@@ -71,8 +71,14 @@ export interface SandpackManifest {
   dependencies?: Record<string, string>;
   /** Entry file path */
   entry?: string;
-  /** Custom Sandpack bundler URL (self-hosted). If omitted, auto-detected or CodeSandbox default. */
-  bundlerURL?: string;
+  /**
+   * Opt into the daemon's self-hosted Sandpack bundler instead of CodeSandbox's
+   * default hosted bundler. Stores intent rather than a concrete URL so the
+   * artifact keeps working if the daemon's origin changes. Resolved to the
+   * daemon's selfHostedBundlerURL at payload read time. If the local bundler
+   * is not available at read time, falls back silently to the hosted bundler.
+   */
+  use_local_bundler?: boolean;
 }
 
 /**

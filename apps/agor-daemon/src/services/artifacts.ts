@@ -146,6 +146,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       files?: Record<string, string>;
       dependencies?: Record<string, string>;
       entry?: string;
+      use_local_bundler?: boolean;
       x?: number;
       y?: number;
       width?: number;
@@ -156,6 +157,15 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const template = data.template ?? 'react';
     const artifactId = generateId();
     const relativePath = `.agor/artifacts/${artifactId}`;
+
+    // Validate use_local_bundler opt-in: fail fast if the daemon wasn't built
+    // with --with-sandpack. Better to error here than to silently render with
+    // the wrong bundler on an air-gapped deployment.
+    if (data.use_local_bundler && !this.selfHostedBundlerURL) {
+      throw new Error(
+        'Cannot create artifact with use_local_bundler=true: this daemon was not built with --with-sandpack, so no self-hosted Sandpack bundler is available. Either rebuild the daemon with `./build.sh --with-sandpack`, or omit use_local_bundler to use the default CodeSandbox hosted bundler.'
+      );
+    }
 
     // Resolve worktree to get filesystem path
     const worktree = await this.worktreeRepo.findById(data.worktree_id);
@@ -172,6 +182,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         template,
         dependencies: data.dependencies,
         entry: data.entry,
+        ...(data.use_local_bundler ? { use_local_bundler: true } : {}),
       };
       fs.writeFileSync(path.join(artifactDir, 'sandpack.json'), JSON.stringify(manifest, null, 2));
 
@@ -290,10 +301,20 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       }
     }
 
-    // Resolve bundlerURL: manifest override > self-hosted detection > omit (CodeSandbox default)
-    let bundlerURL = manifest.bundlerURL;
-    if (!bundlerURL && this.selfHostedBundlerURL) {
-      bundlerURL = this.selfHostedBundlerURL;
+    // Resolve bundlerURL: only when the manifest explicitly opts into the local
+    // bundler via use_local_bundler=true. Otherwise omit it so the frontend uses
+    // Sandpack's default CodeSandbox hosted bundler. If the artifact opted in but
+    // the daemon no longer has a local bundler (e.g. rebuilt without --with-sandpack),
+    // silently fall back to hosted — log a warning so operators can notice.
+    let bundlerURL: string | undefined;
+    if (manifest.use_local_bundler) {
+      if (this.selfHostedBundlerURL) {
+        bundlerURL = this.selfHostedBundlerURL;
+      } else {
+        console.warn(
+          `[artifacts] Artifact ${artifactId} opted into local bundler but no self-hosted bundler is available on this daemon. Falling back to CodeSandbox hosted bundler. Rebuild with --with-sandpack to restore local bundling.`
+        );
+      }
     }
 
     return {

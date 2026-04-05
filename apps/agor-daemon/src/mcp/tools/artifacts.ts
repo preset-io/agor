@@ -72,6 +72,24 @@ Then in your app: import { apiKey, apiUrl } from '/agor.config.js';`,
           .optional()
           .describe('NPM dependencies beyond template defaults, e.g. { "recharts": "^2.0.0" }'),
         entry: z.string().optional().describe('Entry file path (default: determined by template)'),
+        use_local_bundler: z
+          .boolean()
+          .optional()
+          .describe(
+            `Use the daemon's self-hosted Sandpack bundler at /static/sandpack/ instead of the default CodeSandbox hosted bundler. Default: false.
+
+When to set true:
+- Daemon is on a private network / VPN with no egress to codesandbox.io
+- Air-gapped deployments, compliance constraints, or fully offline demos
+
+REQUIRES the daemon to have been built with \`./build.sh --with-sandpack\`. If the local bundler is not available, artifact creation fails with a clear error.
+
+KNOWN LIMITATIONS of the local bundler (upstream sandpack-bundler v2):
+- CommonJS npm packages fail to resolve. Popular examples that break: recharts, lodash (use lodash-es instead), moment. Stick to ESM-only packages when this flag is true.
+- Fewer features and slower updates than the hosted bundler. Upstream issues: https://github.com/codesandbox/sandpack-bundler
+
+When in doubt, leave unset — the hosted bundler supports the widest range of packages and is the recommended default.`
+          ),
         x: z.number().default(0).describe('X position on board'),
         y: z.number().default(0).describe('Y position on board'),
         width: z.number().default(600).describe('Width in pixels (default: 600)'),
@@ -89,6 +107,7 @@ Then in your app: import { apiKey, apiUrl } from '/agor.config.js';`,
           files: args.files as Record<string, string> | undefined,
           dependencies: args.dependencies as Record<string, string> | undefined,
           entry: coerceString(args.entry),
+          use_local_bundler: args.use_local_bundler,
           x: args.x,
           y: args.y,
           width: args.width,
