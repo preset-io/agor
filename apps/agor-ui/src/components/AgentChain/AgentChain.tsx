@@ -314,6 +314,7 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
       case 'Read':
       case 'Write':
       case 'Edit':
+      case 'NotebookEdit':
         if (input.file_path) {
           const path = String(input.file_path);
           return path
@@ -327,6 +328,29 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
 
       case 'Glob':
         return input.pattern ? `Find files: ${input.pattern}` : null;
+
+      case 'ToolSearch':
+        return input.query ? String(input.query) : null;
+
+      case 'WebSearch':
+        return input.query ? String(input.query) : null;
+
+      case 'WebFetch':
+        return input.url ? String(input.url) : null;
+
+      case 'Agent':
+        return input.description ? String(input.description) : null;
+
+      case 'Skill':
+      case 'SlashCommand':
+        return input.skill ? String(input.skill) : input.name ? String(input.name) : null;
+
+      case 'Task':
+        if (input.prompt) {
+          const firstLine = String(input.prompt).trim().split('\n')[0];
+          return firstLine.length > 100 ? `${firstLine.slice(0, 100)}…` : firstLine;
+        }
+        return null;
 
       default:
         return null;

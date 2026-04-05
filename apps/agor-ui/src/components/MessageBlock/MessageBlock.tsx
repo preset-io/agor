@@ -106,6 +106,7 @@ function getToolDescription(toolUse: ToolUseBlock): string | undefined {
     case 'Read':
     case 'Write':
     case 'Edit':
+    case 'NotebookEdit':
       return input.file_path ? String(input.file_path) : undefined;
     case 'Bash':
       return input.description
@@ -116,6 +117,21 @@ function getToolDescription(toolUse: ToolUseBlock): string | undefined {
     case 'Grep':
     case 'Glob':
       return input.pattern ? String(input.pattern) : undefined;
+    case 'ToolSearch':
+    case 'WebSearch':
+      return input.query ? String(input.query) : undefined;
+    case 'WebFetch':
+      return input.url ? String(input.url) : undefined;
+    case 'Agent':
+      return input.description ? String(input.description) : undefined;
+    case 'Skill':
+    case 'SlashCommand':
+      return input.skill ? String(input.skill) : input.name ? String(input.name) : undefined;
+    case 'Task': {
+      if (!input.prompt) return undefined;
+      const firstLine = String(input.prompt).trim().split('\n')[0];
+      return firstLine.length > 100 ? `${firstLine.slice(0, 100)}…` : firstLine;
+    }
     default:
       return undefined;
   }
