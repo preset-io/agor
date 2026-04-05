@@ -13,7 +13,7 @@
  * as green message bubbles, NOT in AgentChain.
  */
 
-import type { ContentBlock as CoreContentBlock, Message } from '@agor/core/types';
+import type { ContentBlock as CoreContentBlock, DiffEnrichment, Message } from '@agor/core/types';
 import {
   BranchesOutlined,
   BulbOutlined,
@@ -58,15 +58,7 @@ interface ToolResultBlock {
   tool_use_id: string;
   content: string | CoreContentBlock[];
   is_error?: boolean;
-  diff?: {
-    structuredPatch: Array<{
-      oldStart: number;
-      oldLines: number;
-      newStart: number;
-      newLines: number;
-      lines: string[];
-    }>;
-  };
+  diff?: DiffEnrichment;
 }
 
 interface TextBlock {

@@ -25,6 +25,7 @@
  * See TEXT_TRUNCATION constants in src/constants/ui.ts for default limits.
  */
 
+import type { DiffEnrichment } from '@agor/core/types';
 import type React from 'react';
 import { BashRenderer } from './BashRenderer';
 import { EditRenderer } from './EditRenderer';
@@ -52,15 +53,7 @@ export interface ToolRendererProps {
     content: string | unknown[];
     is_error?: boolean;
     /** Executor-enriched diff data (best-effort, may not be present) */
-    diff?: {
-      structuredPatch: Array<{
-        oldStart: number;
-        oldLines: number;
-        newStart: number;
-        newLines: number;
-        lines: string[];
-      }>;
-    };
+    diff?: DiffEnrichment;
   };
 }
 

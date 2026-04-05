@@ -19,7 +19,10 @@
  */
 
 import * as fs from 'node:fs';
+import type { StructuredPatchHunk } from '@agor/core/types';
 import { structuredPatch } from 'diff';
+
+export type { StructuredPatchHunk } from '@agor/core/types';
 
 /** Maximum file size we'll read for diff computation (1 MB) */
 const MAX_FILE_SIZE_BYTES = 1_048_576;
@@ -41,14 +44,6 @@ interface ContentBlock {
   content?: unknown;
   is_error?: boolean;
   [key: string]: unknown;
-}
-
-export interface StructuredPatchHunk {
-  oldStart: number;
-  oldLines: number;
-  newStart: number;
-  newLines: number;
-  lines: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -194,9 +189,15 @@ function enrichEditResult(block: ContentBlock, input: Record<string, unknown>): 
   // Read current file (post-edit)
   let currentContent: string | null = fs.readFileSync(filePath, 'utf-8');
 
-  // Reconstruct pre-edit content by reversing the replacement
+  // Reconstruct pre-edit content by reversing the replacement.
+  // Special case: when newString is empty (a deletion), indexOf('') always returns 0
+  // and replaceAll('', ...) inserts between every character — both are wrong.
+  // In that case, skip reverse reconstruction and diff old_string vs new_string directly.
   let preEditContent: string | null;
-  if (replaceAll) {
+  if (newString === '') {
+    // Deletion — can't reliably reverse-locate where the deletion happened in the file
+    preEditContent = null;
+  } else if (replaceAll) {
     preEditContent = currentContent.replaceAll(newString, oldString);
   } else {
     // Reverse first occurrence
@@ -247,7 +248,7 @@ function enrichWriteResult(block: ContentBlock, input: Record<string, unknown>):
   const filePath = input.file_path as string | undefined;
   const content = input.content as string | undefined;
 
-  if (!filePath || !content) return;
+  if (!filePath || content === undefined) return;
 
   // For Write tool, we don't know the previous content (it's been overwritten).
   // Create a simple "all additions" patch.

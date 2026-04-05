@@ -15,7 +15,7 @@ import type React from 'react';
 import { useState } from 'react';
 import { copyToClipboard } from '@/utils/clipboard';
 import { isDarkTheme } from '@/utils/theme';
-import { type DiffHunk, type DiffLine, useDiff } from './useDiff';
+import { type DiffLine, type StructuredPatchHunk, useDiff } from './useDiff';
 
 /** Lines of diff output before we collapse by default */
 const COLLAPSE_THRESHOLD = 10;
@@ -29,7 +29,7 @@ export interface DiffBlockProps {
   oldContent?: string;
   newContent?: string;
   replaceAll?: boolean;
-  structuredPatch?: DiffHunk[];
+  structuredPatch?: StructuredPatchHunk[];
   isError?: boolean;
   errorMessage?: string;
   toolUseId: string;

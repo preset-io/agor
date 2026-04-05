@@ -13,7 +13,7 @@
  * (like AgentChain) are responsible for wrapping this in ThoughtChain items.
  */
 
-import type { ContentBlock as CoreContentBlock } from '@agor/core/types';
+import type { ContentBlock as CoreContentBlock, DiffEnrichment } from '@agor/core/types';
 import { theme } from 'antd';
 import type React from 'react';
 import { shouldUseAnsiRendering } from '../../utils/ansi';
@@ -34,15 +34,7 @@ interface ToolResultBlock {
   content: string | CoreContentBlock[];
   is_error?: boolean;
   /** Executor-enriched diff data (best-effort, may not be present) */
-  diff?: {
-    structuredPatch: Array<{
-      oldStart: number;
-      oldLines: number;
-      newStart: number;
-      newLines: number;
-      lines: string[];
-    }>;
-  };
+  diff?: DiffEnrichment;
 }
 
 interface ToolUseRendererProps {

@@ -6,16 +6,11 @@
  * 2. Otherwise, compute a simple diffLines from old/new strings (client-side fallback).
  */
 
+import type { StructuredPatchHunk } from '@agor/core/types';
 import { diffLines, diffWords } from 'diff';
 import { useMemo } from 'react';
 
-export interface DiffHunk {
-  oldStart: number;
-  oldLines: number;
-  newStart: number;
-  newLines: number;
-  lines: string[];
-}
+export type { StructuredPatchHunk };
 
 export interface DiffLine {
   type: 'add' | 'remove' | 'context';
@@ -51,7 +46,7 @@ export interface DiffData {
 export function useDiff(
   oldContent: string | undefined,
   newContent: string | undefined,
-  structuredPatch?: DiffHunk[]
+  structuredPatch?: StructuredPatchHunk[]
 ): DiffData {
   return useMemo(() => {
     // Tier 1: Use executor-provided structured patch
@@ -78,7 +73,7 @@ export function useDiff(
   }, [oldContent, newContent, structuredPatch]);
 }
 
-function fromStructuredPatch(hunks: DiffHunk[]): DiffData {
+function fromStructuredPatch(hunks: StructuredPatchHunk[]): DiffData {
   const lines: DiffLine[] = [];
   let additions = 0;
   let deletions = 0;
