@@ -566,6 +566,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
         // If not in a zone, compute a smart default position
         if (!position) {
+          const { toAbsolutePosition, computeDefaultBoardPosition } = await import(
+            '@agor/core/utils/board-placement'
+          );
+
           const existingResult = await boardObjectsService.find({
             query: { board_id: data.boardId },
             ...params,
@@ -582,7 +586,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
               obj.entity_type === 'worktree' && obj.worktree_id
           );
 
-          // Batch-check which worktrees are archived
           let activeEntities = worktreeEntities;
           if (worktreeEntities.length > 0) {
             const worktreesService = this.app.service('worktrees');
@@ -592,14 +595,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
                 const wt = await worktreesService.get(entity.worktree_id!);
                 if (wt.archived) archivedIds.add(entity.worktree_id!);
               } catch {
-                // Worktree may have been deleted — skip it
                 archivedIds.add(entity.worktree_id!);
               }
             }
             activeEntities = worktreeEntities.filter((e) => !archivedIds.has(e.worktree_id!));
           }
 
-          // Convert all positions to absolute canvas coordinates
+          // Build zone lookup from board objects
           const zones = board?.objects
             ? Object.entries(board.objects)
                 .filter(([, o]) => (o as { type: string }).type === 'zone')
@@ -607,49 +609,16 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             : [];
           const zoneMap = new Map(zones.map((z) => [z.id, z]));
 
+          // Convert zone-relative positions to absolute canvas coordinates
           const absolutePositions = activeEntities.map((entity) => {
             if (entity.zone_id) {
               const zone = zoneMap.get(entity.zone_id);
-              if (zone) {
-                return {
-                  x: zone.x + entity.position.x,
-                  y: zone.y + entity.position.y,
-                };
-              }
+              if (zone) return toAbsolutePosition(entity.position, zone);
             }
             return entity.position;
           });
 
-          // Strategy 1: median of all active worktree positions
-          if (absolutePositions.length > 0) {
-            const xs = absolutePositions.map((p) => p.x).sort((a, b) => a - b);
-            const ys = absolutePositions.map((p) => p.y).sort((a, b) => a - b);
-            const mid = Math.floor(xs.length / 2);
-            const medianX = xs.length % 2 === 1 ? xs[mid] : (xs[mid - 1] + xs[mid]) / 2;
-            const medianY = ys.length % 2 === 1 ? ys[mid] : (ys[mid - 1] + ys[mid]) / 2;
-            position = {
-              x: medianX + (Math.random() - 0.5) * 200,
-              y: medianY + (Math.random() - 0.5) * 200,
-            };
-          }
-
-          // Strategy 2: center of zone bounding box
-          if (!position && zones.length > 0) {
-            let minX = Infinity,
-              minY = Infinity,
-              maxX = -Infinity,
-              maxY = -Infinity;
-            for (const z of zones) {
-              minX = Math.min(minX, z.x);
-              minY = Math.min(minY, z.y);
-              maxX = Math.max(maxX, z.x + z.width);
-              maxY = Math.max(maxY, z.y + z.height);
-            }
-            position = {
-              x: (minX + maxX) / 2 + (Math.random() - 0.5) * 100,
-              y: (minY + maxY) / 2 + (Math.random() - 0.5) * 100,
-            };
-          }
+          position = computeDefaultBoardPosition(absolutePositions, zones);
         }
       } catch (error) {
         console.warn(
@@ -658,7 +627,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         );
       }
 
-      // Final fallback: near origin
+      // Final fallback: near origin (if smart positioning threw)
       if (!position) {
         position = { x: 100 + Math.random() * 200, y: 100 + Math.random() * 200 };
       }

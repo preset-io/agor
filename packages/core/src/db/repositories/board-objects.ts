@@ -14,6 +14,7 @@ import type {
 } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
+import { toAbsolutePosition } from '../../utils/board-placement.js';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type BoardObjectInsert, type BoardObjectRow, boardObjects } from '../schema';
@@ -338,11 +339,8 @@ export class BoardObjectRepository {
       for (const row of rows) {
         const data = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
         if (data.zone_id === zoneId) {
-          // Convert relative position to absolute by adding zone origin
           const relPos = data.position ?? { x: 0, y: 0 };
-          const absolutePosition = zonePosition
-            ? { x: relPos.x + zonePosition.x, y: relPos.y + zonePosition.y }
-            : relPos;
+          const absolutePosition = zonePosition ? toAbsolutePosition(relPos, zonePosition) : relPos;
 
           await update(this.db, boardObjects)
             .set({
