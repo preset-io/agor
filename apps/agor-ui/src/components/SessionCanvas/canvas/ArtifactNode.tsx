@@ -365,11 +365,6 @@ export const ArtifactNode = ({
               initMode: 'user-visible',
               ...(payload.entry ? { activeFile: payload.entry } : {}),
               ...(payload.bundlerURL ? { bundlerURL: payload.bundlerURL } : {}),
-              // When self-hosting the bundler at a subpath (e.g. /static/sandpack/),
-              // Sandpack's default startRoute "/" resolves via `new URL("/", bundlerURL)`
-              // to the origin root, wiping out the subpath and loading the wrong page
-              // into the iframe. Use "./" so it resolves to the bundler's own directory.
-              ...(payload.bundlerURL ? { startRoute: './' } : {}),
             }}
           >
             <SandpackPreview
@@ -380,6 +375,15 @@ export const ArtifactNode = ({
               showNavigator={false}
               showOpenInCodeSandbox={false}
               showRefreshButton={interactMode}
+              // When self-hosting the bundler at a subpath (e.g. /static/sandpack/),
+              // Sandpack's default startRoute "/" resolves via `new URL("/", bundlerURL)`
+              // to the origin root per the WHATWG URL spec, wiping out the subpath and
+              // loading the wrong page into the iframe. Use "./" so it resolves to the
+              // bundler's own directory. NOTE: this MUST be passed as a prop directly
+              // on SandpackPreview — setting it via SandpackProvider.options is silently
+              // overridden because SandpackPreview's own prop default ("/") is always
+              // forwarded as clientPropsOverride, which wins over options.startRoute.
+              {...(payload.bundlerURL ? { startRoute: './' } : {})}
             />
             <ConsoleReporter artifactId={data.artifactId} />
           </SandpackProvider>
