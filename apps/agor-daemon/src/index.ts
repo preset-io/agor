@@ -1240,8 +1240,13 @@ async function main() {
       typeof __dirname !== 'undefined' ? __dirname : pathMod.dirname(toPath(import.meta.url));
     const sandpackPath = pathMod.resolve(dir, '../static/sandpack');
     if (exists(sandpackPath)) {
+      // Use origin (scheme + host) rather than the full base URL: in prod,
+      // base_url may include a path prefix like /ui (where the UI is mounted),
+      // but the sandpack bundler is served at /static/sandpack/ at the origin
+      // root — a sibling of /ui, not a child. See the /static mount above.
       const baseUrl = await getBaseUrl();
-      const bundlerURL = `${baseUrl}/static/sandpack/`;
+      const origin = new URL(baseUrl).origin;
+      const bundlerURL = `${origin}/static/sandpack/`;
       const artifactsService = app.service('artifacts') as unknown as ArtifactsService;
       artifactsService.selfHostedBundlerURL = bundlerURL;
       console.log(`🧩 Self-hosted Sandpack bundler detected: ${bundlerURL}`);

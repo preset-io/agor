@@ -171,10 +171,40 @@ if [[ "$WITH_SANDPACK" == true ]]; then
   cd "$SANDPACK_DIR"
   echo "  → Installing dependencies..."
   yarn install --frozen-lockfile 2>/dev/null || yarn install
+  echo "  → Patching build script for relative asset paths..."
+  # sandpack-bundler's build script chains `parcel build ... && cp ...`, so we
+  # can't override via `yarn build` args (they'd land on cp). Patch the script
+  # in package.json to force `--public-url ./`, which makes Parcel emit relative
+  # asset paths that work when served from /static/sandpack/ (Parcel's default
+  # is `/`, which bakes absolute paths into index.html and breaks subpath mounts).
+  node -e "
+    const fs = require('fs');
+    const path = 'package.json';
+    const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
+    if (pkg.scripts && pkg.scripts.build) {
+      const before = pkg.scripts.build;
+      let after;
+      if (/--public-url\s+\S+/.test(before)) {
+        // Replace existing flag value
+        after = before.replace(/--public-url\s+\S+/g, '--public-url ./');
+      } else {
+        // Insert flag right after 'parcel build <entry>'
+        after = before.replace(
+          /(parcel\s+build\s+\S+)/,
+          '\$1 --public-url ./'
+        );
+      }
+      if (after !== before) {
+        pkg.scripts.build = after;
+        fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
+        console.log('    patched: ' + after);
+      } else {
+        console.log('    WARNING: could not find parcel build command to patch');
+      }
+    }
+  "
   echo "  → Building..."
-  # --public-url ./ makes Parcel emit relative asset paths so the bundle works
-  # when served from a subpath like /static/sandpack/ instead of the server root.
-  yarn build --public-url ./
+  yarn build
   echo "  ✓ Sandpack bundler built"
 fi
 

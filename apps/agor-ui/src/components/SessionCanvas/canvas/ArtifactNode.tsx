@@ -365,6 +365,11 @@ export const ArtifactNode = ({
               initMode: 'user-visible',
               ...(payload.entry ? { activeFile: payload.entry } : {}),
               ...(payload.bundlerURL ? { bundlerURL: payload.bundlerURL } : {}),
+              // When self-hosting the bundler at a subpath (e.g. /static/sandpack/),
+              // Sandpack's default startRoute "/" resolves via `new URL("/", bundlerURL)`
+              // to the origin root, wiping out the subpath and loading the wrong page
+              // into the iframe. Use "./" so it resolves to the bundler's own directory.
+              ...(payload.bundlerURL ? { startRoute: './' } : {}),
             }}
           >
             <SandpackPreview
