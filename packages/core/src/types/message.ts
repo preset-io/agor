@@ -71,11 +71,25 @@ export interface StructuredPatchHunk {
 }
 
 /**
+ * Per-file diff data for multi-file tools (e.g. Codex edit_files).
+ */
+export interface FileDiff {
+  path: string;
+  kind: 'add' | 'update' | 'delete';
+  structuredPatch: StructuredPatchHunk[];
+}
+
+/**
  * Diff enrichment data attached to tool_result content blocks.
  * Computed best-effort by the executor for Edit/Write tool results.
+ *
+ * Single-file tools (Edit, Write) use `structuredPatch`.
+ * Multi-file tools (edit_files) use `files`.
  */
 export interface DiffEnrichment {
   structuredPatch: StructuredPatchHunk[];
+  /** Per-file diffs for multi-file tools like Codex edit_files */
+  files?: FileDiff[];
 }
 
 /**

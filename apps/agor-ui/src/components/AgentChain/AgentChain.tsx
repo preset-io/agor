@@ -109,6 +109,9 @@ function getToolIcon(toolName: string): React.ReactElement {
     case 'Skill':
     case 'SlashCommand':
       return <ThunderboltOutlined {...iconProps} />;
+    // Codex tools
+    case 'edit_files':
+      return <EditOutlined {...iconProps} />;
     // MCP tools
     case 'ListMcpResourcesTool':
     case 'ReadMcpResourceTool':
@@ -120,7 +123,7 @@ function getToolIcon(toolName: string): React.ReactElement {
 }
 
 /** Tools whose content is always shown (not collapsible) */
-const ALWAYS_EXPANDED_TOOLS = new Set(['Edit', 'Write', 'edit', 'write']);
+const ALWAYS_EXPANDED_TOOLS = new Set(['Edit', 'Write', 'edit', 'write', 'edit_files']);
 
 export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
   const { token } = theme.useToken();
@@ -360,6 +363,21 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
         const parts = [`${done}/${todos.length} done`];
         if (inProg > 0) parts.push(`${inProg} in progress`);
         return parts.join(', ');
+      }
+
+      case 'edit_files': {
+        const changes = Array.isArray(input.changes) ? input.changes : [];
+        if (changes.length === 0) return null;
+        if (changes.length === 1) {
+          const c = changes[0] as { path?: string; kind?: string };
+          const shortPath = c.path
+            ? String(c.path)
+                .replace(/^\/Users\/[^/]+\/code\/[^/]+\//, '')
+                .replace(/^\/Users\/[^/]+\//, '~/')
+            : '';
+          return `${c.kind || 'update'} ${shortPath}`;
+        }
+        return `${changes.length} files`;
       }
 
       default:

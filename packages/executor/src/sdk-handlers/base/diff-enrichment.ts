@@ -18,8 +18,10 @@
  *    to enrich adjacent tool_result blocks in one pass.
  */
 
+import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import type { StructuredPatchHunk } from '@agor/core/types';
+import * as path from 'node:path';
+import type { FileDiff, StructuredPatchHunk } from '@agor/core/types';
 import { structuredPatch } from 'diff';
 
 export type { StructuredPatchHunk } from '@agor/core/types';
@@ -156,6 +158,8 @@ function enrichBlock(
       enrichEditResult(block, toolInput);
     } else if (normalized === 'write') {
       enrichWriteResult(block, toolInput);
+    } else if (normalized === 'edit_files') {
+      enrichEditFilesResult(block, toolInput);
     }
   } catch {
     // Best effort — swallow any errors
@@ -261,5 +265,103 @@ function enrichWriteResult(block: ContentBlock, input: Record<string, unknown>):
 
   if (patch.hunks.length > 0) {
     block.diff = { structuredPatch: patch.hunks };
+  }
+}
+
+/**
+ * Compute structuredPatch for Codex edit_files tool results.
+ *
+ * Codex groups file changes as: { changes: [{ path, kind }] }.
+ * No old/new content is provided — we reconstruct diffs by comparing
+ * the current file (post-edit) against git HEAD.
+ */
+function enrichEditFilesResult(block: ContentBlock, input: Record<string, unknown>): void {
+  const changes = input.changes as Array<{ path: string; kind: string }> | undefined;
+  if (!changes || changes.length === 0) return;
+
+  // Find git root once for relative path resolution
+  let gitRoot: string;
+  try {
+    gitRoot = execSync('git rev-parse --show-toplevel', {
+      encoding: 'utf-8',
+      timeout: 5000,
+    }).trim();
+  } catch {
+    return; // Not in a git repo or git unavailable
+  }
+
+  const fileDiffs: FileDiff[] = [];
+
+  for (const change of changes) {
+    if (!change.path) continue;
+
+    const kind = (change.kind || 'update') as 'add' | 'update' | 'delete';
+    const filePath = change.path;
+
+    try {
+      if (kind === 'add') {
+        // New file — all additions
+        const stat = fs.statSync(filePath);
+        if (stat.size > MAX_FILE_SIZE_BYTES) continue;
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const patch = structuredPatch(filePath, filePath, '', content, '', '', {
+          context: 0,
+        });
+        if (patch.hunks.length > 0) {
+          fileDiffs.push({ path: filePath, kind, structuredPatch: patch.hunks });
+        }
+      } else if (kind === 'delete') {
+        // Deleted file — get old content from git
+        const relativePath = path.relative(gitRoot, filePath);
+        const oldContent = execSync(`git show HEAD:${relativePath}`, {
+          encoding: 'utf-8',
+          timeout: 5000,
+        });
+        const patch = structuredPatch(filePath, filePath, oldContent, '', '', '', {
+          context: CONTEXT_LINES,
+        });
+        if (patch.hunks.length > 0) {
+          fileDiffs.push({ path: filePath, kind, structuredPatch: patch.hunks });
+        }
+      } else {
+        // Update — diff git HEAD vs current file
+        const stat = fs.statSync(filePath);
+        if (stat.size > MAX_FILE_SIZE_BYTES) continue;
+        const currentContent = fs.readFileSync(filePath, 'utf-8');
+        const relativePath = path.relative(gitRoot, filePath);
+        let oldContent: string;
+        try {
+          oldContent = execSync(`git show HEAD:${relativePath}`, {
+            encoding: 'utf-8',
+            timeout: 5000,
+          });
+        } catch {
+          // File may be new (not in HEAD) — treat as addition
+          const patch = structuredPatch(filePath, filePath, '', currentContent, '', '', {
+            context: 0,
+          });
+          if (patch.hunks.length > 0) {
+            fileDiffs.push({ path: filePath, kind: 'add', structuredPatch: patch.hunks });
+          }
+          continue;
+        }
+        const patch = structuredPatch(filePath, filePath, oldContent, currentContent, '', '', {
+          context: CONTEXT_LINES,
+        });
+        if (patch.hunks.length > 0) {
+          fileDiffs.push({ path: filePath, kind, structuredPatch: patch.hunks });
+        }
+      }
+    } catch {
+      // Best effort — skip files that fail
+    }
+  }
+
+  if (fileDiffs.length > 0) {
+    // Also set structuredPatch to the first file's hunks for backward compat
+    block.diff = {
+      structuredPatch: fileDiffs[0].structuredPatch,
+      files: fileDiffs,
+    };
   }
 }

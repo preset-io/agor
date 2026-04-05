@@ -31,6 +31,8 @@ export interface DiffBlockProps {
   structuredPatch?: StructuredPatchHunk[];
   isError?: boolean;
   errorMessage?: string;
+  /** Override the default expand/collapse heuristic */
+  forceExpanded?: boolean;
 }
 
 /** Shorten an absolute file path for display */
@@ -74,12 +76,14 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
   structuredPatch,
   isError,
   errorMessage,
+  forceExpanded,
 }) => {
   const { token } = theme.useToken();
   const isDark = isDarkTheme(token);
   const diff = useDiff(oldContent, newContent, structuredPatch);
 
-  const defaultExpanded = diff.totalLines <= COLLAPSE_THRESHOLD && diff.totalLines > 0;
+  const defaultExpanded =
+    forceExpanded ?? (diff.totalLines <= COLLAPSE_THRESHOLD && diff.totalLines > 0);
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [showAll, setShowAll] = useState(false);
 

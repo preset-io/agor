@@ -96,7 +96,7 @@ interface MessageBlockProps {
 }
 
 /** Tools whose content is always shown expanded by default */
-const ALWAYS_EXPANDED_TOOLS = new Set(['Edit', 'Write', 'edit', 'write']);
+const ALWAYS_EXPANDED_TOOLS = new Set(['Edit', 'Write', 'edit', 'write', 'edit_files']);
 
 /** Get short description for a tool call (file path, pattern, command, etc.) */
 function getToolDescription(toolUse: ToolUseBlock): string | undefined {
@@ -140,6 +140,15 @@ function getToolDescription(toolUse: ToolUseBlock): string | undefined {
       const parts = [`${done}/${todos.length} done`];
       if (inProg > 0) parts.push(`${inProg} in progress`);
       return parts.join(', ');
+    }
+    case 'edit_files': {
+      const changes = Array.isArray(input.changes) ? input.changes : [];
+      if (changes.length === 0) return undefined;
+      if (changes.length === 1) {
+        const c = changes[0] as { path?: string; kind?: string };
+        return `${c.kind || 'update'} ${c.path || ''}`;
+      }
+      return `${changes.length} files`;
     }
     default:
       return undefined;

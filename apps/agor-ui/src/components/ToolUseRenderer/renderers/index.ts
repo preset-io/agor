@@ -28,6 +28,7 @@
 import type { DiffEnrichment } from '@agor/core/types';
 import type React from 'react';
 import { BashRenderer } from './BashRenderer';
+import { EditFilesRenderer } from './EditFilesRenderer';
 import { EditRenderer } from './EditRenderer';
 import { TodoListRenderer } from './TodoListRenderer';
 import { WriteRenderer } from './WriteRenderer';
@@ -90,6 +91,8 @@ export const TOOL_RENDERERS = new Map<string, ToolRenderer>([
   ['Bash', BashRenderer as unknown as ToolRenderer],
   ['Edit', EditRenderer as unknown as ToolRenderer],
   ['Write', WriteRenderer as unknown as ToolRenderer],
+  // Codex tools
+  ['edit_files', EditFilesRenderer as unknown as ToolRenderer],
 ]);
 
 /**
@@ -105,7 +108,11 @@ export function getToolRenderer(toolName: string): ToolRenderer | undefined {
   const exactMatch = TOOL_RENDERERS.get(toolName);
   if (exactMatch) return exactMatch;
 
-  // Try case-insensitive match by normalizing to PascalCase
-  const normalized = toolName.charAt(0).toUpperCase() + toolName.slice(1).toLowerCase();
-  return TOOL_RENDERERS.get(normalized);
+  // Try lowercase match (handles snake_case tools like edit_files)
+  const lower = toolName.toLowerCase();
+  for (const [key, renderer] of TOOL_RENDERERS) {
+    if (key.toLowerCase() === lower) return renderer;
+  }
+
+  return undefined;
 }
