@@ -461,22 +461,43 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
       if (toolUse.name === 'Bash' && toolUse.input.command) {
         const cmd = String(toolUse.input.command);
         const shortCmd = cmd.length > 80 ? `${cmd.slice(0, 80)}…` : cmd;
+        const bashDesc = toolUse.input.description ? String(toolUse.input.description) : null;
         titleContent = (
-          <span>
-            <strong>Bash</strong>
-            <Typography.Text
-              code
-              style={{
-                fontSize: token.fontSizeSM - 1,
-                marginLeft: 4,
-                maxWidth: 400,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {shortCmd}
-            </Typography.Text>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'baseline',
+              maxWidth: '100%',
+              overflow: 'hidden',
+              gap: 4,
+            }}
+          >
+            <strong style={{ flexShrink: 0 }}>Bash</strong>
+            {bashDesc ? (
+              <span
+                style={{
+                  color: token.colorTextSecondary,
+                  fontWeight: 'normal',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {bashDesc}
+              </span>
+            ) : (
+              <Typography.Text
+                code
+                style={{
+                  fontSize: token.fontSizeSM - 1,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {shortCmd}
+              </Typography.Text>
+            )}
           </span>
         );
       } else if (toolUse.name === 'Grep' && toolUse.input.pattern) {
@@ -500,10 +521,25 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
       } else {
         // Default: tool name with description (file path, etc.)
         titleContent = (
-          <span>
-            <strong>{displayName}</strong>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'baseline',
+              maxWidth: '100%',
+              overflow: 'hidden',
+            }}
+          >
+            <strong style={{ flexShrink: 0 }}>{displayName}</strong>
             {description && (
-              <span style={{ color: token.colorTextSecondary, fontWeight: 'normal' }}>
+              <span
+                style={{
+                  color: token.colorTextSecondary,
+                  fontWeight: 'normal',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
                 : {description}
               </span>
             )}
