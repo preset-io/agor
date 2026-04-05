@@ -596,32 +596,29 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
                 archivedIds.add(entity.worktree_id!);
               }
             }
-            activeEntities = worktreeEntities.filter(
-              (e) => !archivedIds.has(e.worktree_id!)
-            );
+            activeEntities = worktreeEntities.filter((e) => !archivedIds.has(e.worktree_id!));
           }
 
           // Convert all positions to absolute canvas coordinates
           const zones = board?.objects
-            ? (Object.entries(board.objects)
+            ? Object.entries(board.objects)
                 .filter(([, o]) => (o as { type: string }).type === 'zone')
-                .map(([id, o]) => ({ id, ...(o as import('@agor/core/types').ZoneBoardObject) })))
+                .map(([id, o]) => ({ id, ...(o as import('@agor/core/types').ZoneBoardObject) }))
             : [];
           const zoneMap = new Map(zones.map((z) => [z.id, z]));
 
-          const absolutePositions = activeEntities
-            .map((entity) => {
-              if (entity.zone_id) {
-                const zone = zoneMap.get(entity.zone_id);
-                if (zone) {
-                  return {
-                    x: zone.x + entity.position.x,
-                    y: zone.y + entity.position.y,
-                  };
-                }
+          const absolutePositions = activeEntities.map((entity) => {
+            if (entity.zone_id) {
+              const zone = zoneMap.get(entity.zone_id);
+              if (zone) {
+                return {
+                  x: zone.x + entity.position.x,
+                  y: zone.y + entity.position.y,
+                };
               }
-              return entity.position;
-            });
+            }
+            return entity.position;
+          });
 
           // Strategy 1: median of all active worktree positions
           if (absolutePositions.length > 0) {
@@ -638,7 +635,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
           // Strategy 2: center of zone bounding box
           if (!position && zones.length > 0) {
-            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            let minX = Infinity,
+              minY = Infinity,
+              maxX = -Infinity,
+              maxY = -Infinity;
             for (const z of zones) {
               minX = Math.min(minX, z.x);
               minY = Math.min(minY, z.y);
