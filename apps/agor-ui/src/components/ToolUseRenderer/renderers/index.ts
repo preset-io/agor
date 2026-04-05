@@ -27,7 +27,9 @@
 
 import type React from 'react';
 import { BashRenderer } from './BashRenderer';
+import { EditRenderer } from './EditRenderer';
 import { TodoListRenderer } from './TodoListRenderer';
+import { WriteRenderer } from './WriteRenderer';
 
 /**
  * Props that all custom tool renderers receive
@@ -49,6 +51,16 @@ export interface ToolRendererProps {
   result?: {
     content: string | unknown[];
     is_error?: boolean;
+    /** Executor-enriched diff data (best-effort, may not be present) */
+    diff?: {
+      structuredPatch: Array<{
+        oldStart: number;
+        oldLines: number;
+        newStart: number;
+        newLines: number;
+        lines: string[];
+      }>;
+    };
   };
 }
 
@@ -64,11 +76,8 @@ export const TOOL_RENDERERS = new Map<string, ToolRenderer>([
   // Claude Code tools
   ['TodoWrite', TodoListRenderer as unknown as ToolRenderer],
   ['Bash', BashRenderer as unknown as ToolRenderer],
-
-  // Add more custom renderers here:
-  // ['Read', FileReadRenderer],
-  // ['Edit', FileEditRenderer],
-  // etc.
+  ['Edit', EditRenderer as unknown as ToolRenderer],
+  ['Write', WriteRenderer as unknown as ToolRenderer],
 ]);
 
 /**

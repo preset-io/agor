@@ -58,6 +58,15 @@ interface ToolResultBlock {
   tool_use_id: string;
   content: string | CoreContentBlock[];
   is_error?: boolean;
+  diff?: {
+    structuredPatch: Array<{
+      oldStart: number;
+      oldLines: number;
+      newStart: number;
+      newLines: number;
+      lines: string[];
+    }>;
+  };
 }
 
 interface TextBlock {

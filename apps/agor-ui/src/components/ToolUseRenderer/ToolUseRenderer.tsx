@@ -33,6 +33,16 @@ interface ToolResultBlock {
   tool_use_id: string;
   content: string | CoreContentBlock[];
   is_error?: boolean;
+  /** Executor-enriched diff data (best-effort, may not be present) */
+  diff?: {
+    structuredPatch: Array<{
+      oldStart: number;
+      oldLines: number;
+      newStart: number;
+      newLines: number;
+      lines: string[];
+    }>;
+  };
 }
 
 interface ToolUseRendererProps {
@@ -66,6 +76,7 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
             ? {
                 content: toolResult.content,
                 is_error: toolResult.is_error,
+                diff: toolResult.diff,
               }
             : undefined
         }

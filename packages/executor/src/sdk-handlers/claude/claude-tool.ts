@@ -36,6 +36,7 @@ import {
   TaskStatus,
 } from '../../types.js';
 import type { ImportOptions, ITool, SessionData, ToolCapabilities } from '../base/index.js';
+import { enrichToolResults, registerToolUses } from './diff-enrichment.js';
 import { loadClaudeSession } from './import/load-session.js';
 import { transcriptsToMessages } from './import/message-converter.js';
 import {
@@ -783,6 +784,11 @@ export class ClaudeTool implements ITool {
           const assistantMessageId =
             currentTextMessageId || currentThinkingMessageId || (generateId() as MessageID);
 
+          // Register tool uses for diff enrichment lookup
+          if (completeEvent.toolUses?.length) {
+            registerToolUses(completeEvent.toolUses);
+          }
+
           // Create assistant message with session guard (handles deleted sessions gracefully)
           const created = await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
             await createAssistantMessage(
@@ -816,6 +822,9 @@ export class ClaudeTool implements ITool {
         } else if (event.type === 'complete' && event.role === MessageRole.USER) {
           // Type assertion for user message
           const completeEvent = event as Extract<ProcessedEvent, { type: 'complete' }>;
+
+          // Best-effort: enrich Edit/Write tool results with structuredPatch diff data
+          enrichToolResults(completeEvent.content);
 
           // Create user message with session guard (handles deleted sessions gracefully)
           await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
