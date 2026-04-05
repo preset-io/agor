@@ -42,7 +42,6 @@ import React, { useMemo, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { CollapsibleText } from '../CollapsibleText';
-import { CopyableContent } from '../CopyableContent';
 import { Tag } from '../Tag';
 import { ToolUseRenderer } from '../ToolUseRenderer';
 
@@ -455,74 +454,70 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
       // Resolve display name (extracts inner tool name for MCP proxy tools)
       const displayName = resolveDisplayName(toolUse);
 
-      // Build title with inline command/pattern for Bash, Grep, Glob
+      // Build compact title — one line per tool with key context inline
+      const isAlwaysExpanded = ALWAYS_EXPANDED_TOOLS.has(toolUse.name);
       let titleContent: React.ReactNode;
+
       if (toolUse.name === 'Bash' && toolUse.input.command) {
-        // For Bash, just show the tool name (command will be shown as description)
+        const cmd = String(toolUse.input.command);
+        const shortCmd = cmd.length > 80 ? `${cmd.slice(0, 80)}…` : cmd;
         titleContent = (
           <span>
             <strong>Bash</strong>
+            <Typography.Text
+              code
+              style={{
+                fontSize: token.fontSizeSM - 1,
+                marginLeft: 4,
+                maxWidth: 400,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {shortCmd}
+            </Typography.Text>
           </span>
         );
       } else if (toolUse.name === 'Grep' && toolUse.input.pattern) {
         titleContent = (
-          <span style={{ cursor: 'help' }}>
-            <strong>Grep: </strong>
-            <Typography.Text code>{String(toolUse.input.pattern)}</Typography.Text>
+          <span>
+            <strong>Grep</strong>{' '}
+            <Typography.Text code style={{ fontSize: token.fontSizeSM - 1 }}>
+              {String(toolUse.input.pattern)}
+            </Typography.Text>
           </span>
         );
       } else if (toolUse.name === 'Glob' && toolUse.input.pattern) {
         titleContent = (
-          <span style={{ cursor: 'help' }}>
-            <strong>Glob: </strong>
-            <Typography.Text code>{String(toolUse.input.pattern)}</Typography.Text>
+          <span>
+            <strong>Glob</strong>{' '}
+            <Typography.Text code style={{ fontSize: token.fontSizeSM - 1 }}>
+              {String(toolUse.input.pattern)}
+            </Typography.Text>
           </span>
         );
       } else {
-        // Default: tool name with optional description
-        // Uses resolved display name (inner tool name for MCP proxies)
+        // Default: tool name with description (file path, etc.)
         titleContent = (
-          <span style={{ cursor: 'help' }}>
+          <span>
             <strong>{displayName}</strong>
-            {description && <>: {description}</>}
+            {description && (
+              <span style={{ color: token.colorTextSecondary, fontWeight: 'normal' }}>
+                : {description}
+              </span>
+            )}
           </span>
         );
       }
 
-      // Additional details line for file operations and Bash commands
+      // Only Edit/Write get a description line (file path); all others are one-line
       let detailsLine: React.ReactNode | null = null;
-      if (['Read', 'Write', 'Edit'].includes(toolUse.name) && toolUse.input.file_path) {
+      if (isAlwaysExpanded && toolUse.input.file_path) {
         detailsLine = (
           <Typography.Text code type="secondary" ellipsis>
             {String(toolUse.input.file_path)}
           </Typography.Text>
-        );
-      } else if (toolUse.name === 'Bash' && toolUse.input.command) {
-        // Show Bash command as a code block (not ellipsis, allows wrapping)
-        const commandText = String(toolUse.input.command);
-        detailsLine = (
-          <CopyableContent
-            textContent={commandText}
-            copyTooltip="Copy command"
-            copyButtonOffset={{ top: token.sizeXXS, right: token.sizeXXS }}
-          >
-            <pre
-              style={{
-                margin: 0,
-                padding: `${token.sizeXXS}px ${token.sizeXS}px`,
-                background: token.colorBgLayout,
-                borderRadius: token.borderRadiusSM,
-                fontSize: token.fontSizeSM,
-                fontFamily: 'Monaco, Menlo, Ubuntu Mono, Consolas, source-code-pro, monospace',
-                color: token.colorTextSecondary,
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-all',
-                maxWidth: '100%',
-              }}
-            >
-              {commandText}
-            </pre>
-          </CopyableContent>
         );
       }
 
@@ -563,9 +558,10 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
         description: detailsLine,
         status,
         icon,
-        // Always show Edit/Write content (diffs); wrap others in collapsible
+        // Edit/Write: always show content (diffs are the star)
+        // Others: collapsible "Show output" toggle
         ...(toolResult && {
-          content: ALWAYS_EXPANDED_TOOLS.has(toolUse.name) ? (
+          content: isAlwaysExpanded ? (
             <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
           ) : (
             <CollapsibleToolContent>
