@@ -108,7 +108,7 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
 
       {/* Body — shown when expanded */}
       {expanded && children && (
-        <div style={{ marginTop: 2, paddingLeft: token.sizeUnit * 2 }}>{children}</div>
+        <div style={{ marginTop: 2, paddingLeft: token.sizeUnit * 4 }}>{children}</div>
       )}
     </div>
   );
