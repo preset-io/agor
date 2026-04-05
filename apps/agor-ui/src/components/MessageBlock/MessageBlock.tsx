@@ -132,6 +132,15 @@ function getToolDescription(toolUse: ToolUseBlock): string | undefined {
       const firstLine = String(input.prompt).trim().split('\n')[0];
       return firstLine.length > 100 ? `${firstLine.slice(0, 100)}…` : firstLine;
     }
+    case 'TodoWrite': {
+      const todos = Array.isArray(input.todos) ? input.todos : [];
+      if (todos.length === 0) return undefined;
+      const done = todos.filter((t: { status?: string }) => t.status === 'completed').length;
+      const inProg = todos.filter((t: { status?: string }) => t.status === 'in_progress').length;
+      const parts = [`${done}/${todos.length} done`];
+      if (inProg > 0) parts.push(`${inProg} in progress`);
+      return parts.join(', ');
+    }
     default:
       return undefined;
   }
