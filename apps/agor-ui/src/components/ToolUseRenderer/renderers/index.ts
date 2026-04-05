@@ -63,6 +63,25 @@ export interface ToolRendererProps {
 export type ToolRenderer = React.FC<ToolRendererProps>;
 
 /**
+ * Extract a human-readable error message from a tool result.
+ * Handles both string content and array-of-blocks content shapes.
+ */
+export function extractErrorMessage(result: ToolRendererProps['result']): string | undefined {
+  if (!result?.is_error) return undefined;
+  if (typeof result.content === 'string') return result.content;
+  if (Array.isArray(result.content)) {
+    return result.content
+      .filter((b): b is { type: 'text'; text: string } => {
+        const block = b as { type: string; text?: string };
+        return block.type === 'text';
+      })
+      .map((b) => b.text)
+      .join('\n');
+  }
+  return undefined;
+}
+
+/**
  * Registry of tool name -> custom renderer
  */
 export const TOOL_RENDERERS = new Map<string, ToolRenderer>([

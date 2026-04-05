@@ -198,7 +198,10 @@ function enrichEditResult(block: ContentBlock, input: Record<string, unknown>): 
     // Deletion — can't reliably reverse-locate where the deletion happened in the file
     preEditContent = null;
   } else if (replaceAll) {
-    preEditContent = currentContent.replaceAll(newString, oldString);
+    // replace_all: can't reliably reverse — newString may appear in unrelated parts of
+    // the file, so replaceAll(newString, oldString) would corrupt those sections.
+    // Fall back to diffing old_string vs new_string directly.
+    preEditContent = null;
   } else {
     // Reverse first occurrence
     const idx = currentContent.indexOf(newString);

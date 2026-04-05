@@ -121,9 +121,45 @@ function getToolIcon(toolName: string): React.ReactElement {
   }
 }
 
+/** Tools whose content is always shown (not collapsible) */
+const ALWAYS_EXPANDED_TOOLS = new Set(['Edit', 'Write', 'edit', 'write']);
+
+/** Wrapper that makes tool output collapsible with a "Show output" toggle */
+const CollapsibleToolContent: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [open, setOpen] = useState(false);
+  const { token } = theme.useToken();
+  return (
+    <div>
+      <div
+        onClick={() => setOpen(!open)}
+        style={{
+          cursor: 'pointer',
+          fontSize: token.fontSizeSM,
+          color: token.colorTextSecondary,
+          padding: `2px 0`,
+          userSelect: 'none',
+        }}
+      >
+        {open ? (
+          <>
+            <DownOutlined style={{ fontSize: 9, marginRight: 4 }} />
+            Hide output
+          </>
+        ) : (
+          <>
+            <RightOutlined style={{ fontSize: 9, marginRight: 4 }} />
+            Show output
+          </>
+        )}
+      </div>
+      {open && children}
+    </div>
+  );
+};
+
 export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
   const { token } = theme.useToken();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
 
   // Extract chain items (thoughts and tools) from messages
   const chainItems = useMemo(() => {
@@ -341,23 +377,36 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
   const thoughtChainItems: ThoughtChainProps['items'] = chainItems.map((item, _index) => {
     if (item.type === 'thought') {
       const thoughtContent = item.content as string;
+      const oneLiner = thoughtContent.trim().split('\n')[0]?.slice(0, 120);
 
       return {
-        title: 'Thinking',
-        // No status - thoughts are neutral, not success/error
+        title: (
+          <span>
+            <strong>Thinking</strong>
+            {oneLiner && (
+              <span style={{ color: token.colorTextTertiary, fontWeight: 'normal' }}>
+                : {oneLiner}
+                {(thoughtContent.trim().length > 120 || thoughtContent.includes('\n')) && '…'}
+              </span>
+            )}
+          </span>
+        ),
+        // Collapsed by default — full content expandable
         ...(thoughtContent.trim() && {
           content: (
-            <CollapsibleText
-              maxLines={8}
-              preserveWhitespace
-              style={{
-                fontSize: token.fontSizeSM,
-                margin: 0,
-                color: token.colorTextTertiary,
-              }}
-            >
-              {thoughtContent}
-            </CollapsibleText>
+            <CollapsibleToolContent>
+              <CollapsibleText
+                maxLines={8}
+                preserveWhitespace
+                style={{
+                  fontSize: token.fontSizeSM,
+                  margin: 0,
+                  color: token.colorTextTertiary,
+                }}
+              >
+                {thoughtContent}
+              </CollapsibleText>
+            </CollapsibleToolContent>
           ),
         }),
       };
@@ -514,9 +563,15 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
         description: detailsLine,
         status,
         icon,
-        // Only include content if we have a tool result
+        // Always show Edit/Write content (diffs); wrap others in collapsible
         ...(toolResult && {
-          content: <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />,
+          content: ALWAYS_EXPANDED_TOOLS.has(toolUse.name) ? (
+            <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
+          ) : (
+            <CollapsibleToolContent>
+              <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
+            </CollapsibleToolContent>
+          ),
         }),
       };
     }

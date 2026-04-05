@@ -15,7 +15,7 @@ import type React from 'react';
 import { useState } from 'react';
 import { copyToClipboard } from '@/utils/clipboard';
 import { isDarkTheme } from '@/utils/theme';
-import { type DiffLine, type StructuredPatchHunk, useDiff } from './useDiff';
+import { type DiffLine, type StructuredPatchHunk, useDiff, type WordSegment } from './useDiff';
 
 /** Lines of diff output before we collapse by default */
 const COLLAPSE_THRESHOLD = 10;
@@ -28,43 +28,10 @@ export interface DiffBlockProps {
   operationType: 'edit' | 'create' | 'delete';
   oldContent?: string;
   newContent?: string;
-  replaceAll?: boolean;
   structuredPatch?: StructuredPatchHunk[];
   isError?: boolean;
   errorMessage?: string;
-  toolUseId: string;
 }
-
-const getLanguageFromPath = (filePath: string): string => {
-  const ext = filePath.split('.').pop()?.toLowerCase();
-  const map: Record<string, string> = {
-    js: 'javascript',
-    ts: 'typescript',
-    jsx: 'jsx',
-    tsx: 'tsx',
-    py: 'python',
-    rb: 'ruby',
-    go: 'go',
-    rs: 'rust',
-    java: 'java',
-    c: 'c',
-    cpp: 'cpp',
-    h: 'c',
-    css: 'css',
-    scss: 'scss',
-    html: 'html',
-    xml: 'xml',
-    json: 'json',
-    yaml: 'yaml',
-    yml: 'yaml',
-    sh: 'bash',
-    bash: 'bash',
-    sql: 'sql',
-    md: 'markdown',
-    toml: 'toml',
-  };
-  return map[ext || ''] || 'text';
-};
 
 /** Shorten an absolute file path for display */
 const shortenPath = (filePath: string): string => {
@@ -116,13 +83,14 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [showAll, setShowAll] = useState(false);
 
-  const _language = getLanguageFromPath(filePath);
-
   // Color tokens for diff
   const addBg = isDark ? 'rgba(46, 160, 67, 0.15)' : 'rgba(46, 160, 67, 0.1)';
   const removeBg = isDark ? 'rgba(218, 54, 51, 0.15)' : 'rgba(218, 54, 51, 0.1)';
   const addColor = isDark ? '#3fb950' : '#1a7f37';
   const removeColor = isDark ? '#f85149' : '#cf222e';
+  // Brighter backgrounds for word-level highlights (the "inner diff")
+  const addWordBg = isDark ? 'rgba(46, 160, 67, 0.4)' : 'rgba(46, 160, 67, 0.3)';
+  const removeWordBg = isDark ? 'rgba(218, 54, 51, 0.4)' : 'rgba(218, 54, 51, 0.3)';
   const contextColor = token.colorTextTertiary;
   const lineNumColor = token.colorTextQuaternary;
   const separatorColor = token.colorBorderSecondary;
@@ -168,6 +136,29 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
 
   const needsTruncation = diff.totalLines > TRUNCATE_THRESHOLD && !showAll;
   const visibleLines = needsTruncation ? diff.lines.slice(0, TRUNCATE_SHOW_LINES) : diff.lines;
+
+  const renderWordSegments = (segments: WordSegment[], highlightBg: string) => {
+    // Merge adjacent unchanged segments to minimize DOM nodes, then render
+    const merged: { text: string; changed: boolean }[] = [];
+    for (const seg of segments) {
+      const isChanged = seg.type === 'changed';
+      const last = merged[merged.length - 1];
+      if (last && last.changed === isChanged) {
+        last.text += seg.text;
+      } else {
+        merged.push({ text: seg.text, changed: isChanged });
+      }
+    }
+    return merged.map((seg) =>
+      seg.changed ? (
+        <span key={seg.text} style={{ background: highlightBg, borderRadius: 2 }}>
+          {seg.text}
+        </span>
+      ) : (
+        seg.text
+      )
+    );
+  };
 
   const renderLine = (line: DiffLine, index: number) => {
     const isSeparator = line.type === 'context' && line.content === '...';
@@ -248,7 +239,9 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
             paddingRight: 8,
           }}
         >
-          {line.content || ' '}
+          {line.wordSegments
+            ? renderWordSegments(line.wordSegments, line.type === 'add' ? addWordBg : removeWordBg)
+            : line.content || ' '}
         </span>
       </div>
     );

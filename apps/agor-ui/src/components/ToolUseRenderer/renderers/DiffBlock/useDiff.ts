@@ -12,6 +12,12 @@ import { useMemo } from 'react';
 
 export type { StructuredPatchHunk };
 
+/** A word-level segment within a diff line */
+export interface WordSegment {
+  text: string;
+  type: 'unchanged' | 'changed';
+}
+
 export interface DiffLine {
   type: 'add' | 'remove' | 'context';
   content: string;
@@ -19,17 +25,13 @@ export interface DiffLine {
   oldLineNumber?: number;
   /** Line number in new file (context/add lines) */
   newLineNumber?: number;
+  /** Word-level highlighting segments (only for add/remove lines with a paired counterpart) */
+  wordSegments?: WordSegment[];
 }
 
 export interface DiffStats {
   additions: number;
   deletions: number;
-}
-
-export interface WordDiff {
-  value: string;
-  added?: boolean;
-  removed?: boolean;
 }
 
 export interface DiffData {
@@ -108,6 +110,7 @@ function fromStructuredPatch(hunks: StructuredPatchHunk[]): DiffData {
     }
   }
 
+  addWordSegments(lines);
   return { lines, stats: { additions, deletions }, hasLineNumbers: true, totalLines: lines.length };
 }
 
@@ -132,6 +135,7 @@ function fromOldNew(oldContent: string, newContent: string): DiffData {
     }
   }
 
+  addWordSegments(lines);
   return {
     lines,
     stats: { additions, deletions },
@@ -157,27 +161,51 @@ function fromNewOnly(content: string): DiffData {
 }
 
 /**
- * Compute word-level diffs within a pair of removed/added lines.
- * Used for highlighting exactly what changed within a line.
+ * Post-process diff lines to add word-level highlighting.
+ * Finds adjacent remove/add line pairs and computes word-level segments.
+ * Mutates lines in place.
  */
-export function computeWordDiff(
-  oldLine: string,
-  newLine: string
-): { old: WordDiff[]; new: WordDiff[] } {
-  const changes = diffWords(oldLine, newLine);
-  const oldParts: WordDiff[] = [];
-  const newParts: WordDiff[] = [];
+function addWordSegments(lines: DiffLine[]): void {
+  let i = 0;
+  while (i < lines.length) {
+    // Find a run of remove lines followed by a run of add lines
+    if (lines[i].type !== 'remove') {
+      i++;
+      continue;
+    }
 
-  for (const change of changes) {
-    if (change.added) {
-      newParts.push({ value: change.value, added: true });
-    } else if (change.removed) {
-      oldParts.push({ value: change.value, removed: true });
-    } else {
-      oldParts.push({ value: change.value });
-      newParts.push({ value: change.value });
+    const removeStart = i;
+    while (i < lines.length && lines[i].type === 'remove') i++;
+    const removeEnd = i;
+
+    const addStart = i;
+    while (i < lines.length && lines[i].type === 'add') i++;
+    const addEnd = i;
+
+    if (addStart === addEnd) continue; // No matching adds
+
+    // Pair up remove/add lines 1:1 for word diff
+    const pairs = Math.min(removeEnd - removeStart, addEnd - addStart);
+    for (let p = 0; p < pairs; p++) {
+      const removeLine = lines[removeStart + p];
+      const addLine = lines[addStart + p];
+      const changes = diffWords(removeLine.content, addLine.content);
+
+      const removeSegments: WordSegment[] = [];
+      const addSegments: WordSegment[] = [];
+      for (const change of changes) {
+        if (change.added) {
+          addSegments.push({ text: change.value, type: 'changed' });
+        } else if (change.removed) {
+          removeSegments.push({ text: change.value, type: 'changed' });
+        } else {
+          removeSegments.push({ text: change.value, type: 'unchanged' });
+          addSegments.push({ text: change.value, type: 'unchanged' });
+        }
+      }
+
+      removeLine.wordSegments = removeSegments;
+      addLine.wordSegments = addSegments;
     }
   }
-
-  return { old: oldParts, new: newParts };
 }
