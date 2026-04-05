@@ -564,7 +564,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           }
         }
 
-        // If not in a zone, anchor near existing content on the board
+        // If not in a zone, compute a smart default position
         if (!position) {
           const existingResult = await boardObjectsService.find({
             query: { board_id: data.boardId },
@@ -576,40 +576,79 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             }
           ).data;
 
-          // Strategy 1: centroid of absolute-positioned worktrees
-          const absolute = existing.filter(
+          // Collect worktree entities and filter out archived ones
+          const worktreeEntities = existing.filter(
             (obj: import('@agor/core/types').BoardEntityObject) =>
-              obj.entity_type === 'worktree' && !obj.zone_id
+              obj.entity_type === 'worktree' && obj.worktree_id
           );
-          if (absolute.length > 0) {
-            const cx = absolute.reduce((s, o) => s + o.position.x, 0) / absolute.length;
-            const cy = absolute.reduce((s, o) => s + o.position.y, 0) / absolute.length;
+
+          // Batch-check which worktrees are archived
+          let activeEntities = worktreeEntities;
+          if (worktreeEntities.length > 0) {
+            const worktreesService = this.app.service('worktrees');
+            const archivedIds = new Set<string>();
+            for (const entity of worktreeEntities) {
+              try {
+                const wt = await worktreesService.get(entity.worktree_id!);
+                if (wt.archived) archivedIds.add(entity.worktree_id!);
+              } catch {
+                // Worktree may have been deleted — skip it
+                archivedIds.add(entity.worktree_id!);
+              }
+            }
+            activeEntities = worktreeEntities.filter(
+              (e) => !archivedIds.has(e.worktree_id!)
+            );
+          }
+
+          // Convert all positions to absolute canvas coordinates
+          const zones = board?.objects
+            ? (Object.entries(board.objects)
+                .filter(([, o]) => (o as { type: string }).type === 'zone')
+                .map(([id, o]) => ({ id, ...(o as import('@agor/core/types').ZoneBoardObject) })))
+            : [];
+          const zoneMap = new Map(zones.map((z) => [z.id, z]));
+
+          const absolutePositions = activeEntities
+            .map((entity) => {
+              if (entity.zone_id) {
+                const zone = zoneMap.get(entity.zone_id);
+                if (zone) {
+                  return {
+                    x: zone.x + entity.position.x,
+                    y: zone.y + entity.position.y,
+                  };
+                }
+              }
+              return entity.position;
+            });
+
+          // Strategy 1: median of all active worktree positions
+          if (absolutePositions.length > 0) {
+            const xs = absolutePositions.map((p) => p.x).sort((a, b) => a - b);
+            const ys = absolutePositions.map((p) => p.y).sort((a, b) => a - b);
+            const mid = Math.floor(xs.length / 2);
+            const medianX = xs.length % 2 === 1 ? xs[mid] : (xs[mid - 1] + xs[mid]) / 2;
+            const medianY = ys.length % 2 === 1 ? ys[mid] : (ys[mid - 1] + ys[mid]) / 2;
             position = {
-              x: cx + (Math.random() - 0.5) * 300,
-              y: cy + (Math.random() - 0.5) * 300,
+              x: medianX + (Math.random() - 0.5) * 200,
+              y: medianY + (Math.random() - 0.5) * 200,
             };
           }
 
-          // Strategy 2: below the lowest zone
-          if (!position && board?.objects) {
-            const zones = Object.values(board.objects).filter(
-              (o: unknown) => (o as { type: string }).type === 'zone'
-            ) as import('@agor/core/types').ZoneBoardObject[];
-            if (zones.length > 0) {
-              let maxBottom = 0;
-              let anchorX = 0;
-              for (const z of zones) {
-                const bottom = z.y + z.height;
-                if (bottom > maxBottom) {
-                  maxBottom = bottom;
-                  anchorX = z.x;
-                }
-              }
-              position = {
-                x: anchorX + (Math.random() - 0.5) * 200,
-                y: maxBottom + 80 + Math.random() * 100,
-              };
+          // Strategy 2: center of zone bounding box
+          if (!position && zones.length > 0) {
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const z of zones) {
+              minX = Math.min(minX, z.x);
+              minY = Math.min(minY, z.y);
+              maxX = Math.max(maxX, z.x + z.width);
+              maxY = Math.max(maxY, z.y + z.height);
             }
+            position = {
+              x: (minX + maxX) / 2 + (Math.random() - 0.5) * 100,
+              y: (minY + maxY) / 2 + (Math.random() - 0.5) * 100,
+            };
           }
         }
       } catch (error) {
