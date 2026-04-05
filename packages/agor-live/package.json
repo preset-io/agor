@@ -79,6 +79,7 @@
     "cors": "^2.8.6",
     "cron-parser": "^5.5.0",
     "cronstrue": "^3.13.0",
+    "diff": "^7.0.0",
     "dotenv": "^17.3.1",
     "drizzle-orm": "^0.45.1",
     "express": "^5.2.0",
