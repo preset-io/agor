@@ -8,7 +8,7 @@
  */
 
 import { DownOutlined, RightOutlined } from '@ant-design/icons';
-import { Tooltip, Typography, theme } from 'antd';
+import { Typography, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
 
@@ -25,8 +25,6 @@ export interface ToolBlockProps {
   status?: 'success' | 'error' | 'pending';
   /** Whether to expand by default */
   expandedByDefault?: boolean;
-  /** Tooltip content on hover */
-  tooltip?: React.ReactNode;
   /** Body content shown when expanded */
   children?: React.ReactNode;
 }
@@ -38,7 +36,6 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
   descriptionNode,
   status,
   expandedByDefault = false,
-  tooltip,
   children,
 }) => {
   const [expanded, setExpanded] = useState(expandedByDefault);
@@ -107,13 +104,7 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
 
   return (
     <div>
-      {tooltip ? (
-        <Tooltip title={tooltip} placement="right" mouseEnterDelay={0.3}>
-          {header}
-        </Tooltip>
-      ) : (
-        header
-      )}
+      {header}
 
       {/* Body — shown when expanded */}
       {expanded && children && <div style={{ marginTop: 2 }}>{children}</div>}

@@ -421,13 +421,6 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
       description = undefined;
     }
 
-    // Tooltip with input params
-    const tooltip = (
-      <pre style={{ margin: 0, fontSize: 11, maxWidth: 400, maxHeight: 300, overflow: 'auto' }}>
-        {JSON.stringify(toolUse.input, null, 2)}
-      </pre>
-    );
-
     return (
       <ToolBlock
         key={toolUse.id}
@@ -437,9 +430,33 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
         descriptionNode={descriptionNode}
         status={status}
         expandedByDefault={isAlwaysExpanded}
-        tooltip={tooltip}
       >
         {toolResult && <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />}
+        <details style={{ marginTop: token.sizeUnit }}>
+          <summary
+            style={{
+              cursor: 'pointer',
+              fontSize: 11,
+              color: token.colorTextTertiary,
+              userSelect: 'none',
+            }}
+          >
+            Input parameters
+          </summary>
+          <pre
+            style={{
+              margin: `${token.sizeUnit / 2}px 0 0`,
+              padding: token.sizeUnit,
+              background: token.colorBgLayout,
+              borderRadius: token.borderRadius,
+              fontSize: 11,
+              overflow: 'auto',
+              maxHeight: 300,
+            }}
+          >
+            {JSON.stringify(toolUse.input, null, 2)}
+          </pre>
+        </details>
       </ToolBlock>
     );
   };
