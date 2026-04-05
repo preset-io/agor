@@ -462,7 +462,7 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
             {cmd}
           </Typography.Text>
         );
-        description = undefined;
+        description = null;
       }
     } else if ((toolUse.name === 'Grep' || toolUse.name === 'Glob') && toolUse.input.pattern) {
       descriptionNode = (
@@ -470,7 +470,7 @@ export const AgentChain = React.memo<AgentChainProps>(({ messages }) => {
           {String(toolUse.input.pattern)}
         </Typography.Text>
       );
-      description = undefined;
+      description = null;
     }
 
     return (
