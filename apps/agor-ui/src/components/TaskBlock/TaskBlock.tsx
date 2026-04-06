@@ -373,9 +373,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
   }) => {
     const { token } = theme.useToken();
 
-    // A task is "current" if it's the latest AND still running
-    const isCurrentTask = isLatestTask && task.status === TaskStatus.RUNNING;
-
     // Track real-time tool executions for this task
     const { toolsExecuting } = useTaskEvents(client, task.task_id);
 
@@ -665,7 +662,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                           key={blockKey}
                           messages={block.messages}
                           isTaskRunning={task.status === TaskStatus.RUNNING}
-                          isLatest={isCurrentTask && blockIndex === lastAgentChainIndex}
+                          isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
                         />
                       );
                     }
