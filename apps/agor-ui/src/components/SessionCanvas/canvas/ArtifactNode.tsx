@@ -375,6 +375,7 @@ export const ArtifactNode = ({
             />
           )}
           <SandpackProvider
+            key={payload.content_hash}
             template={payload.template as 'react'}
             files={withBodyReset(payload.files)}
             customSetup={payload.dependencies ? { dependencies: payload.dependencies } : undefined}
