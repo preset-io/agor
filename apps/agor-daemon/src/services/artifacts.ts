@@ -465,7 +465,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * Anonymous callers see only public artifacts.
    */
   async findVisible(userId?: string, options?: { limit?: number }): Promise<Artifact[]> {
-    return this.artifactRepo.findAll({ userId: userId ?? '__anonymous__', limit: options?.limit });
+    return this.artifactRepo.findVisible(userId ?? '__anonymous__', { limit: options?.limit });
   }
 
   // ── Private helpers ──

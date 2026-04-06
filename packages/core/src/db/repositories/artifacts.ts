@@ -150,6 +150,29 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
     }
   }
 
+  /**
+   * Find all visible artifacts for a user: public + private owned by userId.
+   */
+  async findVisible(userId: string, options?: { limit?: number }): Promise<Artifact[]> {
+    try {
+      let query = select(this.db)
+        .from(artifacts)
+        .where(or(eq(artifacts.public, true), eq(artifacts.created_by, userId))!);
+
+      if (options?.limit) {
+        query = query.limit(options.limit);
+      }
+
+      const rows = await query.all();
+      return rows.map((row: ArtifactRow) => this.rowToArtifact(row));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find visible artifacts: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
   async findByWorktreeId(worktreeId: WorktreeID): Promise<Artifact[]> {
     try {
       const rows = await select(this.db)
