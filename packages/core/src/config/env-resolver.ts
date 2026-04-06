@@ -260,14 +260,11 @@ export async function createUserProcessEnvironment(
   /**
    * Gateway-level env vars (e.g., service account tokens).
    *
-   * Accepts either the new structured array format (with forceOverride) or
-   * the legacy `Record<string, string>` format (treated as fallback-only).
-   *
-   * - Fallback vars are merged BEFORE user env vars — user values win.
-   * - Force-override vars are merged AFTER user env vars — channel values win.
+   * - Fallback vars (`forceOverride: false`) are merged BEFORE user env vars — user values win.
+   * - Force-override vars (`forceOverride: true`) are merged AFTER user env vars — channel values win.
    * - All gateway keys are included in AGOR_USER_ENV_KEYS for MCP template resolution.
    */
-  gatewayEnv?: GatewayEnvVar[] | Record<string, string>
+  gatewayEnv?: GatewayEnvVar[]
 ): Promise<Record<string, string>> {
   // SECURITY: Start with allowlisted env vars only — never inherit full process.env
   const env = buildAllowlistedEnv();
@@ -283,23 +280,9 @@ export async function createUserProcessEnvironment(
   // Track user-defined env var keys (for MCP template scoping)
   const userEnvKeys: string[] = [];
 
-  // Normalize gateway env vars to structured format
-  let gatewayFallback: GatewayEnvVar[] = [];
-  let gatewayForceOverride: GatewayEnvVar[] = [];
-
-  if (gatewayEnv) {
-    const normalizedVars: GatewayEnvVar[] = Array.isArray(gatewayEnv)
-      ? gatewayEnv
-      : // Legacy Record<string, string> — treat all as fallback
-        Object.entries(gatewayEnv).map(([key, value]) => ({
-          key,
-          value,
-          forceOverride: false,
-        }));
-
-    gatewayFallback = normalizedVars.filter((v) => !v.forceOverride);
-    gatewayForceOverride = normalizedVars.filter((v) => v.forceOverride);
-  }
+  // Split gateway env vars by override mode
+  const gatewayFallback = gatewayEnv?.filter((v) => !v.forceOverride) ?? [];
+  const gatewayForceOverride = gatewayEnv?.filter((v) => v.forceOverride) ?? [];
 
   // 1. Merge gateway fallback vars (low priority — user vars override these)
   for (const { key, value } of gatewayFallback) {

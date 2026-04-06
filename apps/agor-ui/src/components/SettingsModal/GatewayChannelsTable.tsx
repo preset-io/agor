@@ -1243,14 +1243,14 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       ...(values.codexNetworkAccess !== undefined
         ? { codexNetworkAccess: values.codexNetworkAccess as boolean }
         : {}),
-      // Include env vars — filter out empty-key entries and strip redacted sentinel values.
-      // Entries where the value is still '••••••••' are omitted so the backend
-      // keeps the existing encrypted value instead of overwriting it.
-      ...(() => {
-        const raw = (values.envVars as GatewayEnvVar[] | undefined) ?? [];
-        const cleaned = raw.filter((v) => v.key.trim() !== '' && v.value !== '••••••••');
-        return cleaned.length ? { envVars: cleaned } : {};
-      })(),
+      // Include env vars — filter out empty-key entries only.
+      // Sentinel values ('••••••••') are sent through so the backend can
+      // substitute real values from the database. Empty array = delete all.
+      ...(values.envVars !== undefined
+        ? {
+            envVars: (values.envVars as GatewayEnvVar[]).filter((v) => v.key.trim() !== ''),
+          }
+        : {}),
     };
 
     // Form has preserve={true}, so agor_user_id is retained even when the

@@ -3508,29 +3508,64 @@ async function main() {
       create: [requireMinimumRole(ROLES.MEMBER, 'create gateway channels')],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update gateway channels'),
-        // Preserve existing env vars when the update omits envVars (i.e., all
-        // values were still redacted and got stripped by the UI).
+        // Resolve redacted env var sentinel values ('••••••••') back to real
+        // values from the database. Uses the repository directly to bypass
+        // the after-hook redaction that the service layer applies.
+        //
+        // Semantics:
+        // - envVars omitted (undefined) → preserve all existing env vars
+        // - envVars = [] (empty array) → explicitly delete all env vars
+        // - envVars = [...] with sentinels → substitute real values per key
         async (context: HookContext) => {
           const data = context.data as Record<string, unknown> | undefined;
           const ac = data?.agentic_config as Record<string, unknown> | undefined;
-          if (ac && !ac.envVars && context.id) {
+          if (!ac || !context.id) return context;
+
+          const SENTINEL = '••••••••';
+          const incomingVars = ac.envVars as
+            | { key: string; value: string; forceOverride: boolean }[]
+            | undefined;
+
+          // undefined → preserve existing env vars entirely
+          if (incomingVars === undefined) {
             try {
-              const existing = await app.service('gateway-channels').get(String(context.id), {
-                ...context.params,
-                // Internal call — skip hooks to avoid infinite loop
-                provider: undefined,
-              });
-              const existingAc = (existing as Record<string, unknown>).agentic_config as Record<
-                string,
-                unknown
-              > | null;
-              if (existingAc?.envVars) {
-                ac.envVars = existingAc.envVars;
+              const { GatewayChannelRepository } = await import('@agor/core/db');
+              const channelRepo = new GatewayChannelRepository(db);
+              const existing = await channelRepo.findById(String(context.id));
+              if (existing?.agentic_config?.envVars) {
+                ac.envVars = existing.agentic_config.envVars;
               }
             } catch {
-              // Non-fatal — if we can't read existing, just proceed without merging
+              // Non-fatal
             }
+            return context;
           }
+
+          // [] → explicit delete all (no substitution needed)
+          if (incomingVars.length === 0) return context;
+
+          // Has entries with potential sentinels — substitute from DB
+          const hasSentinels = incomingVars.some((v) => v.value === SENTINEL);
+          if (!hasSentinels) return context;
+
+          try {
+            const { GatewayChannelRepository } = await import('@agor/core/db');
+            const channelRepo = new GatewayChannelRepository(db);
+            const existing = await channelRepo.findById(String(context.id));
+            const existingVars = existing?.agentic_config?.envVars ?? [];
+            const existingByKey = new Map(existingVars.map((v) => [v.key, v.value]));
+
+            ac.envVars = incomingVars.map((v) =>
+              v.value === SENTINEL && existingByKey.has(v.key)
+                ? { ...v, value: existingByKey.get(v.key)! }
+                : v
+            );
+          } catch {
+            // Non-fatal — if we can't resolve sentinels, strip them to avoid
+            // persisting the literal sentinel string as a secret
+            ac.envVars = incomingVars.filter((v) => v.value !== SENTINEL);
+          }
+
           return context;
         },
       ],
