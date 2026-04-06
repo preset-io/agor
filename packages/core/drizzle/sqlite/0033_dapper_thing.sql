@@ -24,7 +24,7 @@ CREATE TABLE `__new_artifacts` (
 	FOREIGN KEY (`board_id`) REFERENCES `boards`(`board_id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-INSERT INTO `__new_artifacts`("artifact_id", "worktree_id", "board_id", "name", "description", "path", "template", "build_status", "build_errors", "content_hash", "files", "dependencies", "entry", "use_local_bundler", "public", "created_by", "created_at", "updated_at", "archived", "archived_at") SELECT "artifact_id", "worktree_id", "board_id", "name", "description", "path", "template", "build_status", "build_errors", "content_hash", "files", "dependencies", "entry", "use_local_bundler", "public", "created_by", "created_at", "updated_at", "archived", "archived_at" FROM `artifacts`;--> statement-breakpoint
+INSERT INTO `__new_artifacts`("artifact_id", "worktree_id", "board_id", "name", "description", "path", "template", "build_status", "build_errors", "content_hash", "created_by", "created_at", "updated_at", "archived", "archived_at") SELECT "artifact_id", "worktree_id", "board_id", "name", "description", "path", "template", "build_status", "build_errors", "content_hash", "created_by", "created_at", "updated_at", "archived", "archived_at" FROM `artifacts`;--> statement-breakpoint
 DROP TABLE `artifacts`;--> statement-breakpoint
 ALTER TABLE `__new_artifacts` RENAME TO `artifacts`;--> statement-breakpoint
 PRAGMA foreign_keys=ON;--> statement-breakpoint
