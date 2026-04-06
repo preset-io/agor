@@ -407,6 +407,15 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     // Group messages into blocks
     const blocks = useMemo(() => groupMessagesIntoBlocks(messages), [messages]);
 
+    // Index of the last agent-chain block — used for isLatest so that a streaming
+    // text bubble appearing after the chain doesn't prematurely collapse it
+    const lastAgentChainIndex = useMemo(() => {
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        if (blocks[i].type === 'agent-chain') return i;
+      }
+      return -1;
+    }, [blocks]);
+
     // Calculate message count from task message_range
     const messageCount = task.message_range.end_index - task.message_range.start_index + 1;
 
@@ -656,7 +665,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                           key={blockKey}
                           messages={block.messages}
                           isTaskRunning={task.status === TaskStatus.RUNNING}
-                          isLatest={isCurrentTask && blockIndex === blocks.length - 1}
+                          isLatest={isCurrentTask && blockIndex === lastAgentChainIndex}
                         />
                       );
                     }
