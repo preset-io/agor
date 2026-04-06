@@ -427,7 +427,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
         <GenealogyBanner />
 
         {/* Task-organized conversation */}
-        {tasks.map((task) => (
+        {tasks.map((task, taskIndex) => (
           <TaskBlock
             key={task.task_id}
             task={task}
@@ -446,6 +446,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
             scheduledRunAt={scheduledRunAt}
             streamingMessages={streamingMessagesByTask.get(task.task_id)}
             assistantEmoji={assistantEmoji}
+            isLatestTask={taskIndex === tasks.length - 1}
           />
         ))}
       </div>

@@ -22,7 +22,7 @@ export interface ToolBlockProps {
   /** Override the description display with custom ReactNode (e.g. code block) */
   descriptionNode?: React.ReactNode;
   /** Status indicator */
-  status?: 'success' | 'error' | 'pending';
+  status?: 'success' | 'error' | 'pending' | 'stale';
   /** Whether to expand by default */
   expandedByDefault?: boolean;
   /** Body content shown when expanded */
@@ -47,7 +47,9 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
       ? token.colorError
       : status === 'pending'
         ? token.colorTextQuaternary
-        : token.colorTextSecondary;
+        : status === 'stale'
+          ? token.colorWarning
+          : token.colorTextSecondary;
 
   const header = (
     <div

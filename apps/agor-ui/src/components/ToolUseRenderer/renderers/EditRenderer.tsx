@@ -26,6 +26,7 @@ export const EditRenderer: React.FC<ToolRendererProps> = ({ input, result }) => 
       structuredPatch={result?.diff?.structuredPatch}
       isError={result?.is_error}
       errorMessage={extractErrorMessage(result)}
+      forceExpanded
     />
   );
 };

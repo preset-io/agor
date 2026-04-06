@@ -20,7 +20,12 @@ import {
   PermissionStatus,
   type User,
 } from '@agor/core/types';
-import { CheckCircleOutlined, CloseCircleOutlined, RobotOutlined } from '@ant-design/icons';
+import {
+  CheckCircleOutlined,
+  ClockCircleOutlined,
+  CloseCircleOutlined,
+  RobotOutlined,
+} from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
 import { Spin, Tooltip, theme } from 'antd';
 
@@ -589,21 +594,34 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
             gap: 2,
           }}
         >
-          {toolBlocks.map(({ toolUse, toolResult }) => {
+          {toolBlocks.map(({ toolUse, toolResult }, toolIndex) => {
             const isError = toolResult?.is_error;
             const displayName = getToolDisplayName(toolUse.name, toolUse.input);
             const isAlwaysExpanded = ALWAYS_EXPANDED_TOOLS.has(toolUse.name);
-            const status: 'success' | 'error' | 'pending' = !toolResult
-              ? 'pending'
-              : isError
+
+            // Position-based stale detection
+            const isLastTool = toolIndex === toolBlocks.length - 1;
+            const showSpinner = !toolResult && isLastTool && isTaskRunning;
+
+            const status: 'success' | 'error' | 'pending' | 'stale' = toolResult
+              ? isError
                 ? 'error'
-                : 'success';
-            const icon = !toolResult ? (
+                : 'success'
+              : showSpinner
+                ? 'pending'
+                : 'stale';
+            const icon = toolResult ? (
+              isError ? (
+                <CloseCircleOutlined style={{ fontSize: 14 }} />
+              ) : (
+                <CheckCircleOutlined style={{ fontSize: 14 }} />
+              )
+            ) : showSpinner ? (
               <Spin size="small" />
-            ) : isError ? (
-              <CloseCircleOutlined style={{ fontSize: 14 }} />
             ) : (
-              <CheckCircleOutlined style={{ fontSize: 14 }} />
+              <Tooltip title="Agent moved on — result not captured">
+                <ClockCircleOutlined style={{ fontSize: 14 }} />
+              </Tooltip>
             );
 
             return (

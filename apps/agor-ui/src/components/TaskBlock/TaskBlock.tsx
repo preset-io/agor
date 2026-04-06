@@ -101,6 +101,8 @@ interface TaskBlockProps {
   scheduledRunAt?: number;
   streamingMessages?: Map<MessageID, StreamingMessage>;
   assistantEmoji?: string;
+  /** Whether this is the most recent task in the session */
+  isLatestTask?: boolean;
 }
 
 /**
@@ -367,8 +369,12 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     scheduledRunAt,
     streamingMessages,
     assistantEmoji,
+    isLatestTask = false,
   }) => {
     const { token } = theme.useToken();
+
+    // A task is "current" if it's the latest AND still running
+    const isCurrentTask = isLatestTask && task.status === TaskStatus.RUNNING;
 
     // Track real-time tool executions for this task
     const { toolsExecuting } = useTaskEvents(client, task.task_id);
@@ -645,7 +651,14 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                     if (block.type === 'agent-chain') {
                       // Use first message ID as key for agent chain
                       const blockKey = `agent-chain-${block.messages[0]?.message_id || 'unknown'}`;
-                      return <AgentChain key={blockKey} messages={block.messages} />;
+                      return (
+                        <AgentChain
+                          key={blockKey}
+                          messages={block.messages}
+                          isTaskRunning={task.status === TaskStatus.RUNNING}
+                          isLatest={isCurrentTask && blockIndex === blocks.length - 1}
+                        />
+                      );
                     }
                     if (block.type === 'compaction') {
                       // Render compaction block with aggregated messages
