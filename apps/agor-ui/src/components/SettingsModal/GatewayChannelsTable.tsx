@@ -51,7 +51,7 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { getDaemonUrl } from '@/config/daemon';
 import { copyToClipboard } from '@/utils/clipboard';
@@ -141,7 +141,20 @@ const GatewayEnvVarsEditor: React.FC<{
   value?: GatewayEnvVar[];
   onChange?: (vars: GatewayEnvVar[]) => void;
 }> = ({ value = [], onChange }) => {
+  // Stable row IDs so React doesn't remount inputs on every keystroke.
+  // Each row gets a monotonically increasing ID that persists across re-renders.
+  const nextId = useRef(0);
+  const rowIds = useRef<number[]>([]);
+  // Sync rowIds length with value length (handles external additions/removals)
+  while (rowIds.current.length < value.length) {
+    rowIds.current.push(nextId.current++);
+  }
+  if (rowIds.current.length > value.length) {
+    rowIds.current.length = value.length;
+  }
+
   const addVar = () => {
+    rowIds.current.push(nextId.current++);
     onChange?.([...value, { key: '', value: '', forceOverride: false }]);
   };
 
@@ -151,6 +164,7 @@ const GatewayEnvVarsEditor: React.FC<{
   };
 
   const removeVar = (index: number) => {
+    rowIds.current.splice(index, 1);
     onChange?.(value.filter((_, i) => i !== index));
   };
 
@@ -158,7 +172,7 @@ const GatewayEnvVarsEditor: React.FC<{
     <div>
       {value.map((envVar, index) => (
         <div
-          key={`${envVar.key}-${index}`}
+          key={rowIds.current[index]}
           style={{
             display: 'flex',
             gap: 8,
