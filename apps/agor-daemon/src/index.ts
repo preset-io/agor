@@ -931,11 +931,15 @@ async function main() {
         ?.gateway_source as { channel_id?: string } | undefined;
       if (gatewaySource?.channel_id) {
         try {
-          const { GatewayChannelRepository } = await import('@agor/core/db');
+          const { GatewayChannelRepository, decryptApiKey } = await import('@agor/core/db');
           const channelRepo = new GatewayChannelRepository(db);
           const channel = await channelRepo.findById(gatewaySource.channel_id);
           if (channel?.agentic_config?.envVars) {
-            gatewayEnv = channel.agentic_config.envVars;
+            // Decrypt env var values (stored encrypted at rest)
+            gatewayEnv = channel.agentic_config.envVars.map((v) => ({
+              ...v,
+              value: v.value ? decryptApiKey(v.value) : v.value,
+            }));
           }
         } catch {
           // Non-fatal — gateway env vars are optional
@@ -3505,7 +3509,23 @@ async function main() {
   app.service('gateway-channels').hooks({
     before: {
       all: [requireAuth],
-      create: [requireMinimumRole(ROLES.MEMBER, 'create gateway channels')],
+      create: [
+        requireMinimumRole(ROLES.MEMBER, 'create gateway channels'),
+        // Encrypt env var values at rest (same pattern as user env vars / API keys)
+        async (context: HookContext) => {
+          const data = context.data as Record<string, unknown> | undefined;
+          const ac = data?.agentic_config as Record<string, unknown> | undefined;
+          if (!ac || !Array.isArray(ac.envVars)) return context;
+          const { encryptApiKey } = await import('@agor/core/db');
+          ac.envVars = (ac.envVars as { key: string; value: string; forceOverride: boolean }[]).map(
+            (v) => ({
+              ...v,
+              value: v.value ? encryptApiKey(v.value) : v.value,
+            })
+          );
+          return context;
+        },
+      ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update gateway channels'),
         // Resolve redacted env var sentinel values ('••••••••') back to real
@@ -3546,7 +3566,15 @@ async function main() {
 
           // Has entries with potential sentinels — substitute from DB
           const hasSentinels = incomingVars.some((v) => v.value === SENTINEL);
-          if (!hasSentinels) return context;
+          if (!hasSentinels) {
+            // No sentinels — all values are new/changed. Encrypt them.
+            const { encryptApiKey } = await import('@agor/core/db');
+            ac.envVars = incomingVars.map((v) => ({
+              ...v,
+              value: v.value ? encryptApiKey(v.value) : v.value,
+            }));
+            return context;
+          }
 
           try {
             const { GatewayChannelRepository } = await import('@agor/core/db');
@@ -3555,11 +3583,17 @@ async function main() {
             const existingVars = existing?.agentic_config?.envVars ?? [];
             const existingByKey = new Map(existingVars.map((v) => [v.key, v.value]));
 
-            ac.envVars = incomingVars.map((v) =>
-              v.value === SENTINEL && existingByKey.has(v.key)
-                ? { ...v, value: existingByKey.get(v.key)! }
-                : v
-            );
+            // Substitute sentinels with existing (already encrypted) values,
+            // encrypt new/changed values
+            const { encryptApiKey } = await import('@agor/core/db');
+            ac.envVars = incomingVars.map((v) => {
+              if (v.value === SENTINEL && existingByKey.has(v.key)) {
+                // Keep existing encrypted value as-is
+                return { ...v, value: existingByKey.get(v.key)! };
+              }
+              // New or changed value — encrypt it
+              return { ...v, value: v.value ? encryptApiKey(v.value) : v.value };
+            });
           } catch {
             // Non-fatal — if we can't resolve sentinels, strip them to avoid
             // persisting the literal sentinel string as a secret
