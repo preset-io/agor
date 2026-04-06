@@ -402,10 +402,17 @@ export const AgentChain = React.memo<AgentChainProps>(
       return getToolDisplayName(toolUse.name, toolUse.input);
     };
 
-    // Precompute index of last tool item (avoids O(n²) slice().some() per item)
-    const lastToolIndex = useMemo(() => {
+    // Precompute index of the last tool item that has a result.
+    // Tools after this index have no subsequent completed tool, so they
+    // are potentially still running (handles concurrent tool calls).
+    const lastResultToolIndex = useMemo(() => {
       for (let i = chainItems.length - 1; i >= 0; i--) {
-        if (chainItems[i].type === 'tool') return i;
+        if (chainItems[i].type === 'tool') {
+          const { toolResult } = chainItems[i].content as {
+            toolResult?: ToolResultBlock;
+          };
+          if (toolResult) return i;
+        }
       }
       return -1;
     }, [chainItems]);
@@ -451,11 +458,14 @@ export const AgentChain = React.memo<AgentChainProps>(
       const displayName = resolveDisplayName(toolUse);
       const isAlwaysExpanded = ALWAYS_EXPANDED_TOOLS.has(toolUse.name);
 
-      // Derive status and icon via shared helper
+      // Derive status and icon via shared helper.
+      // A tool is potentially still running when no subsequent tool in
+      // this chain has a result AND this is the active (latest) chain.
+      const isPotentiallyRunning = index > lastResultToolIndex && isLatest !== false;
       const status = deriveToolStatus({
         hasResult: !!toolResult,
         isError: !!isError,
-        isLastTool: index === lastToolIndex,
+        isLastTool: isPotentiallyRunning,
         isTaskRunning,
       });
       const icon = renderToolStatusIcon(status);

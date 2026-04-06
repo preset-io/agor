@@ -591,35 +591,41 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
             gap: 2,
           }}
         >
-          {toolBlocks.map(({ toolUse, toolResult }, toolIndex) => {
-            const displayName = getToolDisplayName(toolUse.name, toolUse.input);
-            const isAlwaysExpanded = ALWAYS_EXPANDED_TOOLS.has(toolUse.name);
+          {/* Index of last tool with a result — tools after this are potentially running */}
+          {(() => {
+            const lastResultIndex = toolBlocks.findLastIndex((b) => !!b.toolResult);
+            return toolBlocks.map(({ toolUse, toolResult }, toolIndex) => {
+              const displayName = getToolDisplayName(toolUse.name, toolUse.input);
+              const isAlwaysExpanded = ALWAYS_EXPANDED_TOOLS.has(toolUse.name);
 
-            // A tool can only be "pending" if it's the last in this message AND
-            // this is the latest message — otherwise the agent has moved on
-            const isLastTool = toolIndex === toolBlocks.length - 1 && isLatestMessage;
+              // A tool is potentially still running when no subsequent tool in
+              // this message has a result AND this is the latest message.
+              // This correctly handles concurrent tool calls (e.g. multiple
+              // WebSearch calls) — they all show as "pending" simultaneously.
+              const isPotentiallyRunning = toolIndex > lastResultIndex && isLatestMessage;
 
-            const status = deriveToolStatus({
-              hasResult: !!toolResult,
-              isError: !!toolResult?.is_error,
-              isLastTool,
-              isTaskRunning,
+              const status = deriveToolStatus({
+                hasResult: !!toolResult,
+                isError: !!toolResult?.is_error,
+                isLastTool: isPotentiallyRunning,
+                isTaskRunning,
+              });
+              const icon = renderToolStatusIcon(status);
+
+              return (
+                <ToolBlock
+                  key={toolUse.id}
+                  icon={icon}
+                  name={displayName}
+                  description={getToolDescription(toolUse)}
+                  status={status}
+                  expandedByDefault={isAlwaysExpanded}
+                >
+                  {toolResult && <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />}
+                </ToolBlock>
+              );
             });
-            const icon = renderToolStatusIcon(status);
-
-            return (
-              <ToolBlock
-                key={toolUse.id}
-                icon={icon}
-                name={displayName}
-                description={getToolDescription(toolUse)}
-                status={status}
-                expandedByDefault={isAlwaysExpanded}
-              >
-                {toolResult && <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />}
-              </ToolBlock>
-            );
-          })}
+          })()}
         </div>
       )}
 

@@ -19,7 +19,14 @@ interface ToolStatusInput {
   hasResult: boolean;
   /** Whether the result is an error */
   isError?: boolean;
-  /** Whether this is the last tool in the sequence (chain or message) */
+  /**
+   * Whether this tool is potentially still running.
+   *
+   * True when no subsequent tool in the block has a result AND the block
+   * is still active (latest chain/message).  This correctly handles
+   * concurrent tool calls: when multiple tools run in parallel none of
+   * them have a subsequent result, so they all remain "pending".
+   */
   isLastTool: boolean;
   /** Whether the parent task is still running */
   isTaskRunning: boolean;
