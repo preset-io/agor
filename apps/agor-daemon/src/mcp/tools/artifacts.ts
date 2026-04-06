@@ -5,6 +5,7 @@
  * Artifacts are DB-backed live web applications that render on the board canvas.
  */
 
+import { NotFoundError } from '@agor/core/utils/errors';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ArtifactsService } from '../../services/artifacts.js';
@@ -194,14 +195,14 @@ Then in your app: import { apiKey, apiUrl } from '/agor.config.js';`,
       const artifactId = coerceString(args.artifactId)!;
 
       // Fetch the artifact via the Feathers get() method (inherited from DrizzleService)
-      let artifact: Awaited<ReturnType<typeof service.get>> | null;
+      let artifact: Awaited<ReturnType<typeof service.get>>;
       try {
         artifact = await service.get(artifactId, ctx.baseServiceParams);
-      } catch {
-        artifact = null;
-      }
-      if (!artifact) {
-        return textResult({ error: `Artifact ${artifactId} not found` });
+      } catch (err) {
+        if (err instanceof NotFoundError) {
+          return textResult({ error: `Artifact ${artifactId} not found` });
+        }
+        throw err;
       }
 
       // Visibility check: private artifacts are only visible to their creator
@@ -211,26 +212,11 @@ Then in your app: import { apiKey, apiUrl } from '/agor.config.js';`,
         }
       }
 
+      // Return metadata (without files blob) + full file map separately
+      const { files, ...metadata } = artifact;
       return textResult({
-        artifact: {
-          artifact_id: artifact.artifact_id,
-          name: artifact.name,
-          description: artifact.description,
-          template: artifact.template,
-          board_id: artifact.board_id,
-          worktree_id: artifact.worktree_id,
-          build_status: artifact.build_status,
-          build_errors: artifact.build_errors,
-          content_hash: artifact.content_hash,
-          entry: artifact.entry,
-          dependencies: artifact.dependencies,
-          use_local_bundler: artifact.use_local_bundler,
-          public: artifact.public,
-          created_by: artifact.created_by,
-          created_at: artifact.created_at,
-          updated_at: artifact.updated_at,
-        },
-        files: artifact.files ?? {},
+        artifact: metadata,
+        files: files ?? {},
       });
     }
   );
