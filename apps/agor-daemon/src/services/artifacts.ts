@@ -129,9 +129,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     },
     userId?: string
   ): Promise<Artifact> {
-    const folderPath = data.folderPath;
+    const folderPath = path.resolve(data.folderPath);
     const template = data.template ?? 'react';
     const isPublic = data.public ?? true;
+
+    // Path containment: only allow reading from worktree paths or temp directories
+    await this.validatePublishPath(folderPath);
 
     if (!fs.existsSync(folderPath)) {
       throw new Error(`Folder not found: ${folderPath}`);
@@ -165,6 +168,9 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         throw new Error('Cannot update artifact: not the owner');
       }
 
+      // Auto-check build status from the files we just read
+      const buildResult = this.validateFiles(files);
+
       const updated = await this.artifactRepo.update(data.artifact_id, {
         name: data.name,
         files,
@@ -174,6 +180,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         content_hash: contentHash,
         use_local_bundler: manifest.use_local_bundler,
         public: isPublic,
+        build_status: buildResult.status,
+        build_errors: buildResult.errors.length > 0 ? buildResult.errors : undefined,
       });
 
       this.app.service('artifacts').emit('patched', updated);
@@ -182,6 +190,9 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
     // ── CREATE new artifact ──
     const artifactId = generateId();
+
+    // Auto-check build status from the files we just read
+    const buildResult = this.validateFiles(files);
 
     const artifact = await this.artifactRepo.create({
       artifact_id: artifactId,
@@ -194,6 +205,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       entry: manifest.entry,
       use_local_bundler: manifest.use_local_bundler,
       content_hash: contentHash,
+      build_status: buildResult.status,
+      build_errors: buildResult.errors.length > 0 ? buildResult.errors : undefined,
       public: isPublic,
       created_by: userId,
     });
@@ -242,8 +255,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
 
     // Visibility check: private artifacts are only visible to their creator
-    if (!artifact.public && artifact.created_by && artifact.created_by !== userId) {
-      throw new Error(`Artifact ${artifactId} not found`);
+    if (!artifact.public) {
+      if (!userId || !artifact.created_by || artifact.created_by !== userId) {
+        throw new Error(`Artifact ${artifactId} not found`);
+      }
     }
 
     let files: Record<string, string>;
@@ -351,11 +366,14 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     status: ArtifactBuildStatus;
     errors: string[];
   }> {
-    if (!fs.existsSync(folderPath)) {
+    const resolved = path.resolve(folderPath);
+    await this.validatePublishPath(resolved);
+
+    if (!fs.existsSync(resolved)) {
       return { status: 'error', errors: [`Folder not found: ${folderPath}`] };
     }
 
-    const files = this.readFilesRecursive(folderPath, folderPath);
+    const files = this.readFilesRecursive(resolved, resolved);
     return this.validateFiles(files);
   }
 
@@ -434,13 +452,49 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   /**
-   * Find artifacts by board ID with optional visibility filtering
+   * Find artifacts by board ID with visibility filtering.
+   * Always enforces visibility: public artifacts + private artifacts owned by userId.
+   * Anonymous callers (no userId) see only public artifacts.
    */
   async findByBoardId(boardId: BoardID, userId?: string): Promise<Artifact[]> {
-    return this.artifactRepo.findByBoardId(boardId, { userId });
+    return this.artifactRepo.findByBoardId(boardId, { userId: userId ?? '__anonymous__' });
+  }
+
+  /**
+   * Find all visible artifacts (across boards) for a user.
+   * Anonymous callers see only public artifacts.
+   */
+  async findVisible(userId?: string, options?: { limit?: number }): Promise<Artifact[]> {
+    return this.artifactRepo.findAll({ userId: userId ?? '__anonymous__', limit: options?.limit });
   }
 
   // ── Private helpers ──
+
+  /**
+   * Validate that a publish folder path is inside an allowed root directory.
+   * Allowed roots: any registered worktree path, /tmp, /var/tmp.
+   * Prevents reading arbitrary filesystem paths through the publish API.
+   */
+  private async validatePublishPath(folderPath: string): Promise<void> {
+    const resolved = path.resolve(folderPath);
+
+    // Allow temp directories
+    const allowedTempRoots = ['/tmp', '/var/tmp'];
+    for (const root of allowedTempRoots) {
+      if (resolved.startsWith(root + path.sep) || resolved === root) return;
+    }
+
+    // Allow any registered worktree path
+    const worktrees = await this.worktreeRepo.findAll();
+    for (const wt of worktrees) {
+      const wtPath = path.resolve(wt.path);
+      if (resolved.startsWith(wtPath + path.sep) || resolved === wtPath) return;
+    }
+
+    throw new Error(
+      `Publish path rejected: ${folderPath} is not inside a known worktree or temp directory`
+    );
+  }
 
   /**
    * Validate files: check that source files exist and are non-empty

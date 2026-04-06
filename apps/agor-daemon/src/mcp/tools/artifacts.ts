@@ -70,21 +70,21 @@ Then in your app: import { apiKey, apiUrl } from '/agor.config.js';`,
             'solid',
             'angular',
           ])
-          .default('react')
+          .optional()
           .describe('Sandpack template (default: react)'),
         public: z
           .boolean()
-          .default(true)
+          .optional()
           .describe('Whether the artifact is visible to all board viewers (default: true)'),
-        x: z.number().default(0).describe('X position on board (only used on create)'),
-        y: z.number().default(0).describe('Y position on board (only used on create)'),
+        x: z.number().optional().describe('X position on board (default: 0, only used on create)'),
+        y: z.number().optional().describe('Y position on board (default: 0, only used on create)'),
         width: z
           .number()
-          .default(600)
+          .optional()
           .describe('Width in pixels (default: 600, only used on create)'),
         height: z
           .number()
-          .default(400)
+          .optional()
           .describe('Height in pixels (default: 400, only used on create)'),
       }),
     },
@@ -106,8 +106,10 @@ Then in your app: import { apiKey, apiUrl } from '/agor.config.js';`,
         ctx.userId
       );
 
+      // Omit files blob from response to avoid context bloat for agents
+      const { files: _files, ...artifactSummary } = artifact;
       return textResult({
-        artifact,
+        artifact: artifactSummary,
         instructions: args.artifactId
           ? 'Artifact updated. Changes are live on the board.'
           : 'Artifact created and placed on the board. To update it later, call agor_artifacts_publish again with the artifact_id.',
@@ -197,16 +199,16 @@ Then in your app: import { apiKey, apiUrl } from '/agor.config.js';`,
       if (boardId) {
         artifactsList = await service.findByBoardId(boardId as never, ctx.userId);
       } else {
-        const result = await service.find({
-          query: { $limit: limit },
-        } as never);
-        artifactsList =
-          'data' in result ? (result as { data: unknown[] }).data : (result as unknown[]);
+        artifactsList = await service.findVisible(ctx.userId, { limit });
       }
 
+      // Omit files blob from list results to avoid context bloat
+      const stripped = (artifactsList as Record<string, unknown>[]).map(
+        ({ files: _f, ...rest }) => rest
+      );
       return textResult({
-        total: Array.isArray(artifactsList) ? artifactsList.length : 0,
-        data: artifactsList,
+        total: stripped.length,
+        data: stripped,
       });
     }
   );
