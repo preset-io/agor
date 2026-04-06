@@ -1392,6 +1392,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             }> = [];
             const zoneUpdates: Record<string, { x: number; y: number }> = {};
             const markdownUpdates: Record<string, { x: number; y: number }> = {};
+            const artifactUpdates: Record<string, { x: number; y: number }> = {};
             const commentUpdates: Array<{
               comment_id: string;
               position: { x: number; y: number };
@@ -1412,6 +1413,10 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               } else if (draggedNode?.type === 'markdown') {
                 // Markdown note moved - update position via batchUpdateObjectPositions
                 markdownUpdates[nodeId] = position;
+              } else if (draggedNode?.type === 'artifactNode') {
+                // Artifact moved - update position via batchUpdateObjectPositions
+                // Board objects key is the nodeId itself (e.g. "artifact-{uuid}")
+                artifactUpdates[nodeId] = position;
               } else if (draggedNode?.type === 'comment') {
                 // Comment pin moved - extract comment_id from node id
                 const commentId = nodeId.replace('comment-', '');
@@ -1667,6 +1672,11 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             // Update markdown positions
             if (Object.keys(markdownUpdates).length > 0) {
               await batchUpdateObjectPositions(markdownUpdates);
+            }
+
+            // Update artifact positions
+            if (Object.keys(artifactUpdates).length > 0) {
+              await batchUpdateObjectPositions(artifactUpdates);
             }
 
             // Update comment positions
