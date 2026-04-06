@@ -718,6 +718,12 @@ export function useAgorData(
         next.set(artifact.artifact_id, artifact);
         return next;
       });
+      // Notify ArtifactNode components that payload may have changed
+      window.dispatchEvent(
+        new CustomEvent('agor:artifact-patched', {
+          detail: { artifactId: artifact.artifact_id, contentHash: artifact.content_hash },
+        })
+      );
     };
     const handleArtifactRemoved = (artifact: Artifact) => {
       setArtifactById((prev) => {

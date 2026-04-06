@@ -3125,22 +3125,6 @@ async function main() {
 
   registerAuthenticatedRoute(
     app,
-    '/artifacts/:id/hash',
-    {
-      async find(_params: RouteParams) {
-        const artifactId = _params.route?.id;
-        if (!artifactId) throw new Error('Artifact ID required');
-        const artifactsService = app.service('artifacts') as unknown as ArtifactsService;
-        const hash = await artifactsService.getHash(artifactId);
-        return { hash };
-      },
-    },
-    {},
-    requireAuth
-  );
-
-  registerAuthenticatedRoute(
-    app,
     '/artifacts/:id/console',
     {
       async create(

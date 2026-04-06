@@ -104,6 +104,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const artifact = await this.artifactRepo.findById(artifactId);
     if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
     await this.deleteArtifact(artifactId);
+    this.app.service('artifacts').emit('removed', artifact);
     return artifact;
   }
 
@@ -267,41 +268,17 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       }
     }
 
-    let files: Record<string, string>;
-    let manifest: SandpackManifest;
-
-    if (artifact.files) {
-      // ── New path: serve from DB ──
-      files = { ...artifact.files };
-      manifest = {
-        template: artifact.template as SandpackTemplate,
-        dependencies: artifact.dependencies,
-        entry: artifact.entry,
-        use_local_bundler: artifact.use_local_bundler,
-      };
-    } else if (artifact.worktree_id && artifact.path) {
-      // ── Legacy fallback: read from filesystem ──
-      const worktree = await this.worktreeRepo.findById(artifact.worktree_id);
-      if (!worktree) throw new Error(`Worktree ${artifact.worktree_id} not found`);
-
-      const artifactDir = this.resolveArtifactDir(worktree.path, artifact.path);
-      if (!fs.existsSync(artifactDir)) {
-        throw new Error(`Artifact directory not found: ${artifactDir}`);
-      }
-
-      // Read sandpack.json
-      const manifestPath = path.join(artifactDir, 'sandpack.json');
-      manifest = { template: artifact.template as SandpackTemplate };
-      if (fs.existsSync(manifestPath)) {
-        manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-      }
-
-      files = this.readFilesRecursive(artifactDir, artifactDir);
-    } else {
-      throw new Error(
-        `Artifact ${artifactId} has no files in DB and no filesystem path — cannot serve payload`
-      );
+    if (!artifact.files) {
+      throw new Error(`Artifact ${artifactId} has no files in DB — cannot serve payload`);
     }
+
+    const files: Record<string, string> = { ...artifact.files };
+    const manifest: SandpackManifest = {
+      template: artifact.template as SandpackTemplate,
+      dependencies: artifact.dependencies,
+      entry: artifact.entry,
+      use_local_bundler: artifact.use_local_bundler,
+    };
 
     // Compute hash from files
     const contentHash = this.computeHashFromFiles(files);
@@ -340,28 +317,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       ...(missingEnvVars ? { missing_env_vars: missingEnvVars } : {}),
       ...(bundlerURL ? { bundlerURL } : {}),
     };
-  }
-
-  /**
-   * Get content hash for cache validation
-   */
-  async getHash(artifactId: string): Promise<string> {
-    const artifact = await this.artifactRepo.findById(artifactId);
-    if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
-
-    if (artifact.files) {
-      return this.computeHashFromFiles(artifact.files);
-    }
-
-    // Legacy fallback
-    if (artifact.worktree_id && artifact.path) {
-      const worktree = await this.worktreeRepo.findById(artifact.worktree_id);
-      if (!worktree) throw new Error(`Worktree ${artifact.worktree_id} not found`);
-      const artifactDir = this.resolveArtifactDir(worktree.path, artifact.path);
-      return this.computeHashFromDir(artifactDir);
-    }
-
-    return artifact.content_hash ?? '';
   }
 
   /**
@@ -622,19 +577,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   /**
-   * Resolve artifact directory with path containment check.
-   * Used only for legacy filesystem fallback.
-   */
-  private resolveArtifactDir(worktreePath: string, artifactPath: string): string {
-    const resolved = path.resolve(worktreePath, artifactPath);
-    const worktreeReal = path.resolve(worktreePath);
-    if (!resolved.startsWith(worktreeReal + path.sep) && resolved !== worktreeReal) {
-      throw new Error('Path traversal detected: artifact path resolves outside worktree');
-    }
-    return resolved;
-  }
-
-  /**
    * Compute content hash from in-memory file map
    */
   private computeHashFromFiles(files: Record<string, string>): string {
@@ -643,23 +585,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
     for (const key of sortedKeys) {
       hash.update(`${key}:${files[key]}`);
-    }
-
-    return hash.digest('hex');
-  }
-
-  /**
-   * Compute content hash from filesystem directory (legacy)
-   */
-  private computeHashFromDir(dirPath: string): string {
-    if (!fs.existsSync(dirPath)) return '';
-
-    const hash = createHash('md5');
-    const fileList = this.getFileList(dirPath);
-
-    for (const file of fileList.sort()) {
-      const content = fs.readFileSync(file, 'utf-8');
-      hash.update(`${path.relative(dirPath, file)}:${content}`);
     }
 
     return hash.digest('hex');

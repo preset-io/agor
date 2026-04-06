@@ -2,7 +2,8 @@
  * ArtifactNode — Board canvas node for live Sandpack artifacts
  *
  * Fetches artifact payload from the daemon REST API, renders via Sandpack,
- * captures console events, and reloads on content_hash changes.
+ * captures console events, and reloads when a WebSocket 'patched' event
+ * signals a content_hash change.
  */
 
 // Polyfill crypto.subtle for non-secure contexts (HTTP).
@@ -73,39 +74,63 @@ function getAuthHeaders(): HeadersInit {
  * Inner component that captures Sandpack console events and forwards them to the daemon.
  * Must be inside SandpackProvider.
  */
+/** Max console entries to send per batch, and minimum interval between sends. */
+const CONSOLE_BATCH_MAX = 50;
+const CONSOLE_THROTTLE_MS = 2000;
+
 function ConsoleReporter({ artifactId }: { artifactId: string }) {
   const { logs } = useSandpackConsole({ resetOnPreviewRestart: false });
   const lastSentRef = useRef(0);
+  const lastSendTimeRef = useRef(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (logs.length <= lastSentRef.current) return;
 
-    const newLogs = logs.slice(lastSentRef.current);
-    lastSentRef.current = logs.length;
+    const sendBatch = () => {
+      const newLogs = logs.slice(lastSentRef.current, lastSentRef.current + CONSOLE_BATCH_MAX);
+      lastSentRef.current = Math.min(logs.length, lastSentRef.current + CONSOLE_BATCH_MAX);
+      lastSendTimeRef.current = Date.now();
 
-    // Fire-and-forget POST to daemon
-    const entries = newLogs.map((log) => ({
-      timestamp: Date.now(),
-      level:
-        log.method === 'warn'
-          ? 'warn'
-          : log.method === 'error'
-            ? 'error'
-            : log.method === 'info'
-              ? 'info'
-              : 'log',
-      message:
-        log.data?.map((d: unknown) => (typeof d === 'string' ? d : JSON.stringify(d))).join(' ') ??
-        '',
-    }));
+      const entries = newLogs.map((log) => ({
+        timestamp: Date.now(),
+        level:
+          log.method === 'warn'
+            ? 'warn'
+            : log.method === 'error'
+              ? 'error'
+              : log.method === 'info'
+                ? 'info'
+                : 'log',
+        message:
+          log.data
+            ?.map((d: unknown) => (typeof d === 'string' ? d : JSON.stringify(d)))
+            .join(' ') ?? '',
+      }));
 
-    fetch(`${getDaemonUrl()}/artifacts/${artifactId}/console`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ entries }),
-    }).catch(() => {
-      // Silently ignore – console forwarding is best-effort
-    });
+      fetch(`${getDaemonUrl()}/artifacts/${artifactId}/console`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ entries }),
+      }).catch(() => {});
+    };
+
+    const elapsed = Date.now() - lastSendTimeRef.current;
+    if (elapsed >= CONSOLE_THROTTLE_MS) {
+      sendBatch();
+    } else if (!timerRef.current) {
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        sendBatch();
+      }, CONSOLE_THROTTLE_MS - elapsed);
+    }
+
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
   }, [logs, artifactId]);
 
   return null;
@@ -151,24 +176,16 @@ export const ArtifactNode = ({
     fetchPayload();
   }, [fetchPayload]);
 
-  // Poll for hash changes (lightweight) — every 5s
+  // Re-fetch payload when the artifact is updated (via WebSocket 'patched' event)
   useEffect(() => {
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`${getDaemonUrl()}/artifacts/${data.artifactId}/hash`, {
-          headers: getAuthHeaders(),
-        });
-        if (!res.ok) return;
-        const { hash } = await res.json();
-        if (hash && lastHashRef.current && hash !== lastHashRef.current) {
-          fetchPayload();
-        }
-      } catch {
-        // Ignore polling errors
+    const handler = (e: Event) => {
+      const { artifactId, contentHash } = (e as CustomEvent).detail;
+      if (artifactId === data.artifactId && contentHash !== lastHashRef.current) {
+        fetchPayload();
       }
-    }, 5000);
-
-    return () => clearInterval(interval);
+    };
+    window.addEventListener('agor:artifact-patched', handler);
+    return () => window.removeEventListener('agor:artifact-patched', handler);
   }, [data.artifactId, fetchPayload]);
 
   const handleResize = useCallback(
