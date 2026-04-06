@@ -19,7 +19,6 @@ import {
   BulbOutlined,
   CheckCircleOutlined,
   CheckSquareOutlined,
-  ClockCircleOutlined,
   CloseCircleOutlined,
   CodeOutlined,
   CopyOutlined,
@@ -36,13 +35,18 @@ import {
   ThunderboltOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
-import { Popover, Space, Spin, Tooltip, Typography, theme } from 'antd';
+import { Popover, Space, Typography, theme } from 'antd';
 import React, { useMemo, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { CollapsibleText } from '../CollapsibleText';
 import { Tag } from '../Tag';
-import { ToolBlock } from '../ToolBlock';
+import {
+  ALWAYS_EXPANDED_TOOLS,
+  deriveToolStatus,
+  renderToolStatusIcon,
+  ToolBlock,
+} from '../ToolBlock';
 import { ToolUseRenderer } from '../ToolUseRenderer';
 
 interface ToolUseBlock {
@@ -126,9 +130,6 @@ function getToolIcon(toolName: string): React.ReactElement {
       return <ToolOutlined {...iconProps} />;
   }
 }
-
-/** Tools whose content is always shown (not collapsible) */
-const ALWAYS_EXPANDED_TOOLS = new Set(['Edit', 'Write', 'edit', 'write', 'edit_files']);
 
 export const AgentChain = React.memo<AgentChainProps>(
   ({ messages, isTaskRunning = false, isLatest }) => {
@@ -401,6 +402,14 @@ export const AgentChain = React.memo<AgentChainProps>(
       return getToolDisplayName(toolUse.name, toolUse.input);
     };
 
+    // Precompute index of last tool item (avoids O(n²) slice().some() per item)
+    const lastToolIndex = useMemo(() => {
+      for (let i = chainItems.length - 1; i >= 0; i--) {
+        if (chainItems[i].type === 'tool') return i;
+      }
+      return -1;
+    }, [chainItems]);
+
     // Build tool block items for rendering
     const renderChainItem = (item: ChainItem, index: number) => {
       if (item.type === 'thought') {
@@ -442,34 +451,14 @@ export const AgentChain = React.memo<AgentChainProps>(
       const displayName = resolveDisplayName(toolUse);
       const isAlwaysExpanded = ALWAYS_EXPANDED_TOOLS.has(toolUse.name);
 
-      // Position-based stale detection: if there are tool items after this one,
-      // the agent has moved on — a missing result means "stale", not "running"
-      const isLastTool = !chainItems.slice(index + 1).some((i) => i.type === 'tool');
-      const showSpinner = !toolResult && isLastTool && isTaskRunning;
-
-      // Status
-      const status: 'success' | 'error' | 'pending' | 'stale' = toolResult
-        ? isError
-          ? 'error'
-          : 'success'
-        : showSpinner
-          ? 'pending'
-          : 'stale';
-
-      // Icon
-      const icon = toolResult ? (
-        isError ? (
-          <CloseCircleOutlined style={{ fontSize: 14 }} />
-        ) : (
-          <CheckCircleOutlined style={{ fontSize: 14 }} />
-        )
-      ) : showSpinner ? (
-        <Spin size="small" />
-      ) : (
-        <Tooltip title="Agent moved on — result not captured">
-          <ClockCircleOutlined style={{ fontSize: 14 }} />
-        </Tooltip>
-      );
+      // Derive status and icon via shared helper
+      const status = deriveToolStatus({
+        hasResult: !!toolResult,
+        isError: !!isError,
+        isLastTool: index === lastToolIndex,
+        isTaskRunning,
+      });
+      const icon = renderToolStatusIcon(status);
 
       // Description — key context for the tool call
       let description = getToolDescription(toolUse);
