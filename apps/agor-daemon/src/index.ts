@@ -926,7 +926,7 @@ async function main() {
         | undefined;
 
       // Resolve gateway-level env vars (for sessions created via gateway channels)
-      let gatewayEnv: Record<string, string> | undefined;
+      let gatewayEnv: import('@agor/core/types').GatewayEnvVar[] | undefined;
       const gatewaySource = (session.custom_context as Record<string, unknown> | undefined)
         ?.gateway_source as { channel_id?: string } | undefined;
       if (gatewaySource?.channel_id) {
@@ -935,7 +935,7 @@ async function main() {
           const channelRepo = new GatewayChannelRepository(db);
           const channel = await channelRepo.findById(gatewaySource.channel_id);
           if (channel?.agentic_config?.envVars) {
-            gatewayEnv = channel.agentic_config.envVars as Record<string, string>;
+            gatewayEnv = channel.agentic_config.envVars;
           }
         } catch {
           // Non-fatal — gateway env vars are optional
@@ -3506,7 +3506,34 @@ async function main() {
     before: {
       all: [requireAuth],
       create: [requireMinimumRole(ROLES.MEMBER, 'create gateway channels')],
-      patch: [requireMinimumRole(ROLES.MEMBER, 'update gateway channels')],
+      patch: [
+        requireMinimumRole(ROLES.MEMBER, 'update gateway channels'),
+        // Preserve existing env vars when the update omits envVars (i.e., all
+        // values were still redacted and got stripped by the UI).
+        async (context: HookContext) => {
+          const data = context.data as Record<string, unknown> | undefined;
+          const ac = data?.agentic_config as Record<string, unknown> | undefined;
+          if (ac && !ac.envVars && context.id) {
+            try {
+              const existing = await app.service('gateway-channels').get(String(context.id), {
+                ...context.params,
+                // Internal call — skip hooks to avoid infinite loop
+                provider: undefined,
+              });
+              const existingAc = (existing as Record<string, unknown>).agentic_config as Record<
+                string,
+                unknown
+              > | null;
+              if (existingAc?.envVars) {
+                ac.envVars = existingAc.envVars;
+              }
+            } catch {
+              // Non-fatal — if we can't read existing, just proceed without merging
+            }
+          }
+          return context;
+        },
+      ],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete gateway channels')],
     },
     after: {
@@ -3528,6 +3555,15 @@ async function main() {
                 }
               }
               channel.config = config;
+            }
+            // Redact env var values in agentic_config (keep keys and forceOverride visible)
+            if (channel?.agentic_config && typeof channel.agentic_config === 'object') {
+              const ac = channel.agentic_config as Record<string, unknown>;
+              if (Array.isArray(ac.envVars)) {
+                ac.envVars = (
+                  ac.envVars as { key: string; value: string; forceOverride: boolean }[]
+                ).map((v) => ({ key: v.key, value: '••••••••', forceOverride: v.forceOverride }));
+              }
             }
           };
           if (Array.isArray(context.result?.data)) {

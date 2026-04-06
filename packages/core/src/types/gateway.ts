@@ -41,6 +41,19 @@ export type ThreadStatus = 'active' | 'archived' | 'paused';
  * When a channel has agentic_config, sessions created via that channel
  * use these settings. Falls back to user defaults when not set.
  */
+/**
+ * A single gateway-level environment variable with override behavior.
+ *
+ * - `forceOverride: false` (default) — fallback only; used when the user
+ *   hasn't defined this key at the user level.
+ * - `forceOverride: true` — always applied, even if the user has their own value.
+ */
+export interface GatewayEnvVar {
+  key: string;
+  value: string;
+  forceOverride: boolean;
+}
+
 export interface GatewayAgenticConfig {
   agent: AgenticToolName;
   modelConfig?: DefaultModelConfig;
@@ -51,11 +64,14 @@ export interface GatewayAgenticConfig {
   codexNetworkAccess?: boolean;
   /**
    * Gateway-level environment variables (e.g., service account tokens).
-   * Merged into the session's process environment with LOWER priority than
-   * per-user env vars (user values take precedence when both exist).
-   * Useful for providing fallback service account tokens for MCP servers.
+   *
+   * Each entry specifies a key, value, and override mode:
+   * - Fallback (`forceOverride: false`) — merged BEFORE user env vars so user
+   *   values take precedence when both exist.
+   * - Force override (`forceOverride: true`) — merged AFTER user env vars so
+   *   the channel value always wins.
    */
-  envVars?: Record<string, string>;
+  envVars?: GatewayEnvVar[];
 }
 
 // ============================================================================

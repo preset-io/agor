@@ -3,7 +3,7 @@ import type { Database } from '../db/client';
 import { select } from '../db/database-wrapper';
 import { decryptApiKey } from '../db/encryption';
 import { users } from '../db/schema';
-import type { UserID } from '../types';
+import type { GatewayEnvVar, UserID } from '../types';
 
 /**
  * SECURITY: Allowlisted environment variable names that are safe to pass
@@ -259,10 +259,15 @@ export async function createUserProcessEnvironment(
   forImpersonation = false,
   /**
    * Gateway-level env vars (e.g., service account tokens).
-   * Merged BEFORE user env vars — user values take precedence.
-   * Included in AGOR_USER_ENV_KEYS so MCP templates can resolve them.
+   *
+   * Accepts either the new structured array format (with forceOverride) or
+   * the legacy `Record<string, string>` format (treated as fallback-only).
+   *
+   * - Fallback vars are merged BEFORE user env vars — user values win.
+   * - Force-override vars are merged AFTER user env vars — channel values win.
+   * - All gateway keys are included in AGOR_USER_ENV_KEYS for MCP template resolution.
    */
-  gatewayEnv?: Record<string, string>
+  gatewayEnv?: GatewayEnvVar[] | Record<string, string>
 ): Promise<Record<string, string>> {
   // SECURITY: Start with allowlisted env vars only — never inherit full process.env
   const env = buildAllowlistedEnv();
@@ -278,18 +283,34 @@ export async function createUserProcessEnvironment(
   // Track user-defined env var keys (for MCP template scoping)
   const userEnvKeys: string[] = [];
 
-  // Merge gateway-level env vars (low priority — user vars override these)
+  // Normalize gateway env vars to structured format
+  let gatewayFallback: GatewayEnvVar[] = [];
+  let gatewayForceOverride: GatewayEnvVar[] = [];
+
   if (gatewayEnv) {
-    for (const [key, value] of Object.entries(gatewayEnv)) {
-      if (value && value.trim() !== '') {
-        env[key] = value;
-        userEnvKeys.push(key);
-      }
+    const normalizedVars: GatewayEnvVar[] = Array.isArray(gatewayEnv)
+      ? gatewayEnv
+      : // Legacy Record<string, string> — treat all as fallback
+        Object.entries(gatewayEnv).map(([key, value]) => ({
+          key,
+          value,
+          forceOverride: false,
+        }));
+
+    gatewayFallback = normalizedVars.filter((v) => !v.forceOverride);
+    gatewayForceOverride = normalizedVars.filter((v) => v.forceOverride);
+  }
+
+  // 1. Merge gateway fallback vars (low priority — user vars override these)
+  for (const { key, value } of gatewayFallback) {
+    if (value && value.trim() !== '') {
+      env[key] = value;
+      userEnvKeys.push(key);
     }
   }
 
-  // Resolve and merge user environment variables (if userId provided)
-  // Only override if values are non-empty — takes precedence over gateway vars
+  // 2. Resolve and merge user environment variables (if userId provided)
+  // Only override if values are non-empty — takes precedence over gateway fallback vars
   if (userId && db) {
     const userEnv = await resolveUserEnvironment(userId, db);
     for (const [key, value] of Object.entries(userEnv)) {
@@ -302,7 +323,17 @@ export async function createUserProcessEnvironment(
     }
   }
 
-  // Merge additional environment variables (highest priority)
+  // 3. Merge gateway force-override vars (takes precedence over user vars)
+  for (const { key, value } of gatewayForceOverride) {
+    if (value && value.trim() !== '') {
+      env[key] = value;
+      if (!userEnvKeys.includes(key)) {
+        userEnvKeys.push(key);
+      }
+    }
+  }
+
+  // 4. Merge additional environment variables (highest priority)
   // Only override if values are non-empty
   if (additionalEnv) {
     for (const [key, value] of Object.entries(additionalEnv)) {

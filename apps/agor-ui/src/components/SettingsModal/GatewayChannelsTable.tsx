@@ -4,6 +4,7 @@ import type {
   ChannelType,
   GatewayAgenticConfig,
   GatewayChannel,
+  GatewayEnvVar,
   MCPServer,
   PermissionMode,
   User,
@@ -17,6 +18,7 @@ import {
   GithubOutlined,
   KeyOutlined,
   LoadingOutlined,
+  LockOutlined,
   MessageOutlined,
   PlusOutlined,
   SlackOutlined,
@@ -29,6 +31,7 @@ import {
   Alert,
   Badge,
   Button,
+  Checkbox,
   Collapse,
   Form,
   type FormInstance,
@@ -44,6 +47,7 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
   theme,
 } from 'antd';
@@ -124,6 +128,90 @@ const SectionLabel: React.FC<{ icon: React.ReactNode; title: string; subtitle?: 
     </span>
   </Space>
 );
+
+// ============================================================================
+// Environment Variables Editor
+// ============================================================================
+
+/**
+ * Inline editor for gateway-level environment variables.
+ * Stored as GatewayEnvVar[] in agentic_config.envVars.
+ */
+const GatewayEnvVarsEditor: React.FC<{
+  value?: GatewayEnvVar[];
+  onChange?: (vars: GatewayEnvVar[]) => void;
+}> = ({ value = [], onChange }) => {
+  const addVar = () => {
+    onChange?.([...value, { key: '', value: '', forceOverride: false }]);
+  };
+
+  const updateVar = (index: number, field: keyof GatewayEnvVar, newValue: string | boolean) => {
+    const updated = value.map((v, i) => (i === index ? { ...v, [field]: newValue } : v));
+    onChange?.(updated);
+  };
+
+  const removeVar = (index: number) => {
+    onChange?.(value.filter((_, i) => i !== index));
+  };
+
+  return (
+    <div>
+      {value.map((envVar, index) => (
+        <div
+          key={`${envVar.key}-${index}`}
+          style={{
+            display: 'flex',
+            gap: 8,
+            marginBottom: 8,
+            alignItems: 'flex-start',
+          }}
+        >
+          <Input
+            placeholder="KEY_NAME"
+            value={envVar.key}
+            onChange={(e) => updateVar(index, 'key', e.target.value)}
+            style={{ flex: '0 0 160px', fontFamily: 'monospace', fontSize: 12 }}
+          />
+          <Input.Password
+            placeholder="value"
+            value={envVar.value}
+            onChange={(e) => updateVar(index, 'value', e.target.value)}
+            style={{ flex: 1, fontFamily: 'monospace', fontSize: 12 }}
+          />
+          <Tooltip title="Force override: always use this value, even if the user has their own">
+            <Checkbox
+              checked={envVar.forceOverride}
+              onChange={(e) => updateVar(index, 'forceOverride', e.target.checked)}
+              style={{ marginTop: 5 }}
+            >
+              <Typography.Text style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
+                Force
+              </Typography.Text>
+            </Checkbox>
+          </Tooltip>
+          <Button
+            type="text"
+            size="small"
+            icon={<DeleteOutlined />}
+            danger
+            onClick={() => removeVar(index)}
+            style={{ marginTop: 2 }}
+          />
+        </div>
+      ))}
+      <Button type="dashed" size="small" icon={<PlusOutlined />} onClick={addVar} block>
+        Add Variable
+      </Button>
+      {value.length > 0 && (
+        <Typography.Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 8 }}>
+          <LockOutlined style={{ marginRight: 4 }} />
+          <strong>Fallback</strong> (default): used only when the user hasn&apos;t set this key.{' '}
+          <strong>Force</strong>: always overrides the user&apos;s value.
+        </Typography.Text>
+      )}
+    </div>
+  );
+};
 
 // ============================================================================
 // GitHub App Setup Types & Helpers
@@ -651,6 +739,31 @@ const ChannelFormFields: React.FC<{
                     </Space>
                   ),
                 },
+                // ── Environment Variables ──
+                {
+                  key: 'env-vars',
+                  label: (
+                    <SectionLabel
+                      icon={<LockOutlined />}
+                      title="Environment Variables"
+                      subtitle="channel-level secrets"
+                    />
+                  ),
+                  children: (
+                    <>
+                      <Typography.Text
+                        type="secondary"
+                        style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
+                      >
+                        Define environment variables for sessions created from this channel. Useful
+                        for service account tokens or API keys for MCP servers.
+                      </Typography.Text>
+                      <Form.Item name="envVars" noStyle>
+                        <GatewayEnvVarsEditor />
+                      </Form.Item>
+                    </>
+                  ),
+                },
               ]}
             />
           )}
@@ -953,6 +1066,31 @@ const ChannelFormFields: React.FC<{
                 </Space>
               ),
             },
+            // ── Environment Variables ──
+            {
+              key: 'env-vars',
+              label: (
+                <SectionLabel
+                  icon={<LockOutlined />}
+                  title="Environment Variables"
+                  subtitle="channel-level secrets"
+                />
+              ),
+              children: (
+                <>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
+                  >
+                    Define environment variables for sessions created from this channel. Useful for
+                    service account tokens or API keys for MCP servers.
+                  </Typography.Text>
+                  <Form.Item name="envVars" noStyle>
+                    <GatewayEnvVarsEditor />
+                  </Form.Item>
+                </>
+              ),
+            },
           ]}
         />
       )}
@@ -1105,6 +1243,14 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       ...(values.codexNetworkAccess !== undefined
         ? { codexNetworkAccess: values.codexNetworkAccess as boolean }
         : {}),
+      // Include env vars — filter out empty-key entries and strip redacted sentinel values.
+      // Entries where the value is still '••••••••' are omitted so the backend
+      // keeps the existing encrypted value instead of overwriting it.
+      ...(() => {
+        const raw = (values.envVars as GatewayEnvVar[] | undefined) ?? [];
+        const cleaned = raw.filter((v) => v.key.trim() !== '' && v.value !== '••••••••');
+        return cleaned.length ? { envVars: cleaned } : {};
+      })(),
     };
 
     // Form has preserve={true}, so agor_user_id is retained even when the
@@ -1173,6 +1319,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       codexSandboxMode: channel.agentic_config?.codexSandboxMode,
       codexApprovalPolicy: channel.agentic_config?.codexApprovalPolicy,
       codexNetworkAccess: channel.agentic_config?.codexNetworkAccess,
+      // Env vars: values are masked by the API, so on edit we show the
+      // existing keys with empty values — the user re-enters values to update.
+      envVars: channel.agentic_config?.envVars ?? [],
     };
 
     if (channel.channel_type === 'slack') {
