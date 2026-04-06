@@ -181,5 +181,8 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
       {/* Tool input parameters (collapsible below result) */}
       {inputParamsBlock}
     </div>
-  ) : null;
+  ) : (
+    // No result yet — still show input parameters so users can see what's running
+    <div>{inputParamsBlock}</div>
+  );
 };

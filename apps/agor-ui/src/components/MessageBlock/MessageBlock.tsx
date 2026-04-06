@@ -593,7 +593,13 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
         >
           {/* Index of last tool with a result — tools after this are potentially running */}
           {(() => {
-            const lastResultIndex = toolBlocks.findLastIndex((b) => !!b.toolResult);
+            let lastResultIndex = -1;
+            for (let i = toolBlocks.length - 1; i >= 0; i--) {
+              if (toolBlocks[i].toolResult) {
+                lastResultIndex = i;
+                break;
+              }
+            }
             return toolBlocks.map(({ toolUse, toolResult }, toolIndex) => {
               const displayName = getToolDisplayName(toolUse.name, toolUse.input);
               const isAlwaysExpanded = ALWAYS_EXPANDED_TOOLS.has(toolUse.name);
@@ -621,7 +627,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
                   status={status}
                   expandedByDefault={isAlwaysExpanded}
                 >
-                  {toolResult && <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />}
+                  <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
                 </ToolBlock>
               );
             });

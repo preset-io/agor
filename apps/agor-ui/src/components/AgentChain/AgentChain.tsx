@@ -506,7 +506,7 @@ export const AgentChain = React.memo<AgentChainProps>(
           status={status}
           expandedByDefault={isAlwaysExpanded}
         >
-          {toolResult && <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />}
+          <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
         </ToolBlock>
       );
     };
