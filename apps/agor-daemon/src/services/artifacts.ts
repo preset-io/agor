@@ -122,6 +122,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       artifact_id?: string;
       template?: SandpackTemplate;
       public?: boolean;
+      use_local_bundler?: boolean;
       x?: number;
       y?: number;
       width?: number;
@@ -148,6 +149,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     let manifest: SandpackManifest = { template };
     if (fs.existsSync(manifestPath)) {
       manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    }
+
+    // Allow explicit parameter to override manifest
+    if (data.use_local_bundler !== undefined) {
+      manifest.use_local_bundler = data.use_local_bundler;
     }
 
     // Validate use_local_bundler opt-in
