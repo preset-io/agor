@@ -607,7 +607,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
               const status = deriveToolStatus({
                 hasResult: !!toolResult,
                 isError: !!toolResult?.is_error,
-                isLastTool: isPotentiallyRunning,
+                isPotentiallyRunning,
                 isTaskRunning,
               });
               const icon = renderToolStatusIcon(status);

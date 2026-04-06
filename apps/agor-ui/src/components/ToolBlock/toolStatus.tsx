@@ -27,7 +27,7 @@ interface ToolStatusInput {
    * concurrent tool calls: when multiple tools run in parallel none of
    * them have a subsequent result, so they all remain "pending".
    */
-  isLastTool: boolean;
+  isPotentiallyRunning: boolean;
   /** Whether the parent task is still running */
   isTaskRunning: boolean;
 }
@@ -38,17 +38,17 @@ interface ToolStatusInput {
  * Rules:
  * - Has result + error → 'error'
  * - Has result + no error → 'success'
- * - No result + last tool + task running → 'pending' (spinner)
- * - No result + (not last tool OR task done) → 'stale' (agent moved on)
+ * - No result + potentially running + task running → 'pending' (spinner)
+ * - No result + (not potentially running OR task done) → 'stale' (agent moved on)
  */
 export function deriveToolStatus({
   hasResult,
   isError,
-  isLastTool,
+  isPotentiallyRunning,
   isTaskRunning,
 }: ToolStatusInput): ToolStatus {
   if (hasResult) return isError ? 'error' : 'success';
-  return isLastTool && isTaskRunning ? 'pending' : 'stale';
+  return isPotentiallyRunning && isTaskRunning ? 'pending' : 'stale';
 }
 
 /** Render the icon for a given tool status. */

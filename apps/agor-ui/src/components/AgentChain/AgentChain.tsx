@@ -465,7 +465,7 @@ export const AgentChain = React.memo<AgentChainProps>(
       const status = deriveToolStatus({
         hasResult: !!toolResult,
         isError: !!isError,
-        isLastTool: isPotentiallyRunning,
+        isPotentiallyRunning,
         isTaskRunning,
       });
       const icon = renderToolStatusIcon(status);
