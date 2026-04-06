@@ -186,12 +186,28 @@ const GatewayEnvVarsEditor: React.FC<{
             onChange={(e) => updateVar(index, 'key', e.target.value)}
             style={{ flex: '0 0 160px', fontFamily: 'monospace', fontSize: 12 }}
           />
-          <Input.Password
-            placeholder="value"
-            value={envVar.value}
-            onChange={(e) => updateVar(index, 'value', e.target.value)}
-            style={{ flex: 1, fontFamily: 'monospace', fontSize: 12 }}
-          />
+          {envVar.value === '••••••••' ? (
+            <Input
+              placeholder="click to replace value"
+              value=""
+              onFocus={() => updateVar(index, 'value', '')}
+              readOnly
+              style={{
+                flex: 1,
+                fontFamily: 'monospace',
+                fontSize: 12,
+                color: 'transparent',
+                textShadow: '0 0 6px rgba(255,255,255,0.5)',
+              }}
+            />
+          ) : (
+            <Input.Password
+              placeholder="value"
+              value={envVar.value}
+              onChange={(e) => updateVar(index, 'value', e.target.value)}
+              style={{ flex: 1, fontFamily: 'monospace', fontSize: 12 }}
+            />
+          )}
           <Tooltip title="Force override: always use this value, even if the user has their own">
             <Checkbox
               checked={envVar.forceOverride}
