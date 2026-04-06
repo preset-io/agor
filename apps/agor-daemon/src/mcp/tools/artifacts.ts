@@ -178,7 +178,64 @@ Then in your app: import { apiKey, apiUrl } from '/agor.config.js';`,
     }
   );
 
-  // Tool 5: agor_artifacts_list
+  // Tool 5: agor_artifacts_get
+  server.registerTool(
+    'agor_artifacts_get',
+    {
+      description:
+        'Get a single artifact by ID, including its full file map (path → content). Use this to read artifact source code from another worktree without filesystem access. Respects visibility: public artifacts are readable by anyone; private artifacts are only readable by their creator.',
+      annotations: { readOnlyHint: true },
+      inputSchema: z.object({
+        artifactId: z.string().describe('Artifact ID (full UUID or short prefix)'),
+      }),
+    },
+    async (args) => {
+      const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
+      const artifactId = coerceString(args.artifactId)!;
+
+      // Fetch the artifact via the Feathers get() method (inherited from DrizzleService)
+      let artifact: Awaited<ReturnType<typeof service.get>> | null;
+      try {
+        artifact = await service.get(artifactId, ctx.baseServiceParams);
+      } catch {
+        artifact = null;
+      }
+      if (!artifact) {
+        return textResult({ error: `Artifact ${artifactId} not found` });
+      }
+
+      // Visibility check: private artifacts are only visible to their creator
+      if (!artifact.public) {
+        if (!ctx.userId || !artifact.created_by || artifact.created_by !== ctx.userId) {
+          return textResult({ error: `Artifact ${artifactId} not found` });
+        }
+      }
+
+      return textResult({
+        artifact: {
+          artifact_id: artifact.artifact_id,
+          name: artifact.name,
+          description: artifact.description,
+          template: artifact.template,
+          board_id: artifact.board_id,
+          worktree_id: artifact.worktree_id,
+          build_status: artifact.build_status,
+          build_errors: artifact.build_errors,
+          content_hash: artifact.content_hash,
+          entry: artifact.entry,
+          dependencies: artifact.dependencies,
+          use_local_bundler: artifact.use_local_bundler,
+          public: artifact.public,
+          created_by: artifact.created_by,
+          created_at: artifact.created_at,
+          updated_at: artifact.updated_at,
+        },
+        files: artifact.files ?? {},
+      });
+    }
+  );
+
+  // Tool 6: agor_artifacts_list
   server.registerTool(
     'agor_artifacts_list',
     {
