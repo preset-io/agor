@@ -109,6 +109,22 @@ export interface AgorDaemonSettings {
   /** Instance description (markdown supported).
    * Displayed as a popover around the instance label Tag. */
   instanceDescription?: string;
+
+  /** Allow CORS from Sandpack/CodeSandbox bundler origins (default: true).
+   * Enables artifacts on the hosted bundler to call the Agor API. */
+  cors_allow_sandpack?: boolean;
+
+  /** Additional allowed CORS origins.
+   * Plain strings are exact matches. Wrap in /slashes/ for regex patterns.
+   * @example
+   * ```yaml
+   * daemon:
+   *   cors_origins:
+   *     - https://my-dashboard.example.com
+   *     - /\.internal\.example\.com$/
+   * ```
+   */
+  cors_origins?: string[];
 }
 
 /**

@@ -619,6 +619,8 @@ async function main() {
     uiPort: UI_PORT,
     isCodespaces: process.env.CODESPACES === 'true',
     corsOriginOverride: process.env.CORS_ORIGIN,
+    allowSandpack: config.daemon?.cors_allow_sandpack !== false,
+    configOrigins: config.daemon?.cors_origins,
   });
 
   // Allow browser Private Network Access preflight (public iframe -> localhost daemon).

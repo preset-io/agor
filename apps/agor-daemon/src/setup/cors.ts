@@ -2,7 +2,8 @@
  * CORS Configuration
  *
  * Builds CORS origin configuration based on deployment environment.
- * Supports local development, GitHub Codespaces, and explicit wildcard override.
+ * Supports local development, GitHub Codespaces, Sandpack/CodeSandbox
+ * bundler origins, and configurable extra origins via config or env var.
  */
 
 /**
@@ -20,6 +21,10 @@ export interface CorsConfigOptions {
   isCodespaces: boolean;
   /** Explicit CORS_ORIGIN environment variable override */
   corsOriginOverride?: string;
+  /** Allow Sandpack/CodeSandbox bundler origins (default: true) */
+  allowSandpack?: boolean;
+  /** Additional allowed origins from config (exact strings or /regex/ patterns) */
+  configOrigins?: string[];
 }
 
 export interface CorsConfigResult {
@@ -29,19 +34,36 @@ export interface CorsConfigResult {
   localhostOrigins: string[];
 }
 
+/** Matches hosted Sandpack bundler origins like https://2-19-8-sandpack.codesandbox.io */
+const SANDPACK_ORIGIN_PATTERN = /^https:\/\/[\w.-]+\.codesandbox\.io$/;
+
+/**
+ * Parse a string as a regex pattern if wrapped in /slashes/, otherwise return null.
+ */
+function parseRegexPattern(entry: string): RegExp | null {
+  if (entry.startsWith('/') && entry.endsWith('/') && entry.length > 2) {
+    return new RegExp(entry.slice(1, -1));
+  }
+  return null;
+}
+
 /**
  * Build CORS origin configuration based on deployment environment
  *
  * Priority:
  * 1. CORS_ORIGIN='*' → Allow all origins (dangerous, use with caution)
- * 2. CODESPACES=true → Allow GitHub Codespaces domains + localhost
- * 3. Default → Allow localhost ports only (UI port + 3 additional for parallel dev)
+ * 2. Otherwise → Callback-based handler combining:
+ *    - Localhost ports (UI port + 3 additional for parallel dev)
+ *    - Sandpack/CodeSandbox origins (unless allowSandpack=false)
+ *    - GitHub Codespaces domains (when CODESPACES=true)
+ *    - Additional origins from config.yaml (cors_origins)
+ *    - Additional origins from CORS_ORIGIN env var (comma-separated)
  *
  * @param options - Configuration options
  * @returns CORS origin configuration ready for express cors middleware
  */
 export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
-  const { uiPort, isCodespaces, corsOriginOverride } = options;
+  const { uiPort, isCodespaces, corsOriginOverride, allowSandpack = true, configOrigins } = options;
 
   // Support UI port and 3 additional ports (for parallel dev servers)
   const localhostOrigins = [
@@ -51,53 +73,76 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
     `http://localhost:${uiPort + 3}`,
   ];
 
-  let origin: CorsOrigin;
-
+  // Explicit wildcard - allow all origins (use with caution!)
   if (corsOriginOverride === '*') {
-    // Explicit wildcard - allow all origins (use with caution!)
     console.warn('⚠️  CORS set to allow ALL origins (CORS_ORIGIN=*)');
-    origin = true;
-  } else if (isCodespaces) {
-    // Codespaces: Only allow GitHub Codespaces domains and localhost
-    console.log('🔒 CORS configured for GitHub Codespaces (*.github.dev, *.githubpreview.dev)');
-    origin = createCodespacesCorsHandler();
-  } else {
-    // Local development: Allow localhost ports only
-    origin = localhostOrigins;
+    return { origin: true, localhostOrigins };
   }
 
-  return { origin, localhostOrigins };
-}
-
-/**
- * Create CORS handler for GitHub Codespaces environment
- *
- * Allows:
- * - Requests with no origin (mobile apps, curl, Postman)
- * - GitHub Codespaces domains (*.github.dev, *.githubpreview.dev)
- * - Localhost with any port
- */
-function createCodespacesCorsHandler(): CorsOrigin {
-  const allowedPatterns = [
-    /\.github\.dev$/,
-    /\.githubpreview\.dev$/,
-    /\.preview\.app\.github\.dev$/,
-    /^https?:\/\/localhost(:\d+)?$/,
+  // Collect exact origins and regex patterns from all sources
+  const exactOrigins = new Set(localhostOrigins);
+  const patterns: RegExp[] = [
+    /^https?:\/\/localhost(:\d+)?$/, // Any localhost port
   ];
 
-  return (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-    // Allow requests with no origin (like mobile apps, curl, Postman)
-    if (!origin) {
+  // Sandpack/CodeSandbox bundler (on by default)
+  if (allowSandpack) {
+    patterns.push(SANDPACK_ORIGIN_PATTERN);
+  }
+
+  // GitHub Codespaces
+  if (isCodespaces) {
+    patterns.push(/\.github\.dev$/, /\.githubpreview\.dev$/, /\.preview\.app\.github\.dev$/);
+    console.log('🔒 CORS configured for GitHub Codespaces (*.github.dev, *.githubpreview.dev)');
+  }
+
+  // Additional origins from config.yaml (cors_origins)
+  if (configOrigins) {
+    for (const entry of configOrigins) {
+      const regex = parseRegexPattern(entry);
+      if (regex) {
+        patterns.push(regex);
+      } else {
+        exactOrigins.add(entry);
+      }
+    }
+  }
+
+  // Additional origins from CORS_ORIGIN env var (comma-separated)
+  if (corsOriginOverride) {
+    for (const entry of corsOriginOverride
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)) {
+      const regex = parseRegexPattern(entry);
+      if (regex) {
+        patterns.push(regex);
+      } else {
+        exactOrigins.add(entry);
+      }
+    }
+  }
+
+  if (allowSandpack) {
+    console.log('🔒 CORS allows Sandpack/CodeSandbox bundler origins (*.codesandbox.io)');
+  }
+
+  const origin: CorsOrigin = (
+    requestOrigin: string | undefined,
+    callback: (err: Error | null, allow?: boolean) => void
+  ) => {
+    // Allow requests with no origin (curl, Postman, mobile apps)
+    if (!requestOrigin) {
       return callback(null, true);
     }
 
-    const isAllowed = allowedPatterns.some((pattern) => pattern.test(origin));
-
-    if (isAllowed) {
-      callback(null, true);
-    } else {
-      console.warn(`⚠️  CORS rejected origin: ${origin}`);
-      callback(new Error('Not allowed by CORS'));
+    if (exactOrigins.has(requestOrigin) || patterns.some((p) => p.test(requestOrigin))) {
+      return callback(null, true);
     }
+
+    console.warn(`⚠️  CORS rejected origin: ${requestOrigin}`);
+    callback(new Error('Not allowed by CORS'));
   };
+
+  return { origin, localhostOrigins };
 }
