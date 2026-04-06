@@ -162,6 +162,13 @@
       "when": 1775300000000,
       "tag": "0022_add_user_api_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1775441037758,
+      "tag": "0023_tough_magik",
+      "breakpoints": true
     }
   ]
 }

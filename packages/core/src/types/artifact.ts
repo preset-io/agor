@@ -1,9 +1,9 @@
 /**
  * Artifact Type Definitions
  *
- * Artifacts are live web applications rendered via Sandpack on the board canvas.
- * Code lives on the filesystem at {worktree_path}/.agor/artifacts/{artifact_id}/
- * with a sandpack.json manifest that maps directly to Sandpack React component props.
+ * Artifacts are board-scoped, DB-backed live web applications rendered via Sandpack.
+ * The filesystem folder is a transient staging area; on publish, the daemon serializes
+ * folder contents into the DB `files` column. Serving reads from DB only.
  */
 
 import type { SandpackTemplate } from './board';
@@ -17,14 +17,14 @@ export type ArtifactBuildStatus = 'unknown' | 'checking' | 'success' | 'error';
 /**
  * Artifact - Live web application rendered via Sandpack on the board canvas
  *
- * Artifacts are filesystem-backed Sandpack applications managed by agents.
- * Code lives at {worktree_path}/.agor/artifacts/{artifact_id}/ with a sandpack.json manifest.
+ * Artifacts are board-scoped, DB-backed objects. The `files` column holds the
+ * serialized source code. `worktree_id` and `path` are provenance only.
  */
 export interface Artifact {
   artifact_id: ArtifactID;
 
-  /** Worktree this artifact belongs to (filesystem location) */
-  worktree_id: WorktreeID;
+  /** Worktree provenance (nullable — survives worktree deletion via SET NULL) */
+  worktree_id: WorktreeID | null;
 
   /** Board this artifact is displayed on */
   board_id: BoardID;
@@ -35,8 +35,8 @@ export interface Artifact {
   /** Optional description */
   description?: string;
 
-  /** Relative path within worktree (always .agor/artifacts/{artifact_id}) */
-  path: string;
+  /** Provenance path — where files were read from (nullable) */
+  path: string | null;
 
   /** Sandpack template */
   template: SandpackTemplate;
@@ -49,6 +49,21 @@ export interface Artifact {
 
   /** Content hash for cache invalidation (MD5 of sorted file contents) */
   content_hash?: string;
+
+  /** Serialized file contents: path -> code. Null for legacy records not yet re-published. */
+  files?: Record<string, string>;
+
+  /** NPM dependencies from manifest */
+  dependencies?: Record<string, string>;
+
+  /** Entry file from manifest */
+  entry?: string;
+
+  /** Use self-hosted Sandpack bundler */
+  use_local_bundler?: boolean;
+
+  /** Whether this artifact is visible to all board viewers */
+  public: boolean;
 
   /** User who created this artifact */
   created_by?: string;

@@ -218,6 +218,13 @@
       "when": 1775300000000,
       "tag": "0032_add_user_api_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1775441036373,
+      "tag": "0033_dapper_thing",
+      "breakpoints": true
     }
   ]
 }

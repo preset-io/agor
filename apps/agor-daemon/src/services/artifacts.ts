@@ -2,12 +2,11 @@
  * Artifacts Service
  *
  * Provides REST + WebSocket API for artifact management.
- * Artifacts are filesystem-backed Sandpack applications managed by agents via MCP tools.
+ * Artifacts are board-scoped, DB-backed Sandpack applications.
  *
  * Key behavior:
- * - Artifact creation scaffolds a filesystem directory and creates a board object reference
- * - Build checking reads files from disk and validates via esbuild
- * - Refresh re-reads filesystem and broadcasts to connected clients
+ * - Publish reads a folder from the filesystem, serializes contents into the DB `files` column
+ * - getPayload reads from DB (with legacy filesystem fallback for un-migrated artifacts)
  * - Console logs stored in-memory ring buffer for agent debugging
  */
 
@@ -61,32 +60,6 @@ export type ArtifactParams = QueryParams<{
 
 const MAX_CONSOLE_ENTRIES = 100;
 
-/**
- * Default files for each template when no initial files are provided
- */
-const DEFAULT_FILES: Record<string, Record<string, string>> = {
-  react: {
-    '/App.js': `export default function App() {
-  return <h1>Hello from Agor Artifact</h1>;
-}`,
-  },
-  'react-ts': {
-    '/App.tsx': `export default function App() {
-  return <h1>Hello from Agor Artifact</h1>;
-}`,
-  },
-  vanilla: {
-    '/index.js': `document.getElementById("app").innerHTML = "<h1>Hello from Agor Artifact</h1>";`,
-    '/index.html': `<!DOCTYPE html>
-<html><body><div id="app"></div><script src="index.js"></script></body></html>`,
-  },
-  'vanilla-ts': {
-    '/index.ts': `document.getElementById("app")!.innerHTML = "<h1>Hello from Agor Artifact</h1>";`,
-    '/index.html': `<!DOCTYPE html>
-<html><body><div id="app"></div><script src="index.ts"></script></body></html>`,
-  },
-};
-
 export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>, ArtifactParams> {
   private artifactRepo: ArtifactRepository;
   private worktreeRepo: WorktreeRepository;
@@ -116,13 +89,13 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   // Override Feathers CRUD to enforce lifecycle-safe operations.
-  // Artifacts require filesystem scaffolding (create) and cleanup (remove).
-  // Raw Feathers create/remove would skip these, causing orphaned state.
-  // Use createArtifact() / deleteArtifact() or MCP tools instead.
+  // Artifacts require publish semantics (serializing folder → DB).
+  // Raw Feathers create would skip these, causing incomplete state.
+  // Use publish() or the agor_artifacts_publish MCP tool instead.
 
   async create(_data: Partial<Artifact>, _params?: unknown): Promise<Artifact> {
     throw new Error(
-      'Direct artifact creation not supported. Use createArtifact() or agor_artifacts_create MCP tool.'
+      'Direct artifact creation not supported. Use publish() or agor_artifacts_publish MCP tool.'
     );
   }
 
@@ -135,18 +108,20 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   /**
-   * Create an artifact: scaffold filesystem, create DB record, place on board
+   * Publish a folder as a live Sandpack artifact on a board.
+   *
+   * Reads all files from folderPath, serializes them into the DB `files` column.
+   * If artifactId is provided, updates an existing artifact (must be owned by userId).
+   * If artifactId is omitted, creates a new artifact and places it on the board.
    */
-  async createArtifact(
+  async publish(
     data: {
-      name: string;
+      folderPath: string;
       board_id: string;
-      worktree_id: string;
+      name: string;
+      artifact_id?: string;
       template?: SandpackTemplate;
-      files?: Record<string, string>;
-      dependencies?: Record<string, string>;
-      entry?: string;
-      use_local_bundler?: boolean;
+      public?: boolean;
       x?: number;
       y?: number;
       width?: number;
@@ -154,114 +129,111 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     },
     userId?: string
   ): Promise<Artifact> {
+    const folderPath = data.folderPath;
     const template = data.template ?? 'react';
-    const artifactId = generateId();
-    const relativePath = `.agor/artifacts/${artifactId}`;
+    const isPublic = data.public ?? true;
 
-    // Validate use_local_bundler opt-in: fail fast if the daemon wasn't built
-    // with --with-sandpack. Better to error here than to silently render with
-    // the wrong bundler on an air-gapped deployment.
-    if (data.use_local_bundler && !this.selfHostedBundlerURL) {
+    if (!fs.existsSync(folderPath)) {
+      throw new Error(`Folder not found: ${folderPath}`);
+    }
+
+    // Read all files from the folder
+    const files = this.readFilesRecursive(folderPath, folderPath);
+
+    // Read sandpack.json manifest if present
+    const manifestPath = path.join(folderPath, 'sandpack.json');
+    let manifest: SandpackManifest = { template };
+    if (fs.existsSync(manifestPath)) {
+      manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    }
+
+    // Validate use_local_bundler opt-in
+    if (manifest.use_local_bundler && !this.selfHostedBundlerURL) {
       throw new Error(
-        'Cannot create artifact with use_local_bundler=true: this daemon was not built with --with-sandpack, so no self-hosted Sandpack bundler is available. Either rebuild the daemon with `./build.sh --with-sandpack`, or omit use_local_bundler to use the default CodeSandbox hosted bundler.'
+        'Cannot publish artifact with use_local_bundler=true: this daemon was not built with --with-sandpack, so no self-hosted Sandpack bundler is available. Either rebuild the daemon with `./build.sh --with-sandpack`, or omit use_local_bundler to use the default CodeSandbox hosted bundler.'
       );
     }
 
-    // Resolve worktree to get filesystem path
-    const worktree = await this.worktreeRepo.findById(data.worktree_id);
-    if (!worktree) throw new Error(`Worktree ${data.worktree_id} not found`);
+    // Compute content hash from serialized files
+    const contentHash = this.computeHashFromFiles(files);
 
-    const artifactDir = path.join(worktree.path, relativePath);
-
-    // Scaffold directory
-    fs.mkdirSync(artifactDir, { recursive: true });
-
-    try {
-      // Write sandpack.json manifest
-      const manifest: SandpackManifest = {
-        template,
-        dependencies: data.dependencies,
-        entry: data.entry,
-        ...(data.use_local_bundler ? { use_local_bundler: true } : {}),
-      };
-      fs.writeFileSync(path.join(artifactDir, 'sandpack.json'), JSON.stringify(manifest, null, 2));
-
-      // Write initial files with path containment check
-      const files = data.files ?? DEFAULT_FILES[template] ?? DEFAULT_FILES.react;
-      for (const [filePath, content] of Object.entries(files)) {
-        const relativePart = filePath.startsWith('/') ? filePath.slice(1) : filePath;
-        const fullPath = path.resolve(artifactDir, relativePart);
-
-        // Path traversal guard: ensure resolved path stays within artifact directory
-        if (!fullPath.startsWith(artifactDir + path.sep) && fullPath !== artifactDir) {
-          throw new Error(
-            `Path traversal detected: ${filePath} resolves outside artifact directory`
-          );
-        }
-
-        const dir = path.dirname(fullPath);
-        if (!fs.existsSync(dir)) {
-          fs.mkdirSync(dir, { recursive: true });
-        }
-        fs.writeFileSync(fullPath, content);
+    if (data.artifact_id) {
+      // ── UPDATE existing artifact ──
+      const existing = await this.artifactRepo.findById(data.artifact_id);
+      if (!existing) throw new Error(`Artifact ${data.artifact_id} not found`);
+      if (userId && existing.created_by && existing.created_by !== userId) {
+        throw new Error('Cannot update artifact: not the owner');
       }
 
-      // Compute initial content hash
-      const contentHash = this.computeHash(artifactDir);
-
-      // Create DB record
-      const artifact = await this.artifactRepo.create({
-        artifact_id: artifactId,
-        worktree_id: data.worktree_id as WorktreeID,
-        board_id: data.board_id as BoardID,
+      const updated = await this.artifactRepo.update(data.artifact_id, {
         name: data.name,
-        path: relativePath,
-        template,
+        files,
+        dependencies: manifest.dependencies,
+        entry: manifest.entry,
+        template: manifest.template ?? template,
         content_hash: contentHash,
-        created_by: userId,
+        use_local_bundler: manifest.use_local_bundler,
+        public: isPublic,
       });
 
-      // Place on board as a thin reference
-      const objectId = `artifact-${artifactId}`;
-      try {
-        const updatedBoard = await this.boardRepo.upsertBoardObject(data.board_id, objectId, {
-          type: 'artifact',
-          artifact_id: artifactId,
-          x: data.x ?? 0,
-          y: data.y ?? 0,
-          width: data.width ?? 600,
-          height: data.height ?? 400,
-        });
-
-        // Emit board patched event so the UI updates in real-time via WebSocket
-        if (this.app) {
-          this.app.service('boards').emit('patched', updatedBoard);
-        }
-      } catch (boardError) {
-        // Compensate: remove DB record if board placement fails
-        try {
-          await this.artifactRepo.delete(artifactId);
-        } catch (deleteError) {
-          console.error(
-            `Rollback failed: could not delete orphan artifact ${artifactId}:`,
-            deleteError
-          );
-        }
-        throw boardError;
-      }
-
-      return artifact;
-    } catch (error) {
-      // Compensate: remove scaffolded directory on any failure
-      if (fs.existsSync(artifactDir)) {
-        fs.rmSync(artifactDir, { recursive: true, force: true });
-      }
-      throw error;
+      this.app.service('artifacts').emit('patched', updated);
+      return updated;
     }
+
+    // ── CREATE new artifact ──
+    const artifactId = generateId();
+
+    const artifact = await this.artifactRepo.create({
+      artifact_id: artifactId,
+      board_id: data.board_id as BoardID,
+      name: data.name,
+      path: folderPath,
+      template: manifest.template ?? template,
+      files,
+      dependencies: manifest.dependencies,
+      entry: manifest.entry,
+      use_local_bundler: manifest.use_local_bundler,
+      content_hash: contentHash,
+      public: isPublic,
+      created_by: userId,
+    });
+
+    // Place on board as a thin reference
+    const objectId = `artifact-${artifactId}`;
+    try {
+      const updatedBoard = await this.boardRepo.upsertBoardObject(data.board_id, objectId, {
+        type: 'artifact',
+        artifact_id: artifactId,
+        x: data.x ?? 0,
+        y: data.y ?? 0,
+        width: data.width ?? 600,
+        height: data.height ?? 400,
+      });
+
+      if (this.app) {
+        this.app.service('boards').emit('patched', updatedBoard);
+      }
+    } catch (boardError) {
+      // Compensate: remove DB record if board placement fails
+      try {
+        await this.artifactRepo.delete(artifactId);
+      } catch (deleteError) {
+        console.error(
+          `Rollback failed: could not delete orphan artifact ${artifactId}:`,
+          deleteError
+        );
+      }
+      throw boardError;
+    }
+
+    this.app.service('artifacts').emit('created', artifact);
+    return artifact;
   }
 
   /**
-   * Read artifact directory and build the payload for the frontend.
+   * Read artifact payload for the frontend.
+   * Primary path: reads from DB `files` column.
+   * Legacy fallback: reads from filesystem if `files` is null (un-migrated artifacts).
    * If the artifact contains an /agor.config.js file, it is treated as a
    * Handlebars template and rendered with the requesting user's context.
    */
@@ -269,27 +241,49 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const artifact = await this.artifactRepo.findById(artifactId);
     if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
 
-    const worktree = await this.worktreeRepo.findById(artifact.worktree_id);
-    if (!worktree) throw new Error(`Worktree ${artifact.worktree_id} not found`);
-
-    const artifactDir = this.resolveArtifactDir(worktree.path, artifact.path);
-
-    if (!fs.existsSync(artifactDir)) {
-      throw new Error(`Artifact directory not found: ${artifactDir}`);
+    // Visibility check: private artifacts are only visible to their creator
+    if (!artifact.public && artifact.created_by && artifact.created_by !== userId) {
+      throw new Error(`Artifact ${artifactId} not found`);
     }
 
-    // Read sandpack.json
-    const manifestPath = path.join(artifactDir, 'sandpack.json');
-    let manifest: SandpackManifest = { template: artifact.template as SandpackTemplate };
-    if (fs.existsSync(manifestPath)) {
-      manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    let files: Record<string, string>;
+    let manifest: SandpackManifest;
+
+    if (artifact.files) {
+      // ── New path: serve from DB ──
+      files = { ...artifact.files };
+      manifest = {
+        template: artifact.template as SandpackTemplate,
+        dependencies: artifact.dependencies,
+        entry: artifact.entry,
+        use_local_bundler: artifact.use_local_bundler,
+      };
+    } else if (artifact.worktree_id && artifact.path) {
+      // ── Legacy fallback: read from filesystem ──
+      const worktree = await this.worktreeRepo.findById(artifact.worktree_id);
+      if (!worktree) throw new Error(`Worktree ${artifact.worktree_id} not found`);
+
+      const artifactDir = this.resolveArtifactDir(worktree.path, artifact.path);
+      if (!fs.existsSync(artifactDir)) {
+        throw new Error(`Artifact directory not found: ${artifactDir}`);
+      }
+
+      // Read sandpack.json
+      const manifestPath = path.join(artifactDir, 'sandpack.json');
+      manifest = { template: artifact.template as SandpackTemplate };
+      if (fs.existsSync(manifestPath)) {
+        manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      }
+
+      files = this.readFilesRecursive(artifactDir, artifactDir);
+    } else {
+      throw new Error(
+        `Artifact ${artifactId} has no files in DB and no filesystem path — cannot serve payload`
+      );
     }
 
-    // Read all files from directory (excluding sandpack.json)
-    const files = this.readFilesRecursive(artifactDir, artifactDir);
-
-    // Compute hash
-    const contentHash = this.computeHash(artifactDir);
+    // Compute hash from files
+    const contentHash = this.computeHashFromFiles(files);
 
     // Render agor.config.js template if present
     let missingEnvVars: string[] | undefined;
@@ -301,11 +295,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       }
     }
 
-    // Resolve bundlerURL: only when the manifest explicitly opts into the local
-    // bundler via use_local_bundler=true. Otherwise omit it so the frontend uses
-    // Sandpack's default CodeSandbox hosted bundler. If the artifact opted in but
-    // the daemon no longer has a local bundler (e.g. rebuilt without --with-sandpack),
-    // silently fall back to hosted — log a warning so operators can notice.
+    // Resolve bundlerURL
     let bundlerURL: string | undefined;
     if (manifest.use_local_bundler) {
       if (this.selfHostedBundlerURL) {
@@ -338,73 +328,52 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const artifact = await this.artifactRepo.findById(artifactId);
     if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
 
-    const worktree = await this.worktreeRepo.findById(artifact.worktree_id);
-    if (!worktree) throw new Error(`Worktree ${artifact.worktree_id} not found`);
+    if (artifact.files) {
+      return this.computeHashFromFiles(artifact.files);
+    }
 
-    const artifactDir = this.resolveArtifactDir(worktree.path, artifact.path);
-    return this.computeHash(artifactDir);
+    // Legacy fallback
+    if (artifact.worktree_id && artifact.path) {
+      const worktree = await this.worktreeRepo.findById(artifact.worktree_id);
+      if (!worktree) throw new Error(`Worktree ${artifact.worktree_id} not found`);
+      const artifactDir = this.resolveArtifactDir(worktree.path, artifact.path);
+      return this.computeHashFromDir(artifactDir);
+    }
+
+    return artifact.content_hash ?? '';
   }
 
   /**
    * Check build: verify artifact files exist and are non-empty.
-   *
-   * Note: `new Function()` was considered for syntax checking but it cannot
-   * parse ESM (export/import), JSX, or TypeScript — which are the primary
-   * Sandpack use cases. Real syntax validation requires esbuild (v2 enhancement).
-   * For now, we validate file existence and structure.
+   * Reads from a folder path (pre-publish check) or from DB (post-publish check).
    */
+  async checkBuildFromFolder(folderPath: string): Promise<{
+    status: ArtifactBuildStatus;
+    errors: string[];
+  }> {
+    if (!fs.existsSync(folderPath)) {
+      return { status: 'error', errors: [`Folder not found: ${folderPath}`] };
+    }
+
+    const files = this.readFilesRecursive(folderPath, folderPath);
+    return this.validateFiles(files);
+  }
+
   async checkBuild(artifactId: string): Promise<{
     status: ArtifactBuildStatus;
     errors: string[];
   }> {
     const payload = await this.getPayload(artifactId);
-    const errors: string[] = [];
-
-    // Check that at least one source file exists
-    const sourceFiles = Object.entries(payload.files).filter(([fp]) =>
-      /\.(js|jsx|ts|tsx|html|css)$/.test(fp)
-    );
-
-    if (sourceFiles.length === 0) {
-      errors.push('No source files found in artifact');
-    }
-
-    // Check for empty source files
-    for (const [filePath, content] of sourceFiles) {
-      if (!content || content.trim().length === 0) {
-        errors.push(`${filePath}: file is empty`);
-      }
-    }
-
-    const status: ArtifactBuildStatus = errors.length > 0 ? 'error' : 'success';
+    const result = this.validateFiles(payload.files);
 
     // Update DB
     await this.artifactRepo.updateBuildStatus(
       artifactId,
-      status,
-      errors.length > 0 ? errors : undefined
+      result.status,
+      result.errors.length > 0 ? result.errors : undefined
     );
 
-    return { status, errors };
-  }
-
-  /**
-   * Refresh: re-read filesystem, compute new hash, broadcast update
-   */
-  async refresh(artifactId: string): Promise<Artifact> {
-    const artifact = await this.artifactRepo.findById(artifactId);
-    if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
-
-    const worktree = await this.worktreeRepo.findById(artifact.worktree_id);
-    if (!worktree) throw new Error(`Worktree ${artifact.worktree_id} not found`);
-
-    const artifactDir = this.resolveArtifactDir(worktree.path, artifact.path);
-    const newHash = this.computeHash(artifactDir);
-
-    // Update hash in DB
-    const updated = await this.artifactRepo.updateContentHash(artifactId, newHash);
-
-    return updated;
+    return result;
   }
 
   /**
@@ -439,20 +408,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   /**
-   * Delete artifact: remove filesystem, board object, and DB record
+   * Delete artifact: remove board object and DB record.
+   * No filesystem cleanup — files aren't ours to manage.
    */
   async deleteArtifact(artifactId: string): Promise<void> {
     const artifact = await this.artifactRepo.findById(artifactId);
     if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
-
-    // Remove filesystem directory
-    const worktree = await this.worktreeRepo.findById(artifact.worktree_id);
-    if (worktree) {
-      const artifactDir = this.resolveArtifactDir(worktree.path, artifact.path);
-      if (fs.existsSync(artifactDir)) {
-        fs.rmSync(artifactDir, { recursive: true, force: true });
-      }
-    }
 
     // Remove board object reference
     const objectId = `artifact-${artifactId}`;
@@ -473,13 +434,39 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   /**
-   * Find artifacts by board ID
+   * Find artifacts by board ID with optional visibility filtering
    */
-  async findByBoardId(boardId: BoardID): Promise<Artifact[]> {
-    return this.artifactRepo.findByBoardId(boardId);
+  async findByBoardId(boardId: BoardID, userId?: string): Promise<Artifact[]> {
+    return this.artifactRepo.findByBoardId(boardId, { userId });
   }
 
   // ── Private helpers ──
+
+  /**
+   * Validate files: check that source files exist and are non-empty
+   */
+  private validateFiles(files: Record<string, string>): {
+    status: ArtifactBuildStatus;
+    errors: string[];
+  } {
+    const errors: string[] = [];
+
+    const sourceFiles = Object.entries(files).filter(([fp]) =>
+      /\.(js|jsx|ts|tsx|html|css)$/.test(fp)
+    );
+
+    if (sourceFiles.length === 0) {
+      errors.push('No source files found in artifact');
+    }
+
+    for (const [filePath, content] of sourceFiles) {
+      if (!content || content.trim().length === 0) {
+        errors.push(`${filePath}: file is empty`);
+      }
+    }
+
+    return { status: errors.length > 0 ? 'error' : 'success', errors };
+  }
 
   /**
    * Render an agor.config.js Handlebars template with user-specific context.
@@ -524,9 +511,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         );
         context.user = { id: userId, env: {} };
       }
-
-      // TODO: generate scoped artifact token via SessionTokenService
-      // (context.agor as any).token = await this.generateArtifactToken(artifact, userId);
     }
 
     // Render template using shared core helper (missing values become "")
@@ -579,7 +563,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
   /**
    * Resolve artifact directory with path containment check.
-   * Prevents path traversal via malicious artifact.path values.
+   * Used only for legacy filesystem fallback.
    */
   private resolveArtifactDir(worktreePath: string, artifactPath: string): string {
     const resolved = path.resolve(worktreePath, artifactPath);
@@ -590,13 +574,30 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     return resolved;
   }
 
-  private computeHash(dirPath: string): string {
+  /**
+   * Compute content hash from in-memory file map
+   */
+  private computeHashFromFiles(files: Record<string, string>): string {
+    const hash = createHash('md5');
+    const sortedKeys = Object.keys(files).sort();
+
+    for (const key of sortedKeys) {
+      hash.update(`${key}:${files[key]}`);
+    }
+
+    return hash.digest('hex');
+  }
+
+  /**
+   * Compute content hash from filesystem directory (legacy)
+   */
+  private computeHashFromDir(dirPath: string): string {
     if (!fs.existsSync(dirPath)) return '';
 
     const hash = createHash('md5');
-    const files = this.getFileList(dirPath);
+    const fileList = this.getFileList(dirPath);
 
-    for (const file of files.sort()) {
+    for (const file of fileList.sort()) {
       const content = fs.readFileSync(file, 'utf-8');
       hash.update(`${path.relative(dirPath, file)}:${content}`);
     }

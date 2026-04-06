@@ -13,7 +13,7 @@ import type {
   UUID,
   WorktreeID,
 } from '@agor/core/types';
-import { and, eq, like } from 'drizzle-orm';
+import { and, eq, like, or } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
@@ -31,15 +31,20 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
   private rowToArtifact(row: ArtifactRow): Artifact {
     return {
       artifact_id: row.artifact_id as UUID,
-      worktree_id: row.worktree_id as WorktreeID,
+      worktree_id: (row.worktree_id as WorktreeID) ?? null,
       board_id: row.board_id as BoardID,
       name: row.name,
       description: row.description ?? undefined,
-      path: row.path,
+      path: row.path ?? null,
       template: (row.template ?? 'react') as SandpackTemplate,
       build_status: (row.build_status ?? 'unknown') as ArtifactBuildStatus,
       build_errors: row.build_errors ? JSON.parse(row.build_errors) : undefined,
       content_hash: row.content_hash ?? undefined,
+      files: row.files ? JSON.parse(row.files as string) : undefined,
+      dependencies: row.dependencies ? JSON.parse(row.dependencies as string) : undefined,
+      entry: row.entry ?? undefined,
+      use_local_bundler: Boolean(row.use_local_bundler),
+      public: row.public !== undefined ? Boolean(row.public) : true,
       created_by: row.created_by ?? undefined,
       created_at: new Date(row.created_at).toISOString(),
       updated_at: new Date(row.updated_at).toISOString(),
@@ -76,15 +81,20 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
 
       const insertData: ArtifactInsert = {
         artifact_id: artifactId,
-        worktree_id: data.worktree_id ?? '',
+        worktree_id: data.worktree_id ?? null,
         board_id: data.board_id ?? '',
         name: data.name ?? 'Untitled Artifact',
         description: data.description ?? null,
-        path: data.path ?? `.agor/artifacts/${artifactId}`,
+        path: data.path ?? null,
         template: data.template ?? 'react',
         build_status: data.build_status ?? 'unknown',
         build_errors: data.build_errors ? JSON.stringify(data.build_errors) : null,
         content_hash: data.content_hash ?? null,
+        files: data.files ? JSON.stringify(data.files) : null,
+        dependencies: data.dependencies ? JSON.stringify(data.dependencies) : null,
+        entry: data.entry ?? null,
+        use_local_bundler: data.use_local_bundler ?? false,
+        public: data.public ?? true,
         created_by: data.created_by ?? null,
         created_at: now,
         updated_at: now,
@@ -157,12 +167,17 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
 
   async findByBoardId(
     boardId: BoardID,
-    options?: { archived?: boolean; limit?: number }
+    options?: { archived?: boolean; limit?: number; userId?: string }
   ): Promise<Artifact[]> {
     try {
       const conditions = [eq(artifacts.board_id, boardId)];
       if (options?.archived !== undefined) {
         conditions.push(eq(artifacts.archived, options.archived));
+      }
+
+      // Visibility filtering: public artifacts + private artifacts owned by the user
+      if (options?.userId) {
+        conditions.push(or(eq(artifacts.public, true), eq(artifacts.created_by, options.userId))!);
       }
 
       let query = select(this.db)
@@ -199,6 +214,16 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         setData.build_errors = updates.build_errors ? JSON.stringify(updates.build_errors) : null;
       }
       if (updates.content_hash !== undefined) setData.content_hash = updates.content_hash ?? null;
+      if (updates.files !== undefined) {
+        setData.files = updates.files ? JSON.stringify(updates.files) : null;
+      }
+      if (updates.dependencies !== undefined) {
+        setData.dependencies = updates.dependencies ? JSON.stringify(updates.dependencies) : null;
+      }
+      if (updates.entry !== undefined) setData.entry = updates.entry ?? null;
+      if (updates.use_local_bundler !== undefined)
+        setData.use_local_bundler = updates.use_local_bundler;
+      if (updates.public !== undefined) setData.public = updates.public;
       if (updates.archived !== undefined) setData.archived = updates.archived;
       if (updates.archived_at !== undefined) {
         setData.archived_at = updates.archived_at ? new Date(updates.archived_at) : null;

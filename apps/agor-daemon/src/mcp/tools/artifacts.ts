@@ -1,8 +1,8 @@
 /**
  * Artifact MCP Tools
  *
- * Agent-facing tools for creating and managing Sandpack artifacts on boards.
- * Artifacts are filesystem-backed live web applications that render on the board canvas.
+ * Agent-facing tools for publishing and managing Sandpack artifacts on boards.
+ * Artifacts are DB-backed live web applications that render on the board canvas.
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -12,11 +12,18 @@ import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
 export function registerArtifactTools(server: McpServer, ctx: McpContext): void {
-  // Tool 1: agor_artifacts_create
+  // Tool 1: agor_artifacts_publish
   server.registerTool(
-    'agor_artifacts_create',
+    'agor_artifacts_publish',
     {
-      description: `Create a live web application artifact on a board. Scaffolds a folder in the worktree at .agor/artifacts/{id}/, writes initial files, and places it on the board. The artifact renders in-browser using Sandpack. After creation, you can edit files in the returned path using normal file tools, then call agor_artifacts_refresh to push changes to the board.
+      description: `Publish a folder as a live Sandpack artifact on a board. Reads all files from the given folder path, serializes them to the database, and places (or updates) the artifact on the board.
+
+If artifact_id is omitted, creates a new artifact.
+If artifact_id is provided, updates the existing artifact (must be owned by you).
+
+The folder should contain source files and optionally a sandpack.json manifest. The agent decides where to create the folder — inside the worktree, a temp directory, etc. The folder is only read at publish time; after that, the artifact lives in the database.
+
+Recommended: create the folder inside your worktree so files can be version-controlled.
 
 CONFIG CONVENTION (agor.config.js):
 If you include a file named "/agor.config.js", it is treated as a Handlebars template and rendered per-user at view time. This lets artifacts access API credentials and Agor context without hardcoding secrets.
@@ -44,9 +51,13 @@ Example /agor.config.js:
 
 Then in your app: import { apiKey, apiUrl } from '/agor.config.js';`,
       inputSchema: z.object({
-        name: z.string().describe('Artifact display name'),
+        folderPath: z.string().describe('Absolute path to folder containing artifact files'),
         boardId: z.string().describe('Board to place the artifact on'),
-        worktreeId: z.string().describe('Worktree where artifact files are stored'),
+        name: z.string().describe('Artifact display name'),
+        artifactId: z
+          .string()
+          .optional()
+          .describe('If provided, update existing artifact (must be owned by you)'),
         template: z
           .enum([
             'react',
@@ -61,53 +72,32 @@ Then in your app: import { apiKey, apiUrl } from '/agor.config.js';`,
           ])
           .default('react')
           .describe('Sandpack template (default: react)'),
-        files: z
-          .record(z.string(), z.string())
-          .optional()
-          .describe(
-            'Initial file map: path -> code content. e.g. { "/App.js": "export default ..." }. If omitted, default template files are used.'
-          ),
-        dependencies: z
-          .record(z.string(), z.string())
-          .optional()
-          .describe('NPM dependencies beyond template defaults, e.g. { "recharts": "^2.0.0" }'),
-        entry: z.string().optional().describe('Entry file path (default: determined by template)'),
-        use_local_bundler: z
+        public: z
           .boolean()
-          .optional()
-          .describe(
-            `Use the daemon's self-hosted Sandpack bundler at /static/sandpack/ instead of the default CodeSandbox hosted bundler. Default: false.
-
-When to set true:
-- Daemon is on a private network / VPN with no egress to codesandbox.io
-- Air-gapped deployments, compliance constraints, or fully offline demos
-
-REQUIRES the daemon to have been built with \`./build.sh --with-sandpack\`. If the local bundler is not available, artifact creation fails with a clear error.
-
-KNOWN LIMITATIONS of the local bundler (upstream sandpack-bundler v2):
-- CommonJS npm packages fail to resolve. Popular examples that break: recharts, lodash (use lodash-es instead), moment. Stick to ESM-only packages when this flag is true.
-- Fewer features and slower updates than the hosted bundler. Upstream issues: https://github.com/codesandbox/sandpack-bundler
-
-When in doubt, leave unset — the hosted bundler supports the widest range of packages and is the recommended default.`
-          ),
-        x: z.number().default(0).describe('X position on board'),
-        y: z.number().default(0).describe('Y position on board'),
-        width: z.number().default(600).describe('Width in pixels (default: 600)'),
-        height: z.number().default(400).describe('Height in pixels (default: 400)'),
+          .default(true)
+          .describe('Whether the artifact is visible to all board viewers (default: true)'),
+        x: z.number().default(0).describe('X position on board (only used on create)'),
+        y: z.number().default(0).describe('Y position on board (only used on create)'),
+        width: z
+          .number()
+          .default(600)
+          .describe('Width in pixels (default: 600, only used on create)'),
+        height: z
+          .number()
+          .default(400)
+          .describe('Height in pixels (default: 400, only used on create)'),
       }),
     },
     async (args) => {
       const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
-      const artifact = await service.createArtifact(
+      const artifact = await service.publish(
         {
-          name: coerceString(args.name)!,
+          folderPath: coerceString(args.folderPath)!,
           board_id: coerceString(args.boardId)!,
-          worktree_id: coerceString(args.worktreeId)!,
+          name: coerceString(args.name)!,
+          artifact_id: coerceString(args.artifactId),
           template: args.template,
-          files: args.files as Record<string, string> | undefined,
-          dependencies: args.dependencies as Record<string, string> | undefined,
-          entry: coerceString(args.entry),
-          use_local_bundler: args.use_local_bundler,
+          public: args.public,
           x: args.x,
           y: args.y,
           width: args.width,
@@ -116,17 +106,11 @@ When in doubt, leave unset — the hosted bundler supports the widest range of p
         ctx.userId
       );
 
-      ctx.app.service('artifacts').emit('created', artifact);
-
-      // Return artifact with the filesystem path for the agent to edit
-      const worktree = await ctx.app
-        .service('worktrees')
-        .get(artifact.worktree_id, ctx.baseServiceParams);
       return textResult({
         artifact,
-        path: `${worktree.path}/${artifact.path}`,
-        instructions:
-          'Edit files in the path above using normal file tools. Call agor_artifacts_refresh when done to push changes to the board.',
+        instructions: args.artifactId
+          ? 'Artifact updated. Changes are live on the board.'
+          : 'Artifact created and placed on the board. To update it later, call agor_artifacts_publish again with the artifact_id.',
       });
     }
   );
@@ -136,37 +120,21 @@ When in doubt, leave unset — the hosted bundler supports the widest range of p
     'agor_artifacts_check_build',
     {
       description:
-        'Check build readiness of an artifact. Verifies source files exist and are non-empty (does not run a real build or syntax check). Use this after editing files to verify basic structure before refreshing.',
+        'Check build readiness of artifact files in a folder. Verifies source files exist and are non-empty (does not run a real build or syntax check). Use this before publishing to verify basic structure.',
       inputSchema: z.object({
-        artifactId: z.string().describe('Artifact ID'),
+        folderPath: z
+          .string()
+          .describe('Absolute path to the folder containing artifact files to check'),
       }),
     },
     async (args) => {
       const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
-      const result = await service.checkBuild(coerceString(args.artifactId)!);
+      const result = await service.checkBuildFromFolder(coerceString(args.folderPath)!);
       return textResult(result);
     }
   );
 
-  // Tool 3: agor_artifacts_refresh
-  server.registerTool(
-    'agor_artifacts_refresh',
-    {
-      description:
-        'Refresh an artifact after making file changes. Re-reads the filesystem, computes a new content hash, and notifies connected browser clients to reload the preview. Call this after editing files.',
-      inputSchema: z.object({
-        artifactId: z.string().describe('Artifact ID'),
-      }),
-    },
-    async (args) => {
-      const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
-      const artifact = await service.refresh(coerceString(args.artifactId)!);
-      ctx.app.service('artifacts').emit('patched', artifact);
-      return textResult(artifact);
-    }
-  );
-
-  // Tool 4: agor_artifacts_status
+  // Tool 3: agor_artifacts_status
   server.registerTool(
     'agor_artifacts_status',
     {
@@ -184,12 +152,12 @@ When in doubt, leave unset — the hosted bundler supports the widest range of p
     }
   );
 
-  // Tool 5: agor_artifacts_delete
+  // Tool 4: agor_artifacts_delete
   server.registerTool(
     'agor_artifacts_delete',
     {
       description:
-        'Delete an artifact. Removes filesystem files, database record, and board placement.',
+        'Delete an artifact. Removes database record and board placement. Does not touch the filesystem.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         artifactId: z.string().describe('Artifact ID to delete'),
@@ -208,11 +176,12 @@ When in doubt, leave unset — the hosted bundler supports the widest range of p
     }
   );
 
-  // Tool 6: agor_artifacts_list
+  // Tool 5: agor_artifacts_list
   server.registerTool(
     'agor_artifacts_list',
     {
-      description: 'List artifacts, optionally filtered by board.',
+      description:
+        'List artifacts, optionally filtered by board. Respects visibility: shows public artifacts plus private artifacts owned by you.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         boardId: z.string().optional().describe('Filter by board ID'),
@@ -226,7 +195,7 @@ When in doubt, leave unset — the hosted bundler supports the widest range of p
 
       let artifactsList: unknown[];
       if (boardId) {
-        artifactsList = await service.findByBoardId(boardId as never);
+        artifactsList = await service.findByBoardId(boardId as never, ctx.userId);
       } else {
         const result = await service.find({
           query: { $limit: limit },

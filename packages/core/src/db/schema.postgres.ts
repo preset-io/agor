@@ -883,26 +883,32 @@ export const cards = pgTable(
 /**
  * Artifacts table - Live web applications rendered via Sandpack
  *
- * Artifacts are filesystem-backed apps managed by agents via MCP tools.
- * Code lives at {worktree_path}/.agor/artifacts/{artifact_id}/ with a sandpack.json manifest.
+ * Artifacts are board-scoped, DB-backed objects. The filesystem folder is a
+ * transient staging area that agents write to; on publish, the daemon serializes
+ * folder contents into the `files` JSONB column. Serving reads from DB only.
  */
 export const artifacts = pgTable(
   'artifacts',
   {
     artifact_id: varchar('artifact_id', { length: 36 }).primaryKey(),
-    worktree_id: varchar('worktree_id', { length: 36 })
-      .notNull()
-      .references(() => worktrees.worktree_id, { onDelete: 'cascade' }),
+    worktree_id: varchar('worktree_id', { length: 36 }).references(() => worktrees.worktree_id, {
+      onDelete: 'set null',
+    }),
     board_id: varchar('board_id', { length: 36 })
       .notNull()
       .references(() => boards.board_id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     description: text('description'),
-    path: text('path').notNull(), // relative path within worktree: .agor/artifacts/{id}
+    path: text('path'), // provenance only — where files were read from
     template: text('template').notNull().default('react'),
     build_status: text('build_status').notNull().default('unknown'),
     build_errors: text('build_errors'), // JSON array of error strings
     content_hash: text('content_hash'),
+    files: text('files'), // JSON: Record<string, string> — serialized file contents
+    dependencies: text('dependencies'), // JSON: Record<string, string> — npm deps
+    entry: text('entry'), // entry file from manifest
+    use_local_bundler: t.bool('use_local_bundler').notNull().default(false),
+    public: t.bool('public').notNull().default(true),
     created_by: varchar('created_by', { length: 36 }),
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at').notNull(),
@@ -913,6 +919,7 @@ export const artifacts = pgTable(
     worktreeIdx: index('artifacts_worktree_idx').on(table.worktree_id),
     boardIdx: index('artifacts_board_idx').on(table.board_id),
     archivedIdx: index('artifacts_archived_idx').on(table.archived),
+    publicIdx: index('artifacts_public_idx').on(table.public),
   })
 );
 
