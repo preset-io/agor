@@ -3546,14 +3546,19 @@ async function main() {
             | { key: string; value: string; forceOverride: boolean }[]
             | undefined;
 
-          // undefined → preserve existing env vars entirely
+          // undefined → preserve existing env vars, encrypting any plaintext (migration)
           if (incomingVars === undefined) {
             try {
-              const { GatewayChannelRepository } = await import('@agor/core/db');
+              const { GatewayChannelRepository, encryptApiKey, isEncrypted } = await import(
+                '@agor/core/db'
+              );
               const channelRepo = new GatewayChannelRepository(db);
               const existing = await channelRepo.findById(String(context.id));
               if (existing?.agentic_config?.envVars) {
-                ac.envVars = existing.agentic_config.envVars;
+                ac.envVars = existing.agentic_config.envVars.map((v) => ({
+                  ...v,
+                  value: v.value && !isEncrypted(v.value) ? encryptApiKey(v.value) : v.value,
+                }));
               }
             } catch {
               // Non-fatal
@@ -3583,13 +3588,17 @@ async function main() {
             const existingVars = existing?.agentic_config?.envVars ?? [];
             const existingByKey = new Map(existingVars.map((v) => [v.key, v.value]));
 
-            // Substitute sentinels with existing (already encrypted) values,
-            // encrypt new/changed values
-            const { encryptApiKey } = await import('@agor/core/db');
+            // Substitute sentinels with existing values, encrypting any
+            // that aren't already encrypted (migrates legacy plaintext)
+            const { encryptApiKey, isEncrypted } = await import('@agor/core/db');
             ac.envVars = incomingVars.map((v) => {
               if (v.value === SENTINEL && existingByKey.has(v.key)) {
-                // Keep existing encrypted value as-is
-                return { ...v, value: existingByKey.get(v.key)! };
+                const existing = existingByKey.get(v.key)!;
+                // Encrypt if not already encrypted (migrates plaintext on save)
+                return {
+                  ...v,
+                  value: existing && !isEncrypted(existing) ? encryptApiKey(existing) : existing,
+                };
               }
               // New or changed value — encrypt it
               return { ...v, value: v.value ? encryptApiKey(v.value) : v.value };
