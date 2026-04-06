@@ -6,13 +6,10 @@
  * bundler origins, and configurable extra origins via config or env var.
  */
 
-/**
- * CORS origin type - matches express cors package expectations
- */
-export type CorsOrigin =
-  | boolean
-  | string[]
-  | ((origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => void);
+import type { CorsOptions } from 'cors';
+
+/** CORS origin type — derived from the cors package's own CorsOptions */
+export type CorsOrigin = CorsOptions['origin'];
 
 export interface CorsConfigOptions {
   /** UI port for localhost origins */
@@ -39,10 +36,16 @@ const SANDPACK_ORIGIN_PATTERN = /^https:\/\/[\w.-]+\.codesandbox\.io$/;
 
 /**
  * Parse a string as a regex pattern if wrapped in /slashes/, otherwise return null.
+ * Returns null and warns on invalid regex syntax rather than throwing.
  */
 function parseRegexPattern(entry: string): RegExp | null {
   if (entry.startsWith('/') && entry.endsWith('/') && entry.length > 2) {
-    return new RegExp(entry.slice(1, -1));
+    try {
+      return new RegExp(entry.slice(1, -1));
+    } catch (err) {
+      console.warn(`⚠️  CORS: invalid regex pattern ${entry}, skipping: ${err}`);
+      return null;
+    }
   }
   return null;
 }
@@ -74,7 +77,7 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
   ];
 
   // Explicit wildcard - allow all origins (use with caution!)
-  if (corsOriginOverride === '*') {
+  if (corsOriginOverride?.trim() === '*') {
     console.warn('⚠️  CORS set to allow ALL origins (CORS_ORIGIN=*)');
     return { origin: true, localhostOrigins };
   }
@@ -98,7 +101,9 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
 
   // Additional origins from config.yaml (cors_origins)
   if (configOrigins) {
-    for (const entry of configOrigins) {
+    for (const raw of configOrigins) {
+      const entry = raw.trim();
+      if (!entry) continue;
       const regex = parseRegexPattern(entry);
       if (regex) {
         patterns.push(regex);
@@ -127,10 +132,7 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
     console.log('🔒 CORS allows Sandpack/CodeSandbox bundler origins (*.codesandbox.io)');
   }
 
-  const origin: CorsOrigin = (
-    requestOrigin: string | undefined,
-    callback: (err: Error | null, allow?: boolean) => void
-  ) => {
+  const origin: CorsOrigin = (requestOrigin, callback) => {
     // Allow requests with no origin (curl, Postman, mobile apps)
     if (!requestOrigin) {
       return callback(null, true);
