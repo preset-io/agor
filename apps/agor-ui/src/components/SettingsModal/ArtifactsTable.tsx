@@ -114,7 +114,8 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
       dataIndex: 'worktree_id',
       key: 'worktree_id',
       width: 160,
-      render: (worktreeId: string) => {
+      render: (worktreeId: string | null) => {
+        if (!worktreeId) return <Typography.Text type="secondary">—</Typography.Text>;
         const worktree = worktreeById.get(worktreeId);
         return (
           <Typography.Text type="secondary">
