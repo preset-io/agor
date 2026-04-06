@@ -39,6 +39,7 @@ import { loadDaemonVersion } from './setup/version.js';
 const DAEMON_VERSION = await loadDaemonVersion(import.meta.url);
 
 import {
+  ArtifactRepository,
   and,
   eq,
   generateId,
@@ -4391,6 +4392,74 @@ async function main() {
       clone: [requireMinimumRole(ROLES.MEMBER, 'clone boards')],
     },
     after: {
+      // Strip private artifact objects from board.objects for non-owners
+      get: [
+        async (context: HookContext<Board>) => {
+          const board = context.result;
+          if (!board?.objects) return context;
+          const userId = (context.params as { user?: { user_id: string } }).user?.user_id;
+          const artifactObjectIds = Object.entries(board.objects)
+            .filter(([, obj]) => obj && (obj as { type?: string }).type === 'artifact')
+            .map(([id, obj]) => ({
+              id,
+              artifactId: (obj as { artifact_id?: string }).artifact_id,
+            }));
+          if (artifactObjectIds.length === 0) return context;
+
+          const artifactRepo = new ArtifactRepository(db);
+          const filtered = { ...board.objects };
+          for (const { id, artifactId } of artifactObjectIds) {
+            if (!artifactId) continue;
+            try {
+              const artifact = await artifactRepo.findById(artifactId);
+              if (!artifact) {
+                delete filtered[id]; // orphaned reference
+              } else if (!artifact.public && artifact.created_by !== userId) {
+                delete filtered[id]; // private, not owned
+              }
+            } catch {
+              // artifact not found, remove stale reference
+              delete filtered[id];
+            }
+          }
+          context.result = { ...board, objects: filtered };
+          return context;
+        },
+      ],
+      find: [
+        async (context: HookContext<Board>) => {
+          const result = context.result;
+          if (!result) return context;
+          const boards = Array.isArray(result) ? result : (result as { data: Board[] }).data;
+          if (!boards?.length) return context;
+          const userId = (context.params as { user?: { user_id: string } }).user?.user_id;
+          const artifactRepo = new ArtifactRepository(db);
+
+          for (const board of boards) {
+            if (!board.objects) continue;
+            const artifactEntries = Object.entries(board.objects).filter(
+              ([, obj]) => obj && (obj as { type?: string }).type === 'artifact'
+            );
+            if (artifactEntries.length === 0) continue;
+
+            const filtered = { ...board.objects };
+            for (const [id, obj] of artifactEntries) {
+              const artifactId = (obj as { artifact_id?: string }).artifact_id;
+              if (!artifactId) continue;
+              try {
+                const artifact = await artifactRepo.findById(artifactId);
+                if (!artifact || (!artifact.public && artifact.created_by !== userId)) {
+                  delete filtered[id];
+                }
+              } catch {
+                delete filtered[id];
+              }
+            }
+            board.objects = filtered;
+          }
+          return context;
+        },
+      ],
       // Emit created events for custom methods that create boards
       // Custom methods don't automatically trigger app.publish(), so we emit manually
       clone: [
