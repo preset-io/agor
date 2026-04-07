@@ -15,8 +15,13 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { GatewayConnector, InboundMessage } from '@agor/core/gateway';
-import { getConnector, hasConnector, parseGitHubThreadId } from '@agor/core/gateway';
+import type { GatewayConnector, GatewayContext, InboundMessage } from '@agor/core/gateway';
+import {
+  formatGatewayContext,
+  getConnector,
+  hasConnector,
+  parseGitHubThreadId,
+} from '@agor/core/gateway';
 import type {
   AgenticToolName,
   ChannelType,
@@ -129,6 +134,75 @@ function buildGitHubInitialPrompt(
     ].join('\n');
   } catch {
     return text;
+  }
+}
+
+/**
+ * Build a GatewayContext from channel + inbound message data.
+ *
+ * Maps platform-specific metadata fields onto the platform-agnostic
+ * GatewayContext interface used by formatGatewayContext().
+ */
+function buildGatewayContext(channel: GatewayChannel, data: PostMessageData): GatewayContext {
+  const meta = data.metadata ?? {};
+
+  switch (channel.channel_type) {
+    case 'slack': {
+      const slackChannelType = meta.channel_type as string | undefined;
+      const isDM = slackChannelType === 'im';
+      const isMpim = slackChannelType === 'mpim';
+
+      let channelName: string | undefined;
+      let channelKind: string | undefined;
+
+      if (isDM) {
+        channelKind = 'DM';
+      } else if (isMpim) {
+        channelKind = 'Group DM';
+        channelName = (meta.slack_channel_name as string) ?? undefined;
+      } else {
+        channelKind = 'Channel';
+        const name = meta.slack_channel_name as string | undefined;
+        channelName = name ? `#${name}` : undefined;
+      }
+
+      return {
+        platform: 'slack',
+        channelName,
+        channelKind,
+        userName: (meta.slack_user_name as string) ?? undefined,
+        userEmail: (meta.slack_user_email as string) ?? undefined,
+      };
+    }
+
+    case 'github': {
+      const repo = meta.repo_full_name as string | undefined;
+      const issueNumber = meta.issue_number as number | undefined;
+      const githubUser = meta.github_user as string | undefined;
+      const commentUrl = meta.comment_url as string | undefined;
+
+      const extras: string[] = [];
+      if (repo) extras.push(`Repo: ${repo}`);
+      if (issueNumber) {
+        extras.push(`Issue/PR: #${issueNumber}`);
+      }
+      if (commentUrl) extras.push(`Comment: ${commentUrl}`);
+
+      return {
+        platform: 'github',
+        channelName: repo,
+        userHandle: githubUser ? `@${githubUser}` : undefined,
+        userEmail: (meta.github_user_email as string) ?? undefined,
+        extras,
+      };
+    }
+
+    default:
+      // Generic fallback for future platforms
+      return {
+        platform: channel.channel_type as ChannelType,
+        userName: data.user_name,
+      };
   }
 }
 
@@ -650,6 +724,15 @@ export class GatewayService {
       let promptText = data.text;
       if (created && channel.channel_type === 'github') {
         promptText = buildGitHubInitialPrompt(data.thread_id, data.text, data.metadata);
+      }
+
+      // Prepend gateway context block so the agent knows the message source.
+      // Applied to ALL messages (initial + follow-up) since each message may
+      // come from a different user in a shared channel.
+      const gatewayCtx = buildGatewayContext(channel, data);
+      const contextPrefix = formatGatewayContext(gatewayCtx);
+      if (contextPrefix) {
+        promptText = contextPrefix + promptText;
       }
 
       // Prepend MCP auth warning to the initial prompt so the agent is aware

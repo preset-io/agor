@@ -163,8 +163,14 @@ export class SlackConnector implements GatewayConnector {
   private config: SlackConfig;
   private botUserId: string | null = null;
 
-  /** Cache: Slack user ID → email (or null if unavailable). */
-  private userEmailCache = new Map<string, { email: string | null; expiresAt: number }>();
+  /** Cache: Slack user ID → profile (email + display name, or null if unavailable). */
+  private userProfileCache = new Map<
+    string,
+    { email: string | null; displayName: string | null; expiresAt: number }
+  >();
+
+  /** Cache: Slack channel ID → channel name */
+  private channelNameCache = new Map<string, { name: string | null; expiresAt: number }>();
   private static USER_CACHE_TTL_MS = 15 * 60 * 1000; // 15 min for successful lookups
   private static USER_CACHE_ERROR_TTL_MS = 60 * 1000; // 1 min for errors (transient recovery)
 
@@ -198,49 +204,109 @@ export class SlackConnector implements GatewayConnector {
   /**
    * Look up a Slack user's email address by their user ID.
    *
+   * Delegates to lookupUserProfile() and returns just the email.
+   */
+  async lookupUserEmail(slackUserId: string): Promise<string | null> {
+    const profile = await this.lookupUserProfile(slackUserId);
+    return profile.email;
+  }
+
+  /**
+   * Look up a Slack user's profile (email + display name) by their user ID.
+   *
    * Caches successful results for 15 minutes and errors for 1 minute
    * (so transient failures recover quickly). Evicts expired entries on
    * each call to prevent unbounded cache growth.
    *
-   * Returns null if the email is unavailable (missing users:read.email scope,
-   * bot user, restricted guest, or API error).
+   * Returns `{ email: null, displayName: null }` if unavailable.
    */
-  async lookupUserEmail(slackUserId: string): Promise<string | null> {
+  async lookupUserProfile(
+    slackUserId: string
+  ): Promise<{ email: string | null; displayName: string | null }> {
     const now = Date.now();
 
     // Evict expired entries to prevent unbounded growth
-    for (const [key, entry] of this.userEmailCache) {
-      if (entry.expiresAt <= now) this.userEmailCache.delete(key);
+    for (const [key, entry] of this.userProfileCache) {
+      if (entry.expiresAt <= now) this.userProfileCache.delete(key);
     }
 
-    const cached = this.userEmailCache.get(slackUserId);
+    const cached = this.userProfileCache.get(slackUserId);
     if (cached && cached.expiresAt > now) {
-      return cached.email;
+      return { email: cached.email, displayName: cached.displayName };
     }
 
     try {
       const result = await this.web.users.info({ user: slackUserId });
       const email = result.user?.profile?.email ?? null;
+      const displayName =
+        result.user?.profile?.display_name ||
+        result.user?.profile?.real_name ||
+        result.user?.real_name ||
+        null;
 
-      this.userEmailCache.set(slackUserId, {
+      this.userProfileCache.set(slackUserId, {
         email,
+        displayName,
         expiresAt: now + SlackConnector.USER_CACHE_TTL_MS,
       });
 
       if (email) {
-        console.log(`[slack] Resolved user ${slackUserId} → ${email}`);
+        console.log(
+          `[slack] Resolved user ${slackUserId} → ${displayName ?? '(no name)'} <${email}>`
+        );
       } else {
         console.log(
           `[slack] User ${slackUserId} has no email (missing users:read.email scope or restricted account)`
         );
       }
 
-      return email;
+      return { email, displayName };
     } catch (error) {
-      console.warn(`[slack] Failed to look up email for user ${slackUserId}:`, error);
+      console.warn(`[slack] Failed to look up profile for user ${slackUserId}:`, error);
       // Short TTL for errors so transient failures (rate limits, network) recover quickly
-      this.userEmailCache.set(slackUserId, {
+      this.userProfileCache.set(slackUserId, {
         email: null,
+        displayName: null,
+        expiresAt: now + SlackConnector.USER_CACHE_ERROR_TTL_MS,
+      });
+      return { email: null, displayName: null };
+    }
+  }
+
+  /**
+   * Look up a Slack channel's name by its ID.
+   *
+   * Uses the channelTypeCache to avoid duplicate API calls when
+   * resolveChannelType already fetched conversations.info.
+   * Falls back to conversations.info if not cached.
+   */
+  async lookupChannelName(channelId: string): Promise<string | null> {
+    const now = Date.now();
+
+    // Evict expired entries
+    for (const [key, entry] of this.channelNameCache) {
+      if (entry.expiresAt <= now) this.channelNameCache.delete(key);
+    }
+
+    const cached = this.channelNameCache.get(channelId);
+    if (cached && cached.expiresAt > now) {
+      return cached.name;
+    }
+
+    try {
+      const result = await this.web.conversations.info({ channel: channelId });
+      const name = (result.channel as { name?: string })?.name ?? null;
+
+      this.channelNameCache.set(channelId, {
+        name,
+        expiresAt: now + SlackConnector.CHANNEL_CACHE_TTL_MS,
+      });
+
+      return name;
+    } catch (error) {
+      console.warn(`[slack] Failed to look up channel name for ${channelId}:`, error);
+      this.channelNameCache.set(channelId, {
+        name: null,
         expiresAt: now + SlackConnector.USER_CACHE_ERROR_TTL_MS,
       });
       return null;
@@ -630,10 +696,21 @@ export class SlackConnector implements GatewayConnector {
         `[slack] Inbound message: thread=${threadId} channel_type=${channelType} user=${event.user}`
       );
 
-      // Resolve Slack user email if align_slack_users is enabled
+      // Resolve Slack user profile (email + display name)
       let slackUserEmail: string | null = null;
-      if (this.config.align_slack_users && event.user) {
-        slackUserEmail = await this.lookupUserEmail(event.user);
+      let slackUserDisplayName: string | null = null;
+      if (event.user) {
+        // Always look up profile for context injection; email is needed
+        // for user alignment but display name is useful regardless.
+        const profile = await this.lookupUserProfile(event.user);
+        slackUserEmail = profile.email;
+        slackUserDisplayName = profile.displayName;
+      }
+
+      // Resolve channel name for context injection
+      let slackChannelName: string | null = null;
+      if (event.channel && channelType !== 'im') {
+        slackChannelName = await this.lookupChannelName(event.channel);
       }
 
       callback({
@@ -646,6 +723,8 @@ export class SlackConnector implements GatewayConnector {
           channel_type: channelType,
           requires_mapping_verification: allowedViaThreadReplyException,
           ...(slackUserEmail ? { slack_user_email: slackUserEmail } : {}),
+          ...(slackUserDisplayName ? { slack_user_name: slackUserDisplayName } : {}),
+          ...(slackChannelName ? { slack_channel_name: slackChannelName } : {}),
           // Signal that user alignment was attempted so the gateway can
           // reject (instead of silently falling back to channel owner)
           // when the email couldn't be resolved.
