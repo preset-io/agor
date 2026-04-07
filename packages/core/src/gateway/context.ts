@@ -61,11 +61,7 @@ export function formatGatewayContext(ctx: GatewayContext): string {
   // Channel / location line
   if (ctx.channelName) {
     const kindLabel = ctx.channelKind === 'DM' ? 'DM with' : (ctx.channelKind ?? 'Channel');
-    if (ctx.channelKind === 'DM') {
-      lines.push(`${kindLabel}: ${ctx.channelName}`);
-    } else {
-      lines.push(`${kindLabel}: ${ctx.channelName}`);
-    }
+    lines.push(`${kindLabel}: ${ctx.channelName}`);
   } else if (ctx.channelKind === 'DM') {
     lines.push('DM');
   }

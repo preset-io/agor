@@ -729,10 +729,15 @@ export class GatewayService {
       // Prepend gateway context block so the agent knows the message source.
       // Applied to ALL messages (initial + follow-up) since each message may
       // come from a different user in a shared channel.
-      const gatewayCtx = buildGatewayContext(channel, data);
-      const contextPrefix = formatGatewayContext(gatewayCtx);
-      if (contextPrefix) {
-        promptText = contextPrefix + promptText;
+      // Skip for initial GitHub messages — buildGitHubInitialPrompt() already
+      // includes repo/issue/user context and adding both would be redundant.
+      const skipContext = created && channel.channel_type === 'github';
+      if (!skipContext) {
+        const gatewayCtx = buildGatewayContext(channel, data);
+        const contextPrefix = formatGatewayContext(gatewayCtx);
+        if (contextPrefix) {
+          promptText = contextPrefix + promptText;
+        }
       }
 
       // Prepend MCP auth warning to the initial prompt so the agent is aware

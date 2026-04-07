@@ -276,9 +276,9 @@ export class SlackConnector implements GatewayConnector {
   /**
    * Look up a Slack channel's name by its ID.
    *
-   * Uses the channelTypeCache to avoid duplicate API calls when
-   * resolveChannelType already fetched conversations.info.
-   * Falls back to conversations.info if not cached.
+   * Often a cache hit because resolveChannelType() populates the
+   * channelNameCache when it calls conversations.info.
+   * Falls back to its own conversations.info call if not cached.
    */
   async lookupChannelName(channelId: string): Promise<string | null> {
     const now = Date.now();
@@ -365,6 +365,7 @@ export class SlackConnector implements GatewayConnector {
           is_mpim?: boolean;
           is_im?: boolean;
           is_private?: boolean;
+          name?: string;
         };
         let resolvedType: string;
         if (ch.is_im) {
@@ -378,6 +379,16 @@ export class SlackConnector implements GatewayConnector {
         }
         console.log(`[slack] conversations.info resolved channel ${channelId} → ${resolvedType}`);
         this.cacheChannelType(channelId, resolvedType);
+
+        // Also cache channel name to avoid a second conversations.info call
+        // from lookupChannelName() later in the same message path.
+        if (ch.name) {
+          this.channelNameCache.set(channelId, {
+            name: ch.name,
+            expiresAt: now + SlackConnector.CHANNEL_CACHE_TTL_MS,
+          });
+        }
+
         return resolvedType;
       }
     } catch (error) {
