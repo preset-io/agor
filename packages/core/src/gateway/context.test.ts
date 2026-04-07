@@ -22,11 +22,9 @@ describe('formatGatewayContext', () => {
 
       expect(result).toBe(
         [
-          '---',
-          '📡 Message via Slack',
-          'Channel: #eng-backend',
-          'From: Max (max@preset.io)',
-          '---',
+          '> 📡 **Message via Slack**',
+          '> Channel: #eng-backend',
+          '> From: Max (max@preset.io)',
           '',
           '',
         ].join('\n')
@@ -41,7 +39,7 @@ describe('formatGatewayContext', () => {
         userEmail: 'alice@example.com',
       });
 
-      expect(result).toContain('📡 Message via Slack');
+      expect(result).toContain('**Message via Slack**');
       expect(result).toContain('DM');
       expect(result).toContain('From: Alice (alice@example.com)');
     });
@@ -101,7 +99,7 @@ describe('formatGatewayContext', () => {
         ],
       });
 
-      expect(result).toContain('📡 Message via GitHub');
+      expect(result).toContain('**Message via GitHub**');
       expect(result).toContain('Repo: preset-io/agor');
       expect(result).toContain('Issue/PR: #123');
       expect(result).toContain('From: @mistercrunch (max@preset.io)');
@@ -151,7 +149,7 @@ describe('formatGatewayContext', () => {
         userName: 'TelegramUser',
       });
 
-      expect(result).toContain('Message via Telegram');
+      expect(result).toContain('**Message via Telegram**');
       expect(result).toContain('From: TelegramUser');
     });
 
@@ -163,7 +161,7 @@ describe('formatGatewayContext', () => {
         userName: 'DiscordUser',
       });
 
-      expect(result).toContain('Message via Discord');
+      expect(result).toContain('**Message via Discord**');
       expect(result).toContain('Channel: #lobby');
     });
   });
@@ -173,7 +171,7 @@ describe('formatGatewayContext', () => {
   // ============================================================================
 
   describe('format', () => {
-    it('should use markdown delimiters (---), not XML tags', () => {
+    it('should use blockquote syntax, not --- delimiters or XML tags', () => {
       const result = formatGatewayContext({
         platform: 'slack',
         channelName: '#test',
@@ -182,9 +180,13 @@ describe('formatGatewayContext', () => {
       });
 
       expect(result).not.toContain('<');
-      expect(result).not.toContain('>');
-      expect(result.startsWith('---\n')).toBe(true);
-      expect(result).toContain('\n---\n');
+      // Every content line should start with '> '
+      const contentLines = result.trim().split('\n');
+      for (const line of contentLines) {
+        expect(line.startsWith('> ')).toBe(true);
+      }
+      // Should NOT use --- delimiters (cause setext heading rendering)
+      expect(result).not.toContain('---');
     });
 
     it('should end with double newline for clean separation from message text', () => {

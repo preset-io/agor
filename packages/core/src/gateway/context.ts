@@ -3,8 +3,11 @@
  *
  * Produces a human-readable context block that is prepended to inbound
  * messages so the agent knows where the message originated (platform,
- * channel, sender). The block is visible in the Agor UI conversation view,
- * so it uses clean markdown delimiters rather than XML-like tags.
+ * channel, sender). The block is visible in the Agor UI conversation view.
+ *
+ * Uses blockquote (`>`) syntax to avoid markdown rendering issues —
+ * `---` delimiters are interpreted as setext headings by streamdown
+ * when they follow text without a blank line.
  */
 
 import type { ChannelType } from '../types/gateway';
@@ -41,13 +44,11 @@ const PLATFORM_LABELS: Record<string, string> = {
  * Returns an empty string when the context would add no useful information
  * (e.g. platform-only with no channel/user details).
  *
- * Output format:
+ * Output format (blockquote to avoid setext heading issues):
  * ```
- * ---
- * 📡 Message via Slack
- * Channel: #eng-backend
- * From: Max (max@preset.io)
- * ---
+ * > 📡 **Message via Slack**
+ * > Channel: #eng-backend
+ * > From: Max (max@preset.io)
  *
  * ```
  */
@@ -55,21 +56,20 @@ export function formatGatewayContext(ctx: GatewayContext): string {
   const label = PLATFORM_LABELS[ctx.platform] ?? ctx.platform;
   const lines: string[] = [];
 
-  lines.push('---');
-  lines.push(`📡 Message via ${label}`);
+  lines.push(`> 📡 **Message via ${label}**`);
 
   // Channel / location line
   if (ctx.channelName) {
     const kindLabel = ctx.channelKind === 'DM' ? 'DM with' : (ctx.channelKind ?? 'Channel');
-    lines.push(`${kindLabel}: ${ctx.channelName}`);
+    lines.push(`> ${kindLabel}: ${ctx.channelName}`);
   } else if (ctx.channelKind === 'DM') {
-    lines.push('DM');
+    lines.push('> DM');
   }
 
   // Extra lines (PR title, issue number, repo, etc.)
   if (ctx.extras) {
     for (const extra of ctx.extras) {
-      lines.push(extra);
+      lines.push(`> ${extra}`);
     }
   }
 
@@ -86,14 +86,12 @@ export function formatGatewayContext(ctx: GatewayContext): string {
     if (ctx.userEmail && ctx.userEmail !== fromParts[0]) {
       fromParts.push(`(${ctx.userEmail})`);
     }
-    lines.push(`From: ${fromParts.join(' ')}`);
+    lines.push(`> From: ${fromParts.join(' ')}`);
   }
 
-  lines.push('---');
-
-  // Only emit the block if we have more than just the header + delimiters
-  // (i.e. at least one detail line beyond "📡 Message via X")
-  if (lines.length <= 3) {
+  // Only emit the block if we have at least one detail line
+  // beyond the header "📡 Message via X"
+  if (lines.length <= 1) {
     return '';
   }
 
