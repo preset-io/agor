@@ -10,6 +10,7 @@ import type {
   GatewayAgenticConfig,
   GatewayChannel,
   GatewayChannelID,
+  GatewayEnvVar,
   UUID,
 } from '@agor/core/types';
 import { eq, like } from 'drizzle-orm';
@@ -74,6 +75,68 @@ function decryptConfig(config: Record<string, unknown>): Record<string, unknown>
   return decrypted;
 }
 
+function encryptAgenticConfig(
+  agenticConfig: Record<string, unknown> | null
+): Record<string, unknown> | null {
+  if (!agenticConfig) return null;
+
+  const encrypted = { ...agenticConfig };
+  const rawEnvVars = encrypted.envVars;
+
+  if (Array.isArray(rawEnvVars)) {
+    encrypted.envVars = (rawEnvVars as GatewayEnvVar[]).map((envVar) => ({
+      ...envVar,
+      value: envVar.value ? encryptApiKey(envVar.value) : envVar.value,
+    }));
+  } else if (rawEnvVars && typeof rawEnvVars === 'object') {
+    // Legacy shape support: Record<string, string>
+    encrypted.envVars = Object.fromEntries(
+      Object.entries(rawEnvVars as Record<string, unknown>).map(([key, value]) => [
+        key,
+        typeof value === 'string' && value ? encryptApiKey(value) : value,
+      ])
+    );
+  }
+
+  return encrypted;
+}
+
+function decryptAgenticConfig(
+  agenticConfig: Record<string, unknown> | null
+): Record<string, unknown> | null {
+  if (!agenticConfig) return null;
+
+  const decrypted = { ...agenticConfig };
+  const rawEnvVars = decrypted.envVars;
+
+  if (Array.isArray(rawEnvVars)) {
+    decrypted.envVars = (rawEnvVars as GatewayEnvVar[]).map((envVar) => {
+      try {
+        return {
+          ...envVar,
+          value: envVar.value ? decryptApiKey(envVar.value) : envVar.value,
+        };
+      } catch {
+        return envVar;
+      }
+    });
+  } else if (rawEnvVars && typeof rawEnvVars === 'object') {
+    // Legacy shape support: Record<string, string>
+    decrypted.envVars = Object.fromEntries(
+      Object.entries(rawEnvVars as Record<string, unknown>).map(([key, value]) => {
+        if (typeof value !== 'string' || !value) return [key, value];
+        try {
+          return [key, decryptApiKey(value)];
+        } catch {
+          return [key, value];
+        }
+      })
+    );
+  }
+
+  return decrypted;
+}
+
 /**
  * Gateway channel repository implementation
  */
@@ -87,6 +150,9 @@ export class GatewayChannelRepository
    */
   private rowToChannel(row: GatewayChannelRow): GatewayChannel {
     const config = row.config as Record<string, unknown>;
+    const agenticConfig = decryptAgenticConfig(
+      (row.agentic_config as Record<string, unknown> | null) ?? null
+    );
 
     return {
       id: row.id as GatewayChannelID,
@@ -97,7 +163,7 @@ export class GatewayChannelRepository
       agor_user_id: row.agor_user_id as UUID,
       channel_key: row.channel_key,
       config: decryptConfig(config),
-      agentic_config: (row.agentic_config as unknown as GatewayAgenticConfig) ?? null,
+      agentic_config: (agenticConfig as unknown as GatewayAgenticConfig) ?? null,
       enabled: Boolean(row.enabled),
       created_at: new Date(row.created_at).toISOString(),
       updated_at: new Date(row.updated_at).toISOString(),
@@ -112,6 +178,10 @@ export class GatewayChannelRepository
     const now = Date.now();
     const id = data.id ?? generateId();
 
+    const encryptedAgenticConfig = encryptAgenticConfig(
+      (data.agentic_config as unknown as Record<string, unknown> | null) ?? null
+    );
+
     return {
       id,
       created_at: new Date(data.created_at ?? now),
@@ -125,7 +195,7 @@ export class GatewayChannelRepository
       enabled: data.enabled ?? true,
       last_message_at: data.last_message_at ? new Date(data.last_message_at) : null,
       config: data.config ? encryptConfig(data.config) : {},
-      agentic_config: (data.agentic_config as unknown as Record<string, unknown>) ?? null,
+      agentic_config: encryptedAgenticConfig,
     };
   }
 

@@ -931,14 +931,25 @@ async function main() {
         ?.gateway_source as { channel_id?: string } | undefined;
       if (gatewaySource?.channel_id) {
         try {
-          const { GatewayChannelRepository, decryptApiKey } = await import('@agor/core/db');
+          const { GatewayChannelRepository, decryptApiKey, isEncrypted } = await import(
+            '@agor/core/db'
+          );
           const channelRepo = new GatewayChannelRepository(db);
           const channel = await channelRepo.findById(gatewaySource.channel_id);
           if (channel?.agentic_config?.envVars) {
-            // Decrypt env var values (stored encrypted at rest)
+            // Decrypt env var values (stored encrypted at rest). Be tolerant of
+            // malformed/plaintext legacy entries so one bad value doesn't drop
+            // all gateway env vars for execution.
             gatewayEnv = channel.agentic_config.envVars.map((v) => ({
               ...v,
-              value: v.value ? decryptApiKey(v.value) : v.value,
+              value: (() => {
+                if (!v.value || !isEncrypted(v.value)) return v.value;
+                try {
+                  return decryptApiKey(v.value);
+                } catch {
+                  return v.value;
+                }
+              })(),
             }));
           }
         } catch {
@@ -3538,27 +3549,37 @@ async function main() {
         // - envVars = [...] with sentinels → substitute real values per key
         async (context: HookContext) => {
           const data = context.data as Record<string, unknown> | undefined;
-          const ac = data?.agentic_config as Record<string, unknown> | undefined;
-          if (!ac || !context.id) return context;
+          if (!data || !context.id) return context;
+
+          let ac = data.agentic_config as Record<string, unknown> | undefined;
+          const hadAgenticConfigInPatch = ac !== undefined;
+          const ensureAc = (): Record<string, unknown> => {
+            if (!ac) {
+              ac = {};
+              data.agentic_config = ac;
+            }
+            return ac;
+          };
 
           const SENTINEL = '••••••••';
-          const incomingVars = ac.envVars as
+          const incomingVars = ac?.envVars as
             | { key: string; value: string; forceOverride: boolean }[]
             | undefined;
 
-          // undefined → preserve existing env vars, encrypting any plaintext (migration)
+          // undefined → preserve existing env vars
           if (incomingVars === undefined) {
             try {
-              const { GatewayChannelRepository, encryptApiKey, isEncrypted } = await import(
-                '@agor/core/db'
-              );
+              const { GatewayChannelRepository } = await import('@agor/core/db');
               const channelRepo = new GatewayChannelRepository(db);
               const existing = await channelRepo.findById(String(context.id));
+              // For patches that omit agentic_config entirely (e.g. enabled toggle),
+              // copy existing agentic_config so migration still occurs on save.
+              if (!hadAgenticConfigInPatch && existing?.agentic_config) {
+                ac = { ...(existing.agentic_config as unknown as Record<string, unknown>) };
+                data.agentic_config = ac;
+              }
               if (existing?.agentic_config?.envVars) {
-                ac.envVars = existing.agentic_config.envVars.map((v) => ({
-                  ...v,
-                  value: v.value && !isEncrypted(v.value) ? encryptApiKey(v.value) : v.value,
-                }));
+                ensureAc().envVars = existing.agentic_config.envVars;
               }
             } catch {
               // Non-fatal
@@ -3572,12 +3593,7 @@ async function main() {
           // Has entries with potential sentinels — substitute from DB
           const hasSentinels = incomingVars.some((v) => v.value === SENTINEL);
           if (!hasSentinels) {
-            // No sentinels — all values are new/changed. Encrypt them.
-            const { encryptApiKey } = await import('@agor/core/db');
-            ac.envVars = incomingVars.map((v) => ({
-              ...v,
-              value: v.value ? encryptApiKey(v.value) : v.value,
-            }));
+            ensureAc().envVars = incomingVars;
             return context;
           }
 
@@ -3588,25 +3604,18 @@ async function main() {
             const existingVars = existing?.agentic_config?.envVars ?? [];
             const existingByKey = new Map(existingVars.map((v) => [v.key, v.value]));
 
-            // Substitute sentinels with existing values, encrypting any
-            // that aren't already encrypted (migrates legacy plaintext)
-            const { encryptApiKey, isEncrypted } = await import('@agor/core/db');
-            ac.envVars = incomingVars.map((v) => {
+            // Substitute sentinels with existing values. Encryption-at-rest is
+            // handled in GatewayChannelRepository.
+            ensureAc().envVars = incomingVars.map((v) => {
               if (v.value === SENTINEL && existingByKey.has(v.key)) {
-                const existing = existingByKey.get(v.key)!;
-                // Encrypt if not already encrypted (migrates plaintext on save)
-                return {
-                  ...v,
-                  value: existing && !isEncrypted(existing) ? encryptApiKey(existing) : existing,
-                };
+                return { ...v, value: existingByKey.get(v.key)! };
               }
-              // New or changed value — encrypt it
-              return { ...v, value: v.value ? encryptApiKey(v.value) : v.value };
+              return v;
             });
-          } catch {
-            // Non-fatal — if we can't resolve sentinels, strip them to avoid
-            // persisting the literal sentinel string as a secret
-            ac.envVars = incomingVars.filter((v) => v.value !== SENTINEL);
+          } catch (error) {
+            throw new BadRequest(
+              `Failed to resolve redacted gateway env vars: ${error instanceof Error ? error.message : String(error)}`
+            );
           }
 
           return context;
