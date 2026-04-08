@@ -421,15 +421,14 @@ export const AgentChain = React.memo<AgentChainProps>(
     const renderChainItem = (item: ChainItem, index: number) => {
       if (item.type === 'thought') {
         const thoughtContent = item.content as string;
-        const firstLine = thoughtContent.trim().split('\n')[0]?.slice(0, 120) || '';
-        const isTruncated = thoughtContent.trim().length > 120 || thoughtContent.includes('\n');
+        const oneLine = thoughtContent.replace(/\s+/g, ' ').trim();
 
         return (
           <ToolBlock
             key={`thought-${index}`}
             icon={<BulbOutlined style={{ fontSize: 14 }} />}
             name="Thinking"
-            description={firstLine ? `${firstLine}${isTruncated ? '…' : ''}` : undefined}
+            description={oneLine || undefined}
             status="success"
           >
             {thoughtContent.trim() && (
