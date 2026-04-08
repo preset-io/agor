@@ -1,3 +1,4 @@
+import { isWorktreeRbacEnabled } from '@agor/core/config';
 import { WorktreeRepository } from '@agor/core/db';
 import type {
   AgenticToolName,
@@ -283,18 +284,25 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       );
 
       // Add additional owners (creator is already added by reposService.createWorktree)
+      const ownerWarnings: string[] = [];
       if (args.ownerIds && args.ownerIds.length > 0) {
-        const worktreeOwnersService = ctx.app.service('worktrees/:id/owners');
-        for (const ownerId of args.ownerIds) {
-          try {
-            await worktreeOwnersService.create(
-              { user_id: ownerId },
-              { ...ctx.baseServiceParams, route: { id: worktree.worktree_id } }
-            );
-          } catch (error) {
-            console.warn(
-              `⚠️  Failed to add owner ${ownerId} to worktree ${worktree.worktree_id}: ${error instanceof Error ? error.message : String(error)}`
-            );
+        if (!isWorktreeRbacEnabled()) {
+          ownerWarnings.push(
+            'ownerIds ignored: worktree RBAC is not enabled. Enable worktree_rbac in config to manage owners.'
+          );
+        } else {
+          const worktreeOwnersService = ctx.app.service('worktrees/:id/owners');
+          for (const ownerId of args.ownerIds) {
+            try {
+              await worktreeOwnersService.create(
+                { user_id: ownerId },
+                { ...ctx.baseServiceParams, route: { id: worktree.worktree_id } }
+              );
+            } catch (error) {
+              ownerWarnings.push(
+                `Failed to add owner ${ownerId}: ${error instanceof Error ? error.message : String(error)}`
+              );
+            }
           }
         }
       }
@@ -311,6 +319,10 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       } else {
         response.hint =
           'Use agor_worktrees_set_zone to pin this worktree to a specific zone and optionally trigger zone prompt templates.';
+      }
+
+      if (ownerWarnings.length > 0) {
+        response.ownerWarnings = ownerWarnings;
       }
 
       return textResult(response);
@@ -486,29 +498,39 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       // Handle owner additions/removals via the owners service (includes unix sync hooks)
       const ownerErrors: string[] = [];
       if (hasOwnerChanges) {
-        const worktreeOwnersService = ctx.app.service('worktrees/:id/owners');
-        const routeParams = { ...ctx.baseServiceParams, route: { id: resolvedWorktreeId } };
+        if (!isWorktreeRbacEnabled()) {
+          ownerErrors.push(
+            'Owner changes ignored: worktree RBAC is not enabled. Enable worktree_rbac in config to manage owners.'
+          );
+        } else {
+          const worktreeOwnersService = ctx.app.service('worktrees/:id/owners');
+          // Use full UUID from resolved worktree (not the potentially-short input ID)
+          const routeParams = {
+            ...ctx.baseServiceParams,
+            route: { id: worktree.worktree_id },
+          };
 
-        if (args.addOwnerIds) {
-          for (const ownerId of args.addOwnerIds) {
-            try {
-              await worktreeOwnersService.create({ user_id: ownerId }, routeParams);
-            } catch (error) {
-              ownerErrors.push(
-                `Failed to add owner ${ownerId}: ${error instanceof Error ? error.message : String(error)}`
-              );
+          if (args.addOwnerIds) {
+            for (const ownerId of args.addOwnerIds) {
+              try {
+                await worktreeOwnersService.create({ user_id: ownerId }, routeParams);
+              } catch (error) {
+                ownerErrors.push(
+                  `Failed to add owner ${ownerId}: ${error instanceof Error ? error.message : String(error)}`
+                );
+              }
             }
           }
-        }
 
-        if (args.removeOwnerIds) {
-          for (const ownerId of args.removeOwnerIds) {
-            try {
-              await worktreeOwnersService.remove(ownerId, routeParams);
-            } catch (error) {
-              ownerErrors.push(
-                `Failed to remove owner ${ownerId}: ${error instanceof Error ? error.message : String(error)}`
-              );
+          if (args.removeOwnerIds) {
+            for (const ownerId of args.removeOwnerIds) {
+              try {
+                await worktreeOwnersService.remove(ownerId, routeParams);
+              } catch (error) {
+                ownerErrors.push(
+                  `Failed to remove owner ${ownerId}: ${error instanceof Error ? error.message : String(error)}`
+                );
+              }
             }
           }
         }

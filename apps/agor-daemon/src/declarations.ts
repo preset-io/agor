@@ -131,6 +131,9 @@ export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersP
       issue_url?: string;
       pull_request_url?: string;
       boardId?: string;
+      zoneId?: string;
+      others_can?: 'none' | 'view' | 'prompt' | 'all';
+      others_fs_access?: 'none' | 'read' | 'write';
     },
     params?: FeathersParams
   ): Promise<Worktree>;
