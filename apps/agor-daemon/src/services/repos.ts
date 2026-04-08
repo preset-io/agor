@@ -342,6 +342,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       pull_request_url?: string;
       boardId?: string;
       zoneId?: string;
+      others_can?: 'none' | 'view' | 'prompt' | 'all';
+      others_fs_access?: 'none' | 'read' | 'write';
     },
     params?: RepoParams
   ): Promise<Worktree> {
@@ -513,6 +515,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         worktree_unique_id: worktreeUniqueId,
         filesystem_status: 'creating', // Will be set to 'ready' by executor
         // Environment templates will be rendered by executor after Unix group creation
+        // RBAC fields (optional, defaults handled by repository layer)
+        ...(data.others_can ? { others_can: data.others_can } : {}),
+        ...(data.others_fs_access ? { others_fs_access: data.others_fs_access } : {}),
         sessions: [],
         last_used: new Date().toISOString(),
         issue_url: data.issue_url,
@@ -674,7 +679,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             refType: data.refType,
             // Unix group isolation (only when RBAC is enabled)
             initUnixGroup: rbacEnabled,
-            othersAccess: worktree.others_fs_access || 'read', // Default to read access
+            othersAccess: data.others_fs_access || worktree.others_fs_access || 'read', // Default to read access
             daemonUser,
             repoUnixGroup: repo.unix_group,
             creatorUnixUsername, // Creator will be added to worktree group
