@@ -103,6 +103,57 @@ function parseWWWAuthenticate(header: string): string | null {
 }
 
 /**
+ * Discover the OAuth Protected Resource Metadata URL for an MCP server.
+ *
+ * Many MCP servers (e.g. Notion) return a 401 with a plain Bearer challenge
+ * that does NOT include the `resource_metadata` parameter per RFC 9728.
+ * However, they DO serve the metadata at the well-known path.
+ *
+ * This function tries to discover it by probing:
+ *   1. {origin}/.well-known/oauth-protected-resource  (root-level)
+ *   2. {origin}/.well-known/oauth-protected-resource{path}  (path-aware per RFC)
+ *
+ * @param mcpUrl - The MCP server URL
+ * @returns The resource metadata URL if discoverable, null otherwise
+ */
+export async function discoverResourceMetadataUrl(mcpUrl: string): Promise<string | null> {
+  const url = new URL(mcpUrl);
+  const origin = url.origin;
+  const path = url.pathname === '/' ? '' : url.pathname.replace(/\/$/, '');
+
+  const candidates: string[] = [`${origin}/.well-known/oauth-protected-resource`];
+
+  // Add path-aware URL if the MCP endpoint isn't at root
+  if (path) {
+    candidates.push(`${origin}/.well-known/oauth-protected-resource${path}`);
+  }
+
+  for (const candidate of candidates) {
+    try {
+      console.log('[MCP OAuth] Trying resource metadata discovery:', candidate);
+      const response = await fetch(candidate, { signal: AbortSignal.timeout(10_000) });
+      if (response.ok) {
+        // Validate it looks like proper metadata
+        const data = (await response.json()) as Record<string, unknown>;
+        if (data.authorization_servers && Array.isArray(data.authorization_servers)) {
+          console.log('[MCP OAuth] ✓ Discovered resource metadata at:', candidate);
+          return candidate;
+        }
+      }
+    } catch (err) {
+      console.log(
+        '[MCP OAuth] Discovery failed for',
+        candidate,
+        ':',
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  }
+
+  return null;
+}
+
+/**
  * Fetch Protected Resource Metadata (RFC 9728)
  */
 async function fetchResourceMetadata(metadataUrl: string): Promise<OAuthMetadata> {
@@ -666,10 +717,21 @@ export async function performMCPOAuthFlow(
 }
 
 /**
- * Check if HTTP response indicates OAuth is required
+ * Check if HTTP response indicates OAuth is required.
+ *
+ * Returns true if the response is a 401 with either:
+ * - A WWW-Authenticate header containing resource_metadata (RFC 9728 compliant)
+ * - A WWW-Authenticate header containing Bearer (many OAuth servers omit resource_metadata)
  */
 export function isOAuthRequired(status: number, headers: Headers): boolean {
-  return status === 401 && headers.get('www-authenticate')?.includes('resource_metadata=') === true;
+  if (status !== 401) return false;
+  const wwwAuth = headers.get('www-authenticate');
+  if (!wwwAuth) return false;
+  // Strict check: resource_metadata present
+  if (wwwAuth.includes('resource_metadata=')) return true;
+  // Permissive check: Bearer challenge present (may need .well-known discovery)
+  if (wwwAuth.toLowerCase().includes('bearer')) return true;
+  return false;
 }
 
 /**
@@ -818,15 +880,19 @@ export async function startMCPOAuthFlow(
     tokenUrlOverride?: string;
     clientSecret?: string;
     scope?: string;
+    /** Pre-discovered resource metadata URL (used when WWW-Authenticate lacks resource_metadata) */
+    resourceMetadataUrl?: string;
   }
 ): Promise<OAuthFlowContext> {
   console.log('[MCP OAuth] Starting two-phase OAuth 2.1 flow');
 
-  // Step 1: Parse WWW-Authenticate header
-  const metadataUrl = parseWWWAuthenticate(wwwAuthenticateHeader);
+  // Step 1: Parse WWW-Authenticate header, fall back to pre-discovered URL
+  const metadataUrl = parseWWWAuthenticate(wwwAuthenticateHeader) || options?.resourceMetadataUrl;
   if (!metadataUrl) {
     throw new Error(
-      'Invalid WWW-Authenticate header. Expected format: Bearer resource_metadata="<url>"'
+      'Could not determine OAuth resource metadata URL. ' +
+        'The WWW-Authenticate header does not contain resource_metadata, ' +
+        'and no pre-discovered metadata URL was provided.'
     );
   }
   console.log('[MCP OAuth] Resource metadata URL:', metadataUrl);
