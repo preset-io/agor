@@ -34,7 +34,19 @@ function resolveToolArgs(
   tool: RegisteredTool,
   toolName: string
 ): Record<string, unknown> {
-  let toolArgs: Record<string, unknown> = (proxyArgs.arguments as Record<string, unknown>) ?? {};
+  // Defense-in-depth: coerce stringified arguments even if Zod preprocess
+  // already handled it (e.g. if the SDK bypasses schema validation).
+  let rawArgs = proxyArgs.arguments;
+  if (typeof rawArgs === 'string') {
+    try {
+      rawArgs = JSON.parse(rawArgs);
+    } catch {
+      throw new Error(
+        `Invalid arguments for tool ${toolName}: arguments is a string but not valid JSON`
+      );
+    }
+  }
+  let toolArgs: Record<string, unknown> = (rawArgs as Record<string, unknown>) ?? {};
 
   if (Object.keys(toolArgs).length === 0) {
     // No nested arguments — check for flattened params at top level
@@ -145,7 +157,23 @@ export function registerSearchTools(server: McpServer, registry: ToolRegistry): 
         .object({
           tool_name: z.string().describe('The tool name to execute (e.g. "agor_worktrees_list")'),
           arguments: z
-            .record(z.string(), z.unknown())
+            .preprocess(
+              (val) => {
+                // Some MCP clients (e.g. Claude Code) double-serialize nested
+                // objects as JSON strings when content is large or contains
+                // special characters (markdown, backticks, multi-paragraph text).
+                // Coerce back to an object before validation.
+                if (typeof val === 'string') {
+                  try {
+                    return JSON.parse(val);
+                  } catch {
+                    return val; // let Zod reject the raw string
+                  }
+                }
+                return val;
+              },
+              z.record(z.string(), z.unknown())
+            )
             .optional()
             .describe('Arguments to pass to the tool, matching its input schema'),
         })
