@@ -1521,27 +1521,16 @@ async function main() {
           headers: allHeaders,
         });
 
-        // Check for OAuth 2.1 auto-discovery (RFC 9728)
-        // The WWW-Authenticate header should contain: Bearer resource_metadata="<url>"
-        const hasResourceMetadata = wwwAuthenticate?.includes('resource_metadata=');
-
-        // Determine resource metadata URL from header or .well-known discovery
+        // Resolve resource metadata URL: try header first, then .well-known discovery
         let metadataUrl: string | null = null;
-        if (probeResponse.status === 401 && hasResourceMetadata) {
-          const metadataMatch = wwwAuthenticate!.match(/resource_metadata="([^"]+)"/);
-          metadataUrl = metadataMatch ? metadataMatch[1] : null;
-        } else if (probeResponse.status === 401 && !hasResourceMetadata) {
-          // Fallback: try .well-known discovery (handles servers like Notion that
-          // return 401 without resource_metadata in WWW-Authenticate)
-          console.log(
-            '[OAuth Test] WWW-Authenticate lacks resource_metadata, trying .well-known discovery'
-          );
-          const { discoverResourceMetadataUrl } = await import(
+        if (probeResponse.status === 401) {
+          const { resolveResourceMetadataUrl } = await import(
             '@agor/core/tools/mcp/oauth-mcp-transport'
           );
-          metadataUrl = await discoverResourceMetadataUrl(data.mcp_url);
-          if (metadataUrl) {
-            console.log('[OAuth Test] Discovered resource metadata URL:', metadataUrl);
+          const resolved = await resolveResourceMetadataUrl(wwwAuthenticate, data.mcp_url);
+          if (resolved) {
+            metadataUrl = resolved.metadataUrl;
+            console.log(`[OAuth Test] Resolved metadata URL (${resolved.source}):`, metadataUrl);
           }
         }
 
@@ -1607,15 +1596,11 @@ async function main() {
                 }
               };
 
-              // If the header lacked resource_metadata, synthesize one with the discovered URL
-              const effectiveHeader = hasResourceMetadata
-                ? wwwAuthenticate!
-                : `Bearer resource_metadata="${metadataUrl}"`;
-
               const token = await performMCPOAuthFlow(
-                effectiveHeader,
+                wwwAuthenticate || '',
                 data.client_id, // Optional client_id
-                browserOpener // Custom opener emits event to client
+                browserOpener, // Custom opener emits event to client
+                metadataUrl // Pre-discovered metadata URL (fallback for servers lacking resource_metadata)
               );
               console.log('[OAuth Test] OAuth flow completed, token obtained');
 
@@ -1992,34 +1977,25 @@ async function main() {
         }
 
         const wwwAuthenticate = probeResponse.headers.get('www-authenticate') || '';
-        const hasResourceMetadata = wwwAuthenticate.includes('resource_metadata=');
 
-        // If the 401 lacks resource_metadata in WWW-Authenticate (e.g. Notion),
-        // try auto-discovering the metadata URL via .well-known endpoint
-        let discoveredMetadataUrl: string | undefined;
-        if (!hasResourceMetadata) {
-          console.log(
-            '[OAuth Start] WWW-Authenticate lacks resource_metadata, trying .well-known discovery'
-          );
-          const { discoverResourceMetadataUrl } = await import(
-            '@agor/core/tools/mcp/oauth-mcp-transport'
-          );
-          discoveredMetadataUrl = (await discoverResourceMetadataUrl(data.mcp_url)) ?? undefined;
-
-          if (!discoveredMetadataUrl) {
-            return {
-              success: false,
-              error:
-                'Server returned 401 but does not advertise OAuth metadata. ' +
-                'No resource_metadata in WWW-Authenticate header and no ' +
-                '.well-known/oauth-protected-resource endpoint found.',
-            };
-          }
-          console.log('[OAuth Start] Discovered metadata URL:', discoveredMetadataUrl);
+        // Resolve resource metadata URL: try header first, then .well-known discovery
+        const { resolveResourceMetadataUrl, startMCPOAuthFlow } = await import(
+          '@agor/core/tools/mcp/oauth-mcp-transport'
+        );
+        const resolved = await resolveResourceMetadataUrl(wwwAuthenticate, data.mcp_url);
+        if (!resolved) {
+          return {
+            success: false,
+            error:
+              'Server returned 401 but does not advertise OAuth metadata. ' +
+              'No resource_metadata in WWW-Authenticate header and no ' +
+              '.well-known/oauth-protected-resource endpoint found.',
+          };
         }
-
-        // Import the two-phase OAuth flow functions
-        const { startMCPOAuthFlow } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
+        console.log(
+          `[OAuth Start] Resolved metadata URL (${resolved.source}):`,
+          resolved.metadataUrl
+        );
 
         // Start the flow - use browser-facing base URL for the OAuth redirect URI
         // getBaseUrl() resolves: AGOR_BASE_URL env → daemon.base_url config → localhost fallback
@@ -2032,7 +2008,7 @@ async function main() {
           tokenUrlOverride,
           clientSecret: clientSecretOverride,
           scope: scopeOverride,
-          resourceMetadataUrl: discoveredMetadataUrl,
+          resourceMetadataUrl: resolved.metadataUrl,
         });
 
         // Capture initiating socket ID for scoped notifications
@@ -2476,34 +2452,21 @@ async function main() {
             const wwwAuthenticate = probeResponse.headers.get('www-authenticate');
 
             if (probeResponse.status === 401) {
-              const hasMetadataInHeader = wwwAuthenticate?.includes('resource_metadata=');
+              const { resolveResourceMetadataUrl, performMCPOAuthFlow } = await import(
+                '@agor/core/tools/mcp/oauth-mcp-transport'
+              );
+              const resolved = await resolveResourceMetadataUrl(wwwAuthenticate, mcpUrl);
 
-              // If resource_metadata not in header, try .well-known discovery
-              let discoveredMetadataUrl: string | undefined;
-              if (!hasMetadataInHeader) {
-                const { discoverResourceMetadataUrl } = await import(
-                  '@agor/core/tools/mcp/oauth-mcp-transport'
+              if (resolved) {
+                console.log(
+                  `[MCP Discovery] OAuth 2.1 detected (${resolved.source}), starting browser flow...`
                 );
-                discoveredMetadataUrl = (await discoverResourceMetadataUrl(mcpUrl)) ?? undefined;
-              }
-
-              if (hasMetadataInHeader || discoveredMetadataUrl) {
-                console.log('[MCP Discovery] OAuth 2.1 detected, starting browser flow...');
-
-                const { performMCPOAuthFlow } = await import(
-                  '@agor/core/tools/mcp/oauth-mcp-transport'
-                );
-
-                // For performMCPOAuthFlow, we need a valid WWW-Authenticate header.
-                // If the header lacked resource_metadata, synthesize one.
-                const effectiveHeader = hasMetadataInHeader
-                  ? wwwAuthenticate!
-                  : `Bearer resource_metadata="${discoveredMetadataUrl}"`;
 
                 const token = await performMCPOAuthFlow(
-                  effectiveHeader,
+                  wwwAuthenticate || '',
                   undefined,
-                  openOAuthBrowser
+                  openOAuthBrowser,
+                  resolved.metadataUrl
                 );
 
                 cacheOAuth21Token(mcpUrl, token, 3600);

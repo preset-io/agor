@@ -121,12 +121,13 @@ export async function discoverResourceMetadataUrl(mcpUrl: string): Promise<strin
   const origin = url.origin;
   const path = url.pathname === '/' ? '' : url.pathname.replace(/\/$/, '');
 
-  const candidates: string[] = [`${origin}/.well-known/oauth-protected-resource`];
-
-  // Add path-aware URL if the MCP endpoint isn't at root
+  // Path-aware first (more specific), then root fallback.
+  // Per RFC 9728, path-scoped resources should match their specific metadata endpoint.
+  const candidates: string[] = [];
   if (path) {
     candidates.push(`${origin}/.well-known/oauth-protected-resource${path}`);
   }
+  candidates.push(`${origin}/.well-known/oauth-protected-resource`);
 
   for (const candidate of candidates) {
     try {
@@ -148,6 +149,38 @@ export async function discoverResourceMetadataUrl(mcpUrl: string): Promise<strin
         err instanceof Error ? err.message : String(err)
       );
     }
+  }
+
+  return null;
+}
+
+/**
+ * Resolve the OAuth resource metadata URL for an MCP server.
+ *
+ * Combines two strategies:
+ *   1. Parse the `resource_metadata` parameter from the WWW-Authenticate header (RFC 9728)
+ *   2. Auto-discover via `.well-known/oauth-protected-resource` (fallback for servers like Notion)
+ *
+ * Returns the metadata URL and its source, or null if neither strategy succeeds.
+ * This is the single entry point that daemon endpoints should use instead of
+ * duplicating parse + fallback logic.
+ */
+export async function resolveResourceMetadataUrl(
+  wwwAuthenticateHeader: string | null,
+  mcpUrl: string
+): Promise<{ metadataUrl: string; source: 'header' | 'well-known' } | null> {
+  // Strategy 1: Parse from WWW-Authenticate header
+  if (wwwAuthenticateHeader) {
+    const parsed = parseWWWAuthenticate(wwwAuthenticateHeader);
+    if (parsed) {
+      return { metadataUrl: parsed, source: 'header' };
+    }
+  }
+
+  // Strategy 2: Auto-discover via .well-known endpoint
+  const discovered = await discoverResourceMetadataUrl(mcpUrl);
+  if (discovered) {
+    return { metadataUrl: discovered, source: 'well-known' };
   }
 
   return null;
@@ -538,14 +571,20 @@ export async function performMCPOAuthFlow(
    * The function should open the provided URL in a browser. It can be async.
    * Throwing an error will abort the OAuth flow.
    */
-  browserOpener?: (url: string) => void | Promise<void>
+  browserOpener?: (url: string) => void | Promise<void>,
+  /** Pre-discovered resource metadata URL (used when WWW-Authenticate lacks resource_metadata) */
+  resourceMetadataUrl?: string
 ): Promise<string> {
   console.log('[MCP OAuth] Starting OAuth 2.1 Authorization Code flow with PKCE');
 
-  // Step 1: Parse WWW-Authenticate header
-  const metadataUrl = parseWWWAuthenticate(wwwAuthenticateHeader);
+  // Step 1: Parse WWW-Authenticate header, fall back to pre-discovered URL
+  const metadataUrl = parseWWWAuthenticate(wwwAuthenticateHeader) || resourceMetadataUrl;
   if (!metadataUrl) {
-    throw new Error('WWW-Authenticate header missing resource_metadata parameter');
+    throw new Error(
+      'Could not determine OAuth resource metadata URL. ' +
+        'The WWW-Authenticate header does not contain resource_metadata, ' +
+        'and no pre-discovered metadata URL was provided.'
+    );
   }
 
   console.log('[MCP OAuth] Resource metadata URL:', metadataUrl);
@@ -727,10 +766,11 @@ export function isOAuthRequired(status: number, headers: Headers): boolean {
   if (status !== 401) return false;
   const wwwAuth = headers.get('www-authenticate');
   if (!wwwAuth) return false;
-  // Strict check: resource_metadata present
+  // Strict check: resource_metadata present (RFC 9728 compliant)
   if (wwwAuth.includes('resource_metadata=')) return true;
-  // Permissive check: Bearer challenge present (may need .well-known discovery)
-  if (wwwAuth.toLowerCase().includes('bearer')) return true;
+  // Permissive check: Bearer auth scheme at start of challenge (may need .well-known discovery).
+  // Uses word boundary to avoid matching e.g. "X-Bearer-Custom" schemes.
+  if (/^\s*Bearer\b/i.test(wwwAuth)) return true;
   return false;
 }
 
