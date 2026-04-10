@@ -68,7 +68,7 @@
     "@oclif/plugin-help": "^6.2.37",
     "@octokit/auth-app": "^7.1.5",
     "@octokit/rest": "^22.0.0",
-    "@openai/codex-sdk": "^0.116.0",
+    "@openai/codex-sdk": "^0.118.0",
     "@opencode-ai/sdk": "^1.2.15",
     "@slack/socket-mode": "^2.0.5",
     "@slack/web-api": "^7.14.1",

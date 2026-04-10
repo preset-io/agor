@@ -63,7 +63,7 @@ RUN npm install -g \
   pnpm@9.15.1 \
   @anthropic-ai/claude-code@2.1.87 \
   @google/gemini-cli@0.31.0 \
-  @openai/codex@0.116.0 \
+  @openai/codex@0.118.0 \
   opencode-ai@1.2.15
 
 # Arguments for matching host user UID/GID (default to 1000)
