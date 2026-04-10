@@ -340,6 +340,8 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       ...(data.includeOriginalPrompt !== undefined
         ? { include_original_prompt: data.includeOriginalPrompt }
         : {}),
+      // Default callback mode to "once" — fires once then auto-disables
+      callback_mode: data.callbackMode ?? 'once',
     };
 
     // Build final prompt (append extra instructions if provided)

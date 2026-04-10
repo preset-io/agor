@@ -353,7 +353,25 @@ export interface Session {
      * session owner. Execution still runs as the target session's Unix user.
      */
     callback_created_by?: string;
+    /**
+     * Callback firing mode:
+     * - "once": Fire callback on first completion, then auto-disable (default)
+     * - "persistent": Fire on every completion (legacy behavior)
+     */
+    callback_mode?: 'once' | 'persistent';
   };
+
+  // ===== Fork Origin =====
+
+  /**
+   * Tracks how this session was created via fork:
+   * - "full": Regular fork (user-initiated or via sessions.prompt mode:"fork")
+   * - "btw": Ephemeral fork created via sessions.prompt mode:"btw"
+   *
+   * Only set on forked sessions. Null/undefined for spawned or directly created sessions.
+   * Sessions with fork_origin:"btw" are auto-archived after their callback fires.
+   */
+  fork_origin?: 'full' | 'btw';
 
   // ===== Archive State =====
 
@@ -510,6 +528,9 @@ export interface SpawnConfig {
 
   /** Enable callback to parent on completion (default: true) */
   enableCallback?: boolean;
+
+  /** Callback mode: "once" (default) fires once then auto-disables, "persistent" fires every time */
+  callbackMode?: 'once' | 'persistent';
 
   /** Include child's final result in callback (default: true) */
   includeLastMessage?: boolean;

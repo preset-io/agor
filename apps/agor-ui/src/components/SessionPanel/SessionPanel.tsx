@@ -437,6 +437,22 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     deleteDraft(session.session_id);
   };
 
+  const handleBtwSend = async () => {
+    if (!inputValue.trim() || connectionDisabled || !client) return;
+    const promptToSend = inputValue.trim();
+    try {
+      // Fork the session and send prompt via the fork
+      onFork?.(session.session_id, promptToSend);
+      setInputValue('');
+      deleteDraft(session.session_id);
+      message.success('Side question sent via fork');
+    } catch (error) {
+      message.error(
+        `Failed to send btw: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+
   const handleSpawnModalConfirm = async (config: string | Partial<SpawnConfig>) => {
     if (!session) return;
 
@@ -608,7 +624,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         <AutocompleteTextarea
           value={inputValue}
           onChange={setInputValue}
-          placeholder="Send a prompt, fork, or create a subsession... (type @ for autocomplete)"
+          placeholder={
+            isRunning
+              ? 'Session is working... Type here to queue, or click "btw" to ask a side question via fork'
+              : 'Send a prompt, fork, or create a subsession... (type @ for autocomplete)'
+          }
           autoSize={{ minRows: 1, maxRows: 10 }}
           onKeyPress={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -732,19 +752,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                   loading={isStopping && !stopRequestInFlight}
                 />
               </Tooltip>
-              <Tooltip
-                title={
-                  connectionDisabled
-                    ? 'Disconnected from daemon'
-                    : isRunning
-                      ? 'Session is running...'
-                      : 'Fork Session'
-                }
-              >
+              <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Fork Session'}>
                 <Button
                   icon={<ForkOutlined />}
                   onClick={handleFork}
-                  disabled={connectionDisabled || isRunning}
+                  disabled={connectionDisabled}
                 />
               </Tooltip>
               <Tooltip
@@ -768,6 +780,21 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                   disabled={connectionDisabled}
                 />
               </Tooltip>
+              {isRunning && (
+                <Tooltip title="Ask a side question via fork (btw)">
+                  <Button
+                    icon={<ForkOutlined />}
+                    onClick={handleBtwSend}
+                    disabled={connectionDisabled || !inputValue.trim()}
+                    style={{
+                      borderColor: token.colorWarning,
+                      color: token.colorWarning,
+                    }}
+                  >
+                    btw
+                  </Button>
+                </Tooltip>
+              )}
               <Tooltip
                 title={
                   connectionDisabled

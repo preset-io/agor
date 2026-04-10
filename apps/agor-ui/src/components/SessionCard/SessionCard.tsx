@@ -154,11 +154,15 @@ const SessionCard = ({
 
         <Space size={4}>
           <div className="nodrag">
-            {isForked && (
+            {isForked && session.fork_origin === 'btw' ? (
+              <Tag icon={<ForkOutlined />} color="orange">
+                BTW
+              </Tag>
+            ) : isForked ? (
               <Tag icon={<ForkOutlined />} color="cyan">
                 FORK
               </Tag>
-            )}
+            ) : null}
             {isSpawned && (
               <Tag icon={<BranchesOutlined />} color="purple">
                 SPAWN

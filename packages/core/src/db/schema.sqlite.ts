@@ -139,6 +139,9 @@ export const sessions = sqliteTable(
         // Callback config (child/remote session completion notifications)
         callback_config?: Session['callback_config'];
 
+        // Fork origin tracking (how this session was forked)
+        fork_origin?: 'full' | 'btw';
+
         // Context window tracking (cumulative usage from latest task)
         current_context_usage?: number; // Tokens currently in context
         context_window_limit?: number; // Model's max context (e.g., 200K)

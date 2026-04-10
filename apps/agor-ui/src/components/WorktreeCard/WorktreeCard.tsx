@@ -345,6 +345,13 @@ const WorktreeCardComponent = ({
     // Get relationship icon based on type
     const getRelationshipIcon = () => {
       if (node.relationshipType === 'fork') {
+        if (session.fork_origin === 'btw') {
+          return (
+            <Typography.Text style={{ fontSize: 9, color: token.colorWarning, fontWeight: 'bold' }}>
+              btw
+            </Typography.Text>
+          );
+        }
         return <ForkOutlined style={{ fontSize: 10, color: token.colorWarning }} />;
       }
       if (node.relationshipType === 'spawn') {

@@ -464,6 +464,39 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         `🔔 Queued callback to ${targetSessionId.substring(0, 8)} from child ${childSession.session_id.substring(0, 8)}`
       );
 
+      // "once" mode: auto-disable callback after first delivery
+      const callbackMode = childSession.callback_config?.callback_mode ?? 'once';
+      if (callbackMode === 'once') {
+        try {
+          await this.app.service('sessions').patch(childSession.session_id, {
+            callback_config: {
+              ...childSession.callback_config,
+              enabled: false,
+            },
+          });
+          console.log(
+            `🔕 [TasksService] Auto-disabled callback for session ${childSession.session_id.substring(0, 8)} (once mode)`
+          );
+        } catch (error) {
+          console.warn(`⚠️  [TasksService] Failed to auto-disable callback:`, error);
+        }
+      }
+
+      // "btw" fork origin: auto-archive the ephemeral fork after callback delivery
+      if (childSession.fork_origin === 'btw') {
+        try {
+          await this.app.service('sessions').patch(childSession.session_id, {
+            archived: true,
+            archived_reason: 'manual', // btw forks are ephemeral — auto-archive after callback
+          });
+          console.log(
+            `📦 [TasksService] Auto-archived btw fork session ${childSession.session_id.substring(0, 8)}`
+          );
+        } catch (error) {
+          console.warn(`⚠️  [TasksService] Failed to auto-archive btw fork:`, error);
+        }
+      }
+
       // NOTE: Queue processing is handled automatically via task completion hook
       // When target session becomes idle, it will process all queued messages including this callback
     } catch (error) {
