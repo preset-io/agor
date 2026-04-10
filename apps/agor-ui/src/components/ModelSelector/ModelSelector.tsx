@@ -113,7 +113,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       if (newMode === 'alias') {
         defaultModel = modelList[0].id;
       } else if (effectiveTool === 'codex') {
-        defaultModel = 'gpt-5.3-codex';
+        defaultModel = 'gpt-5.4-codex';
       } else if (effectiveTool === 'gemini') {
         defaultModel = 'gemini-2.5-flash';
       } else if (effectiveTool === 'copilot') {
@@ -181,7 +181,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                 onChange={(e) => handleModelChange(e.target.value)}
                 placeholder={
                   effectiveTool === 'codex'
-                    ? 'e.g., gpt-5.3-codex'
+                    ? 'e.g., gpt-5.4-codex'
                     : effectiveTool === 'gemini'
                       ? 'e.g., gemini-2.5-pro'
                       : effectiveTool === 'copilot'
