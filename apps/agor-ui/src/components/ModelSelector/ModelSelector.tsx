@@ -1,6 +1,7 @@
 import {
   AVAILABLE_CLAUDE_MODEL_ALIASES,
   CODEX_MODEL_METADATA,
+  DEFAULT_CODEX_MODEL,
   GEMINI_MODELS,
   type GeminiModel,
 } from '@agor/core/models';
@@ -113,7 +114,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       if (newMode === 'alias') {
         defaultModel = modelList[0].id;
       } else if (effectiveTool === 'codex') {
-        defaultModel = 'gpt-5.4';
+        defaultModel = DEFAULT_CODEX_MODEL;
       } else if (effectiveTool === 'gemini') {
         defaultModel = 'gemini-2.5-flash';
       } else if (effectiveTool === 'copilot') {
@@ -181,7 +182,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                 onChange={(e) => handleModelChange(e.target.value)}
                 placeholder={
                   effectiveTool === 'codex'
-                    ? 'e.g., gpt-5.4'
+                    ? `e.g., ${DEFAULT_CODEX_MODEL}`
                     : effectiveTool === 'gemini'
                       ? 'e.g., gemini-2.5-pro'
                       : effectiveTool === 'copilot'

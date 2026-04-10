@@ -113,11 +113,11 @@ const DEFAULT_CODEX_CONTEXT_LIMIT = 200_000;
  */
 export const CODEX_CONTEXT_LIMITS: Record<string, number> = {
   // GPT-5.4 models
-  'gpt-5.4': 400_000,
-  'gpt-5.4-mini': 200_000,
+  'gpt-5.4': 1_050_000,
+  'gpt-5.4-mini': 400_000,
   // GPT-5.3 models
   'gpt-5.3-codex': 400_000,
-  'gpt-5.3-codex-spark': 400_000,
+  'gpt-5.3-codex-spark': 128_000,
   // GPT-5.2 models (400k context, 128k max output)
   'gpt-5.2-codex': 400_000,
   'gpt-5.2': 400_000,
