@@ -139,68 +139,16 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_mcp_servers_auth_status',
     {
       description:
-        'Check the OAuth authentication status for an MCP server. Returns whether the current user is authenticated. If NOT authenticated, returns instructions for the user to complete OAuth via Settings → MCP Servers. Prefer using mcpServerId for reliable lookups (get IDs from agor_mcp_servers_list).',
+        'Check the OAuth authentication status for an MCP server. Returns whether the current user is authenticated. If NOT authenticated, returns instructions for the user to complete OAuth via Settings → MCP Servers. Use agor_mcp_servers_list to get server IDs.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        mcpServerId: z
-          .string()
-          .optional()
-          .describe(
-            'MCP server ID to check (UUIDv7 or short ID). Preferred — use agor_mcp_servers_list to get IDs.'
-          ),
-        mcpServerName: z
-          .string()
-          .optional()
-          .describe(
-            'MCP server name to check (exact match, case-insensitive). Alternative to mcpServerId.'
-          ),
+        mcpServerId: z.string().describe('MCP server ID to check (UUIDv7 or short ID)'),
       }),
     },
     async (args) => {
-      if (!args.mcpServerId && !args.mcpServerName) {
-        throw new Error(
-          'Either mcpServerId or mcpServerName is required. Use agor_mcp_servers_list to find available servers and their IDs.'
-        );
-      }
-
-      let mcpServer: MCPServer;
-
-      if (args.mcpServerId) {
-        mcpServer = await ctx.app
-          .service('mcp-servers')
-          .get(args.mcpServerId, ctx.baseServiceParams);
-      } else {
-        // Exact case-insensitive name match against all accessible servers
-        const allServers = await ctx.app.service('mcp-servers').find({
-          ...ctx.baseServiceParams,
-          query: { $limit: 200 },
-        });
-        const serverList = Array.isArray(allServers) ? allServers : allServers.data;
-        const nameToMatch = args.mcpServerName!.toLowerCase();
-        const matches = serverList.filter(
-          (s: MCPServer) =>
-            s.name.toLowerCase() === nameToMatch ||
-            (s.display_name && s.display_name.toLowerCase() === nameToMatch)
-        );
-
-        if (matches.length === 0) {
-          const availableNames = serverList
-            .map((s: MCPServer) => s.display_name || s.name)
-            .join(', ');
-          throw new Error(
-            `No MCP server found with name "${args.mcpServerName}". Available servers: ${availableNames || 'none'}`
-          );
-        }
-        if (matches.length > 1) {
-          const matchInfo = matches
-            .map((s: MCPServer) => `${s.display_name || s.name} (${s.mcp_server_id})`)
-            .join(', ');
-          throw new Error(
-            `Multiple MCP servers match name "${args.mcpServerName}": ${matchInfo}. Use mcpServerId for an exact match.`
-          );
-        }
-        mcpServer = matches[0];
-      }
+      const mcpServer: MCPServer = await ctx.app
+        .service('mcp-servers')
+        .get(args.mcpServerId, ctx.baseServiceParams);
 
       const authType = mcpServer.auth?.type || 'none';
       const oauthMode = mcpServer.auth?.oauth_mode || 'per_user';
