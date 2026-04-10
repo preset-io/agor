@@ -15,6 +15,12 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ReposServiceImpl, WorktreesServiceImpl } from '../../declarations.js';
 import type { WorktreeParams } from '../../services/worktrees.js';
+import {
+  resolveBoardId,
+  resolveRepoId,
+  resolveSessionId,
+  resolveWorktreeId,
+} from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
@@ -71,7 +77,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
     },
     async (args) => {
       const query: Record<string, unknown> = {};
-      if (args.repoId) query.repo_id = args.repoId;
+      if (args.repoId) query.repo_id = await resolveRepoId(ctx, args.repoId);
       if (args.limit) query.$limit = args.limit;
       if (args.archived === true) {
         query.archived = true;
@@ -191,10 +197,10 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       }),
     },
     async (args) => {
-      const repoId = coerceString(args.repoId)!;
+      const repoId = await resolveRepoId(ctx, coerceString(args.repoId)!);
       let worktreeName = coerceString(args.worktreeName)!;
       const originalName = worktreeName;
-      const boardId = coerceString(args.boardId)!;
+      const boardId = await resolveBoardId(ctx, coerceString(args.boardId)!);
       const zoneId = coerceString(args.zoneId);
       const autoSuffix = typeof args.autoSuffix === 'boolean' ? args.autoSuffix : true;
 
@@ -417,8 +423,10 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       }),
     },
     async (args) => {
-      let resolvedWorktreeId = coerceString(args.worktreeId);
-      if (!resolvedWorktreeId) {
+      let resolvedWorktreeId: string;
+      if (coerceString(args.worktreeId)) {
+        resolvedWorktreeId = await resolveWorktreeId(ctx, coerceString(args.worktreeId)!);
+      } else {
         const currentSession = await ctx.app.service('sessions').get(ctx.sessionId);
         const sessionWorktreeId = currentSession.worktree_id;
         if (!sessionWorktreeId)
@@ -454,7 +462,8 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       }
       if (args.boardId !== undefined) {
         fieldsProvided++;
-        updates.board_id = args.boardId === null ? null : coerceString(args.boardId);
+        const boardIdStr = args.boardId === null ? null : coerceString(args.boardId);
+        updates.board_id = boardIdStr ? await resolveBoardId(ctx, boardIdStr) : null;
       }
       if (args.customContext !== undefined) {
         fieldsProvided++;
@@ -568,9 +577,11 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       }),
     },
     async (args) => {
-      const worktreeId = coerceString(args.worktreeId)!;
+      const worktreeId = await resolveWorktreeId(ctx, coerceString(args.worktreeId)!);
       const zoneId = coerceString(args.zoneId)!;
-      const targetSessionId = coerceString(args.targetSessionId);
+      const targetSessionId = coerceString(args.targetSessionId)
+        ? await resolveSessionId(ctx, coerceString(args.targetSessionId)!)
+        : undefined;
       const triggerTemplate = args.triggerTemplate === true;
 
       console.log(`📍 MCP pinning worktree ${worktreeId.substring(0, 8)} to zone ${zoneId}`);
@@ -911,7 +922,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       }),
     },
     async (args) => {
-      const worktreeId = coerceString(args.worktreeId)!;
+      const worktreeId = await resolveWorktreeId(ctx, coerceString(args.worktreeId)!);
       const filesystemAction =
         (args.filesystemAction as 'preserved' | 'cleaned' | 'deleted') || 'cleaned';
       const worktreesService = ctx.app.service('worktrees') as unknown as WorktreesServiceImpl;
@@ -940,8 +951,9 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       }),
     },
     async (args) => {
-      const worktreeId = coerceString(args.worktreeId)!;
-      const boardId = coerceString(args.boardId);
+      const worktreeId = await resolveWorktreeId(ctx, coerceString(args.worktreeId)!);
+      const boardIdStr = coerceString(args.boardId);
+      const boardId = boardIdStr ? await resolveBoardId(ctx, boardIdStr) : undefined;
       const worktreesService = ctx.app.service('worktrees') as unknown as WorktreesServiceImpl;
       const result = await worktreesService.unarchive(
         worktreeId as WorktreeID,
@@ -974,7 +986,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       }),
     },
     async (args) => {
-      const worktreeId = coerceString(args.worktreeId)!;
+      const worktreeId = await resolveWorktreeId(ctx, coerceString(args.worktreeId)!);
       const filesystemAction = (args.filesystemAction as 'preserved' | 'deleted') || 'deleted';
       const worktreesService = ctx.app.service('worktrees') as unknown as WorktreesServiceImpl;
       await worktreesService.archiveOrDelete(
@@ -1004,7 +1016,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
     },
     async (args) => {
       const query: Record<string, unknown> = { archived: false, $limit: args.limit || 200 };
-      if (args.repoId) query.repo_id = args.repoId;
+      if (args.repoId) query.repo_id = await resolveRepoId(ctx, args.repoId);
 
       const result = await ctx.app.service('worktrees').find({ query, ...ctx.baseServiceParams });
 

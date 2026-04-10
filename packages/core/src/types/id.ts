@@ -54,6 +54,19 @@ export type ShortID = string;
  */
 export type IDPrefix = string;
 
+/**
+ * Unresolved ID input — either a full UUID or a short ID prefix.
+ *
+ * Used at API entry points (MCP tools, REST routes) where callers may pass
+ * either form. Must be resolved to a full UUID before use as a foreign key
+ * or in database queries.
+ *
+ * @example
+ * const input: IdInput = "01933e4a";                                // short prefix
+ * const input: IdInput = "01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f";  // full UUID
+ */
+export type IdInput = string;
+
 // ============================================================================
 // Entity-Specific ID Types
 // ============================================================================

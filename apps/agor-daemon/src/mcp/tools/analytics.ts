@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { resolveRepoId, resolveUserId, resolveWorktreeId } from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
 
@@ -51,9 +52,9 @@ export function registerAnalyticsTools(server: McpServer, ctx: McpContext): void
     },
     async (args) => {
       const query: Record<string, unknown> = {};
-      if (args.userId) query.userId = args.userId;
-      if (args.worktreeId) query.worktreeId = args.worktreeId;
-      if (args.repoId) query.repoId = args.repoId;
+      if (args.userId) query.userId = await resolveUserId(ctx, args.userId);
+      if (args.worktreeId) query.worktreeId = await resolveWorktreeId(ctx, args.worktreeId);
+      if (args.repoId) query.repoId = await resolveRepoId(ctx, args.repoId);
       if (args.startDate) query.startDate = args.startDate;
       if (args.endDate) query.endDate = args.endDate;
       if (args.groupBy) query.groupBy = args.groupBy;

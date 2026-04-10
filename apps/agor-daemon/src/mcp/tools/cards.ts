@@ -3,6 +3,7 @@ import type { Card, ZoneBoardObject } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { CardsService } from '../../services/cards.js';
+import { resolveBoardId } from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
@@ -27,7 +28,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const boardId = coerceString(args.boardId)!;
+      const boardId = await resolveBoardId(ctx, coerceString(args.boardId)!);
       const title = coerceString(args.title)!;
       const board = await ctx.app.service('boards').get(boardId, ctx.baseServiceParams);
       let zoneData: ZoneBoardObject | undefined;
@@ -103,7 +104,8 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
-      const boardId = coerceString(args.boardId);
+      const boardIdRaw = coerceString(args.boardId);
+      const boardId = boardIdRaw ? await resolveBoardId(ctx, boardIdRaw) : undefined;
       const cardTypeId = coerceString(args.cardTypeId);
       const zoneId = coerceString(args.zoneId);
       const search = coerceString(args.search);

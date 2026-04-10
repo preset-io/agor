@@ -9,6 +9,7 @@ import { NotFoundError } from '@agor/core/utils/errors';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ArtifactsService } from '../../services/artifacts.js';
+import { resolveArtifactId, resolveBoardId } from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
@@ -109,12 +110,16 @@ When in doubt, leave unset — the hosted bundler supports the widest range of p
     },
     async (args) => {
       const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
+      const resolvedBoardId = await resolveBoardId(ctx, coerceString(args.boardId)!);
+      const resolvedArtifactId = coerceString(args.artifactId)
+        ? await resolveArtifactId(ctx, coerceString(args.artifactId)!)
+        : undefined;
       const artifact = await service.publish(
         {
           folderPath: coerceString(args.folderPath)!,
-          board_id: coerceString(args.boardId)!,
+          board_id: resolvedBoardId,
           name: coerceString(args.name)!,
-          artifact_id: coerceString(args.artifactId),
+          artifact_id: resolvedArtifactId,
           template: args.template,
           public: args.public,
           use_local_bundler: args.useLocalBundler,
@@ -254,7 +259,8 @@ When in doubt, leave unset — the hosted bundler supports the widest range of p
     },
     async (args) => {
       const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
-      const boardId = coerceString(args.boardId);
+      const boardIdRaw = coerceString(args.boardId);
+      const boardId = boardIdRaw ? await resolveBoardId(ctx, boardIdRaw) : undefined;
       const limit = typeof args.limit === 'number' ? args.limit : 50;
 
       let artifactsList: unknown[];

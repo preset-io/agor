@@ -2,6 +2,7 @@ import { and, asc, desc, eq, messages as messagesTable, or, select, sql } from '
 import type { ContentBlock } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { resolveSessionId, resolveTaskId } from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
@@ -49,13 +50,16 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const sessionId = coerceString(args.sessionId);
-      const taskId = coerceString(args.taskId);
+      const sessionIdRaw = coerceString(args.sessionId);
+      const taskIdRaw = coerceString(args.taskId);
       const search = coerceString(args.search);
 
-      if (!sessionId && !taskId && !search) {
+      if (!sessionIdRaw && !taskIdRaw && !search) {
         throw new Error('at least one of sessionId, taskId, or search is required');
       }
+
+      const sessionId = sessionIdRaw ? await resolveSessionId(ctx, sessionIdRaw) : undefined;
+      const taskId = taskIdRaw ? await resolveTaskId(ctx, taskIdRaw) : undefined;
 
       const includeToolCalls = args.includeToolCalls === true;
       const contentMode = args.contentMode === 'full' ? 'full' : 'preview';

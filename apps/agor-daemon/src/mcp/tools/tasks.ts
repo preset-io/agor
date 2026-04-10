@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { resolveSessionId } from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
 
@@ -17,7 +18,7 @@ export function registerTaskTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const query: Record<string, unknown> = {};
-      if (args.sessionId) query.session_id = args.sessionId;
+      if (args.sessionId) query.session_id = await resolveSessionId(ctx, args.sessionId);
       if (args.limit) query.$limit = args.limit;
       const tasks = await ctx.app.service('tasks').find({ query, ...ctx.baseServiceParams });
       return textResult(tasks);
