@@ -17,6 +17,7 @@ import type { ReposServiceImpl, WorktreesServiceImpl } from '../../declarations.
 import type { WorktreeParams } from '../../services/worktrees.js';
 import {
   resolveBoardId,
+  resolveMcpServerId,
   resolveRepoId,
   resolveSessionId,
   resolveWorktreeId,
@@ -471,7 +472,10 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       }
       if (args.mcpServerIds !== undefined) {
         fieldsProvided++;
-        updates.mcp_server_ids = args.mcpServerIds === null ? [] : args.mcpServerIds;
+        updates.mcp_server_ids =
+          args.mcpServerIds === null
+            ? []
+            : await Promise.all(args.mcpServerIds.map((id) => resolveMcpServerId(ctx, id)));
       }
       if (args.othersCan !== undefined) {
         fieldsProvided++;

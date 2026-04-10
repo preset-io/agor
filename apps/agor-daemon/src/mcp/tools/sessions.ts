@@ -12,7 +12,12 @@ import { z } from 'zod';
 import type { SessionsServiceImpl } from '../../declarations.js';
 import type { SessionParams } from '../../services/sessions.js';
 import { ensureCanPromptSession } from '../../utils/worktree-authorization.js';
-import { resolveBoardId, resolveSessionId, resolveWorktreeId } from '../resolve-ids.js';
+import {
+  resolveBoardId,
+  resolveMcpServerId,
+  resolveSessionId,
+  resolveWorktreeId,
+} from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
 
@@ -674,9 +679,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       // MCP server inheritance: explicit param > worktree config > user defaults
       // An explicit empty array means "no MCPs" — does NOT fall through to worktree/user defaults.
+      // Resolve short IDs when from user input; worktree/user defaults are already full UUIDs.
       const mcpServerIds =
         args.mcpServerIds !== undefined
-          ? args.mcpServerIds
+          ? await Promise.all(args.mcpServerIds.map((id) => resolveMcpServerId(ctx, id)))
           : worktree.mcp_server_ids && worktree.mcp_server_ids.length > 0
             ? worktree.mcp_server_ids
             : userToolDefaults?.mcpServerIds || [];

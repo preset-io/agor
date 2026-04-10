@@ -3,7 +3,7 @@ import type { Card, ZoneBoardObject } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { CardsService } from '../../services/cards.js';
-import { resolveBoardId } from '../resolve-ids.js';
+import { resolveBoardId, resolveCardId } from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
@@ -258,8 +258,9 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
+      const cardId = await resolveCardId(ctx, args.cardId);
       const zoneId = args.zoneId === null ? null : (coerceString(args.zoneId) ?? null);
-      const card = await ctx.app.service('cards').get(args.cardId, ctx.baseServiceParams);
+      const card = await ctx.app.service('cards').get(cardId, ctx.baseServiceParams);
       let zoneData: ZoneBoardObject | undefined;
       if (zoneId) {
         const board = await ctx.app.service('boards').get(card.board_id, ctx.baseServiceParams);
@@ -269,7 +270,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
         zoneData = zone;
       }
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
-      const boardObject = await cardsService.moveToZone(args.cardId as never, zoneId, zoneData);
+      const boardObject = await cardsService.moveToZone(cardId as never, zoneId, zoneData);
       ctx.app.service('board-objects').emit('patched', boardObject);
       return textResult(boardObject);
     }
@@ -288,9 +289,10 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
+      const cardId = await resolveCardId(ctx, args.cardId);
       const boardObjectRepo = new BoardObjectRepository(ctx.db);
-      const boardObj = await boardObjectRepo.findByCardId(args.cardId as never);
-      if (!boardObj) throw new Error(`Card ${args.cardId} has no board placement`);
+      const boardObj = await boardObjectRepo.findByCardId(cardId as never);
+      if (!boardObj) throw new Error(`Card ${cardId} has no board placement`);
       const boardObjectsService = ctx.app.service(
         'board-objects'
       ) as unknown as import('../../services/board-objects.js').BoardObjectsService;
@@ -328,7 +330,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const boardId = coerceString(args.boardId)!;
+      const boardId = await resolveBoardId(ctx, coerceString(args.boardId)!);
       const cardsArr = args.cards;
       if (!Array.isArray(cardsArr) || cardsArr.length === 0)
         throw new Error('non-empty cards array is required');
@@ -445,8 +447,9 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       const results = [];
 
       for (const m of moves) {
-        const cardId = coerceString(m.cardId);
-        if (!cardId) continue;
+        const cardIdRaw = coerceString(m.cardId);
+        if (!cardIdRaw) continue;
+        const cardId = await resolveCardId(ctx, cardIdRaw);
         const zoneId = m.zoneId === null ? null : (coerceString(m.zoneId) ?? null);
         let zoneData: ZoneBoardObject | undefined;
         if (zoneId) {
