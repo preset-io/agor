@@ -43,8 +43,9 @@ export function isSuperAdmin(role: string | undefined, allowSuperadmin = true): 
 export const PERMISSION_RANK: Record<WorktreePermissionLevel, number> = {
   none: -1, // No access at all
   view: 0,
-  prompt: 1,
-  all: 2,
+  session: 1, // Can create sessions and prompt own sessions
+  prompt: 2, // Can prompt any session (including other users' sessions)
+  all: 3,
 };
 
 /**
@@ -83,8 +84,8 @@ export function hasWorktreePermission(
     return true;
   }
 
-  // Non-owners inherit from worktree.others_can (defaults to 'view')
-  const effectiveLevel = worktree.others_can ?? 'view';
+  // Non-owners inherit from worktree.others_can (defaults to 'session')
+  const effectiveLevel = worktree.others_can ?? 'session';
   const effectiveRank = PERMISSION_RANK[effectiveLevel];
   const requiredRank = PERMISSION_RANK[requiredLevel];
 
@@ -113,7 +114,7 @@ export function resolveWorktreePermission(
     return 'all';
   }
   // Superadmins get at least 'view' on all worktrees, even others_can=none
-  const basePermission = worktree.others_can ?? 'view';
+  const basePermission = worktree.others_can ?? 'session';
   if (
     isSuperAdmin(userRole, allowSuperadmin) &&
     PERMISSION_RANK[basePermission] < PERMISSION_RANK.view
@@ -511,7 +512,7 @@ export function filterWorktreesByPermission(worktreeRepo: WorktreeRepository) {
       const isOwner = await worktreeRepo.isOwner(worktree.worktree_id, userId);
       // User can access if they're an owner OR others_can allows at least 'view' permission
       // Check against permission rank: 'none' (-1) blocks access, 'view' (0) and above allows
-      const effectivePermission = worktree.others_can ?? 'view';
+      const effectivePermission = worktree.others_can ?? 'session';
       const hasAccess = isOwner || PERMISSION_RANK[effectivePermission] >= PERMISSION_RANK.view;
 
       if (hasAccess) {
@@ -975,10 +976,13 @@ export function validateSessionUnixUsername(
 }
 
 /**
- * Validate that a user has 'prompt' permission on the worktree containing a session.
+ * Validate that a user can prompt a specific session.
  *
  * Standalone helper (not a Feathers hook) — usable from MCP tools, service hooks, or anywhere
  * with access to the app and worktree repository. Resolves worktree ownership internally.
+ *
+ * Respects the 'session' tier: users with 'session' permission can prompt their own sessions
+ * but not sessions created by other users.
  *
  * Use case: validating callback targets ("can this user queue a prompt to that session?").
  *
@@ -990,7 +994,7 @@ export function validateSessionUnixUsername(
  * @throws Forbidden if user lacks prompt permission
  * @throws Error if session or worktree not found
  */
-export async function ensureCanPromptSession(
+export async function ensureCanPromptTargetSession(
   sessionId: string,
   userId: string,
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS app type
@@ -1016,28 +1020,48 @@ export async function ensureCanPromptSession(
   // Resolve ownership internally — callers shouldn't need to know this
   const isOwner = await worktreeRepo.isOwner(worktree.worktree_id, userId as UUID);
 
-  if (!hasWorktreePermission(worktree, userId as UUID, isOwner, 'prompt')) {
-    const effectiveLevel = resolveWorktreePermission(worktree, userId as UUID, isOwner);
+  // Owners can always prompt
+  if (isOwner) {
+    return targetSession;
+  }
+
+  const effectiveLevel = resolveWorktreePermission(worktree, userId as UUID, isOwner);
+
+  // 'prompt' or 'all' → can prompt any session
+  if (PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt) {
+    return targetSession;
+  }
+
+  // 'session' → can only prompt own sessions
+  if (effectiveLevel === 'session') {
+    if (targetSession.created_by === userId) {
+      return targetSession;
+    }
     throw new Forbidden(
-      `Cannot set callback target: you need 'prompt' permission on worktree ` +
-        `${worktree.name || worktree.worktree_id.substring(0, 8)}. ` +
-        `You have '${effectiveLevel}' permission.`
+      `You have 'session' permission — you can only prompt sessions you created. ` +
+        `This session was created by another user. ` +
+        `Ask a worktree owner to upgrade your access to 'prompt' if needed.`
     );
   }
 
-  return targetSession;
+  throw new Forbidden(
+    `Cannot set callback target: you need at least 'session' permission on worktree ` +
+      `${worktree.name || worktree.worktree_id.substring(0, 8)}. ` +
+      `You have '${effectiveLevel}' permission.`
+  );
 }
 
 /**
  * Check if user can create a session in a worktree
  *
- * Creating a session requires 'all' permission (full access).
- * Users with 'prompt' can only create tasks in existing sessions.
+ * Creating a session requires 'session' or higher permission.
+ * Users with 'session' can create new sessions (which run as their own identity).
+ * Users with 'view' can only read — they cannot create sessions.
  *
  * @returns Feathers hook
  */
 export function ensureCanCreateSession(options?: { allowSuperadmin?: boolean }) {
-  return ensureWorktreePermission('all', 'create sessions in this worktree', options);
+  return ensureWorktreePermission('session', 'create sessions in this worktree', options);
 }
 
 /**
@@ -1049,6 +1073,91 @@ export function ensureCanCreateSession(options?: { allowSuperadmin?: boolean }) 
  */
 export function ensureCanPrompt(options?: { allowSuperadmin?: boolean }) {
   return ensureWorktreePermission('prompt', 'create tasks/messages in this worktree', options);
+}
+
+/**
+ * Check if user can prompt (create tasks/messages) in a session, respecting the 'session' tier.
+ *
+ * For users with 'prompt' or 'all' permission: always allowed.
+ * For users with 'session' permission: only allowed if session.created_by === userId (own sessions).
+ * For users with 'view' or 'none': denied.
+ *
+ * IMPORTANT: Must run AFTER loadWorktree (or loadWorktreeFromSession) AND loadSession hooks,
+ * since it reads context.params.session and context.params.worktree.
+ *
+ * Use this INSTEAD of ensureCanPrompt when the operation targets a specific session
+ * (e.g., creating tasks/messages). The 'session' tier allows prompting own sessions only.
+ *
+ * @returns Feathers hook
+ */
+export function ensureCanPromptInSession(options?: { allowSuperadmin?: boolean }) {
+  return (context: HookContext) => {
+    // Skip for internal calls
+    if (!context.params.provider) {
+      return context;
+    }
+
+    if (!context.params.user) {
+      throw new NotAuthenticated('Authentication required');
+    }
+
+    // Service accounts (executor) bypass RBAC
+    if (context.params.user._isServiceAccount) {
+      return context;
+    }
+
+    const worktree = context.params.worktree;
+    const isOwner = context.params.isWorktreeOwner ?? false;
+
+    if (!worktree) {
+      throw new Error('loadWorktree hook must run before ensureCanPromptInSession');
+    }
+
+    const userId = context.params.user.user_id as UUID;
+    const userRole = context.params.user.role as string | undefined;
+    const allowSuperadmin = options?.allowSuperadmin ?? true;
+
+    // Owners always have full access
+    if (isOwner) {
+      return context;
+    }
+
+    const effectiveLevel = resolveWorktreePermission(
+      worktree,
+      userId,
+      isOwner,
+      userRole,
+      allowSuperadmin
+    );
+
+    // 'prompt' or 'all' → can prompt any session
+    if (PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt) {
+      return context;
+    }
+
+    // 'session' → can only prompt own sessions
+    if (effectiveLevel === 'session') {
+      const session = context.params.session;
+      if (!session) {
+        throw new Error('loadSession hook must run before ensureCanPromptInSession');
+      }
+
+      if (session.created_by === userId) {
+        return context;
+      }
+
+      throw new Forbidden(
+        `You have 'session' permission — you can only prompt sessions you created. ` +
+          `This session was created by another user. ` +
+          `Ask a worktree owner to upgrade your access to 'prompt' if you need to prompt other users' sessions.`
+      );
+    }
+
+    // 'view' or 'none' → denied
+    throw new Forbidden(
+      `You need 'prompt' permission to create tasks/messages in this worktree. You have '${effectiveLevel}' permission.`
+    );
+  };
 }
 
 /**

@@ -132,7 +132,7 @@ export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersP
       pull_request_url?: string;
       boardId?: string;
       zoneId?: string;
-      others_can?: 'none' | 'view' | 'prompt' | 'all';
+      others_can?: 'none' | 'view' | 'session' | 'prompt' | 'all';
       others_fs_access?: 'none' | 'read' | 'write';
     },
     params?: FeathersParams

@@ -125,14 +125,22 @@ describe('hasWorktreePermission', () => {
     it.each<[WorktreePermissionLevel, WorktreePermissionLevel, boolean]>([
       ['all', 'all', true],
       ['all', 'prompt', true],
+      ['all', 'session', true],
       ['all', 'view', true],
       ['prompt', 'prompt', true],
+      ['prompt', 'session', true],
       ['prompt', 'view', true],
       ['prompt', 'all', false],
+      ['session', 'session', true],
+      ['session', 'view', true],
+      ['session', 'prompt', false],
+      ['session', 'all', false],
       ['view', 'view', true],
+      ['view', 'session', false],
       ['view', 'prompt', false],
       ['view', 'all', false],
       ['none', 'view', false],
+      ['none', 'session', false],
       ['none', 'prompt', false],
       ['none', 'all', false],
     ])('others_can=%s, required=%s → %s', (othersCan, required, expected) => {
@@ -166,5 +174,15 @@ describe('resolveWorktreePermission', () => {
   it('member gets none when others_can=none', () => {
     const wt = makeWorktree({ others_can: 'none' });
     expect(resolveWorktreePermission(wt, USER_ID, false, ROLES.MEMBER)).toBe('none');
+  });
+
+  it('member gets session when others_can=session', () => {
+    const wt = makeWorktree({ others_can: 'session' });
+    expect(resolveWorktreePermission(wt, USER_ID, false, ROLES.MEMBER)).toBe('session');
+  });
+
+  it('superadmin inherits session permission from others_can', () => {
+    const wt = makeWorktree({ others_can: 'session' });
+    expect(resolveWorktreePermission(wt, USER_ID, false, ROLES.SUPERADMIN)).toBe('session');
   });
 });

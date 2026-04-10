@@ -140,8 +140,8 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       archived_at: worktree.archived_at ? new Date(worktree.archived_at) : null,
       archived_by: worktree.archived_by ?? null,
       filesystem_status: worktree.filesystem_status ?? null,
-      // RBAC fields (default 'view' for others_can matches schema default)
-      others_can: worktree.others_can ?? 'view',
+      // RBAC fields (default 'session' for others_can matches schema default)
+      others_can: worktree.others_can ?? 'session',
       others_fs_access: worktree.others_fs_access ?? null,
       unix_group: worktree.unix_group ?? null,
       data: {
@@ -527,7 +527,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
     const conditions = [
       or(
         isNotNull(worktreeOwners.user_id),
-        inArray(worktrees.others_can, ['view', 'prompt', 'all'])
+        inArray(worktrees.others_can, ['view', 'session', 'prompt', 'all'])
       ),
     ];
 

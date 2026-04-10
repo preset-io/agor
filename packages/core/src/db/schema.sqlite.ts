@@ -453,10 +453,10 @@ export const worktrees = sqliteTable(
 
     // RBAC: App-layer permissions (rbac.md)
     others_can: text('others_can', {
-      enum: ['none', 'view', 'prompt', 'all'],
+      enum: ['none', 'view', 'session', 'prompt', 'all'],
     })
-      .$type<'none' | 'view' | 'prompt' | 'all'>()
-      .default('view'),
+      .$type<'none' | 'view' | 'session' | 'prompt' | 'all'>()
+      .default('session'),
 
     // RBAC: OS-layer permissions (unix-user-modes.md)
     unix_group: text('unix_group'), // e.g., 'agor_wt_abc123'

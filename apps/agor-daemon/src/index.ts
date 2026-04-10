@@ -477,8 +477,8 @@ import {
 import { createUploadMiddleware } from './utils/upload';
 import {
   ensureCanCreateSession,
-  ensureCanPrompt,
-  ensureCanPromptSession,
+  ensureCanPromptInSession,
+  ensureCanPromptTargetSession,
   ensureCanView,
   ensureSessionImmutability,
   ensureWorktreePermission,
@@ -2960,7 +2960,7 @@ async function main() {
               loadSession(sessionsService),
               validateSessionUnixUsername(usersRepository), // Defensive check: session.unix_username must match creator's current unix_username
               loadWorktreeFromSession(worktreeRepository),
-              ensureCanPrompt(superadminOpts), // Require 'prompt' permission to create messages
+              ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
             ]
           : []),
       ],
@@ -2971,7 +2971,7 @@ async function main() {
               resolveSessionContext(),
               loadSession(sessionsService),
               loadWorktreeFromSession(worktreeRepository),
-              ensureCanPrompt(superadminOpts), // Require 'prompt' permission to update messages
+              ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
             ]
           : []),
       ],
@@ -2982,7 +2982,7 @@ async function main() {
               resolveSessionContext(),
               loadSession(sessionsService),
               loadWorktreeFromSession(worktreeRepository),
-              ensureCanPrompt(superadminOpts), // Require 'prompt' permission to delete messages
+              ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
             ]
           : []),
       ],
@@ -3073,7 +3073,7 @@ async function main() {
                     }
 
                     const isOwner = await worktreeRepository.isOwner(worktree.worktree_id, userId);
-                    const effectivePermission = worktree.others_can ?? 'view';
+                    const effectivePermission = worktree.others_can ?? 'session';
                     const hasAccess =
                       isOwner || PERMISSION_RANK[effectivePermission] >= PERMISSION_RANK.view;
 
@@ -4073,7 +4073,7 @@ async function main() {
             // Use authenticated user, NOT context.data.created_by (which could be client-supplied)
             const authenticatedUserId =
               (context.params as { user?: { user_id: string } }).user?.user_id || 'anonymous';
-            await ensureCanPromptSession(
+            await ensureCanPromptTargetSession(
               cbConfig.callback_session_id,
               authenticatedUserId,
               context.app,
@@ -4101,7 +4101,7 @@ async function main() {
           if (patchCbConfig?.callback_session_id) {
             const userId =
               (context.params as { user?: { user_id: string } }).user?.user_id || 'anonymous';
-            await ensureCanPromptSession(
+            await ensureCanPromptTargetSession(
               patchCbConfig.callback_session_id,
               userId,
               context.app,
@@ -4342,7 +4342,7 @@ async function main() {
               loadSession(sessionsService),
               validateSessionUnixUsername(usersRepository), // Defensive check: session.unix_username must match creator's current unix_username
               loadWorktreeFromSession(worktreeRepository),
-              ensureCanPrompt(superadminOpts), // Require 'prompt' permission to create tasks
+              ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
             ]
           : []),
         async (context) => {
@@ -4374,7 +4374,7 @@ async function main() {
               resolveSessionContext(),
               loadSession(sessionsService),
               loadWorktreeFromSession(worktreeRepository),
-              ensureCanPrompt(superadminOpts), // Require 'prompt' permission to update tasks
+              ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
             ]
           : []),
       ],

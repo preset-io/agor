@@ -11,7 +11,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { SessionsServiceImpl } from '../../declarations.js';
 import type { SessionParams } from '../../services/sessions.js';
-import { ensureCanPromptSession } from '../../utils/worktree-authorization.js';
+import { ensureCanPromptTargetSession } from '../../utils/worktree-authorization.js';
 import {
   resolveBoardId,
   resolveMcpServerId,
@@ -697,7 +697,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       // Validate user has prompt permission on the callback target session's worktree
       if (wantsCallback && args.callbackSessionId) {
         const worktreeRepo = new WorktreeRepository(ctx.db);
-        await ensureCanPromptSession(args.callbackSessionId, ctx.userId, ctx.app, worktreeRepo);
+        await ensureCanPromptTargetSession(
+          args.callbackSessionId,
+          ctx.userId,
+          ctx.app,
+          worktreeRepo
+        );
       }
 
       if (args.enableCallback !== undefined) {

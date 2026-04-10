@@ -646,7 +646,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       .where(
         or(
           isNotNull(worktreeOwners.user_id),
-          inArray(worktrees.others_can, ['view', 'prompt', 'all'])
+          inArray(worktrees.others_can, ['view', 'session', 'prompt', 'all'])
         )
       )
       .all();

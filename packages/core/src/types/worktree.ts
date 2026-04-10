@@ -331,12 +331,13 @@ export interface Worktree {
    *
    * - 'none': No access (worktree is completely private to owners)
    * - 'view': Can read worktrees/sessions/tasks/messages
-   * - 'prompt': View + can create tasks/messages (run agents)
+   * - 'session': View + can create new sessions (running as own identity) and prompt own sessions
+   * - 'prompt': View + can create tasks/messages in ANY session (run agents as session creator's identity)
    * - 'all': Full control (create/patch/delete sessions)
    *
    * Note: Owners always have 'all' permission regardless of this setting.
    */
-  others_can?: 'none' | 'view' | 'prompt' | 'all';
+  others_can?: 'none' | 'view' | 'session' | 'prompt' | 'all';
 
   // ===== RBAC: OS-layer permissions (unix-user-modes.md) =====
 
@@ -366,7 +367,7 @@ export interface Worktree {
 /**
  * Permission level type (for app-layer RBAC)
  */
-export type WorktreePermissionLevel = 'none' | 'view' | 'prompt' | 'all';
+export type WorktreePermissionLevel = 'none' | 'view' | 'session' | 'prompt' | 'all';
 
 /**
  * Worktree schedule configuration

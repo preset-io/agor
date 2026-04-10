@@ -300,7 +300,7 @@ execution:
 
 **Behavior:**
 
-- ✅ App-layer permission checks (view/prompt/all)
+- ✅ App-layer permission checks (none/view/session/prompt/all)
 - ✅ Worktree owners service active
 - ✅ UI shows permission management
 - ❌ No Unix groups (all runs as daemon user)
@@ -374,6 +374,20 @@ execution:
   # Password sync (strict mode)
   sync_unix_passwords: boolean # default: true
 ```
+
+### Permission Tiers (`others_can`)
+
+The `others_can` field on worktrees controls what non-owners can do:
+
+| Tier | Rank | Description |
+|------|------|-------------|
+| `none` | -1 | No access (worktree is completely private to owners) |
+| `view` | 0 | Can read worktrees, sessions, tasks, messages |
+| `session` | 1 | **Default.** Can create new sessions (running as own identity) and prompt own sessions only |
+| `prompt` | 2 | Can prompt ANY session, including other users' sessions. **Warning: sessions execute under the original creator's OS identity.** |
+| `all` | 3 | Full control (create/update/delete sessions) |
+
+The `session` tier is the safe default — it lets collaborators work independently without being able to impersonate other users' OS identities.
 
 ---
 

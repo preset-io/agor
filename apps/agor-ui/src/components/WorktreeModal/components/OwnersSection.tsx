@@ -11,8 +11,8 @@
 import type { AgorClient } from '@agor/core/api';
 import type { User, Worktree, WorktreePermissionLevel } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
-import { UserOutlined } from '@ant-design/icons';
-import { Button, Form, Select, Space, Typography } from 'antd';
+import { UserOutlined, WarningOutlined } from '@ant-design/icons';
+import { Alert, Button, Form, Select, Space, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
 import { Tag } from '../../Tag';
@@ -32,7 +32,7 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
   const [selectedOwnerIds, setSelectedOwnerIds] = useState<string[]>([]);
   const [selectKey, setSelectKey] = useState(0); // Force re-render key
   const [othersCanValue, setOthersCanValue] = useState<WorktreePermissionLevel>(
-    worktree.others_can || 'view'
+    worktree.others_can || 'session'
   );
   const [othersFsAccessValue, setOthersFsAccessValue] = useState<'none' | 'read' | 'write'>(
     worktree.others_fs_access || 'read'
@@ -106,7 +106,7 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
     // Reset to original values
     const currentOwnerIds = owners.map((o) => o.user_id as string);
     setSelectedOwnerIds(currentOwnerIds);
-    setOthersCanValue(worktree.others_can || 'view');
+    setOthersCanValue(worktree.others_can || 'session');
     setOthersFsAccessValue(worktree.others_fs_access || 'read');
     setSelectKey((prev) => prev + 1); // Force Select to remount
   };
@@ -179,10 +179,11 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
     othersCanValue !== worktree.others_can || othersFsAccessValue !== worktree.others_fs_access;
   const hasUnsavedChanges = ownersChanged || permissionsChanged;
 
-  const permissionLevelDescriptions = {
+  const permissionLevelDescriptions: Record<WorktreePermissionLevel, string> = {
     none: 'No access (worktree is completely private to owners)',
     view: 'Can view worktrees, sessions, tasks, and messages',
-    prompt: 'View + can create tasks and messages (run agents)',
+    session: 'Can create new sessions (running as own identity) and prompt own sessions',
+    prompt: 'Can prompt ANY session, including those created by other users',
     all: 'Full access (create/update/delete sessions and worktrees)',
   };
 
@@ -276,11 +277,24 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
             options={[
               { value: 'none', label: 'None' },
               { value: 'view', label: 'View' },
+              { value: 'session', label: 'Own Sessions' },
               { value: 'prompt', label: 'Prompt' },
               { value: 'all', label: 'All' },
             ]}
           />
         </Form.Item>
+
+        {othersCanValue === 'prompt' && (
+          <Form.Item wrapperCol={{ offset: 8, span: 16 }} style={{ marginBottom: 12 }}>
+            <Alert
+              type="warning"
+              showIcon
+              icon={<WarningOutlined />}
+              message="Unix identity risk"
+              description="Allows users to send prompts to sessions they didn't create. Those sessions execute under the original creator's OS identity and filesystem permissions. Only use with fully trusted collaborators."
+            />
+          </Form.Item>
+        )}
 
         <Form.Item
           label="Filesystem Access"
