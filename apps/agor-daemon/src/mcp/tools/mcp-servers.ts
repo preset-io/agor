@@ -139,7 +139,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_mcp_servers_auth_status',
     {
       description:
-        'Check the OAuth authentication status for an MCP server. Returns whether the current user is authenticated. If NOT authenticated, you MUST immediately call agor_mcp_servers_request_oauth to trigger the OAuth popup in the UI. Do not just tell the user to authenticate manually.',
+        'Check the OAuth authentication status for an MCP server. Returns whether the current user is authenticated. If NOT authenticated, returns instructions for the user to complete OAuth via Settings → MCP Servers.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         mcpServerId: z.string().optional().describe('MCP server ID to check (UUIDv7 or short ID)'),
@@ -203,61 +203,6 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
           !oauthAuthenticated && authType === 'oauth'
             ? `To authenticate with "${mcpServer.display_name || mcpServer.name}", go to Settings > MCP Servers > ${mcpServer.display_name || mcpServer.name} > Click "Test Authentication" then "Start OAuth Flow". After completing the OAuth flow in your browser, the MCP tools will become available.`
             : undefined,
-      });
-    }
-  );
-
-  // Tool 3: agor_mcp_servers_request_oauth
-  server.registerTool(
-    'agor_mcp_servers_request_oauth',
-    {
-      description:
-        'Check if an MCP server needs OAuth authentication and tell the user how to authenticate. Call this when you detect an MCP server needs OAuth (e.g., when agor_mcp_servers_auth_status shows oauth_authenticated=false, or when MCP tools fail).',
-      inputSchema: z.object({
-        mcpServerId: z
-          .string()
-          .optional()
-          .describe('MCP server ID to authenticate (UUIDv7 or short ID)'),
-        mcpServerName: z
-          .string()
-          .optional()
-          .describe('MCP server name to authenticate (alternative to mcpServerId)'),
-      }),
-    },
-    async (args) => {
-      let mcpServer: MCPServer;
-
-      if (args.mcpServerId) {
-        mcpServer = await ctx.app
-          .service('mcp-servers')
-          .get(args.mcpServerId, ctx.baseServiceParams);
-      } else if (args.mcpServerName) {
-        const servers = await ctx.app.service('mcp-servers').find({
-          ...ctx.baseServiceParams,
-          query: { name: args.mcpServerName, $limit: 1 },
-        });
-        const serverList = Array.isArray(servers) ? servers : servers.data;
-        if (serverList.length === 0)
-          throw new Error(`MCP server not found with name: ${args.mcpServerName}`);
-        mcpServer = serverList[0];
-      } else {
-        throw new Error('mcpServerId or mcpServerName is required');
-      }
-
-      const authType = mcpServer.auth?.type || 'none';
-
-      if (authType !== 'oauth') {
-        return textResult({
-          success: false,
-          error: `MCP server "${mcpServer.display_name || mcpServer.name}" does not use OAuth authentication (auth_type: ${authType})`,
-        });
-      }
-
-      return textResult({
-        success: true,
-        message: `MCP server "${mcpServer.display_name || mcpServer.name}" requires OAuth authentication. Please ask the user to go to Settings → MCP Servers → ${mcpServer.display_name || mcpServer.name} → Start OAuth Flow to authenticate.`,
-        mcp_server_id: mcpServer.mcp_server_id,
-        mcp_server_name: mcpServer.name,
       });
     }
   );
