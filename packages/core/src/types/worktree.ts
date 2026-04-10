@@ -337,7 +337,7 @@ export interface Worktree {
    *
    * Note: Owners always have 'all' permission regardless of this setting.
    */
-  others_can?: 'none' | 'view' | 'session' | 'prompt' | 'all';
+  others_can?: WorktreePermissionLevel;
 
   // ===== RBAC: OS-layer permissions (unix-user-modes.md) =====
 
@@ -365,9 +365,16 @@ export interface Worktree {
 }
 
 /**
+ * Ordered permission levels for worktree RBAC (least → most privileged).
+ *
+ * Single source of truth — derive types, zod schemas, DB enums, and rank maps from this.
+ */
+export const WORKTREE_PERMISSION_LEVELS = ['none', 'view', 'session', 'prompt', 'all'] as const;
+
+/**
  * Permission level type (for app-layer RBAC)
  */
-export type WorktreePermissionLevel = 'none' | 'view' | 'session' | 'prompt' | 'all';
+export type WorktreePermissionLevel = (typeof WORKTREE_PERMISSION_LEVELS)[number];
 
 /**
  * Worktree schedule configuration

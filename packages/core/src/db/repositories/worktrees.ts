@@ -5,6 +5,7 @@
  */
 
 import type { AgenticToolName, SessionStatus, UUID, Worktree, WorktreeID } from '@agor/core/types';
+import { WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
 import {
   and,
   desc,
@@ -527,7 +528,10 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
     const conditions = [
       or(
         isNotNull(worktreeOwners.user_id),
-        inArray(worktrees.others_can, ['view', 'session', 'prompt', 'all'])
+        inArray(
+          worktrees.others_can,
+          WORKTREE_PERMISSION_LEVELS.filter((l) => l !== 'none')
+        )
       ),
     ];
 

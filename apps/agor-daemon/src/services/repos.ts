@@ -41,6 +41,7 @@ import type {
   UserID,
   UUID,
   Worktree,
+  WorktreePermissionLevel,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import { resolveGitImpersonationForUser } from '../utils/git-impersonation.js';
@@ -342,7 +343,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       pull_request_url?: string;
       boardId?: string;
       zoneId?: string;
-      others_can?: 'none' | 'view' | 'session' | 'prompt' | 'all';
+      others_can?: WorktreePermissionLevel;
       others_fs_access?: 'none' | 'read' | 'write';
     },
     params?: RepoParams

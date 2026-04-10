@@ -5,7 +5,7 @@
  */
 
 import type { Session, UUID } from '@agor/core/types';
-import { SessionStatus } from '@agor/core/types';
+import { SessionStatus, WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
 import { and, desc, eq, inArray, isNotNull, isNull, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { formatShortId, generateId } from '../../lib/ids';
@@ -646,7 +646,10 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       .where(
         or(
           isNotNull(worktreeOwners.user_id),
-          inArray(worktrees.others_can, ['view', 'session', 'prompt', 'all'])
+          inArray(
+            worktrees.others_can,
+            WORKTREE_PERMISSION_LEVELS.filter((l) => l !== 'none')
+          )
         )
       )
       .all();

@@ -19,7 +19,7 @@ import type {
   Worktree,
   WorktreePermissionLevel,
 } from '@agor/core/types';
-import { ROLES } from '@agor/core/types';
+import { ROLES, WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
 
 /**
  * Check if a user has the superadmin role (or deprecated 'owner' alias).
@@ -38,15 +38,12 @@ export function isSuperAdmin(role: string | undefined, allowSuperadmin = true): 
 }
 
 /**
- * Permission level hierarchy (for comparisons)
+ * Permission level hierarchy (for comparisons).
+ * Derived from WORKTREE_PERMISSION_LEVELS — rank = array index - 1 (none=-1, view=0, …, all=3).
  */
-export const PERMISSION_RANK: Record<WorktreePermissionLevel, number> = {
-  none: -1, // No access at all
-  view: 0,
-  session: 1, // Can create sessions and prompt own sessions
-  prompt: 2, // Can prompt any session (including other users' sessions)
-  all: 3,
-};
+export const PERMISSION_RANK: Record<WorktreePermissionLevel, number> = Object.fromEntries(
+  WORKTREE_PERMISSION_LEVELS.map((level, i) => [level, i - 1])
+) as Record<WorktreePermissionLevel, number>;
 
 /**
  * Check if user has minimum required permission level on a worktree

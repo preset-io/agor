@@ -13,6 +13,7 @@ import type {
   Session,
   Task,
 } from '@agor/core/types';
+import { WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
 import { relations, sql } from 'drizzle-orm';
 import {
   bigint,
@@ -458,10 +459,8 @@ export const worktrees = pgTable(
 
     // RBAC: App-layer permissions (rbac.md)
     others_can: text('others_can', {
-      enum: ['none', 'view', 'session', 'prompt', 'all'],
-    })
-      .$type<'none' | 'view' | 'session' | 'prompt' | 'all'>()
-      .default('view'),
+      enum: [...WORKTREE_PERMISSION_LEVELS],
+    }).default('view'),
 
     // RBAC: OS-layer permissions (unix-user-modes.md)
     unix_group: text('unix_group'), // e.g., 'agor_wt_abc123'
