@@ -610,17 +610,23 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="Client ID"
                     name="oauth_client_id"
-                    tooltip="OAuth client ID. Supports templates like {{ user.env.OAUTH_CLIENT_ID }}"
+                    tooltip="Required for servers that don't support Dynamic Client Registration (e.g. Figma, GitHub). Register an OAuth app with the provider and paste the client ID here."
                   >
-                    <Input placeholder="{{ user.env.OAUTH_CLIENT_ID }}" allowClear />
+                    <Input
+                      placeholder="Enter client ID or {{ user.env.OAUTH_CLIENT_ID }}"
+                      allowClear
+                    />
                   </Form.Item>
 
                   <Form.Item
                     label="Client Secret"
                     name="oauth_client_secret"
-                    tooltip="OAuth client secret. Supports templates like {{ user.env.OAUTH_CLIENT_SECRET }}"
+                    tooltip="Required for servers that use confidential clients (e.g. Figma). The secret is sent via HTTP Basic Auth during token exchange."
                   >
-                    <Input.Password placeholder="{{ user.env.OAUTH_CLIENT_SECRET }}" allowClear />
+                    <Input.Password
+                      placeholder="Enter client secret or {{ user.env.OAUTH_CLIENT_SECRET }}"
+                      allowClear
+                    />
                   </Form.Item>
 
                   <Form.Item
@@ -659,15 +665,20 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   </Form.Item>
 
                   <Alert
-                    message="OAuth 2.1 Auto-Discovery"
+                    message="OAuth Configuration"
                     description={
                       <ul style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
                         <li>
-                          All fields are optional - OAuth 2.1 servers advertise their endpoints
+                          <strong>Auto-discovery:</strong> OAuth 2.1 servers advertise their
+                          endpoints automatically via RFC 9728
                         </li>
-                        <li>MCP server returns metadata URL in WWW-Authenticate header</li>
+                        <li>
+                          <strong>Pre-registered apps:</strong> Some servers (e.g. Figma, GitHub)
+                          require you to register an OAuth app in their developer portal and enter
+                          the Client ID and Client Secret here
+                        </li>
+                        <li>When Client ID is provided, Dynamic Client Registration is skipped</li>
                         <li>Browser opens automatically for user authentication (PKCE flow)</li>
-                        <li>Only fill Client ID/Secret for legacy Client Credentials flow</li>
                       </ul>
                     }
                     type="info"
