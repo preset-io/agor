@@ -8,6 +8,7 @@
 
 import crypto from 'node:crypto';
 import http from 'node:http';
+import type { OAuthTokenResponse } from './oauth-auth.js';
 
 export interface OAuthMetadata {
   authorization_servers: string[];
@@ -77,13 +78,8 @@ export interface DynamicClientRegistrationResponse {
   client_name?: string;
 }
 
-export interface OAuthTokenResponse {
-  access_token: string;
-  token_type: string;
-  expires_in?: number;
-  refresh_token?: string;
-  scope?: string;
-}
+// Re-export the canonical OAuthTokenResponse from oauth-auth to avoid duplication
+export type { OAuthTokenResponse } from './oauth-auth.js';
 
 /**
  * Generate PKCE code verifier and challenge
@@ -576,7 +572,7 @@ export async function performMCPOAuthFlow(
   browserOpener?: (url: string) => void | Promise<void>,
   /** Pre-discovered resource metadata URL (used when WWW-Authenticate lacks resource_metadata) */
   resourceMetadataUrl?: string
-): Promise<string> {
+): Promise<OAuthTokenResponse> {
   console.log('[MCP OAuth] Starting OAuth 2.1 Authorization Code flow with PKCE');
 
   // Step 1: Parse WWW-Authenticate header, fall back to pre-discovered URL
@@ -596,7 +592,7 @@ export async function performMCPOAuthFlow(
   if (cached && cached.expiresAt > Date.now()) {
     const ttlRemaining = Math.floor((cached.expiresAt - Date.now()) / 1000);
     console.log(`[MCP OAuth] Using cached token (valid for ${ttlRemaining}s)`);
-    return cached.token;
+    return { access_token: cached.token, token_type: 'bearer', expires_in: ttlRemaining };
   }
 
   if (cached) {
@@ -750,7 +746,7 @@ export async function performMCPOAuthFlow(
       `[MCP OAuth] Token cached for ${expiresInSeconds}s (${EXPIRY_BUFFER_SECONDS}s buffer)`
     );
 
-    return tokenResponse.access_token;
+    return tokenResponse;
   } finally {
     // Always close callback server, even on error
     callback.server.close();

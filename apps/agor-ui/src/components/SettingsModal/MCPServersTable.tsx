@@ -670,7 +670,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                       <ul style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
                         <li>
                           <strong>Auto-discovery:</strong> OAuth 2.1 servers advertise their
-                          endpoints automatically via RFC 9728
+                          endpoints automatically
                         </li>
                         <li>
                           <strong>Pre-registered apps:</strong> Some servers (e.g. Figma, GitHub)
