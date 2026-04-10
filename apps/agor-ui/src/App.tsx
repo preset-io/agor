@@ -152,7 +152,7 @@ function AppContent() {
   });
 
   // Session actions
-  const { createSession, forkSession, spawnSession, updateSession, deleteSession } =
+  const { createSession, forkSession, btwForkSession, spawnSession, updateSession, deleteSession } =
     useSessionActions(client);
 
   // Board actions
@@ -534,6 +534,17 @@ function AppContent() {
       handleClearDraft(sessionId);
     } else {
       showError('Failed to fork session');
+    }
+  };
+
+  // Handle btw fork session (ephemeral fork for side questions)
+  const handleBtwForkSession = async (sessionId: string, prompt: string) => {
+    const session = await btwForkSession(sessionId as SessionID, prompt);
+    if (session) {
+      showSuccess('Side question sent via btw fork');
+      handleClearDraft(sessionId);
+    } else {
+      showError('Failed to create btw fork');
     }
   };
 
@@ -1219,6 +1230,7 @@ function AppContent() {
                 onNewWorktreeModalClose={handleNewWorktreeModalClose}
                 onCreateSession={handleCreateSession}
                 onForkSession={handleForkSession}
+                onBtwForkSession={handleBtwForkSession}
                 onSpawnSession={handleSpawnSession}
                 onSendPrompt={handleSendPrompt}
                 onUpdateSession={handleUpdateSession}
@@ -1301,6 +1313,7 @@ function AppContent() {
                 onNewWorktreeModalClose={handleNewWorktreeModalClose}
                 onCreateSession={handleCreateSession}
                 onForkSession={handleForkSession}
+                onBtwForkSession={handleBtwForkSession}
                 onSpawnSession={handleSpawnSession}
                 onSendPrompt={handleSendPrompt}
                 onUpdateSession={handleUpdateSession}
@@ -1383,6 +1396,7 @@ function AppContent() {
                 onNewWorktreeModalClose={handleNewWorktreeModalClose}
                 onCreateSession={handleCreateSession}
                 onForkSession={handleForkSession}
+                onBtwForkSession={handleBtwForkSession}
                 onSpawnSession={handleSpawnSession}
                 onSendPrompt={handleSendPrompt}
                 onUpdateSession={handleUpdateSession}

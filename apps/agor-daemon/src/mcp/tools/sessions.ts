@@ -506,7 +506,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           status: promptResponse.status,
           note: 'Prompt added to existing session and execution started.',
         });
-      } else if (mode === 'fork') {
+      } else if (mode === 'fork' || mode === 'btw') {
+        // Shared fork+prompt flow for both "fork" and "btw" modes
         const forkData: { prompt: string; task_id?: string } = { prompt: args.prompt };
         if (args.taskId) forkData.task_id = args.taskId;
 
@@ -514,10 +515,24 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           ctx.app.service('sessions') as unknown as SessionsServiceImpl
         ).fork(sessionId, forkData, ctx.baseServiceParams);
 
-        if (args.title) {
+        // Build patch for the fork — title for both modes, btw-specific metadata for btw
+        const forkPatch: Record<string, unknown> = {};
+        if (args.title) forkPatch.title = args.title;
+
+        if (mode === 'btw') {
+          forkPatch.fork_origin = 'btw';
+          forkPatch.callback_config = {
+            enabled: true,
+            callback_session_id: ctx.sessionId,
+            callback_created_by: ctx.userId,
+            callback_mode: 'once',
+          };
+        }
+
+        if (Object.keys(forkPatch).length > 0) {
           await ctx.app
             .service('sessions')
-            .patch(forkedSession.session_id, { title: args.title }, ctx.baseServiceParams);
+            .patch(forkedSession.session_id, forkPatch, ctx.baseServiceParams);
         }
 
         const updatedSession = await ctx.app
@@ -533,11 +548,16 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           { ...ctx.baseServiceParams, route: { id: forkedSession.session_id } }
         );
 
+        const note =
+          mode === 'btw'
+            ? 'Ephemeral "btw" fork created. Result will be sent back via callback when done, then the fork will auto-archive.'
+            : 'Forked session created and prompt execution started.';
+
         return textResult({
           session: updatedSession,
           taskId: promptResponse.taskId,
           status: promptResponse.status,
-          note: 'Forked session created and prompt execution started.',
+          note,
         });
       } else if (mode === 'subsession') {
         const spawnData: Partial<import('@agor/core/types').SpawnConfig> = {
@@ -566,52 +586,6 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           taskId: promptResponse.taskId,
           status: promptResponse.status,
           note: 'Subsession created and prompt execution started.',
-        });
-      } else if (mode === 'btw') {
-        // "btw" mode: ephemeral fork with auto-callback and auto-archive
-        // Works even on running sessions — forks from persisted conversation history
-        const forkData: { prompt: string; task_id?: string } = { prompt: args.prompt };
-        if (args.taskId) forkData.task_id = args.taskId;
-
-        const forkedSession = await (
-          ctx.app.service('sessions') as unknown as SessionsServiceImpl
-        ).fork(sessionId, forkData, ctx.baseServiceParams);
-
-        // Set btw-specific metadata: fork_origin, callback config with once mode
-        const callerSessionId = ctx.sessionId;
-        await ctx.app.service('sessions').patch(
-          forkedSession.session_id,
-          {
-            fork_origin: 'btw',
-            callback_config: {
-              enabled: true,
-              callback_session_id: callerSessionId,
-              callback_created_by: ctx.userId,
-              callback_mode: 'once',
-            },
-            ...(args.title ? { title: args.title } : {}),
-          },
-          ctx.baseServiceParams
-        );
-
-        const updatedSession = await ctx.app
-          .service('sessions')
-          .get(forkedSession.session_id, ctx.baseServiceParams);
-
-        const promptResponse = await ctx.app.service('/sessions/:id/prompt').create(
-          {
-            prompt: args.prompt,
-            permissionMode: updatedSession.permission_config?.mode,
-            stream: true,
-          },
-          { ...ctx.baseServiceParams, route: { id: forkedSession.session_id } }
-        );
-
-        return textResult({
-          session: updatedSession,
-          taskId: promptResponse.taskId,
-          status: promptResponse.status,
-          note: `Ephemeral "btw" fork created. Result will be sent back via callback when done, then the fork will auto-archive.`,
         });
       }
 

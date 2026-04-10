@@ -23,6 +23,7 @@ interface UseSessionActionsResult {
   archiveSession: (sessionId: SessionID) => Promise<Session | null>;
   unarchiveSession: (sessionId: SessionID) => Promise<Session | null>;
   forkSession: (sessionId: SessionID, prompt: string) => Promise<Session | null>;
+  btwForkSession: (sessionId: SessionID, prompt: string) => Promise<Session | null>;
   spawnSession: (sessionId: SessionID, config: Partial<SpawnConfig>) => Promise<Session | null>;
   creating: boolean;
   error: string | null;
@@ -131,6 +132,45 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
     }
   };
 
+  const btwForkSession = async (sessionId: SessionID, prompt: string): Promise<Session | null> => {
+    if (!client) {
+      setError('Client not connected');
+      return null;
+    }
+
+    try {
+      setCreating(true);
+      setError(null);
+
+      // Fork the session
+      const forkedSession = (await client.service(`sessions/${sessionId}/fork`).create({
+        prompt,
+      })) as Session;
+
+      // Patch with btw metadata: fork_origin and auto-archive callback config
+      await client.service('sessions').patch(forkedSession.session_id, {
+        fork_origin: 'btw',
+      } as Partial<Session>);
+
+      // Send the prompt to the forked session
+      if (prompt.trim()) {
+        await client.service(`sessions/${forkedSession.session_id}/prompt`).create({
+          prompt,
+          messageSource: 'agor',
+        });
+      }
+
+      return forkedSession;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to create btw fork';
+      setError(message);
+      console.error('Failed to create btw fork:', err);
+      return null;
+    } finally {
+      setCreating(false);
+    }
+  };
+
   const spawnSession = async (
     sessionId: SessionID,
     config: Partial<SpawnConfig>
@@ -226,6 +266,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
     archiveSession,
     unarchiveSession,
     forkSession,
+    btwForkSession,
     spawnSession,
     creating,
     error,

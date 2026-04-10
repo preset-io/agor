@@ -365,13 +365,12 @@ export interface Session {
 
   /**
    * Tracks how this session was created via fork:
-   * - "full": Regular fork (user-initiated or via sessions.prompt mode:"fork")
-   * - "btw": Ephemeral fork created via sessions.prompt mode:"btw"
+   * - "btw": Ephemeral fork created via sessions.prompt mode:"btw" or UI btw button
    *
-   * Only set on forked sessions. Null/undefined for spawned or directly created sessions.
-   * Sessions with fork_origin:"btw" are auto-archived after their callback fires.
+   * Undefined for regular forks, spawned sessions, or directly created sessions.
+   * Sessions with fork_origin:"btw" are auto-archived after task completion.
    */
-  fork_origin?: 'full' | 'btw';
+  fork_origin?: 'btw';
 
   // ===== Archive State =====
 
@@ -388,8 +387,9 @@ export interface Session {
    *
    * - 'worktree_archived': Cascaded from parent worktree being archived
    * - 'manual': User manually archived this session
+   * - 'btw_completed': Ephemeral btw fork auto-archived after task completion
    */
-  archived_reason?: 'worktree_archived' | 'manual';
+  archived_reason?: 'worktree_archived' | 'manual' | 'btw_completed';
 }
 
 /**

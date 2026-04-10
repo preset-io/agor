@@ -103,6 +103,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const {
     onSendPrompt,
     onFork,
+    onBtwFork,
     onOpenSettings,
     onUpdateSession,
     onDeleteSession: onDelete,
@@ -438,19 +439,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   };
 
   const handleBtwSend = async () => {
-    if (!inputValue.trim() || connectionDisabled || !client) return;
+    if (!inputValue.trim() || connectionDisabled) return;
     const promptToSend = inputValue.trim();
-    try {
-      // Fork the session and send prompt via the fork
-      onFork?.(session.session_id, promptToSend);
-      setInputValue('');
-      deleteDraft(session.session_id);
-      message.success('Side question sent via fork');
-    } catch (error) {
-      message.error(
-        `Failed to send btw: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
+    setInputValue('');
+    deleteDraft(session.session_id);
+    await onBtwFork?.(session.session_id, promptToSend);
   };
 
   const handleSpawnModalConfirm = async (config: string | Partial<SpawnConfig>) => {

@@ -91,6 +91,7 @@ export interface AppProps {
   onNewWorktreeModalClose?: () => void; // Called when new worktree modal closes
   onCreateSession?: (config: NewSessionConfig, boardId: string) => Promise<string | null>;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
+  onBtwForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onSpawnSession?: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
   onSendPrompt?: (sessionId: string, prompt: string, permissionMode?: PermissionMode) => void;
   onUpdateSession?: (sessionId: string, updates: Partial<Session>) => void;
@@ -184,6 +185,7 @@ export const App: React.FC<AppProps> = ({
   onNewWorktreeModalClose,
   onCreateSession,
   onForkSession,
+  onBtwForkSession,
   onSpawnSession,
   onSendPrompt,
   onUpdateSession,
@@ -635,6 +637,7 @@ export const App: React.FC<AppProps> = ({
     () => ({
       onSendPrompt,
       onFork: onForkSession,
+      onBtwFork: onBtwForkSession,
       onSubsession: onSpawnSession,
       onUpdateSession,
       onDeleteSession,
@@ -654,6 +657,7 @@ export const App: React.FC<AppProps> = ({
     [
       onSendPrompt,
       onForkSession,
+      onBtwForkSession,
       onSpawnSession,
       onUpdateSession,
       onDeleteSession,
