@@ -732,7 +732,7 @@ export async function performMCPOAuthFlow(
     console.log('[MCP OAuth] Access token received successfully');
 
     // Step 10: Cache token
-    const expiresInSeconds = tokenResponse.expires_in || DEFAULT_AUTHCODE_TOKEN_TTL_SECONDS;
+    const expiresInSeconds = tokenResponse.expires_in ?? DEFAULT_AUTHCODE_TOKEN_TTL_SECONDS;
     const expiresAt = Date.now() + (expiresInSeconds - EXPIRY_BUFFER_SECONDS) * 1000;
     const fetchedAt = Date.now();
 
@@ -1133,7 +1133,7 @@ export async function completeMCPOAuthFlow(
   console.log('[MCP OAuth] Access token received successfully');
 
   // Cache token
-  const expiresInSeconds = tokenResponse.expires_in || DEFAULT_AUTHCODE_TOKEN_TTL_SECONDS;
+  const expiresInSeconds = tokenResponse.expires_in ?? DEFAULT_AUTHCODE_TOKEN_TTL_SECONDS;
   const expiresAt = Date.now() + (expiresInSeconds - EXPIRY_BUFFER_SECONDS) * 1000;
   const fetchedAt = Date.now();
 

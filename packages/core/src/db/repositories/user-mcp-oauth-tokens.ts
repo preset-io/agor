@@ -120,12 +120,12 @@ export class UserMCPOAuthTokenRepository {
       const existing = await this.getToken(userId, serverId);
 
       if (existing) {
-        // Update existing token
+        // Update existing token — only overwrite refresh_token when a new one is provided
         await update(this.db, userMcpOauthTokens)
           .set({
             oauth_access_token: accessToken,
             oauth_token_expires_at: expiresAt,
-            oauth_refresh_token: refreshToken,
+            ...(refreshToken != null ? { oauth_refresh_token: refreshToken } : {}),
             updated_at: now,
           })
           .where(

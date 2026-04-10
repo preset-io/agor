@@ -242,7 +242,7 @@ async function persistOAuthToken(
   },
   logPrefix: string
 ): Promise<void> {
-  const expiresIn = tokenResponse.expires_in || 3600;
+  const expiresIn = tokenResponse.expires_in ?? 3600;
 
   // Cache the token at daemon level
   cacheOAuth21Token(cacheKey, tokenResponse.access_token, expiresIn);
@@ -1640,7 +1640,7 @@ async function main() {
                 metadataUrl // Pre-discovered metadata URL (fallback for servers lacking resource_metadata)
               );
               console.log('[OAuth Test] OAuth flow completed, token obtained');
-              const testExpiresIn = tokenResponse.expires_in || 3600;
+              const testExpiresIn = tokenResponse.expires_in ?? 3600;
 
               // Cache the token at daemon level for discover endpoint to use
               cacheOAuth21Token(data.mcp_url, tokenResponse.access_token, testExpiresIn);
@@ -2490,7 +2490,7 @@ async function main() {
                   openOAuthBrowser,
                   resolved.metadataUrl
                 );
-                const discoveryExpiresIn = tokenResponse.expires_in || 3600;
+                const discoveryExpiresIn = tokenResponse.expires_in ?? 3600;
 
                 cacheOAuth21Token(mcpUrl, tokenResponse.access_token, discoveryExpiresIn);
                 if (serverId) {
