@@ -2147,50 +2147,6 @@ async function main() {
     before: { create: [requireAuth] },
   });
 
-  // Notify UI that OAuth authentication is needed for MCP servers
-  // Called by executor when MCP servers require authentication
-  app.use('/mcp-servers/oauth-notify', {
-    async create(
-      data: {
-        session_id: string;
-        user_id?: string;
-        servers: Array<{ name: string; serverId: string; url: string }>;
-      },
-      params?: AuthenticatedParams
-    ) {
-      // Derive target user server-side, fail closed on missing user
-      // - Service accounts (executor): trust data.user_id from payload
-      // - Authenticated users: always use their own identity, ignore payload
-      const isServiceAccount =
-        (params?.user as unknown as Record<string, unknown> | undefined)?._isServiceAccount ===
-        true;
-      const targetUserId = isServiceAccount ? data.user_id : params?.user?.user_id;
-
-      if (!targetUserId) {
-        console.warn(
-          `[OAuth Notify] No target user resolved for session ${data.session_id}, ` +
-            `servers: ${data.servers.map((s) => s.name).join(', ')}. Skipping emit.`
-        );
-        return { success: false, reason: 'no_target_user' };
-      }
-
-      console.log(
-        `[OAuth Notify] Emitting oauth:auth_required to user ${targetUserId.substring(0, 8)} ` +
-          `for session ${data.session_id}, servers: ${data.servers.map((s) => s.name).join(', ')}`
-      );
-
-      app.io.to(`user:${targetUserId}`).emit('oauth:auth_required', {
-        session_id: data.session_id,
-        servers: data.servers,
-      });
-
-      return { success: true };
-    },
-  });
-
-  app.service('mcp-servers/oauth-notify').hooks({
-    before: { create: [requireAuth] },
-  });
 
   // Disconnect OAuth - delete per-user OAuth token and clear all caches for an MCP server
   app.use('/mcp-servers/oauth-disconnect', {

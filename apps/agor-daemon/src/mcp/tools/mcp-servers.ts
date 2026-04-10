@@ -212,7 +212,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_mcp_servers_request_oauth',
     {
       description:
-        'TRIGGER OAuth authentication popup in the Agor UI. Call this immediately when you detect an MCP server needs OAuth (e.g., when agor_mcp_servers_auth_status shows oauth_authenticated=false, or when MCP tools fail). This displays a modal/notification in the UI prompting the user to authenticate. The user will complete OAuth in their browser, and once done the MCP tools will become available.',
+        'Check if an MCP server needs OAuth authentication and tell the user how to authenticate. Call this when you detect an MCP server needs OAuth (e.g., when agor_mcp_servers_auth_status shows oauth_authenticated=false, or when MCP tools fail).',
       inputSchema: z.object({
         mcpServerId: z
           .string()
@@ -253,35 +253,12 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
         });
       }
 
-      try {
-        await ctx.app.service('mcp-servers/oauth-notify').create(
-          {
-            session_id: ctx.sessionId,
-            user_id: ctx.userId,
-            servers: [
-              {
-                name: mcpServer.display_name || mcpServer.name,
-                serverId: mcpServer.mcp_server_id,
-                url: mcpServer.url || '',
-              },
-            ],
-          },
-          ctx.baseServiceParams
-        );
-
-        return textResult({
-          success: true,
-          message: `OAuth authentication request sent to the Agor UI. The user has been notified to authenticate with "${mcpServer.display_name || mcpServer.name}". They should go to Settings > MCP Servers > ${mcpServer.display_name || mcpServer.name} > Start OAuth Flow.`,
-          mcp_server_id: mcpServer.mcp_server_id,
-          mcp_server_name: mcpServer.name,
-        });
-      } catch (error) {
-        return textResult({
-          success: false,
-          error: `Failed to send OAuth notification: ${error instanceof Error ? error.message : String(error)}`,
-          instructions: `Please ask the user to manually go to Settings > MCP Servers > ${mcpServer.display_name || mcpServer.name} > Start OAuth Flow`,
-        });
-      }
+      return textResult({
+        success: true,
+        message: `MCP server "${mcpServer.display_name || mcpServer.name}" requires OAuth authentication. Please ask the user to go to Settings → MCP Servers → ${mcpServer.display_name || mcpServer.name} → Start OAuth Flow to authenticate.`,
+        mcp_server_id: mcpServer.mcp_server_id,
+        mcp_server_name: mcpServer.name,
+      });
     }
   );
 }

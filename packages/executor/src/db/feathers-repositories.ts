@@ -316,7 +316,5 @@ export function createFeathersBackedRepositories(client: AgorClient) {
     messagesService: client.service('messages'),
     tasksService: client.service('tasks'),
     sessionsService: client.service('sessions'),
-    // Service for notifying UI about OAuth authentication requirements
-    mcpOAuthNotifyService: client.service('mcp-servers/oauth-notify'),
   };
 }

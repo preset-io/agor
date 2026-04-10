@@ -153,15 +153,10 @@ export async function setupQuery(
   query: InterruptibleQuery;
   resolvedModel: string;
   getStderr: () => string;
-  /** OAuth MCP servers that need authentication before they can be used */
-  oauthServersNeedingAuth: Array<{ name: string; serverId: string; url: string }>;
   /** The user ID whose context was used for this query (session owner or task creator) */
   contextUserId?: string;
 }> {
   const { taskId, permissionMode, resume = true, abortController } = options;
-
-  // Track OAuth MCP servers that need authentication
-  const oauthServersNeedingAuth: Array<{ name: string; serverId: string; url: string }> = [];
 
   const session = await deps.sessionsRepo.findById(sessionId);
   if (!session) {
@@ -583,12 +578,6 @@ export async function setupQuery(
               console.warn(
                 `      💡 Go to Settings → MCP Servers → ${server.name} → Start OAuth Flow to authenticate`
               );
-              // Add to list for UI notification
-              oauthServersNeedingAuth.push({
-                name: server.name,
-                serverId: server.mcp_server_id,
-                url: server.url || '',
-              });
             }
           } catch (error) {
             console.warn(
@@ -696,7 +685,6 @@ export async function setupQuery(
     query: queryObj,
     resolvedModel: model,
     getStderr,
-    oauthServersNeedingAuth,
     contextUserId,
   };
 }

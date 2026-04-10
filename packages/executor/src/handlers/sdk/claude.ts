@@ -72,7 +72,6 @@ export async function executeClaudeCodeTask(params: {
           repos.repos,
           true, // mcpEnabled
           useNativeAuth, // Flag for Claude CLI OAuth (`claude login`)
-          repos.mcpOAuthNotifyService, // Service for notifying UI about OAuth requirements
           inputRequestService,
           repos.users
         ),

@@ -40,7 +40,6 @@ import {
 import { StreamdownDemoPage } from './pages/StreamdownDemoPage';
 import { isMobileDevice } from './utils/deviceDetection';
 import { useThemedMessage } from './utils/message';
-import { buildOAuthAutoContinuePrompt, shouldProcessOAuthRequired } from './utils/oauth-helpers';
 
 /**
  * DeviceRouter - Redirects users to mobile or desktop site based on device detection
@@ -190,137 +189,6 @@ function AppContent() {
     }
   }, [loading, sessionById.size, boardById.size, repoById.size]);
 
-  // State for OAuth flow triggered by MCP tools
-  const [pendingOAuthServer, setPendingOAuthServer] = useState<{
-    serverId: string;
-    name: string;
-    url: string;
-    sessionId?: string;
-  } | null>(null);
-  const [oauthFlowStarted, setOauthFlowStarted] = useState(false);
-  const [oauthCooldownUntil, setOauthCooldownUntil] = useState<number>(0);
-  const [oauthAuthUrl, setOauthAuthUrl] = useState<string | null>(null);
-
-  // Listen for OAuth authentication required events from MCP tools
-  useEffect(() => {
-    if (!client?.io) return;
-
-    const handleOAuthRequired = (data: {
-      session_id: string;
-      servers: Array<{ name: string; serverId: string; url: string }>;
-    }) => {
-      console.log('[OAuth] Received oauth:auth_required event:', data);
-
-      const { shouldProcess, reason } = shouldProcessOAuthRequired(
-        pendingOAuthServer,
-        oauthCooldownUntil
-      );
-      if (!shouldProcess) {
-        console.log(`[OAuth] Ignoring - ${reason}`);
-        return;
-      }
-
-      // Start OAuth flow for the first server that needs it
-      if (data.servers.length > 0) {
-        const server = data.servers[0];
-        setPendingOAuthServer({ ...server, sessionId: data.session_id });
-        setOauthFlowStarted(false);
-      }
-    };
-
-    client.io.on('oauth:auth_required', handleOAuthRequired);
-
-    return () => {
-      client.io.off('oauth:auth_required', handleOAuthRequired);
-    };
-  }, [client, pendingOAuthServer, oauthCooldownUntil]);
-
-  // Auto-start OAuth flow when pendingOAuthServer is set
-  useEffect(() => {
-    if (!client || !pendingOAuthServer || oauthFlowStarted) return;
-
-    let oauthCleanup: (() => void) | null = null;
-
-    const startOAuthFlow = async () => {
-      setOauthFlowStarted(true);
-      setOauthAuthUrl(null);
-
-      try {
-        const mcpServer = mcpServerById.get(pendingOAuthServer.serverId);
-        const data = (await client.service('mcp-servers/oauth-start').create({
-          mcp_url: mcpServer?.url || pendingOAuthServer.url,
-          mcp_server_id: pendingOAuthServer.serverId,
-          client_id: mcpServer?.auth?.oauth_client_id,
-        })) as {
-          success: boolean;
-          error?: string;
-          authorizationUrl?: string;
-          state?: string;
-        };
-
-        if (!data.success) {
-          showError(data.error || 'Failed to start OAuth flow');
-          setPendingOAuthServer(null);
-          return;
-        }
-
-        // Use authorizationUrl from the response directly (avoids WebSocket race)
-        if (data.authorizationUrl) {
-          const authUrl = data.authorizationUrl;
-          setOauthAuthUrl(authUrl);
-
-          // Try to open browser — may be blocked if not triggered by user gesture
-          const popup = window.open(authUrl, '_blank', 'noopener,noreferrer');
-          if (!popup) {
-            console.log('[OAuth] Popup blocked — user can click the link in the modal');
-          }
-        }
-
-        // Listen for automatic completion via the daemon's callback endpoint
-        if (data.state) {
-          const handleOAuthCompleted = (event: { state: string; success: boolean }) => {
-            if (event.state === data.state && event.success) {
-              showSuccess('OAuth authentication successful! MCP tools are now available.');
-
-              // Auto-continue the session that was waiting for OAuth
-              const autoContinue = buildOAuthAutoContinuePrompt(pendingOAuthServer);
-              if (autoContinue) {
-                client
-                  .service(`sessions/${autoContinue.sessionId}/prompt`)
-                  .create({
-                    prompt: autoContinue.prompt,
-                    messageSource: autoContinue.messageSource,
-                  })
-                  .catch((err: unknown) =>
-                    console.warn('[OAuth] Failed to auto-continue session:', err)
-                  );
-              }
-
-              setPendingOAuthServer(null);
-              setOauthAuthUrl(null);
-              // Set 10 second cooldown to prevent immediate re-triggers
-              setOauthCooldownUntil(Date.now() + 10000);
-              oauthCleanup?.();
-            }
-          };
-          oauthCleanup = () => {
-            client.io.off('oauth:completed', handleOAuthCompleted);
-            oauthCleanup = null;
-          };
-          client.io.on('oauth:completed', handleOAuthCompleted);
-        }
-      } catch (error) {
-        showError(`OAuth error: ${error instanceof Error ? error.message : String(error)}`);
-        setPendingOAuthServer(null);
-      }
-    };
-
-    startOAuthFlow();
-
-    return () => {
-      oauthCleanup?.();
-    };
-  }, [client, pendingOAuthServer, oauthFlowStarted, mcpServerById, showError, showSuccess]);
 
   // Get current user from users Map (real-time updates via WebSocket)
   // This ensures we get the latest onboarding_completed status
@@ -1264,41 +1132,6 @@ function AppContent() {
         onLogout={logout}
       />
 
-      {/* OAuth waiting modal - closes automatically when daemon receives the callback */}
-      <Modal
-        title={`OAuth Authentication - ${pendingOAuthServer?.name || 'MCP Server'}`}
-        open={!!pendingOAuthServer && oauthFlowStarted}
-        onCancel={() => {
-          setPendingOAuthServer(null);
-          setOauthAuthUrl(null);
-        }}
-        footer={[
-          <Button
-            key="cancel"
-            onClick={() => {
-              setPendingOAuthServer(null);
-              setOauthAuthUrl(null);
-            }}
-          >
-            Cancel
-          </Button>,
-        ]}
-      >
-        {oauthAuthUrl ? (
-          <p>
-            <a href={oauthAuthUrl} target="_blank" rel="noopener noreferrer">
-              Click here to open the authentication page
-            </a>{' '}
-            if it didn&apos;t open automatically.
-          </p>
-        ) : (
-          <p>Starting OAuth authentication...</p>
-        )}
-        <p>
-          Waiting for authentication to complete in the browser tab. This dialog will close
-          automatically once sign-in is complete.
-        </p>
-      </Modal>
 
       {/* Onboarding Wizard - shown for new users */}
       <OnboardingWizard
