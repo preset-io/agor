@@ -16,7 +16,7 @@ import type {
   UUID,
   Worktree,
 } from '@agor/core/types';
-import { Alert, App as AntApp, Button, ConfigProvider, Modal, Spin, theme } from 'antd';
+import { Alert, App as AntApp, ConfigProvider, Spin, theme } from 'antd';
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
@@ -188,7 +188,6 @@ function AppContent() {
       setHasLoadedOnce(true);
     }
   }, [loading, sessionById.size, boardById.size, repoById.size]);
-
 
   // Get current user from users Map (real-time updates via WebSocket)
   // This ensures we get the latest onboarding_completed status
@@ -1131,7 +1130,6 @@ function AppContent() {
         onChangePassword={handleForcePasswordChange}
         onLogout={logout}
       />
-
 
       {/* Onboarding Wizard - shown for new users */}
       <OnboardingWizard

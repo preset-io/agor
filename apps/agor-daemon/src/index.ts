@@ -2147,7 +2147,6 @@ async function main() {
     before: { create: [requireAuth] },
   });
 
-
   // Disconnect OAuth - delete per-user OAuth token and clear all caches for an MCP server
   app.use('/mcp-servers/oauth-disconnect', {
     async create(data: { mcp_server_id: string }, params?: AuthenticatedParams) {

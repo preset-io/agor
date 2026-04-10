@@ -153,8 +153,6 @@ export async function setupQuery(
   query: InterruptibleQuery;
   resolvedModel: string;
   getStderr: () => string;
-  /** The user ID whose context was used for this query (session owner or task creator) */
-  contextUserId?: string;
 }> {
   const { taskId, permissionMode, resume = true, abortController } = options;
 
@@ -685,6 +683,5 @@ export async function setupQuery(
     query: queryObj,
     resolvedModel: model,
     getStderr,
-    contextUserId,
   };
 }

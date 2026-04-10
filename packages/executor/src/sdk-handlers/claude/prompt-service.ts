@@ -174,11 +174,7 @@ If you continue to see authentication errors, please contact your Agor administr
       }
     }
 
-    const {
-      query: result,
-      getStderr,
-      contextUserId,
-    } = await setupQuery(
+    const { query: result, getStderr } = await setupQuery(
       sessionId,
       prompt,
       {
@@ -347,10 +343,7 @@ If you continue to see authentication errors, please contact your Agor administr
    * @returns Complete assistant response with metadata
    */
   async promptSession(sessionId: SessionID, prompt: string): Promise<PromptResult> {
-    const {
-      query: result,
-      contextUserId,
-    } = await setupQuery(
+    const { query: result } = await setupQuery(
       sessionId,
       prompt,
       {
