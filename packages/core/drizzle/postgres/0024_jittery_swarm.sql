@@ -1,1 +1,0 @@
-ALTER TABLE "worktrees" ALTER COLUMN "others_can" SET DEFAULT 'session';

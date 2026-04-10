@@ -456,7 +456,7 @@ export const worktrees = sqliteTable(
       enum: ['none', 'view', 'session', 'prompt', 'all'],
     })
       .$type<'none' | 'view' | 'session' | 'prompt' | 'all'>()
-      .default('session'),
+      .default('view'),
 
     // RBAC: OS-layer permissions (unix-user-modes.md)
     unix_group: text('unix_group'), // e.g., 'agor_wt_abc123'

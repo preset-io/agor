@@ -225,13 +225,6 @@
       "when": 1775441036373,
       "tag": "0033_dapper_thing",
       "breakpoints": true
-    },
-    {
-      "idx": 34,
-      "version": "6",
-      "when": 1775850813331,
-      "tag": "0034_lyrical_rictor",
-      "breakpoints": true
     }
   ]
 }
