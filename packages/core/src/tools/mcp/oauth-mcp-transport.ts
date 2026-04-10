@@ -630,9 +630,12 @@ export async function performMCPOAuthFlow(
     let actualClientId = clientId;
     let clientSecret: string | undefined;
 
-    // Compute scopes early — needed for both DCR registration and auth URL
+    // Compute scopes early — needed for both DCR registration and auth URL.
+    // Skip auto-populating from resource metadata when client_id is pre-registered.
     const scopeString =
-      resourceMetadata.scopes_supported && resourceMetadata.scopes_supported.length > 0
+      !actualClientId &&
+      resourceMetadata.scopes_supported &&
+      resourceMetadata.scopes_supported.length > 0
         ? resourceMetadata.scopes_supported.join(' ')
         : undefined;
 
@@ -987,10 +990,14 @@ export async function startMCPOAuthFlow(
   // so we use a known URI pattern that the user will copy from
   const actualRedirectUri = redirectUri || 'http://127.0.0.1:0/oauth/callback';
 
-  // Compute scopes early — needed for both DCR registration and auth URL
+  // Compute scopes early — needed for both DCR registration and auth URL.
+  // When a client_id is pre-registered (e.g. Figma, GitHub), don't auto-populate scopes
+  // from resource metadata — the resource server may advertise scopes (like "mcp:connect")
+  // that the authorization server doesn't recognize. Pre-registered apps have scopes
+  // configured during app registration, so omitting them lets the auth server use defaults.
   const scopeString = options?.scope
     ? options.scope
-    : resourceMetadata.scopes_supported && resourceMetadata.scopes_supported.length > 0
+    : !clientId && resourceMetadata.scopes_supported && resourceMetadata.scopes_supported.length > 0
       ? resourceMetadata.scopes_supported.join(' ')
       : undefined;
 
