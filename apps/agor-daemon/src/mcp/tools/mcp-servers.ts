@@ -4,6 +4,37 @@ import { z } from 'zod';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
 
+/** Resolve OAuth authentication status for an MCP server. */
+async function getOAuthStatus(
+  ctx: McpContext,
+  mcpServer: MCPServer
+): Promise<{ authenticated: boolean; tokenExpiresAt?: number }> {
+  const authType = mcpServer.auth?.type || 'none';
+  const oauthMode = mcpServer.auth?.oauth_mode || 'per_user';
+
+  if (authType !== 'oauth') {
+    return { authenticated: true };
+  }
+
+  if (oauthMode === 'shared') {
+    return { authenticated: !!mcpServer.auth?.oauth_access_token };
+  }
+
+  // per_user OAuth — check user-specific token
+  const { UserMCPOAuthTokenRepository } = await import('@agor/core/db');
+  const userTokenRepo = new UserMCPOAuthTokenRepository(ctx.db);
+  const tokenData = await userTokenRepo.getToken(ctx.userId, mcpServer.mcp_server_id);
+  if (tokenData) {
+    if (!tokenData.oauth_token_expires_at || tokenData.oauth_token_expires_at > new Date()) {
+      return {
+        authenticated: true,
+        tokenExpiresAt: tokenData.oauth_token_expires_at?.getTime(),
+      };
+    }
+  }
+  return { authenticated: false };
+}
+
 export function registerMcpServerTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_mcp_servers_list
   server.registerTool(
@@ -56,18 +87,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
             .get(serverId, ctx.baseServiceParams);
           const authType = mcpServer.auth?.type || 'none';
           const oauthMode = mcpServer.auth?.oauth_mode || 'per_user';
-
-          let oauthAuthenticated = false;
-          if (authType === 'oauth' && oauthMode === 'per_user') {
-            const { UserMCPOAuthTokenRepository } = await import('@agor/core/db');
-            const userTokenRepo = new UserMCPOAuthTokenRepository(ctx.db);
-            const token = await userTokenRepo.getValidToken(ctx.userId, serverId);
-            oauthAuthenticated = !!token;
-          } else if (authType === 'oauth' && oauthMode === 'shared') {
-            oauthAuthenticated = !!mcpServer.auth?.oauth_access_token;
-          } else if (authType !== 'oauth') {
-            oauthAuthenticated = true;
-          }
+          const { authenticated } = await getOAuthStatus(ctx, mcpServer);
 
           servers.push({
             mcp_server_id: mcpServer.mcp_server_id,
@@ -76,7 +96,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
             transport: mcpServer.transport,
             auth_type: authType,
             oauth_mode: oauthMode,
-            oauth_authenticated: oauthAuthenticated,
+            oauth_authenticated: authenticated,
             enabled: mcpServer.enabled,
           });
         } catch (error) {
@@ -87,25 +107,14 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
       // Also include global MCP servers not explicitly attached
       const globalServers = await ctx.app.service('mcp-servers').find({
         ...ctx.baseServiceParams,
-        query: { scope: 'global', enabled: true, $limit: 100 },
+        query: { scope: 'global', ...(includeDisabled ? {} : { enabled: true }), $limit: 100 },
       });
 
       for (const mcpServer of Array.isArray(globalServers) ? globalServers : globalServers.data) {
         if (!mcpServerIds.includes(mcpServer.mcp_server_id)) {
           const authType = mcpServer.auth?.type || 'none';
           const oauthMode = mcpServer.auth?.oauth_mode || 'per_user';
-
-          let oauthAuthenticated = false;
-          if (authType === 'oauth' && oauthMode === 'per_user') {
-            const { UserMCPOAuthTokenRepository } = await import('@agor/core/db');
-            const userTokenRepo = new UserMCPOAuthTokenRepository(ctx.db);
-            const token = await userTokenRepo.getValidToken(ctx.userId, mcpServer.mcp_server_id);
-            oauthAuthenticated = !!token;
-          } else if (authType === 'oauth' && oauthMode === 'shared') {
-            oauthAuthenticated = !!mcpServer.auth?.oauth_access_token;
-          } else if (authType !== 'oauth') {
-            oauthAuthenticated = true;
-          }
+          const { authenticated } = await getOAuthStatus(ctx, mcpServer);
 
           servers.push({
             mcp_server_id: mcpServer.mcp_server_id,
@@ -114,7 +123,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
             transport: mcpServer.transport,
             auth_type: authType,
             oauth_mode: oauthMode,
-            oauth_authenticated: oauthAuthenticated,
+            oauth_authenticated: authenticated,
             enabled: mcpServer.enabled,
           });
         }
@@ -152,25 +161,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
 
       const authType = mcpServer.auth?.type || 'none';
       const oauthMode = mcpServer.auth?.oauth_mode || 'per_user';
-
-      let oauthAuthenticated = false;
-      let tokenExpiry: number | undefined;
-
-      if (authType === 'oauth' && oauthMode === 'per_user') {
-        const { UserMCPOAuthTokenRepository } = await import('@agor/core/db');
-        const userTokenRepo = new UserMCPOAuthTokenRepository(ctx.db);
-        const tokenData = await userTokenRepo.getToken(ctx.userId, mcpServer.mcp_server_id);
-        if (tokenData) {
-          if (!tokenData.oauth_token_expires_at || tokenData.oauth_token_expires_at > new Date()) {
-            oauthAuthenticated = true;
-            tokenExpiry = tokenData.oauth_token_expires_at?.getTime();
-          }
-        }
-      } else if (authType === 'oauth' && oauthMode === 'shared') {
-        oauthAuthenticated = !!mcpServer.auth?.oauth_access_token;
-      } else if (authType !== 'oauth') {
-        oauthAuthenticated = true;
-      }
+      const { authenticated, tokenExpiresAt } = await getOAuthStatus(ctx, mcpServer);
 
       return textResult({
         mcp_server_id: mcpServer.mcp_server_id,
@@ -178,10 +169,10 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
         display_name: mcpServer.display_name,
         auth_type: authType,
         oauth_mode: oauthMode,
-        oauth_authenticated: oauthAuthenticated,
-        token_expires_at: tokenExpiry ? new Date(tokenExpiry).toISOString() : undefined,
+        oauth_authenticated: authenticated,
+        token_expires_at: tokenExpiresAt ? new Date(tokenExpiresAt).toISOString() : undefined,
         instructions:
-          !oauthAuthenticated && authType === 'oauth'
+          !authenticated && authType === 'oauth'
             ? `To authenticate with "${mcpServer.display_name || mcpServer.name}", go to Settings > MCP Servers > ${mcpServer.display_name || mcpServer.name} > Click "Test Authentication" then "Start OAuth Flow". After completing the OAuth flow in your browser, the MCP tools will become available.`
             : undefined,
       });
