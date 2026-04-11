@@ -679,29 +679,23 @@ const WorktreeCardComponent = ({
     </div>
   );
 
-  // Use colorTextBase for glow - hex color that adapts to light/dark mode
-  // Fallback to detecting dark mode if colorTextBase is not available
   const isDarkMode = isDarkTheme(token);
-  const rawGlowColor = token.colorTextBase || (isDarkMode ? '#ffffff' : '#000000');
 
-  // Use Ant Design's Color class to normalize and convert to full hex format
-  // This handles shorthand hex (#fff -> #ffffff) and ensures we can append alpha values
-  let glowColor: string;
-  try {
-    const color = new AggregationColor(rawGlowColor);
-    // toHexString() always returns full 6 or 8 digit hex
-    glowColor = color.toHexString();
-  } catch {
-    // Fallback if color parsing fails
-    glowColor = isDarkMode ? '#ffffff' : '#000000';
-  }
+  // Memoize glow shadow string to avoid recomputing color normalization on every render
+  const attentionGlowShadow = useMemo(() => {
+    const rawGlowColor = token.colorTextBase || (isDarkMode ? '#ffffff' : '#000000');
 
-  const attentionGlowShadow = `
-    0 0 0 3px ${glowColor},
-    0 0 20px 4px ${glowColor}dd,
-    0 0 40px 8px ${glowColor}88,
-    0 0 60px 12px ${glowColor}44
-  `;
+    let glowColor: string;
+    try {
+      const color = new AggregationColor(rawGlowColor);
+      glowColor = color.toHexString();
+    } catch {
+      glowColor = isDarkMode ? '#ffffff' : '#000000';
+    }
+
+    // 2-layer glow: tight solid ring + soft halo (reduced from 4 layers for less paint work)
+    return `0 0 0 3px ${glowColor}, 0 0 24px 6px ${glowColor}99`;
+  }, [token.colorTextBase, isDarkMode]);
 
   // Ensure pin color is visible (adjust lightness if too pale)
   const visiblePinColor = useMemo(() => {
@@ -727,10 +721,10 @@ const WorktreeCardComponent = ({
       style={{
         width: 500,
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
-        transition: 'box-shadow 1s ease-in-out, border 1s ease-in-out',
+        transition: 'box-shadow 0.6s ease-in-out, border 0.6s ease-in-out',
+        willChange: needsAttention ? 'box-shadow' : 'auto',
         ...(needsAttention && !inPopover
           ? {
-              // Static multi-layer glow (no animation — avoids continuous GPU work)
               boxShadow: attentionGlowShadow,
               border: 'none',
             }
