@@ -8,7 +8,7 @@ import type {
   SpawnConfig,
   Worktree,
 } from '@agor/core/types';
-import { SessionStatus, TaskStatus } from '@agor/core/types';
+import { AGENTIC_TOOL_CAPABILITIES, SessionStatus, TaskStatus } from '@agor/core/types';
 import {
   BranchesOutlined,
   CloseOutlined,
@@ -110,6 +110,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     onDeleteSession: onDelete,
     onOpenTerminal,
   } = useAppActions();
+
+  // Tool capabilities — drives which buttons are shown
+  const toolCaps = session?.agentic_tool
+    ? AGENTIC_TOOL_CAPABILITIES[session.agentic_tool]
+    : undefined;
 
   // Compute which session MCP servers need authentication
   const unauthedMcpServers = React.useMemo(() => {
@@ -746,35 +751,41 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                   loading={isStopping && !stopRequestInFlight}
                 />
               </Tooltip>
-              <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Fork Session'}>
-                <Button
-                  icon={<ForkOutlined />}
-                  onClick={handleFork}
-                  disabled={connectionDisabled}
-                />
-              </Tooltip>
-              <Tooltip
-                title={
-                  connectionDisabled
-                    ? 'Disconnected from daemon'
-                    : isRunning
-                      ? 'Session is running...'
-                      : 'Spawn Subsession'
-                }
-              >
-                <Button
-                  icon={<BranchesOutlined />}
-                  onClick={() => setSpawnModalOpen(true)}
-                  disabled={connectionDisabled || isRunning}
-                />
-              </Tooltip>
-              <Tooltip title="Ask a side question via ephemeral fork (btw)">
-                <Button
-                  icon={<QuestionCircleOutlined />}
-                  onClick={handleBtwSend}
-                  disabled={connectionDisabled}
-                />
-              </Tooltip>
+              {toolCaps?.supportsSessionFork !== false && (
+                <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Fork Session'}>
+                  <Button
+                    icon={<ForkOutlined />}
+                    onClick={handleFork}
+                    disabled={connectionDisabled}
+                  />
+                </Tooltip>
+              )}
+              {toolCaps?.supportsChildSpawn !== false && (
+                <Tooltip
+                  title={
+                    connectionDisabled
+                      ? 'Disconnected from daemon'
+                      : isRunning
+                        ? 'Session is running...'
+                        : 'Spawn Subsession'
+                  }
+                >
+                  <Button
+                    icon={<BranchesOutlined />}
+                    onClick={() => setSpawnModalOpen(true)}
+                    disabled={connectionDisabled || isRunning}
+                  />
+                </Tooltip>
+              )}
+              {toolCaps?.supportsSessionFork !== false && (
+                <Tooltip title="Ask a side question via ephemeral fork (btw)">
+                  <Button
+                    icon={<QuestionCircleOutlined />}
+                    onClick={handleBtwSend}
+                    disabled={connectionDisabled}
+                  />
+                </Tooltip>
+              )}
               <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Upload Files'}>
                 <FileUploadButton
                   onClick={() => setUploadModalOpen(true)}

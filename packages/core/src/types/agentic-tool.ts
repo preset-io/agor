@@ -127,3 +127,54 @@ export type CodexNetworkAccess = boolean;
  * - bypassPermissions: Auto-approve everything (equivalent to approveAll helper)
  */
 export type CopilotPermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions';
+
+// ============================================================================
+// Tool Capabilities (static, shared between backend and UI)
+// ============================================================================
+
+/**
+ * Static capability flags for agentic tools.
+ * Used by the UI to show/hide features based on what a tool supports.
+ * Mirrors the runtime ToolCapabilities in the executor but is available
+ * without instantiating a tool.
+ */
+export interface AgenticToolCapabilities {
+  /** Can fork sessions (branch conversation at a decision point) */
+  supportsSessionFork: boolean;
+  /** Can spawn child sessions for subsessions */
+  supportsChildSpawn: boolean;
+  /** Can import historical sessions from tool's storage */
+  supportsSessionImport: boolean;
+}
+
+/**
+ * Static capability map for all agentic tools.
+ * Source of truth for what each tool supports — avoids scattered `if (tool === 'codex')` checks.
+ */
+export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapabilities> = {
+  'claude-code': {
+    supportsSessionFork: true,
+    supportsChildSpawn: true,
+    supportsSessionImport: true,
+  },
+  codex: {
+    supportsSessionFork: false,
+    supportsChildSpawn: false,
+    supportsSessionImport: false,
+  },
+  gemini: {
+    supportsSessionFork: false,
+    supportsChildSpawn: false,
+    supportsSessionImport: false,
+  },
+  opencode: {
+    supportsSessionFork: false,
+    supportsChildSpawn: true,
+    supportsSessionImport: false,
+  },
+  copilot: {
+    supportsSessionFork: false,
+    supportsChildSpawn: false,
+    supportsSessionImport: false,
+  },
+};
