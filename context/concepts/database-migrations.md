@@ -39,4 +39,10 @@ Drizzle determines pending migrations by comparing each journal entry's `when` t
 
 When adding manual/backfill migrations to `meta/_journal.json`, always ensure the `when` value is **strictly greater** than all preceding entries. This applies to both `postgres` and `sqlite` journals independently.
 
+### Avoid CHECK constraints for enum-like columns
+
+Don't use `CHECK(col IN ('a', 'b', 'c'))` on SQLite columns. When a new value is added (like adding `'session'` to `others_can`), the CHECK constraint requires a full table recreation migration — SQLite can't alter constraints in place. This is error-prone and easy to forget when updating TypeScript enums.
+
+Instead, validate enum values at the application layer (Drizzle schema `enum` option, Zod, service hooks). The TypeScript types are the source of truth; the DB just stores text.
+
 _Detailed planning doc archived in `context/archives/database-migrations.md`._
