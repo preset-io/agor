@@ -4,10 +4,12 @@
  * Reads the resolved DaemonServicesConfig from the health endpoint (via useAuthConfig)
  * to conditionally show/hide UI sections based on which services are enabled.
  *
+ * Delegates to @agor/core pure functions for tier logic — no duplication.
  * Defaults to 'on' for all services when config is absent (backward-compatible).
  */
 
 import type { DaemonServicesConfig, ServiceGroupName, ServiceTier } from '@agor/core/types';
+import { getServiceTier, isServiceEnabled, isServiceExternallyAccessible } from '@agor/core/types';
 import { useContext } from 'react';
 import { ServicesConfigContext } from '../contexts/ServicesConfigContext';
 
@@ -24,9 +26,7 @@ export function useServicesConfig(): DaemonServicesConfig | undefined {
  * Defaults to true when config is not available.
  */
 export function useServiceEnabled(group: ServiceGroupName): boolean {
-  const config = useServicesConfig();
-  const tier = config?.[group] ?? 'on';
-  return tier !== 'off';
+  return isServiceEnabled(useServicesConfig(), group);
 }
 
 /**
@@ -34,8 +34,7 @@ export function useServiceEnabled(group: ServiceGroupName): boolean {
  * Defaults to 'on' when config is not available.
  */
 export function useServiceTier(group: ServiceGroupName): ServiceTier {
-  const config = useServicesConfig();
-  return config?.[group] ?? 'on';
+  return getServiceTier(useServicesConfig(), group);
 }
 
 /**
@@ -43,6 +42,5 @@ export function useServiceTier(group: ServiceGroupName): ServiceTier {
  * Useful for gating UI that reads from a service's API.
  */
 export function useServiceReadable(group: ServiceGroupName): boolean {
-  const tier = useServiceTier(group);
-  return tier === 'readonly' || tier === 'on';
+  return isServiceExternallyAccessible(useServicesConfig(), group);
 }

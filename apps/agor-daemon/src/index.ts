@@ -109,7 +109,13 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
-import { getServiceTier, isServiceEnabled, SessionStatus, TaskStatus } from '@agor/core/types';
+import {
+  getServiceTier,
+  isServiceEnabled,
+  SERVICE_GROUP_NAMES,
+  SessionStatus,
+  TaskStatus,
+} from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
@@ -7250,7 +7256,7 @@ async function main() {
   // Apply service tier hooks (internal/readonly access restrictions)
   // This runs AFTER all services and their auth/RBAC hooks are registered,
   // so tier hooks prepend to the before:all chain.
-  const SERVICE_GROUP_PATHS: Record<string, string[]> = {
+  const SERVICE_GROUP_PATHS: Partial<Record<ServiceGroupName, string[]>> = {
     core: ['sessions', 'tasks', 'messages'],
     worktrees: ['worktrees'],
     repos: ['repos'],
@@ -7264,6 +7270,16 @@ async function main() {
     mcp_servers: ['mcp-servers', 'session-mcp-servers'],
     leaderboard: ['leaderboard'],
   };
+
+  // Drift check: warn if SERVICE_GROUP_NAMES has groups not in SERVICE_GROUP_PATHS
+  const mappedGroups = new Set(Object.keys(SERVICE_GROUP_PATHS));
+  for (const name of SERVICE_GROUP_NAMES) {
+    if (!mappedGroups.has(name)) {
+      console.warn(
+        `[services] Service group '${name}' has no path mapping — tier hooks will not apply`
+      );
+    }
+  }
 
   for (const [group, paths] of Object.entries(SERVICE_GROUP_PATHS)) {
     const tier = svcTier(group as ServiceGroupName);
