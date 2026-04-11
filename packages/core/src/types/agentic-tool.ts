@@ -159,12 +159,12 @@ export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapab
   },
   codex: {
     supportsSessionFork: false,
-    supportsChildSpawn: false,
+    supportsChildSpawn: true,
     supportsSessionImport: false,
   },
   gemini: {
     supportsSessionFork: false,
-    supportsChildSpawn: false,
+    supportsChildSpawn: true,
     supportsSessionImport: false,
   },
   opencode: {
@@ -174,7 +174,7 @@ export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapab
   },
   copilot: {
     supportsSessionFork: false,
-    supportsChildSpawn: false,
+    supportsChildSpawn: true,
     supportsSessionImport: false,
   },
 };

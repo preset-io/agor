@@ -1,5 +1,6 @@
 import { WorktreeRepository, type WorktreeWithZoneAndSessions } from '@agor/core/db';
 import {
+  AGENTIC_TOOL_CAPABILITIES,
   type AgenticToolName,
   type Board,
   getSessionType,
@@ -507,6 +508,17 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           note: 'Prompt added to existing session and execution started.',
         });
       } else if (mode === 'fork' || mode === 'btw') {
+        // Check if the target session's tool supports forking
+        const targetSession = await ctx.app
+          .service('sessions')
+          .get(sessionId, ctx.baseServiceParams);
+        const caps = AGENTIC_TOOL_CAPABILITIES[targetSession.agentic_tool as AgenticToolName];
+        if (caps && !caps.supportsSessionFork) {
+          return textResult({
+            error: `${targetSession.agentic_tool} does not support session forking. Use mode "subsession" instead to delegate work to a fresh session.`,
+          });
+        }
+
         // Shared fork+prompt flow for both "fork" and "btw" modes
         const forkData: { prompt: string; task_id?: string } = { prompt: args.prompt };
         if (args.taskId) forkData.task_id = args.taskId;
