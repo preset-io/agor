@@ -30,6 +30,7 @@ import {
   UsersRepository,
   WorktreeRepository,
 } from '@agor/core/db';
+import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
 import { cloneRepo, createWorktree, getWorktreesDir } from '@agor/core/git';
 import type { User, UUID } from '@agor/core/types';
 import { Command, Flags } from '@oclif/core';
@@ -166,7 +167,7 @@ export default class DaemonSync extends Command {
       const existing = await repoRepo.findBySlug(repoCfg.slug);
       const repoPath = join(getReposDir(), repoCfg.slug);
       const fsExists = existsSync(repoPath);
-      const action = determineRepoAction(repoCfg, existing, fsExists);
+      const action = determineRepoAction(repoCfg, existing);
 
       if (action === 'create') {
         this.log(`  ${chalk.green('create')} repo ${chalk.cyan(repoCfg.slug)}`);
@@ -256,7 +257,7 @@ export default class DaemonSync extends Command {
           }
 
           const usedIds = await worktreeRepo.getAllUsedUniqueIds();
-          const nextId = usedIds.length > 0 ? Math.max(...usedIds) + 1 : 1;
+          const nextId = autoAssignWorktreeUniqueId(usedIds);
 
           await worktreeRepo.create({
             worktree_id: wtCfg.worktree_id as UUID,
@@ -324,7 +325,7 @@ export default class DaemonSync extends Command {
             );
           }
 
-          const hashedPassword = await hash(resolved.password, 10);
+          const hashedPassword = await hash(resolved.password, 12);
 
           await usersRepo.create({
             user_id: userCfg.user_id as UUID,

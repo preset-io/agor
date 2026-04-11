@@ -22,8 +22,7 @@ export type UserAction = 'create' | 'update' | 'unchanged';
 
 export function determineRepoAction(
   config: { remote_url?: string; default_branch?: string },
-  existing: { remote_url?: string; default_branch?: string } | null,
-  _fsExists: boolean
+  existing: { remote_url?: string; default_branch?: string } | null
 ): RepoAction {
   if (!existing) return 'create';
 

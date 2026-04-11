@@ -37,14 +37,19 @@ export const enforcedAgentConfigSchema = z.object({
 // ResourceRepoConfig
 // ---------------------------------------------------------------------------
 
-export const resourceRepoConfigSchema = z.object({
-  repo_id: uuidSchema,
-  slug: slugSchema,
-  remote_url: z.string().optional(),
-  repo_type: z.enum(['remote', 'local']).default('remote'),
-  default_branch: z.string().optional(),
-  shallow: z.boolean().optional(),
-});
+export const resourceRepoConfigSchema = z
+  .object({
+    repo_id: uuidSchema,
+    slug: slugSchema,
+    remote_url: z.string().optional(),
+    repo_type: z.enum(['remote', 'local']).default('remote'),
+    default_branch: z.string().optional(),
+    shallow: z.boolean().optional(),
+  })
+  .refine((data) => data.repo_type !== 'remote' || data.remote_url, {
+    message: 'remote_url is required when repo_type is "remote"',
+    path: ['remote_url'],
+  });
 
 // ---------------------------------------------------------------------------
 // ResourceWorktreeConfig
@@ -188,26 +193,4 @@ export function validateResourceCrossReferences(
   }
 
   return errors;
-}
-
-/**
- * Resolve worktree.repo (slug) to the corresponding repo_id.
- * Returns a map of worktree_id → repo_id.
- */
-export function resolveRepoSlugs(
-  resources: z.infer<typeof daemonResourcesConfigSchema>
-): Map<string, string> {
-  const slugToId = new Map<string, string>();
-  for (const repo of resources.repos ?? []) {
-    slugToId.set(repo.slug, repo.repo_id);
-  }
-
-  const result = new Map<string, string>();
-  for (const wt of resources.worktrees ?? []) {
-    const repoId = slugToId.get(wt.repo);
-    if (repoId) {
-      result.set(wt.worktree_id, repoId);
-    }
-  }
-  return result;
 }

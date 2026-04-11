@@ -17,32 +17,30 @@ import {
 
 describe('determineRepoAction', () => {
   it('returns create when no existing repo', () => {
-    expect(determineRepoAction({ remote_url: 'https://example.com/repo' }, null, false)).toBe(
-      'create'
-    );
+    expect(determineRepoAction({ remote_url: 'https://example.com/repo' }, null)).toBe('create');
   });
 
   it('returns unchanged when existing matches config', () => {
     const existing = { remote_url: 'https://example.com/repo', default_branch: 'main' };
     const config = { remote_url: 'https://example.com/repo', default_branch: 'main' };
-    expect(determineRepoAction(config, existing, true)).toBe('unchanged');
+    expect(determineRepoAction(config, existing)).toBe('unchanged');
   });
 
   it('returns update when remote_url differs', () => {
     const existing = { remote_url: 'https://old.com/repo', default_branch: 'main' };
     const config = { remote_url: 'https://new.com/repo' };
-    expect(determineRepoAction(config, existing, true)).toBe('update');
+    expect(determineRepoAction(config, existing)).toBe('update');
   });
 
   it('returns update when default_branch differs', () => {
     const existing = { remote_url: 'https://example.com/repo', default_branch: 'main' };
     const config = { default_branch: 'develop' };
-    expect(determineRepoAction(config, existing, true)).toBe('update');
+    expect(determineRepoAction(config, existing)).toBe('update');
   });
 
   it('returns unchanged when config fields are undefined', () => {
     const existing = { remote_url: 'https://example.com/repo', default_branch: 'main' };
-    expect(determineRepoAction({}, existing, true)).toBe('unchanged');
+    expect(determineRepoAction({}, existing)).toBe('unchanged');
   });
 });
 

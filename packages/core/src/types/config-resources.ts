@@ -44,7 +44,7 @@ export type ResourceWorktreeConfig = Pick<
 export type ResourceUserConfig = Pick<User, 'user_id' | 'email' | 'name' | 'role'> & {
   /** Unix username for process impersonation */
   unix_username?: string;
-  /** Password: 'generate' | 'env:VAR_NAME' | literal string */
+  /** Password: Handlebars template '{{env.VAR}}', literal string, or omit to auto-generate */
   password?: string;
 };
 

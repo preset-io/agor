@@ -5,7 +5,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   daemonResourcesConfigSchema,
-  resolveRepoSlugs,
   resourceRepoConfigSchema,
   resourceUserConfigSchema,
   resourceWorktreeConfigSchema,
@@ -81,6 +80,20 @@ describe('resourceRepoConfigSchema', () => {
   it('defaults repo_type to remote', () => {
     const result = resourceRepoConfigSchema.parse(validRepo());
     expect(result.repo_type).toBe('remote');
+  });
+
+  it('rejects remote repo without remote_url', () => {
+    const result = resourceRepoConfigSchema.safeParse(
+      validRepo({ remote_url: undefined, repo_type: 'remote' })
+    );
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts local repo without remote_url', () => {
+    const result = resourceRepoConfigSchema.safeParse(
+      validRepo({ remote_url: undefined, repo_type: 'local' })
+    );
+    expect(result.success).toBe(true);
   });
 });
 
@@ -242,35 +255,5 @@ describe('validateResourceCrossReferences', () => {
     const errors = validateResourceCrossReferences(resources);
     expect(errors).toHaveLength(1);
     expect(errors[0].message).toContain('Duplicate user email');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Slug cross-reference resolution
-// ---------------------------------------------------------------------------
-
-describe('resolveRepoSlugs', () => {
-  it('maps worktree IDs to repo IDs via slug', () => {
-    const resources = daemonResourcesConfigSchema.parse({
-      repos: [validRepo()],
-      worktrees: [validWorktree()],
-    });
-    const result = resolveRepoSlugs(resources);
-    expect(result.get(VALID_UUID_2)).toBe(VALID_UUID);
-  });
-
-  it('skips worktrees with unknown repo slug', () => {
-    const resources = daemonResourcesConfigSchema.parse({
-      repos: [validRepo()],
-      worktrees: [validWorktree({ repo: 'nonexistent/repo' })],
-    });
-    const result = resolveRepoSlugs(resources);
-    expect(result.size).toBe(0);
-  });
-
-  it('handles empty resources', () => {
-    const resources = daemonResourcesConfigSchema.parse({});
-    const result = resolveRepoSlugs(resources);
-    expect(result.size).toBe(0);
   });
 });
