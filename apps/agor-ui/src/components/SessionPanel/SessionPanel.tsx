@@ -15,6 +15,7 @@ import {
   CodeOutlined,
   DeleteOutlined,
   ForkOutlined,
+  QuestionCircleOutlined,
   SendOutlined,
   SettingOutlined,
   StopOutlined,
@@ -619,8 +620,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           onChange={setInputValue}
           placeholder={
             isRunning
-              ? 'Session is working... Type here to queue, or click "btw" to ask a side question via fork'
-              : 'Send a prompt, fork, or create a subsession... (type @ for autocomplete)'
+              ? 'Session is working... Type here to queue, or use "btw" for a side question'
+              : 'Send a prompt, fork, or use "btw" for a side question... (type @ for autocomplete)'
           }
           autoSize={{ minRows: 1, maxRows: 10 }}
           onKeyPress={(e) => {
@@ -767,27 +768,19 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                   disabled={connectionDisabled || isRunning}
                 />
               </Tooltip>
+              <Tooltip title="Ask a side question via ephemeral fork (btw)">
+                <Button
+                  icon={<QuestionCircleOutlined />}
+                  onClick={handleBtwSend}
+                  disabled={connectionDisabled}
+                />
+              </Tooltip>
               <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Upload Files'}>
                 <FileUploadButton
                   onClick={() => setUploadModalOpen(true)}
                   disabled={connectionDisabled}
                 />
               </Tooltip>
-              {isRunning && (
-                <Tooltip title="Ask a side question via fork (btw)">
-                  <Button
-                    icon={<ForkOutlined />}
-                    onClick={handleBtwSend}
-                    disabled={connectionDisabled || !inputValue.trim()}
-                    style={{
-                      borderColor: token.colorWarning,
-                      color: token.colorWarning,
-                    }}
-                  >
-                    btw
-                  </Button>
-                </Tooltip>
-              )}
               <Tooltip
                 title={
                   connectionDisabled

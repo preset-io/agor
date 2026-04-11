@@ -266,7 +266,6 @@ export const FileUploadButton = forwardRef<HTMLButtonElement, FileUploadButtonPr
         onClick={onClick}
         disabled={disabled}
         size={size}
-        type="text"
         title="Upload files"
       />
     );

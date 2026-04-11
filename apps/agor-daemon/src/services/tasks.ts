@@ -12,8 +12,17 @@ import {
 import { PAGINATION } from '@agor/core/config';
 import { type Database, MessagesRepository, TaskRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { Paginated, QueryParams, Session, SessionID, Task } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import type {
+  Message,
+  MessageID,
+  Paginated,
+  QueryParams,
+  Session,
+  SessionID,
+  Task,
+  TaskID,
+} from '@agor/core/types';
+import { MessageRole, TaskStatus } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import type { SessionsService } from './sessions';
 
@@ -335,6 +344,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             } catch (error) {
               console.warn(`⚠️  [TasksService] Failed to auto-archive btw fork:`, error);
             }
+
+            // Inject a result message into the parent session's conversation.
+            // This is a non-prompt system message — it shows up in the UI but doesn't
+            // trigger a new prompt cycle. The parent's agent never sees it.
+            await this.injectBtwResultMessage(task, session, params);
           }
 
           // IMPORTANT: Now that session is idle, process any queued messages (including callbacks)
@@ -350,6 +364,151 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     }
 
     return result;
+  }
+
+  /**
+   * Inject a btw result message into the parent session's conversation.
+   * This is a system message that appears in the UI but does NOT trigger a prompt cycle.
+   * Shows: originating session (if remote), the question asked, and the response.
+   */
+  private async injectBtwResultMessage(
+    task: Task,
+    btwSession: Session,
+    _params?: TaskParams
+  ): Promise<void> {
+    const parentSessionId = btwSession.genealogy?.forked_from_session_id;
+    if (!parentSessionId) return;
+
+    try {
+      const messagesService = this.app.service('messages');
+
+      // Fetch all messages from the btw fork's task to extract prompt + response
+      const messagesResult = await messagesService.find({
+        query: {
+          session_id: btwSession.session_id,
+          task_id: task.task_id,
+        },
+      });
+
+      const allMessages = messagesResult.data || messagesResult;
+      const messageList = Array.isArray(allMessages) ? allMessages : [];
+
+      // Extract the original prompt (first user message or task description)
+      // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
+      const userMessages = messageList.filter((msg: any) => msg.role === 'user');
+      let promptText = '';
+      if (userMessages.length > 0) {
+        const firstUser = userMessages[0];
+        promptText =
+          typeof firstUser.content === 'string'
+            ? firstUser.content
+            : Array.isArray(firstUser.content)
+              ? firstUser.content
+                  // biome-ignore lint/suspicious/noExplicitAny: Content block types vary by SDK
+                  .filter((b: any) => b.type === 'text')
+                  // biome-ignore lint/suspicious/noExplicitAny: Content block types vary by SDK
+                  .map((b: any) => b.text || '')
+                  .join('\n\n')
+              : '';
+      }
+      if (!promptText) {
+        promptText = task.description || btwSession.title || '(no prompt)';
+      }
+
+      // Extract the last assistant response
+      const assistantMessages = messageList
+        // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
+        .filter((msg: any) => msg.role === 'assistant')
+        // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
+        .sort((a: any, b: any) => (b.index || 0) - (a.index || 0));
+
+      let responseText = '';
+      if (assistantMessages.length > 0) {
+        const lastMsg = assistantMessages[0];
+        responseText =
+          typeof lastMsg.content === 'string'
+            ? lastMsg.content
+            : Array.isArray(lastMsg.content)
+              ? lastMsg.content
+                  // biome-ignore lint/suspicious/noExplicitAny: Content block types vary by SDK
+                  .filter((block: any) => block.type === 'text')
+                  // biome-ignore lint/suspicious/noExplicitAny: Content block types vary by SDK
+                  .map((block: any) => block.text || '')
+                  .join('\n\n')
+              : '';
+      }
+
+      if (!responseText) {
+        responseText = `(btw fork completed with status: ${task.status}, but no text response was found)`;
+      }
+
+      // Get the parent session's current message count for index
+      const messageRepo = new MessagesRepository(this.db);
+      const parentMessages = await messageRepo.findBySessionId(parentSessionId as SessionID);
+      const nextIndex = parentMessages.length;
+
+      // Find the parent's current running task to attach the message to
+      const parentSession = await this.app.service('sessions').get(parentSessionId);
+      const parentLatestTaskId = parentSession.tasks?.[parentSession.tasks.length - 1];
+
+      // For remote btw, fetch the caller session's title
+      const callerSessionId = btwSession.callback_config?.callback_session_id;
+      let callerTitle: string | undefined;
+      if (callerSessionId) {
+        try {
+          const callerSession = await this.app.service('sessions').get(callerSessionId);
+          callerTitle = callerSession.title;
+        } catch {
+          // Caller session may have been deleted — not critical
+        }
+      }
+
+      const { generateId } = await import('@agor/core');
+
+      // Build preview from prompt + response
+      const previewText = `Q: ${promptText.substring(0, 80)} → A: ${responseText.substring(0, 100)}`;
+
+      const btwResultMessage: Message = {
+        message_id: generateId() as MessageID,
+        session_id: parentSessionId as SessionID,
+        task_id: parentLatestTaskId as TaskID | undefined,
+        type: 'system',
+        role: MessageRole.SYSTEM,
+        index: nextIndex,
+        timestamp: new Date().toISOString(),
+        content_preview: previewText.substring(0, 200),
+        content: [
+          {
+            type: 'text',
+            text: responseText,
+          },
+        ],
+        metadata: {
+          is_btw_result: true,
+          // The ephemeral btw fork session
+          btw_session_id: btwSession.session_id,
+          btw_task_id: task.task_id,
+          btw_status: task.status,
+          btw_title: btwSession.title,
+          btw_prompt: promptText,
+          // For remote btw: the session that initiated the btw (via MCP callback_session_id).
+          // Absent for local btw (user clicked btw button from parent session's UI).
+          btw_caller_session_id: btwSession.callback_config?.callback_session_id,
+          btw_caller_title: callerTitle,
+          source: 'agor',
+        },
+      };
+
+      // Create via service so FeathersJS broadcasts the `created` event to all clients
+      await messagesService.create(btwResultMessage);
+
+      console.log(
+        `💬 [TasksService] Injected btw result message into parent session ${parentSessionId.substring(0, 8)} from btw fork ${btwSession.session_id.substring(0, 8)}`
+      );
+    } catch (error) {
+      console.warn(`⚠️  [TasksService] Failed to inject btw result message:`, error);
+      // Non-critical — don't break task completion
+    }
   }
 
   /**

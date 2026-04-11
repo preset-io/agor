@@ -353,10 +353,69 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
 
   // Special handling for system messages
   // Note: Compaction events are now handled by CompactionBlock in TaskBlock grouping
-  // This section can be used for other system message types in the future
+  if (isSystem && message.metadata?.is_btw_result) {
+    const btwResponse =
+      typeof message.content === 'string'
+        ? message.content
+        : Array.isArray(message.content)
+          ? message.content
+              // biome-ignore lint/suspicious/noExplicitAny: Content block types vary
+              .filter((b: any) => b.type === 'text')
+              // biome-ignore lint/suspicious/noExplicitAny: Content block types vary
+              .map((b: any) => b.text)
+              .join('\n\n')
+          : '';
+    const btwPrompt = message.metadata?.btw_prompt as string | undefined;
+    const btwSessionId = message.metadata?.btw_session_id as string | undefined;
+    const btwShortId = btwSessionId ? btwSessionId.substring(0, 8) : undefined;
+    const callerSessionId = message.metadata?.btw_caller_session_id as string | undefined;
+    const callerTitle = message.metadata?.btw_caller_title as string | undefined;
+    const callerShortId = callerSessionId ? callerSessionId.substring(0, 8) : undefined;
+    const isRemote = !!callerSessionId;
+
+    // Build markdown content
+    const lines: string[] = [];
+    if (isRemote) {
+      const callerLink = callerTitle
+        ? `[${callerTitle} (${callerShortId})](#session/${callerSessionId})`
+        : `[${callerShortId}](#session/${callerSessionId})`;
+      const forkLink = `[btw (${btwShortId})](#session/${btwSessionId})`;
+      lines.push(`From ${callerLink} · ${forkLink}`);
+    }
+    if (btwPrompt) {
+      lines.push(`> ${btwPrompt.replace(/\n/g, '\n> ')}`);
+      lines.push('');
+    }
+    lines.push(btwResponse);
+    const markdownContent = lines.join('\n');
+
+    return (
+      <div
+        style={{
+          border: `1px solid ${token.colorWarning}`,
+          borderRadius: token.borderRadiusLG,
+          padding: '8px 12px',
+          margin: '8px 0',
+          background: token.colorWarningBg,
+        }}
+      >
+        <div
+          style={{
+            fontSize: 11,
+            fontWeight: 600,
+            color: token.colorWarning,
+            marginBottom: 4,
+          }}
+        >
+          btw
+        </div>
+        <MarkdownRenderer content={markdownContent} />
+      </div>
+    );
+  }
+
   if (isSystem && Array.isArray(message.content)) {
-    // Future: Handle other system message types here
-    // For now, compaction is the only system message type, and it's handled elsewhere
+    // Other system message types handled elsewhere (e.g., compaction in TaskBlock)
   }
 
   // Parse content blocks from message, preserving order
