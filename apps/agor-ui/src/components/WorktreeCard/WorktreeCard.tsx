@@ -40,6 +40,7 @@ import {
 import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useServiceEnabled } from '../../hooks/useServicesConfig';
 import { useSessionActions } from '../../hooks/useSessionActions';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
@@ -189,6 +190,8 @@ const WorktreeCardComponent = ({
 }: WorktreeCardProps) => {
   const { token } = theme.useToken();
   const connectionDisabled = useConnectionDisabled();
+  const schedulerEnabled = useServiceEnabled('scheduler');
+  const gatewayEnabled = useServiceEnabled('gateway');
 
   // Fork/Spawn modal state
   const [forkSpawnModal, setForkSpawnModal] = useState<{
@@ -989,7 +992,7 @@ const WorktreeCardComponent = ({
             )}
 
             {/* Scheduled Runs */}
-            {scheduledSessions.length > 0 && (
+            {schedulerEnabled && scheduledSessions.length > 0 && (
               <Collapse
                 defaultActiveKey={[]}
                 items={[
@@ -1006,7 +1009,7 @@ const WorktreeCardComponent = ({
             )}
 
             {/* Gateway Sessions */}
-            {gatewaySessions.length > 0 && (
+            {gatewayEnabled && gatewaySessions.length > 0 && (
               <Collapse
                 defaultActiveKey={[]}
                 items={[

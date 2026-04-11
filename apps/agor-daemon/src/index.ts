@@ -7077,6 +7077,7 @@ async function main() {
             GEMINI_API_KEY: !!(config.credentials?.GEMINI_API_KEY || process.env.GEMINI_API_KEY),
           },
         },
+        services: servicesConfig,
       };
 
       // If user is authenticated (via requireAuth hook check), provide detailed info

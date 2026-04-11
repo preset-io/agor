@@ -33,7 +33,8 @@ import {
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Layout, Menu, Modal, theme } from 'antd';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useServiceEnabled } from '../../hooks/useServicesConfig';
 import { WorktreeModal } from '../WorktreeModal';
 import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
 import { AboutTab } from './AboutTab';
@@ -194,110 +195,135 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const { token } = theme.useToken();
 
+  // Service tier gates — hide tabs for disabled services
+  const gatewayEnabled = useServiceEnabled('gateway');
+  const mcpEnabled = useServiceEnabled('mcp_servers');
+  const artifactsEnabled = useServiceEnabled('artifacts');
+  const cardsEnabled = useServiceEnabled('cards');
+
   // Menu items for left sidebar navigation
-  const menuItems: MenuProps['items'] = [
-    {
-      key: 'workspace',
-      label: 'Workspace',
-      type: 'group',
-      children: [
-        {
-          key: 'boards',
-          label: 'Boards',
-          icon: <AppstoreOutlined />,
-        },
-        {
-          key: 'repos',
-          label: 'Repositories',
-          icon: <FolderOutlined />,
-        },
-        {
-          key: 'worktrees',
-          label: 'Worktrees',
-          icon: <BranchesOutlined />,
-        },
-        {
-          key: 'assistants',
-          label: 'Assistants',
-          icon: <RobotOutlined />,
-        },
-        {
-          key: 'cards',
-          label: (
-            <span>
-              Cards{' '}
-              <span
-                style={{
-                  fontSize: 10,
-                  fontWeight: 600,
-                  padding: '0 4px',
-                  borderRadius: 3,
-                  background: token.colorWarningBg,
-                  color: token.colorWarningText,
-                  border: `1px solid ${token.colorWarningBorder}`,
-                  marginLeft: 4,
-                }}
-              >
-                Beta
-              </span>
-            </span>
-          ),
-          icon: <CreditCardOutlined />,
-        },
-        {
-          key: 'artifacts',
-          label: 'Artifacts',
-          icon: <ExperimentOutlined />,
-        },
-      ],
-    },
-    {
-      key: 'integrations',
-      label: 'Integrations',
-      type: 'group',
-      children: [
-        {
-          key: 'mcp',
-          label: 'MCP Servers',
-          icon: <ApiOutlined />,
-        },
-        {
-          key: 'agentic-tools',
-          label: 'Agentic Tools',
-          icon: <ThunderboltOutlined />,
-        },
-        {
-          key: 'gateway',
-          label: 'Gateway Channels',
-          icon: <MessageOutlined />,
-        },
-      ],
-    },
-    {
-      key: 'admin',
-      label: 'Admin',
-      type: 'group',
-      children: [
-        {
-          key: 'users',
-          label: 'Users',
-          icon: <TeamOutlined />,
-        },
-      ],
-    },
-    {
-      key: 'system',
-      label: 'System',
-      type: 'group',
-      children: [
-        {
-          key: 'about',
-          label: 'About',
-          icon: <InfoCircleOutlined />,
-        },
-      ],
-    },
-  ];
+  const menuItems: MenuProps['items'] = useMemo(
+    () => [
+      {
+        key: 'workspace',
+        label: 'Workspace',
+        type: 'group' as const,
+        children: [
+          {
+            key: 'boards',
+            label: 'Boards',
+            icon: <AppstoreOutlined />,
+          },
+          {
+            key: 'repos',
+            label: 'Repositories',
+            icon: <FolderOutlined />,
+          },
+          {
+            key: 'worktrees',
+            label: 'Worktrees',
+            icon: <BranchesOutlined />,
+          },
+          {
+            key: 'assistants',
+            label: 'Assistants',
+            icon: <RobotOutlined />,
+          },
+          ...(cardsEnabled
+            ? [
+                {
+                  key: 'cards',
+                  label: (
+                    <span>
+                      Cards{' '}
+                      <span
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 600,
+                          padding: '0 4px',
+                          borderRadius: 3,
+                          background: token.colorWarningBg,
+                          color: token.colorWarningText,
+                          border: `1px solid ${token.colorWarningBorder}`,
+                          marginLeft: 4,
+                        }}
+                      >
+                        Beta
+                      </span>
+                    </span>
+                  ),
+                  icon: <CreditCardOutlined />,
+                },
+              ]
+            : []),
+          ...(artifactsEnabled
+            ? [
+                {
+                  key: 'artifacts',
+                  label: 'Artifacts',
+                  icon: <ExperimentOutlined />,
+                },
+              ]
+            : []),
+        ],
+      },
+      {
+        key: 'integrations',
+        label: 'Integrations',
+        type: 'group' as const,
+        children: [
+          ...(mcpEnabled
+            ? [
+                {
+                  key: 'mcp',
+                  label: 'MCP Servers',
+                  icon: <ApiOutlined />,
+                },
+              ]
+            : []),
+          {
+            key: 'agentic-tools',
+            label: 'Agentic Tools',
+            icon: <ThunderboltOutlined />,
+          },
+          ...(gatewayEnabled
+            ? [
+                {
+                  key: 'gateway',
+                  label: 'Gateway Channels',
+                  icon: <MessageOutlined />,
+                },
+              ]
+            : []),
+        ],
+      },
+      {
+        key: 'admin',
+        label: 'Admin',
+        type: 'group' as const,
+        children: [
+          {
+            key: 'users',
+            label: 'Users',
+            icon: <TeamOutlined />,
+          },
+        ],
+      },
+      {
+        key: 'system',
+        label: 'System',
+        type: 'group' as const,
+        children: [
+          {
+            key: 'about',
+            label: 'About',
+            icon: <InfoCircleOutlined />,
+          },
+        ],
+      },
+    ],
+    [gatewayEnabled, mcpEnabled, artifactsEnabled, cardsEnabled, token]
+  );
 
   // Render content based on active section
   const renderContent = () => {

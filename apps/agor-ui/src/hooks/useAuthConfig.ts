@@ -5,6 +5,7 @@
  * Used on app startup to determine if login page should be shown and display instance label.
  */
 
+import type { DaemonServicesConfig } from '@agor/core/types';
 import { useEffect, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
 
@@ -40,12 +41,14 @@ interface HealthResponse {
   auth: AuthConfig;
   instance?: InstanceConfig;
   onboarding?: OnboardingConfig;
+  services?: DaemonServicesConfig;
 }
 
 export function useAuthConfig() {
   const [config, setConfig] = useState<AuthConfig | null>(null);
   const [instanceConfig, setInstanceConfig] = useState<InstanceConfig | null>(null);
   const [onboardingConfig, setOnboardingConfig] = useState<OnboardingConfig | null>(null);
+  const [servicesConfig, setServicesConfig] = useState<DaemonServicesConfig | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
@@ -61,6 +64,7 @@ export function useAuthConfig() {
         setConfig(health.auth);
         setInstanceConfig(health.instance ?? null);
         setOnboardingConfig(health.onboarding ?? null);
+        setServicesConfig(health.services);
         setError(null);
       } catch (err) {
         setError(err instanceof Error ? err : new Error(String(err)));
@@ -68,6 +72,7 @@ export function useAuthConfig() {
         setConfig({ requireAuth: true, allowAnonymous: false });
         setInstanceConfig(null);
         setOnboardingConfig(null);
+        setServicesConfig(undefined);
       } finally {
         setLoading(false);
       }
@@ -76,5 +81,5 @@ export function useAuthConfig() {
     fetchAuthConfig();
   }, []);
 
-  return { config, instanceConfig, onboardingConfig, loading, error };
+  return { config, instanceConfig, onboardingConfig, servicesConfig, loading, error };
 }

@@ -17,6 +17,7 @@
 import type { AgenticToolName, MCPServer } from '@agor/core/types';
 import { Form, Select } from 'antd';
 import { mapToArray } from '@/utils/mapHelpers';
+import { useServiceReadable } from '../../hooks/useServicesConfig';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
 import { MCPServerSelect } from '../MCPServerSelect';
 import { ModelSelector } from '../ModelSelector';
@@ -57,6 +58,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
 }) => {
   const modelLabel = MODEL_LABELS[agenticTool] ?? 'Claude Model';
   const showCodexFields = agenticTool === 'codex' && !compact;
+  const mcpReadable = useServiceReadable('mcp_servers');
 
   return (
     <>
@@ -133,16 +135,18 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
         </Form.Item>
       )}
 
-      <Form.Item
-        name="mcpServerIds"
-        label="MCP Servers"
-        help={showHelpText ? 'Select MCP servers to make available in this session' : undefined}
-      >
-        <MCPServerSelect
-          mcpServers={mapToArray(mcpServerById)}
-          placeholder="No MCP servers attached"
-        />
-      </Form.Item>
+      {mcpReadable && (
+        <Form.Item
+          name="mcpServerIds"
+          label="MCP Servers"
+          help={showHelpText ? 'Select MCP servers to make available in this session' : undefined}
+        >
+          <MCPServerSelect
+            mcpServers={mapToArray(mcpServerById)}
+            placeholder="No MCP servers attached"
+          />
+        </Form.Item>
+      )}
     </>
   );
 };
