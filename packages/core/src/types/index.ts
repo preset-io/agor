@@ -7,6 +7,7 @@ export * from './board';
 export * from './board-comment';
 export * from './card';
 export * from './config-resources';
+export * from './config-services';
 export * from './context';
 export * from './feathers';
 export * from './file';

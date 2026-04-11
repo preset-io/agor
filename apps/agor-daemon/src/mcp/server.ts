@@ -15,7 +15,8 @@
 
 import type { Database } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { SessionID, UserID } from '@agor/core/types';
+import type { DaemonServicesConfig, SessionID, UserID } from '@agor/core/types';
+import { getServiceTier, SERVICE_GROUP_TO_MCP_DOMAINS, SERVICE_TIER_RANK } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -137,7 +138,7 @@ let cachedToolsList: { tools: Array<Record<string, unknown>> } | null = null;
  * Captures metadata (name, description, JSON Schema, annotations, domain)
  * without creating real handlers. Called once, cached forever.
  */
-function buildRegistry(): ToolRegistry {
+function buildRegistry(servicesConfig?: DaemonServicesConfig): ToolRegistry {
   const registry = new ToolRegistry();
 
   // Create a throwaway server just to run the registration code.
@@ -182,45 +183,60 @@ function buildRegistry(): ToolRegistry {
 
   // Register all domain tools with domain tracking.
   // Handlers receive a dummy context — they won't be called.
+  // Only register tools for enabled service domains.
   const dummyCtx = {} as McpContext;
 
-  registry.setCurrentDomain('sessions');
-  registerSessionTools(tempServer, dummyCtx);
+  if (isDomainEnabled('sessions', servicesConfig)) {
+    registry.setCurrentDomain('sessions');
+    registerSessionTools(tempServer, dummyCtx);
+    registerTaskTools(tempServer, dummyCtx);
+    registerMessageTools(tempServer, dummyCtx);
+  }
 
-  registry.setCurrentDomain('repos');
-  registerRepoTools(tempServer, dummyCtx);
+  if (isDomainEnabled('repos', servicesConfig)) {
+    registry.setCurrentDomain('repos');
+    registerRepoTools(tempServer, dummyCtx);
+  }
 
-  registry.setCurrentDomain('worktrees');
-  registerWorktreeTools(tempServer, dummyCtx);
+  if (isDomainEnabled('worktrees', servicesConfig)) {
+    registry.setCurrentDomain('worktrees');
+    registerWorktreeTools(tempServer, dummyCtx);
+    registry.setCurrentDomain('environment');
+    registerEnvironmentTools(tempServer, dummyCtx);
+  }
 
-  registry.setCurrentDomain('environment');
-  registerEnvironmentTools(tempServer, dummyCtx);
+  if (isDomainEnabled('boards', servicesConfig)) {
+    registry.setCurrentDomain('boards');
+    registerBoardTools(tempServer, dummyCtx);
+  }
 
-  registry.setCurrentDomain('boards');
-  registerBoardTools(tempServer, dummyCtx);
+  if (isDomainEnabled('cards', servicesConfig)) {
+    registry.setCurrentDomain('cards');
+    registerCardTools(tempServer, dummyCtx);
+    registerCardTypeTools(tempServer, dummyCtx);
+  }
 
-  registry.setCurrentDomain('cards');
-  registerCardTools(tempServer, dummyCtx);
-  registerCardTypeTools(tempServer, dummyCtx);
+  if (isDomainEnabled('artifacts', servicesConfig)) {
+    registry.setCurrentDomain('artifacts');
+    registerArtifactTools(tempServer, dummyCtx);
+  }
 
-  registry.setCurrentDomain('artifacts');
-  registerArtifactTools(tempServer, dummyCtx);
+  if (isDomainEnabled('users', servicesConfig)) {
+    registry.setCurrentDomain('users');
+    registerUserTools(tempServer, dummyCtx);
+  }
 
-  registry.setCurrentDomain('sessions');
-  registerTaskTools(tempServer, dummyCtx);
-  registerMessageTools(tempServer, dummyCtx);
+  if (isDomainEnabled('analytics', servicesConfig)) {
+    registry.setCurrentDomain('analytics');
+    registerAnalyticsTools(tempServer, dummyCtx);
+  }
 
-  registry.setCurrentDomain('users');
-  registerUserTools(tempServer, dummyCtx);
+  if (isDomainEnabled('mcp-servers', servicesConfig)) {
+    registry.setCurrentDomain('mcp-servers');
+    registerMcpServerTools(tempServer, dummyCtx);
+  }
 
-  registry.setCurrentDomain('analytics');
-  registerAnalyticsTools(tempServer, dummyCtx);
-
-  registry.setCurrentDomain('mcp-servers');
-  registerMcpServerTools(tempServer, dummyCtx);
-
-  // Search/execute tools registered separately on the real server
-  // but we capture their metadata here too
+  // Search/execute tools always registered (meta-tools)
   registry.setCurrentDomain('discovery');
   registerSearchTools(tempServer, registry);
 
@@ -230,12 +246,12 @@ function buildRegistry(): ToolRegistry {
 /**
  * Get or build the cached registry and tools/list response.
  */
-function getRegistry(): {
+function getRegistry(servicesConfig?: DaemonServicesConfig): {
   registry: ToolRegistry;
   toolsList: { tools: Array<Record<string, unknown>> };
 } {
   if (!cachedRegistry) {
-    cachedRegistry = buildRegistry();
+    cachedRegistry = buildRegistry(servicesConfig);
     // Pre-compute the tools/list response — frozen, deterministic
     cachedToolsList = {
       tools: cachedRegistry.getAlwaysVisible().map((entry) => ({
@@ -255,7 +271,29 @@ function getRegistry(): {
  * Tool handlers close over `ctx` for per-request user/session scope.
  * The registry and tools/list response are shared across all requests.
  */
-function createMcpServer(ctx: McpContext, toolSearchEnabled: boolean): McpServer {
+/**
+ * Check if a MCP domain should have tools registered based on service config.
+ * Returns true if the service group for this domain is 'readonly' or 'on'.
+ * Tools are NOT registered for 'off' or 'internal' tiers.
+ */
+function isDomainEnabled(domain: string, servicesConfig?: DaemonServicesConfig): boolean {
+  if (!servicesConfig) return true; // default: all enabled
+
+  // Find which service group owns this domain
+  for (const [group, domains] of Object.entries(SERVICE_GROUP_TO_MCP_DOMAINS)) {
+    if (domains?.includes(domain)) {
+      const tier = getServiceTier(servicesConfig, group as keyof DaemonServicesConfig);
+      return SERVICE_TIER_RANK[tier] >= SERVICE_TIER_RANK.readonly;
+    }
+  }
+  return true; // unknown domain = enabled
+}
+
+function createMcpServer(
+  ctx: McpContext,
+  toolSearchEnabled: boolean,
+  servicesConfig?: DaemonServicesConfig
+): McpServer {
   const server = new McpServer(
     {
       name: 'agor',
@@ -270,23 +308,32 @@ function createMcpServer(ctx: McpContext, toolSearchEnabled: boolean): McpServer
     }
   );
 
-  // Register all domain tools — handlers close over ctx for this request
-  registerSessionTools(server, ctx);
-  registerRepoTools(server, ctx);
-  registerWorktreeTools(server, ctx);
-  registerEnvironmentTools(server, ctx);
-  registerBoardTools(server, ctx);
-  registerCardTools(server, ctx);
-  registerCardTypeTools(server, ctx);
-  registerArtifactTools(server, ctx);
-  registerTaskTools(server, ctx);
-  registerMessageTools(server, ctx);
-  registerUserTools(server, ctx);
-  registerAnalyticsTools(server, ctx);
-  registerMcpServerTools(server, ctx);
+  // Register domain tools conditionally based on service tier.
+  // 'off' and 'internal' tiers: no MCP tools
+  // 'readonly' and 'on' tiers: tools registered
+  // Note: readonly vs on filtering (read-only tools only) is left for future refinement.
+  if (isDomainEnabled('sessions', servicesConfig)) {
+    registerSessionTools(server, ctx);
+    registerTaskTools(server, ctx);
+    registerMessageTools(server, ctx);
+  }
+  if (isDomainEnabled('repos', servicesConfig)) registerRepoTools(server, ctx);
+  if (isDomainEnabled('worktrees', servicesConfig)) {
+    registerWorktreeTools(server, ctx);
+    registerEnvironmentTools(server, ctx);
+  }
+  if (isDomainEnabled('boards', servicesConfig)) registerBoardTools(server, ctx);
+  if (isDomainEnabled('cards', servicesConfig)) {
+    registerCardTools(server, ctx);
+    registerCardTypeTools(server, ctx);
+  }
+  if (isDomainEnabled('artifacts', servicesConfig)) registerArtifactTools(server, ctx);
+  if (isDomainEnabled('users', servicesConfig)) registerUserTools(server, ctx);
+  if (isDomainEnabled('analytics', servicesConfig)) registerAnalyticsTools(server, ctx);
+  if (isDomainEnabled('mcp-servers', servicesConfig)) registerMcpServerTools(server, ctx);
 
   if (toolSearchEnabled) {
-    const { registry, toolsList } = getRegistry();
+    const { registry, toolsList } = getRegistry(servicesConfig);
 
     // Register search/execute tools with the shared cached registry
     registerSearchTools(server, registry);
@@ -305,10 +352,15 @@ function createMcpServer(ctx: McpContext, toolSearchEnabled: boolean): McpServer
  * @param toolSearchEnabled - When true, tools/list returns only essential tools
  *   and agents discover others via agor_search_tools. Default: true.
  */
-export function setupMCPRoutes(app: Application, db: Database, toolSearchEnabled = true): void {
+export function setupMCPRoutes(
+  app: Application,
+  db: Database,
+  toolSearchEnabled = true,
+  servicesConfig?: DaemonServicesConfig
+): void {
   // Eagerly build the registry at startup so first request isn't slower
   if (toolSearchEnabled) {
-    getRegistry();
+    getRegistry(servicesConfig);
     console.log(`✅ MCP tool registry built (${cachedRegistry!.size} tools cached)`);
   }
 
@@ -384,7 +436,7 @@ export function setupMCPRoutes(app: Application, db: Database, toolSearchEnabled
         provider: 'mcp',
       };
 
-      // Create a per-request McpServer with all tools registered
+      // Create a per-request McpServer with tools registered per service tier
       const mcpServer = createMcpServer(
         {
           app,
@@ -394,7 +446,8 @@ export function setupMCPRoutes(app: Application, db: Database, toolSearchEnabled
           authenticatedUser,
           baseServiceParams,
         },
-        toolSearchEnabled
+        toolSearchEnabled,
+        servicesConfig
       );
 
       // Create stateless transport (one per request, no session tracking)

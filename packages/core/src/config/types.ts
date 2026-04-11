@@ -431,6 +431,25 @@ export interface AgorConfig {
 
   /** Declarative resource definitions for headless/k8s deployments */
   resources?: DaemonResourcesConfig;
+
+  /**
+   * Service tier configuration for lean daemon mode.
+   *
+   * Controls which FeathersJS service groups are registered and how they're exposed.
+   * Each group can be: 'off' | 'internal' | 'readonly' | 'on' (default: 'on').
+   *
+   * @example Executor pod config
+   * ```yaml
+   * services:
+   *   core: on
+   *   worktrees: on
+   *   repos: readonly
+   *   users: internal
+   *   boards: off
+   *   cards: off
+   * ```
+   */
+  services?: import('../types/config-services').DaemonServicesConfig;
 }
 
 /**
@@ -447,4 +466,5 @@ export type ConfigKey =
   | `execution.${keyof AgorExecutionSettings}`
   | `paths.${keyof AgorPathSettings}`
   | `credentials.${keyof AgorCredentials}`
-  | `onboarding.${keyof AgorOnboardingSettings}`;
+  | `onboarding.${keyof AgorOnboardingSettings}`
+  | `services.${keyof import('../types/config-services').DaemonServicesConfig}`;
