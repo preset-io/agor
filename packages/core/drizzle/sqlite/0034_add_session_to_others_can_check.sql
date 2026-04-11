@@ -37,7 +37,26 @@ CREATE TABLE `__new_worktrees` (
 	FOREIGN KEY (`repo_id`) REFERENCES `repos`(`repo_id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`board_id`) REFERENCES `boards`(`board_id`) ON UPDATE no action ON DELETE set null
 );--> statement-breakpoint
-INSERT INTO `__new_worktrees` SELECT * FROM `worktrees`;--> statement-breakpoint
+INSERT INTO `__new_worktrees` (
+	`worktree_id`, `repo_id`, `created_at`, `updated_at`, `created_by`,
+	`name`, `ref`, `ref_type`, `worktree_unique_id`,
+	`start_command`, `stop_command`, `nuke_command`,
+	`health_check_url`, `app_url`, `logs_command`,
+	`board_id`, `schedule_enabled`, `schedule_cron`,
+	`schedule_last_triggered_at`, `schedule_next_run_at`,
+	`needs_attention`, `archived`, `archived_at`, `archived_by`,
+	`filesystem_status`, `others_can`, `unix_group`, `others_fs_access`, `data`
+)
+SELECT
+	`worktree_id`, `repo_id`, `created_at`, `updated_at`, `created_by`,
+	`name`, `ref`, `ref_type`, `worktree_unique_id`,
+	`start_command`, `stop_command`, `nuke_command`,
+	`health_check_url`, `app_url`, `logs_command`,
+	`board_id`, `schedule_enabled`, `schedule_cron`,
+	`schedule_last_triggered_at`, `schedule_next_run_at`,
+	`needs_attention`, `archived`, `archived_at`, `archived_by`,
+	`filesystem_status`, `others_can`, `unix_group`, `others_fs_access`, `data`
+FROM `worktrees`;--> statement-breakpoint
 DROP TABLE `worktrees`;--> statement-breakpoint
 ALTER TABLE `__new_worktrees` RENAME TO `worktrees`;--> statement-breakpoint
 PRAGMA foreign_keys=ON;--> statement-breakpoint

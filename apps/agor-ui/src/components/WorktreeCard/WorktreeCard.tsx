@@ -722,7 +722,7 @@ const WorktreeCardComponent = ({
         width: 500,
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
         transition: 'box-shadow 0.6s ease-in-out, border 0.6s ease-in-out',
-        willChange: needsAttention ? 'box-shadow' : 'auto',
+        willChange: needsAttention && !inPopover ? 'box-shadow' : 'auto',
         ...(needsAttention && !inPopover
           ? {
               boxShadow: attentionGlowShadow,
