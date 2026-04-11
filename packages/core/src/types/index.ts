@@ -6,6 +6,7 @@ export * from './artifact';
 export * from './board';
 export * from './board-comment';
 export * from './card';
+export * from './config-resources';
 export * from './context';
 export * from './feathers';
 export * from './file';

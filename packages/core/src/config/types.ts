@@ -2,6 +2,8 @@
  * Agor Configuration Types
  */
 
+import type { DaemonResourcesConfig } from '../types/config-resources';
+
 /**
  * Type for user-provided JSON data where structure is unknown or dynamic
  *
@@ -426,6 +428,9 @@ export interface AgorConfig {
 
   /** Onboarding settings (CLI init → UI wizard) */
   onboarding?: AgorOnboardingSettings;
+
+  /** Declarative resource definitions for headless/k8s deployments */
+  resources?: DaemonResourcesConfig;
 }
 
 /**
