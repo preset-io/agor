@@ -271,6 +271,34 @@ This feature unlocks capabilities not available in native agent SDKs, including 
 
 ---
 
+## ❓ BTW — Ephemeral Forks
+
+**Ask a side question without interrupting the running agent.** The "btw" button (❓) creates an ephemeral fork that runs concurrently alongside the main session.
+
+### How It Works
+
+1. While a session is working (or idle), type your side question and click the ❓ button
+2. Agor forks the session and runs your question in a separate, ephemeral session
+3. When the fork completes, the result is injected as a message in the parent conversation
+4. The ephemeral fork auto-archives — no cleanup needed
+
+### For Orchestrating Agents (MCP)
+
+The real power is in multi-agent orchestration. Agents can use `agor_sessions_prompt` with `mode: "btw"` to ask quick questions to other running sessions without breaking their flow:
+
+- **Non-blocking** — The target session keeps working uninterrupted
+- **Auto-callback** — Results are delivered back to the caller when done
+- **Auto-archive** — Ephemeral forks clean themselves up after completion
+- **Result injection** — A system message appears in the target session showing who asked, what was asked, and the response
+
+This lets orchestrating agents quickly check on status, ask for clarifications, or gather information from peer sessions — all without disrupting anyone's work.
+
+### Tool Support
+
+BTW uses session forking under the hood, so it's available for tools that support forking (currently Claude Code). For tools without fork support (Codex, Gemini), use `mode: "subsession"` instead.
+
+---
+
 ## 📚 Related Docs
 
 - [Concepts](/guide/concepts) - Understanding worktrees, sessions, and boards
