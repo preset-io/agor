@@ -1174,9 +1174,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       }
 
       // Fetch the updated session to return current state
-      const session = await ctx.app
-        .service('sessions')
-        .get(sessionId, ctx.baseServiceParams);
+      const session = await ctx.app.service('sessions').get(sessionId, ctx.baseServiceParams);
 
       return textResult({
         success: true,
