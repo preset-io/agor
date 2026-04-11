@@ -1163,7 +1163,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           { ...ctx.baseServiceParams, route: { id: sessionId } }
         );
 
-      const stopResult = result as { success: boolean; reason?: string };
+      const stopResult = result as { success: boolean; status?: string; reason?: string };
 
       if (!stopResult.success) {
         return textResult({
@@ -1173,13 +1173,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         });
       }
 
-      // Fetch the updated session to return current state
-      const session = await ctx.app.service('sessions').get(sessionId, ctx.baseServiceParams);
-
       return textResult({
         success: true,
         sessionId,
-        status: session.status,
+        status: stopResult.status,
         ...(args.reason ? { reason: args.reason } : {}),
         note: stopResult.reason || 'Session stopped successfully.',
       });

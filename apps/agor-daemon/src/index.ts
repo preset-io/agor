@@ -5832,7 +5832,11 @@ async function main() {
             },
             params
           );
-          return { success: true, reason: 'No active tasks found, session reset to idle' };
+          return {
+            success: true,
+            status: SessionStatus.IDLE,
+            reason: 'No active tasks found, session reset to idle',
+          };
         }
 
         // Pick the most recent task
@@ -5881,7 +5885,7 @@ async function main() {
           console.error(`❌ [Stop] Failed to patch session to IDLE:`, error);
         }
 
-        return { success: true };
+        return { success: true, status: SessionStatus.IDLE };
       },
     },
     {
