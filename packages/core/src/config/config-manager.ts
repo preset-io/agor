@@ -82,6 +82,20 @@ export async function loadConfig(): Promise<AgorConfig> {
 }
 
 /**
+ * Load config from a specific file path.
+ *
+ * Unlike loadConfig(), this does NOT fall back to defaults if the file is missing.
+ * Throws on missing file or parse error.
+ */
+export async function loadConfigFromFile(filePath: string): Promise<AgorConfig> {
+  const content = await fs.readFile(filePath, 'utf-8');
+  const config = yaml.load(content) as AgorConfig;
+  const finalConfig = config || {};
+  validateConfig(finalConfig);
+  return finalConfig;
+}
+
+/**
  * Save config to ~/.agor/config.yaml
  */
 export async function saveConfig(config: AgorConfig): Promise<void> {

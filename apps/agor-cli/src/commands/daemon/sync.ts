@@ -8,17 +8,22 @@
 
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import type { ParsedRepoConfig, ParsedUserConfig, ParsedWorktreeConfig } from '@agor/core/config';
 import {
+  buildSlugToRepoIdMap,
   daemonResourcesConfigSchema,
+  determineRepoAction,
+  determineUserAction,
+  determineWorktreeAction,
   getReposDir,
   getWorktreePath,
   loadConfig,
-  resolveRepoSlugs,
+  loadConfigFromFile,
+  resolvePassword,
   validateResourceCrossReferences,
 } from '@agor/core/config';
 import {
   createDatabase,
-  generateId,
   getDatabaseUrl,
   hash,
   RepoRepository,
@@ -39,12 +44,20 @@ interface SyncCounts {
 export default class DaemonSync extends Command {
   static description = 'Sync resources from config.yml into database and filesystem';
 
-  static examples = ['<%= config.bin %> daemon sync', '<%= config.bin %> daemon sync --dry-run'];
+  static examples = [
+    '<%= config.bin %> daemon sync',
+    '<%= config.bin %> daemon sync --dry-run',
+    '<%= config.bin %> daemon sync --config /path/to/config.yml',
+  ];
 
   static flags = {
     'dry-run': Flags.boolean({
       description: 'Validate and report what would change without making changes',
       default: false,
+    }),
+    config: Flags.string({
+      char: 'c',
+      description: 'Path to config file (default: ~/.agor/config.yaml)',
     }),
   };
 
@@ -53,10 +66,10 @@ export default class DaemonSync extends Command {
     const dryRun = flags['dry-run'];
 
     // 1. Load and validate config
-    const config = await loadConfig();
+    const config = flags.config ? await this.loadConfigFromPath(flags.config) : await loadConfig();
 
     if (!config.resources) {
-      this.log(chalk.yellow('No resources section in config.yml — nothing to sync.'));
+      this.log(chalk.yellow('No resources section in config — nothing to sync.'));
       return;
     }
 
@@ -82,7 +95,7 @@ export default class DaemonSync extends Command {
       this.exit(1);
     }
 
-    this.log(chalk.bold('Syncing resources from config.yml...'));
+    this.log(chalk.bold('Syncing resources from config...'));
     if (dryRun) {
       this.log(chalk.yellow('(dry-run mode — no changes will be made)'));
     }
@@ -96,9 +109,6 @@ export default class DaemonSync extends Command {
     const worktreeRepo = new WorktreeRepository(db);
     const usersRepo = new UsersRepository(db);
 
-    // Resolve worktree.repo slugs to repo_ids
-    const _slugToRepoId = resolveRepoSlugs(resources);
-
     // 3. Sync repos
     const repoCounts = await this.syncRepos(resources.repos ?? [], repoRepo, dryRun);
 
@@ -106,7 +116,6 @@ export default class DaemonSync extends Command {
     const worktreeCounts = await this.syncWorktrees(
       resources.worktrees ?? [],
       resources.repos ?? [],
-      repoRepo,
       worktreeRepo,
       dryRun
     );
@@ -122,6 +131,18 @@ export default class DaemonSync extends Command {
     this.logCounts('Users', userCounts);
   }
 
+  private async loadConfigFromPath(
+    configPath: string
+  ): Promise<import('@agor/core/config').AgorConfig> {
+    try {
+      return await loadConfigFromFile(configPath);
+    } catch (error) {
+      this.log(chalk.red(`Failed to load config from ${configPath}:`));
+      this.log(chalk.red(`  ${error instanceof Error ? error.message : String(error)}`));
+      this.exit(1);
+    }
+  }
+
   private logCounts(label: string, counts: SyncCounts): void {
     const parts: string[] = [];
     if (counts.created > 0) parts.push(chalk.green(`${counts.created} created`));
@@ -135,14 +156,7 @@ export default class DaemonSync extends Command {
   // ---------------------------------------------------------------------------
 
   private async syncRepos(
-    repos: Array<{
-      repo_id: string;
-      slug: string;
-      remote_url?: string;
-      repo_type?: string;
-      default_branch?: string;
-      shallow?: boolean;
-    }>,
+    repos: ParsedRepoConfig[],
     repoRepo: RepoRepository,
     dryRun: boolean
   ): Promise<SyncCounts> {
@@ -150,67 +164,46 @@ export default class DaemonSync extends Command {
 
     for (const repoCfg of repos) {
       const existing = await repoRepo.findBySlug(repoCfg.slug);
+      const repoPath = join(getReposDir(), repoCfg.slug);
+      const fsExists = existsSync(repoPath);
+      const action = determineRepoAction(repoCfg, existing, fsExists);
 
-      if (existing) {
-        // Repo exists in DB — check if update needed
-        const needsUpdate =
-          (repoCfg.remote_url && existing.remote_url !== repoCfg.remote_url) ||
-          (repoCfg.default_branch && existing.default_branch !== repoCfg.default_branch);
-
-        if (needsUpdate) {
-          this.log(`  ${chalk.yellow('update')} repo ${chalk.cyan(repoCfg.slug)}`);
-          if (!dryRun) {
-            await repoRepo.update(existing.repo_id, {
-              remote_url: repoCfg.remote_url ?? existing.remote_url,
-              default_branch: repoCfg.default_branch ?? existing.default_branch,
-            });
-          }
-          counts.updated++;
-        } else {
-          counts.unchanged++;
-        }
-
-        // Check filesystem — re-clone if missing
-        const repoPath = join(getReposDir(), repoCfg.slug);
-        if (!existsSync(repoPath) && repoCfg.remote_url && !dryRun) {
-          this.log(
-            `  ${chalk.green('clone')} repo ${chalk.cyan(repoCfg.slug)} (filesystem missing)`
-          );
-          mkdirSync(join(getReposDir()), { recursive: true });
-          await cloneRepo({
-            url: repoCfg.remote_url,
-            targetDir: repoPath,
-          });
-        }
-      } else {
-        // Repo doesn't exist — create
+      if (action === 'create') {
         this.log(`  ${chalk.green('create')} repo ${chalk.cyan(repoCfg.slug)}`);
-
         if (!dryRun) {
-          const repoPath = join(getReposDir(), repoCfg.slug);
-
-          // Clone if remote
           if (repoCfg.remote_url) {
             mkdirSync(getReposDir(), { recursive: true });
-            await cloneRepo({
-              url: repoCfg.remote_url,
-              targetDir: repoPath,
-            });
+            await cloneRepo({ url: repoCfg.remote_url, targetDir: repoPath });
           }
-
-          // Register in DB
           await repoRepo.create({
             repo_id: repoCfg.repo_id as UUID,
             slug: repoCfg.slug,
             name: repoCfg.slug,
-            repo_type: (repoCfg.repo_type as 'remote' | 'local') ?? 'remote',
+            repo_type: repoCfg.repo_type ?? 'remote',
             remote_url: repoCfg.remote_url,
             default_branch: repoCfg.default_branch ?? 'main',
             local_path: repoPath,
           });
         }
-
         counts.created++;
+      } else if (action === 'update') {
+        this.log(`  ${chalk.yellow('update')} repo ${chalk.cyan(repoCfg.slug)}`);
+        if (!dryRun && existing) {
+          await repoRepo.update(existing.repo_id, {
+            remote_url: repoCfg.remote_url ?? existing.remote_url,
+            default_branch: repoCfg.default_branch ?? existing.default_branch,
+          });
+        }
+        counts.updated++;
+      } else {
+        counts.unchanged++;
+      }
+
+      // Re-clone if DB exists but filesystem is missing
+      if (existing && !fsExists && repoCfg.remote_url && !dryRun) {
+        this.log(`  ${chalk.green('clone')} repo ${chalk.cyan(repoCfg.slug)} (filesystem missing)`);
+        mkdirSync(getReposDir(), { recursive: true });
+        await cloneRepo({ url: repoCfg.remote_url, targetDir: repoPath });
       }
     }
 
@@ -222,74 +215,29 @@ export default class DaemonSync extends Command {
   // ---------------------------------------------------------------------------
 
   private async syncWorktrees(
-    worktrees: Array<{
-      worktree_id: string;
-      name: string;
-      ref: string;
-      ref_type?: 'branch' | 'tag';
-      others_can?: string;
-      mcp_server_ids?: string[];
-      repo: string;
-      readonly?: boolean;
-      agent?: Record<string, unknown>;
-    }>,
+    worktrees: ParsedWorktreeConfig[],
     repos: Array<{ repo_id: string; slug: string }>,
-    repoRepo: RepoRepository,
     worktreeRepo: WorktreeRepository,
     dryRun: boolean
   ): Promise<SyncCounts> {
     const counts: SyncCounts = { created: 0, updated: 0, unchanged: 0 };
-
-    // Build slug → repo_id map from declared repos
-    const slugToId = new Map<string, string>();
-    for (const repo of repos) {
-      slugToId.set(repo.slug, repo.repo_id);
-    }
+    const slugToId = buildSlugToRepoIdMap(repos);
 
     for (const wtCfg of worktrees) {
       const repoId = slugToId.get(wtCfg.repo);
       if (!repoId) {
-        // Should not happen after validation, but guard anyway
         this.log(chalk.red(`  skip worktree "${wtCfg.name}" — repo "${wtCfg.repo}" not found`));
         continue;
       }
 
       const existing = await worktreeRepo.findByRepoAndName(repoId as UUID, wtCfg.name);
+      const action = determineWorktreeAction(wtCfg, existing);
 
-      if (existing) {
-        // Worktree exists — check if update needed
-        const needsUpdate =
-          existing.ref !== wtCfg.ref ||
-          (wtCfg.others_can && existing.others_can !== wtCfg.others_can) ||
-          (wtCfg.mcp_server_ids &&
-            JSON.stringify(existing.mcp_server_ids) !== JSON.stringify(wtCfg.mcp_server_ids));
-
-        if (needsUpdate) {
-          this.log(
-            `  ${chalk.yellow('update')} worktree ${chalk.cyan(`${wtCfg.repo}/${wtCfg.name}`)}`
-          );
-          if (!dryRun) {
-            await worktreeRepo.update(existing.worktree_id, {
-              ref: wtCfg.ref,
-              ref_type: wtCfg.ref_type ?? existing.ref_type,
-              others_can:
-                (wtCfg.others_can as 'none' | 'view' | 'session' | 'prompt' | 'all') ??
-                existing.others_can,
-              mcp_server_ids: wtCfg.mcp_server_ids ?? existing.mcp_server_ids,
-            });
-          }
-          counts.updated++;
-        } else {
-          counts.unchanged++;
-        }
-      } else {
-        // Worktree doesn't exist — create
+      if (action === 'create') {
         this.log(
           `  ${chalk.green('create')} worktree ${chalk.cyan(`${wtCfg.repo}/${wtCfg.name}`)}`
         );
-
         if (!dryRun) {
-          // Create git worktree on disk
           const repoPath = join(getReposDir(), wtCfg.repo);
           const worktreePath = getWorktreePath(wtCfg.repo, wtCfg.name);
 
@@ -299,19 +247,17 @@ export default class DaemonSync extends Command {
               repoPath,
               worktreePath,
               wtCfg.ref,
-              false, // don't create branch
-              false, // don't pull latest
-              undefined, // no source branch
-              undefined, // no env
+              false,
+              false,
+              undefined,
+              undefined,
               wtCfg.ref_type
             );
           }
 
-          // Allocate unique ID
           const usedIds = await worktreeRepo.getAllUsedUniqueIds();
           const nextId = usedIds.length > 0 ? Math.max(...usedIds) + 1 : 1;
 
-          // Register in DB
           await worktreeRepo.create({
             worktree_id: wtCfg.worktree_id as UUID,
             repo_id: repoId as UUID,
@@ -327,8 +273,24 @@ export default class DaemonSync extends Command {
             last_used: new Date().toISOString(),
           });
         }
-
         counts.created++;
+      } else if (action === 'update') {
+        this.log(
+          `  ${chalk.yellow('update')} worktree ${chalk.cyan(`${wtCfg.repo}/${wtCfg.name}`)}`
+        );
+        if (!dryRun && existing) {
+          await worktreeRepo.update(existing.worktree_id, {
+            ref: wtCfg.ref,
+            ref_type: wtCfg.ref_type ?? existing.ref_type,
+            others_can:
+              (wtCfg.others_can as 'none' | 'view' | 'session' | 'prompt' | 'all') ??
+              existing.others_can,
+            mcp_server_ids: wtCfg.mcp_server_ids ?? existing.mcp_server_ids,
+          });
+        }
+        counts.updated++;
+      } else {
+        counts.unchanged++;
       }
     }
 
@@ -340,14 +302,7 @@ export default class DaemonSync extends Command {
   // ---------------------------------------------------------------------------
 
   private async syncUsers(
-    users: Array<{
-      user_id: string;
-      email: string;
-      name?: string;
-      role?: string;
-      unix_username?: string;
-      password?: string;
-    }>,
+    users: ParsedUserConfig[],
     usersRepo: UsersRepository,
     dryRun: boolean
   ): Promise<SyncCounts> {
@@ -355,60 +310,46 @@ export default class DaemonSync extends Command {
 
     for (const userCfg of users) {
       const existing = await usersRepo.findByEmail(userCfg.email);
+      const action = determineUserAction(userCfg, existing);
 
-      if (existing) {
-        // User exists — check if update needed
-        const needsUpdate =
-          (userCfg.name && existing.name !== userCfg.name) ||
-          (userCfg.role && existing.role !== userCfg.role) ||
-          (userCfg.unix_username && existing.unix_username !== userCfg.unix_username);
-
-        if (needsUpdate) {
-          this.log(`  ${chalk.yellow('update')} user ${chalk.cyan(userCfg.email)}`);
-          if (!dryRun) {
-            await usersRepo.update(existing.user_id, {
-              name: userCfg.name ?? existing.name,
-              role: (userCfg.role as 'superadmin' | 'admin' | 'member' | 'viewer') ?? existing.role,
-              unix_username: userCfg.unix_username ?? existing.unix_username,
-            });
-          }
-          counts.updated++;
-        } else {
-          counts.unchanged++;
-        }
-      } else {
-        // User doesn't exist — create
+      if (action === 'create') {
         this.log(`  ${chalk.green('create')} user ${chalk.cyan(userCfg.email)}`);
 
         if (!dryRun) {
-          // Resolve password
-          let password = '';
-          if (userCfg.password === 'generate') {
-            password = generateId(); // Random UUID as password
-          } else if (userCfg.password?.startsWith('env:')) {
-            const envVar = userCfg.password.slice(4);
-            password = process.env[envVar] ?? '';
-            if (!password) {
-              this.warn(`Environment variable ${envVar} not set for user ${userCfg.email}`);
-            }
-          } else if (userCfg.password) {
-            password = userCfg.password;
+          const resolved = resolvePassword(userCfg.password);
+
+          if (resolved.mustChange) {
+            this.log(
+              `    ${chalk.dim('generated temporary password for')} ${userCfg.email}: ${chalk.yellow(resolved.password)}`
+            );
           }
 
-          // Hash the password
-          const hashedPassword = password ? await hash(password, 10) : '';
+          const hashedPassword = await hash(resolved.password, 10);
 
           await usersRepo.create({
             user_id: userCfg.user_id as UUID,
             email: userCfg.email,
             name: userCfg.name,
-            role: (userCfg.role as 'superadmin' | 'admin' | 'member' | 'viewer') ?? 'member',
+            role: userCfg.role ?? 'member',
             unix_username: userCfg.unix_username,
             password: hashedPassword,
+            must_change_password: resolved.mustChange,
           } as Partial<User> & { password: string });
         }
 
         counts.created++;
+      } else if (action === 'update') {
+        this.log(`  ${chalk.yellow('update')} user ${chalk.cyan(userCfg.email)}`);
+        if (!dryRun && existing) {
+          await usersRepo.update(existing.user_id, {
+            name: userCfg.name ?? existing.name,
+            role: userCfg.role ?? existing.role,
+            unix_username: userCfg.unix_username ?? existing.unix_username,
+          });
+        }
+        counts.updated++;
+      } else {
+        counts.unchanged++;
       }
     }
 

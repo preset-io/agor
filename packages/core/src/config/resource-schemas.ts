@@ -86,6 +86,15 @@ export const daemonResourcesConfigSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Inferred types (for consumers that don't import zod)
+// ---------------------------------------------------------------------------
+
+export type ParsedRepoConfig = z.infer<typeof resourceRepoConfigSchema>;
+export type ParsedWorktreeConfig = z.infer<typeof resourceWorktreeConfigSchema>;
+export type ParsedUserConfig = z.infer<typeof resourceUserConfigSchema>;
+export type ParsedResourcesConfig = z.infer<typeof daemonResourcesConfigSchema>;
+
+// ---------------------------------------------------------------------------
 // Cross-reference & uniqueness validation
 // ---------------------------------------------------------------------------
 
