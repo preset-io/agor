@@ -225,6 +225,13 @@
       "when": 1775441036373,
       "tag": "0033_dapper_thing",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1775876000000,
+      "tag": "0034_add_session_to_others_can_check",
+      "breakpoints": true
     }
   ]
 }
