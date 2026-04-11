@@ -97,7 +97,9 @@ export function resolveServicesConfig(raw: DaemonServicesConfig | undefined): Da
 export function logServicesConfig(config: DaemonServicesConfig | undefined): void {
   // Check if any service is non-default (not 'on')
   const hasCustomConfig =
-    config && SERVICE_GROUP_NAMES.some((g) => config[g] !== undefined && config[g] !== 'on');
+    config &&
+    (SERVICE_GROUP_NAMES.some((g) => config[g] !== undefined && config[g] !== 'on') ||
+      config.static_files === 'off');
 
   if (!hasCustomConfig) {
     console.log('[services] All services enabled (default configuration)');
@@ -141,5 +143,9 @@ export function logServicesConfig(config: DaemonServicesConfig | undefined): voi
     if (internalCount > 0) parts.push(`${internalCount} internal`);
     if (readonlyCount > 0) parts.push(`${readonlyCount} readonly`);
     console.log(`[services] Summary: ${parts.join(', ')}`);
+  }
+
+  if (config?.static_files === 'off') {
+    console.log('[services] Static files disabled (headless mode)');
   }
 }

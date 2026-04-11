@@ -50,10 +50,14 @@ export interface DaemonServicesConfig {
   mcp_servers?: ServiceTier;
   /** usage analytics */
   leaderboard?: ServiceTier;
+  /** Serve UI bundle and static assets (default: on). Set to 'off' for headless/executor pods. */
+  static_files?: 'on' | 'off';
 }
 
-/** All service group names */
-export type ServiceGroupName = keyof DaemonServicesConfig;
+/**
+ * Service group names (excludes non-service toggles like static_files).
+ */
+export type ServiceGroupName = Exclude<keyof DaemonServicesConfig, 'static_files'>;
 
 /** All service group names as an array (useful for iteration) */
 export const SERVICE_GROUP_NAMES: ServiceGroupName[] = [

@@ -90,7 +90,6 @@ import { registerHandlebarsHelpers } from '@agor/core/templates/handlebars-helpe
 import type {
   AuthenticatedParams,
   Board,
-  DaemonServicesConfig,
   HookContext,
   Id,
   InputRequestContent,
@@ -100,6 +99,7 @@ import type {
   Paginated,
   Params,
   PermissionRequestContent,
+  ServiceGroupName,
   ServiceTier,
   Session,
   SessionID,
@@ -544,10 +544,8 @@ async function main() {
   logServicesConfig(servicesConfig);
 
   // Helper to check service tier
-  const svcTier = (group: keyof DaemonServicesConfig): ServiceTier =>
-    getServiceTier(servicesConfig, group);
-  const svcEnabled = (group: keyof DaemonServicesConfig): boolean =>
-    isServiceEnabled(servicesConfig, group);
+  const svcTier = (group: ServiceGroupName): ServiceTier => getServiceTier(servicesConfig, group);
+  const svcEnabled = (group: ServiceGroupName): boolean => isServiceEnabled(servicesConfig, group);
 
   // SECURITY: Disable anonymous authentication by default
   // Must explicitly set daemon.allowAnonymous=true in config to enable
@@ -721,7 +719,8 @@ async function main() {
   // This ensures pre-compressed .br files are served directly
   // In development, UI runs on separate Vite dev server
   const isProduction = process.env.NODE_ENV === 'production';
-  if (isProduction) {
+  const serveStaticFiles = servicesConfig.static_files !== 'off';
+  if (isProduction && serveStaticFiles) {
     const path = await import('node:path');
     const { fileURLToPath } = await import('node:url');
     const { existsSync } = await import('node:fs');
@@ -772,7 +771,7 @@ async function main() {
 
   // Serve static assets (e.g., self-hosted Sandpack bundler) if available.
   // Static directory lives at dist/static/ in production (agor-live) or static/ in dev.
-  {
+  if (serveStaticFiles) {
     const pathMod = await import('node:path');
     const { fileURLToPath: toPath } = await import('node:url');
     const { existsSync: exists } = await import('node:fs');
@@ -7266,7 +7265,7 @@ async function main() {
   };
 
   for (const [group, paths] of Object.entries(SERVICE_GROUP_PATHS)) {
-    const tier = svcTier(group as keyof DaemonServicesConfig);
+    const tier = svcTier(group as ServiceGroupName);
     if (tier === 'on' || tier === 'off') continue; // 'on' needs no hooks, 'off' not registered
     for (const path of paths) {
       try {

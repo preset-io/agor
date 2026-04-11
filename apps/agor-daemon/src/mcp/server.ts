@@ -15,7 +15,7 @@
 
 import type { Database } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { DaemonServicesConfig, SessionID, UserID } from '@agor/core/types';
+import type { DaemonServicesConfig, ServiceGroupName, SessionID, UserID } from '@agor/core/types';
 import { getServiceTier, SERVICE_GROUP_TO_MCP_DOMAINS, SERVICE_TIER_RANK } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -282,7 +282,7 @@ function isDomainEnabled(domain: string, servicesConfig?: DaemonServicesConfig):
   // Find which service group owns this domain
   for (const [group, domains] of Object.entries(SERVICE_GROUP_TO_MCP_DOMAINS)) {
     if (domains?.includes(domain)) {
-      const tier = getServiceTier(servicesConfig, group as keyof DaemonServicesConfig);
+      const tier = getServiceTier(servicesConfig, group as ServiceGroupName);
       return SERVICE_TIER_RANK[tier] >= SERVICE_TIER_RANK.readonly;
     }
   }
