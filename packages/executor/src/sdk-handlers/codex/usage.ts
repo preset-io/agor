@@ -63,13 +63,15 @@ export function extractCodexTokenUsage(raw: unknown): TokenUsage | undefined {
 /**
  * Extract context-window usage from a Codex turn payload.
  *
- * Source semantics from @openai/codex-sdk:
- * - `usage.input_tokens` and `usage.cached_input_tokens` are input-side tokens used DURING the turn.
- * - `usage.output_tokens` are completion tokens and should not count toward context-window occupancy.
+ * Source semantics from OpenAI usage schema:
+ * - `input_tokens` already includes cached input tokens.
+ * - `cached_input_tokens` is a subset detail, not an additive field.
+ * - `output_tokens` are completion tokens and should not count toward context-window occupancy.
  *
  * Returns the best available approximation for current context occupancy:
- * 1) input + cached_input (preferred)
- * 2) total_tokens (legacy fallback when input fields are missing)
+ * 1) input_tokens / prompt_tokens (preferred)
+ * 2) total_tokens - output_tokens (when both are available)
+ * 3) total_tokens (legacy fallback when only total is available)
  * 3) undefined (no usable data)
  */
 export function extractCodexContextWindowUsage(raw: unknown): number | undefined {
@@ -86,18 +88,23 @@ export function extractCodexContextWindowUsage(raw: unknown): number | undefined
   const inputTokens = sanitizeTokenCount(
     normalizeNumber(usage.input_tokens ?? usage.inputTokens ?? usage.prompt_tokens)
   );
-  const cachedInputTokens = sanitizeTokenCount(
-    normalizeNumber(usage.cached_input_tokens ?? usage.cachedInputTokens ?? usage.cache_read_tokens)
-  );
 
-  if (inputTokens !== undefined || cachedInputTokens !== undefined) {
-    return (inputTokens || 0) + (cachedInputTokens || 0);
+  if (inputTokens !== undefined) {
+    return inputTokens;
   }
 
-  const fallbackTotal = sanitizeTokenCount(
+  const fallbackTotalTokens = sanitizeTokenCount(
     normalizeNumber(usage.total_tokens ?? usage.totalTokens)
   );
-  return fallbackTotal;
+  const outputTokens = sanitizeTokenCount(
+    normalizeNumber(usage.output_tokens ?? usage.outputTokens ?? usage.completion_tokens)
+  );
+
+  if (fallbackTotalTokens !== undefined && outputTokens !== undefined) {
+    return Math.max(0, fallbackTotalTokens - outputTokens);
+  }
+
+  return fallbackTotalTokens;
 }
 
 /**

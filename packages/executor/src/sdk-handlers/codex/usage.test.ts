@@ -54,7 +54,7 @@ describe('extractCodexTokenUsage', () => {
 });
 
 describe('extractCodexContextWindowUsage', () => {
-  it('uses input + cached input tokens for turn-level context usage', () => {
+  it('uses input tokens directly (cached tokens are already included)', () => {
     const result = extractCodexContextWindowUsage({
       type: 'turn.completed',
       usage: {
@@ -64,7 +64,7 @@ describe('extractCodexContextWindowUsage', () => {
       },
     });
 
-    expect(result).toBe(50_000);
+    expect(result).toBe(42_000);
   });
 
   it('supports direct usage payloads and camelCase keys', () => {
@@ -74,10 +74,35 @@ describe('extractCodexContextWindowUsage', () => {
       outputTokens: 900,
     });
 
-    expect(result).toBe(12_000);
+    expect(result).toBe(10_000);
   });
 
-  it('falls back to total tokens when input fields are unavailable (legacy)', () => {
+  it('matches observed Codex payloads without double-counting cache', () => {
+    const result = extractCodexContextWindowUsage({
+      type: 'turn.completed',
+      usage: {
+        input_tokens: 30_918,
+        cached_input_tokens: 15_488,
+        output_tokens: 184,
+      },
+    });
+
+    expect(result).toBe(30_918);
+  });
+
+  it('falls back to total - output when input is unavailable', () => {
+    const result = extractCodexContextWindowUsage({
+      type: 'turn.completed',
+      usage: {
+        total_tokens: 65_432,
+        output_tokens: 1_432,
+      },
+    });
+
+    expect(result).toBe(64_000);
+  });
+
+  it('falls back to total tokens when only total is available (legacy)', () => {
     const result = extractCodexContextWindowUsage({
       type: 'turn.completed',
       usage: {
