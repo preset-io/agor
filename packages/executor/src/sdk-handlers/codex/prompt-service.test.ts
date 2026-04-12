@@ -9,6 +9,13 @@ import { CodexPromptService } from './prompt-service.js';
 
 // Track how many Codex instances were created (module-level state)
 let mockInstanceCount = 0;
+let mockStreamEvents: Array<Record<string, unknown>> = [];
+
+async function* streamMockEvents() {
+  for (const event of mockStreamEvents) {
+    yield event;
+  }
+}
 
 // Mock @agor/core/sdk to avoid spawning real Codex CLI processes
 vi.mock('@agor/core/sdk', () => {
@@ -25,7 +32,7 @@ vi.mock('@agor/core/sdk', () => {
       return {
         id: 'mock-thread-id',
         run: vi.fn(),
-        runStreamed: vi.fn().mockResolvedValue({ events: [] }),
+        runStreamed: vi.fn().mockResolvedValue({ events: streamMockEvents() }),
       };
     }
 
@@ -33,7 +40,7 @@ vi.mock('@agor/core/sdk', () => {
       return {
         id: threadId,
         run: vi.fn(),
-        runStreamed: vi.fn().mockResolvedValue({ events: [] }),
+        runStreamed: vi.fn().mockResolvedValue({ events: streamMockEvents() }),
       };
     }
   }
@@ -61,6 +68,7 @@ const mockDb = {} as any;
 describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
   beforeEach(() => {
     mockInstanceCount = 0;
+    mockStreamEvents = [];
     vi.clearAllMocks();
   });
 
@@ -226,5 +234,75 @@ describe('CodexPromptService - Todo normalization', () => {
     );
 
     expect(toolUse).toBeNull();
+  });
+
+  it('emits only one TodoWrite tool_complete when both item.updated and item.completed fire', async () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockWorktreesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+
+    // Avoid filesystem/config setup noise in this focused stream test
+    const serviceWithPrivates = service as any;
+    serviceWithPrivates.ensureCodexSessionContext = vi.fn().mockResolvedValue('/tmp');
+    serviceWithPrivates.ensureCodexConfig = vi.fn().mockResolvedValue(0);
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    mockSessionsRepo.findById.mockResolvedValue({
+      session_id: 'session-1',
+      worktree_id: 'worktree-1',
+      created_at: new Date().toISOString(),
+      sdk_session_id: null,
+      permission_config: { codex: {} },
+      model_config: {},
+      mcp_token: 'test-token',
+    });
+    mockWorktreesRepo.findById.mockResolvedValue({
+      worktree_id: 'worktree-1',
+      path: process.cwd(),
+    });
+
+    mockStreamEvents = [
+      { type: 'turn.started' },
+      {
+        type: 'item.updated',
+        item: {
+          id: 'todo-1',
+          type: 'todo_list',
+          items: [{ text: 'Review API client changes', completed: false }],
+        },
+      },
+      {
+        type: 'item.completed',
+        item: {
+          id: 'todo-1',
+          type: 'todo_list',
+          items: [{ text: 'Review API client changes', completed: false }],
+        },
+      },
+      {
+        type: 'turn.completed',
+        usage: {
+          input_tokens: 10,
+          cached_input_tokens: 0,
+          output_tokens: 20,
+        },
+      },
+    ];
+
+    const emitted: Array<{ type: string; toolUse?: { name?: string } }> = [];
+    for await (const event of service.promptSessionStreaming('session-1' as any, 'review')) {
+      emitted.push(event as { type: string; toolUse?: { name?: string } });
+    }
+
+    const todoCompletions = emitted.filter(
+      (event) => event.type === 'tool_complete' && event.toolUse?.name === 'TodoWrite'
+    );
+    expect(todoCompletions).toHaveLength(1);
   });
 });

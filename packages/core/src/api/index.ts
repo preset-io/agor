@@ -525,6 +525,15 @@ export function normalizeFindResult<T>(result: FindResult<T>): T[] {
   return Array.isArray(result) ? result : result.data;
 }
 
+function isPaginatedResult<T>(result: FindResult<T>): result is Paginated<T> {
+  return (
+    !Array.isArray(result) &&
+    typeof result === 'object' &&
+    result !== null &&
+    Array.isArray((result as Paginated<T>).data)
+  );
+}
+
 function extendFindAllOnService(service: AgorService<unknown>): void {
   const findAllService = service as AgorService<unknown> & {
     [SERVICE_FIND_ALL_EXTENDED]?: boolean;
@@ -535,8 +544,52 @@ function extendFindAllOnService(service: AgorService<unknown>): void {
   }
 
   findAllService.findAll = async (params?: Params) => {
-    const result = await service.find(params);
-    return normalizeFindResult(result);
+    const firstResult = await service.find(params);
+    if (!isPaginatedResult(firstResult)) {
+      return firstResult;
+    }
+
+    const allData = [...firstResult.data];
+    let total = firstResult.total;
+    let nextSkip = firstResult.skip + firstResult.data.length;
+    const pageLimit =
+      typeof firstResult.limit === 'number' && firstResult.limit > 0
+        ? firstResult.limit
+        : firstResult.data.length;
+
+    if (!Number.isFinite(total) || pageLimit <= 0) {
+      return allData;
+    }
+
+    const baseQuery =
+      params?.query && typeof params.query === 'object' ? { ...params.query } : undefined;
+
+    while (allData.length < total) {
+      const nextParams: Params = {
+        ...(params ?? {}),
+        query: {
+          ...(baseQuery ?? {}),
+          $skip: nextSkip,
+          $limit: pageLimit,
+        },
+      };
+
+      const nextResult = await service.find(nextParams);
+      if (!isPaginatedResult(nextResult)) {
+        allData.push(...nextResult);
+        break;
+      }
+
+      if (nextResult.data.length === 0) {
+        break;
+      }
+
+      allData.push(...nextResult.data);
+      nextSkip = nextResult.skip + nextResult.data.length;
+      total = nextResult.total;
+    }
+
+    return allData;
   };
 
   findAllService[SERVICE_FIND_ALL_EXTENDED] = true;

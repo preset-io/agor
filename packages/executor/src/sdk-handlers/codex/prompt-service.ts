@@ -827,6 +827,7 @@ export class CodexPromptService {
       let threadId = session.sdk_session_id || '';
       const resolvedModel: string | undefined = session.model_config?.model || undefined;
       let allToolUses: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
+      let todoIdsEmittedViaUpdate = new Set<string>();
 
       let eventCount = 0;
 
@@ -849,6 +850,7 @@ export class CodexPromptService {
         switch (event.type) {
           case 'turn.started':
             allToolUses = []; // Reset tool uses for new turn
+            todoIdsEmittedViaUpdate = new Set<string>();
             break;
 
           case 'item.started':
@@ -872,6 +874,7 @@ export class CodexPromptService {
             if (event.item) {
               const toolUseUpdate = this.itemToToolUse(event.item, 'completed');
               if (toolUseUpdate?.name === 'TodoWrite') {
+                todoIdsEmittedViaUpdate.add(toolUseUpdate.id);
                 yield {
                   type: 'tool_complete',
                   toolUse: toolUseUpdate,
@@ -887,6 +890,10 @@ export class CodexPromptService {
               // Emit tool_complete for tool items
               const toolUseComplete = this.itemToToolUse(event.item, 'completed');
               if (toolUseComplete) {
+                const isDuplicateTodoCompletion =
+                  event.item.type === 'todo_list' &&
+                  todoIdsEmittedViaUpdate.has(toolUseComplete.id);
+
                 // Add to allToolUses for backward compatibility (tool_uses field)
                 allToolUses.push({
                   id: toolUseComplete.id,
@@ -921,11 +928,13 @@ export class CodexPromptService {
                   });
                 }
 
-                yield {
-                  type: 'tool_complete',
-                  toolUse: toolUseComplete,
-                  threadId: thread.id || undefined,
-                };
+                if (!isDuplicateTodoCompletion) {
+                  yield {
+                    type: 'tool_complete',
+                    toolUse: toolUseComplete,
+                    threadId: thread.id || undefined,
+                  };
+                }
               }
 
               // Emit intermediate text messages immediately (instead of batching to turn end)

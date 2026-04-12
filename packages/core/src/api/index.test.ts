@@ -472,6 +472,37 @@ describe('createClient', () => {
       expect(findMock).toHaveBeenCalledTimes(1);
     });
 
+    it('should auto-paginate and return all rows via findAll()', async () => {
+      const client = createClient();
+      const sessionsService = client.service('sessions');
+
+      const findMock = sessionsService.find as unknown as MockedFunction<any>;
+      findMock
+        .mockResolvedValueOnce({
+          total: 3,
+          limit: 2,
+          skip: 0,
+          data: [{ session_id: 's1' }, { session_id: 's2' }],
+        })
+        .mockResolvedValueOnce({
+          total: 3,
+          limit: 2,
+          skip: 2,
+          data: [{ session_id: 's3' }],
+        });
+
+      const results = await sessionsService.findAll();
+
+      expect(results).toEqual([{ session_id: 's1' }, { session_id: 's2' }, { session_id: 's3' }]);
+      expect(findMock).toHaveBeenCalledTimes(2);
+      expect(findMock).toHaveBeenNthCalledWith(2, {
+        query: {
+          $skip: 2,
+          $limit: 2,
+        },
+      });
+    });
+
     it('should expose sessions.prompt helper that calls /sessions/:id/prompt route', async () => {
       const client = createClient();
       const routeService = client.service('sessions/session-123/prompt');
