@@ -127,6 +127,76 @@ describe('diff enrichment', () => {
     expect(lines.some((line) => line.includes('-const removed = true;'))).toBe(true);
   });
 
+  it('enriches Codex edit_files add operations with relative paths', () => {
+    const repoDir = createTempGitRepo();
+    const srcDir = path.join(repoDir, 'src');
+    fs.mkdirSync(srcDir, { recursive: true });
+
+    fs.writeFileSync(path.join(repoDir, 'README.md'), '# test\n', 'utf-8');
+    execSync('git add .', { cwd: repoDir, stdio: 'ignore' });
+    execSync('git commit -m "initial"', { cwd: repoDir, stdio: 'ignore' });
+
+    const newFilePath = path.join(srcDir, 'added.ts');
+    fs.writeFileSync(newFilePath, 'export const added = true;\n', 'utf-8');
+
+    const contentBlocks: TestContentBlock[] = [
+      {
+        type: 'tool_use',
+        id: 'tool-codex-edit-files-add-1',
+        name: 'edit_files',
+        input: {
+          changes: [{ path: 'src/added.ts', kind: 'add' }],
+        },
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'tool-codex-edit-files-add-1',
+        content: '[completed]',
+      },
+    ];
+
+    enrichContentBlocks(contentBlocks, { workingDirectory: repoDir });
+
+    const toolResult = contentBlocks[1];
+    expect(toolResult.diff?.files).toHaveLength(1);
+    expect(toolResult.diff?.files?.[0]?.kind).toBe('add');
+    const lines = toolResult.diff?.files?.[0]?.structuredPatch?.[0]?.lines ?? [];
+    expect(lines.some((line) => line.includes('+export const added = true;'))).toBe(true);
+  });
+
+  it('skips unsafe relative paths when resolving git HEAD content', () => {
+    const repoDir = createTempGitRepo();
+    const srcDir = path.join(repoDir, 'src');
+    fs.mkdirSync(srcDir, { recursive: true });
+    const filePath = path.join(srcDir, 'safe.ts');
+
+    fs.writeFileSync(filePath, 'const value = 1;\n', 'utf-8');
+    execSync('git add .', { cwd: repoDir, stdio: 'ignore' });
+    execSync('git commit -m "initial"', { cwd: repoDir, stdio: 'ignore' });
+    fs.writeFileSync(filePath, 'const value = 2;\n', 'utf-8');
+
+    const contentBlocks: TestContentBlock[] = [
+      {
+        type: 'tool_use',
+        id: 'tool-codex-edit-files-unsafe-1',
+        name: 'edit_files',
+        input: {
+          changes: [{ path: '../outside.ts', kind: 'update' }],
+        },
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'tool-codex-edit-files-unsafe-1',
+        content: '[completed]',
+      },
+    ];
+
+    enrichContentBlocks(contentBlocks, { workingDirectory: repoDir });
+
+    // Path resolves outside repo and should be ignored without enriching diff.
+    expect(contentBlocks[1].diff).toBeUndefined();
+  });
+
   it('preserves Claude split-message Edit enrichment behavior', () => {
     const repoDir = createTempGitRepo();
     const filePath = path.join(repoDir, 'claude-edit.txt');
