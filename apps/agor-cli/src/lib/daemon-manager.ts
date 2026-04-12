@@ -217,11 +217,20 @@ export function readLogs(lines: number = DEFAULT_LOG_LINES): string {
     );
 
     let lastLines: string[] = [];
+    let truncatedByCap = false;
     while (bytesToRead <= maxReadableBytes) {
       const tailBuffer = readTailBuffer(fd, fileSize, bytesToRead);
       const tailContent = tailBuffer.toString('utf-8').replaceAll('\0', '').replace(/\r\n/g, '\n');
       const allLines = tailContent.split('\n').filter((line) => line.trim() !== '');
       lastLines = allLines.slice(-safeLines);
+
+      if (
+        bytesToRead === maxReadableBytes &&
+        fileSize > maxReadableBytes &&
+        allLines.length < safeLines
+      ) {
+        truncatedByCap = true;
+      }
 
       if (allLines.length >= safeLines || bytesToRead === maxReadableBytes) {
         break;
@@ -230,7 +239,13 @@ export function readLogs(lines: number = DEFAULT_LOG_LINES): string {
       bytesToRead = Math.min(maxReadableBytes, bytesToRead * 2);
     }
 
-    return lastLines.join('\n');
+    const logText = lastLines.join('\n');
+    if (!truncatedByCap) {
+      return logText;
+    }
+
+    const prefix = `[output truncated: scanned last ${formatBytes(maxReadableBytes)} of ${formatBytes(fileSize)}]`;
+    return logText.length > 0 ? `${prefix}\n${logText}` : prefix;
   } finally {
     fs.closeSync(fd);
   }
@@ -252,7 +267,7 @@ export function rotateDaemonLogIfNeeded(
   const maxFiles = Math.max(1, Math.floor(options.maxFiles ?? DEFAULT_ROTATE_MAX_FILES));
   const logSize = fs.statSync(logFile).size;
 
-  if (logSize < maxBytes) {
+  if (logSize <= maxBytes) {
     return;
   }
 
@@ -294,4 +309,14 @@ function readTailBuffer(fd: number, fileSize: number, bytesToRead: number): Buff
   const bytesRead = fs.readSync(fd, buffer, 0, readLength, start);
 
   return bytesRead === readLength ? buffer : buffer.subarray(0, bytesRead);
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) {
+    return `${Math.round((bytes / (1024 * 1024)) * 10) / 10}MB`;
+  }
+  if (bytes >= 1024) {
+    return `${Math.round((bytes / 1024) * 10) / 10}KB`;
+  }
+  return `${bytes}B`;
 }

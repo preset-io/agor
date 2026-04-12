@@ -51,6 +51,15 @@ describe('daemon-manager logs', () => {
     expect(readLogs(2)).toBe('tail-1\ntail-2');
   });
 
+  it('adds truncation notice when safety cap is hit before enough lines are found', () => {
+    const logFile = getLogFilePath();
+    const nineMbSingleLine = `${'x'.repeat(9 * 1024 * 1024)}\n`;
+    fs.writeFileSync(logFile, nineMbSingleLine);
+
+    const output = readLogs(2);
+    expect(output).toContain('[output truncated: scanned last 8MB of 9MB]');
+  });
+
   it('rotates oversized logs and keeps bounded history', () => {
     const logFile = getLogFilePath();
 
@@ -68,5 +77,14 @@ describe('daemon-manager logs', () => {
     expect(fs.readFileSync(`${logFile}.1`, 'utf-8')).toBe('third');
     expect(fs.readFileSync(`${logFile}.2`, 'utf-8')).toBe('second');
     expect(fs.existsSync(`${logFile}.3`)).toBe(false);
+  });
+
+  it('does not rotate when log size equals maxBytes threshold', () => {
+    const logFile = getLogFilePath();
+    fs.writeFileSync(logFile, '12345');
+    rotateDaemonLogIfNeeded(logFile, { maxBytes: 5, maxFiles: 2 });
+
+    expect(fs.existsSync(logFile)).toBe(true);
+    expect(fs.existsSync(`${logFile}.1`)).toBe(false);
   });
 });

@@ -21,6 +21,7 @@ export default class DaemonLogs extends Command {
       char: 'n',
       description: 'Number of lines to display',
       default: 50,
+      min: 1,
     }),
   };
 
