@@ -29,7 +29,11 @@ import {
   type SessionID,
   type TaskID,
 } from '../../types.js';
-import { enrichContentBlocks, registerToolInvocationStart } from '../base/diff-enrichment.js';
+import {
+  clearToolInvocationState,
+  enrichContentBlocks,
+  registerToolInvocationStart,
+} from '../base/diff-enrichment.js';
 import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base/index.js';
 import type {
   MessagesService,
@@ -189,6 +193,8 @@ export class CodexTool implements ITool {
     let wasStopped = false;
     let workingDirectory: string | undefined;
     const pendingToolMessageIds = new Map<string, MessageID>();
+    const pendingSnapshotToolIds = new Set<string>();
+    const snapshotContext = { snapshotScope: sessionId };
 
     if (this.sessionsRepo && this.worktreesRepo) {
       const session = await this.sessionsRepo.findById(sessionId);
@@ -209,6 +215,10 @@ export class CodexTool implements ITool {
       if (event.type === 'stopped') {
         wasStopped = true;
         console.log(`🛑 Codex execution was stopped for session ${sessionId}`);
+        for (const toolUseId of pendingSnapshotToolIds) {
+          clearToolInvocationState(toolUseId, snapshotContext);
+        }
+        pendingSnapshotToolIds.clear();
         continue; // Skip processing this event
       }
       // Capture resolved model from partial/complete events
@@ -222,12 +232,11 @@ export class CodexTool implements ITool {
 
       // Handle tool execution start (live UI indicator)
       if (event.type === 'tool_start') {
-        registerToolInvocationStart(
-          event.toolUse.id,
-          event.toolUse.name,
-          event.toolUse.input,
-          workingDirectory ? { workingDirectory } : undefined
-        );
+        registerToolInvocationStart(event.toolUse.id, event.toolUse.name, event.toolUse.input, {
+          ...(workingDirectory ? { workingDirectory } : {}),
+          ...snapshotContext,
+        });
+        pendingSnapshotToolIds.add(event.toolUse.id);
 
         if (taskId) {
           await this.emitTaskEvent('tool:start', {
@@ -371,7 +380,12 @@ export class CodexTool implements ITool {
         ];
 
         // Best-effort diff enrichment for Edit/Write tool results
-        enrichContentBlocks(toolContent, { workingDirectory });
+        enrichContentBlocks(toolContent, {
+          ...(workingDirectory ? { workingDirectory } : {}),
+          ...snapshotContext,
+        });
+        clearToolInvocationState(event.toolUse.id, snapshotContext);
+        pendingSnapshotToolIds.delete(event.toolUse.id);
 
         const existingToolMessageId = pendingToolMessageIds.get(event.toolUse.id);
         if (existingToolMessageId) {

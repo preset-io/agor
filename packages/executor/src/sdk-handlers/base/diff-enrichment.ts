@@ -39,6 +39,7 @@ interface ToolUseInfo {
 
 export interface DiffEnrichmentContext {
   workingDirectory?: string;
+  snapshotScope?: string;
 }
 
 export interface FileChangeSpec {
@@ -52,6 +53,11 @@ interface EditFilesSnapshot {
   absolutePath: string;
   beforeExists: boolean;
   beforeContent?: string;
+}
+
+interface PendingSnapshotEntry {
+  snapshots: EditFilesSnapshot[];
+  createdAt: number;
 }
 
 interface ContentBlock {
@@ -138,7 +144,8 @@ function resolveRepoRelativePath(gitRoot: string, absolutePath: string): string 
  * Entries are deleted after consumption to avoid unbounded growth.
  */
 const pendingToolUses = new Map<string, ToolUseInfo>();
-const pendingEditFilesSnapshots = new Map<string, EditFilesSnapshot[]>();
+const pendingEditFilesSnapshots = new Map<string, PendingSnapshotEntry>();
+const MAX_PENDING_EDIT_FILES_SNAPSHOTS = 400;
 
 /**
  * Register tool uses from an assistant message for later enrichment lookup.
@@ -215,15 +222,24 @@ export function registerToolInvocationStart(
     }
 
     if (snapshots.length > 0) {
-      pendingEditFilesSnapshots.set(toolUseId, snapshots);
+      pendingEditFilesSnapshots.set(getSnapshotKey(toolUseId, context), {
+        snapshots,
+        createdAt: Date.now(),
+      });
     }
 
-    if (pendingEditFilesSnapshots.size > 400) {
-      pendingEditFilesSnapshots.clear();
-    }
+    pruneOldestEditFilesSnapshots();
   } catch {
     // Best effort — swallow any errors
   }
+}
+
+/**
+ * Clear pending per-invocation snapshot state for a specific tool use.
+ * Used on terminal paths (stop/abort/error) to prevent stale cache buildup.
+ */
+export function clearToolInvocationState(toolUseId: string, context?: DiffEnrichmentContext): void {
+  pendingEditFilesSnapshots.delete(getSnapshotKey(toolUseId, context));
 }
 
 /**
@@ -443,10 +459,13 @@ function enrichEditFilesResult(
   if (!changes || changes.length === 0) return;
   const workingDirectory = context?.workingDirectory;
 
-  const snapshots = toolUseId ? pendingEditFilesSnapshots.get(toolUseId) : undefined;
+  const snapshotEntry = toolUseId
+    ? pendingEditFilesSnapshots.get(getSnapshotKey(toolUseId, context))
+    : undefined;
   if (toolUseId) {
-    pendingEditFilesSnapshots.delete(toolUseId);
+    pendingEditFilesSnapshots.delete(getSnapshotKey(toolUseId, context));
   }
+  const snapshots = snapshotEntry?.snapshots;
 
   if (snapshots?.length) {
     const snapshotDiffs = enrichFromEditFilesSnapshots(snapshots);
@@ -568,6 +587,24 @@ function normalizeChangeKind(kind: string | undefined): 'add' | 'update' | 'dele
     return kind;
   }
   return 'update';
+}
+
+function getSnapshotKey(toolUseId: string, context?: DiffEnrichmentContext): string {
+  return `${context?.snapshotScope ?? 'global'}:${toolUseId}`;
+}
+
+function pruneOldestEditFilesSnapshots(): void {
+  if (pendingEditFilesSnapshots.size <= MAX_PENDING_EDIT_FILES_SNAPSHOTS) return;
+
+  const overflowCount = pendingEditFilesSnapshots.size - MAX_PENDING_EDIT_FILES_SNAPSHOTS;
+  const oldestKeys = [...pendingEditFilesSnapshots.entries()]
+    .sort((a, b) => a[1].createdAt - b[1].createdAt)
+    .slice(0, overflowCount)
+    .map(([key]) => key);
+
+  for (const key of oldestKeys) {
+    pendingEditFilesSnapshots.delete(key);
+  }
 }
 
 function enrichFromEditFilesSnapshots(snapshots: EditFilesSnapshot[]): FileDiff[] {
