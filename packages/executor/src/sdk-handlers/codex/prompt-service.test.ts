@@ -308,67 +308,6 @@ describe('CodexPromptService - Todo normalization', () => {
 });
 
 describe('CodexPromptService - tool payload mapping', () => {
-  it('forwards last item.completed payload on turn completion for debugging', async () => {
-    const service = new CodexPromptService(
-      mockMessagesRepo,
-      mockSessionsRepo,
-      mockSessionMCPServerRepo,
-      mockWorktreesRepo,
-      undefined,
-      'test-api-key',
-      mockDb
-    );
-
-    const serviceWithPrivates = service as any;
-    serviceWithPrivates.ensureCodexSessionContext = vi.fn().mockResolvedValue('/tmp');
-    serviceWithPrivates.ensureCodexConfig = vi.fn().mockResolvedValue(0);
-    serviceWithPrivates.refreshClient = vi.fn();
-
-    mockSessionsRepo.findById.mockResolvedValue({
-      session_id: 'session-last-item',
-      worktree_id: 'worktree-1',
-      created_at: new Date().toISOString(),
-      sdk_session_id: null,
-      permission_config: { codex: {} },
-      model_config: {},
-      mcp_token: 'test-token',
-    });
-    mockWorktreesRepo.findById.mockResolvedValue({
-      worktree_id: 'worktree-1',
-      path: process.cwd(),
-    });
-
-    const lastItem = {
-      id: 'agent-msg-1',
-      type: 'agent_message',
-      text: 'final assistant text',
-    };
-
-    mockStreamEvents = [
-      { type: 'turn.started' },
-      { type: 'item.completed', item: lastItem },
-      {
-        type: 'turn.completed',
-        usage: {
-          input_tokens: 100,
-          cached_input_tokens: 0,
-          output_tokens: 20,
-        },
-      },
-    ];
-
-    const emitted: Array<Record<string, unknown>> = [];
-    for await (const event of service.promptSessionStreaming('session-last-item' as any, 'hello')) {
-      emitted.push(event as Record<string, unknown>);
-    }
-
-    const completeEvent = emitted.find(
-      (event) => event.type === 'complete' && event.rawSdkEvent !== undefined
-    );
-    expect(completeEvent).toBeTruthy();
-    expect(completeEvent?.lastItemRawPayload).toEqual(lastItem);
-  });
-
   it('captures token_count context snapshot and forwards it on turn completion', async () => {
     const service = new CodexPromptService(
       mockMessagesRepo,

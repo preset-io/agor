@@ -57,8 +57,6 @@ export interface BaseTool {
       maxTokens: number;
       percentage: number;
     };
-    /** Optional debug payload from SDK stream (e.g. last item.completed item for Codex) */
-    lastItemRawPayload?: unknown;
   }>;
 
   // Optional stopTask method for tools that support interruption
@@ -262,6 +260,91 @@ async function captureGitStateAtTaskEnd(
   }
 }
 
+function extractCodexTurnCounts(
+  rawSdkResponse: unknown
+): { inputTokens: number; outputTokens: number } | undefined {
+  if (!rawSdkResponse || typeof rawSdkResponse !== 'object' || Array.isArray(rawSdkResponse)) {
+    return undefined;
+  }
+
+  const raw = rawSdkResponse as Record<string, unknown>;
+  const usage =
+    raw.usage && typeof raw.usage === 'object' && !Array.isArray(raw.usage)
+      ? (raw.usage as Record<string, unknown>)
+      : raw;
+
+  const inputTokens = usage.input_tokens;
+  const outputTokens = usage.output_tokens;
+  if (typeof inputTokens !== 'number' || !Number.isFinite(inputTokens) || inputTokens < 0) {
+    return undefined;
+  }
+
+  return {
+    inputTokens,
+    outputTokens:
+      typeof outputTokens === 'number' && Number.isFinite(outputTokens) && outputTokens >= 0
+        ? outputTokens
+        : 0,
+  };
+}
+
+async function computeCodexDeltaWindowEstimate(
+  client: AgorClient,
+  sessionId: SessionID,
+  currentTaskId: TaskID,
+  currentRawSdkResponse: unknown
+): Promise<number | undefined> {
+  const current = extractCodexTurnCounts(currentRawSdkResponse);
+  if (!current) {
+    return undefined;
+  }
+
+  const existingTasks = await client.service('tasks').find({
+    query: {
+      session_id: sessionId,
+      $limit: 200,
+    },
+  });
+
+  const taskRows: Task[] = Array.isArray(existingTasks)
+    ? (existingTasks as Task[])
+    : existingTasks &&
+        typeof existingTasks === 'object' &&
+        'data' in existingTasks &&
+        Array.isArray((existingTasks as { data?: unknown }).data)
+      ? (((existingTasks as { data?: Task[] }).data ?? []) as Task[])
+      : [];
+
+  const previousTasks = taskRows
+    .filter((task) => task.task_id !== currentTaskId)
+    .sort((a, b) => {
+      const aCreated = new Date(String(a.created_at ?? 0)).getTime();
+      const bCreated = new Date(String(b.created_at ?? 0)).getTime();
+      return bCreated - aCreated;
+    });
+
+  let previousInputTokens: number | undefined;
+  for (const task of previousTasks) {
+    const previous = extractCodexTurnCounts(task.raw_sdk_response);
+    if (previous) {
+      previousInputTokens = previous.inputTokens;
+      break;
+    }
+  }
+
+  if (previousInputTokens === undefined) {
+    return current.inputTokens + current.outputTokens;
+  }
+
+  if (current.inputTokens < previousInputTokens) {
+    // Counter reset/compaction: treat current turn as new baseline.
+    return current.inputTokens + current.outputTokens;
+  }
+
+  const deltaInput = current.inputTokens - previousInputTokens;
+  return deltaInput + current.outputTokens;
+}
+
 /**
  * Resolve API key with proper precedence:
  * 1. Per-user encrypted keys (from database) - HIGHEST
@@ -421,21 +504,7 @@ export async function executeToolTask(params: {
     // Add SDK response data for token accounting
     // Store both raw (for debugging) and normalized (for UI/analytics)
     if (result.rawSdkResponse) {
-      // Debug assist (temporary): surface the final item.completed payload in the
-      // Raw SDK panel by attaching it to raw_sdk_response.
-      if (
-        result.lastItemRawPayload !== undefined &&
-        result.rawSdkResponse &&
-        typeof result.rawSdkResponse === 'object' &&
-        !Array.isArray(result.rawSdkResponse)
-      ) {
-        patchData.raw_sdk_response = {
-          ...(result.rawSdkResponse as Record<string, unknown>),
-          last_item_raw_payload: result.lastItemRawPayload,
-        };
-      } else {
-        patchData.raw_sdk_response = result.rawSdkResponse;
-      }
+      patchData.raw_sdk_response = result.rawSdkResponse;
       // Normalize using tool-specific normalizer (toolName maps to agentic tool type)
       const normalized = normalizeRawSdkResponse(toolName, result.rawSdkResponse);
       if (normalized) {
@@ -476,20 +545,41 @@ export async function executeToolTask(params: {
           percentage: result.rawContextUsage.percentage,
         };
       }
-    } else if (tool.computeContextWindow) {
-      try {
-        const contextWindow = await tool.computeContextWindow(
-          sessionId,
-          taskId,
-          result.rawSdkResponse
-        );
-        if (contextWindow > 0) {
-          patchData.computed_context_window = contextWindow;
-          console.log(`[${toolName}] Computed context window: ${contextWindow} tokens`);
+    } else {
+      if (toolName === 'codex' && result.rawSdkResponse) {
+        try {
+          const estimatedWindow = await computeCodexDeltaWindowEstimate(
+            client,
+            sessionId,
+            taskId,
+            result.rawSdkResponse
+          );
+          if (estimatedWindow && estimatedWindow > 0) {
+            patchData.computed_context_window = estimatedWindow;
+            console.log(
+              `[${toolName}] Estimated context window from cumulative input delta: ${estimatedWindow} tokens`
+            );
+          }
+        } catch (error) {
+          console.warn(`[${toolName}] Failed to estimate delta-based context window:`, error);
         }
-      } catch (error) {
-        console.error(`[${toolName}] Failed to compute context window:`, error);
-        // Continue without context window - not critical
+      }
+
+      if (patchData.computed_context_window === undefined && tool.computeContextWindow) {
+        try {
+          const contextWindow = await tool.computeContextWindow(
+            sessionId,
+            taskId,
+            result.rawSdkResponse
+          );
+          if (contextWindow > 0) {
+            patchData.computed_context_window = contextWindow;
+            console.log(`[${toolName}] Computed context window: ${contextWindow} tokens`);
+          }
+        } catch (error) {
+          console.error(`[${toolName}] Failed to compute context window:`, error);
+          // Continue without context window - not critical
+        }
       }
     }
 
