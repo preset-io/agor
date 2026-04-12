@@ -77,10 +77,11 @@ export function getDaemonPid(): number | null {
  * Start daemon in background
  *
  * @param daemonPath - Path to daemon binary
+ * @param extraEnv - Additional environment variables for the child process
  * @returns PID of started daemon
  * @throws Error if daemon already running or failed to start
  */
-export function startDaemon(daemonPath: string): number {
+export function startDaemon(daemonPath: string, extraEnv?: Record<string, string>): number {
   // Check if already running
   const existingPid = getDaemonPid();
   if (existingPid !== null) {
@@ -110,6 +111,7 @@ export function startDaemon(daemonPath: string): number {
     env: {
       ...process.env,
       NODE_ENV: 'production',
+      ...extraEnv,
     },
   });
 
