@@ -132,6 +132,13 @@ export interface TasksService {
   emit(event: string, data: unknown): void;
 }
 
+export interface TasksStreamingService {
+  create(data: {
+    event: 'tool:start' | 'tool:complete' | 'thinking:chunk';
+    data: Record<string, unknown>;
+  }): Promise<unknown>;
+}
+
 /**
  * Service interface for updating sessions via FeathersJS
  * This ensures WebSocket events are emitted when sessions are updated (e.g., permission config)
@@ -156,6 +163,7 @@ export class ClaudeTool implements ITool {
     mcpServerRepo?: MCPServerRepository,
     permissionService?: PermissionService,
     private tasksService?: TasksService,
+    private tasksStreamingService?: TasksStreamingService,
     sessionsService?: SessionsService,
     worktreesRepo?: WorktreeRepository,
     reposRepo?: RepoRepository,
@@ -205,6 +213,19 @@ export class ClaudeTool implements ITool {
     } catch {
       return false;
     }
+  }
+
+  private async emitTaskEvent(
+    event: 'tool:start' | 'tool:complete' | 'thinking:chunk',
+    data: Record<string, unknown>
+  ): Promise<void> {
+    if (this.tasksStreamingService) {
+      await this.tasksStreamingService.create({ event, data });
+      return;
+    }
+
+    // Fallback for environments that don't expose /tasks/streaming.
+    this.tasksService?.emit(event, data);
   }
 
   async importSession(sessionId: string, options?: ImportOptions): Promise<SessionData> {
@@ -399,8 +420,8 @@ export class ClaudeTool implements ITool {
 
       // Handle tool execution start
       if (event.type === 'tool_start') {
-        if (this.tasksService && taskId) {
-          this.tasksService.emit('tool:start', {
+        if (taskId) {
+          await this.emitTaskEvent('tool:start', {
             task_id: taskId,
             session_id: sessionId,
             tool_use_id: event.toolUseId,
@@ -411,8 +432,8 @@ export class ClaudeTool implements ITool {
 
       // Handle tool execution complete
       if (event.type === 'tool_complete') {
-        if (this.tasksService && taskId) {
-          this.tasksService.emit('tool:complete', {
+        if (taskId) {
+          await this.emitTaskEvent('tool:complete', {
             task_id: taskId,
             session_id: sessionId,
             tool_use_id: event.toolUseId,
@@ -484,8 +505,8 @@ export class ClaudeTool implements ITool {
       // Handle thinking partial (streaming)
       if (event.type === 'thinking_partial') {
         // Emit to tasks service for task-level tracking
-        if (this.tasksService && taskId) {
-          this.tasksService.emit('thinking:chunk', {
+        if (taskId) {
+          await this.emitTaskEvent('thinking:chunk', {
             task_id: taskId,
             session_id: sessionId,
             chunk: event.thinkingChunk,

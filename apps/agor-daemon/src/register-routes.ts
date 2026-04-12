@@ -485,6 +485,28 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
+  registerAuthenticatedRoute(
+    app,
+    '/tasks/streaming',
+    {
+      async create(
+        data: {
+          event: 'tool:start' | 'tool:complete' | 'thinking:chunk';
+          data: Record<string, unknown>;
+        },
+        params: RouteParams
+      ) {
+        const _ = params;
+        app.service('tasks').emit(data.event, data.data);
+        return { success: true };
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'broadcast task streaming events' },
+    },
+    requireAuth
+  );
+
   // ============================================================================
   // Sessions custom routes (fork, spawn, genealogy, prompt, stop, queue)
   // ============================================================================

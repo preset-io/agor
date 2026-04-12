@@ -17,6 +17,7 @@ import type { ContentBlock as CoreContentBlock, DiffEnrichment } from '@agor/cor
 import { theme } from 'antd';
 import type React from 'react';
 import { shouldUseAnsiRendering } from '../../utils/ansi';
+import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
 import { CollapsibleText } from '../CollapsibleText';
 import { CollapsibleAnsiText } from '../CollapsibleText/CollapsibleAnsiText';
 import { ThemedSyntaxHighlighter } from '../ThemedSyntaxHighlighter';
@@ -112,24 +113,7 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
   // Extract text content from tool result
   const getResultText = (): string => {
     if (!toolResult) return '';
-
-    if (typeof toolResult.content === 'string') {
-      return toolResult.content;
-    }
-
-    if (Array.isArray(toolResult.content)) {
-      const textBlocks = toolResult.content
-        .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
-        .map((block) => block.text)
-        .join('\n\n');
-      if (textBlocks.trim().length > 0) {
-        return textBlocks;
-      }
-      // Fall back to JSON when result blocks are non-text (e.g., structured MCP payloads).
-      return JSON.stringify(toolResult.content, null, 2);
-    }
-
-    return '';
+    return toolResultToDisplayText(toolResult.content);
   };
 
   const resultText = getResultText();

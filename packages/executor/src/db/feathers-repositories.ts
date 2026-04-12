@@ -315,6 +315,7 @@ export function createFeathersBackedRepositories(client: AgorClient) {
     // SDK handlers can use these services directly with proper typing
     messagesService: client.service('messages'),
     tasksService: client.service('tasks'),
+    tasksStreamingService: client.service('/tasks/streaming'),
     sessionsService: client.service('sessions'),
   };
 }

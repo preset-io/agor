@@ -31,7 +31,11 @@ import {
 } from '../../types.js';
 import { enrichContentBlocks } from '../base/diff-enrichment.js';
 import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base/index.js';
-import type { MessagesService, TasksService } from '../claude/claude-tool.js';
+import type {
+  MessagesService,
+  TasksService,
+  TasksStreamingService,
+} from '../claude/claude-tool.js';
 import { DEFAULT_CODEX_MODEL } from './models.js';
 import { CodexPromptService } from './prompt-service.js';
 
@@ -56,6 +60,7 @@ export class CodexTool implements ITool {
   private worktreesRepo?: WorktreeRepository;
   private messagesService?: MessagesService;
   private tasksService?: TasksService;
+  private tasksStreamingService?: TasksStreamingService;
 
   constructor(
     messagesRepo?: MessagesRepository,
@@ -66,6 +71,7 @@ export class CodexTool implements ITool {
     apiKey?: string,
     messagesService?: MessagesService,
     tasksService?: TasksService,
+    tasksStreamingService?: TasksStreamingService,
     _useNativeAuth?: boolean, // Codex doesn't have OAuth fallback, but accept for interface consistency
     mcpServerRepo?: MCPServerRepository,
     usersRepo?: UsersRepository
@@ -75,6 +81,7 @@ export class CodexTool implements ITool {
     this.worktreesRepo = worktreesRepo;
     this.messagesService = messagesService;
     this.tasksService = tasksService;
+    this.tasksStreamingService = tasksStreamingService;
 
     if (messagesRepo && sessionsRepo) {
       this.promptService = new CodexPromptService(
@@ -110,6 +117,19 @@ export class CodexTool implements ITool {
     } catch {
       return false;
     }
+  }
+
+  private async emitTaskEvent(
+    event: 'tool:start' | 'tool:complete' | 'thinking:chunk',
+    data: Record<string, unknown>
+  ): Promise<void> {
+    if (this.tasksStreamingService) {
+      await this.tasksStreamingService.create({ event, data });
+      return;
+    }
+
+    // Fallback for environments that don't expose /tasks/streaming.
+    this.tasksService?.emit(event, data);
   }
 
   /**
@@ -201,8 +221,8 @@ export class CodexTool implements ITool {
 
       // Handle tool execution start (live UI indicator)
       if (event.type === 'tool_start') {
-        if (this.tasksService && taskId) {
-          this.tasksService.emit('tool:start', {
+        if (taskId) {
+          await this.emitTaskEvent('tool:start', {
             task_id: taskId,
             session_id: sessionId,
             tool_use_id: event.toolUse.id,
@@ -282,8 +302,8 @@ export class CodexTool implements ITool {
       }
       // Handle tool completion (create message immediately for live updates)
       else if (event.type === 'tool_complete') {
-        if (this.tasksService && taskId) {
-          this.tasksService.emit('tool:complete', {
+        if (taskId) {
+          await this.emitTaskEvent('tool:complete', {
             task_id: taskId,
             session_id: sessionId,
             tool_use_id: event.toolUse.id,

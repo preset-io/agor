@@ -67,6 +67,7 @@ export async function executeClaudeCodeTask(params: {
           repos.mcpServers,
           permissionService,
           repos.tasksService,
+          repos.tasksStreamingService,
           repos.sessionsService,
           repos.worktrees,
           repos.repos,

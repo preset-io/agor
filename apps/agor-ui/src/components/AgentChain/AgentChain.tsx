@@ -39,6 +39,7 @@ import { Popover, Space, Typography, theme } from 'antd';
 import React, { useMemo, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
+import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
 import { CollapsibleText } from '../CollapsibleText';
 import { Tag } from '../Tag';
 import {
@@ -185,16 +186,7 @@ export const AgentChain = React.memo<AgentChainProps>(
           if (toolResults.length > 0) {
             for (const block of toolResults) {
               const toolResult = block as unknown as ToolResultBlock;
-              let resultText = '';
-
-              if (typeof toolResult.content === 'string') {
-                resultText = toolResult.content;
-              } else if (Array.isArray(toolResult.content)) {
-                resultText = toolResult.content
-                  .filter((b) => b.type === 'text')
-                  .map((b) => (b as unknown as { text: string }).text)
-                  .join('\n');
-              }
+              const resultText = toolResultToDisplayText(toolResult.content);
 
               if (resultText.trim()) {
                 items.push({

@@ -567,8 +567,10 @@ export class CodexPromptService {
         // This matches Claude's "start/end + payload" visibility model.
         let mcpOutput: string | Array<Record<string, unknown>> | undefined;
         if (status === 'completed') {
-          if (item.result?.content && Array.isArray(item.result.content)) {
+          if (Array.isArray(item.result?.content) && item.result.content.length > 0) {
             mcpOutput = item.result.content as Array<Record<string, unknown>>;
+          } else if (item.result?.structured_content !== undefined) {
+            mcpOutput = JSON.stringify(item.result.structured_content, null, 2);
           } else if (item.error?.message) {
             mcpOutput = item.error.message;
           }

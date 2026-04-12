@@ -379,6 +379,42 @@ describe('CodexPromptService - tool payload mapping', () => {
     });
   });
 
+  it('falls back to structured_content when MCP content blocks are empty', () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockWorktreesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+
+    const toolUse = (service as any).itemToToolUse(
+      {
+        id: 'mcp-structured-only',
+        type: 'mcp_tool_call',
+        server: 'agor',
+        tool: 'agor_execute_tool',
+        arguments: { tool_name: 'agor_sessions_get_current' },
+        result: {
+          content: [],
+          structured_content: { session_id: 'abc123', status: 'running' },
+        },
+        status: 'completed',
+      },
+      'completed'
+    );
+
+    expect(toolUse).toEqual({
+      id: 'mcp-structured-only',
+      name: 'agor.agor_execute_tool',
+      input: { tool_name: 'agor_sessions_get_current' },
+      output: JSON.stringify({ session_id: 'abc123', status: 'running' }, null, 2),
+      status: 'completed',
+    });
+  });
+
   it('marks web_search as completed to avoid stale UI status', () => {
     const service = new CodexPromptService(
       mockMessagesRepo,

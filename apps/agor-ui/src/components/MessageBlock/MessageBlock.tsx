@@ -27,6 +27,7 @@ import { Tooltip, theme } from 'antd';
 import type React from 'react';
 import { formatTimestampWithRelative } from '../../utils/time';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
+import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
 import { AgorAvatar } from '../AgorAvatar';
 import { CollapsibleMarkdown } from '../CollapsibleText/CollapsibleMarkdown';
 import { CopyableContent } from '../CopyableContent';
@@ -488,15 +489,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
           // Special handling: If this is a Task tool result (user message rendered as agent),
           // extract text content and display it
           if (isTaskResult) {
-            let resultText = '';
-            if (typeof toolResult.content === 'string') {
-              resultText = toolResult.content;
-            } else if (Array.isArray(toolResult.content)) {
-              resultText = toolResult.content
-                .filter((b) => b.type === 'text')
-                .map((b) => (b as unknown as { text: string }).text)
-                .join('\n');
-            }
+            const resultText = toolResultToDisplayText(toolResult.content);
 
             if (resultText.trim()) {
               textBeforeTools.push(resultText);
