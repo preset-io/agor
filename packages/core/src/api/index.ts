@@ -671,6 +671,7 @@ export async function createRestClient(
   apiKey?: string
 ): Promise<AgorClient> {
   const client = feathers<ServiceTypes>() as AgorClient;
+  const fetchImpl = globalThis.fetch.bind(globalThis);
 
   // Lazy-load REST client (only imported when needed, not in browser bundles)
   const { default: rest } = await import('@feathersjs/rest-client');
@@ -680,9 +681,9 @@ export async function createRestClient(
     ? (input: string | URL | globalThis.Request, init?: RequestInit) => {
         const headers = new Headers(init?.headers);
         headers.set('Authorization', `Bearer ${apiKey}`);
-        return fetch(input, { ...init, headers });
+        return fetchImpl(input, { ...init, headers });
       }
-    : fetch;
+    : fetchImpl;
 
   // Configure REST transport
   client.configure(rest(url).fetch(fetchFn));
