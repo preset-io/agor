@@ -13,7 +13,7 @@ import type { useAgorClient } from './useAgorClient';
 export interface ToolExecution {
   toolUseId: string;
   toolName: string;
-  status: 'executing' | 'complete';
+  status: 'executing';
 }
 
 interface ToolStartEvent {
@@ -67,7 +67,7 @@ export function useTaskEvents(
           {
             toolUseId: data.tool_use_id,
             toolName: data.tool_name,
-            status: 'executing',
+            status: 'executing' as const,
           },
         ];
       });
@@ -80,19 +80,8 @@ export function useTaskEvents(
         return;
       }
 
-      setToolsExecuting((prev) => {
-        // Mark as complete
-        const updated = prev.map((tool) =>
-          tool.toolUseId === data.tool_use_id ? { ...tool, status: 'complete' as const } : tool
-        );
-
-        return updated;
-      });
-
-      // Remove from list after 2 seconds (gives time for visual feedback)
-      setTimeout(() => {
-        setToolsExecuting((prev) => prev.filter((t) => t.toolUseId !== data.tool_use_id));
-      }, 2000);
+      // Remove immediately on completion. The tool row itself already shows completion state.
+      setToolsExecuting((prev) => prev.filter((t) => t.toolUseId !== data.tool_use_id));
     };
 
     // Register event listeners

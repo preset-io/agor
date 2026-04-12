@@ -5,7 +5,7 @@
  * Displays a list of currently executing tools with visual feedback.
  */
 
-import { CheckCircleOutlined, LoadingOutlined } from '@ant-design/icons';
+import { LoadingOutlined } from '@ant-design/icons';
 import { Space, Typography } from 'antd';
 import type { ToolExecution } from '../../hooks/useTaskEvents';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
@@ -21,8 +21,7 @@ interface ToolExecutingIndicatorProps {
  * Shows a list of tools that are currently executing or recently completed.
  * Each tool is displayed with:
  * - Tool name
- * - Execution status (executing = spinner, complete = checkmark)
- * - Color coding (blue = executing, green = complete)
+ * - Execution status (spinner while running)
  */
 const ToolExecutingIndicator = ({ toolsExecuting }: ToolExecutingIndicatorProps) => {
   if (toolsExecuting.length === 0) {
@@ -34,13 +33,13 @@ const ToolExecutingIndicator = ({ toolsExecuting }: ToolExecutingIndicatorProps)
       {toolsExecuting.map((tool) => (
         <Tag
           key={tool.toolUseId}
-          icon={tool.status === 'executing' ? <LoadingOutlined spin /> : <CheckCircleOutlined />}
-          color={tool.status === 'executing' ? 'processing' : 'success'}
+          icon={<LoadingOutlined spin />}
+          color="processing"
           style={{ margin: 0 }}
         >
           <Typography.Text style={{ fontSize: 12 }}>
             {getToolDisplayName(tool.toolName)}
-            {tool.status === 'executing' ? ' executing...' : ' complete'}
+            {' executing...'}
           </Typography.Text>
         </Tag>
       ))}
