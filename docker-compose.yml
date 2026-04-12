@@ -101,6 +101,7 @@ services:
       # Daemon configuration
       - NODE_ENV=development
       - DAEMON_PORT=${DAEMON_PORT:-3030}
+      - DAEMON_HOST=${DAEMON_HOST:-0.0.0.0}
       - CORS_ORIGIN=${CORS_ORIGIN:-*}
 
       # UI configuration

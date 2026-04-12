@@ -76,6 +76,22 @@ while [ ! -f "/app/packages/executor/dist/index.d.ts" ]; do
 done
 echo "✅ @agor/executor initial build complete (including type definitions)"
 
+echo "🔨 Building @agor-live/client (initial build)..."
+pnpm --filter @agor-live/client build
+
+echo "⏳ Waiting for @agor-live/client type definitions..."
+MAX_WAIT=30
+WAITED=0
+while [ ! -f "/app/packages/client/dist/index.d.ts" ]; do
+  if [ $WAITED -ge $MAX_WAIT ]; then
+    echo "❌ Timeout waiting for client type definitions!"
+    exit 1
+  fi
+  sleep 0.5
+  WAITED=$((WAITED + 1))
+done
+echo "✅ @agor-live/client initial build complete (including type definitions)"
+
 # Start watch modes for hot-reload
 echo "🔄 Starting watch modes..."
 pnpm --filter @agor/core dev &
@@ -84,12 +100,15 @@ CORE_PID=$!
 pnpm --filter @agor/executor dev &
 EXECUTOR_PID=$!
 
-echo "✅ Watch modes started (core and executor will rebuild on file changes)"
+pnpm --filter @agor-live/client dev &
+CLIENT_PID=$!
+
+echo "✅ Watch modes started (core, executor, and client will rebuild on file changes)"
 
 # Initialize database and configure daemon settings for Docker
 # (idempotent: creates database on first run, preserves JWT secrets on subsequent runs)
 echo "📦 Initializing Agor environment..."
-pnpm agor init --skip-if-exists --set-config --daemon-port "${DAEMON_PORT:-3030}" --daemon-host localhost
+pnpm agor init --skip-if-exists --set-config --daemon-port "${DAEMON_PORT:-3030}" --daemon-host "${DAEMON_HOST:-0.0.0.0}"
 
 # Run database migrations (idempotent: safe to run on every start)
 # This ensures schema is up-to-date even when using existing database volumes
@@ -203,5 +222,6 @@ VITE_DAEMON_PORT="${DAEMON_PORT:-3030}" pnpm --filter agor-ui dev --host 0.0.0.0
 
 # If UI exits, kill daemon, executor watch, and core watch
 kill $DAEMON_PID 2>/dev/null || true
+kill $CLIENT_PID 2>/dev/null || true
 kill $EXECUTOR_PID 2>/dev/null || true
 kill $CORE_PID 2>/dev/null || true

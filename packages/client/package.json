@@ -17,6 +17,7 @@
   ],
   "scripts": {
     "build": "tsup && node scripts/patch-dts.mjs",
+    "dev": "tsup --watch",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
