@@ -64,9 +64,11 @@ export function inferCodexContextWindowFromRunningTotals(
   return Math.max(0, current.inputTokens - previous.inputTokens) + current.outputTokens;
 }
 
-function firstTaskFromFindResult(tasks: unknown): { raw_sdk_response?: unknown } | undefined {
+type TaskRow = { task_id?: string; raw_sdk_response?: unknown };
+
+function taskRowsFromFindResult(tasks: unknown): TaskRow[] {
   if (Array.isArray(tasks)) {
-    return tasks[0] as { raw_sdk_response?: unknown } | undefined;
+    return tasks as TaskRow[];
   }
 
   if (
@@ -75,10 +77,10 @@ function firstTaskFromFindResult(tasks: unknown): { raw_sdk_response?: unknown }
     'data' in tasks &&
     Array.isArray((tasks as { data?: unknown }).data)
   ) {
-    return ((tasks as { data?: Array<{ raw_sdk_response?: unknown }> }).data ?? [])[0];
+    return (tasks as { data?: TaskRow[] }).data ?? [];
   }
 
-  return undefined;
+  return [];
 }
 
 export async function computeCodexContextWindowFromPreviousTask(
@@ -90,13 +92,14 @@ export async function computeCodexContextWindowFromPreviousTask(
   const previousTask = await client.service('tasks').find({
     query: {
       session_id: sessionId,
-      task_id: { $ne: currentTaskId },
       $sort: { created_at: -1 },
-      $limit: 1,
+      $limit: 2,
     },
   });
 
-  const previousRawSdkResponse = firstTaskFromFindResult(previousTask)?.raw_sdk_response;
+  const taskRows = taskRowsFromFindResult(previousTask);
+  const previousTaskRow = taskRows.find((task) => task.task_id !== currentTaskId);
+  const previousRawSdkResponse = previousTaskRow?.raw_sdk_response;
 
   return inferCodexContextWindowFromRunningTotals(currentRawSdkResponse, previousRawSdkResponse);
 }
