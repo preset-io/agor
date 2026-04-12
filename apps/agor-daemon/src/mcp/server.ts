@@ -273,20 +273,50 @@ function getRegistry(servicesConfig?: DaemonServicesConfig): {
  */
 /**
  * Check if a MCP domain should have tools registered based on service config.
- * Returns true if the service group for this domain is 'readonly' or 'on'.
- * Tools are NOT registered for 'off' or 'internal' tiers.
+ * Returns false for 'off' or 'internal' tiers, 'readonly' or 'full' otherwise.
  */
-function isDomainEnabled(domain: string, servicesConfig?: DaemonServicesConfig): boolean {
-  if (!servicesConfig) return true; // default: all enabled
+function getDomainAccess(
+  domain: string,
+  servicesConfig?: DaemonServicesConfig
+): false | 'readonly' | 'full' {
+  if (!servicesConfig) return 'full'; // default: all enabled
 
   // Find which service group owns this domain
   for (const [group, domains] of Object.entries(SERVICE_GROUP_TO_MCP_DOMAINS)) {
     if (domains?.includes(domain)) {
       const tier = getServiceTier(servicesConfig, group as ServiceGroupName);
-      return SERVICE_TIER_RANK[tier] >= SERVICE_TIER_RANK.readonly;
+      if (SERVICE_TIER_RANK[tier] < SERVICE_TIER_RANK.readonly) return false;
+      return tier === 'on' ? 'full' : 'readonly';
     }
   }
-  return true; // unknown domain = enabled
+  return 'full'; // unknown domain = full access
+}
+
+/** Backwards-compatible wrapper */
+function isDomainEnabled(domain: string, servicesConfig?: DaemonServicesConfig): boolean {
+  return getDomainAccess(domain, servicesConfig) !== false;
+}
+
+/**
+ * Create a proxy McpServer that silently skips tools without
+ * readOnlyHint: true. Uses Object.create so the original server is unmodified.
+ */
+function readOnlyProxy(server: McpServer): McpServer {
+  const proxy = Object.create(server) as McpServer;
+  const original = server.registerTool.bind(server);
+  // Cast required: registerTool is an overloaded generic — TS can't represent the replacement.
+  (proxy as unknown as Record<string, unknown>).registerTool = (
+    name: string,
+    config: Record<string, unknown>,
+    cb: unknown
+  ) => {
+    const annotations = config.annotations as { readOnlyHint?: boolean } | undefined;
+    if (annotations?.readOnlyHint === true) {
+      return (original as (...args: unknown[]) => unknown)(name, config, cb);
+    }
+    // Skip mutating tools silently
+  };
+  return proxy;
 }
 
 function createMcpServer(
@@ -309,28 +339,34 @@ function createMcpServer(
   );
 
   // Register domain tools conditionally based on service tier.
-  // 'off' and 'internal' tiers: no MCP tools
-  // 'readonly' and 'on' tiers: tools registered
-  // Note: readonly vs on filtering (read-only tools only) is left for future refinement.
-  if (isDomainEnabled('sessions', servicesConfig)) {
-    registerSessionTools(server, ctx);
-    registerTaskTools(server, ctx);
-    registerMessageTools(server, ctx);
-  }
-  if (isDomainEnabled('repos', servicesConfig)) registerRepoTools(server, ctx);
-  if (isDomainEnabled('worktrees', servicesConfig)) {
-    registerWorktreeTools(server, ctx);
-    registerEnvironmentTools(server, ctx);
-  }
-  if (isDomainEnabled('boards', servicesConfig)) registerBoardTools(server, ctx);
-  if (isDomainEnabled('cards', servicesConfig)) {
-    registerCardTools(server, ctx);
-    registerCardTypeTools(server, ctx);
-  }
-  if (isDomainEnabled('artifacts', servicesConfig)) registerArtifactTools(server, ctx);
-  if (isDomainEnabled('users', servicesConfig)) registerUserTools(server, ctx);
-  if (isDomainEnabled('analytics', servicesConfig)) registerAnalyticsTools(server, ctx);
-  if (isDomainEnabled('mcp-servers', servicesConfig)) registerMcpServerTools(server, ctx);
+  // 'off' / 'internal': no MCP tools
+  // 'readonly': only tools with readOnlyHint: true
+  // 'on': all tools
+  const domainRegister = (domain: string, fn: (s: McpServer, c: McpContext) => void) => {
+    const access = getDomainAccess(domain, servicesConfig);
+    if (!access) return;
+    fn(access === 'readonly' ? readOnlyProxy(server) : server, ctx);
+  };
+
+  domainRegister('sessions', (s, c) => {
+    registerSessionTools(s, c);
+    registerTaskTools(s, c);
+    registerMessageTools(s, c);
+  });
+  domainRegister('repos', registerRepoTools);
+  domainRegister('worktrees', (s, c) => {
+    registerWorktreeTools(s, c);
+    registerEnvironmentTools(s, c);
+  });
+  domainRegister('boards', registerBoardTools);
+  domainRegister('cards', (s, c) => {
+    registerCardTools(s, c);
+    registerCardTypeTools(s, c);
+  });
+  domainRegister('artifacts', registerArtifactTools);
+  domainRegister('users', registerUserTools);
+  domainRegister('analytics', registerAnalyticsTools);
+  domainRegister('mcp-servers', registerMcpServerTools);
 
   if (toolSearchEnabled) {
     const { registry, toolsList } = getRegistry(servicesConfig);

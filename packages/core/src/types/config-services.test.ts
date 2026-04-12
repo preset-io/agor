@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DaemonServicesConfig } from './config-services';
 import {
+  ALLOWED_SERVICE_TIERS,
   autoPromoteDependencies,
   DEFAULT_SERVICE_TIER,
   getServiceTier,
@@ -18,6 +19,8 @@ import {
   SERVICE_GROUP_NAMES,
   SERVICE_GROUP_TO_MCP_DOMAINS,
   SERVICE_TIER_RANK,
+  SERVICE_TIERS,
+  validateAllowedTiers,
   validateServiceDependencies,
 } from './config-services';
 
@@ -110,11 +113,97 @@ describe('isServiceFullAccess', () => {
 // SERVICE_TIER_RANK ordering
 // ============================================================================
 
+describe('SERVICE_TIERS', () => {
+  it('contains all four tiers in order', () => {
+    expect(SERVICE_TIERS).toEqual(['off', 'internal', 'readonly', 'on']);
+  });
+
+  it('matches SERVICE_TIER_RANK keys', () => {
+    expect(new Set(SERVICE_TIERS)).toEqual(new Set(Object.keys(SERVICE_TIER_RANK)));
+  });
+});
+
 describe('SERVICE_TIER_RANK', () => {
   it('orders tiers as off < internal < readonly < on', () => {
     expect(SERVICE_TIER_RANK.off).toBeLessThan(SERVICE_TIER_RANK.internal);
     expect(SERVICE_TIER_RANK.internal).toBeLessThan(SERVICE_TIER_RANK.readonly);
     expect(SERVICE_TIER_RANK.readonly).toBeLessThan(SERVICE_TIER_RANK.on);
+  });
+});
+
+// ============================================================================
+// ALLOWED_SERVICE_TIERS
+// ============================================================================
+
+describe('ALLOWED_SERVICE_TIERS', () => {
+  it('has entries for all service groups', () => {
+    for (const group of SERVICE_GROUP_NAMES) {
+      expect(ALLOWED_SERVICE_TIERS[group]).toBeDefined();
+    }
+  });
+
+  it('core infrastructure services cannot be off', () => {
+    for (const group of ['core', 'worktrees', 'repos', 'users'] as const) {
+      expect(ALLOWED_SERVICE_TIERS[group]).not.toContain('off');
+      expect(ALLOWED_SERVICE_TIERS[group]).toContain('on');
+      expect(ALLOWED_SERVICE_TIERS[group]).toContain('internal');
+    }
+  });
+
+  it('optional services can be off', () => {
+    for (const group of ['boards', 'cards', 'artifacts', 'gateway', 'scheduler'] as const) {
+      expect(ALLOWED_SERVICE_TIERS[group]).toContain('off');
+    }
+  });
+});
+
+// ============================================================================
+// validateAllowedTiers
+// ============================================================================
+
+describe('validateAllowedTiers', () => {
+  it('returns no violations for undefined config', () => {
+    expect(validateAllowedTiers(undefined)).toEqual([]);
+  });
+
+  it('returns no violations for empty config', () => {
+    expect(validateAllowedTiers({})).toEqual([]);
+  });
+
+  it('returns no violations for valid config', () => {
+    const config: DaemonServicesConfig = {
+      core: 'on',
+      users: 'internal',
+      boards: 'off',
+      repos: 'readonly',
+    };
+    expect(validateAllowedTiers(config)).toEqual([]);
+  });
+
+  it('returns violation when core is set to off', () => {
+    const config: DaemonServicesConfig = { core: 'off' };
+    const violations = validateAllowedTiers(config);
+    expect(violations).toHaveLength(1);
+    expect(violations[0].group).toBe('core');
+    expect(violations[0].tier).toBe('off');
+    expect(violations[0].allowed).not.toContain('off');
+  });
+
+  it('returns violations for multiple infra services set to off', () => {
+    const config: DaemonServicesConfig = { core: 'off', users: 'off', repos: 'off' };
+    const violations = validateAllowedTiers(config);
+    expect(violations).toHaveLength(3);
+    expect(violations.map((v) => v.group).sort()).toEqual(['core', 'repos', 'users']);
+  });
+
+  it('allows optional services to be off', () => {
+    const config: DaemonServicesConfig = {
+      boards: 'off',
+      cards: 'off',
+      gateway: 'off',
+      scheduler: 'off',
+    };
+    expect(validateAllowedTiers(config)).toEqual([]);
   });
 });
 
@@ -128,44 +217,28 @@ describe('validateServiceDependencies', () => {
     expect(validateServiceDependencies({})).toEqual([]);
   });
 
-  it('returns violation when core is on but users is off', () => {
-    const config: DaemonServicesConfig = { core: 'on', users: 'off' };
-    const violations = validateServiceDependencies(config);
-    expect(violations.length).toBeGreaterThan(0);
-    const userViolation = violations.find((v) => v.service === 'core' && v.dependency === 'users');
-    expect(userViolation).toBeDefined();
-    expect(userViolation!.currentTier).toBe('off');
-    expect(userViolation!.requiredTier).toBe('internal');
-  });
-
-  it('returns violation when core is on but worktrees is off', () => {
-    const config: DaemonServicesConfig = { core: 'on', worktrees: 'off' };
-    const violations = validateServiceDependencies(config);
-    const wtViolation = violations.find(
-      (v) => v.service === 'core' && v.dependency === 'worktrees'
-    );
-    expect(wtViolation).toBeDefined();
-  });
-
-  it('returns no violations when dependency is internal or higher', () => {
+  it('returns no violations when all dependencies are at least internal', () => {
     const config: DaemonServicesConfig = { core: 'on', users: 'internal', worktrees: 'readonly' };
     expect(validateServiceDependencies(config)).toEqual([]);
   });
 
-  it('skips dependency check when the service itself is off', () => {
-    // Must also disable gateway and scheduler (they default to 'on' and depend on core/worktrees)
+  it('skips dependency check when the dependent service itself is off', () => {
+    // gateway and scheduler are off, so their deps are irrelevant
     const config: DaemonServicesConfig = {
-      core: 'off',
-      users: 'off',
       gateway: 'off',
       scheduler: 'off',
     };
-    // core is off, so its deps on users/worktrees are irrelevant
     expect(validateServiceDependencies(config)).toEqual([]);
   });
 
-  it('validates scheduler depends on core and worktrees', () => {
-    const config: DaemonServicesConfig = { scheduler: 'on', core: 'off', worktrees: 'off' };
+  it('validates scheduler depends on core and worktrees (pure function, ignoring allowed tiers)', () => {
+    // Note: core/worktrees: 'off' would be rejected by validateAllowedTiers first,
+    // but this tests the pure dependency validation logic in isolation.
+    const config: DaemonServicesConfig = {
+      scheduler: 'on',
+      core: 'off' as any,
+      worktrees: 'off' as any,
+    };
     const violations = validateServiceDependencies(config);
     expect(
       violations.find((v) => v.service === 'scheduler' && v.dependency === 'core')
@@ -181,21 +254,6 @@ describe('validateServiceDependencies', () => {
 // ============================================================================
 
 describe('autoPromoteDependencies', () => {
-  it('promotes users from off to internal when core is on', () => {
-    const config: DaemonServicesConfig = { core: 'on', users: 'off' };
-    const { config: result, promotions } = autoPromoteDependencies(config);
-    expect(result.users).toBe('internal');
-    expect(promotions).toContainEqual({ group: 'users', from: 'off', to: 'internal' });
-  });
-
-  it('promotes multiple dependencies at once', () => {
-    const config: DaemonServicesConfig = { core: 'on', users: 'off', worktrees: 'off' };
-    const { config: result, promotions } = autoPromoteDependencies(config);
-    expect(result.users).toBe('internal');
-    expect(result.worktrees).toBe('internal');
-    expect(promotions).toHaveLength(2);
-  });
-
   it('does not demote existing higher tiers', () => {
     const config: DaemonServicesConfig = { core: 'on', users: 'on', worktrees: 'readonly' };
     const { config: result, promotions } = autoPromoteDependencies(config);
@@ -205,32 +263,37 @@ describe('autoPromoteDependencies', () => {
   });
 
   it('does not promote when the dependent service is off', () => {
-    // Must also disable gateway and scheduler (they default to 'on' and depend on core/worktrees)
     const config: DaemonServicesConfig = {
-      core: 'off',
-      users: 'off',
       gateway: 'off',
       scheduler: 'off',
     };
-    const { config: result, promotions } = autoPromoteDependencies(config);
-    expect(result.users).toBe('off');
+    const { promotions } = autoPromoteDependencies(config);
     expect(promotions).toHaveLength(0);
   });
 
-  it('handles transitive dependencies via scheduler', () => {
-    // scheduler depends on core and worktrees
+  it('returns no promotions when all deps are already satisfied', () => {
     const config: DaemonServicesConfig = {
+      core: 'on',
+      users: 'internal',
+      worktrees: 'internal',
+      scheduler: 'on',
+      gateway: 'on',
+    };
+    const { promotions } = autoPromoteDependencies(config);
+    expect(promotions).toHaveLength(0);
+  });
+
+  it('promotes off deps to internal (pure function, bypassing allowed-tiers check)', () => {
+    // In practice, core/worktrees can't be 'off' (blocked by validateAllowedTiers),
+    // but autoPromoteDependencies is a pure function that handles it correctly.
+    const config = {
       scheduler: 'on',
       core: 'off',
       worktrees: 'off',
-      users: 'off',
-    };
+    } as DaemonServicesConfig;
     const { config: result, promotions } = autoPromoteDependencies(config);
-    // scheduler→core and scheduler→worktrees should be promoted
     expect(result.core).toBe('internal');
     expect(result.worktrees).toBe('internal');
-    // Note: core→users is not promoted because autoPromoteDependencies
-    // does a single pass. Users stays off unless we do recursive promotion.
     expect(promotions.length).toBeGreaterThanOrEqual(2);
   });
 });
@@ -319,6 +382,10 @@ describe('executor pod config scenario', () => {
     file_browser: 'on',
     leaderboard: 'off',
   };
+
+  it('passes allowed-tiers validation', () => {
+    expect(validateAllowedTiers(executorConfig)).toEqual([]);
+  });
 
   it('has no dependency violations', () => {
     expect(validateServiceDependencies(executorConfig)).toEqual([]);

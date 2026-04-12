@@ -6,7 +6,7 @@
  */
 
 import type { DaemonServicesConfig, HookContext } from '@agor/core/types';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { blockExternalAccess, blockMutation, resolveServicesConfig } from './service-tiers';
 
 /**
@@ -93,26 +93,15 @@ describe('resolveServicesConfig', () => {
     expect(resolveServicesConfig(config)).toEqual(config);
   });
 
-  it('auto-promotes users when core is on but users is off', () => {
-    const config: DaemonServicesConfig = { core: 'on', users: 'off' };
-    const result = resolveServicesConfig(config);
-    expect(result.users).toBe('internal');
+  it('throws when core infrastructure service is set to off', () => {
+    const config: DaemonServicesConfig = { core: 'off' as any };
+    expect(() => resolveServicesConfig(config)).toThrow('Invalid service configuration');
+    expect(() => resolveServicesConfig(config)).toThrow("'core' cannot be 'off'");
   });
 
-  it('auto-promotes worktrees when core is on but worktrees is off', () => {
-    const config: DaemonServicesConfig = { core: 'on', worktrees: 'off' };
-    const result = resolveServicesConfig(config);
-    expect(result.worktrees).toBe('internal');
-  });
-
-  it('logs warnings for auto-promoted services', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const config: DaemonServicesConfig = { core: 'on', users: 'off' };
-    resolveServicesConfig(config);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Auto-promoted 'users' from 'off' to 'internal'")
-    );
-    warnSpy.mockRestore();
+  it('throws when multiple infra services are off', () => {
+    const config: DaemonServicesConfig = { core: 'off' as any, users: 'off' as any };
+    expect(() => resolveServicesConfig(config)).toThrow('Invalid service configuration');
   });
 
   it('preserves non-dependency services unchanged', () => {
@@ -121,23 +110,29 @@ describe('resolveServicesConfig', () => {
       boards: 'off',
       cards: 'off',
       artifacts: 'off',
-      users: 'off', // will be promoted
+      users: 'internal',
     };
     const result = resolveServicesConfig(config);
     expect(result.boards).toBe('off');
     expect(result.cards).toBe('off');
     expect(result.artifacts).toBe('off');
-    expect(result.users).toBe('internal'); // promoted
+    expect(result.users).toBe('internal');
   });
 
-  it('handles gateway dependencies (needs core + worktrees)', () => {
+  it('accepts valid lean config with internal/readonly infra services', () => {
     const config: DaemonServicesConfig = {
-      gateway: 'on',
-      core: 'off',
-      worktrees: 'off',
+      core: 'on',
+      users: 'internal',
+      worktrees: 'readonly',
+      repos: 'internal',
+      boards: 'off',
+      cards: 'off',
+      gateway: 'off',
+      scheduler: 'off',
     };
     const result = resolveServicesConfig(config);
-    expect(result.core).toBe('internal');
-    expect(result.worktrees).toBe('internal');
+    expect(result.users).toBe('internal');
+    expect(result.worktrees).toBe('readonly');
+    expect(result.boards).toBe('off');
   });
 });

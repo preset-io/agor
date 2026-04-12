@@ -12,6 +12,7 @@ import {
   autoPromoteDependencies,
   getServiceTier,
   SERVICE_GROUP_NAMES,
+  validateAllowedTiers,
   validateServiceDependencies,
 } from '@agor/core/types';
 
@@ -65,13 +66,26 @@ export function applyTierHooks(app: Application, servicePath: string, tier: Serv
 }
 
 /**
- * Resolve services config: validate dependencies, auto-promote, and log.
+ * Resolve services config: validate allowed tiers, auto-promote deps, and log.
  * Returns the effective config to use at runtime.
+ *
+ * Throws on:
+ * - Disallowed tiers (e.g., core: 'off')
+ * - Unresolvable dependency violations after auto-promotion
  */
 export function resolveServicesConfig(raw: DaemonServicesConfig | undefined): DaemonServicesConfig {
   if (!raw) return {};
 
-  // Auto-promote dependencies
+  // 1. Validate allowed tiers (hard error — e.g., core: 'off' is never valid)
+  const tierViolations = validateAllowedTiers(raw);
+  if (tierViolations.length > 0) {
+    const msgs = tierViolations.map(
+      (v) => `'${v.group}' cannot be '${v.tier}' (allowed: ${v.allowed.join(', ')})`
+    );
+    throw new Error(`[services] Invalid service configuration:\n  ${msgs.join('\n  ')}`);
+  }
+
+  // 2. Auto-promote dependencies
   const { config: promoted, promotions } = autoPromoteDependencies(raw);
 
   for (const p of promotions) {
@@ -80,12 +94,14 @@ export function resolveServicesConfig(raw: DaemonServicesConfig | undefined): Da
     );
   }
 
-  // Validate remaining issues (shouldn't have any after auto-promote, but just in case)
-  const violations = validateServiceDependencies(promoted);
-  for (const v of violations) {
-    console.error(
-      `[services] Dependency violation: '${v.service}' requires '${v.dependency}' to be at least '${v.requiredTier}', but it is '${v.currentTier}'`
+  // 3. Validate remaining dependency issues (hard error if still violated after promotion)
+  const depViolations = validateServiceDependencies(promoted);
+  if (depViolations.length > 0) {
+    const msgs = depViolations.map(
+      (v) =>
+        `'${v.service}' requires '${v.dependency}' to be at least '${v.requiredTier}', but it is '${v.currentTier}'`
     );
+    throw new Error(`[services] Unresolvable dependency violations:\n  ${msgs.join('\n  ')}`);
   }
 
   return promoted;

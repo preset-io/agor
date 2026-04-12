@@ -9,7 +9,8 @@
  *
  * Progression: off < internal < readonly < on
  */
-export type ServiceTier = 'off' | 'internal' | 'readonly' | 'on';
+export const SERVICE_TIERS = ['off', 'internal', 'readonly', 'on'] as const;
+export type ServiceTier = (typeof SERVICE_TIERS)[number];
 
 /** Numeric rank for tier comparison */
 export const SERVICE_TIER_RANK: Record<ServiceTier, number> = {
@@ -75,6 +76,27 @@ export const SERVICE_GROUP_NAMES: ServiceGroupName[] = [
   'mcp_servers',
   'leaderboard',
 ];
+
+/**
+ * Allowed tiers per service group.
+ * Core infrastructure services (core, worktrees, repos, users) cannot be turned off —
+ * the daemon doesn't function without them.
+ */
+export const ALLOWED_SERVICE_TIERS: Record<ServiceGroupName, readonly ServiceTier[]> = {
+  core: ['on', 'readonly', 'internal'],
+  worktrees: ['on', 'readonly', 'internal'],
+  repos: ['on', 'readonly', 'internal'],
+  users: ['on', 'readonly', 'internal'],
+  boards: ['on', 'readonly', 'internal', 'off'],
+  cards: ['on', 'readonly', 'internal', 'off'],
+  artifacts: ['on', 'readonly', 'internal', 'off'],
+  gateway: ['on', 'readonly', 'internal', 'off'],
+  scheduler: ['on', 'readonly', 'internal', 'off'],
+  terminals: ['on', 'readonly', 'internal', 'off'],
+  file_browser: ['on', 'readonly', 'internal', 'off'],
+  mcp_servers: ['on', 'readonly', 'internal', 'off'],
+  leaderboard: ['on', 'readonly', 'internal', 'off'],
+};
 
 /**
  * Cross-service dependency declarations.
@@ -148,6 +170,37 @@ export function isServiceFullAccess(
   group: ServiceGroupName
 ): boolean {
   return getServiceTier(config, group) === 'on';
+}
+
+export interface ServiceTierViolation {
+  /** The service group with an invalid tier */
+  group: ServiceGroupName;
+  /** The tier that was set */
+  tier: ServiceTier;
+  /** The tiers that are allowed */
+  allowed: readonly ServiceTier[];
+}
+
+/**
+ * Validate that each service group's configured tier is in its allowed set.
+ * Returns violations for disallowed tiers (e.g., core: 'off').
+ */
+export function validateAllowedTiers(
+  config: DaemonServicesConfig | undefined
+): ServiceTierViolation[] {
+  if (!config) return [];
+  const violations: ServiceTierViolation[] = [];
+
+  for (const group of SERVICE_GROUP_NAMES) {
+    const tier = config[group];
+    if (tier === undefined) continue; // will use default ('on'), always allowed
+    const allowed = ALLOWED_SERVICE_TIERS[group];
+    if (!allowed.includes(tier)) {
+      violations.push({ group, tier, allowed });
+    }
+  }
+
+  return violations;
 }
 
 export interface ServiceDependencyViolation {
