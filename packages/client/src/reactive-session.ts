@@ -1,9 +1,5 @@
-import type {
-  AgorClient,
-  SessionPromptOptions,
-  SessionPromptResult,
-} from '../../core/src/api/index';
-import type { Message, Session, Task } from '../../core/src/types/index';
+import type { AgorClient, SessionPromptOptions, SessionPromptResult } from '@agor/core/api';
+import type { Message, Session, Task } from '@agor/core/types';
 
 export type TaskHydrationMode = 'none' | 'lazy' | 'eager';
 

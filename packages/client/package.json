@@ -10,6 +10,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.js",
+      "require": "./dist/config.cjs"
     }
   },
   "files": [
@@ -21,6 +26,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@agor/core": "workspace:*",
     "@feathersjs/authentication-client": "^5.0.41",
     "@feathersjs/feathers": "^5.0.41",
     "@feathersjs/rest-client": "^5.0.41",
@@ -28,7 +34,6 @@
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
-    "@agor/core": "workspace:*",
     "@types/node": "^22.10.2",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3"

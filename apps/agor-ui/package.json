@@ -17,7 +17,6 @@
     "build-storybook": "storybook build"
   },
   "dependencies": {
-    "@agor/core": "workspace:*",
     "@agor-live/client": "workspace:*",
     "@ant-design/icons": "^6.1.0",
     "@ant-design/x": "^2.3.0",

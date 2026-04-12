@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { getDefaultConfig, loadConfigSync } from '@agor/core/config';
+import { getDefaultConfig, loadConfigSync } from '@agor-live/client/config';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import viteCompression from 'vite-plugin-compression';
@@ -61,8 +61,8 @@ export default defineConfig({
     port: 5173,
     // Watch for changes in workspace packages
     watch: {
-      // Watch the @agor/core dist directory for changes
-      ignored: ['!**/node_modules/@agor/core/**'],
+      // Watch the @agor-live/client package for changes
+      ignored: ['!**/node_modules/@agor-live/client/**'],
     },
     fs: {
       // Allow serving files from the monorepo root

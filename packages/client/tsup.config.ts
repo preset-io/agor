@@ -1,13 +1,18 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: { index: 'src/index.ts' },
+  entry: {
+    index: 'src/index.ts',
+    config: 'src/config.ts',
+  },
   format: ['cjs', 'esm'],
   dts: true,
   clean: true,
   splitting: false,
   // Keep FeathersJS + socket.io as runtime dependencies (not bundled)
   external: [
+    '@agor/core',
+    '@agor/core/*',
     '@feathersjs/authentication-client',
     '@feathersjs/feathers',
     '@feathersjs/rest-client',

@@ -9,7 +9,7 @@ import { registerHandlebarsHelpers } from '@agor-live/client';
 
 // Re-export shared handlebars helpers
 export {
-  buildTemplateContext,
+  buildWorktreeContext,
   registerHandlebarsHelpers,
   renderTemplate,
 } from '@agor-live/client';
