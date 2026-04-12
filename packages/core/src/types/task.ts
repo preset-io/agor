@@ -79,6 +79,13 @@ export interface Task {
     };
     contextWindowLimit?: number; // Model's max context window (e.g., 200k for Claude)
     costUsd?: number; // Estimated cost in USD (if pricing available)
+    primaryModel?: string; // Resolved model used for the task
+    durationMs?: number; // Total execution duration from SDK, when available
+    contextUsageSnapshot?: {
+      totalTokens: number;
+      maxTokens: number;
+      percentage: number;
+    }; // Authoritative SDK context snapshot when available
   };
 
   // Computed context window - cumulative token usage for this session

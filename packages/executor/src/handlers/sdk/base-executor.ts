@@ -20,6 +20,7 @@ import type {
 import { MessageRole } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
+import { extractCodexContextWindowUsage } from '../../sdk-handlers/codex/usage.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 
@@ -288,6 +289,33 @@ function extractCodexTurnCounts(
   };
 }
 
+export function estimateCodexContextWindowFromRunningTotals(
+  currentRawSdkResponse: unknown,
+  previousRawSdkResponse?: unknown
+): number | undefined {
+  const current = extractCodexTurnCounts(currentRawSdkResponse);
+  if (!current) {
+    return undefined;
+  }
+
+  const currentSnapshot = extractCodexContextWindowUsage(currentRawSdkResponse);
+  if (!currentSnapshot || currentSnapshot <= 0) {
+    return undefined;
+  }
+
+  const previous = extractCodexTurnCounts(previousRawSdkResponse);
+  if (!previous) {
+    return currentSnapshot;
+  }
+
+  if (current.inputTokens < previous.inputTokens) {
+    // Running total reset (e.g., compaction/new session counter).
+    return currentSnapshot;
+  }
+
+  return Math.max(0, current.inputTokens - previous.inputTokens);
+}
+
 async function computeCodexDeltaWindowEstimate(
   client: AgorClient,
   sessionId: SessionID,
@@ -302,7 +330,8 @@ async function computeCodexDeltaWindowEstimate(
   const existingTasks = await client.service('tasks').find({
     query: {
       session_id: sessionId,
-      $limit: 200,
+      $sort: { created_at: -1 },
+      $limit: 100,
     },
   });
 
@@ -323,26 +352,14 @@ async function computeCodexDeltaWindowEstimate(
       return bCreated - aCreated;
     });
 
-  let previousInputTokens: number | undefined;
+  let previousRawSdkResponse: unknown;
   for (const task of previousTasks) {
-    const previous = extractCodexTurnCounts(task.raw_sdk_response);
-    if (previous) {
-      previousInputTokens = previous.inputTokens;
+    if (extractCodexTurnCounts(task.raw_sdk_response)) {
+      previousRawSdkResponse = task.raw_sdk_response;
       break;
     }
   }
-
-  if (previousInputTokens === undefined) {
-    return current.inputTokens + current.outputTokens;
-  }
-
-  if (current.inputTokens < previousInputTokens) {
-    // Counter reset/compaction: treat current turn as new baseline.
-    return current.inputTokens + current.outputTokens;
-  }
-
-  const deltaInput = current.inputTokens - previousInputTokens;
-  return deltaInput + current.outputTokens;
+  return estimateCodexContextWindowFromRunningTotals(currentRawSdkResponse, previousRawSdkResponse);
 }
 
 /**

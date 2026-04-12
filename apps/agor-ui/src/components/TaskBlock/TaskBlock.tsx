@@ -515,6 +515,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                   duration_ms: task.duration_ms,
                   agentic_tool,
                   raw_sdk_response: task.raw_sdk_response,
+                  normalized_sdk_response: normalized ?? undefined,
                 }}
               />
             )}
