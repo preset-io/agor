@@ -10,9 +10,9 @@ import { CodexPromptService } from './prompt-service.js';
 // Track how many Codex instances were created (module-level state)
 let mockInstanceCount = 0;
 
-// Mock @openai/codex-sdk to avoid spawning real processes
-vi.mock('@openai/codex-sdk', () => {
-  class MockCodex {
+// Mock @agor/core/sdk to avoid spawning real Codex CLI processes
+vi.mock('@agor/core/sdk', () => {
+  class MockCodexClient {
     apiKey: string;
     instanceId: number;
 
@@ -39,7 +39,9 @@ vi.mock('@openai/codex-sdk', () => {
   }
 
   return {
-    Codex: MockCodex,
+    Codex: {
+      Codex: MockCodexClient,
+    },
   };
 });
 
@@ -150,5 +152,79 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
     // Call with actual key - should create new instance
     serviceWithPrivate.refreshClient('new-key');
     expect(mockInstanceCount).toBe(countAfterInit + 1);
+  });
+});
+
+describe('CodexPromptService - Todo normalization', () => {
+  it('maps codex todo_list to TodoWrite-compatible payload with inferred in_progress', () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockWorktreesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+
+    const toolUse = (service as any).itemToToolUse(
+      {
+        id: 'todo-1',
+        type: 'todo_list',
+        items: [
+          { text: 'Completed step', completed: true },
+          { text: 'Current step', completed: false },
+          { text: 'Next step', completed: false },
+        ],
+      },
+      'completed'
+    );
+
+    expect(toolUse).toEqual({
+      id: 'todo-1',
+      name: 'TodoWrite',
+      input: {
+        todos: [
+          {
+            content: 'Completed step',
+            activeForm: 'Completed step',
+            status: 'completed',
+          },
+          {
+            content: 'Current step',
+            activeForm: 'Current step',
+            status: 'in_progress',
+          },
+          {
+            content: 'Next step',
+            activeForm: 'Next step',
+            status: 'pending',
+          },
+        ],
+      },
+    });
+  });
+
+  it('returns null for empty todo_list', () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockWorktreesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+
+    const toolUse = (service as any).itemToToolUse(
+      {
+        id: 'todo-empty',
+        type: 'todo_list',
+        items: [],
+      },
+      'completed'
+    );
+
+    expect(toolUse).toBeNull();
   });
 });

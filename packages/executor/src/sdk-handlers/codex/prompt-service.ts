@@ -498,6 +498,35 @@ export class CodexPromptService {
   }
 
   /**
+   * Convert Codex todo_list items to TodoWrite-compatible payload.
+   * Codex only provides completed:boolean, so we infer a single in_progress
+   * item as the first remaining incomplete step for better UI parity.
+   */
+  private codexTodosToTodoWriteInput(
+    items: Array<{ text: string; completed: boolean }>
+  ): Record<string, unknown> | null {
+    if (!Array.isArray(items) || items.length === 0) {
+      return null;
+    }
+
+    const firstIncompleteIndex = items.findIndex((todo) => !todo.completed);
+
+    return {
+      todos: items.map((todo, index) => ({
+        content: todo.text,
+        activeForm: todo.text,
+        status: todo.completed
+          ? 'completed'
+          : firstIncompleteIndex === -1
+            ? 'pending'
+            : index === firstIncompleteIndex
+              ? 'in_progress'
+              : 'pending',
+      })),
+    };
+  }
+
+  /**
    * Convert Codex item to ToolUse format
    * Maps different Codex item types to Agor tool use schema
    */
@@ -554,9 +583,15 @@ export class CodexPromptService {
       case 'reasoning':
         // Don't emit tool use for reasoning (it's internal)
         return null;
-      case 'todo_list':
-        // Don't emit tool use for todo list (it's internal)
-        return null;
+      case 'todo_list': {
+        const todoInput = this.codexTodosToTodoWriteInput(item.items);
+        if (!todoInput) return null;
+        return {
+          id: item.id,
+          name: 'TodoWrite',
+          input: todoInput,
+        };
+      }
       case 'agent_message':
         // Don't emit tool use for text messages
         return null;
@@ -831,10 +866,19 @@ export class CodexPromptService {
             break;
 
           case 'item.updated':
-            // NOTE: Based on official OpenAI sample, item.updated is only emitted for todo_list items
-            // agent_message, reasoning, command_execution, file_change only emit item.started/item.completed
-            // We could handle todo_list progress here if needed in the future
-            // For now, we ignore item.updated since we don't track todo lists
+            // Codex emits item.updated for todo_list progress updates.
+            // Normalize these into TodoWrite-style tool events so the UI can
+            // reuse the same sticky todo rendering as Claude Code.
+            if (event.item) {
+              const toolUseUpdate = this.itemToToolUse(event.item, 'completed');
+              if (toolUseUpdate?.name === 'TodoWrite') {
+                yield {
+                  type: 'tool_complete',
+                  toolUse: toolUseUpdate,
+                  threadId: thread.id || undefined,
+                };
+              }
+            }
             break;
 
           case 'item.completed':

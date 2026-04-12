@@ -1,7 +1,7 @@
 /**
  * TodoListRenderer - Custom renderer for TodoWrite tool
  *
- * Displays Claude Code's todo list with:
+ * Displays agent todo lists with:
  * - Visual checkboxes (✓ completed, □ in-progress, ○ pending)
  * - Status-aware coloring
  * - Clean, minimal design
