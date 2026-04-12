@@ -118,10 +118,15 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
     }
 
     if (Array.isArray(toolResult.content)) {
-      return toolResult.content
+      const textBlocks = toolResult.content
         .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
         .map((block) => block.text)
         .join('\n\n');
+      if (textBlocks.trim().length > 0) {
+        return textBlocks;
+      }
+      // Fall back to JSON when result blocks are non-text (e.g., structured MCP payloads).
+      return JSON.stringify(toolResult.content, null, 2);
     }
 
     return '';

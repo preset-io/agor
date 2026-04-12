@@ -306,3 +306,145 @@ describe('CodexPromptService - Todo normalization', () => {
     expect(todoCompletions).toHaveLength(1);
   });
 });
+
+describe('CodexPromptService - tool payload mapping', () => {
+  it('preserves MCP result content on completion', () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockWorktreesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+
+    const toolUse = (service as any).itemToToolUse(
+      {
+        id: 'mcp-1',
+        type: 'mcp_tool_call',
+        server: 'agor',
+        tool: 'agor_execute_tool',
+        arguments: { tool_name: 'agor_worktrees_list' },
+        result: {
+          content: [{ type: 'text', text: 'ok' }],
+          structured_content: { success: true },
+        },
+        status: 'completed',
+      },
+      'completed'
+    );
+
+    expect(toolUse).toEqual({
+      id: 'mcp-1',
+      name: 'agor.agor_execute_tool',
+      input: { tool_name: 'agor_worktrees_list' },
+      output: [{ type: 'text', text: 'ok' }],
+      status: 'completed',
+    });
+  });
+
+  it('preserves MCP error message on failure', () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockWorktreesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+
+    const toolUse = (service as any).itemToToolUse(
+      {
+        id: 'mcp-2',
+        type: 'mcp_tool_call',
+        server: 'agor',
+        tool: 'agor_execute_tool',
+        arguments: {},
+        error: {
+          message: 'permission denied',
+        },
+        status: 'failed',
+      },
+      'completed'
+    );
+
+    expect(toolUse).toEqual({
+      id: 'mcp-2',
+      name: 'agor.agor_execute_tool',
+      input: {},
+      output: 'permission denied',
+      status: 'failed',
+    });
+  });
+
+  it('marks web_search as completed to avoid stale UI status', () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockWorktreesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+
+    const toolUse = (service as any).itemToToolUse(
+      {
+        id: 'search-1',
+        type: 'web_search',
+        query: 'openai codex sdk',
+      },
+      'completed'
+    );
+
+    expect(toolUse).toEqual({
+      id: 'search-1',
+      name: 'web_search',
+      input: { query: 'openai codex sdk' },
+      status: 'completed',
+    });
+  });
+
+  it('propagates top-level stream error events (message field) as failures', async () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockWorktreesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+
+    const serviceWithPrivates = service as any;
+    serviceWithPrivates.ensureCodexSessionContext = vi.fn().mockResolvedValue('/tmp');
+    serviceWithPrivates.ensureCodexConfig = vi.fn().mockResolvedValue(0);
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    mockSessionsRepo.findById.mockResolvedValue({
+      session_id: 'session-1',
+      worktree_id: 'worktree-1',
+      created_at: new Date().toISOString(),
+      sdk_session_id: null,
+      permission_config: { codex: {} },
+      model_config: {},
+      mcp_token: 'test-token',
+    });
+    mockWorktreesRepo.findById.mockResolvedValue({
+      worktree_id: 'worktree-1',
+      path: process.cwd(),
+    });
+
+    mockStreamEvents = [{ type: 'error', message: 'stream exploded' }];
+
+    await expect(
+      (async () => {
+        for await (const _event of service.promptSessionStreaming('session-1' as any, 'review')) {
+          // no-op
+        }
+      })()
+    ).rejects.toThrow('Codex stream error: stream exploded');
+  });
+});

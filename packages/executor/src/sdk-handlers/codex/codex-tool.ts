@@ -199,6 +199,18 @@ export class CodexTool implements ITool {
         }
       }
 
+      // Handle tool execution start (live UI indicator)
+      if (event.type === 'tool_start') {
+        if (this.tasksService && taskId) {
+          this.tasksService.emit('tool:start', {
+            task_id: taskId,
+            session_id: sessionId,
+            tool_use_id: event.toolUse.id,
+            tool_name: event.toolUse.name,
+          });
+        }
+      }
+
       if (event.type === 'complete' && event.usage) {
         tokenUsage = event.usage;
       }
@@ -270,6 +282,21 @@ export class CodexTool implements ITool {
       }
       // Handle tool completion (create message immediately for live updates)
       else if (event.type === 'tool_complete') {
+        if (this.tasksService && taskId) {
+          this.tasksService.emit('tool:complete', {
+            task_id: taskId,
+            session_id: sessionId,
+            tool_use_id: event.toolUse.id,
+          });
+        }
+
+        const toolResultContent =
+          event.toolUse.output !== undefined
+            ? event.toolUse.output
+            : event.toolUse.status
+              ? `[${event.toolUse.status}]`
+              : '';
+
         // Create a message for this tool use immediately
         const toolMessageId = generateId() as MessageID;
         const toolContent = [
@@ -284,7 +311,7 @@ export class CodexTool implements ITool {
                 {
                   type: 'tool_result',
                   tool_use_id: event.toolUse.id,
-                  content: event.toolUse.output || `[${event.toolUse.status}]`,
+                  content: toolResultContent,
                   is_error: event.toolUse.status === 'failed' || event.toolUse.status === 'error',
                 },
               ]
@@ -320,16 +347,21 @@ export class CodexTool implements ITool {
       // Handle complete message (save to database)
       else if (event.type === 'complete' && event.content) {
         const usageForMessage = event.usage ?? tokenUsage;
-        // Filter out tool_use and tool_result blocks (already saved via tool_complete events)
-        // But KEEP text blocks - these contain the response
-        const textOnlyContent = event.content.filter(
-          (block) => block.type === 'text' // Only keep text blocks
+        // Filter out tool_use and tool_result blocks (already saved via tool_complete events),
+        // but keep text + thinking blocks so Codex reasoning is visible in the UI.
+        const nonToolContent = event.content.filter(
+          (block) => block.type === 'text' || block.type === 'thinking'
         );
 
-        // Only create message if there's text content (not just tools)
-        if (textOnlyContent.length > 0) {
+        // Only create message if there's non-tool content (not just tools)
+        if (nonToolContent.length > 0) {
           // Extract full text for streaming callback
-          const fullText = textOnlyContent
+          const fullText = nonToolContent
+            .filter((block) => block.type === 'text')
+            .map((block) => (block as { text?: string }).text || '')
+            .join('');
+          const fullThinking = nonToolContent
+            .filter((block) => block.type === 'thinking')
             .map((block) => (block as { text?: string }).text || '')
             .join('');
 
@@ -370,11 +402,29 @@ export class CodexTool implements ITool {
             }
           }
 
-          // Create complete message in DB (text only, tools already saved)
+          // Codex reasoning is not token-streamed by SDK. Emit a synthetic single
+          // thinking chunk so users see reasoning activity in real time.
+          if (streamingCallbacks && fullThinking && !fullText) {
+            try {
+              if (streamingCallbacks.onThinkingStart) {
+                await streamingCallbacks.onThinkingStart(assistantMessageId, {});
+              }
+              if (streamingCallbacks.onThinkingChunk) {
+                await streamingCallbacks.onThinkingChunk(assistantMessageId, fullThinking);
+              }
+              if (streamingCallbacks.onThinkingEnd) {
+                await streamingCallbacks.onThinkingEnd(assistantMessageId);
+              }
+            } catch (err) {
+              console.error(`[Codex] Thinking callback failed for ${assistantMessageId}:`, err);
+            }
+          }
+
+          // Create complete message in DB (non-tool content only, tools already saved)
           await this.createAssistantMessage(
             sessionId,
             assistantMessageId,
-            textOnlyContent,
+            nonToolContent,
             undefined, // No tool uses in this message (already saved separately)
             taskId,
             nextIndex++,
@@ -482,10 +532,14 @@ export class CodexTool implements ITool {
     resolvedModel?: string,
     tokenUsage?: TokenUsage
   ): Promise<Message> {
-    // Extract text content for preview
+    // Extract preview text (prefer normal text, then thinking text)
     const textBlocks = content.filter((b) => b.type === 'text').map((b) => b.text || '');
     const fullTextContent = textBlocks.join('');
-    const contentPreview = fullTextContent.substring(0, 200);
+    const fallbackThinking = content
+      .filter((b) => b.type === 'thinking')
+      .map((b) => b.text || '')
+      .join('');
+    const contentPreview = (fullTextContent || fallbackThinking).substring(0, 200);
 
     const message: Message = {
       message_id: messageId,

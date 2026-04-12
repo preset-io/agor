@@ -301,7 +301,7 @@ if [[ "$PUBLISH" == true ]]; then
     echo "🚀 Publishing packages..."
     echo ""
     echo "── Publishing agor-live@$NEW_VERSION ──"
-    cd "$SCRIPT_DIR" && npm publish
+    cd "$SCRIPT_DIR" && npm login && npm publish
     echo ""
     echo "── Publishing @agor-live/client@$NEW_VERSION ──"
     cd "$CLIENT_DIR" && npm publish --access public

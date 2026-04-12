@@ -122,6 +122,7 @@ function getToolDescription(toolUse: ToolUseBlock): string | undefined {
       return input.pattern ? String(input.pattern) : undefined;
     case 'ToolSearch':
     case 'WebSearch':
+    case 'web_search':
       return input.query ? String(input.query) : undefined;
     case 'WebFetch':
       return input.url ? String(input.url) : undefined;

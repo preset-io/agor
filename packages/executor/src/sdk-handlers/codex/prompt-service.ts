@@ -86,7 +86,7 @@ export type CodexStreamEvent =
         id: string;
         name: string;
         input: Record<string, unknown>;
-        output?: string;
+        output?: string | Array<Record<string, unknown>>;
         status?: string;
       };
       threadId?: string;
@@ -537,7 +537,7 @@ export class CodexPromptService {
     id: string;
     name: string;
     input: Record<string, unknown>;
-    output?: string;
+    output?: string | Array<Record<string, unknown>>;
     status?: string;
   } | null {
     switch (item.type) {
@@ -562,7 +562,17 @@ export class CodexPromptService {
             status: item.status,
           }),
         };
-      case 'mcp_tool_call':
+      case 'mcp_tool_call': {
+        // Preserve MCP result/error payloads so the UI can render meaningful output.
+        // This matches Claude's "start/end + payload" visibility model.
+        let mcpOutput: string | Array<Record<string, unknown>> | undefined;
+        if (status === 'completed') {
+          if (item.result?.content && Array.isArray(item.result.content)) {
+            mcpOutput = item.result.content as Array<Record<string, unknown>>;
+          } else if (item.error?.message) {
+            mcpOutput = item.error.message;
+          }
+        }
         return {
           id: item.id,
           name: `${item.server}.${item.tool}`,
@@ -570,15 +580,23 @@ export class CodexPromptService {
             item.arguments && typeof item.arguments === 'object' && !Array.isArray(item.arguments)
               ? (item.arguments as Record<string, unknown>)
               : {},
+          ...(mcpOutput !== undefined && {
+            output: mcpOutput,
+          }),
           ...(status === 'completed' && {
             status: item.status,
           }),
         };
+      }
       case 'web_search':
         return {
           id: item.id,
           name: 'web_search',
           input: { query: item.query },
+          ...(status === 'completed' && {
+            // Emit a terminal marker so web_search doesn't remain stale in UI.
+            status: 'completed',
+          }),
         };
       case 'reasoning':
         // Don't emit tool use for reasoning (it's internal)
@@ -821,7 +839,7 @@ export class CodexPromptService {
         name?: string;
         input?: Record<string, unknown>;
         tool_use_id?: string;
-        content?: string;
+        content?: string | Array<Record<string, unknown>>;
         is_error?: boolean;
       }> = [];
       let threadId = session.sdk_session_id || '';
@@ -951,6 +969,32 @@ export class CodexPromptService {
                   // No usage data for intermediate messages - only final turn.completed has it
                 };
               }
+
+              // Surface reasoning as thinking blocks (non-streaming) so Codex reuses
+              // the same ThinkingBlock UI used by Claude/OpenCode.
+              if ('text' in event.item && event.item.type === 'reasoning') {
+                const thinkingContent = [{ type: 'thinking', text: event.item.text as string }];
+                yield {
+                  type: 'complete',
+                  content: thinkingContent,
+                  threadId: thread.id || '',
+                  resolvedModel: resolvedModel || DEFAULT_CODEX_MODEL,
+                };
+              }
+
+              // Surface non-fatal item-level errors as assistant text so users can see
+              // what happened instead of dropping them silently.
+              if ('message' in event.item && event.item.type === 'error') {
+                const errorContent = [
+                  { type: 'text', text: `[Codex item error] ${event.item.message}` },
+                ];
+                yield {
+                  type: 'complete',
+                  content: errorContent,
+                  threadId: thread.id || '',
+                  resolvedModel: resolvedModel || DEFAULT_CODEX_MODEL,
+                };
+              }
             }
             break;
 
@@ -1001,13 +1045,15 @@ export class CodexPromptService {
           }
 
           case 'error':
-            // SDK retry errors (e.g., 401 retries before turn.failed)
-            // Log once at warn level instead of silently ignoring
-            console.warn(
-              `⚠️  [Codex] SDK error event for session ${sessionId.substring(0, 8)} (event ${eventCount}):`,
-              (event as { error?: unknown }).error || 'unknown'
+            // Fatal stream-level error from Codex SDK.
+            // Surface this as a task failure so users see it in the conversation.
+            throw new Error(
+              `Codex stream error: ${
+                (event as { message?: unknown; error?: unknown }).message ||
+                (event as { message?: unknown; error?: unknown }).error ||
+                'unknown'
+              }`
             );
-            break;
 
           default:
             // Ignore other event types silently

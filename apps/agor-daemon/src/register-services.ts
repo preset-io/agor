@@ -150,7 +150,9 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     createExecuteHandler(ctx, sessionsService, sessionTokenService)
   );
 
-  app.use('/tasks', createTasksService(db, app));
+  app.use('/tasks', createTasksService(db, app), {
+    events: ['tool:start', 'tool:complete', 'thinking:chunk'],
+  });
   if (svcEnabled('leaderboard')) {
     app.use('/leaderboard', createLeaderboardService(db));
   }
