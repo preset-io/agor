@@ -37,6 +37,7 @@ import { ThinkingBlock } from '../ThinkingBlock';
 import {
   ALWAYS_EXPANDED_TOOLS,
   deriveToolStatus,
+  IMPLICIT_RESULT_TOOLS,
   renderToolStatusIcon,
   ToolBlock,
 } from '../ToolBlock';
@@ -662,6 +663,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
             return toolBlocks.map(({ toolUse, toolResult }, toolIndex) => {
               const displayName = getToolDisplayName(toolUse.name, toolUse.input);
               const isAlwaysExpanded = ALWAYS_EXPANDED_TOOLS.has(toolUse.name);
+              const hasImplicitResult = IMPLICIT_RESULT_TOOLS.has(toolUse.name);
 
               // A tool is potentially still running when no subsequent tool in
               // this message has a result AND this is the latest message.
@@ -670,7 +672,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
               const isPotentiallyRunning = toolIndex > lastResultIndex && isLatestMessage;
 
               const status = deriveToolStatus({
-                hasResult: !!toolResult,
+                hasResult: !!toolResult || hasImplicitResult,
                 isError: !!toolResult?.is_error,
                 isPotentiallyRunning,
                 isTaskRunning,

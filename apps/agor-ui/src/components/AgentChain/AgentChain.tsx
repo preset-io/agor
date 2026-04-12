@@ -44,6 +44,7 @@ import { Tag } from '../Tag';
 import {
   ALWAYS_EXPANDED_TOOLS,
   deriveToolStatus,
+  IMPLICIT_RESULT_TOOLS,
   renderToolStatusIcon,
   ToolBlock,
 } from '../ToolBlock';
@@ -456,13 +457,14 @@ export const AgentChain = React.memo<AgentChainProps>(
       const isError = toolResult?.is_error;
       const displayName = resolveDisplayName(toolUse);
       const isAlwaysExpanded = ALWAYS_EXPANDED_TOOLS.has(toolUse.name);
+      const hasImplicitResult = IMPLICIT_RESULT_TOOLS.has(toolUse.name);
 
       // Derive status and icon via shared helper.
       // A tool is potentially still running when no subsequent tool in
       // this chain has a result AND this is the active (latest) chain.
       const isPotentiallyRunning = index > lastResultToolIndex && isLatest !== false;
       const status = deriveToolStatus({
-        hasResult: !!toolResult,
+        hasResult: !!toolResult || hasImplicitResult,
         isError: !!isError,
         isPotentiallyRunning,
         isTaskRunning,

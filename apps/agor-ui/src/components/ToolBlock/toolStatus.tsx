@@ -14,6 +14,12 @@ export type ToolStatus = 'success' | 'error' | 'pending' | 'stale';
 /** Tools whose content is always shown expanded by default */
 export const ALWAYS_EXPANDED_TOOLS = new Set(['Edit', 'Write', 'edit', 'write', 'edit_files']);
 
+/**
+ * Tools whose invocation payload itself represents terminal state, even without
+ * a dedicated tool_result block.
+ */
+export const IMPLICIT_RESULT_TOOLS = new Set(['TodoWrite']);
+
 interface ToolStatusInput {
   /** Whether a tool result exists */
   hasResult: boolean;
