@@ -91,6 +91,49 @@ describe('diff enrichment', () => {
     expect(lines.some((line) => line.includes('+const value = "new";'))).toBe(true);
   });
 
+  it('enriches absolute edit_files paths when tool path and git root use different symlink prefixes', () => {
+    const repoDir = createTempGitRepo();
+    const aliasParent = fs.mkdtempSync(path.join(os.tmpdir(), 'agor-diff-enrichment-alias-'));
+    tempDirs.push(aliasParent);
+    const aliasRepo = path.join(aliasParent, 'repo-link');
+    fs.symlinkSync(repoDir, aliasRepo, 'dir');
+
+    const srcDir = path.join(repoDir, 'src');
+    fs.mkdirSync(srcDir, { recursive: true });
+    const realFilePath = path.join(srcDir, 'example.ts');
+    const aliasFilePath = path.join(aliasRepo, 'src', 'example.ts');
+
+    fs.writeFileSync(realFilePath, 'const value = "old";\n', 'utf-8');
+    execSync('git add .', { cwd: repoDir, stdio: 'ignore' });
+    execSync('git commit -m "initial"', { cwd: repoDir, stdio: 'ignore' });
+    fs.writeFileSync(aliasFilePath, 'const value = "new";\n', 'utf-8');
+
+    const contentBlocks: TestContentBlock[] = [
+      {
+        type: 'tool_use',
+        id: 'tool-codex-edit-files-symlink-path-1',
+        name: 'edit_files',
+        input: {
+          changes: [{ path: aliasFilePath, kind: 'update' }],
+        },
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'tool-codex-edit-files-symlink-path-1',
+        content: '[completed]',
+      },
+    ];
+
+    enrichContentBlocks(contentBlocks, { workingDirectory: repoDir });
+
+    const toolResult = contentBlocks[1];
+    expect(toolResult.diff?.files).toHaveLength(1);
+    expect(toolResult.diff?.files?.[0]?.kind).toBe('update');
+    const lines = toolResult.diff?.files?.[0]?.structuredPatch?.[0]?.lines ?? [];
+    expect(lines.some((line) => line.includes('-const value = "old";'))).toBe(true);
+    expect(lines.some((line) => line.includes('+const value = "new";'))).toBe(true);
+  });
+
   it('enriches Codex edit_files delete operations with relative paths', () => {
     const repoDir = createTempGitRepo();
     const srcDir = path.join(repoDir, 'src');

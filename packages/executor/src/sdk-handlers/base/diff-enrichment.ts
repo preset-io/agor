@@ -52,6 +52,67 @@ interface ContentBlock {
   [key: string]: unknown;
 }
 
+function isSafeRepoRelativePath(relativePath: string): boolean {
+  const normalized = path.posix.normalize(relativePath.split(path.sep).join('/'));
+  return !(
+    !normalized ||
+    normalized.startsWith('/') ||
+    normalized === '..' ||
+    normalized.startsWith('../') ||
+    normalized.includes('\0') ||
+    normalized.includes('\n') ||
+    normalized.includes('\r')
+  );
+}
+
+function tryRealpath(p: string): string | null {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve a path to a git-repo-relative path, tolerating symlink prefix drift.
+ *
+ * In production we may receive absolute tool paths under a symlinked mount
+ * while git reports a canonical root under a different prefix. This helper
+ * tries lexical and canonicalized candidates and returns a safe repo-relative path.
+ */
+function resolveRepoRelativePath(gitRoot: string, absolutePath: string): string | null {
+  const lexicalRelative = path.relative(gitRoot, absolutePath);
+  if (isSafeRepoRelativePath(lexicalRelative)) {
+    return lexicalRelative;
+  }
+
+  const gitRootReal = tryRealpath(gitRoot);
+  if (!gitRootReal) return null;
+
+  const candidates = new Set<string>();
+  candidates.add(absolutePath);
+
+  const absoluteReal = tryRealpath(absolutePath);
+  if (absoluteReal) {
+    candidates.add(absoluteReal);
+  } else {
+    // File may not exist (e.g., delete). Resolve through parent directory.
+    const parentReal = tryRealpath(path.dirname(absolutePath));
+    if (parentReal) {
+      candidates.add(path.join(parentReal, path.basename(absolutePath)));
+    }
+  }
+
+  for (const candidate of candidates) {
+    const relativePath = path.relative(gitRootReal, candidate);
+    if (isSafeRepoRelativePath(relativePath)) {
+      return relativePath;
+    }
+  }
+
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Pattern 1: Split messages (Claude)
 // ---------------------------------------------------------------------------
@@ -329,7 +390,8 @@ function enrichEditFilesResult(
         }
       } else if (kind === 'delete') {
         // Deleted file — get old content from git
-        const relativePath = path.relative(gitRoot, resolvedPath);
+        const relativePath = resolveRepoRelativePath(gitRoot, resolvedPath);
+        if (!relativePath) continue;
         const oldContent = gitShowHeadFile(gitRoot, relativePath);
         if (oldContent === null) continue;
         const patch = structuredPatch(filePath, filePath, oldContent, '', '', '', {
@@ -343,7 +405,8 @@ function enrichEditFilesResult(
         const stat = fs.statSync(resolvedPath);
         if (stat.size > MAX_FILE_SIZE_BYTES) continue;
         const currentContent = fs.readFileSync(resolvedPath, 'utf-8');
-        const relativePath = path.relative(gitRoot, resolvedPath);
+        const relativePath = resolveRepoRelativePath(gitRoot, resolvedPath);
+        if (!relativePath) continue;
         const oldContent = gitShowHeadFile(gitRoot, relativePath);
         if (oldContent === null) {
           // File may be new (not in HEAD) — treat as addition
@@ -379,15 +442,7 @@ function enrichEditFilesResult(
 function gitShowHeadFile(gitRoot: string, relativePath: string): string | null {
   // Ensure the ref path is safe and uses git's forward-slash separator.
   const normalized = path.posix.normalize(relativePath.split(path.sep).join('/'));
-  if (
-    !normalized ||
-    normalized.startsWith('/') ||
-    normalized === '..' ||
-    normalized.startsWith('../') ||
-    normalized.includes('\0') ||
-    normalized.includes('\n') ||
-    normalized.includes('\r')
-  ) {
+  if (!isSafeRepoRelativePath(normalized)) {
     return null;
   }
 
