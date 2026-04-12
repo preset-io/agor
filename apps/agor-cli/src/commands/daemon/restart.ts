@@ -2,8 +2,8 @@
  * `agor daemon restart` - Restart daemon
  */
 
-import { getDaemonUrl } from '@agor/core/config';
 import { isDaemonRunning } from '@agor-live/client';
+import { getDaemonUrl } from '@agor-live/client/config';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import { getDaemonPath, isInstalledPackage } from '../../lib/context.js';

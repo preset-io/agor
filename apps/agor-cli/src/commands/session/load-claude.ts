@@ -22,8 +22,8 @@ import type {
   UUID,
   Worktree,
   WorktreeID,
-} from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+} from '@agor-live/client';
+import { TaskStatus } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';

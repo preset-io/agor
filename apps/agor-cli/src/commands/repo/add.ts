@@ -4,7 +4,7 @@
  * Clones the repo to ~/.agor/repos/<name> and registers it with the daemon.
  */
 
-import { extractSlugFromUrl, isValidGitUrl, isValidSlug } from '@agor/core/config';
+import { extractSlugFromUrl, isValidGitUrl, isValidSlug } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';

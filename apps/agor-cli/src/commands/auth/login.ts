@@ -4,8 +4,8 @@
  * Prompts for email/password and stores JWT token for future CLI commands
  */
 
-import { getDaemonUrl } from '@agor/core/config';
 import { createRestClient, isDaemonRunning } from '@agor-live/client';
+import { getDaemonUrl } from '@agor-live/client/config';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';

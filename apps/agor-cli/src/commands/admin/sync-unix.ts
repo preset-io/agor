@@ -33,7 +33,6 @@ import {
   worktreeOwners,
   worktrees,
 } from '@agor/core/db';
-import type { RepoID, WorktreeID } from '@agor/core/types';
 import {
   AGOR_USERS_GROUP,
   generateRepoGroupName,
@@ -43,6 +42,7 @@ import {
   UnixGroupCommands,
   UnixUserCommands,
 } from '@agor/core/unix';
+import type { RepoID, WorktreeID } from '@agor-live/client';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 

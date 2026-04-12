@@ -2,7 +2,7 @@
  * Show details for an MCP server
  */
 
-import type { MCPServer } from '@agor/core/types';
+import type { MCPServer } from '@agor-live/client';
 import { Args } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';

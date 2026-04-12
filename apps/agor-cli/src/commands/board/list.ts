@@ -2,8 +2,8 @@
  * List all boards
  */
 
-import { PAGINATION } from '@agor/core/config';
-import type { Board, BoardEntityObject } from '@agor/core/types';
+import type { Board, BoardEntityObject } from '@agor-live/client';
+import { PAGINATION } from '@agor-live/client';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';
 import Table from 'cli-table3';

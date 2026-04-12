@@ -1,4 +1,4 @@
-import type { Board } from '@agor/core/types';
+import type { Board } from '@agor-live/client';
 import { Args } from '@oclif/core';
 import { BaseCommand } from '../../base-command';
 

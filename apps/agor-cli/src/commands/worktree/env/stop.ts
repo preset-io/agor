@@ -4,8 +4,8 @@
  * Stops the development environment for a worktree.
  */
 
-import { formatShortId } from '@agor/core/db';
-import type { Worktree } from '@agor/core/types';
+import type { Worktree } from '@agor-live/client';
+import { formatShortId } from '@agor-live/client';
 import { Args } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../../base-command';

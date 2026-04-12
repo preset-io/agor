@@ -4,10 +4,8 @@
  * Displays sessions in a beautiful table with filters.
  */
 
-import { PAGINATION } from '@agor/core/config';
-import { formatShortId } from '@agor/core/db';
-import type { Session } from '@agor/core/types';
-import { SessionStatus } from '@agor/core/types';
+import type { Session } from '@agor-live/client';
+import { formatShortId, PAGINATION, SessionStatus } from '@agor-live/client';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';
 import Table from 'cli-table3';

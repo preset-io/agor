@@ -4,9 +4,9 @@
  * Reduces boilerplate by providing common functionality like daemon connection checking.
  */
 
-import { getDaemonUrl } from '@agor/core/config';
 import type { AgorClient } from '@agor-live/client';
 import { createRestClient, getApiKeyFromEnv, isDaemonRunning } from '@agor-live/client';
+import { getDaemonUrl } from '@agor-live/client/config';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import { loadToken } from './lib/auth';
@@ -24,10 +24,11 @@ export abstract class BaseCommand extends Command {
    */
   protected async connectToDaemon(): Promise<AgorClient> {
     // Get daemon URL from config
-    this.daemonUrl = await getDaemonUrl();
+    const daemonUrl = await getDaemonUrl();
+    this.daemonUrl = daemonUrl;
 
     // Check if daemon is running (fast fail with 1s timeout)
-    const running = await isDaemonRunning(this.daemonUrl);
+    const running = await isDaemonRunning(daemonUrl);
 
     if (!running) {
       this.log(
@@ -49,11 +50,11 @@ export abstract class BaseCommand extends Command {
     // Check for API key auth (takes precedence over stored JWT)
     const apiKey = getApiKeyFromEnv();
     if (apiKey) {
-      return await createRestClient(this.daemonUrl, apiKey);
+      return await createRestClient(daemonUrl, apiKey ?? undefined);
     }
 
     // Create REST-only client (prevents hanging processes)
-    const client = await createRestClient(this.daemonUrl);
+    const client = await createRestClient(daemonUrl);
 
     // Load stored authentication token
     const storedAuth = await loadToken();
@@ -82,7 +83,7 @@ export abstract class BaseCommand extends Command {
     } else {
       // No stored token - check if daemon allows anonymous access
       try {
-        const response = await fetch(`${this.daemonUrl}/health`);
+        const response = await fetch(`${daemonUrl}/health`);
         const health = (await response.json()) as { auth?: { requireAuth?: boolean } };
         if (health.auth?.requireAuth) {
           // Daemon requires authentication

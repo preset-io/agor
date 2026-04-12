@@ -5,8 +5,8 @@
  * cleaning or removing files from the filesystem.
  */
 
-import { formatShortId } from '@agor/core/db';
-import type { Worktree } from '@agor/core/types';
+import type { Worktree } from '@agor-live/client';
+import { formatShortId } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';

@@ -5,7 +5,7 @@
 import { join } from 'node:path';
 import { getConfigPath } from '@agor/core/config';
 import { createDatabase, select, users } from '@agor/core/db';
-import type { User } from '@agor/core/types';
+import type { User } from '@agor-live/client';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import Table from 'cli-table3';

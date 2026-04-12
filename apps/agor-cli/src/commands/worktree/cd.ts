@@ -8,7 +8,7 @@
  *   wtcd() { cd "$(agor worktree cd --print "$1")"; }
  */
 
-import type { Worktree } from '@agor/core/types';
+import type { Worktree } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';

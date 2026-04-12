@@ -4,9 +4,8 @@
  * Displays repositories in a beautiful table.
  */
 
-import { PAGINATION } from '@agor/core/config';
-import { formatShortId } from '@agor/core/db';
-import type { Repo } from '@agor/core/types';
+import type { Repo } from '@agor-live/client';
+import { formatShortId, PAGINATION } from '@agor-live/client';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';
 import Table from 'cli-table3';

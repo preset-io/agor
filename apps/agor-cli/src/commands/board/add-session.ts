@@ -6,8 +6,8 @@
  * associated with that worktree.
  */
 
-import { PAGINATION } from '@agor/core/config';
-import type { Board, BoardEntityObject, Session, Worktree } from '@agor/core/types';
+import type { Board, BoardEntityObject, Session, Worktree } from '@agor-live/client';
+import { PAGINATION } from '@agor-live/client';
 import { Args } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';

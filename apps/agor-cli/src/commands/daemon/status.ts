@@ -2,8 +2,8 @@
  * `agor daemon status` - Check daemon status
  */
 
-import { getDaemonUrl } from '@agor/core/config';
 import { isDaemonRunning } from '@agor-live/client';
+import { getDaemonUrl } from '@agor-live/client/config';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import { isAgorInitialized, isInstalledPackage } from '../../lib/context.js';

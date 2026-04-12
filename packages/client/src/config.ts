@@ -1,1 +1,1 @@
-export { getDefaultConfig, loadConfigSync } from '@agor/core/config';
+export { getDaemonUrl, getDefaultConfig, loadConfigSync } from '@agor/core/config';

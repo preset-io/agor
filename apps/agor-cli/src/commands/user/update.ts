@@ -2,7 +2,7 @@
  * `agor user update` - Update a user
  */
 
-import type { User } from '@agor/core/types';
+import type { User } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';

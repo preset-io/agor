@@ -64,6 +64,14 @@ export * from '@agor/core/templates/handlebars-helpers';
 // Re-export full browser-safe type/runtime surface for UI consumers.
 export * from '@agor/core/types';
 
+/**
+ * Format an ID as a short prefix (default: 8 chars).
+ * Accepts raw UUIDs with or without hyphens.
+ */
+export function formatShortId(id: string, length: number = 8): string {
+  return id.replace(/-/g, '').slice(0, Math.min(length, 32));
+}
+
 export function createClient(...args: Parameters<typeof createCoreClient>): ReactiveAgorClient {
   const client = createCoreClient(...args);
   return attachReactiveSessionApi(client as CoreAgorClient);

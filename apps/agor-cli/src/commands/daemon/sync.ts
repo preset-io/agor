@@ -32,7 +32,7 @@ import {
 } from '@agor/core/db';
 import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
 import { cloneRepo, createWorktree, getWorktreesDir } from '@agor/core/git';
-import type { User, UUID } from '@agor/core/types';
+import type { User, UUID } from '@agor-live/client';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 

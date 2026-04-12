@@ -4,7 +4,7 @@
  * Creates an isolated working directory for a specific branch.
  */
 
-import type { Repo, Worktree } from '@agor/core/types';
+import type { Repo, Worktree } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';

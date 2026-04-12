@@ -11,7 +11,7 @@
 import { pathToFileURL } from 'node:url';
 import type { AgorConfig } from '@agor/core/config';
 import { loadConfig, loadConfigFromFile } from '@agor/core/config';
-import { validateAllowedTiers, validateServiceDependencies } from '@agor/core/types';
+import { validateAllowedTiers, validateServiceDependencies } from '@agor-live/client';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { getDaemonModulePath, isInstalledPackage } from '../../lib/context.js';

@@ -2,7 +2,7 @@
  * `agor user create` - Create a new user
  */
 
-import type { CreateUserInput, UserRole } from '@agor/core/types';
+import type { CreateUserInput, UserRole } from '@agor-live/client';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';

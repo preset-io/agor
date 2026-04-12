@@ -4,9 +4,8 @@
  * Shows all worktrees, optionally filtered by repository.
  */
 
-import { PAGINATION } from '@agor/core/config';
-import { formatShortId } from '@agor/core/db';
-import type { Repo, Worktree } from '@agor/core/types';
+import type { Repo, Worktree } from '@agor-live/client';
+import { formatShortId, PAGINATION } from '@agor-live/client';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';
 import Table from 'cli-table3';

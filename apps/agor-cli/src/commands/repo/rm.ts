@@ -4,7 +4,7 @@
  * Removes the repository from the database (does not delete files).
  */
 
-import type { Repo } from '@agor/core/types';
+import type { Repo } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';

@@ -2,7 +2,7 @@
  * List all MCP servers
  */
 
-import type { MCPServer } from '@agor/core/types';
+import type { MCPServer } from '@agor-live/client';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';
 import Table from 'cli-table3';

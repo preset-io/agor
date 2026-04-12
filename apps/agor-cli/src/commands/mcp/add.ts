@@ -2,7 +2,7 @@
  * `agor mcp add` - Add a new MCP server
  */
 
-import type { MCPServer } from '@agor/core/types';
+import type { MCPServer } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
