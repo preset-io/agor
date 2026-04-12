@@ -36,15 +36,23 @@ export interface ToolExecutionState {
   status: 'executing' | 'complete';
 }
 
+/**
+ * Named collection aliases improve IntelliSense discoverability for nested session state.
+ */
+export type ReactiveMessagesByTask = Map<string, Message[]>;
+export type ReactiveStreamingMessagesById = Map<string, StreamingMessageState>;
+export type ReactiveToolsByTask = Map<string, ToolExecutionState[]>;
+export type ReactiveLoadedTaskIds = Set<string>;
+
 export interface ReactiveSessionState {
   sessionId: string;
   session: Session | null;
   tasks: Task[];
-  messagesByTask: Map<string, Message[]>;
+  messagesByTask: ReactiveMessagesByTask;
   queuedMessages: Message[];
-  streamingMessages: Map<string, StreamingMessageState>;
-  toolsByTask: Map<string, ToolExecutionState[]>;
-  loadedTaskIds: Set<string>;
+  streamingMessages: ReactiveStreamingMessagesById;
+  toolsByTask: ReactiveToolsByTask;
+  loadedTaskIds: ReactiveLoadedTaskIds;
   connected: boolean;
   loading: boolean;
   error: string | null;
@@ -153,6 +161,50 @@ export class ReactiveSessionHandle {
 
   get state(): ReactiveSessionState {
     return this.stateSnapshot;
+  }
+
+  /**
+   * Returns the task model for a task id if currently known in state.
+   */
+  getTask(taskId: string): Task | undefined {
+    return this.stateSnapshot.tasks.find((task) => task.task_id === taskId);
+  }
+
+  /**
+   * Returns task messages currently cached in reactive state.
+   * This does not trigger hydration. Use loadTaskMessages() first in lazy mode.
+   */
+  getTaskMessages(taskId: string): readonly Message[] {
+    return this.stateSnapshot.messagesByTask.get(taskId) || [];
+  }
+
+  /**
+   * Returns whether a task's messages are currently hydrated in state.
+   */
+  isTaskLoaded(taskId: string): boolean {
+    return this.stateSnapshot.loadedTaskIds.has(taskId);
+  }
+
+  /**
+   * Returns tool executions currently tracked for a task.
+   */
+  getTaskTools(taskId: string): readonly ToolExecutionState[] {
+    return this.stateSnapshot.toolsByTask.get(taskId) || [];
+  }
+
+  /**
+   * Returns one streaming message by message id, if present.
+   */
+  getStreamingMessage(messageId: string): StreamingMessageState | undefined {
+    return this.stateSnapshot.streamingMessages.get(messageId);
+  }
+
+  /**
+   * Returns currently tracked streaming messages. Optionally filter by task.
+   */
+  getStreamingMessages(taskId?: string): StreamingMessageState[] {
+    const messages = Array.from(this.stateSnapshot.streamingMessages.values());
+    return taskId ? messages.filter((message) => message.task_id === taskId) : messages;
   }
 
   subscribe(listener: Listener): () => void {

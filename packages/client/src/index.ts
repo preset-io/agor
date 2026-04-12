@@ -15,9 +15,13 @@ import {
 import {
   attachReactiveSessionApi,
   type ReactiveAgorClient,
+  type ReactiveLoadedTaskIds,
+  type ReactiveMessagesByTask,
   type ReactiveSessionHandle,
   type ReactiveSessionOptions,
   type ReactiveSessionState,
+  type ReactiveStreamingMessagesById,
+  type ReactiveToolsByTask,
   type StreamingMessageState,
   type TaskHydrationMode,
   type ToolExecutionState,
@@ -38,9 +42,13 @@ export type {
 
 export type {
   ReactiveAgorClient,
+  ReactiveLoadedTaskIds,
+  ReactiveMessagesByTask,
   ReactiveSessionHandle,
   ReactiveSessionOptions,
   ReactiveSessionState,
+  ReactiveStreamingMessagesById,
+  ReactiveToolsByTask,
   StreamingMessageState,
   TaskHydrationMode,
   ToolExecutionState,
