@@ -475,16 +475,14 @@ export const ConversationView = React.memo<ConversationViewProps>(
             streamingMessages={streamingMessagesByTask.get(task.task_id)}
             taskMessages={reactiveState?.messagesByTask.get(task.task_id) || []}
             taskMessagesLoaded={!!reactiveState?.loadedTaskIds.has(task.task_id)}
-            onLoadTaskMessages={
-              reactiveSession
-                ? (taskId: string) => reactiveSession.loadTaskMessages(taskId)
-                : undefined
-            }
-            onUnloadTaskMessages={
-              reactiveSession
-                ? (taskId: string) => reactiveSession.unloadTaskMessages(taskId)
-                : undefined
-            }
+            onLoadTaskMessages={(taskId: string) => {
+              if (!reactiveSession) return;
+              return reactiveSession.loadTaskMessages(taskId).then(() => undefined);
+            }}
+            onUnloadTaskMessages={(taskId: string) => {
+              if (!reactiveSession) return;
+              reactiveSession.unloadTaskMessages(taskId);
+            }}
             assistantEmoji={assistantEmoji}
             isLatestTask={taskIndex === tasks.length - 1}
           />
