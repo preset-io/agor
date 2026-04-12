@@ -10,8 +10,7 @@
  * - Archive/Delete/Save actions
  */
 
-import type { AgorClient } from '@agor-live/client';
-import type { Board, CardWithType } from '@agor-live/client';
+import type { AgorClient, Board, CardWithType } from '@agor-live/client';
 import {
   DeleteOutlined,
   EditOutlined,

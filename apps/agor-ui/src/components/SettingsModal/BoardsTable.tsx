@@ -1,5 +1,4 @@
-import type { AgorClient } from '@agor-live/client';
-import type { Board, Session, Worktree } from '@agor-live/client';
+import type { AgorClient, Board, Session, Worktree } from '@agor-live/client';
 import {
   CodeSandboxOutlined,
   CopyOutlined,

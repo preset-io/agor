@@ -4,8 +4,8 @@
  * Extends oclif's default help to show our hero banner and daemon status
  */
 
-import { isDaemonRunning } from '@agor/core/api';
 import { getDaemonUrl } from '@agor/core/config';
+import { isDaemonRunning } from '@agor-live/client';
 import { Help } from '@oclif/core';
 import chalk from 'chalk';
 import { getBanner } from './banner.js';

@@ -4,8 +4,7 @@
  * Throttles cursor movement events and broadcasts to other users via WebSocket
  */
 
-import type { AgorClient } from '@agor-live/client';
-import type { BoardID, CursorMoveEvent } from '@agor-live/client';
+import type { AgorClient, BoardID, CursorMoveEvent } from '@agor-live/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactFlowInstance } from 'reactflow';
 import { PRESENCE_CONFIG } from '../config/presence';

@@ -9,6 +9,7 @@
  * - Groups 3+ sequential tool-only messages into ToolBlock
  */
 
+import type { StreamingMessageState } from '@agor-live/client';
 import {
   type InputRequestContent,
   InputRequestStatus,
@@ -23,7 +24,6 @@ import {
   TaskStatus,
   type User,
 } from '@agor-live/client';
-import type { StreamingMessageState } from '@agor-live/client';
 // TODO: Move normalization to DB or daemon API
 // import { normalizeRawSdkResponse } from '@agor/core/utils/sdk-normalizer';
 import {

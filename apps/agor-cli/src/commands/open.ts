@@ -4,8 +4,8 @@
 
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
-import { isDaemonRunning } from '@agor/core/api';
 import { getDaemonUrl } from '@agor/core/config';
+import { isDaemonRunning } from '@agor-live/client';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import { getUIUrl, isCodespaces } from '../lib/context.js';

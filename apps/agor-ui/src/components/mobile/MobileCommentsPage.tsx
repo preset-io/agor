@@ -1,5 +1,4 @@
-import type { AgorClient } from '@agor-live/client';
-import type { Board, BoardComment, User, Worktree } from '@agor-live/client';
+import type { AgorClient, Board, BoardComment, User, Worktree } from '@agor-live/client';
 import { Alert } from 'antd';
 import { useParams } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';

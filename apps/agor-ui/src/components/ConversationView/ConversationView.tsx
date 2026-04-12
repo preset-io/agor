@@ -12,10 +12,13 @@
  * Based on design in context/explorations/conversation-design.md
  */
 
-import type { AgorClient } from '@agor-live/client';
-import type { MessageID, PermissionScope, SessionID, User } from '@agor-live/client';
-import {
-  type StreamingMessageState,
+import type {
+  AgorClient,
+  MessageID,
+  PermissionScope,
+  SessionID,
+  StreamingMessageState,
+  User,
 } from '@agor-live/client';
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
 import { Alert, Spin, Typography, theme } from 'antd';

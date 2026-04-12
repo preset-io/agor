@@ -105,7 +105,7 @@ graph TB
 **Implementation Details:**
 
 - All Agent SDKs (Claude, Codex, Gemini) run exclusively in executor processes
-- Executor uses `@agor/core/api` Feathers client with session token authentication
+- External clients (UI/CLI) use `@agor-live/client`; executor internals currently use `@agor/core/api` with session token authentication
 - Custom `SessionTokenStrategy` in daemon validates tokens via `SessionTokenService`
 - Session tokens are opaque UUIDs (not JWTs) with 24-hour expiration
 - IPC communication via Unix sockets using JSON-RPC 2.0 protocol

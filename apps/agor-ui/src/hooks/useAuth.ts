@@ -5,8 +5,8 @@
  * Manages user authentication state and provides login/logout functions
  */
 
-import { createRestClient } from '@agor-live/client';
 import type { User } from '@agor-live/client';
+import { createRestClient } from '@agor-live/client';
 import { useCallback, useEffect, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
 import {

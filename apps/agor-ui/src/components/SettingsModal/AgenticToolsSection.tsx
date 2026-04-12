@@ -5,8 +5,7 @@
  * Each tool tab displays its API key configuration and tool-specific settings.
  */
 
-import type { AgorClient } from '@agor-live/client';
-import type { AgorConfig } from '@agor-live/client';
+import type { AgorClient, AgorConfig } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,

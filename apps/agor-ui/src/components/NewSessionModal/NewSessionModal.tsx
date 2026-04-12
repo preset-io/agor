@@ -1,6 +1,6 @@
-import type { AgorClient } from '@agor-live/client';
 import type {
   AgenticToolName,
+  AgorClient,
   CodexApprovalPolicy,
   CodexSandboxMode,
   MCPServer,

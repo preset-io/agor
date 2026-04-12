@@ -1,5 +1,10 @@
-import type { AgorClient } from '@agor-live/client';
-import type { CreateUserInput, MCPServer, UpdateUserInput, User } from '@agor-live/client';
+import type {
+  AgorClient,
+  CreateUserInput,
+  MCPServer,
+  UpdateUserInput,
+  User,
+} from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import {
   Button,

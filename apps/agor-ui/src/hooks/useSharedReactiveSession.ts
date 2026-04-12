@@ -1,10 +1,10 @@
 import {
-  releaseReactiveSession,
-  retainReactiveSession,
   type AgorClient,
   type ReactiveSessionHandle,
   type ReactiveSessionOptions,
   type ReactiveSessionState,
+  releaseReactiveSession,
+  retainReactiveSession,
 } from '@agor-live/client';
 import { useEffect, useState } from 'react';
 

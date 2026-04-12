@@ -1,5 +1,4 @@
-import type { AgorClient } from '@agor-live/client';
-import type { AssistantConfig, Worktree } from '@agor-live/client';
+import type { AgorClient, AssistantConfig, Worktree } from '@agor-live/client';
 import { getAssistantConfig } from '@agor-live/client';
 import { RobotOutlined } from '@ant-design/icons';
 import { Button, Descriptions, Form, Input, Space, Typography } from 'antd';

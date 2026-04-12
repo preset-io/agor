@@ -1,5 +1,10 @@
-import type { AgorClient } from '@agor-live/client';
-import type { Board, BoardEntityObject, CardType, CardWithType } from '@agor-live/client';
+import type {
+  AgorClient,
+  Board,
+  BoardEntityObject,
+  CardType,
+  CardWithType,
+} from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, PlusOutlined, PushpinFilled } from '@ant-design/icons';
 import {
   Button,

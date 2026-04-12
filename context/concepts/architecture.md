@@ -35,7 +35,7 @@ Agor is a **multi-client agent orchestration platform** with a clean separation 
 └─────────────────────┼──────────────────────────────────┘
                       │
 ┌─────────────────────▼──────────────────────────────────┐
-│         Feathers Client (@agor/core/api)               │
+│       Feathers Client (@agor-live/client)              │
 │  REST + WebSocket + TypeScript SDK                     │
 └─────────────────────┬──────────────────────────────────┘
                       │
@@ -315,11 +315,11 @@ client.service('sessions').on('created', session => {
 
 ### CLI Integration
 
-**CLI as Feathers client:**
+**CLI as Feathers client (REST-only):**
 
 ```typescript
 // agor-cli/src/commands/session/list.ts
-import { createClient, isDaemonRunning } from '@agor/core/api';
+import { createRestClient, isDaemonRunning } from '@agor-live/client';
 
 export default class SessionList extends Command {
   async run() {
@@ -330,7 +330,7 @@ export default class SessionList extends Command {
       this.error('Daemon not running. Start it with: cd apps/agor-daemon && pnpm dev');
     }
 
-    const client = createClient(daemonUrl);
+    const client = await createRestClient(daemonUrl);
     const sessions = await client.service('sessions').find({
       query: { $limit: 50, $sort: { created_at: -1 } },
     });
@@ -347,7 +347,7 @@ export default class SessionList extends Command {
 ```typescript
 // agor-ui/src/hooks/useSessions.ts
 import { useState, useEffect } from 'react';
-import { createClient } from '@agor/core/api';
+import { createClient } from '@agor-live/client';
 
 export function useSessions(boardId?: string) {
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -1193,7 +1193,7 @@ Feathers supports multiple ORMs. Drizzle gives:
   - ContextService (context file browser)
   - HealthMonitorService (real-time diagnostics)
 - CLI commands (repo, session, board, user, worktree, config)
-- Feathers client integration (@agor/core/api)
+- External Feathers client integration (`@agor-live/client`) for UI + CLI
 - Worktree-based session isolation (required foreign key)
 - Git operations via simple-git
 - Real-time WebSocket events for multiplayer UI

@@ -2,8 +2,7 @@
  * React hook for board CRUD operations
  */
 
-import type { AgorClient } from '@agor-live/client';
-import type { Board, UUID } from '@agor-live/client';
+import type { AgorClient, Board, UUID } from '@agor-live/client';
 import { useState } from 'react';
 import { useThemedMessage } from '../utils/message';
 

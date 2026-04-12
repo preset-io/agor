@@ -1,5 +1,12 @@
-import type { AgorClient } from '@agor-live/client';
-import type { PermissionMode, Repo, Session, SessionID, User, Worktree } from '@agor-live/client';
+import type {
+  AgorClient,
+  PermissionMode,
+  Repo,
+  Session,
+  SessionID,
+  User,
+  Worktree,
+} from '@agor-live/client';
 import { getAssistantConfig, isAssistant, PermissionScope } from '@agor-live/client';
 import { Alert, Spin } from 'antd';
 import { useParams } from 'react-router-dom';

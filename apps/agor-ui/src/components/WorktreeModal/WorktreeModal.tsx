@@ -1,5 +1,5 @@
-import type { AgorClient } from '@agor-live/client';
 import type {
+  AgorClient,
   Board,
   BoardEntityObject,
   MCPServer,

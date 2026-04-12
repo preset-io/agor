@@ -4,9 +4,9 @@
  * Reduces boilerplate by providing common functionality like daemon connection checking.
  */
 
-import type { AgorClient } from '@agor/core/api';
-import { createRestClient, getApiKeyFromEnv, isDaemonRunning } from '@agor/core/api';
 import { getDaemonUrl } from '@agor/core/config';
+import type { AgorClient } from '@agor-live/client';
+import { createRestClient, getApiKeyFromEnv, isDaemonRunning } from '@agor-live/client';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import { loadToken } from './lib/auth';

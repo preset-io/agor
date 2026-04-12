@@ -4,9 +4,9 @@
  * Provides functions to create, update, fork, spawn sessions
  */
 
-import type { AgorClient } from '@agor-live/client';
 import type {
   AgenticToolName,
+  AgorClient,
   PermissionMode,
   Session,
   SessionID,

@@ -10,12 +10,11 @@ import type { AgorClient as CoreAgorClient } from '../../core/src/api/index';
 import {
   createClient as createCoreClient,
   createRestClient as createCoreRestClient,
+  getApiKeyFromEnv,
   isDaemonRunning,
 } from '../../core/src/api/index';
 import {
   attachReactiveSessionApi,
-  releaseReactiveSession,
-  retainReactiveSession,
   type ReactiveAgorClient,
   type ReactiveLoadedTaskIds,
   type ReactiveMessagesByTask,
@@ -24,6 +23,8 @@ import {
   type ReactiveSessionState,
   type ReactiveStreamingMessagesById,
   type ReactiveToolsByTask,
+  releaseReactiveSession,
+  retainReactiveSession,
   type StreamingMessageState,
   type TaskHydrationMode,
   type ToolExecutionState,
@@ -56,12 +57,12 @@ export type {
   ToolExecutionState,
 };
 
+export * from '../../core/src/config/browser';
+export type { AgorConfig } from '../../core/src/config/types';
+export * from '../../core/src/models/index';
+export * from '../../core/src/templates/handlebars-helpers';
 // Re-export full browser-safe type/runtime surface for UI consumers.
 export * from '../../core/src/types/index';
-export * from '../../core/src/config/browser';
-export * from '../../core/src/models/index';
-export type { AgorConfig } from '../../core/src/config/types';
-export * from '../../core/src/templates/handlebars-helpers';
 
 export function createClient(...args: Parameters<typeof createCoreClient>): ReactiveAgorClient {
   const client = createCoreClient(...args);
@@ -76,4 +77,5 @@ export async function createRestClient(
 
 export { attachReactiveSessionApi };
 export { releaseReactiveSession, retainReactiveSession };
+export { getApiKeyFromEnv };
 export { isDaemonRunning };

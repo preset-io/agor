@@ -1,5 +1,4 @@
-import type { AgorClient } from '@agor-live/client';
-import type { Session, SessionID, Worktree } from '@agor-live/client';
+import type { AgorClient, Session, SessionID, Worktree } from '@agor-live/client';
 import {
   EyeInvisibleOutlined,
   EyeOutlined,

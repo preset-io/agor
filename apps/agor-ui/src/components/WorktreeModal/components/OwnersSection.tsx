@@ -8,8 +8,7 @@
  * @see context/explorations/unix-user-modes.md
  */
 
-import type { AgorClient } from '@agor-live/client';
-import type { User, Worktree, WorktreePermissionLevel } from '@agor-live/client';
+import type { AgorClient, User, Worktree, WorktreePermissionLevel } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { UserOutlined, WarningOutlined } from '@ant-design/icons';
 import { Alert, Button, Form, Select, Space, Typography } from 'antd';

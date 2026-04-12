@@ -1,5 +1,12 @@
-import type { AgorClient } from '@agor-live/client';
-import type { Board, MCPServer, Repo, Session, User, Worktree } from '@agor-live/client';
+import type {
+  AgorClient,
+  Board,
+  MCPServer,
+  Repo,
+  Session,
+  User,
+  Worktree,
+} from '@agor-live/client';
 import { hasMinimumRole, isAssistant, ROLES } from '@agor-live/client';
 import { DeleteOutlined, FolderOutlined, LinkOutlined } from '@ant-design/icons';
 import { Button, Descriptions, Form, Input, Select, Space, Tooltip, Typography } from 'antd';

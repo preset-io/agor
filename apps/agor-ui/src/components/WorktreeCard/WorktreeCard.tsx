@@ -1,5 +1,12 @@
-import type { AgorClient } from '@agor-live/client';
-import type { Repo, Session, SessionID, SpawnConfig, User, Worktree } from '@agor-live/client';
+import type {
+  AgorClient,
+  Repo,
+  Session,
+  SessionID,
+  SpawnConfig,
+  User,
+  Worktree,
+} from '@agor-live/client';
 import {
   getAssistantConfig,
   getGatewaySource as getGatewaySourceCore,
