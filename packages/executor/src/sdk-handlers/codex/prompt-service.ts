@@ -503,8 +503,7 @@ export class CodexPromptService {
    */
   private itemToToolUse(
     item: ThreadItem,
-    status: 'started' | 'completed',
-    workingDirectory?: string
+    status: 'started' | 'completed'
   ): {
     id: string;
     name: string;
@@ -529,7 +528,6 @@ export class CodexPromptService {
           name: 'edit_files',
           input: {
             changes: item.changes || [],
-            ...(workingDirectory ? { working_directory: workingDirectory } : {}),
           },
           ...(status === 'completed' && {
             status: item.status,
@@ -821,7 +819,7 @@ export class CodexPromptService {
           case 'item.started':
             // Emit tool_start events for tool items
             if (event.item) {
-              const toolUseStart = this.itemToToolUse(event.item, 'started', worktree.path);
+              const toolUseStart = this.itemToToolUse(event.item, 'started');
               if (toolUseStart) {
                 yield {
                   type: 'tool_start',
@@ -843,7 +841,7 @@ export class CodexPromptService {
             // Collect completed items and emit tool_complete events
             if (event.item) {
               // Emit tool_complete for tool items
-              const toolUseComplete = this.itemToToolUse(event.item, 'completed', worktree.path);
+              const toolUseComplete = this.itemToToolUse(event.item, 'completed');
               if (toolUseComplete) {
                 // Add to allToolUses for backward compatibility (tool_uses field)
                 allToolUses.push({

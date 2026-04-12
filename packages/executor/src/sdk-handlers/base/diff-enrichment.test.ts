@@ -71,7 +71,6 @@ describe('diff enrichment', () => {
         name: 'edit_files',
         input: {
           changes: [{ path: 'src/example.ts', kind: 'update' }],
-          working_directory: repoDir,
         },
       },
       {
@@ -81,7 +80,7 @@ describe('diff enrichment', () => {
       },
     ];
 
-    enrichContentBlocks(contentBlocks);
+    enrichContentBlocks(contentBlocks, { workingDirectory: repoDir });
 
     const toolResult = contentBlocks[1];
     expect(toolResult.diff?.files).toHaveLength(1);
@@ -90,6 +89,42 @@ describe('diff enrichment', () => {
     const lines = toolResult.diff?.files?.[0]?.structuredPatch?.[0]?.lines ?? [];
     expect(lines.some((line) => line.includes('-const value = "old";'))).toBe(true);
     expect(lines.some((line) => line.includes('+const value = "new";'))).toBe(true);
+  });
+
+  it('enriches Codex edit_files delete operations with relative paths', () => {
+    const repoDir = createTempGitRepo();
+    const srcDir = path.join(repoDir, 'src');
+    fs.mkdirSync(srcDir, { recursive: true });
+    const filePath = path.join(srcDir, 'delete-me.ts');
+
+    fs.writeFileSync(filePath, 'const removed = true;\n', 'utf-8');
+    execSync('git add .', { cwd: repoDir, stdio: 'ignore' });
+    execSync('git commit -m "initial"', { cwd: repoDir, stdio: 'ignore' });
+    fs.rmSync(filePath);
+
+    const contentBlocks: TestContentBlock[] = [
+      {
+        type: 'tool_use',
+        id: 'tool-codex-edit-files-delete-1',
+        name: 'edit_files',
+        input: {
+          changes: [{ path: 'src/delete-me.ts', kind: 'delete' }],
+        },
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'tool-codex-edit-files-delete-1',
+        content: '[completed]',
+      },
+    ];
+
+    enrichContentBlocks(contentBlocks, { workingDirectory: repoDir });
+
+    const toolResult = contentBlocks[1];
+    expect(toolResult.diff?.files).toHaveLength(1);
+    expect(toolResult.diff?.files?.[0]?.kind).toBe('delete');
+    const lines = toolResult.diff?.files?.[0]?.structuredPatch?.[0]?.lines ?? [];
+    expect(lines.some((line) => line.includes('-const removed = true;'))).toBe(true);
   });
 
   it('preserves Claude split-message Edit enrichment behavior', () => {

@@ -18,7 +18,7 @@
  *    to enrich adjacent tool_result blocks in one pass.
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { FileDiff, StructuredPatchHunk } from '@agor/core/types';
@@ -35,6 +35,10 @@ const CONTEXT_LINES = 3;
 interface ToolUseInfo {
   name: string;
   input: Record<string, unknown>;
+}
+
+export interface DiffEnrichmentContext {
+  workingDirectory?: string;
 }
 
 interface ContentBlock {
@@ -113,7 +117,10 @@ export function enrichToolResults(contentBlocks: ContentBlock[]): void {
  * Used by Codex, OpenCode, and Gemini handlers.
  * Mutates content blocks in-place. Best-effort.
  */
-export function enrichContentBlocks(contentBlocks: ContentBlock[]): void {
+export function enrichContentBlocks(
+  contentBlocks: ContentBlock[],
+  context?: DiffEnrichmentContext
+): void {
   // Build local map from tool_use blocks in this array
   const localToolUses = new Map<string, ToolUseInfo>();
   for (const block of contentBlocks) {
@@ -134,7 +141,7 @@ export function enrichContentBlocks(contentBlocks: ContentBlock[]): void {
     const toolUse = localToolUses.get(toolUseId);
     if (!toolUse) continue;
 
-    enrichBlock(block, toolUse.name, toolUse.input);
+    enrichBlock(block, toolUse.name, toolUse.input, context);
   }
 }
 
@@ -149,7 +156,8 @@ export function enrichContentBlocks(contentBlocks: ContentBlock[]): void {
 function enrichBlock(
   block: ContentBlock,
   toolName: string,
-  toolInput: Record<string, unknown>
+  toolInput: Record<string, unknown>,
+  context?: DiffEnrichmentContext
 ): void {
   try {
     // Normalize tool names across SDKs (Claude: "Edit", Codex: "edit", etc.)
@@ -159,7 +167,7 @@ function enrichBlock(
     } else if (normalized === 'write') {
       enrichWriteResult(block, toolInput);
     } else if (normalized === 'edit_files') {
-      enrichEditFilesResult(block, toolInput);
+      enrichEditFilesResult(block, toolInput, context);
     }
   } catch {
     // Best effort — swallow any errors
@@ -275,11 +283,14 @@ function enrichWriteResult(block: ContentBlock, input: Record<string, unknown>):
  * No old/new content is provided — we reconstruct diffs by comparing
  * the current file (post-edit) against git HEAD.
  */
-function enrichEditFilesResult(block: ContentBlock, input: Record<string, unknown>): void {
+function enrichEditFilesResult(
+  block: ContentBlock,
+  input: Record<string, unknown>,
+  context?: DiffEnrichmentContext
+): void {
   const changes = input.changes as Array<{ path: string; kind: string }> | undefined;
   if (!changes || changes.length === 0) return;
-  const workingDirectory =
-    typeof input.working_directory === 'string' ? input.working_directory : undefined;
+  const workingDirectory = context?.workingDirectory;
 
   // Find git root once for relative path resolution
   let gitRoot: string;
@@ -319,11 +330,8 @@ function enrichEditFilesResult(block: ContentBlock, input: Record<string, unknow
       } else if (kind === 'delete') {
         // Deleted file — get old content from git
         const relativePath = path.relative(gitRoot, resolvedPath);
-        const oldContent = execSync(`git show HEAD:${relativePath}`, {
-          encoding: 'utf-8',
-          timeout: 5000,
-          cwd: gitRoot,
-        });
+        const oldContent = gitShowHeadFile(gitRoot, relativePath);
+        if (oldContent === null) continue;
         const patch = structuredPatch(filePath, filePath, oldContent, '', '', '', {
           context: CONTEXT_LINES,
         });
@@ -336,14 +344,8 @@ function enrichEditFilesResult(block: ContentBlock, input: Record<string, unknow
         if (stat.size > MAX_FILE_SIZE_BYTES) continue;
         const currentContent = fs.readFileSync(resolvedPath, 'utf-8');
         const relativePath = path.relative(gitRoot, resolvedPath);
-        let oldContent: string;
-        try {
-          oldContent = execSync(`git show HEAD:${relativePath}`, {
-            encoding: 'utf-8',
-            timeout: 5000,
-            cwd: gitRoot,
-          });
-        } catch {
+        const oldContent = gitShowHeadFile(gitRoot, relativePath);
+        if (oldContent === null) {
           // File may be new (not in HEAD) — treat as addition
           const patch = structuredPatch(filePath, filePath, '', currentContent, '', '', {
             context: 0,
@@ -371,5 +373,31 @@ function enrichEditFilesResult(block: ContentBlock, input: Record<string, unknow
       structuredPatch: fileDiffs[0].structuredPatch,
       files: fileDiffs,
     };
+  }
+}
+
+function gitShowHeadFile(gitRoot: string, relativePath: string): string | null {
+  // Ensure the ref path is safe and uses git's forward-slash separator.
+  const normalized = path.posix.normalize(relativePath.split(path.sep).join('/'));
+  if (
+    !normalized ||
+    normalized.startsWith('/') ||
+    normalized === '..' ||
+    normalized.startsWith('../') ||
+    normalized.includes('\0') ||
+    normalized.includes('\n') ||
+    normalized.includes('\r')
+  ) {
+    return null;
+  }
+
+  try {
+    return execFileSync('git', ['show', `HEAD:${normalized}`], {
+      encoding: 'utf-8',
+      timeout: 5000,
+      cwd: gitRoot,
+    });
+  } catch {
+    return null;
   }
 }

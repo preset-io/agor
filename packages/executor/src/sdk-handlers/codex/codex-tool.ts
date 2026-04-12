@@ -53,6 +53,7 @@ export class CodexTool implements ITool {
   private promptService?: CodexPromptService;
   private messagesRepo?: MessagesRepository;
   private sessionsRepo?: SessionRepository;
+  private worktreesRepo?: WorktreeRepository;
   private messagesService?: MessagesService;
   private tasksService?: TasksService;
 
@@ -71,6 +72,7 @@ export class CodexTool implements ITool {
   ) {
     this.messagesRepo = messagesRepo;
     this.sessionsRepo = sessionsRepo;
+    this.worktreesRepo = worktreesRepo;
     this.messagesService = messagesService;
     this.tasksService = tasksService;
 
@@ -165,6 +167,15 @@ export class CodexTool implements ITool {
     let rawSdkResponse: unknown;
     let streamStarted = false; // tracks whether onStreamStart succeeded (for safe onStreamEnd)
     let wasStopped = false;
+    let workingDirectory: string | undefined;
+
+    if (this.sessionsRepo && this.worktreesRepo) {
+      const session = await this.sessionsRepo.findById(sessionId);
+      if (session) {
+        const worktree = await this.worktreesRepo.findById(session.worktree_id);
+        workingDirectory = worktree?.path;
+      }
+    }
 
     for await (const event of this.promptService.promptSessionStreaming(
       sessionId,
@@ -281,7 +292,7 @@ export class CodexTool implements ITool {
         ];
 
         // Best-effort diff enrichment for Edit/Write tool results
-        enrichContentBlocks(toolContent);
+        enrichContentBlocks(toolContent, { workingDirectory });
 
         await this.createAssistantMessage(
           sessionId,
