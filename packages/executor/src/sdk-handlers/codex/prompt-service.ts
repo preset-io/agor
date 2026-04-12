@@ -31,7 +31,7 @@ import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID } from '../../types.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { DEFAULT_CODEX_MODEL } from './models.js';
-import { extractCodexTokenUsage } from './usage.js';
+import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
 
 export interface CodexPromptResult {
   /** Complete assistant response from Codex */
@@ -113,6 +113,11 @@ export type CodexStreamEvent =
       resolvedModel?: string;
       usage?: TokenUsage;
       rawSdkEvent?: import('../../types/sdk-response').CodexSdkResponse; // The actual turn.completed event from Codex SDK
+      rawContextUsage?: {
+        totalTokens: number;
+        maxTokens: number;
+        percentage: number;
+      };
     };
 
 export class CodexPromptService {
@@ -848,6 +853,13 @@ export class CodexPromptService {
       const resolvedModel: string | undefined = session.model_config?.model || undefined;
       let allToolUses: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
       let todoIdsEmittedViaUpdate = new Set<string>();
+      let latestContextUsage:
+        | {
+            totalTokens: number;
+            maxTokens: number;
+            percentage: number;
+          }
+        | undefined;
 
       let eventCount = 0;
 
@@ -867,10 +879,21 @@ export class CodexPromptService {
           break;
         }
 
+        if ((event as { type?: string }).type === 'event_msg') {
+          // Codex emits token_count as generic event_msg payloads.
+          // Capture the latest snapshot so turn.completed can return context usage.
+          const contextSnapshot = extractCodexContextSnapshotFromEvent(event);
+          if (contextSnapshot) {
+            latestContextUsage = contextSnapshot;
+          }
+          continue;
+        }
+
         switch (event.type) {
           case 'turn.started':
             allToolUses = []; // Reset tool uses for new turn
             todoIdsEmittedViaUpdate = new Set<string>();
+            latestContextUsage = undefined;
             break;
 
           case 'item.started':
@@ -1014,6 +1037,7 @@ export class CodexPromptService {
               resolvedModel: resolvedModel || DEFAULT_CODEX_MODEL,
               usage: mappedUsage,
               rawSdkEvent: event, // Pass through the actual SDK event (UNMUTATED)
+              rawContextUsage: latestContextUsage,
             };
 
             // Exit the event loop after turn completion

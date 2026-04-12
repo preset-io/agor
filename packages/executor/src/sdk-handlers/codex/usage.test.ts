@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { extractCodexTokenUsage } from './usage.js';
+import {
+  extractCodexContextSnapshotFromEvent,
+  extractCodexContextWindowUsage,
+  extractCodexTokenUsage,
+} from './usage.js';
 
 describe('extractCodexTokenUsage', () => {
   it('returns undefined for non-object payloads', () => {
@@ -46,5 +50,106 @@ describe('extractCodexTokenUsage', () => {
       cache_read_tokens: 25,
       total_tokens: 150,
     });
+  });
+});
+
+describe('extractCodexContextWindowUsage', () => {
+  it('uses input + cached input tokens for turn-level context usage', () => {
+    const result = extractCodexContextWindowUsage({
+      type: 'turn.completed',
+      usage: {
+        input_tokens: 42_000,
+        cached_input_tokens: 8_000,
+        output_tokens: 1_500,
+      },
+    });
+
+    expect(result).toBe(50_000);
+  });
+
+  it('supports direct usage payloads and camelCase keys', () => {
+    const result = extractCodexContextWindowUsage({
+      inputTokens: 10_000,
+      cachedInputTokens: 2_000,
+      outputTokens: 900,
+    });
+
+    expect(result).toBe(12_000);
+  });
+
+  it('falls back to total tokens when input fields are unavailable (legacy)', () => {
+    const result = extractCodexContextWindowUsage({
+      type: 'turn.completed',
+      usage: {
+        total_tokens: 65_432,
+      },
+    });
+
+    expect(result).toBe(65_432);
+  });
+
+  it('returns undefined for invalid payloads', () => {
+    expect(extractCodexContextWindowUsage(undefined)).toBeUndefined();
+    expect(extractCodexContextWindowUsage(null)).toBeUndefined();
+    expect(extractCodexContextWindowUsage('bad')).toBeUndefined();
+    expect(extractCodexContextWindowUsage({ usage: { output_tokens: 123 } })).toBeUndefined();
+  });
+});
+
+describe('extractCodexContextSnapshotFromEvent', () => {
+  it('extracts total usage + model context window from token_count event_msg', () => {
+    const result = extractCodexContextSnapshotFromEvent({
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: {
+            total_tokens: 210_000,
+          },
+          last_token_usage: {
+            total_tokens: 12_000,
+          },
+          model_context_window: 272_000,
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      totalTokens: 210_000,
+      maxTokens: 272_000,
+      percentage: 77,
+    });
+  });
+
+  it('clamps percentage to 100 for over-limit totals', () => {
+    const result = extractCodexContextSnapshotFromEvent({
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: {
+            total_tokens: 1_000_000,
+          },
+          model_context_window: 272_000,
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      totalTokens: 1_000_000,
+      maxTokens: 272_000,
+      percentage: 100,
+    });
+  });
+
+  it('returns undefined for non-token_count or malformed events', () => {
+    expect(extractCodexContextSnapshotFromEvent(undefined)).toBeUndefined();
+    expect(extractCodexContextSnapshotFromEvent({ type: 'turn.completed' })).toBeUndefined();
+    expect(
+      extractCodexContextSnapshotFromEvent({
+        type: 'event_msg',
+        payload: { type: 'other' },
+      })
+    ).toBeUndefined();
   });
 });

@@ -24,6 +24,7 @@ import {
 import { Collapse, Popover, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
+import { getContextWindowPercentage } from '../../utils/contextWindow';
 import { Tag } from '../Tag';
 
 /**
@@ -410,7 +411,7 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
   style,
 }) => {
   // Handle division by zero - if no limit, show as unknown percentage
-  const percentage = limit > 0 ? Math.round((used / limit) * 100) : 0;
+  const percentage = limit > 0 ? Math.round(getContextWindowPercentage(used, limit)) : 0;
   const hasLimit = limit > 0;
 
   // Color-code based on usage: green (<50%), yellow (50-80%), red (>80%)

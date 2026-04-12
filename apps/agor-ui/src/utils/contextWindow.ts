@@ -20,6 +20,11 @@ export function getContextWindowColor(percentage: number): string {
   return 'rgba(255, 77, 79, 0.12)'; // Red
 }
 
+function clampPercentage(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, value));
+}
+
 /**
  * Create a horizontal gradient background for context window progress
  *
@@ -33,7 +38,7 @@ export function getContextWindowGradient(
 ): string | undefined {
   if (!used || !limit) return undefined;
 
-  const percentage = (used / limit) * 100;
+  const percentage = clampPercentage((used / limit) * 100);
   const color = getContextWindowColor(percentage);
 
   return `linear-gradient(to right, ${color} ${percentage}%, transparent ${percentage}%)`;
@@ -51,5 +56,5 @@ export function getContextWindowPercentage(
   limit: number | undefined
 ): number {
   if (!used || !limit) return 0;
-  return (used / limit) * 100;
+  return clampPercentage((used / limit) * 100);
 }

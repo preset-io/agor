@@ -436,23 +436,14 @@ export async function executeToolTask(params: {
       }
     }
 
-    // Use SDK's authoritative context usage when available (Claude Code),
-    // fall back to tool-specific computation for other tools (Codex, Gemini).
+    // Use SDK's authoritative context usage when available,
+    // fall back to tool-specific computation otherwise.
     // Handled independently of rawSdkResponse since the two data sources are separate.
     if (result.rawContextUsage && result.rawContextUsage.totalTokens > 0) {
       patchData.computed_context_window = result.rawContextUsage.totalTokens;
       console.log(
         `[${toolName}] SDK context usage: ${result.rawContextUsage.totalTokens}/${result.rawContextUsage.maxTokens} tokens (${result.rawContextUsage.percentage}%)`
       );
-
-      // Store rawContextUsage in the raw_sdk_response for debugging
-      if (patchData.raw_sdk_response && typeof patchData.raw_sdk_response === 'object') {
-        (patchData.raw_sdk_response as Record<string, unknown>).rawContextUsage = {
-          totalTokens: result.rawContextUsage.totalTokens,
-          maxTokens: result.rawContextUsage.maxTokens,
-          percentage: result.rawContextUsage.percentage,
-        };
-      }
 
       // Override contextWindowLimit in normalized response with the authoritative
       // maxTokens from getContextUsage() so the UI computes percentage correctly
@@ -461,8 +452,13 @@ export async function executeToolTask(params: {
         typeof patchData.normalized_sdk_response === 'object' &&
         result.rawContextUsage.maxTokens > 0
       ) {
-        (patchData.normalized_sdk_response as Record<string, unknown>).contextWindowLimit =
-          result.rawContextUsage.maxTokens;
+        const normalizedResponse = patchData.normalized_sdk_response as Record<string, unknown>;
+        normalizedResponse.contextWindowLimit = result.rawContextUsage.maxTokens;
+        normalizedResponse.contextUsageSnapshot = {
+          totalTokens: result.rawContextUsage.totalTokens,
+          maxTokens: result.rawContextUsage.maxTokens,
+          percentage: result.rawContextUsage.percentage,
+        };
       }
     } else if (tool.computeContextWindow) {
       try {

@@ -308,6 +308,77 @@ describe('CodexPromptService - Todo normalization', () => {
 });
 
 describe('CodexPromptService - tool payload mapping', () => {
+  it('captures token_count context snapshot and forwards it on turn completion', async () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockWorktreesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+
+    const serviceWithPrivates = service as any;
+    serviceWithPrivates.ensureCodexSessionContext = vi.fn().mockResolvedValue('/tmp');
+    serviceWithPrivates.ensureCodexConfig = vi.fn().mockResolvedValue(0);
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    mockSessionsRepo.findById.mockResolvedValue({
+      session_id: 'session-ctx',
+      worktree_id: 'worktree-1',
+      created_at: new Date().toISOString(),
+      sdk_session_id: null,
+      permission_config: { codex: {} },
+      model_config: {},
+      mcp_token: 'test-token',
+    });
+    mockWorktreesRepo.findById.mockResolvedValue({
+      worktree_id: 'worktree-1',
+      path: process.cwd(),
+    });
+
+    mockStreamEvents = [
+      { type: 'turn.started' },
+      {
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          info: {
+            total_token_usage: {
+              total_tokens: 210000,
+            },
+            last_token_usage: {
+              total_tokens: 12000,
+            },
+            model_context_window: 272000,
+          },
+        },
+      },
+      {
+        type: 'turn.completed',
+        usage: {
+          input_tokens: 1000,
+          cached_input_tokens: 500,
+          output_tokens: 300,
+        },
+      },
+    ];
+
+    const emitted: Array<Record<string, unknown>> = [];
+    for await (const event of service.promptSessionStreaming('session-ctx' as any, 'review')) {
+      emitted.push(event as Record<string, unknown>);
+    }
+
+    const completeEvent = emitted.find((event) => event.type === 'complete');
+    expect(completeEvent).toBeTruthy();
+    expect(completeEvent?.rawContextUsage).toEqual({
+      totalTokens: 210000,
+      maxTokens: 272000,
+      percentage: 77,
+    });
+  });
+
   it('preserves MCP result content on completion', () => {
     const service = new CodexPromptService(
       mockMessagesRepo,

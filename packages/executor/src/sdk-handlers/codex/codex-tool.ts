@@ -42,6 +42,7 @@ import type {
 } from '../claude/claude-tool.js';
 import { DEFAULT_CODEX_MODEL } from './models.js';
 import { CodexPromptService } from './prompt-service.js';
+import { extractCodexContextWindowUsage } from './usage.js';
 
 interface CodexExecutionResult {
   userMessageId: MessageID;
@@ -51,6 +52,11 @@ interface CodexExecutionResult {
   contextWindowLimit?: number;
   model?: string;
   rawSdkResponse?: unknown; // Raw SDK event from Codex
+  rawContextUsage?: {
+    totalTokens: number;
+    maxTokens: number;
+    percentage: number;
+  };
   wasStopped?: boolean; // True if execution was stopped early via stopTask()
 }
 
@@ -186,6 +192,13 @@ export class CodexTool implements ITool {
     let resolvedModel: string | undefined;
     let currentMessageId: MessageID | null = null;
     let tokenUsage: TokenUsage | undefined;
+    let rawContextUsage:
+      | {
+          totalTokens: number;
+          maxTokens: number;
+          percentage: number;
+        }
+      | undefined;
     let _streamStartTime = Date.now();
     let _firstTokenTime: number | null = null;
     let rawSdkResponse: unknown;
@@ -277,6 +290,10 @@ export class CodexTool implements ITool {
 
       if (event.type === 'complete' && event.usage) {
         tokenUsage = event.usage;
+      }
+
+      if (event.type === 'complete' && event.rawContextUsage) {
+        rawContextUsage = event.rawContextUsage;
       }
 
       // Capture raw SDK response for token accounting
@@ -530,6 +547,7 @@ export class CodexTool implements ITool {
       contextWindowLimit: undefined,
       model: resolvedModel || DEFAULT_CODEX_MODEL,
       rawSdkResponse,
+      rawContextUsage,
       wasStopped,
     };
   }
@@ -696,6 +714,13 @@ export class CodexTool implements ITool {
     let _contextWindow: number | undefined;
     let _contextWindowLimit: number | undefined;
     let rawSdkResponse: unknown;
+    let rawContextUsage:
+      | {
+          totalTokens: number;
+          maxTokens: number;
+          percentage: number;
+        }
+      | undefined;
     let wasStopped = false;
 
     for await (const event of this.promptService.promptSessionStreaming(
@@ -722,6 +747,10 @@ export class CodexTool implements ITool {
 
       if (event.type === 'complete' && event.usage) {
         tokenUsage = event.usage;
+      }
+
+      if (event.type === 'complete' && event.rawContextUsage) {
+        rawContextUsage = event.rawContextUsage;
       }
 
       // Capture raw SDK response for token accounting
@@ -771,6 +800,7 @@ export class CodexTool implements ITool {
       contextWindowLimit: undefined,
       model: resolvedModel || DEFAULT_CODEX_MODEL,
       rawSdkResponse,
+      rawContextUsage,
       wasStopped,
     };
   }
@@ -831,33 +861,39 @@ export class CodexTool implements ITool {
   }
 
   /**
-   * Compute cumulative context window usage for a Codex session
+   * Compute context window usage for a Codex session
    *
-   * For Codex, the SDK already provides cumulative token counts in each task's response.
-   * The inputTokens field includes the full conversation history up to that point.
-   * We just need to extract and return the contextWindow from the current task's SDK response.
+   * Codex SDK usage is reported per turn (not cumulative across tasks).
+   * For context occupancy, use input-side tokens only:
+   * - usage.input_tokens
+   * - usage.cached_input_tokens
+   *
+   * Output tokens are excluded because they are generated during the turn and
+   * are not prompt-side context occupancy.
    *
    * @param sessionId - Session ID to compute context for
    * @param currentTaskId - Optional current task ID (not used for Codex, kept for interface consistency)
    * @param currentRawSdkResponse - Optional raw SDK response from current task (if available in memory)
-   * @returns Promise resolving to computed context window usage in tokens
+   * @returns Promise resolving to context usage in tokens
    */
   async computeContextWindow(
     sessionId: string,
     _currentTaskId?: string,
     currentRawSdkResponse?: unknown
   ): Promise<number> {
-    // Codex SDK provides cumulative tokens in each turn.completed event
-    // Simply extract input_tokens + output_tokens from the raw response
     if (currentRawSdkResponse) {
-      const response = currentRawSdkResponse as import('../../types/sdk-response').CodexSdkResponse;
-      const inputTokens = response.usage?.input_tokens || 0;
-      const outputTokens = response.usage?.output_tokens || 0;
-      const cumulativeTokens = inputTokens + outputTokens;
-      console.log(
-        `✅ Computed context window for Codex session ${sessionId}: ${cumulativeTokens} tokens (from current task)`
+      const contextWindow = extractCodexContextWindowUsage(currentRawSdkResponse);
+      if (contextWindow !== undefined) {
+        console.log(
+          `✅ Computed context window for Codex session ${sessionId}: ${contextWindow} tokens`
+        );
+        return contextWindow;
+      }
+
+      console.warn(
+        `⚠️  Could not extract Codex context window usage from rawSdkResponse for session ${sessionId}, returning 0`
       );
-      return cumulativeTokens;
+      return 0;
     }
 
     // IMPORTANT: Do NOT query database when currentRawSdkResponse is not provided
