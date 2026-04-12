@@ -31,6 +31,51 @@ interface UseAuthReturn extends AuthState {
   reAuthenticate: () => Promise<void>;
 }
 
+function isLikelyConnectionError(error: unknown): boolean {
+  const errorMessage =
+    error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  const errorName = error instanceof Error ? error.constructor.name : '';
+  const errorObject = error as
+    | {
+        status?: unknown;
+        statusCode?: unknown;
+      }
+    | undefined;
+
+  const status =
+    typeof errorObject?.statusCode === 'number'
+      ? errorObject.statusCode
+      : typeof errorObject?.status === 'number'
+        ? errorObject.status
+        : undefined;
+
+  // Definite auth failures should not be treated as connectivity issues.
+  if (status === 401 || status === 403) {
+    return false;
+  }
+
+  if (status === 0 || status === 408 || status === 429 || (status !== undefined && status >= 500)) {
+    return true;
+  }
+
+  if (errorName === 'TypeError' && errorMessage.includes('fetch')) {
+    return true;
+  }
+
+  return (
+    errorMessage.includes('connection') ||
+    errorMessage.includes('timeout') ||
+    errorMessage.includes('websocket') ||
+    errorMessage.includes('transport') ||
+    errorMessage.includes('failed to fetch') ||
+    errorMessage.includes('networkerror') ||
+    errorMessage.includes('network error') ||
+    errorMessage.includes('load failed') ||
+    errorName === 'TransportError' ||
+    errorName === 'WebSocketError'
+  );
+}
+
 /**
  * Authentication hook
  */
@@ -122,16 +167,7 @@ export function useAuth(): UseAuthReturn {
       });
     } catch (error) {
       // Connection or authentication error - retry if daemon just restarted
-      const errorMessage =
-        error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-      const errorName = error instanceof Error ? error.constructor.name : '';
-      const isConnectionError =
-        errorMessage.includes('connection') ||
-        errorMessage.includes('timeout') ||
-        errorMessage.includes('websocket') ||
-        errorMessage.includes('transport') ||
-        errorName === 'TransportError' ||
-        errorName === 'WebSocketError';
+      const isConnectionError = isLikelyConnectionError(error);
 
       if (isConnectionError && retryCount < MAX_RETRIES) {
         const delay = Math.min(2000 * 1.5 ** retryCount, 10000); // Exponential backoff: 2s, 3s, 4.5s, 6.75s, 10s (capped)
@@ -222,15 +258,22 @@ export function useAuth(): UseAuthReturn {
         }));
       } catch (error) {
         console.error('Failed to auto-refresh token:', error);
-        // Token refresh failed, user needs to login again
-        clearTokens();
-        setState({
-          user: null,
-          accessToken: null,
-          authenticated: false,
-          loading: false,
-          error: 'Session expired, please login again',
-        });
+        if (isLikelyConnectionError(error)) {
+          setState((prev) => ({
+            ...prev,
+            error: 'Connection lost - waiting for daemon...',
+          }));
+        } else {
+          // Definite refresh/auth failure: token refresh failed, user must login again.
+          clearTokens();
+          setState({
+            user: null,
+            accessToken: null,
+            authenticated: false,
+            loading: false,
+            error: 'Session expired, please login again',
+          });
+        }
       }
     }, REFRESH_INTERVAL);
 

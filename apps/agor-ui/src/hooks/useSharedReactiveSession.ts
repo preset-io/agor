@@ -37,9 +37,12 @@ export function useSharedReactiveSession(
 
     const sharedHandle = retainReactiveSession(client, sessionId, { taskHydration });
     setHandle(sharedHandle);
+    let disposed = false;
 
     const sync = () => {
-      setState(sharedHandle.state);
+      if (!disposed) {
+        setState(sharedHandle.state);
+      }
     };
 
     sync();
@@ -47,6 +50,7 @@ export function useSharedReactiveSession(
     sharedHandle.ready().then(sync).catch(sync);
 
     return () => {
+      disposed = true;
       unsubscribe();
       releaseReactiveSession(client, sessionId, { taskHydration });
     };

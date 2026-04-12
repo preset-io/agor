@@ -395,6 +395,9 @@ importers:
 
   packages/agor-live:
     dependencies:
+      '@agor-live/client':
+        specifier: workspace:*
+        version: link:../client
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.2.87
         version: 0.2.87(zod@4.3.6)
