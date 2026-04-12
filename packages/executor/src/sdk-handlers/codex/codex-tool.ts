@@ -57,6 +57,7 @@ interface CodexExecutionResult {
     maxTokens: number;
     percentage: number;
   };
+  lastItemRawPayload?: unknown;
   wasStopped?: boolean; // True if execution was stopped early via stopTask()
 }
 
@@ -199,6 +200,7 @@ export class CodexTool implements ITool {
           percentage: number;
         }
       | undefined;
+    let lastItemRawPayload: unknown;
     let _streamStartTime = Date.now();
     let _firstTokenTime: number | null = null;
     let rawSdkResponse: unknown;
@@ -294,6 +296,9 @@ export class CodexTool implements ITool {
 
       if (event.type === 'complete' && event.rawContextUsage) {
         rawContextUsage = event.rawContextUsage;
+      }
+      if (event.type === 'complete' && event.lastItemRawPayload !== undefined) {
+        lastItemRawPayload = event.lastItemRawPayload;
       }
 
       // Capture raw SDK response for token accounting
@@ -548,6 +553,7 @@ export class CodexTool implements ITool {
       model: resolvedModel || DEFAULT_CODEX_MODEL,
       rawSdkResponse,
       rawContextUsage,
+      lastItemRawPayload,
       wasStopped,
     };
   }
@@ -721,6 +727,7 @@ export class CodexTool implements ITool {
           percentage: number;
         }
       | undefined;
+    let lastItemRawPayload: unknown;
     let wasStopped = false;
 
     for await (const event of this.promptService.promptSessionStreaming(
@@ -751,6 +758,9 @@ export class CodexTool implements ITool {
 
       if (event.type === 'complete' && event.rawContextUsage) {
         rawContextUsage = event.rawContextUsage;
+      }
+      if (event.type === 'complete' && event.lastItemRawPayload !== undefined) {
+        lastItemRawPayload = event.lastItemRawPayload;
       }
 
       // Capture raw SDK response for token accounting
@@ -801,6 +811,7 @@ export class CodexTool implements ITool {
       model: resolvedModel || DEFAULT_CODEX_MODEL,
       rawSdkResponse,
       rawContextUsage,
+      lastItemRawPayload,
       wasStopped,
     };
   }

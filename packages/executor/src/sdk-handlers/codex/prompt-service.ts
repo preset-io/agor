@@ -118,6 +118,7 @@ export type CodexStreamEvent =
         maxTokens: number;
         percentage: number;
       };
+      lastItemRawPayload?: unknown;
     };
 
 export class CodexPromptService {
@@ -860,6 +861,7 @@ export class CodexPromptService {
             percentage: number;
           }
         | undefined;
+      let lastCompletedItemRawPayload: unknown;
 
       let eventCount = 0;
 
@@ -894,6 +896,7 @@ export class CodexPromptService {
             allToolUses = []; // Reset tool uses for new turn
             todoIdsEmittedViaUpdate = new Set<string>();
             latestContextUsage = undefined;
+            lastCompletedItemRawPayload = undefined;
             break;
 
           case 'item.started':
@@ -928,6 +931,9 @@ export class CodexPromptService {
             break;
 
           case 'item.completed':
+            // Keep the latest raw item payload for debugging on turn completion.
+            // This is intentionally raw and unmodified.
+            lastCompletedItemRawPayload = event.item;
             // Collect completed items and emit tool_complete events
             if (event.item) {
               // Emit tool_complete for tool items
@@ -1038,6 +1044,7 @@ export class CodexPromptService {
               usage: mappedUsage,
               rawSdkEvent: event, // Pass through the actual SDK event (UNMUTATED)
               rawContextUsage: latestContextUsage,
+              lastItemRawPayload: lastCompletedItemRawPayload,
             };
 
             // Exit the event loop after turn completion

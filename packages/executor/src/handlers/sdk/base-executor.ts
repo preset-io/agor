@@ -57,6 +57,8 @@ export interface BaseTool {
       maxTokens: number;
       percentage: number;
     };
+    /** Optional debug payload from SDK stream (e.g. last item.completed item for Codex) */
+    lastItemRawPayload?: unknown;
   }>;
 
   // Optional stopTask method for tools that support interruption
@@ -419,7 +421,21 @@ export async function executeToolTask(params: {
     // Add SDK response data for token accounting
     // Store both raw (for debugging) and normalized (for UI/analytics)
     if (result.rawSdkResponse) {
-      patchData.raw_sdk_response = result.rawSdkResponse;
+      // Debug assist (temporary): surface the final item.completed payload in the
+      // Raw SDK panel by attaching it to raw_sdk_response.
+      if (
+        result.lastItemRawPayload !== undefined &&
+        result.rawSdkResponse &&
+        typeof result.rawSdkResponse === 'object' &&
+        !Array.isArray(result.rawSdkResponse)
+      ) {
+        patchData.raw_sdk_response = {
+          ...(result.rawSdkResponse as Record<string, unknown>),
+          last_item_raw_payload: result.lastItemRawPayload,
+        };
+      } else {
+        patchData.raw_sdk_response = result.rawSdkResponse;
+      }
       // Normalize using tool-specific normalizer (toolName maps to agentic tool type)
       const normalized = normalizeRawSdkResponse(toolName, result.rawSdkResponse);
       if (normalized) {
