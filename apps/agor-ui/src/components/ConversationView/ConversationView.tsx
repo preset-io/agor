@@ -14,15 +14,20 @@
 
 import type { AgorClient } from '@agor/core/api';
 import type { MessageID, PermissionScope, SessionID, User } from '@agor/core/types';
+import {
+  attachReactiveSessionApi,
+  type ReactiveSessionHandle,
+  type ReactiveSessionState,
+} from '@agor-live/client';
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
 import { Alert, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useStreamingMessages, useTasks } from '../../hooks';
 import type { StreamingMessage } from '../../hooks/useStreamingMessages';
 import { useCopyToClipboard } from '../../utils/clipboard';
 import { TaskBlock } from '../TaskBlock';
 
 const { Text } = Typography;
+const EMPTY_STREAMING_MESSAGES = new Map();
 
 /**
  * Check if two Maps are equal (same keys and same content)
@@ -192,16 +197,43 @@ export const ConversationView = React.memo<ConversationViewProps>(
       }
     }, [onScrollRef, scrollToBottom, scrollToTop]);
 
-    // Fetch tasks for this session
-    const currentUser = currentUserId ? userById.get(currentUserId) || null : null;
-    const {
-      tasks,
-      loading: tasksLoading,
-      error: tasksError,
-    } = useTasks(client, sessionId, currentUser, isActive);
+    const [reactiveSession, setReactiveSession] = useState<ReactiveSessionHandle | null>(null);
+    const [reactiveState, setReactiveState] = useState<ReactiveSessionState | null>(null);
 
-    // Track real-time streaming messages for the session
-    const allStreamingMessages = useStreamingMessages(client, sessionId || undefined, isActive);
+    useEffect(() => {
+      if (!client || !sessionId) {
+        setReactiveSession(null);
+        setReactiveState(null);
+        return;
+      }
+
+      if (!isActive) {
+        return;
+      }
+
+      const reactiveClient = attachReactiveSessionApi(client);
+      const handle = reactiveClient.session(sessionId, { taskHydration: 'lazy' });
+      setReactiveSession(handle);
+
+      const sync = () => {
+        setReactiveState(handle.state);
+      };
+
+      sync();
+      const unsubscribe = handle.subscribe(sync);
+      handle.ready().then(sync).catch(sync);
+
+      return () => {
+        unsubscribe();
+        handle.dispose();
+        setReactiveSession(null);
+      };
+    }, [client, sessionId, isActive]);
+
+    const tasks = reactiveState?.tasks || [];
+    const allStreamingMessages = reactiveState?.streamingMessages || EMPTY_STREAMING_MESSAGES;
+    const loading = reactiveState ? reactiveState.loading : !!sessionId;
+    const error = reactiveState?.error || null;
 
     // Store previous task maps to maintain stable references
     const prevTaskMapsRef = useRef<Map<string, Map<MessageID, StreamingMessage>>>(new Map());
@@ -242,9 +274,6 @@ export const ConversationView = React.memo<ConversationViewProps>(
 
       return result;
     }, [allStreamingMessages]);
-
-    const loading = tasksLoading;
-    const error = tasksError;
 
     // Track which tasks are expanded (default: last task expanded)
     const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(() => {
@@ -445,6 +474,18 @@ export const ConversationView = React.memo<ConversationViewProps>(
             scheduledFromWorktree={scheduledFromWorktree}
             scheduledRunAt={scheduledRunAt}
             streamingMessages={streamingMessagesByTask.get(task.task_id)}
+            taskMessages={reactiveState?.messagesByTask.get(task.task_id) || []}
+            taskMessagesLoaded={!!reactiveState?.loadedTaskIds.has(task.task_id)}
+            onLoadTaskMessages={
+              reactiveSession
+                ? (taskId: string) => reactiveSession.loadTaskMessages(taskId)
+                : undefined
+            }
+            onUnloadTaskMessages={
+              reactiveSession
+                ? (taskId: string) => reactiveSession.unloadTaskMessages(taskId)
+                : undefined
+            }
             assistantEmoji={assistantEmoji}
             isLatestTask={taskIndex === tasks.length - 1}
           />

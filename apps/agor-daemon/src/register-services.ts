@@ -172,6 +172,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       'createMany',
     ],
     events: [
+      'queued',
       'streaming:start',
       'streaming:chunk',
       'streaming:end',

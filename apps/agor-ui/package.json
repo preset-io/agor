@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@agor/core": "workspace:*",
+    "@agor-live/client": "workspace:*",
     "@ant-design/icons": "^6.1.0",
     "@ant-design/x": "^2.3.0",
     "@codesandbox/sandpack-react": "^2.20.0",

@@ -9,6 +9,7 @@ import type {
   Worktree,
 } from '@agor/core/types';
 import { AGENTIC_TOOL_CAPABILITIES, SessionStatus, TaskStatus } from '@agor/core/types';
+import { attachReactiveSessionApi, type ReactiveSessionState } from '@agor-live/client';
 import {
   BranchesOutlined,
   CloseOutlined,
@@ -27,7 +28,6 @@ import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAppData } from '../../contexts/AppDataContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
-import { useTasks } from '../../hooks/useTasks';
 import spawnSubsessionTemplate from '../../templates/spawn_subsession.hbs?raw';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
@@ -198,13 +198,42 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [scrollToBottom, setScrollToBottom] = React.useState<(() => void) | null>(null);
   const [scrollToTop, setScrollToTop] = React.useState<(() => void) | null>(null);
   const [queuedMessages, setQueuedMessages] = React.useState<Message[]>([]);
+  const [reactiveSessionState, setReactiveSessionState] =
+    React.useState<ReactiveSessionState | null>(null);
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
   const [droppedFiles, setDroppedFiles] = React.useState<File[]>([]);
   const [stopRequestInFlight, setStopRequestInFlight] = React.useState(false);
+  const reactiveSessionId = session?.session_id ?? null;
 
-  const currentUser = currentUserId ? userById.get(currentUserId) || null : null;
-  const { tasks } = useTasks(client, session?.session_id || null, currentUser, open);
+  const tasks = reactiveSessionState?.tasks || [];
+
+  // Dogfood reactive session state for live task updates in the panel.
+  // We use taskHydration='none' here because SessionPanelContent still manages message loading.
+  React.useEffect(() => {
+    if (!client || !reactiveSessionId || !open) {
+      setReactiveSessionState(null);
+      return;
+    }
+
+    const reactiveClient = attachReactiveSessionApi(client);
+    const reactiveSession = reactiveClient.session(reactiveSessionId, {
+      taskHydration: 'none',
+    });
+
+    const sync = () => {
+      setReactiveSessionState(reactiveSession.state);
+    };
+
+    sync();
+    const unsubscribe = reactiveSession.subscribe(sync);
+    reactiveSession.ready().then(sync).catch(sync);
+
+    return () => {
+      unsubscribe();
+      reactiveSession.dispose();
+    };
+  }, [client, reactiveSessionId, open]);
 
   // Fetch queued messages
   React.useEffect(() => {

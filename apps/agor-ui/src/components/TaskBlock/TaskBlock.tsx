@@ -98,6 +98,10 @@ interface TaskBlockProps {
   scheduledFromWorktree?: boolean;
   scheduledRunAt?: number;
   streamingMessages?: Map<MessageID, StreamingMessage>;
+  taskMessages?: Message[];
+  taskMessagesLoaded?: boolean;
+  onLoadTaskMessages?: (taskId: string) => Promise<void> | void;
+  onUnloadTaskMessages?: (taskId: string) => void;
   assistantEmoji?: string;
   /** Whether this is the most recent task in the session */
   isLatestTask?: boolean;
@@ -366,17 +370,49 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     scheduledFromWorktree,
     scheduledRunAt,
     streamingMessages,
+    taskMessages: taskMessagesOverride,
+    taskMessagesLoaded = false,
+    onLoadTaskMessages,
+    onUnloadTaskMessages,
     assistantEmoji,
     isLatestTask = false,
   }) => {
     const { token } = theme.useToken();
 
-    // Fetch messages for this task (only when expanded)
-    const { messages: taskMessages, loading: messagesLoading } = useTaskMessages(
+    // Fallback hook path (non-reactive consumers)
+    const useFallbackMessages = !onLoadTaskMessages;
+    const { messages: hookTaskMessages, loading: hookMessagesLoading } = useTaskMessages(
       client,
       task.task_id,
-      isExpanded
+      useFallbackMessages && isExpanded
     );
+
+    const [reactiveMessagesLoading, setReactiveMessagesLoading] = React.useState(false);
+
+    React.useEffect(() => {
+      if (!onLoadTaskMessages) return;
+
+      if (isExpanded) {
+        if (!taskMessagesLoaded) {
+          setReactiveMessagesLoading(true);
+          Promise.resolve(onLoadTaskMessages(task.task_id))
+            .catch((error) => {
+              console.error('[TaskBlock] Failed to load task messages:', error);
+            })
+            .finally(() => {
+              setReactiveMessagesLoading(false);
+            });
+        }
+      } else if (onUnloadTaskMessages && taskMessagesLoaded) {
+        onUnloadTaskMessages(task.task_id);
+      }
+    }, [isExpanded, onLoadTaskMessages, onUnloadTaskMessages, task.task_id, taskMessagesLoaded]);
+
+    const taskMessages = taskMessagesOverride || hookTaskMessages;
+    const messagesLoading =
+      onLoadTaskMessages != null
+        ? reactiveMessagesLoading && !taskMessagesLoaded
+        : hookMessagesLoading;
 
     // Convert streaming messages map to array once the reference changes
     const streamingForTask = useMemo(
