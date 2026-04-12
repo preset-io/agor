@@ -2,7 +2,7 @@
  * List all boards
  */
 
-import type { Board, BoardEntityObject } from '@agor-live/client';
+import type { BoardEntityObject } from '@agor-live/client';
 import { PAGINATION } from '@agor-live/client';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';
@@ -28,9 +28,9 @@ export default class BoardList extends BaseCommand {
 
     try {
       // Fetch all boards (high limit for accurate counts)
-      const allBoards = (await client
+      const allBoards = await client
         .service('boards')
-        .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })) as Board[];
+        .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } });
 
       if (allBoards.length === 0) {
         this.log(chalk.yellow('No boards found.'));
@@ -39,9 +39,10 @@ export default class BoardList extends BaseCommand {
       }
 
       // Fetch all board objects to count worktrees per board
-      const boardObjects = (await client
+      const boardObjects = await client
         .service('board-objects')
-        .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })) as BoardEntityObject[];
+        .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } });
+      const typedBoardObjects = boardObjects as BoardEntityObject[];
 
       // Apply display limit
       const displayBoards = allBoards.slice(0, flags.limit);
@@ -61,7 +62,9 @@ export default class BoardList extends BaseCommand {
 
       // Add rows
       for (const board of displayBoards) {
-        const worktreeCount = boardObjects.filter((bo) => bo.board_id === board.board_id).length;
+        const worktreeCount = typedBoardObjects.filter(
+          (bo) => bo.board_id === board.board_id
+        ).length;
         table.push([
           board.board_id.substring(0, 8),
           `${board.icon || '📋'} ${board.name}`,

@@ -4,7 +4,6 @@
  * Displays the current status of a worktree's development environment.
  */
 
-import type { Worktree } from '@agor-live/client';
 import { formatShortId } from '@agor-live/client';
 import { Args } from '@oclif/core';
 import chalk from 'chalk';
@@ -54,7 +53,7 @@ export default class WorktreeEnvStatus extends BaseCommand {
       const worktreesService = client.service('worktrees');
 
       // Get worktree
-      const worktree = (await worktreesService.get(args.worktreeId)) as Worktree;
+      const worktree = await worktreesService.get(args.worktreeId);
 
       this.log('');
       this.log(chalk.bold(`Environment Status: ${chalk.cyan(worktree.name)}`));

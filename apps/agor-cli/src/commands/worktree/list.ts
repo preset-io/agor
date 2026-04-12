@@ -75,14 +75,14 @@ export default class WorktreeList extends BaseCommand {
 
       if (flags['repo-id']) {
         // Filter by repo ID
-        allWorktrees = (await worktreesService.findAll({
+        allWorktrees = await worktreesService.findAll({
           query: { repo_id: flags['repo-id'], $limit: PAGINATION.DEFAULT_LIMIT },
-        })) as Worktree[];
+        });
       } else {
         // Show all worktrees
-        allWorktrees = (await worktreesService.findAll({
+        allWorktrees = await worktreesService.findAll({
           query: { $limit: PAGINATION.DEFAULT_LIMIT },
-        })) as Worktree[];
+        });
       }
 
       // Filter by archive status
@@ -124,7 +124,7 @@ export default class WorktreeList extends BaseCommand {
       for (const wt of allWorktrees) {
         if (!repoCache.has(wt.repo_id)) {
           try {
-            const repo = (await reposService.get(wt.repo_id)) as Repo;
+            const repo = await reposService.get(wt.repo_id);
             repoCache.set(wt.repo_id, repo);
           } catch {
             // Repo might have been deleted, use ID as fallback

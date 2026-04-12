@@ -8,7 +8,6 @@
  *   wtcd() { cd "$(agor worktree cd --print "$1")"; }
  */
 
-import type { Worktree } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
@@ -52,7 +51,7 @@ export default class WorktreeCd extends BaseCommand {
       const worktreesService = client.service('worktrees');
 
       // Get worktree info
-      const worktree = (await worktreesService.get(args.worktreeId)) as Worktree;
+      const worktree = await worktreesService.get(args.worktreeId);
 
       // If --print flag is set, just print the path
       if (flags.print) {

@@ -4,7 +4,6 @@
  * Stops the development environment for a worktree.
  */
 
-import type { Worktree } from '@agor-live/client';
 import { formatShortId } from '@agor-live/client';
 import { Args } from '@oclif/core';
 import chalk from 'chalk';
@@ -35,7 +34,7 @@ export default class WorktreeEnvStop extends BaseCommand {
       const worktreesService = client.service('worktrees');
 
       // Get worktree info
-      const worktree = (await worktreesService.get(args.worktreeId)) as Worktree;
+      const worktree = await worktreesService.get(args.worktreeId);
 
       this.log('');
       this.log(`Stopping environment for ${chalk.cyan(worktree.name)}...`);

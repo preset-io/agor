@@ -2,7 +2,6 @@
  * `agor user delete` - Delete a user
  */
 
-import type { User } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
@@ -39,7 +38,7 @@ export default class UserDelete extends BaseCommand {
     try {
       // Find user by email or ID
       const usersService = client.service('users');
-      const users = (await usersService.findAll()) as User[];
+      const users = await usersService.findAll();
 
       const user = users.find(
         (u) => u.email === args.user || u.user_id === args.user || u.user_id.startsWith(args.user)

@@ -60,7 +60,7 @@ export default class WorktreeUpdate extends BaseCommand {
       if (flags.notes !== undefined) updates.notes = flags.notes;
 
       // Update worktree
-      const updated = (await worktreesService.patch(args.worktreeId, updates)) as Worktree;
+      const updated = await worktreesService.patch(args.worktreeId, updates);
 
       this.log('');
       this.log(`${chalk.green('✓')} Worktree updated: ${chalk.cyan(updated.name)}`);

@@ -38,9 +38,9 @@ export default class BoardAddSession extends BaseCommand {
 
     try {
       // Find board by ID or slug
-      const boards = (await client
+      const boards = await client
         .service('boards')
-        .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })) as Board[];
+        .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } });
 
       const board = boards.find(
         (b: Board) =>
@@ -55,9 +55,9 @@ export default class BoardAddSession extends BaseCommand {
       }
 
       // Find session by short or full ID
-      const sessions = (await client
+      const sessions = await client
         .service('sessions')
-        .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })) as Session[];
+        .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } });
 
       const session = sessions.find(
         (s: Session) => s.session_id === args.sessionId || s.session_id.startsWith(args.sessionId)
@@ -74,9 +74,9 @@ export default class BoardAddSession extends BaseCommand {
         this.error('Session has no worktree associated');
       }
 
-      const worktrees = (await client
+      const worktrees = await client
         .service('worktrees')
-        .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })) as Worktree[];
+        .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } });
 
       const worktree = worktrees.find((w: Worktree) => w.worktree_id === session.worktree_id);
 
@@ -86,13 +86,14 @@ export default class BoardAddSession extends BaseCommand {
       }
 
       // Check if worktree is already on the board
-      const boardObjects = (await client.service('board-objects').findAll({
+      const boardObjects = await client.service('board-objects').findAll({
         query: {
           board_id: board.board_id,
         },
-      })) as BoardEntityObject[];
+      });
+      const typedBoardObjects = boardObjects as BoardEntityObject[];
 
-      const existingObject = boardObjects.find(
+      const existingObject = typedBoardObjects.find(
         (bo: BoardEntityObject) => bo.worktree_id === worktree.worktree_id
       );
 

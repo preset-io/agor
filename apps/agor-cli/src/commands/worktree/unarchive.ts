@@ -4,7 +4,6 @@
  * Unarchives a worktree, making it active again and optionally restoring it to a board.
  */
 
-import type { Worktree } from '@agor-live/client';
 import { formatShortId } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
@@ -41,7 +40,7 @@ export default class WorktreeUnarchive extends BaseCommand {
       const worktreesService = client.service('worktrees');
 
       // Fetch worktree first to show what we're unarchiving
-      const worktree = (await worktreesService.get(args.worktreeId)) as Worktree;
+      const worktree = await worktreesService.get(args.worktreeId);
 
       if (!worktree.archived) {
         this.log('');

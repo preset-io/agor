@@ -25,7 +25,7 @@ export function useBoardActions(client: AgorClient | null): UseBoardActionsResul
     try {
       setLoading(true);
       const created = await client.service('boards').create(board);
-      return created as Board;
+      return created;
     } catch (error) {
       showError(
         `Failed to create board: ${error instanceof Error ? error.message : String(error)}`
@@ -42,7 +42,7 @@ export function useBoardActions(client: AgorClient | null): UseBoardActionsResul
     try {
       setLoading(true);
       const updated = await client.service('boards').patch(boardId, updates);
-      return updated as Board;
+      return updated;
     } catch (error) {
       showError(
         `Failed to update board: ${error instanceof Error ? error.message : String(error)}`

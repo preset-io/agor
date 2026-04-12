@@ -4,7 +4,6 @@
  * Starts the development environment (docker-compose, dev server, etc.) for a worktree.
  */
 
-import type { Worktree } from '@agor-live/client';
 import { formatShortId } from '@agor-live/client';
 import { Args } from '@oclif/core';
 import chalk from 'chalk';
@@ -35,7 +34,7 @@ export default class WorktreeEnvStart extends BaseCommand {
       const worktreesService = client.service('worktrees');
 
       // Get worktree info
-      const worktree = (await worktreesService.get(args.worktreeId)) as Worktree;
+      const worktree = await worktreesService.get(args.worktreeId);
 
       this.log('');
       this.log(`Starting environment for ${chalk.cyan(worktree.name)}...`);
@@ -44,7 +43,7 @@ export default class WorktreeEnvStart extends BaseCommand {
       this.log('');
 
       // Call custom startEnvironment method
-      const updated = (await worktreesService.startEnvironment(worktree.worktree_id)) as Worktree;
+      const updated = await worktreesService.startEnvironment(worktree.worktree_id);
 
       this.log(`${chalk.green('✓')} Environment started`);
 

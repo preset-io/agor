@@ -4,7 +4,7 @@
  * Creates an isolated working directory for a specific branch.
  */
 
-import type { Repo, Worktree } from '@agor-live/client';
+import type { Worktree } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
@@ -68,16 +68,16 @@ export default class WorktreeAdd extends BaseCommand {
       const reposService = client.service('repos');
 
       // Fetch repo by ID
-      const repo = (await reposService.get(flags['repo-id'])) as Repo;
+      const repo = await reposService.get(flags['repo-id']);
 
       // Check if worktree already exists (query worktrees table)
       const worktreesService = client.service('worktrees');
-      const worktreesList = (await worktreesService.findAll({
+      const worktreesList = await worktreesService.findAll({
         query: {
           repo_id: repo.repo_id,
           name: args.name,
         },
-      })) as Worktree[];
+      });
       if (worktreesList.length > 0) {
         this.error(`Worktree '${args.name}' already exists at ${worktreesList[0].path}`);
       }
