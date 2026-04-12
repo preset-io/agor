@@ -12,17 +12,15 @@
  * Based on design in context/explorations/conversation-design.md
  */
 
-import type { AgorClient } from '@agor/core/api';
-import type { MessageID, PermissionScope, SessionID, User } from '@agor/core/types';
+import type { AgorClient } from '@agor-live/client';
+import type { MessageID, PermissionScope, SessionID, User } from '@agor-live/client';
 import {
-  attachReactiveSessionApi,
-  type ReactiveSessionHandle,
-  type ReactiveSessionState,
   type StreamingMessageState,
 } from '@agor-live/client';
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
 import { Alert, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useCopyToClipboard } from '../../utils/clipboard';
 import { TaskBlock } from '../TaskBlock';
 
@@ -197,38 +195,14 @@ export const ConversationView = React.memo<ConversationViewProps>(
       }
     }, [onScrollRef, scrollToBottom, scrollToTop]);
 
-    const [reactiveSession, setReactiveSession] = useState<ReactiveSessionHandle | null>(null);
-    const [reactiveState, setReactiveState] = useState<ReactiveSessionState | null>(null);
-
-    useEffect(() => {
-      if (!client || !sessionId) {
-        setReactiveSession(null);
-        setReactiveState(null);
-        return;
+    const { handle: reactiveSession, state: reactiveState } = useSharedReactiveSession(
+      client,
+      sessionId,
+      {
+        enabled: isActive,
+        reactiveOptions: { taskHydration: 'lazy' },
       }
-
-      if (!isActive) {
-        return;
-      }
-
-      const reactiveClient = attachReactiveSessionApi(client);
-      const handle = reactiveClient.session(sessionId, { taskHydration: 'lazy' });
-      setReactiveSession(handle);
-
-      const sync = () => {
-        setReactiveState(handle.state);
-      };
-
-      sync();
-      const unsubscribe = handle.subscribe(sync);
-      handle.ready().then(sync).catch(sync);
-
-      return () => {
-        unsubscribe();
-        handle.dispose();
-        setReactiveSession(null);
-      };
-    }, [client, sessionId, isActive]);
+    );
 
     const tasks = reactiveState?.tasks || [];
     const allStreamingMessages = reactiveState?.streamingMessages || EMPTY_STREAMING_MESSAGES;

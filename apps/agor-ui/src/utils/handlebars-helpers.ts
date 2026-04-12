@@ -5,10 +5,14 @@
  * initialization for the frontend app.
  */
 
-import { registerHandlebarsHelpers } from '@agor/core/templates/handlebars-helpers';
+import { registerHandlebarsHelpers } from '@agor-live/client';
 
-// Export everything from core
-export * from '@agor/core/templates/handlebars-helpers';
+// Re-export shared handlebars helpers
+export {
+  buildTemplateContext,
+  registerHandlebarsHelpers,
+  renderTemplate,
+} from '@agor-live/client';
 
 /**
  * Initialize Handlebars helpers for frontend

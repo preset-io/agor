@@ -14,6 +14,8 @@ import {
 } from '../../core/src/api/index';
 import {
   attachReactiveSessionApi,
+  releaseReactiveSession,
+  retainReactiveSession,
   type ReactiveAgorClient,
   type ReactiveLoadedTaskIds,
   type ReactiveMessagesByTask,
@@ -54,24 +56,12 @@ export type {
   ToolExecutionState,
 };
 
-// Core types that consumers need for working with the API
-export type {
-  Artifact,
-  AuthenticationResult,
-  Board,
-  BoardExportBlob,
-  CardType,
-  CardWithType,
-  ContextFileDetail,
-  ContextFileListItem,
-  MCPServer,
-  Message,
-  Repo,
-  Session,
-  Task,
-  User,
-  Worktree,
-} from '../../core/src/types/index';
+// Re-export full browser-safe type/runtime surface for UI consumers.
+export * from '../../core/src/types/index';
+export * from '../../core/src/config/browser';
+export * from '../../core/src/models/index';
+export type { AgorConfig } from '../../core/src/config/types';
+export * from '../../core/src/templates/handlebars-helpers';
 
 export function createClient(...args: Parameters<typeof createCoreClient>): ReactiveAgorClient {
   const client = createCoreClient(...args);
@@ -85,4 +75,5 @@ export async function createRestClient(
 }
 
 export { attachReactiveSessionApi };
+export { releaseReactiveSession, retainReactiveSession };
 export { isDaemonRunning };

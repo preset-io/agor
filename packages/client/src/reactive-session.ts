@@ -877,6 +877,86 @@ export function attachReactiveSessionApi(client: AgorClient): ReactiveAgorClient
   return reactiveClient;
 }
 
+interface SharedReactiveSessionEntry {
+  handle: ReactiveSessionHandle;
+  refCount: number;
+}
+
+const SHARED_REACTIVE_SESSIONS = new WeakMap<AgorClient, Map<string, SharedReactiveSessionEntry>>();
+
+function normalizeReactiveSessionOptions(
+  options?: ReactiveSessionOptions
+): Required<ReactiveSessionOptions> {
+  return {
+    taskHydration: options?.taskHydration ?? 'lazy',
+  };
+}
+
+function getSharedSessionKey(sessionId: string, options: Required<ReactiveSessionOptions>): string {
+  return `${sessionId}:${options.taskHydration}`;
+}
+
+/**
+ * Retain a shared reactive session handle for a given client/session/options tuple.
+ * The handle is reference-counted and disposed when the last caller releases it.
+ */
+export function retainReactiveSession(
+  client: AgorClient,
+  sessionId: string,
+  options?: ReactiveSessionOptions
+): ReactiveSessionHandle {
+  const normalizedOptions = normalizeReactiveSessionOptions(options);
+  const cacheKey = getSharedSessionKey(sessionId, normalizedOptions);
+
+  let clientSessions = SHARED_REACTIVE_SESSIONS.get(client);
+  if (!clientSessions) {
+    clientSessions = new Map();
+    SHARED_REACTIVE_SESSIONS.set(client, clientSessions);
+  }
+
+  const existing = clientSessions.get(cacheKey);
+  if (existing) {
+    existing.refCount += 1;
+    return existing.handle;
+  }
+
+  const handle = new ReactiveSessionHandle(client, sessionId, normalizedOptions);
+  clientSessions.set(cacheKey, { handle, refCount: 1 });
+  return handle;
+}
+
+/**
+ * Release a retained shared reactive session handle.
+ * Disposes the underlying handle when ref count reaches zero.
+ */
+export function releaseReactiveSession(
+  client: AgorClient,
+  sessionId: string,
+  options?: ReactiveSessionOptions
+): void {
+  const normalizedOptions = normalizeReactiveSessionOptions(options);
+  const cacheKey = getSharedSessionKey(sessionId, normalizedOptions);
+  const clientSessions = SHARED_REACTIVE_SESSIONS.get(client);
+  if (!clientSessions) {
+    return;
+  }
+
+  const entry = clientSessions.get(cacheKey);
+  if (!entry) {
+    return;
+  }
+
+  entry.refCount -= 1;
+  if (entry.refCount <= 0) {
+    entry.handle.dispose();
+    clientSessions.delete(cacheKey);
+  }
+
+  if (clientSessions.size === 0) {
+    SHARED_REACTIVE_SESSIONS.delete(client);
+  }
+}
+
 function sortMessagesByIndex(messages: Message[]): Message[] {
   return [...messages].sort((a, b) => a.index - b.index);
 }

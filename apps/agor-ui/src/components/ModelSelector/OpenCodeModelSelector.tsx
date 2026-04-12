@@ -1,4 +1,4 @@
-import { createClient } from '@agor/core/api';
+import { createRestClient } from '@agor-live/client';
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Alert, Select, Space, Spin, Typography } from 'antd';
 import { useEffect, useState } from 'react';
@@ -49,9 +49,8 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
         setLoading(true);
         setError(null);
 
-        // Create client to fetch OpenCode models
         const daemonUrl = getDaemonUrl();
-        const client = createClient(daemonUrl);
+        const client = await createRestClient(daemonUrl);
 
         const response = (await client
           .service('opencode/models')

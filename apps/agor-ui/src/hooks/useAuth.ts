@@ -5,8 +5,8 @@
  * Manages user authentication state and provides login/logout functions
  */
 
-import { createClient } from '@agor/core/api';
-import type { User } from '@agor/core/types';
+import { createRestClient } from '@agor-live/client';
+import type { User } from '@agor-live/client';
 import { useCallback, useEffect, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
 import {
@@ -51,9 +51,6 @@ export function useAuth(): UseAuthReturn {
     const MAX_RETRIES = 5;
     setState((prev) => ({ ...prev, loading: true, error: null }));
 
-    // Move client outside try block so it's accessible in finally
-    let client: ReturnType<typeof createClient> | null = null;
-
     try {
       const storedAccessToken = getStoredAccessToken();
       const storedRefreshToken = getStoredRefreshToken();
@@ -69,32 +66,7 @@ export function useAuth(): UseAuthReturn {
         return;
       }
 
-      // Create temporary client
-      client = createClient(getDaemonUrl());
-
-      // Connect the client first (since autoConnect is false)
-      client.io.connect();
-
-      // Wait for connection (longer timeout for daemon restarts)
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Connection timeout')), 10000);
-
-        if (client.io.connected) {
-          clearTimeout(timeout);
-          resolve();
-          return;
-        }
-
-        client.io.once('connect', () => {
-          clearTimeout(timeout);
-          resolve();
-        });
-
-        client.io.once('connect_error', (err) => {
-          clearTimeout(timeout);
-          reject(err);
-        });
-      });
+      const client = await createRestClient(getDaemonUrl());
 
       // Try to authenticate with stored access token first
       if (storedAccessToken) {
@@ -183,12 +155,6 @@ export function useAuth(): UseAuthReturn {
         loading: false,
         error: isConnectionError ? 'Connection lost - waiting for daemon...' : null,
       });
-    } finally {
-      // CRITICAL: Always close the client connection to prevent leaks
-      if (client?.io) {
-        client.io.removeAllListeners();
-        client.io.close();
-      }
     }
   }, []);
 
@@ -244,31 +210,8 @@ export function useAuth(): UseAuthReturn {
         return;
       }
 
-      let client: ReturnType<typeof createClient> | null = null;
-
       try {
-        client = createClient(getDaemonUrl());
-        client.io.connect();
-
-        await new Promise<void>((resolve, reject) => {
-          const timeout = setTimeout(() => reject(new Error('Connection timeout')), 5000);
-
-          if (client.io.connected) {
-            clearTimeout(timeout);
-            resolve();
-            return;
-          }
-
-          client.io.once('connect', () => {
-            clearTimeout(timeout);
-            resolve();
-          });
-
-          client.io.once('connect_error', (err) => {
-            clearTimeout(timeout);
-            reject(err);
-          });
-        });
+        const client = await createRestClient(getDaemonUrl());
 
         const refreshResult = await refreshAndStoreTokens(client, refreshToken);
 
@@ -288,12 +231,6 @@ export function useAuth(): UseAuthReturn {
           loading: false,
           error: 'Session expired, please login again',
         });
-      } finally {
-        // CRITICAL: Always close the client connection to prevent leaks
-        if (client?.io) {
-          client.io.removeAllListeners();
-          client.io.close();
-        }
       }
     }, REFRESH_INTERVAL);
 
@@ -306,35 +243,8 @@ export function useAuth(): UseAuthReturn {
   const login = async (email: string, password: string): Promise<boolean> => {
     setState((prev) => ({ ...prev, loading: true, error: null }));
 
-    let client: ReturnType<typeof createClient> | null = null;
-
     try {
-      // Create temporary client for login
-      client = createClient(getDaemonUrl());
-
-      // Connect the client first (since autoConnect is false)
-      client.io.connect();
-
-      // Wait for connection
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Connection timeout')), 5000);
-
-        if (client.io.connected) {
-          clearTimeout(timeout);
-          resolve();
-          return;
-        }
-
-        client.io.once('connect', () => {
-          clearTimeout(timeout);
-          resolve();
-        });
-
-        client.io.once('connect_error', (err) => {
-          clearTimeout(timeout);
-          reject(err);
-        });
-      });
+      const client = await createRestClient(getDaemonUrl());
 
       // Authenticate
       const result = await client.authenticate({
@@ -365,12 +275,6 @@ export function useAuth(): UseAuthReturn {
         error: errorMessage,
       }));
       return false;
-    } finally {
-      // CRITICAL: Always close the client connection to prevent leaks
-      if (client?.io) {
-        client.io.removeAllListeners();
-        client.io.close();
-      }
     }
   };
 
