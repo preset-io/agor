@@ -18,7 +18,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { toShortId as toSharedShortId } from '../types/id';
+import { toShortId } from '../types/id';
 
 // ============================================================================
 // Types
@@ -145,7 +145,7 @@ export function isValidShortID(value: string): value is ShortID {
  * shortId(uuid, 16) // => "01933e4a7b897c35"
  */
 export function shortId(uuid: UUID, length: number = 8): ShortID {
-  return toSharedShortId(uuid, length);
+  return toShortId(uuid, length);
 }
 
 /**

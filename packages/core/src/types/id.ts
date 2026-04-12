@@ -68,12 +68,22 @@ export type IDPrefix = string;
 export type IdInput = string;
 
 /**
+ * Any ID-like input accepted by short-id helpers.
+ *
+ * Useful at API boundaries where callers may provide:
+ * - full UUIDs
+ * - short prefixes
+ * - plain string IDs not yet branded
+ */
+export type AnyShortId = UUID | ShortID | string;
+
+/**
  * Extract short ID prefix from a UUID-like string.
  *
  * Removes hyphens and truncates to the requested length (max 32).
  * Shared by core and client surfaces to keep short-ID behavior consistent.
  */
-export function toShortId(id: string, length: number = 8): ShortID {
+export function toShortId(id: AnyShortId, length: number = 8): ShortID {
   return id.replace(/-/g, '').slice(0, Math.min(length, 32));
 }
 
