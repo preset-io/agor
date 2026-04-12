@@ -72,7 +72,7 @@ export function extractCodexTokenUsage(raw: unknown): TokenUsage | undefined {
  * 1) input_tokens / prompt_tokens (preferred)
  * 2) total_tokens - output_tokens (when both are available)
  * 3) total_tokens (legacy fallback when only total is available)
- * 3) undefined (no usable data)
+ * 4) undefined (no usable data)
  */
 export function extractCodexContextWindowUsage(raw: unknown): number | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
