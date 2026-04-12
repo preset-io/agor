@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { estimateCodexContextWindowFromRunningTotals } from './base-executor.js';
+import { inferCodexContextWindowFromRunningTotals } from './context-window-fallback.js';
 
-describe('estimateCodexContextWindowFromRunningTotals', () => {
+describe('inferCodexContextWindowFromRunningTotals', () => {
   it('uses current snapshot when there is no previous task', () => {
-    const result = estimateCodexContextWindowFromRunningTotals({
+    const result = inferCodexContextWindowFromRunningTotals({
       type: 'turn.completed',
       usage: {
         input_tokens: 15_120,
@@ -15,7 +15,7 @@ describe('estimateCodexContextWindowFromRunningTotals', () => {
   });
 
   it('uses input-token delta for running totals and adds output tokens', () => {
-    const result = estimateCodexContextWindowFromRunningTotals(
+    const result = inferCodexContextWindowFromRunningTotals(
       {
         type: 'turn.completed',
         usage: {
@@ -36,7 +36,7 @@ describe('estimateCodexContextWindowFromRunningTotals', () => {
   });
 
   it('falls back to current snapshot when running totals reset', () => {
-    const result = estimateCodexContextWindowFromRunningTotals(
+    const result = inferCodexContextWindowFromRunningTotals(
       {
         type: 'turn.completed',
         usage: {
@@ -57,9 +57,9 @@ describe('estimateCodexContextWindowFromRunningTotals', () => {
   });
 
   it('returns undefined for invalid current payloads', () => {
-    expect(estimateCodexContextWindowFromRunningTotals(undefined)).toBeUndefined();
+    expect(inferCodexContextWindowFromRunningTotals(undefined)).toBeUndefined();
     expect(
-      estimateCodexContextWindowFromRunningTotals({ usage: { output_tokens: 123 } })
+      inferCodexContextWindowFromRunningTotals({ usage: { output_tokens: 123 } })
     ).toBeUndefined();
   });
 });

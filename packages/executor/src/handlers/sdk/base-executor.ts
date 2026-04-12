@@ -20,7 +20,7 @@ import type {
 import { MessageRole } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
-import { extractCodexContextWindowUsage } from '../../sdk-handlers/codex/usage.js';
+import { computeCodexContextWindowFromPreviousTask } from '../../sdk-handlers/codex/context-window-fallback.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 
@@ -261,107 +261,6 @@ async function captureGitStateAtTaskEnd(
   }
 }
 
-function extractCodexTurnCounts(
-  rawSdkResponse: unknown
-): { inputTokens: number; outputTokens: number } | undefined {
-  if (!rawSdkResponse || typeof rawSdkResponse !== 'object' || Array.isArray(rawSdkResponse)) {
-    return undefined;
-  }
-
-  const raw = rawSdkResponse as Record<string, unknown>;
-  const usage =
-    raw.usage && typeof raw.usage === 'object' && !Array.isArray(raw.usage)
-      ? (raw.usage as Record<string, unknown>)
-      : raw;
-
-  const inputTokens = usage.input_tokens;
-  const outputTokens = usage.output_tokens;
-  if (typeof inputTokens !== 'number' || !Number.isFinite(inputTokens) || inputTokens < 0) {
-    return undefined;
-  }
-
-  return {
-    inputTokens,
-    outputTokens:
-      typeof outputTokens === 'number' && Number.isFinite(outputTokens) && outputTokens >= 0
-        ? outputTokens
-        : 0,
-  };
-}
-
-export function estimateCodexContextWindowFromRunningTotals(
-  currentRawSdkResponse: unknown,
-  previousRawSdkResponse?: unknown
-): number | undefined {
-  const current = extractCodexTurnCounts(currentRawSdkResponse);
-  if (!current) {
-    return undefined;
-  }
-
-  const currentSnapshot = extractCodexContextWindowUsage(currentRawSdkResponse);
-  if (!currentSnapshot || currentSnapshot <= 0) {
-    return undefined;
-  }
-
-  const previous = extractCodexTurnCounts(previousRawSdkResponse);
-  if (!previous) {
-    return currentSnapshot + current.outputTokens;
-  }
-
-  if (current.inputTokens < previous.inputTokens) {
-    // Running total reset (e.g., compaction/new session counter).
-    return currentSnapshot + current.outputTokens;
-  }
-
-  return Math.max(0, current.inputTokens - previous.inputTokens) + current.outputTokens;
-}
-
-async function computeCodexDeltaWindowEstimate(
-  client: AgorClient,
-  sessionId: SessionID,
-  currentTaskId: TaskID,
-  currentRawSdkResponse: unknown
-): Promise<number | undefined> {
-  const current = extractCodexTurnCounts(currentRawSdkResponse);
-  if (!current) {
-    return undefined;
-  }
-
-  const existingTasks = await client.service('tasks').find({
-    query: {
-      session_id: sessionId,
-      $sort: { created_at: -1 },
-      $limit: 100,
-    },
-  });
-
-  const taskRows: Task[] = Array.isArray(existingTasks)
-    ? (existingTasks as Task[])
-    : existingTasks &&
-        typeof existingTasks === 'object' &&
-        'data' in existingTasks &&
-        Array.isArray((existingTasks as { data?: unknown }).data)
-      ? (((existingTasks as { data?: Task[] }).data ?? []) as Task[])
-      : [];
-
-  const previousTasks = taskRows
-    .filter((task) => task.task_id !== currentTaskId)
-    .sort((a, b) => {
-      const aCreated = new Date(String(a.created_at ?? 0)).getTime();
-      const bCreated = new Date(String(b.created_at ?? 0)).getTime();
-      return bCreated - aCreated;
-    });
-
-  let previousRawSdkResponse: unknown;
-  for (const task of previousTasks) {
-    if (extractCodexTurnCounts(task.raw_sdk_response)) {
-      previousRawSdkResponse = task.raw_sdk_response;
-      break;
-    }
-  }
-  return estimateCodexContextWindowFromRunningTotals(currentRawSdkResponse, previousRawSdkResponse);
-}
-
 /**
  * Resolve API key with proper precedence:
  * 1. Per-user encrypted keys (from database) - HIGHEST
@@ -565,20 +464,20 @@ export async function executeToolTask(params: {
     } else {
       if (toolName === 'codex' && result.rawSdkResponse) {
         try {
-          const estimatedWindow = await computeCodexDeltaWindowEstimate(
+          const inferredWindow = await computeCodexContextWindowFromPreviousTask(
             client,
             sessionId,
             taskId,
             result.rawSdkResponse
           );
-          if (estimatedWindow && estimatedWindow > 0) {
-            patchData.computed_context_window = estimatedWindow;
+          if (inferredWindow && inferredWindow > 0) {
+            patchData.computed_context_window = inferredWindow;
             console.log(
-              `[${toolName}] Estimated context window from cumulative input delta: ${estimatedWindow} tokens`
+              `[${toolName}] Inferred context window from previous-task running totals: ${inferredWindow} tokens`
             );
           }
         } catch (error) {
-          console.warn(`[${toolName}] Failed to estimate delta-based context window:`, error);
+          console.warn(`[${toolName}] Failed to infer context window from previous task:`, error);
         }
       }
 
