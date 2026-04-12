@@ -49,7 +49,7 @@ export function useTasks(
       setLoading(true);
       setError(null);
 
-      const result = await client.service('tasks').find({
+      const tasksList = await client.service('tasks').findAll({
         query: {
           session_id: sessionId,
           $limit: PAGINATION.DEFAULT_LIMIT,
@@ -58,8 +58,6 @@ export function useTasks(
           },
         },
       });
-
-      const tasksList = Array.isArray(result) ? result : result.data;
       setTasks(tasksList);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch tasks');

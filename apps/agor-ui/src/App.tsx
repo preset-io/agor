@@ -573,8 +573,7 @@ function AppContent() {
     if (!client) return;
 
     try {
-      await client.service(`sessions/${sessionId}/prompt`).create({
-        prompt,
+      await client.sessions.prompt(sessionId, prompt, {
         permissionMode,
         messageSource: 'agor',
       });

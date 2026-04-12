@@ -310,8 +310,16 @@ export interface AuthenticationResult {
     /** Decoded JWT payload */
     payload?: Record<string, unknown>;
   };
-  /** Authenticated user (if available) */
-  user?: AuthenticatedUser;
+  /**
+   * Authenticated user (if available)
+   *
+   * Uses a concrete user shape instead of `unknown` to improve client ergonomics.
+   * Includes the guaranteed auth fields plus optional full user fields.
+   */
+  user?: AuthenticatedUser & {
+    name?: string;
+    emoji?: string;
+  };
   /** Additional fields from strategy */
   [key: string]: unknown;
 }

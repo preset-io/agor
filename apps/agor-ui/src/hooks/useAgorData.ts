@@ -97,64 +97,43 @@ export function useAgorData(
       // Fetch sessions, boards, board-objects, comments, repos, worktrees, users, mcp servers, session-mcp relationships in parallel
       // Tasks are fetched just-in-time via useTasks hook to avoid unnecessary global subscriptions
       const [
-        sessionsResult,
-        boardsResult,
-        boardObjectsResult,
-        commentsResult,
-        cardsResult,
-        cardTypesResult,
-        reposResult,
-        worktreesResult,
-        usersResult,
-        mcpServersResult,
-        sessionMcpResult,
-        gatewayChannelsResult,
-        artifactsResult,
+        sessionsList,
+        boardsList,
+        boardObjectsList,
+        commentsList,
+        cardsList,
+        cardTypesList,
+        reposList,
+        worktreesList,
+        usersList,
+        mcpServersList,
+        sessionMcpList,
+        gatewayChannelsList,
+        artifactsList,
         oauthStatusResult,
       ] = await Promise.all([
         client
           .service('sessions')
-          .find({ query: { $limit: PAGINATION.DEFAULT_LIMIT, $sort: { updated_at: -1 } } }),
-        client.service('boards').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-        client.service('board-objects').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-        client.service('board-comments').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-        client.service('cards').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-        client.service('card-types').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-        client.service('repos').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-        client.service('worktrees').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-        client.service('users').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-        client.service('mcp-servers').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-        client.service('session-mcp-servers').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-        client.service('gateway-channels').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-        client.service('artifacts').find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT, $sort: { updated_at: -1 } } }),
+        client.service('boards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('board-objects').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('board-comments').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('cards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('card-types').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('repos').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('worktrees').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('users').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('mcp-servers').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client
+          .service('session-mcp-servers')
+          .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('gateway-channels').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client.service('artifacts').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
         client
           .service('mcp-servers/oauth-status')
           .find()
           .catch(() => ({ authenticated_server_ids: [] })),
       ]);
-
-      // Handle paginated vs array results
-      const sessionsList = Array.isArray(sessionsResult) ? sessionsResult : sessionsResult.data;
-      const boardsList = Array.isArray(boardsResult) ? boardsResult : boardsResult.data;
-      const boardObjectsList = Array.isArray(boardObjectsResult)
-        ? boardObjectsResult
-        : boardObjectsResult.data;
-      const commentsList = Array.isArray(commentsResult) ? commentsResult : commentsResult.data;
-      const cardsList = Array.isArray(cardsResult) ? cardsResult : cardsResult.data;
-      const cardTypesList = Array.isArray(cardTypesResult) ? cardTypesResult : cardTypesResult.data;
-      const reposList = Array.isArray(reposResult) ? reposResult : reposResult.data;
-      const worktreesList = Array.isArray(worktreesResult) ? worktreesResult : worktreesResult.data;
-      const usersList = Array.isArray(usersResult) ? usersResult : usersResult.data;
-      const mcpServersList = Array.isArray(mcpServersResult)
-        ? mcpServersResult
-        : mcpServersResult.data;
-      const sessionMcpList = Array.isArray(sessionMcpResult)
-        ? sessionMcpResult
-        : sessionMcpResult.data;
-      const gatewayChannelsList = Array.isArray(gatewayChannelsResult)
-        ? gatewayChannelsResult
-        : gatewayChannelsResult.data;
-      const artifactsList = Array.isArray(artifactsResult) ? artifactsResult : artifactsResult.data;
 
       // Build session Maps for efficient lookups
       const sessionsById = new Map<string, Session>();

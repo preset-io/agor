@@ -34,10 +34,9 @@ export default class McpShow extends BaseCommand {
         server = (await client.service('mcp-servers').get(args.id)) as MCPServer;
       } catch {
         // If not found by ID, try to find by name
-        const result = await client.service('mcp-servers').find({
+        const servers = (await client.service('mcp-servers').findAll({
           query: { $limit: 1 },
-        });
-        const servers = (Array.isArray(result) ? result : result.data) as MCPServer[];
+        })) as MCPServer[];
         server = servers.find((s) => s.name === args.id) || null;
       }
 

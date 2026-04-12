@@ -15,10 +15,12 @@ import type {
   ContextFileListItem,
   MCPServer,
   Message,
+  PermissionMode,
   Repo,
   Session,
   Task,
   User,
+  UUID,
   Worktree,
 } from '@agor/core/types';
 import authentication from '@feathersjs/authentication-client';
@@ -38,6 +40,67 @@ const DEFAULT_DAEMON_URL = `http://${DAEMON.DEFAULT_HOST}:${DAEMON.DEFAULT_PORT}
  * Using a symbol avoids clashing with existing service properties.
  */
 const BOARDS_SERVICE_EXTENDED = Symbol('agor.boardsServiceExtended');
+const SERVICE_FIND_ALL_EXTENDED = Symbol('agor.serviceFindAllExtended');
+const CLIENT_SERVICE_FACTORY_EXTENDED = Symbol('agor.clientServiceFactoryExtended');
+const CLIENT_SESSIONS_HELPERS_EXTENDED = Symbol('agor.clientSessionsHelpersExtended');
+
+/**
+ * Client-side input type helper:
+ * keeps strongly typed output models branded, while accepting plain strings
+ * for branded UUID fields in create/update/patch payloads.
+ */
+export type ClientInput<T> = T extends UUID
+  ? string
+  : T extends string & { readonly __brand: string }
+    ? string
+    : T extends readonly (infer U)[]
+      ? ClientInput<U>[]
+      : T extends (...args: unknown[]) => unknown
+        ? T
+        : T extends object
+          ? { [K in keyof T]: ClientInput<T[K]> }
+          : T;
+
+export type CreatePayload<T> = Partial<ClientInput<T>>;
+export type UpdatePayload<T> = ClientInput<T>;
+export type PatchPayload<T> = Partial<ClientInput<T>> | null;
+export type FindResult<T> = Paginated<T> | T[];
+
+export interface SessionPromptRequest {
+  prompt: string;
+  permissionMode?: PermissionMode;
+  stream?: boolean;
+  messageSource?: 'gateway' | 'agor';
+}
+
+export interface QueuedSessionPromptResult {
+  success: true;
+  queued: true;
+  message: Message;
+  queue_position: number;
+}
+
+export interface RunningSessionPromptResult {
+  success: true;
+  taskId: string;
+  status: string;
+  streaming: boolean;
+  queued?: false;
+}
+
+export type SessionPromptResult = QueuedSessionPromptResult | RunningSessionPromptResult;
+
+export interface SessionPromptOptions extends Omit<SessionPromptRequest, 'prompt'> {
+  params?: Params;
+}
+
+export interface SessionsClientHelpers {
+  prompt(
+    sessionId: string,
+    prompt: string,
+    options?: SessionPromptOptions
+  ): Promise<SessionPromptResult>;
+}
 
 /**
  * Service interfaces for type safety
@@ -60,13 +123,19 @@ export interface ServiceTypes {
 /**
  * Feathers service with find method properly typed and event emitter methods
  */
-export interface AgorService<T> {
+export interface AgorService<
+  T,
+  TCreate = CreatePayload<T>,
+  TUpdate = UpdatePayload<T>,
+  TPatch = PatchPayload<T>,
+> {
   // CRUD methods
-  find(params?: Params): Promise<Paginated<T> | T[]>;
+  find(params?: Params): Promise<FindResult<T>>;
+  findAll(params?: Params): Promise<T[]>;
   get(id: string, params?: Params): Promise<T>;
-  create(data: Partial<T>, params?: Params): Promise<T>;
-  update(id: string, data: T, params?: Params): Promise<T>;
-  patch(id: string | null, data: Partial<T> | null, params?: Params): Promise<T>;
+  create(data: TCreate, params?: Params): Promise<T>;
+  update(id: string, data: TUpdate, params?: Params): Promise<T>;
+  patch(id: string | null, data: TPatch, params?: Params): Promise<T>;
   remove(id: string, params?: Params): Promise<T>;
 
   // Event emitter methods (for real-time updates)
@@ -300,6 +369,7 @@ export interface WorktreesService extends AgorService<Worktree> {
  */
 export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   io: Socket;
+  sessions: SessionsClientHelpers;
 
   // Typed service overloads for services with custom methods
   service(path: 'sessions'): SessionsService;
@@ -451,6 +521,69 @@ function extendBoardsService(client: AgorClient): void {
   boardsService[BOARDS_SERVICE_EXTENDED] = true;
 }
 
+export function normalizeFindResult<T>(result: FindResult<T>): T[] {
+  return Array.isArray(result) ? result : result.data;
+}
+
+function extendFindAllOnService(service: AgorService<unknown>): void {
+  const findAllService = service as AgorService<unknown> & {
+    [SERVICE_FIND_ALL_EXTENDED]?: boolean;
+  };
+
+  if (findAllService[SERVICE_FIND_ALL_EXTENDED]) {
+    return;
+  }
+
+  findAllService.findAll = async (params?: Params) => {
+    const result = await service.find(params);
+    return normalizeFindResult(result);
+  };
+
+  findAllService[SERVICE_FIND_ALL_EXTENDED] = true;
+}
+
+function extendServiceFactory(client: AgorClient): void {
+  const augmentedClient = client as AgorClient & {
+    [CLIENT_SERVICE_FACTORY_EXTENDED]?: boolean;
+  };
+
+  if (augmentedClient[CLIENT_SERVICE_FACTORY_EXTENDED]) {
+    return;
+  }
+
+  const rawService = client.service.bind(client) as (path: string) => AgorService<unknown>;
+
+  augmentedClient.service = ((path: string) => {
+    const service = rawService(path);
+    extendFindAllOnService(service);
+    return service;
+  }) as AgorClient['service'];
+
+  augmentedClient[CLIENT_SERVICE_FACTORY_EXTENDED] = true;
+}
+
+function extendSessionsHelpers(client: AgorClient): void {
+  const augmentedClient = client as AgorClient & {
+    [CLIENT_SESSIONS_HELPERS_EXTENDED]?: boolean;
+  };
+
+  if (augmentedClient[CLIENT_SESSIONS_HELPERS_EXTENDED]) {
+    return;
+  }
+
+  client.sessions = {
+    prompt: async (sessionId: string, prompt: string, options?: SessionPromptOptions) => {
+      const { params, ...requestOptions } = options ?? {};
+      const response = await client
+        .service(`sessions/${sessionId}/prompt`)
+        .create({ prompt, ...requestOptions } as SessionPromptRequest, params);
+      return response as SessionPromptResult;
+    },
+  };
+
+  augmentedClient[CLIENT_SESSIONS_HELPERS_EXTENDED] = true;
+}
+
 /**
  * Create Feathers client connected to agor-daemon
  *
@@ -511,7 +644,9 @@ export async function createRestClient(
     io: { opts: {} },
   } as unknown as Socket;
 
+  extendServiceFactory(client);
   extendBoardsService(client);
+  extendSessionsHelpers(client);
 
   return client;
 }
@@ -584,7 +719,9 @@ export function createClient(
   client.configure(authentication({ storage }));
   client.io = socket;
 
+  extendServiceFactory(client);
   extendBoardsService(client);
+  extendSessionsHelpers(client);
 
   return client;
 }

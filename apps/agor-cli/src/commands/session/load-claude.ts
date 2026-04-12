@@ -88,8 +88,7 @@ export default class SessionLoadClaude extends BaseCommand {
       // Try to find existing repo by path
       let repo: { repo_id: UUID; slug: string } | null = null;
       try {
-        const allRepos = await reposService.find({ query: { $limit: 1000 } });
-        const reposList = Array.isArray(allRepos) ? allRepos : allRepos.data;
+        const reposList = await reposService.findAll({ query: { $limit: 1000 } });
         repo = reposList.find((r: Repo) => r.local_path === absoluteProjectDir) || null;
       } catch {
         // Ignore errors

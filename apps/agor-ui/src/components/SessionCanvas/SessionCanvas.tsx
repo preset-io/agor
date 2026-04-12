@@ -1610,8 +1610,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                           });
 
                           // Send prompt to new session
-                          await client.service(`sessions/${newSession.session_id}/prompt`).create({
-                            prompt: renderedPrompt,
+                          await client.sessions.prompt(newSession.session_id, renderedPrompt, {
                             messageSource: 'agor',
                           });
                         } catch (error) {
@@ -2562,8 +2561,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                     }
 
                     // Send rendered prompt to session
-                    await client.service(`sessions/${sessionId}/prompt`).create({
-                      prompt: renderedPrompt,
+                    await client.sessions.prompt(sessionId, renderedPrompt, {
                       messageSource: 'agor',
                     });
                   } catch (error) {
@@ -2751,8 +2749,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 // Execute action
                 switch (action) {
                   case 'prompt': {
-                    await client.service(`sessions/${targetSessionId}/prompt`).create({
-                      prompt: renderedTemplate,
+                    await client.sessions.prompt(targetSessionId, renderedTemplate, {
                       permissionMode,
                       messageSource: 'agor',
                     });
@@ -2762,8 +2759,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                     const forkedSession = (await client
                       .service(`sessions/${targetSessionId}/fork`)
                       .create({})) as Session;
-                    await client.service(`sessions/${forkedSession.session_id}/prompt`).create({
-                      prompt: renderedTemplate,
+                    await client.sessions.prompt(forkedSession.session_id, renderedTemplate, {
                       permissionMode,
                       messageSource: 'agor',
                     });
@@ -2773,8 +2769,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                     const spawnedSession = (await client
                       .service(`sessions/${targetSessionId}/spawn`)
                       .create({})) as Session;
-                    await client.service(`sessions/${spawnedSession.session_id}/prompt`).create({
-                      prompt: renderedTemplate,
+                    await client.sessions.prompt(spawnedSession.session_id, renderedTemplate, {
                       permissionMode,
                       messageSource: 'agor',
                     });

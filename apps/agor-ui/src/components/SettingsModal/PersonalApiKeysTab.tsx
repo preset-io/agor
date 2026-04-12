@@ -40,9 +40,8 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
     if (!client) return;
     setLoading(true);
     try {
-      const result = await client.service('api/v1/user/api-keys').find({});
-      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service returns vary
-      setKeys(Array.isArray(result) ? result : (result as any).data || []);
+      const result = await client.service('api/v1/user/api-keys').findAll({});
+      setKeys(result as ApiKeyEntry[]);
     } catch (err) {
       console.error('Failed to fetch API keys:', err);
     } finally {

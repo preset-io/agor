@@ -72,15 +72,12 @@ export default class WorktreeAdd extends BaseCommand {
 
       // Check if worktree already exists (query worktrees table)
       const worktreesService = client.service('worktrees');
-      const existingWorktrees = await worktreesService.find({
+      const worktreesList = (await worktreesService.findAll({
         query: {
           repo_id: repo.repo_id,
           name: args.name,
         },
-      });
-      const worktreesList = (
-        Array.isArray(existingWorktrees) ? existingWorktrees : existingWorktrees.data
-      ) as Worktree[];
+      })) as Worktree[];
       if (worktreesList.length > 0) {
         this.error(`Worktree '${args.name}' already exists at ${worktreesList[0].path}`);
       }

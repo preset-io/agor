@@ -46,7 +46,7 @@ export function useTaskMessages(
       setLoading(true);
       setError(null);
 
-      const result = await client.service('messages').find({
+      const messagesList = await client.service('messages').findAll({
         query: {
           task_id: taskId,
           $limit: PAGINATION.DEFAULT_LIMIT,
@@ -55,8 +55,6 @@ export function useTaskMessages(
           },
         },
       });
-
-      const messagesList = Array.isArray(result) ? result : result.data;
       setMessages(messagesList);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch messages');

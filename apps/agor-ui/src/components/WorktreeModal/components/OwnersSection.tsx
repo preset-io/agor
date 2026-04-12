@@ -66,8 +66,7 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
         setSelectedOwnerIds(ownersData.map((o) => o.user_id));
 
         // Load all users
-        const usersResponse = await client.service('users').find({});
-        const users = Array.isArray(usersResponse) ? usersResponse : usersResponse.data || [];
+        const users = await client.service('users').findAll({});
         setAllUsers(users);
         setRbacEnabled(true); // If we got here, RBAC is enabled
         // biome-ignore lint/suspicious/noExplicitAny: Error type from API client is not strongly typed

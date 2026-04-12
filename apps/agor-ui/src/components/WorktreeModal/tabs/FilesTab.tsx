@@ -43,11 +43,9 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
         setLoading(true);
         setError(null);
 
-        const result = await client.service('file').find({
+        const data = await client.service('file').findAll({
           query: { worktree_id: worktree.worktree_id },
         });
-        const data = Array.isArray(result) ? result : result.data;
-
         setFiles(data as FileListItem[]);
       } catch (err) {
         console.error('Failed to fetch files:', err);

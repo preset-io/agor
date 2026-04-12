@@ -5,11 +5,13 @@
  * Does NOT test FeathersJS internals, Socket.io, or HTTP libraries.
  */
 
+import type { AuthenticationResult, Session } from '@agor/core/types';
 import authClient from '@feathersjs/authentication-client';
 import type { Socket } from 'socket.io-client';
 import io from 'socket.io-client';
 import { beforeEach, describe, expect, it, type MockedFunction, vi } from 'vitest';
-import { createClient, isDaemonRunning } from './index';
+import type { AgorService, UpdatePayload } from './index';
+import { createClient, isDaemonRunning, normalizeFindResult } from './index';
 
 // Mock socket.io-client
 vi.mock('socket.io-client', () => ({
@@ -18,12 +20,37 @@ vi.mock('socket.io-client', () => ({
 
 // Mock @feathersjs/feathers
 vi.mock('@feathersjs/feathers', () => ({
-  feathers: vi.fn(() => ({
-    configure: vi.fn(function (this: any, plugin: any) {
-      plugin.call(this);
-      return this;
-    }),
-  })),
+  feathers: vi.fn(() => {
+    const services = new Map<string, any>();
+
+    const createService = () => ({
+      find: vi.fn(),
+      get: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      patch: vi.fn(),
+      remove: vi.fn(),
+      on: vi.fn(),
+      off: vi.fn(),
+      removeListener: vi.fn(),
+      emit: vi.fn(),
+      methods: vi.fn(),
+    });
+
+    return {
+      configure: vi.fn(function (this: any, plugin: any) {
+        plugin.call(this);
+        return this;
+      }),
+      service: vi.fn((path: string) => {
+        const existing = services.get(path);
+        if (existing) return existing;
+        const created = createService();
+        services.set(path, created);
+        return created;
+      }),
+    };
+  }),
 }));
 
 // Mock @feathersjs/socketio-client
@@ -137,7 +164,7 @@ describe('createClient', () => {
         expect.objectContaining({
           reconnection: true,
           reconnectionDelay: 1000,
-          reconnectionDelayMax: 2000,
+          reconnectionDelayMax: 5000,
           reconnectionAttempts: 2,
         })
       );
@@ -149,7 +176,7 @@ describe('createClient', () => {
       expect(ioMock).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
-          timeout: 2000,
+          timeout: 20000,
         })
       );
     });
@@ -411,6 +438,114 @@ describe('createClient', () => {
         expect.objectContaining({ autoConnect: false })
       );
     });
+  });
+
+  describe('service helpers', () => {
+    it('should normalize paginated find results via findAll()', async () => {
+      const client = createClient();
+      const sessionsService = client.service('sessions');
+
+      const findMock = sessionsService.find as unknown as MockedFunction<any>;
+      findMock.mockResolvedValue({
+        total: 2,
+        limit: 10,
+        skip: 0,
+        data: [{ session_id: 's1' }, { session_id: 's2' }],
+      });
+
+      const results = await sessionsService.findAll();
+
+      expect(results).toEqual([{ session_id: 's1' }, { session_id: 's2' }]);
+      expect(findMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('should return array find results unchanged via findAll()', async () => {
+      const client = createClient();
+      const sessionsService = client.service('sessions');
+
+      const findMock = sessionsService.find as unknown as MockedFunction<any>;
+      findMock.mockResolvedValue([{ session_id: 's1' }]);
+
+      const results = await sessionsService.findAll();
+
+      expect(results).toEqual([{ session_id: 's1' }]);
+      expect(findMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('should expose sessions.prompt helper that calls /sessions/:id/prompt route', async () => {
+      const client = createClient();
+      const routeService = client.service('sessions/session-123/prompt');
+      const createMock = routeService.create as unknown as MockedFunction<any>;
+
+      createMock.mockResolvedValue({
+        success: true,
+        taskId: 'task-123',
+        status: 'running',
+        streaming: true,
+      });
+
+      const result = await client.sessions.prompt('session-123', 'Fix failing tests', {
+        permissionMode: 'auto',
+        stream: true,
+      });
+
+      expect(createMock).toHaveBeenCalledWith(
+        {
+          prompt: 'Fix failing tests',
+          permissionMode: 'auto',
+          stream: true,
+        },
+        undefined
+      );
+      expect(result).toEqual({
+        success: true,
+        taskId: 'task-123',
+        status: 'running',
+        streaming: true,
+      });
+    });
+  });
+});
+
+describe('normalizeFindResult', () => {
+  it('returns paginated data array', () => {
+    const result = normalizeFindResult({
+      total: 1,
+      limit: 10,
+      skip: 0,
+      data: [{ id: 1 }],
+    });
+
+    expect(result).toEqual([{ id: 1 }]);
+  });
+
+  it('returns plain array result unchanged', () => {
+    const result = normalizeFindResult([{ id: 1 }]);
+    expect(result).toEqual([{ id: 1 }]);
+  });
+});
+
+describe('type-level API ergonomics', () => {
+  it('accepts plain string IDs for create/patch/update payloads', () => {
+    type SessionCreateInput = Parameters<AgorService<Session>['create']>[0];
+    type SessionPatchInput = Exclude<Parameters<AgorService<Session>['patch']>[1], null>;
+    type SessionIdUpdateInput = UpdatePayload<Session>['session_id'];
+
+    const createPayload: SessionCreateInput = {
+      worktree_id: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+    };
+    const patchPayload: SessionPatchInput = { worktree_id: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' };
+    const updateId: SessionIdUpdateInput = '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f';
+
+    expect(createPayload.worktree_id).toBeDefined();
+    expect(patchPayload.worktree_id).toBeDefined();
+    expect(typeof updateId).toBe('string');
+  });
+
+  it('uses concrete user typing for AuthenticationResult.user', () => {
+    type AuthUser = NonNullable<AuthenticationResult['user']>;
+    const getEmail = (user: AuthUser): string => user.email;
+    expect(typeof getEmail).toBe('function');
   });
 });
 

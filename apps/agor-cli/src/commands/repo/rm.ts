@@ -52,8 +52,7 @@ export default class RepoRm extends BaseCommand {
         repo = await reposService.get(args.id);
       } catch {
         // Try as slug
-        const result = await reposService.find({ query: { slug: args.id } });
-        const repos = Array.isArray(result) ? result : result.data;
+        const repos = await reposService.findAll({ query: { slug: args.id } });
 
         if (repos.length > 0) {
           repo = repos[0];

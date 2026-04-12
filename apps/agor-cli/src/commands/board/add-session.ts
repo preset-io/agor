@@ -38,10 +38,9 @@ export default class BoardAddSession extends BaseCommand {
 
     try {
       // Find board by ID or slug
-      const boardsResult = await client
+      const boards = (await client
         .service('boards')
-        .find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } });
-      const boards = (Array.isArray(boardsResult) ? boardsResult : boardsResult.data) as Board[];
+        .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })) as Board[];
 
       const board = boards.find(
         (b: Board) =>
@@ -56,12 +55,9 @@ export default class BoardAddSession extends BaseCommand {
       }
 
       // Find session by short or full ID
-      const sessionsResult = await client
+      const sessions = (await client
         .service('sessions')
-        .find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } });
-      const sessions = (
-        Array.isArray(sessionsResult) ? sessionsResult : sessionsResult.data
-      ) as Session[];
+        .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })) as Session[];
 
       const session = sessions.find(
         (s: Session) => s.session_id === args.sessionId || s.session_id.startsWith(args.sessionId)
@@ -78,12 +74,9 @@ export default class BoardAddSession extends BaseCommand {
         this.error('Session has no worktree associated');
       }
 
-      const worktreesResult = await client
+      const worktrees = (await client
         .service('worktrees')
-        .find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } });
-      const worktrees = (
-        Array.isArray(worktreesResult) ? worktreesResult : worktreesResult.data
-      ) as Worktree[];
+        .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })) as Worktree[];
 
       const worktree = worktrees.find((w: Worktree) => w.worktree_id === session.worktree_id);
 
@@ -93,15 +86,11 @@ export default class BoardAddSession extends BaseCommand {
       }
 
       // Check if worktree is already on the board
-      const boardObjectsResult = await client.service('board-objects').find({
+      const boardObjects = (await client.service('board-objects').findAll({
         query: {
           board_id: board.board_id,
         },
-      });
-
-      const boardObjects = (
-        Array.isArray(boardObjectsResult) ? boardObjectsResult : boardObjectsResult.data
-      ) as BoardEntityObject[];
+      })) as BoardEntityObject[];
 
       const existingObject = boardObjects.find(
         (bo: BoardEntityObject) => bo.worktree_id === worktree.worktree_id

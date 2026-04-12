@@ -76,20 +76,14 @@ export default class WorktreeList extends BaseCommand {
 
       if (flags['repo-id']) {
         // Filter by repo ID
-        const worktreesResult = await worktreesService.find({
+        allWorktrees = (await worktreesService.findAll({
           query: { repo_id: flags['repo-id'], $limit: PAGINATION.DEFAULT_LIMIT },
-        });
-        allWorktrees = (
-          Array.isArray(worktreesResult) ? worktreesResult : worktreesResult.data
-        ) as Worktree[];
+        })) as Worktree[];
       } else {
         // Show all worktrees
-        const worktreesResult = await worktreesService.find({
+        allWorktrees = (await worktreesService.findAll({
           query: { $limit: PAGINATION.DEFAULT_LIMIT },
-        });
-        allWorktrees = (
-          Array.isArray(worktreesResult) ? worktreesResult : worktreesResult.data
-        ) as Worktree[];
+        })) as Worktree[];
       }
 
       // Filter by archive status
@@ -145,10 +139,9 @@ export default class WorktreeList extends BaseCommand {
 
       try {
         // Fetch all sessions (use high limit to get all for accurate counts)
-        const sessionsResult = await sessionsService.find({
+        const allSessions = await sessionsService.findAll({
           query: { $limit: PAGINATION.DEFAULT_LIMIT },
         });
-        const allSessions = Array.isArray(sessionsResult) ? sessionsResult : sessionsResult.data;
 
         // Count sessions per worktree
         for (const session of allSessions) {

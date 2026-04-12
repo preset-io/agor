@@ -40,10 +40,9 @@ export default class McpRemove extends BaseCommand {
 
       // If it looks like a name (not a UUID), try to find by name
       if (!args.id.match(/^[0-9a-f]{8}/i)) {
-        const result = await client.service('mcp-servers').find({
+        const servers = await client.service('mcp-servers').findAll({
           query: { $limit: 100 },
         });
-        const servers = Array.isArray(result) ? result : result.data;
         const server = servers.find((s: { name: string }) => s.name === args.id);
 
         if (!server) {

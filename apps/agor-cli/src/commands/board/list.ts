@@ -28,10 +28,9 @@ export default class BoardList extends BaseCommand {
 
     try {
       // Fetch all boards (high limit for accurate counts)
-      const result = await client
+      const allBoards = (await client
         .service('boards')
-        .find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } });
-      const allBoards = (Array.isArray(result) ? result : result.data) as Board[];
+        .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })) as Board[];
 
       if (allBoards.length === 0) {
         this.log(chalk.yellow('No boards found.'));
@@ -40,12 +39,9 @@ export default class BoardList extends BaseCommand {
       }
 
       // Fetch all board objects to count worktrees per board
-      const boardObjectsResult = await client
+      const boardObjects = (await client
         .service('board-objects')
-        .find({ query: { $limit: PAGINATION.DEFAULT_LIMIT } });
-      const boardObjects = (
-        Array.isArray(boardObjectsResult) ? boardObjectsResult : boardObjectsResult.data
-      ) as BoardEntityObject[];
+        .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })) as BoardEntityObject[];
 
       // Apply display limit
       const displayBoards = allBoards.slice(0, flags.limit);

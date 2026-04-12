@@ -103,10 +103,9 @@ export default class WorktreeShow extends BaseCommand {
       this.log(chalk.bold('Sessions:'));
       const sessionsService = client.service('sessions');
       try {
-        const sessionsResult = await sessionsService.find({
+        const allSessions = await sessionsService.findAll({
           query: { worktree_id: worktree.worktree_id, $limit: 10000 },
         });
-        const allSessions = Array.isArray(sessionsResult) ? sessionsResult : sessionsResult.data;
 
         if (allSessions.length > 0) {
           this.log(`  ${chalk.cyan(allSessions.length.toString())} session(s)`);

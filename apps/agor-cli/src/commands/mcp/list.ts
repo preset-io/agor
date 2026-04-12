@@ -46,8 +46,7 @@ export default class McpList extends BaseCommand {
       if (flags.enabled) query.enabled = true;
 
       // Fetch MCP servers
-      const result = await client.service('mcp-servers').find({ query });
-      const servers = (Array.isArray(result) ? result : result.data) as MCPServer[];
+      const servers = (await client.service('mcp-servers').findAll({ query })) as MCPServer[];
 
       if (servers.length === 0) {
         this.log(chalk.yellow('No MCP servers found.'));

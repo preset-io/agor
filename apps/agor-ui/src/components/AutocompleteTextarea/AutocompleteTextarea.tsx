@@ -325,13 +325,11 @@ export const AutocompleteTextarea = React.forwardRef<
         setIsLoading(true);
 
         try {
-          const result = await client.service('files').find({
+          const result = await client.service('files').findAll({
             query: { sessionId, search: searchQuery },
           });
 
-          setFileResults(
-            Array.isArray(result) ? (result as FileResult[]) : (result?.data as FileResult[]) || []
-          );
+          setFileResults(result as FileResult[]);
         } catch (error) {
           console.error('File search error:', error);
           setFileResults([]);

@@ -56,8 +56,7 @@ export default class UserUpdate extends BaseCommand {
     try {
       // Find user by email or ID
       const usersService = client.service('users');
-      const result = await usersService.find();
-      const users = (Array.isArray(result) ? result : result.data) as User[];
+      const users = (await usersService.findAll()) as User[];
 
       const user = users.find(
         (u) => u.email === args.user || u.user_id === args.user || u.user_id.startsWith(args.user)

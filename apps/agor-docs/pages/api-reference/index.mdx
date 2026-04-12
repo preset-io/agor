@@ -133,6 +133,97 @@ All services follow standard REST patterns:
 - `PATCH /service/:id` - Update item (partial)
 - `DELETE /service/:id` - Delete item
 
+## Session Prompt Endpoint
+
+Use `POST /sessions/:id/prompt` to send a prompt to an existing session.
+
+```bash
+curl -X POST http://localhost:3030/sessions/<session-id>/prompt \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your-token>" \
+  -d '{
+    "prompt": "Review the latest auth changes for security issues",
+    "permissionMode": "auto",
+    "stream": true
+  }'
+```
+
+Possible response shapes:
+
+```json
+{
+  "success": true,
+  "taskId": "0195d3c0-82df-7a75-b9b3-83f58de12345",
+  "status": "running",
+  "streaming": true
+}
+```
+
+```json
+{
+  "success": true,
+  "queued": true,
+  "message": {
+    "message_id": "0195d3c0-82df-7a75-b9b3-83f58de67890",
+    "status": "queued"
+  },
+  "queue_position": 2
+}
+```
+
+## Message Content Shape
+
+Message `content` supports both plain text and structured blocks:
+
+- `string`
+- `ContentBlock[]`
+
+String content example:
+
+```json
+{
+  "role": "assistant",
+  "content": "Implemented the fix and added tests."
+}
+```
+
+Structured content example:
+
+```json
+{
+  "role": "assistant",
+  "content": [
+    { "type": "text", "text": "Implemented the fix." },
+    { "type": "thinking", "thinking": "Checking edge cases before final response." }
+  ]
+}
+```
+
+## Browser Client Quick Start
+
+```ts
+import { createClient } from '@agor/core/api';
+
+const client = createClient('http://localhost:3030', true);
+
+await client.authenticate({
+  strategy: 'jwt',
+  accessToken: '<your-token>',
+});
+
+const sessions = await client.service('sessions').findAll({
+  query: { $limit: 20 },
+});
+
+const promptResult = await client.sessions.prompt(
+  sessions[0].session_id,
+  'Summarize current progress and next steps',
+  { stream: true }
+);
+
+console.log(promptResult);
+```
+
 ## WebSocket Events
 
 Real-time updates via Socket.IO:
