@@ -8,11 +8,13 @@
  * Compose with sync: `agor daemon sync --config ... && agor daemon start --config ...`
  */
 
+import { pathToFileURL } from 'node:url';
 import type { AgorConfig } from '@agor/core/config';
 import { loadConfig, loadConfigFromFile } from '@agor/core/config';
 import { validateAllowedTiers, validateServiceDependencies } from '@agor/core/types';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
+import { getDaemonModulePath, isInstalledPackage } from '../../lib/context.js';
 
 export default class DaemonStart extends Command {
   static description = 'Start daemon with config-aware boot (services, resources)';
@@ -76,7 +78,10 @@ export default class DaemonStart extends Command {
     this.log('');
 
     try {
-      const { startDaemon } = await import('@agor/daemon');
+      const daemonModule = isInstalledPackage()
+        ? await import(pathToFileURL(this.getBundledDaemonModulePath()).href)
+        : await import('@agor/daemon');
+      const { startDaemon } = daemonModule;
       await startDaemon({ config });
     } catch (error) {
       this.log(chalk.red('Failed to start daemon:'));
@@ -93,5 +98,14 @@ export default class DaemonStart extends Command {
       this.log(chalk.red(`  ${error instanceof Error ? error.message : String(error)}`));
       this.exit(1);
     }
+  }
+
+  private getBundledDaemonModulePath(): string {
+    const daemonModulePath = getDaemonModulePath();
+    if (!daemonModulePath) {
+      this.log(chalk.red('Failed to locate bundled daemon module'));
+      this.exit(1);
+    }
+    return daemonModulePath;
   }
 }

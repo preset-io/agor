@@ -20,7 +20,7 @@ const { fileURLToPath } = await import('node:url');
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Daemon is bundled in dist/daemon relative to bin/
-const daemonPath = path.resolve(dirname, '../dist/daemon/index.js');
+const daemonPath = path.resolve(dirname, '../dist/daemon/main.js');
 
 // Import and run the daemon
 await import(daemonPath);

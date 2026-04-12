@@ -16,7 +16,9 @@ const sourceManifests = [
   'packages/executor/package.json',
 ];
 
-const skipDeps = new Set(['@agor/core']);
+// Internal workspace packages are bundled/copied into agor-live dist.
+// They are not publishable npm dependencies and should not be synced into dependencies.
+const skipDeps = new Set(['@agor/core', '@agor/daemon']);
 const mode = process.argv.includes('--check') ? 'check' : 'write';
 
 const readJson = (relPath) => JSON.parse(readFileSync(resolve(repoRoot, relPath), 'utf8'));

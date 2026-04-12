@@ -54,13 +54,36 @@ export function getDaemonPath(): string | null {
   const cliDistIndex = dirname.indexOf(`${path.sep}dist${path.sep}cli`);
   if (cliDistIndex === -1) {
     // Fallback: couldn't find dist/cli, use relative path
-    return path.resolve(dirname, '../../daemon/index.js');
+    return path.resolve(dirname, '../../daemon/main.js');
   }
 
   // Get package root (everything before /dist/cli)
   const packageRoot = dirname.substring(0, cliDistIndex);
 
   // Construct daemon path from package root
+  return path.join(packageRoot, 'dist', 'daemon', 'main.js');
+}
+
+/**
+ * Get path to bundled daemon module (library entrypoint for startDaemon import)
+ *
+ * @returns path to daemon module, or null if in development
+ */
+export function getDaemonModulePath(): string | null {
+  if (!isInstalledPackage()) {
+    // Development mode: use workspace package import
+    return null;
+  }
+
+  const dirname =
+    typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
+
+  const cliDistIndex = dirname.indexOf(`${path.sep}dist${path.sep}cli`);
+  if (cliDistIndex === -1) {
+    return path.resolve(dirname, '../../daemon/index.js');
+  }
+
+  const packageRoot = dirname.substring(0, cliDistIndex);
   return path.join(packageRoot, 'dist', 'daemon', 'index.js');
 }
 
