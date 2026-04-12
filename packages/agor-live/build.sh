@@ -129,6 +129,11 @@ cd "$REPO_ROOT/packages/core"
 pnpm build
 
 echo ""
+echo "📦 Building @agor-live/client..."
+cd "$CLIENT_DIR"
+pnpm build
+
+echo ""
 echo "🖥️  Building CLI..."
 cd "$REPO_ROOT/apps/agor-cli"
 pnpm build
@@ -147,11 +152,6 @@ echo ""
 echo "🎨 Building UI..."
 cd "$REPO_ROOT/apps/agor-ui"
 NODE_ENV=production pnpm build
-
-echo ""
-echo "📦 Building @agor-live/client..."
-cd "$CLIENT_DIR"
-pnpm build
 
 # ── Build self-hosted Sandpack bundler (optional) ────────────────────────────
 
