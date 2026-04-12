@@ -23,7 +23,7 @@ const SESSION_CARD_MAX_WIDTH = 560;
 
 interface SessionCardProps {
   session: Session;
-  tasks?: Task[]; // Optional - will be fetched via useTasks if not provided
+  tasks?: Task[]; // Optional snapshot passed by parent
   userById: Map<string, User>;
   currentUserId?: string;
   onTaskClick?: (taskId: string) => void;
@@ -39,7 +39,7 @@ interface SessionCardProps {
 
 const SessionCard = ({
   session,
-  tasks = [], // Default to empty array - tasks fetching will be added later via useTasks
+  tasks = [], // Default empty snapshot
   userById,
   currentUserId,
   onTaskClick,

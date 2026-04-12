@@ -9,7 +9,6 @@
  * - Groups 3+ sequential tool-only messages into ToolBlock
  */
 
-import type { AgorClient } from '@agor/core/api';
 import {
   type InputRequestContent,
   InputRequestStatus,
@@ -24,6 +23,7 @@ import {
   TaskStatus,
   type User,
 } from '@agor/core/types';
+import type { StreamingMessageState } from '@agor-live/client';
 // TODO: Move normalization to DB or daemon API
 // import { normalizeRawSdkResponse } from '@agor/core/utils/sdk-normalizer';
 import {
@@ -36,8 +36,6 @@ import {
 import { Bubble } from '@ant-design/x';
 import { Collapse, Flex, Spin, Typography, theme } from 'antd';
 import React, { useMemo } from 'react';
-import type { StreamingMessage } from '../../hooks/useStreamingMessages';
-import { useTaskMessages } from '../../hooks/useTaskMessages';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
@@ -72,7 +70,6 @@ type Block =
 
 interface TaskBlockProps {
   task: Task;
-  client: AgorClient | null;
   agentic_tool?: string;
   sessionModel?: string;
   userById?: Map<string, User>;
@@ -97,11 +94,11 @@ interface TaskBlockProps {
   worktreeName?: string;
   scheduledFromWorktree?: boolean;
   scheduledRunAt?: number;
-  streamingMessages?: Map<MessageID, StreamingMessage>;
-  taskMessages?: Message[];
-  taskMessagesLoaded?: boolean;
-  onLoadTaskMessages?: (taskId: string) => Promise<void> | void;
-  onUnloadTaskMessages?: (taskId: string) => void;
+  streamingMessages?: Map<MessageID, StreamingMessageState>;
+  taskMessages: Message[];
+  taskMessagesLoaded: boolean;
+  onLoadTaskMessages: (taskId: string) => Promise<void> | void;
+  onUnloadTaskMessages: (taskId: string) => void;
   assistantEmoji?: string;
   /** Whether this is the most recent task in the session */
   isLatestTask?: boolean;
@@ -356,7 +353,6 @@ function groupMessagesIntoBlocks(messages: Message[]): Block[] {
 export const TaskBlock = React.memo<TaskBlockProps>(
   ({
     task,
-    client,
     agentic_tool,
     sessionModel,
     userById = new Map(),
@@ -370,8 +366,8 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     scheduledFromWorktree,
     scheduledRunAt,
     streamingMessages,
-    taskMessages: taskMessagesOverride,
-    taskMessagesLoaded = false,
+    taskMessages,
+    taskMessagesLoaded,
     onLoadTaskMessages,
     onUnloadTaskMessages,
     assistantEmoji,
@@ -379,19 +375,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
   }) => {
     const { token } = theme.useToken();
 
-    // Fallback hook path (non-reactive consumers)
-    const useFallbackMessages = !onLoadTaskMessages;
-    const { messages: hookTaskMessages, loading: hookMessagesLoading } = useTaskMessages(
-      client,
-      task.task_id,
-      useFallbackMessages && isExpanded
-    );
-
     const [reactiveMessagesLoading, setReactiveMessagesLoading] = React.useState(false);
 
     React.useEffect(() => {
-      if (!onLoadTaskMessages) return;
-
       if (isExpanded) {
         if (!taskMessagesLoaded) {
           setReactiveMessagesLoading(true);
@@ -407,12 +393,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         onUnloadTaskMessages(task.task_id);
       }
     }, [isExpanded, onLoadTaskMessages, onUnloadTaskMessages, task.task_id, taskMessagesLoaded]);
-
-    const taskMessages = taskMessagesOverride || hookTaskMessages;
-    const messagesLoading =
-      onLoadTaskMessages != null
-        ? reactiveMessagesLoading && !taskMessagesLoaded
-        : hookMessagesLoading;
+    const messagesLoading = reactiveMessagesLoading && !taskMessagesLoaded;
 
     // Convert streaming messages map to array once the reference changes
     const streamingForTask = useMemo(

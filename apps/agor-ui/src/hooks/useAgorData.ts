@@ -51,7 +51,7 @@ interface UseAgorDataResult {
  * @param options - Optional configuration
  * @param options.enabled - Whether to enable data fetching (default: true). Set to false to skip
  *                          all data fetching (useful when user needs to change password first).
- * @returns Sessions, boards, loading state, and refetch function (tasks fetched just-in-time via useTasks)
+ * @returns Sessions, boards, loading state, and refetch function
  */
 export function useAgorData(
   client: AgorClient | null,
@@ -94,8 +94,8 @@ export function useAgorData(
       setLoading(true);
       setError(null);
 
-      // Fetch sessions, boards, board-objects, comments, repos, worktrees, users, mcp servers, session-mcp relationships in parallel
-      // Tasks are fetched just-in-time via useTasks hook to avoid unnecessary global subscriptions
+      // Fetch sessions, boards, board-objects, comments, repos, worktrees, users, mcp servers, session-mcp relationships in parallel.
+      // Task/message detail now comes from per-session reactive state in conversation components.
       const [
         sessionsList,
         boardsList,

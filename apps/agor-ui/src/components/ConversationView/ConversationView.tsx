@@ -18,11 +18,11 @@ import {
   attachReactiveSessionApi,
   type ReactiveSessionHandle,
   type ReactiveSessionState,
+  type StreamingMessageState,
 } from '@agor-live/client';
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
 import { Alert, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { StreamingMessage } from '../../hooks/useStreamingMessages';
 import { useCopyToClipboard } from '../../utils/clipboard';
 import { TaskBlock } from '../TaskBlock';
 
@@ -236,16 +236,16 @@ export const ConversationView = React.memo<ConversationViewProps>(
     const error = reactiveState?.error || null;
 
     // Store previous task maps to maintain stable references
-    const prevTaskMapsRef = useRef<Map<string, Map<MessageID, StreamingMessage>>>(new Map());
+    const prevTaskMapsRef = useRef<Map<string, Map<MessageID, StreamingMessageState>>>(new Map());
 
     // Create stable Map references per task to avoid unnecessary re-renders
     // Only return new Map objects when the actual messages for that task change
     const streamingMessagesByTask = useMemo(() => {
-      const result = new Map<string, Map<MessageID, StreamingMessage>>();
+      const result = new Map<string, Map<MessageID, StreamingMessageState>>();
       const prevMaps = prevTaskMapsRef.current;
 
       // Group messages by task_id
-      const tempByTask = new Map<string, Map<MessageID, StreamingMessage>>();
+      const tempByTask = new Map<string, Map<MessageID, StreamingMessageState>>();
       for (const [msgId, streamingMsg] of allStreamingMessages.entries()) {
         if (streamingMsg.task_id) {
           if (!tempByTask.has(streamingMsg.task_id)) {
@@ -460,7 +460,6 @@ export const ConversationView = React.memo<ConversationViewProps>(
           <TaskBlock
             key={task.task_id}
             task={task}
-            client={client}
             agentic_tool={agentic_tool}
             sessionModel={sessionModel}
             userById={userById}
