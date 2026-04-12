@@ -305,15 +305,15 @@ export function estimateCodexContextWindowFromRunningTotals(
 
   const previous = extractCodexTurnCounts(previousRawSdkResponse);
   if (!previous) {
-    return currentSnapshot;
+    return currentSnapshot + current.outputTokens;
   }
 
   if (current.inputTokens < previous.inputTokens) {
     // Running total reset (e.g., compaction/new session counter).
-    return currentSnapshot;
+    return currentSnapshot + current.outputTokens;
   }
 
-  return Math.max(0, current.inputTokens - previous.inputTokens);
+  return Math.max(0, current.inputTokens - previous.inputTokens) + current.outputTokens;
 }
 
 async function computeCodexDeltaWindowEstimate(

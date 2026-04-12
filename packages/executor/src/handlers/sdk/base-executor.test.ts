@@ -11,10 +11,10 @@ describe('estimateCodexContextWindowFromRunningTotals', () => {
       },
     });
 
-    expect(result).toBe(15_120);
+    expect(result).toBe(15_360);
   });
 
-  it('uses input-token delta for running totals and does not add output tokens', () => {
+  it('uses input-token delta for running totals and adds output tokens', () => {
     const result = estimateCodexContextWindowFromRunningTotals(
       {
         type: 'turn.completed',
@@ -32,7 +32,7 @@ describe('estimateCodexContextWindowFromRunningTotals', () => {
       }
     );
 
-    expect(result).toBe(15_300);
+    expect(result).toBe(16_100);
   });
 
   it('falls back to current snapshot when running totals reset', () => {
@@ -53,7 +53,7 @@ describe('estimateCodexContextWindowFromRunningTotals', () => {
       }
     );
 
-    expect(result).toBe(9_800);
+    expect(result).toBe(10_050);
   });
 
   it('returns undefined for invalid current payloads', () => {
