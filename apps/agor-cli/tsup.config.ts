@@ -22,5 +22,5 @@ export default defineConfig({
   clean: true,
   splitting: false,
   outDir: 'dist',
-  external: [/^@agor\/core/],
+  external: [/^@agor\/core/, /^@agor\/daemon/],
 });

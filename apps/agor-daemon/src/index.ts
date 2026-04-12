@@ -20,7 +20,8 @@ import { patchConsole } from '@agor/core/utils/logger';
 
 patchConsole();
 
-import { loadConfig } from '@agor/core/config';
+import type { AgorConfig } from '@agor/core/config';
+import { loadConfig, loadConfigFromFile } from '@agor/core/config';
 import { getDatabaseUrl } from '@agor/core/db';
 import {
   authenticate,
@@ -83,10 +84,26 @@ process.on('unhandledRejection', (reason: unknown, _promise: Promise<unknown>) =
 });
 
 // ============================================================================
-// Main
+// Public API for programmatic startup
 // ============================================================================
 
-async function main() {
+/**
+ * Options for programmatic daemon startup (used by `agor daemon start` CLI command).
+ */
+export interface DaemonStartOptions {
+  /** Pre-loaded config (skips loadConfig()) */
+  config?: AgorConfig;
+  /** Path to config file (alternative to pre-loaded config) */
+  configPath?: string;
+}
+
+/**
+ * Start the Agor daemon programmatically.
+ *
+ * Called by `agor daemon start` CLI command with a pre-loaded config,
+ * or from main.ts with no args for direct execution.
+ */
+export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Initialize Handlebars helpers for template rendering
   registerHandlebarsHelpers();
   console.log('✅ Handlebars helpers registered');
@@ -95,8 +112,12 @@ async function main() {
   process.env.GIT_TERMINAL_PROMPT = '0';
   process.env.GIT_ASKPASS = 'echo';
 
-  // Load config
-  const config = await loadConfig();
+  // Load config: CLI-provided > configPath > default loadConfig()
+  const config: AgorConfig = options?.config
+    ? options.config
+    : options?.configPath
+      ? await loadConfigFromFile(options.configPath)
+      : await loadConfig();
 
   // Resolve service tier configuration (validate deps, auto-promote)
   const servicesConfig = resolveServicesConfig(config.services);
@@ -171,7 +192,8 @@ async function main() {
   // Ports, daemon URL, credentials
   // --------------------------------------------------------------------------
   const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
-  const DAEMON_PORT = envPort || config.daemon?.port || 3030;
+  const DAEMON_PORT = envPort ?? config.daemon?.port ?? 3030;
+  const DAEMON_HOST = config.daemon?.host ?? 'localhost';
 
   const envUiPort = process.env.UI_PORT ? Number.parseInt(process.env.UI_PORT, 10) : undefined;
   const UI_PORT = envUiPort || config.ui?.port || 5173;
@@ -406,6 +428,7 @@ async function main() {
     db,
     config,
     DAEMON_PORT,
+    DAEMON_HOST,
     svcEnabled,
     safeService,
     getSocketServer: socketIOConfig.getSocketServer,
@@ -413,9 +436,3 @@ async function main() {
     terminalsService: services.terminalsService,
   });
 }
-
-// Start the daemon
-main().catch((error) => {
-  console.error('Failed to start daemon:', error);
-  process.exit(1);
-});

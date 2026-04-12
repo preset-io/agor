@@ -61,6 +61,9 @@ importers:
       '@agor/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@agor/daemon':
+        specifier: workspace:*
+        version: link:../agor-daemon
       '@oclif/core':
         specifier: ^4.8.2
         version: 4.8.2

@@ -24,6 +24,8 @@ export interface StartupContext {
   db: Database;
   config: AgorConfig;
   DAEMON_PORT: number;
+  /** Bind address (default: 'localhost', use '0.0.0.0' for containers) */
+  DAEMON_HOST: string;
   svcEnabled: (group: string) => boolean;
   /** Safe service getter — returns undefined if service is not registered */
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service return type varies by path
@@ -170,6 +172,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
     db,
     config,
     DAEMON_PORT,
+    DAEMON_HOST,
     svcEnabled,
     safeService,
     getSocketServer,
@@ -186,14 +189,17 @@ export async function startup(ctx: StartupContext): Promise<void> {
   await ensureMasterSecret(config);
 
   // 4. Start server
-  const server = await app.listen(DAEMON_PORT);
+  const server = await app.listen(DAEMON_PORT, DAEMON_HOST);
 
-  console.log(`🚀 Agor daemon running at http://localhost:${DAEMON_PORT}`);
-  console.log(`   Health: http://localhost:${DAEMON_PORT}/health`);
+  const displayHost = DAEMON_HOST === '0.0.0.0' ? 'localhost' : DAEMON_HOST;
+  console.log(
+    `🚀 Agor daemon running at http://${displayHost}:${DAEMON_PORT} (bound to ${DAEMON_HOST})`
+  );
+  console.log(`   Health: http://${displayHost}:${DAEMON_PORT}/health`);
   console.log(
     `   Authentication: ${config.daemon?.allowAnonymous !== false ? '🔓 Anonymous (default)' : '🔐 Required'}`
   );
-  console.log(`   Login: POST http://localhost:${DAEMON_PORT}/authentication`);
+  console.log(`   Login: POST http://${displayHost}:${DAEMON_PORT}/authentication`);
   console.log(`   Services:`);
   console.log(`     - /sessions`);
   console.log(`     - /tasks`);
