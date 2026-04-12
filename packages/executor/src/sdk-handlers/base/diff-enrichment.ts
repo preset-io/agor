@@ -278,6 +278,8 @@ function enrichWriteResult(block: ContentBlock, input: Record<string, unknown>):
 function enrichEditFilesResult(block: ContentBlock, input: Record<string, unknown>): void {
   const changes = input.changes as Array<{ path: string; kind: string }> | undefined;
   if (!changes || changes.length === 0) return;
+  const workingDirectory =
+    typeof input.working_directory === 'string' ? input.working_directory : undefined;
 
   // Find git root once for relative path resolution
   let gitRoot: string;
@@ -285,6 +287,7 @@ function enrichEditFilesResult(block: ContentBlock, input: Record<string, unknow
     gitRoot = execSync('git rev-parse --show-toplevel', {
       encoding: 'utf-8',
       timeout: 5000,
+      ...(workingDirectory ? { cwd: workingDirectory } : {}),
     }).trim();
   } catch {
     return; // Not in a git repo or git unavailable
@@ -297,13 +300,16 @@ function enrichEditFilesResult(block: ContentBlock, input: Record<string, unknow
 
     const kind = (change.kind || 'update') as 'add' | 'update' | 'delete';
     const filePath = change.path;
+    const resolvedPath = path.isAbsolute(filePath)
+      ? filePath
+      : path.resolve(workingDirectory || gitRoot, filePath);
 
     try {
       if (kind === 'add') {
         // New file — all additions
-        const stat = fs.statSync(filePath);
+        const stat = fs.statSync(resolvedPath);
         if (stat.size > MAX_FILE_SIZE_BYTES) continue;
-        const content = fs.readFileSync(filePath, 'utf-8');
+        const content = fs.readFileSync(resolvedPath, 'utf-8');
         const patch = structuredPatch(filePath, filePath, '', content, '', '', {
           context: 0,
         });
@@ -312,10 +318,11 @@ function enrichEditFilesResult(block: ContentBlock, input: Record<string, unknow
         }
       } else if (kind === 'delete') {
         // Deleted file — get old content from git
-        const relativePath = path.relative(gitRoot, filePath);
+        const relativePath = path.relative(gitRoot, resolvedPath);
         const oldContent = execSync(`git show HEAD:${relativePath}`, {
           encoding: 'utf-8',
           timeout: 5000,
+          cwd: gitRoot,
         });
         const patch = structuredPatch(filePath, filePath, oldContent, '', '', '', {
           context: CONTEXT_LINES,
@@ -325,15 +332,16 @@ function enrichEditFilesResult(block: ContentBlock, input: Record<string, unknow
         }
       } else {
         // Update — diff git HEAD vs current file
-        const stat = fs.statSync(filePath);
+        const stat = fs.statSync(resolvedPath);
         if (stat.size > MAX_FILE_SIZE_BYTES) continue;
-        const currentContent = fs.readFileSync(filePath, 'utf-8');
-        const relativePath = path.relative(gitRoot, filePath);
+        const currentContent = fs.readFileSync(resolvedPath, 'utf-8');
+        const relativePath = path.relative(gitRoot, resolvedPath);
         let oldContent: string;
         try {
           oldContent = execSync(`git show HEAD:${relativePath}`, {
             encoding: 'utf-8',
             timeout: 5000,
+            cwd: gitRoot,
           });
         } catch {
           // File may be new (not in HEAD) — treat as addition
