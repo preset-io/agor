@@ -37,7 +37,6 @@ import { Bubble } from '@ant-design/x';
 import { Collapse, Flex, Spin, Typography, theme } from 'antd';
 import React, { useMemo } from 'react';
 import type { StreamingMessage } from '../../hooks/useStreamingMessages';
-import { useTaskEvents } from '../../hooks/useTaskEvents';
 import { useTaskMessages } from '../../hooks/useTaskMessages';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { AgentChain } from '../AgentChain';
@@ -59,7 +58,6 @@ import { RateLimitBlock } from '../RateLimitBlock';
 import { StickyTodoRenderer } from '../StickyTodoRenderer';
 import { Tag } from '../Tag';
 import { TaskStatusIcon } from '../TaskStatusIcon';
-import ToolExecutingIndicator from '../ToolExecutingIndicator';
 import { ToolIcon } from '../ToolIcon';
 
 const { Paragraph } = Typography;
@@ -373,9 +371,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
   }) => {
     const { token } = theme.useToken();
 
-    // Track real-time tool executions for this task
-    const { toolsExecuting } = useTaskEvents(client, task.task_id);
-
     // Fetch messages for this task (only when expanded)
     const { messages: taskMessages, loading: messagesLoading } = useTaskMessages(
       client,
@@ -679,13 +674,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                     }
                     return null;
                   })}
-
-                {/* Show tool execution indicators when tools are running */}
-                {toolsExecuting.length > 0 && (
-                  <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>
-                    <ToolExecutingIndicator toolsExecuting={toolsExecuting} />
-                  </div>
-                )}
 
                 {/* Show sticky TODO (latest) above typing indicator when task is running */}
                 {task.status === TaskStatus.RUNNING && <StickyTodoRenderer messages={messages} />}
