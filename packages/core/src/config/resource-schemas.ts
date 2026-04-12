@@ -5,6 +5,7 @@
  */
 
 import { z } from 'zod';
+import { REPO_SLUG_PATTERN } from './repo-reference';
 
 // ---------------------------------------------------------------------------
 // Shared validators
@@ -14,12 +15,12 @@ const uuidSchema = z
   .string()
   .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, 'Must be a valid UUID');
 
-/** Lowercase alphanumeric with hyphens and slashes (for org/repo slugs) */
-const slugSchema = z
+/** Repo slug in org/name format — uses shared REPO_SLUG_PATTERN from repo-reference.ts */
+const repoSlugSchema = z
   .string()
   .regex(
-    /^[a-z0-9][a-z0-9-]*(\/[a-z0-9][a-z0-9-]*)*$/,
-    'Must be lowercase alphanumeric with hyphens (e.g., "my-repo" or "org/my-repo")'
+    REPO_SLUG_PATTERN,
+    'Must be org/name format with alphanumeric, hyphens, underscores, or dots (e.g., "my-org/my-repo")'
   );
 
 // ---------------------------------------------------------------------------
@@ -40,7 +41,7 @@ export const enforcedAgentConfigSchema = z.object({
 export const resourceRepoConfigSchema = z
   .object({
     repo_id: uuidSchema,
-    slug: slugSchema,
+    slug: repoSlugSchema,
     remote_url: z.string().optional(),
     repo_type: z.enum(['remote', 'local']).default('remote'),
     default_branch: z.string().optional(),
@@ -62,7 +63,7 @@ export const resourceWorktreeConfigSchema = z.object({
   ref_type: z.enum(['branch', 'tag']).optional(),
   others_can: z.enum(['none', 'view', 'session', 'prompt', 'all']).optional(),
   mcp_server_ids: z.array(z.string()).optional(),
-  repo: slugSchema,
+  repo: repoSlugSchema,
   readonly: z.boolean().optional(),
   agent: enforcedAgentConfigSchema.optional(),
 });

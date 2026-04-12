@@ -17,7 +17,10 @@ export type ResourceRepoConfig = Pick<
   Repo,
   'repo_id' | 'slug' | 'remote_url' | 'repo_type' | 'default_branch'
 > & {
-  /** Shallow clone for faster boot (--depth=1) */
+  /**
+   * Shallow clone for faster boot (--depth=1)
+   * @todo Not yet applied during sync — parsed and validated but not wired into provisioning logic.
+   */
   shallow?: boolean;
 };
 
@@ -31,9 +34,15 @@ export type ResourceWorktreeConfig = Pick<
 > & {
   /** Repo slug reference — resolved to repo_id during sync */
   repo: string;
-  /** Mount filesystem read-only */
+  /**
+   * Mount filesystem read-only
+   * @todo Not yet applied during sync — parsed and validated but not wired into provisioning logic.
+   */
   readonly?: boolean;
-  /** Enforced agent settings for all sessions on this worktree */
+  /**
+   * Enforced agent settings for all sessions on this worktree
+   * @todo Not yet applied during sync — parsed and validated but not wired into provisioning logic.
+   */
   agent?: EnforcedAgentConfig;
 };
 

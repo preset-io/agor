@@ -179,6 +179,24 @@ describe('resolvePassword', () => {
       'Environment variable EMPTY is not set'
     );
   });
+
+  it('throws on unrecognized template expression', () => {
+    expect(() => resolvePassword('{{typo}}', {})).toThrow(
+      'Unrecognized template expression {{typo}}'
+    );
+  });
+
+  it('throws on unknown namespace in template', () => {
+    expect(() => resolvePassword('{{secret.KEY}}', {})).toThrow(
+      'Unrecognized template expression {{secret.KEY}}'
+    );
+  });
+
+  it('throws when mixing valid and invalid templates', () => {
+    expect(() => resolvePassword('{{env.OK}}-{{bad}}', { OK: 'val' })).toThrow(
+      'Unrecognized template expression {{bad}}'
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -72,9 +72,14 @@ describe('resourceRepoConfigSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects invalid slug with uppercase', () => {
-    const result = resourceRepoConfigSchema.safeParse(validRepo({ slug: 'MyRepo' }));
+  it('rejects slug without org/name format', () => {
+    const result = resourceRepoConfigSchema.safeParse(validRepo({ slug: 'my-repo' }));
     expect(result.success).toBe(false);
+  });
+
+  it('accepts slug with uppercase, dots, and underscores', () => {
+    const result = resourceRepoConfigSchema.safeParse(validRepo({ slug: 'My_Org/my.repo' }));
+    expect(result.success).toBe(true);
   });
 
   it('defaults repo_type to remote', () => {
@@ -203,7 +208,7 @@ describe('validateResourceCrossReferences', () => {
 
   it('detects duplicate repo IDs', () => {
     const resources = daemonResourcesConfigSchema.parse({
-      repos: [validRepo(), validRepo({ slug: 'other-repo' })],
+      repos: [validRepo(), validRepo({ slug: 'other-org/other-repo' })],
     });
     const errors = validateResourceCrossReferences(resources);
     expect(errors).toHaveLength(1);

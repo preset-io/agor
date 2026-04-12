@@ -114,10 +114,10 @@ export function resolvePassword(
 /**
  * Resolve Handlebars-style `{{env.VAR_NAME}}` references in a string.
  *
- * @throws Error if any referenced env var is not set
+ * @throws Error if any referenced env var is not set or if unrecognized templates remain
  */
 function resolveHandlebarsEnv(template: string, env: Record<string, string | undefined>): string {
-  return template.replace(/\{\{\s*env\.(\w+)\s*\}\}/g, (_match, varName: string) => {
+  const resolved = template.replace(/\{\{\s*env\.(\w+)\s*\}\}/g, (_match, varName: string) => {
     const value = env[varName];
     if (value === undefined || value === '') {
       throw new Error(
@@ -126,6 +126,16 @@ function resolveHandlebarsEnv(template: string, env: Record<string, string | und
     }
     return value;
   });
+
+  // Error on any unresolved templates (e.g. {{typo}}, {{unknown.ref}})
+  const remaining = resolved.match(/\{\{[^}]*\}\}/);
+  if (remaining) {
+    throw new Error(
+      `Unrecognized template expression ${remaining[0]} in password template "${template}". Only {{env.VAR_NAME}} is supported.`
+    );
+  }
+
+  return resolved;
 }
 
 /**
