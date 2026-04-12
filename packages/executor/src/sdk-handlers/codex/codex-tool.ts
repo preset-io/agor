@@ -188,6 +188,7 @@ export class CodexTool implements ITool {
     let streamStarted = false; // tracks whether onStreamStart succeeded (for safe onStreamEnd)
     let wasStopped = false;
     let workingDirectory: string | undefined;
+    const pendingToolMessageIds = new Map<string, MessageID>();
 
     if (this.sessionsRepo && this.worktreesRepo) {
       const session = await this.sessionsRepo.findById(sessionId);
@@ -229,6 +230,33 @@ export class CodexTool implements ITool {
             tool_name: event.toolUse.name,
           });
         }
+
+        // Create tool row immediately so UI shows "running" state.
+        const toolMessageId = generateId() as MessageID;
+        await this.createAssistantMessage(
+          sessionId,
+          toolMessageId,
+          [
+            {
+              type: 'tool_use',
+              id: event.toolUse.id,
+              name: event.toolUse.name,
+              input: event.toolUse.input,
+            },
+          ],
+          [
+            {
+              id: event.toolUse.id,
+              name: event.toolUse.name,
+              input: event.toolUse.input,
+            },
+          ],
+          taskId,
+          nextIndex++,
+          resolvedModel
+        );
+        assistantMessageIds.push(toolMessageId);
+        pendingToolMessageIds.set(event.toolUse.id, toolMessageId);
       }
 
       if (event.type === 'complete' && event.usage) {
@@ -316,9 +344,6 @@ export class CodexTool implements ITool {
             : event.toolUse.status
               ? `[${event.toolUse.status}]`
               : '';
-
-        // Create a message for this tool use immediately
-        const toolMessageId = generateId() as MessageID;
         const toolContent = [
           {
             type: 'tool_use',
@@ -341,28 +366,40 @@ export class CodexTool implements ITool {
         // Best-effort diff enrichment for Edit/Write tool results
         enrichContentBlocks(toolContent, { workingDirectory });
 
-        await this.createAssistantMessage(
-          sessionId,
-          toolMessageId,
-          toolContent as Array<{
-            type: string;
-            text?: string;
-            id?: string;
-            name?: string;
-            input?: Record<string, unknown>;
-          }>,
-          [
-            {
-              id: event.toolUse.id,
-              name: event.toolUse.name,
-              input: event.toolUse.input,
-            },
-          ],
-          taskId,
-          nextIndex++,
-          resolvedModel
-        );
-        assistantMessageIds.push(toolMessageId);
+        const existingToolMessageId = pendingToolMessageIds.get(event.toolUse.id);
+        if (existingToolMessageId) {
+          await this.messagesService?.patch(existingToolMessageId, {
+            content: toolContent as Message['content'],
+            content_preview:
+              typeof toolResultContent === 'string' ? toolResultContent.substring(0, 200) : '',
+          });
+          pendingToolMessageIds.delete(event.toolUse.id);
+        } else {
+          // Fallback path if start event wasn't observed.
+          const toolMessageId = generateId() as MessageID;
+          await this.createAssistantMessage(
+            sessionId,
+            toolMessageId,
+            toolContent as Array<{
+              type: string;
+              text?: string;
+              id?: string;
+              name?: string;
+              input?: Record<string, unknown>;
+            }>,
+            [
+              {
+                id: event.toolUse.id,
+                name: event.toolUse.name,
+                input: event.toolUse.input,
+              },
+            ],
+            taskId,
+            nextIndex++,
+            resolvedModel
+          );
+          assistantMessageIds.push(toolMessageId);
+        }
       }
       // Handle complete message (save to database)
       else if (event.type === 'complete' && event.content) {
