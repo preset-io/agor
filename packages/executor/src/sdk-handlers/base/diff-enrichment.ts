@@ -41,6 +41,19 @@ export interface DiffEnrichmentContext {
   workingDirectory?: string;
 }
 
+export interface FileChangeSpec {
+  path: string;
+  kind?: string;
+}
+
+interface EditFilesSnapshot {
+  path: string;
+  kind: 'add' | 'update' | 'delete';
+  absolutePath: string;
+  beforeExists: boolean;
+  beforeContent?: string;
+}
+
 interface ContentBlock {
   type: string;
   id?: string;
@@ -125,6 +138,7 @@ function resolveRepoRelativePath(gitRoot: string, absolutePath: string): string 
  * Entries are deleted after consumption to avoid unbounded growth.
  */
 const pendingToolUses = new Map<string, ToolUseInfo>();
+const pendingEditFilesSnapshots = new Map<string, EditFilesSnapshot[]>();
 
 /**
  * Register tool uses from an assistant message for later enrichment lookup.
@@ -135,6 +149,80 @@ export function registerToolUses(
 ): void {
   for (const tu of toolUses) {
     pendingToolUses.set(tu.id, { name: tu.name, input: tu.input });
+  }
+}
+
+/**
+ * Register a pre-edit snapshot for tools that need true pre/post diffs.
+ * Currently used for Codex edit_files at tool-start time so completion does not
+ * rely on git HEAD state.
+ */
+export function registerToolInvocationStart(
+  toolUseId: string,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  context?: DiffEnrichmentContext
+): void {
+  try {
+    if (toolName.toLowerCase() !== 'edit_files') return;
+
+    const changes = toolInput.changes as FileChangeSpec[] | undefined;
+    if (!changes || changes.length === 0) return;
+
+    const workingDirectory = context?.workingDirectory;
+    let gitRoot: string;
+    try {
+      gitRoot = execSync('git rev-parse --show-toplevel', {
+        encoding: 'utf-8',
+        timeout: 5000,
+        ...(workingDirectory ? { cwd: workingDirectory } : {}),
+      }).trim();
+    } catch {
+      return;
+    }
+
+    const snapshots: EditFilesSnapshot[] = [];
+    for (const change of changes) {
+      if (!change?.path) continue;
+
+      const kind = normalizeChangeKind(change.kind);
+      const absolutePath = path.isAbsolute(change.path)
+        ? change.path
+        : path.resolve(workingDirectory || gitRoot, change.path);
+
+      // Only snapshot files inside the repo.
+      if (!resolveRepoRelativePath(gitRoot, absolutePath)) continue;
+
+      let beforeExists = false;
+      let beforeContent: string | undefined;
+      try {
+        const stat = fs.statSync(absolutePath);
+        if (stat.size <= MAX_FILE_SIZE_BYTES) {
+          beforeContent = fs.readFileSync(absolutePath, 'utf-8');
+        }
+        beforeExists = true;
+      } catch {
+        beforeExists = false;
+      }
+
+      snapshots.push({
+        path: change.path,
+        kind,
+        absolutePath,
+        beforeExists,
+        beforeContent,
+      });
+    }
+
+    if (snapshots.length > 0) {
+      pendingEditFilesSnapshots.set(toolUseId, snapshots);
+    }
+
+    if (pendingEditFilesSnapshots.size > 400) {
+      pendingEditFilesSnapshots.clear();
+    }
+  } catch {
+    // Best effort — swallow any errors
   }
 }
 
@@ -158,7 +246,7 @@ export function enrichToolResults(contentBlocks: ContentBlock[]): void {
     // Consume the entry — we no longer need it
     pendingToolUses.delete(toolUseId);
 
-    enrichBlock(block, toolUse.name, toolUse.input);
+    enrichBlock(block, toolUse.name, toolUse.input, undefined, toolUseId);
   }
 
   // GC: clear any stale entries older than expected
@@ -202,7 +290,7 @@ export function enrichContentBlocks(
     const toolUse = localToolUses.get(toolUseId);
     if (!toolUse) continue;
 
-    enrichBlock(block, toolUse.name, toolUse.input, context);
+    enrichBlock(block, toolUse.name, toolUse.input, context, toolUseId);
   }
 }
 
@@ -218,7 +306,8 @@ function enrichBlock(
   block: ContentBlock,
   toolName: string,
   toolInput: Record<string, unknown>,
-  context?: DiffEnrichmentContext
+  context?: DiffEnrichmentContext,
+  toolUseId?: string
 ): void {
   try {
     // Normalize tool names across SDKs (Claude: "Edit", Codex: "edit", etc.)
@@ -228,7 +317,7 @@ function enrichBlock(
     } else if (normalized === 'write') {
       enrichWriteResult(block, toolInput);
     } else if (normalized === 'edit_files') {
-      enrichEditFilesResult(block, toolInput, context);
+      enrichEditFilesResult(block, toolInput, context, toolUseId);
     }
   } catch {
     // Best effort — swallow any errors
@@ -347,11 +436,28 @@ function enrichWriteResult(block: ContentBlock, input: Record<string, unknown>):
 function enrichEditFilesResult(
   block: ContentBlock,
   input: Record<string, unknown>,
-  context?: DiffEnrichmentContext
+  context?: DiffEnrichmentContext,
+  toolUseId?: string
 ): void {
-  const changes = input.changes as Array<{ path: string; kind: string }> | undefined;
+  const changes = input.changes as FileChangeSpec[] | undefined;
   if (!changes || changes.length === 0) return;
   const workingDirectory = context?.workingDirectory;
+
+  const snapshots = toolUseId ? pendingEditFilesSnapshots.get(toolUseId) : undefined;
+  if (toolUseId) {
+    pendingEditFilesSnapshots.delete(toolUseId);
+  }
+
+  if (snapshots?.length) {
+    const snapshotDiffs = enrichFromEditFilesSnapshots(snapshots);
+    if (snapshotDiffs.length > 0) {
+      block.diff = {
+        structuredPatch: snapshotDiffs[0].structuredPatch,
+        files: snapshotDiffs,
+      };
+      return;
+    }
+  }
 
   // Find git root once for relative path resolution
   let gitRoot: string;
@@ -370,7 +476,7 @@ function enrichEditFilesResult(
   for (const change of changes) {
     if (!change.path) continue;
 
-    const kind = (change.kind || 'update') as 'add' | 'update' | 'delete';
+    const kind = normalizeChangeKind(change.kind);
     const filePath = change.path;
     const resolvedPath = path.isAbsolute(filePath)
       ? filePath
@@ -455,4 +561,72 @@ function gitShowHeadFile(gitRoot: string, relativePath: string): string | null {
   } catch {
     return null;
   }
+}
+
+function normalizeChangeKind(kind: string | undefined): 'add' | 'update' | 'delete' {
+  if (kind === 'add' || kind === 'delete' || kind === 'update') {
+    return kind;
+  }
+  return 'update';
+}
+
+function enrichFromEditFilesSnapshots(snapshots: EditFilesSnapshot[]): FileDiff[] {
+  const fileDiffs: FileDiff[] = [];
+
+  for (const snapshot of snapshots) {
+    try {
+      let afterExists = false;
+      let afterContent = '';
+
+      try {
+        const stat = fs.statSync(snapshot.absolutePath);
+        if (stat.size <= MAX_FILE_SIZE_BYTES) {
+          afterContent = fs.readFileSync(snapshot.absolutePath, 'utf-8');
+        }
+        afterExists = true;
+      } catch {
+        afterExists = false;
+      }
+
+      const beforeContent = snapshot.beforeExists ? (snapshot.beforeContent ?? '') : '';
+      const beforeForDiff = snapshot.beforeExists ? beforeContent : '';
+      const afterForDiff = afterExists ? afterContent : '';
+      if (!snapshot.beforeExists && !afterExists) continue;
+      if (beforeForDiff === afterForDiff) continue;
+
+      let resultKind: 'add' | 'update' | 'delete' = snapshot.kind;
+      if (!snapshot.beforeExists && afterExists) {
+        resultKind = 'add';
+      } else if (snapshot.beforeExists && !afterExists) {
+        resultKind = 'delete';
+      } else {
+        resultKind = 'update';
+      }
+
+      const patch = structuredPatch(
+        snapshot.path,
+        snapshot.path,
+        beforeForDiff,
+        afterForDiff,
+        '',
+        '',
+        {
+          context: resultKind === 'add' ? 0 : CONTEXT_LINES,
+        }
+      );
+
+      if (patch.hunks.length > 0) {
+        fileDiffs.push({
+          path: snapshot.path,
+          kind: resultKind,
+          structuredPatch: patch.hunks,
+        });
+      }
+    } catch {
+      // Best effort — skip files that fail
+    }
+  }
+
+  // Keep fallback path in calling method if this yields no diffs.
+  return fileDiffs;
 }

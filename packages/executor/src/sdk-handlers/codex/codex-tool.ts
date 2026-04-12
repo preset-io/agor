@@ -29,7 +29,7 @@ import {
   type SessionID,
   type TaskID,
 } from '../../types.js';
-import { enrichContentBlocks } from '../base/diff-enrichment.js';
+import { enrichContentBlocks, registerToolInvocationStart } from '../base/diff-enrichment.js';
 import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base/index.js';
 import type {
   MessagesService,
@@ -222,6 +222,13 @@ export class CodexTool implements ITool {
 
       // Handle tool execution start (live UI indicator)
       if (event.type === 'tool_start') {
+        registerToolInvocationStart(
+          event.toolUse.id,
+          event.toolUse.name,
+          event.toolUse.input,
+          workingDirectory ? { workingDirectory } : undefined
+        );
+
         if (taskId) {
           await this.emitTaskEvent('tool:start', {
             task_id: taskId,

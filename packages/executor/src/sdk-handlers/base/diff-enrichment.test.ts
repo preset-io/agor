@@ -3,7 +3,12 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { enrichContentBlocks, enrichToolResults, registerToolUses } from './diff-enrichment.js';
+import {
+  enrichContentBlocks,
+  enrichToolResults,
+  registerToolInvocationStart,
+  registerToolUses,
+} from './diff-enrichment.js';
 
 interface TestContentBlock {
   type: string;
@@ -205,6 +210,74 @@ describe('diff enrichment', () => {
     expect(toolResult.diff?.files?.[0]?.kind).toBe('add');
     const lines = toolResult.diff?.files?.[0]?.structuredPatch?.[0]?.lines ?? [];
     expect(lines.some((line) => line.includes('+export const added = true;'))).toBe(true);
+  });
+
+  it('uses invocation snapshots so add then remove across calls both render correctly', () => {
+    const repoDir = createTempGitRepo();
+    const srcDir = path.join(repoDir, 'src');
+    fs.mkdirSync(srcDir, { recursive: true });
+    fs.writeFileSync(path.join(repoDir, 'README.md'), '# test\n', 'utf-8');
+    execSync('git add .', { cwd: repoDir, stdio: 'ignore' });
+    execSync('git commit -m "initial"', { cwd: repoDir, stdio: 'ignore' });
+
+    const relPath = 'src/toggle.ts';
+    const absPath = path.join(repoDir, relPath);
+
+    // Invocation 1: add file
+    registerToolInvocationStart(
+      'tool-codex-edit-files-toggle-add',
+      'edit_files',
+      { changes: [{ path: relPath, kind: 'add' }] },
+      { workingDirectory: repoDir }
+    );
+    fs.writeFileSync(absPath, 'export const mode = "on";\n', 'utf-8');
+    const addBlocks: TestContentBlock[] = [
+      {
+        type: 'tool_use',
+        id: 'tool-codex-edit-files-toggle-add',
+        name: 'edit_files',
+        input: { changes: [{ path: relPath, kind: 'add' }] },
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'tool-codex-edit-files-toggle-add',
+        content: '[completed]',
+      },
+    ];
+    enrichContentBlocks(addBlocks, { workingDirectory: repoDir });
+
+    expect(addBlocks[1].diff?.files).toHaveLength(1);
+    expect(addBlocks[1].diff?.files?.[0]?.kind).toBe('add');
+    const addLines = addBlocks[1].diff?.files?.[0]?.structuredPatch?.[0]?.lines ?? [];
+    expect(addLines.some((line) => line.includes('+export const mode = "on";'))).toBe(true);
+
+    // Invocation 2: delete same file (after add already happened)
+    registerToolInvocationStart(
+      'tool-codex-edit-files-toggle-delete',
+      'edit_files',
+      { changes: [{ path: relPath, kind: 'delete' }] },
+      { workingDirectory: repoDir }
+    );
+    fs.rmSync(absPath);
+    const deleteBlocks: TestContentBlock[] = [
+      {
+        type: 'tool_use',
+        id: 'tool-codex-edit-files-toggle-delete',
+        name: 'edit_files',
+        input: { changes: [{ path: relPath, kind: 'delete' }] },
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'tool-codex-edit-files-toggle-delete',
+        content: '[completed]',
+      },
+    ];
+    enrichContentBlocks(deleteBlocks, { workingDirectory: repoDir });
+
+    expect(deleteBlocks[1].diff?.files).toHaveLength(1);
+    expect(deleteBlocks[1].diff?.files?.[0]?.kind).toBe('delete');
+    const deleteLines = deleteBlocks[1].diff?.files?.[0]?.structuredPatch?.[0]?.lines ?? [];
+    expect(deleteLines.some((line) => line.includes('-export const mode = "on";'))).toBe(true);
   });
 
   it('skips unsafe relative paths when resolving git HEAD content', () => {
