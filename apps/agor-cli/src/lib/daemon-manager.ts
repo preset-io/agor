@@ -10,6 +10,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+const DEFAULT_LOG_LINES = 50;
+const MIN_TAIL_READ_BYTES = 64 * 1024;
+const AVG_LOG_LINE_BYTES = 256;
+const MAX_TAIL_READ_BYTES = 8 * 1024 * 1024;
+const DEFAULT_ROTATE_MAX_BYTES = 50 * 1024 * 1024; // 50MB
+const DEFAULT_ROTATE_MAX_FILES = 5;
+
+export interface DaemonLogRotationOptions {
+  maxBytes?: number;
+  maxFiles?: number;
+}
+
 /**
  * Get Agor home directory (~/.agor)
  */
@@ -82,6 +94,13 @@ export function startDaemon(daemonPath: string): number {
 
   // Ensure log directory exists
   const logFile = getLogFilePath();
+
+  try {
+    rotateDaemonLogIfNeeded(logFile);
+  } catch (error) {
+    console.warn(`⚠ Failed to rotate daemon logs: ${(error as Error).message}`);
+  }
+
   const logStream = fs.openSync(logFile, 'a');
 
   // Spawn daemon in detached mode
@@ -166,19 +185,113 @@ export function stopDaemon(): boolean {
 /**
  * Get last N lines from log file
  *
+ * Reads from the end of the file with a bounded window to avoid loading
+ * arbitrarily large logs into memory.
+ *
  * @param lines - Number of lines to read (default: 50)
  * @returns Log content
  */
-export function readLogs(lines: number = 50): string {
+export function readLogs(lines: number = DEFAULT_LOG_LINES): string {
   const logFile = getLogFilePath();
 
   if (!fs.existsSync(logFile)) {
     return 'No logs found';
   }
 
-  const content = fs.readFileSync(logFile, 'utf-8');
-  const allLines = content.split('\n').filter((line) => line.trim() !== '');
-  const lastLines = allLines.slice(-lines);
+  const safeLines = sanitizeRequestedLineCount(lines);
+  if (safeLines <= 0) {
+    return '';
+  }
 
-  return lastLines.join('\n');
+  const fd = fs.openSync(logFile, 'r');
+  try {
+    const fileSize = fs.fstatSync(fd).size;
+    if (fileSize <= 0) {
+      return '';
+    }
+
+    const maxReadableBytes = Math.min(fileSize, MAX_TAIL_READ_BYTES);
+    let bytesToRead = Math.min(
+      maxReadableBytes,
+      Math.max(MIN_TAIL_READ_BYTES, safeLines * AVG_LOG_LINE_BYTES)
+    );
+
+    let lastLines: string[] = [];
+    while (bytesToRead <= maxReadableBytes) {
+      const tailBuffer = readTailBuffer(fd, fileSize, bytesToRead);
+      const tailContent = tailBuffer.toString('utf-8').replaceAll('\0', '').replace(/\r\n/g, '\n');
+      const allLines = tailContent.split('\n').filter((line) => line.trim() !== '');
+      lastLines = allLines.slice(-safeLines);
+
+      if (allLines.length >= safeLines || bytesToRead === maxReadableBytes) {
+        break;
+      }
+
+      bytesToRead = Math.min(maxReadableBytes, bytesToRead * 2);
+    }
+
+    return lastLines.join('\n');
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * Rotate daemon log file if it exceeds configured size.
+ * Retains N rotated files: daemon.log.1 ... daemon.log.N
+ */
+export function rotateDaemonLogIfNeeded(
+  logFile: string,
+  options: DaemonLogRotationOptions = {}
+): void {
+  if (!fs.existsSync(logFile)) {
+    return;
+  }
+
+  const maxBytes = Math.max(1, Math.floor(options.maxBytes ?? DEFAULT_ROTATE_MAX_BYTES));
+  const maxFiles = Math.max(1, Math.floor(options.maxFiles ?? DEFAULT_ROTATE_MAX_FILES));
+  const logSize = fs.statSync(logFile).size;
+
+  if (logSize < maxBytes) {
+    return;
+  }
+
+  const oldestLog = `${logFile}.${maxFiles}`;
+  if (fs.existsSync(oldestLog)) {
+    fs.unlinkSync(oldestLog);
+  }
+
+  for (let i = maxFiles - 1; i >= 1; i--) {
+    const src = `${logFile}.${i}`;
+    const dest = `${logFile}.${i + 1}`;
+
+    if (!fs.existsSync(src)) {
+      continue;
+    }
+
+    if (fs.existsSync(dest)) {
+      fs.unlinkSync(dest);
+    }
+    fs.renameSync(src, dest);
+  }
+
+  fs.renameSync(logFile, `${logFile}.1`);
+}
+
+function sanitizeRequestedLineCount(lines: number): number {
+  if (!Number.isFinite(lines)) {
+    return DEFAULT_LOG_LINES;
+  }
+
+  const parsed = Math.floor(lines);
+  return Math.max(0, parsed);
+}
+
+function readTailBuffer(fd: number, fileSize: number, bytesToRead: number): Buffer {
+  const readLength = Math.min(bytesToRead, fileSize);
+  const start = fileSize - readLength;
+  const buffer = Buffer.allocUnsafe(readLength);
+  const bytesRead = fs.readSync(fd, buffer, 0, readLength, start);
+
+  return bytesRead === readLength ? buffer : buffer.subarray(0, bytesRead);
 }
