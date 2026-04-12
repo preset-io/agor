@@ -6,13 +6,13 @@
  *   const client = createClient('http://localhost:3030');
  */
 
-import type { AgorClient as CoreAgorClient } from '@agor/core/api';
+import type { AgorClient as CoreAgorClient } from '../../core/src/api/index';
 import {
   createClient as createCoreClient,
   createRestClient as createCoreRestClient,
   getApiKeyFromEnv,
   isDaemonRunning,
-} from '@agor/core/api';
+} from '../../core/src/api/index';
 import {
   attachReactiveSessionApi,
   type ReactiveAgorClient,
@@ -41,7 +41,7 @@ export type {
   SessionsService,
   TasksService,
   WorktreesService,
-} from '@agor/core/api';
+} from '../../core/src/api/index';
 
 export type {
   ReactiveAgorClient,
@@ -57,13 +57,13 @@ export type {
   ToolExecutionState,
 };
 
-export * from '@agor/core/config/browser';
-export type { AgorConfig } from '@agor/core/config/types';
-export * from '@agor/core/models';
-export * from '@agor/core/templates/handlebars-helpers';
+export * from '../../core/src/config/browser';
+export type { AgorConfig } from '../../core/src/config/types';
+export * from '../../core/src/templates/handlebars-helpers';
 // Re-export full browser-safe type/runtime surface for UI consumers.
-export * from '@agor/core/types';
-export { toShortId as formatShortId } from '@agor/core/types';
+export * from '../../core/src/types/index';
+export { toShortId as formatShortId } from '../../core/src/types/index';
+export * from './models';
 
 export function createClient(...args: Parameters<typeof createCoreClient>): ReactiveAgorClient {
   const client = createCoreClient(...args);

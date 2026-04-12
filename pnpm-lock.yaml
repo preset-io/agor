@@ -569,9 +569,6 @@ importers:
 
   packages/client:
     dependencies:
-      '@agor/core':
-        specifier: workspace:*
-        version: link:../core
       '@feathersjs/authentication-client':
         specifier: ^5.0.41
         version: 5.0.41(typescript@5.9.3)
@@ -584,10 +581,19 @@ importers:
       '@feathersjs/socketio-client':
         specifier: ^5.0.41
         version: 5.0.41
+      js-yaml:
+        specifier: ^4.1.1
+        version: 4.1.1
       socket.io-client:
         specifier: ^4.8.3
         version: 4.8.3
     devDependencies:
+      '@agor/core':
+        specifier: workspace:*
+        version: link:../core
+      '@types/js-yaml':
+        specifier: ^4.0.9
+        version: 4.0.9
       '@types/node':
         specifier: ^22.10.2
         version: 22.19.0
