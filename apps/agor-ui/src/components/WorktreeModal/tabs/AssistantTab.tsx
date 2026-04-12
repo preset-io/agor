@@ -1,6 +1,6 @@
-import type { AgorClient } from '@agor/core/api';
-import type { AssistantConfig, Worktree } from '@agor/core/types';
-import { getAssistantConfig } from '@agor/core/types';
+import type { AgorClient } from '@agor-live/client';
+import type { AssistantConfig, Worktree } from '@agor-live/client';
+import { getAssistantConfig } from '@agor-live/client';
 import { RobotOutlined } from '@ant-design/icons';
 import { Button, Descriptions, Form, Input, Space, Typography } from 'antd';
 import { useEffect, useState } from 'react';

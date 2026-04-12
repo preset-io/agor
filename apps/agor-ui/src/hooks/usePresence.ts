@@ -8,8 +8,8 @@
  * Subscribes to cursor-moved events and maintains active user state for Facepile
  */
 
-import type { AgorClient } from '@agor/core/api';
-import type { ActiveUser, BoardID, CursorMovedEvent, User } from '@agor/core/types';
+import type { AgorClient } from '@agor-live/client';
+import type { ActiveUser, BoardID, CursorMovedEvent, User } from '@agor-live/client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { PRESENCE_CONFIG } from '../config/presence';
 

@@ -1,5 +1,5 @@
-import type { AgorClient } from '@agor/core/api';
-import type { FileDetail, FileListItem, Worktree } from '@agor/core/types';
+import type { AgorClient } from '@agor-live/client';
+import type { FileDetail, FileListItem, Worktree } from '@agor-live/client';
 import { Alert, message, Space } from 'antd';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { CodePreviewModal } from '../../CodePreviewModal/CodePreviewModal';

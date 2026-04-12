@@ -4,7 +4,7 @@ import {
   DEFAULT_CODEX_MODEL,
   GEMINI_MODELS,
   type GeminiModel,
-} from '@agor/core/models';
+} from '@agor-live/client';
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Input, Radio, Select, Space, Tooltip } from 'antd';
 import { useState } from 'react';

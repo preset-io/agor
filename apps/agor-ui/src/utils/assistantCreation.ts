@@ -1,5 +1,5 @@
-import type { AgorClient } from '@agor/core/api';
-import type { AssistantConfig, Board, BoardID, Repo, Worktree } from '@agor/core/types';
+import type { AgorClient } from '@agor-live/client';
+import type { AssistantConfig, Board, BoardID, Repo, Worktree } from '@agor-live/client';
 import { CREATE_NEW_BOARD } from '@/utils/assistantConstants';
 import { slugify } from '@/utils/repoSlug';
 

@@ -10,7 +10,7 @@
  * - Note (always shown in full, distinct background)
  */
 
-import type { CardWithType } from '@agor/core/types';
+import type { CardWithType } from '@agor-live/client';
 import { DragOutlined, LinkOutlined, PushpinFilled } from '@ant-design/icons';
 import { Button, Tooltip, Typography, theme } from 'antd';
 

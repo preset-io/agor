@@ -1,5 +1,5 @@
-import type { AgorClient } from '@agor/core/api';
-import type { MCPServer } from '@agor/core/types';
+import type { AgorClient } from '@agor-live/client';
+import type { MCPServer } from '@agor-live/client';
 import { ApiOutlined, LoginOutlined } from '@ant-design/icons';
 import { App, Tooltip } from 'antd';
 import { Tag } from './Tag';

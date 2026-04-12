@@ -6,7 +6,7 @@
  * - WorktreesTable (create standalone worktree)
  */
 
-import type { Board, Repo } from '@agor/core/types';
+import type { Board, Repo } from '@agor-live/client';
 import { Checkbox, Form, Input, Radio, Select, Space, Typography } from 'antd';
 import { useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';

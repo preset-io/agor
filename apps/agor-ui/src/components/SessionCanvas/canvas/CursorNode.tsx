@@ -4,7 +4,7 @@
  * This allows cursors to appear in the minimap automatically
  */
 
-import type { User } from '@agor/core/types';
+import type { User } from '@agor-live/client';
 import { theme } from 'antd';
 import { useViewport } from 'reactflow';
 

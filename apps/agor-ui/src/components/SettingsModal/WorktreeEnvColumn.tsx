@@ -2,8 +2,8 @@
  * Shared environment status column helpers for worktree tables.
  * Used by both WorktreesTable and AssistantsTable to avoid duplication.
  */
-import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
-import type { Repo, Worktree } from '@agor/core/types';
+import { renderTemplate } from '@agor-live/client';
+import type { Repo, Worktree } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,

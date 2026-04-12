@@ -13,7 +13,7 @@ import {
   type PermissionRequestContent,
   PermissionScope,
   PermissionStatus,
-} from '@agor/core/types';
+} from '@agor-live/client';
 import { CheckOutlined, ClockCircleOutlined, CloseOutlined, LockOutlined } from '@ant-design/icons';
 import { Button, Card, Descriptions, Radio, Select, Space, Typography, theme } from 'antd';
 import type React from 'react';

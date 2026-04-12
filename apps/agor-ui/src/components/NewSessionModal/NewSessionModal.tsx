@@ -1,4 +1,4 @@
-import type { AgorClient } from '@agor/core/api';
+import type { AgorClient } from '@agor-live/client';
 import type {
   AgenticToolName,
   CodexApprovalPolicy,
@@ -7,8 +7,8 @@ import type {
   PermissionMode,
   User,
   Worktree,
-} from '@agor/core/types';
-import { getDefaultPermissionMode } from '@agor/core/types';
+} from '@agor-live/client';
+import { getDefaultPermissionMode } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import { Alert, Collapse, Form, Input, Modal, Typography } from 'antd';
 import { useEffect, useState } from 'react';

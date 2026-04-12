@@ -1,4 +1,4 @@
-import type { Worktree } from '@agor/core/types';
+import type { Worktree } from '@agor-live/client';
 import { Alert, Checkbox, Popconfirm, Typography } from 'antd';
 import { type ReactNode, useState } from 'react';
 

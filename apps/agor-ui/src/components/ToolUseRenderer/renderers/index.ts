@@ -25,7 +25,7 @@
  * See TEXT_TRUNCATION constants in src/constants/ui.ts for default limits.
  */
 
-import type { DiffEnrichment } from '@agor/core/types';
+import type { DiffEnrichment } from '@agor-live/client';
 import type React from 'react';
 import { BashRenderer } from './BashRenderer';
 import { EditFilesRenderer } from './EditFilesRenderer';

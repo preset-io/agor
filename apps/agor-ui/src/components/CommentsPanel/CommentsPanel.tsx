@@ -1,4 +1,4 @@
-import type { AgorClient } from '@agor/core/api';
+import type { AgorClient } from '@agor-live/client';
 import type {
   BoardComment,
   BoardObject,
@@ -6,8 +6,8 @@ import type {
   ReactionSummary,
   User,
   Worktree,
-} from '@agor/core/types';
-import { groupReactions, isThreadRoot } from '@agor/core/types';
+} from '@agor-live/client';
+import { groupReactions, isThreadRoot } from '@agor-live/client';
 import {
   AppstoreOutlined,
   BranchesOutlined,

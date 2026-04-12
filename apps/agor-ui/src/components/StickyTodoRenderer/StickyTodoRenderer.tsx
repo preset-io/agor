@@ -12,7 +12,7 @@
  * - Only renders when TODOs exist (returns null otherwise)
  */
 
-import type { Message } from '@agor/core/types';
+import type { Message } from '@agor-live/client';
 import { theme } from 'antd';
 import { useMemo } from 'react';
 import { parseTodosInput, TodoListRenderer } from '../ToolUseRenderer/renderers/TodoListRenderer';

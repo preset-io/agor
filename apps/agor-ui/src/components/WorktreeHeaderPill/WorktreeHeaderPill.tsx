@@ -1,4 +1,4 @@
-import type { Repo, Worktree } from '@agor/core/types';
+import type { Repo, Worktree } from '@agor-live/client';
 import {
   ApartmentOutlined,
   BranchesOutlined,

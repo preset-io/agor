@@ -1,4 +1,4 @@
-import type { Repo, Worktree } from '@agor/core/types';
+import type { Repo, Worktree } from '@agor-live/client';
 import type { Meta, StoryObj } from '@storybook/react';
 import { EnvironmentPill } from './EnvironmentPill';
 

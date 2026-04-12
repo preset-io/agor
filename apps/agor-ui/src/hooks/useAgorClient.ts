@@ -5,8 +5,8 @@
  * Manages FeathersJS client lifecycle with React effects
  */
 
-import type { AgorClient } from '@agor/core/api';
-import { createClient } from '@agor/core/api';
+import type { AgorClient } from '@agor-live/client';
+import { createClient } from '@agor-live/client';
 import { useEffect, useRef, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
 import { getStoredRefreshToken, refreshAndStoreTokens } from '../utils/tokenRefresh';

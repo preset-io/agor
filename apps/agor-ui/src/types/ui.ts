@@ -1,6 +1,6 @@
 // src/types/ui.ts
 // UI-specific types for view modes and component states
-// (SessionViewMode moved to @agor/core/types/ui.ts)
+// (SessionViewMode moved to @agor-live/client/ui.ts)
 
 /**
  * UI-only type for agent selection (different from AgenticTool which has UUIDv7 ID)

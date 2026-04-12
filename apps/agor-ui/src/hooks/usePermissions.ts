@@ -6,8 +6,8 @@
  * role string comparisons and prop-drilling of currentUser.
  */
 
-import type { UserRole } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
+import type { UserRole } from '@agor-live/client';
+import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { useMemo } from 'react';
 import { useAuth } from './useAuth';
 

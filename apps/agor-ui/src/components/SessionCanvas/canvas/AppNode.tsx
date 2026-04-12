@@ -1,4 +1,4 @@
-import type { AppBoardObject, BoardObject, SandpackTemplate } from '@agor/core/types';
+import type { AppBoardObject, BoardObject, SandpackTemplate } from '@agor-live/client';
 import { CodeOutlined, DeleteOutlined, EyeOutlined } from '@ant-design/icons';
 import { SandpackPreview, SandpackProvider } from '@codesandbox/sandpack-react';
 import { Button, Card, Tooltip, Typography, theme } from 'antd';

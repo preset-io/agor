@@ -5,7 +5,7 @@
  * including labels and colors for UI display.
  */
 
-import type { Board, Worktree } from '@agor/core/types';
+import type { Board, Worktree } from '@agor-live/client';
 
 export interface ParentInfo {
   parentId?: string;

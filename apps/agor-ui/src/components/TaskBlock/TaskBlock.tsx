@@ -22,7 +22,7 @@ import {
   type Task,
   TaskStatus,
   type User,
-} from '@agor/core/types';
+} from '@agor-live/client';
 import type { StreamingMessageState } from '@agor-live/client';
 // TODO: Move normalization to DB or daemon API
 // import { normalizeRawSdkResponse } from '@agor/core/utils/sdk-normalizer';

@@ -1,4 +1,4 @@
-import type { CreateMCPServerInput, MCPServer, UpdateMCPServerInput } from '@agor/core/types';
+import type { CreateMCPServerInput, MCPServer, UpdateMCPServerInput } from '@agor-live/client';
 import {
   ApiOutlined,
   DeleteOutlined,
@@ -35,7 +35,7 @@ const { TextArea } = Input;
 
 interface MCPServersTableProps {
   mcpServerById: Map<string, MCPServer>;
-  client: import('@agor/core/api').AgorClient | null;
+  client: import('@agor-live/client').AgorClient | null;
   onCreate?: (data: CreateMCPServerInput) => void;
   onUpdate?: (serverId: string, updates: UpdateMCPServerInput) => void;
   onDelete?: (serverId: string) => void;
@@ -48,7 +48,7 @@ interface MCPServerFormFieldsProps {
   authType?: 'none' | 'bearer' | 'jwt' | 'oauth';
   onAuthTypeChange?: (authType: 'none' | 'bearer' | 'jwt' | 'oauth') => void;
   form: FormInstance;
-  client: import('@agor/core/api').AgorClient | null;
+  client: import('@agor-live/client').AgorClient | null;
   serverId?: string;
   onTestConnection?: () => Promise<void>;
   testing?: boolean;

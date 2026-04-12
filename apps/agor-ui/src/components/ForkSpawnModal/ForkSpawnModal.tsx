@@ -5,9 +5,9 @@
  * For spawn: includes configuration options (agent, callback, etc.)
  */
 
-import type { AgorClient } from '@agor/core/api';
-import type { AgenticToolName, MCPServer, Session, SpawnConfig, User } from '@agor/core/types';
-import { getDefaultPermissionMode } from '@agor/core/types';
+import type { AgorClient } from '@agor-live/client';
+import type { AgenticToolName, MCPServer, Session, SpawnConfig, User } from '@agor-live/client';
+import { getDefaultPermissionMode } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import { Checkbox, Collapse, Form, Modal, Radio, Typography } from 'antd';
 import { useEffect, useState } from 'react';

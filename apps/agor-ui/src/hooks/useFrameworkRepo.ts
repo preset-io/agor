@@ -1,4 +1,4 @@
-import type { Repo } from '@agor/core/types';
+import type { Repo } from '@agor-live/client';
 import { useMemo } from 'react';
 
 export const FRAMEWORK_REPO_SLUG = 'preset-io/agor-assistant';

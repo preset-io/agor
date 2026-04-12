@@ -7,8 +7,8 @@
  * - No dots: Nothing active on current board
  */
 
-import type { BoardEntityObject, Session } from '@agor/core/types';
-import { SessionStatus } from '@agor/core/types';
+import type { BoardEntityObject, Session } from '@agor-live/client';
+import { SessionStatus } from '@agor-live/client';
 import { theme } from 'antd';
 import { useEffect, useState } from 'react';
 import { createFaviconWithDot } from '../utils/faviconDot';

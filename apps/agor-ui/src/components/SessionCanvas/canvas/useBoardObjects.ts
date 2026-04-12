@@ -2,8 +2,8 @@
  * Hook for managing board objects (text labels, zones, etc.)
  */
 
-import type { AgorClient } from '@agor/core/api';
-import type { Board, BoardEntityObject, BoardObject, Session, Worktree } from '@agor/core/types';
+import type { AgorClient } from '@agor-live/client';
+import type { Board, BoardEntityObject, BoardObject, Session, Worktree } from '@agor-live/client';
 import { useCallback, useMemo, useRef } from 'react';
 import type { Node } from 'reactflow';
 import { mapToArray } from '@/utils/mapHelpers';

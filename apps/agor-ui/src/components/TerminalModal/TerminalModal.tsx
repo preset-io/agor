@@ -1,6 +1,6 @@
-import type { AgorClient } from '@agor/core/api';
-import type { User, UserID } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
+import type { AgorClient } from '@agor-live/client';
+import type { User, UserID } from '@agor-live/client';
+import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';

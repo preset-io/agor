@@ -5,8 +5,8 @@
  * that will be used to prepopulate session creation forms.
  */
 
-import type { AgenticToolName, DefaultAgenticConfig, MCPServer } from '@agor/core/types';
-import { getDefaultPermissionMode } from '@agor/core/types';
+import type { AgenticToolName, DefaultAgenticConfig, MCPServer } from '@agor-live/client';
+import { getDefaultPermissionMode } from '@agor-live/client';
 import { Button, Form, Space, Tabs, Typography } from 'antd';
 import { useState } from 'react';
 import { useThemedMessage } from '../../utils/message';

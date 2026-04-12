@@ -1,4 +1,4 @@
-import type { AgorClient } from '@agor/core/api';
+import type { AgorClient } from '@agor-live/client';
 import type {
   Artifact,
   Board,
@@ -18,8 +18,8 @@ import type {
   UpdateUserInput,
   User,
   Worktree,
-} from '@agor/core/types';
-import { PermissionScope } from '@agor/core/types';
+} from '@agor-live/client';
+import { PermissionScope } from '@agor-live/client';
 import { Layout } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {

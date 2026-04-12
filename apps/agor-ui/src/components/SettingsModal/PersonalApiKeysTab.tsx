@@ -1,4 +1,4 @@
-import type { AgorClient } from '@agor/core/api';
+import type { AgorClient } from '@agor-live/client';
 import { CopyOutlined, DeleteOutlined, KeyOutlined, PlusOutlined } from '@ant-design/icons';
 import {
   Alert,

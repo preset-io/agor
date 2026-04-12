@@ -1,4 +1,4 @@
-import type { PermissionMode, PermissionScope, Session, SpawnConfig } from '@agor/core/types';
+import type { PermissionMode, PermissionScope, Session, SpawnConfig } from '@agor-live/client';
 import type React from 'react';
 import { createContext, useContext } from 'react';
 import type { WorktreeModalTab } from '../components/WorktreeModal/WorktreeModal';

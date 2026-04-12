@@ -5,7 +5,7 @@
  * User must change their password before continuing.
  */
 
-import type { User } from '@agor/core/types';
+import type { User } from '@agor-live/client';
 import { LockOutlined, WarningOutlined } from '@ant-design/icons';
 import { Alert, Form, Input, Modal, Typography } from 'antd';
 import { useState } from 'react';

@@ -13,7 +13,7 @@
  * (like AgentChain) are responsible for wrapping this in ThoughtChain items.
  */
 
-import type { ContentBlock as CoreContentBlock, DiffEnrichment } from '@agor/core/types';
+import type { ContentBlock as CoreContentBlock, DiffEnrichment } from '@agor-live/client';
 import { theme } from 'antd';
 import type React from 'react';
 import { shouldUseAnsiRendering } from '../../utils/ansi';

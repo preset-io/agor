@@ -5,7 +5,7 @@
  * if no icon is set). Resets to "Agor" when no board is active or on unmount.
  */
 
-import type { Board } from '@agor/core/types';
+import type { Board } from '@agor-live/client';
 import { useEffect } from 'react';
 
 const DEFAULT_TITLE = 'Agor';

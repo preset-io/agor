@@ -1,4 +1,4 @@
-import type { Repo } from '@agor/core/types';
+import type { Repo } from '@agor-live/client';
 import { Form } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { slugify } from '@/utils/repoSlug';

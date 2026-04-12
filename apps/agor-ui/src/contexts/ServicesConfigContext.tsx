@@ -1,4 +1,4 @@
-import type { DaemonServicesConfig } from '@agor/core/types';
+import type { DaemonServicesConfig } from '@agor-live/client';
 import { createContext } from 'react';
 
 /**

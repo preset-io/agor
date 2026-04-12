@@ -1,4 +1,4 @@
-import type { Board, Repo } from '@agor/core/types';
+import type { Board, Repo } from '@agor-live/client';
 import { InfoCircleOutlined, LoadingOutlined, SettingOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import { Alert, Collapse, Form, Input, Select, Space, Typography } from 'antd';

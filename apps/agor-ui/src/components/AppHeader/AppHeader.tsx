@@ -1,4 +1,4 @@
-import type { ActiveUser, Board, BoardID, User, Worktree } from '@agor/core/types';
+import type { ActiveUser, Board, BoardID, User, Worktree } from '@agor-live/client';
 import {
   ApiOutlined,
   CommentOutlined,

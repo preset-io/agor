@@ -1,4 +1,4 @@
-import type { AgorClient } from '@agor/core/api';
+import type { AgorClient } from '@agor-live/client';
 import type {
   AgenticToolName,
   ChannelType,
@@ -10,7 +10,7 @@ import type {
   User,
   UUID,
   Worktree,
-} from '@agor/core/types';
+} from '@agor-live/client';
 import {
   CopyOutlined,
   DeleteOutlined,

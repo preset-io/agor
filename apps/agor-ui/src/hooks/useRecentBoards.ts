@@ -1,4 +1,4 @@
-import type { Board } from '@agor/core/types';
+import type { Board } from '@agor-live/client';
 import { useCallback, useMemo } from 'react';
 import { useLocalStorage } from './useLocalStorage';
 

@@ -1,5 +1,5 @@
-import type { Board, Repo, Session, Worktree } from '@agor/core/types';
-import { isAssistant } from '@agor/core/types';
+import type { Board, Repo, Session, Worktree } from '@agor-live/client';
+import { isAssistant } from '@agor-live/client';
 import {
   BranchesOutlined,
   CodeSandboxOutlined,

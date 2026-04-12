@@ -5,8 +5,8 @@
  * Manages sessions, tasks, boards with real-time WebSocket updates
  */
 
-import type { AgorClient } from '@agor/core/api';
-import { PAGINATION } from '@agor/core/config/browser';
+import type { AgorClient } from '@agor-live/client';
+import { PAGINATION } from '@agor-live/client';
 import type {
   Artifact,
   Board,
@@ -20,7 +20,7 @@ import type {
   Session,
   User,
   Worktree,
-} from '@agor/core/types';
+} from '@agor-live/client';
 import { useCallback, useEffect, useState } from 'react';
 
 interface UseAgorDataResult {

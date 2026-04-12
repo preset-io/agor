@@ -14,7 +14,7 @@ import type {
   Worktree,
   WorktreeID,
   ZoneTrigger,
-} from '@agor/core/types';
+} from '@agor-live/client';
 
 import { DownOutlined } from '@ant-design/icons';
 import { Alert, Collapse, Form, Input, Modal, Radio, Select, Space, Typography } from 'antd';

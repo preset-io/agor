@@ -5,7 +5,7 @@
  * Includes connection testing and setup instructions.
  */
 
-import type { AgorClient } from '@agor/core/api';
+import type { AgorClient } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,

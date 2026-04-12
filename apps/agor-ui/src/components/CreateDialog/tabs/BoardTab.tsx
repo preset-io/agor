@@ -1,4 +1,4 @@
-import type { Board } from '@agor/core/types';
+import type { Board } from '@agor-live/client';
 import { Form } from 'antd';
 import { useCallback, useState } from 'react';
 import { BoardFormFields } from '../../forms/BoardFormFields';

@@ -1,4 +1,4 @@
-import type { Board, BoardComment, Session, Worktree } from '@agor/core/types';
+import type { Board, BoardComment, Session, Worktree } from '@agor-live/client';
 import { CommentOutlined, DownOutlined } from '@ant-design/icons';
 import { Badge, Button, Collapse, List, Space, Typography, theme } from 'antd';
 import { useNavigate } from 'react-router-dom';

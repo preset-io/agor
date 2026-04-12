@@ -1,6 +1,6 @@
-import type { AgorClient } from '@agor/core/api';
-import type { Board, MCPServer, Repo, Session, User, Worktree } from '@agor/core/types';
-import { hasMinimumRole, isAssistant, ROLES } from '@agor/core/types';
+import type { AgorClient } from '@agor-live/client';
+import type { Board, MCPServer, Repo, Session, User, Worktree } from '@agor-live/client';
+import { hasMinimumRole, isAssistant, ROLES } from '@agor-live/client';
 import { DeleteOutlined, FolderOutlined, LinkOutlined } from '@ant-design/icons';
 import { Button, Descriptions, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
 import { useEffect, useState } from 'react';

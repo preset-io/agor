@@ -8,9 +8,9 @@
  * @see context/explorations/unix-user-modes.md
  */
 
-import type { AgorClient } from '@agor/core/api';
-import type { User, Worktree, WorktreePermissionLevel } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
+import type { AgorClient } from '@agor-live/client';
+import type { User, Worktree, WorktreePermissionLevel } from '@agor-live/client';
+import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { UserOutlined, WarningOutlined } from '@ant-design/icons';
 import { Alert, Button, Form, Select, Space, Typography } from 'antd';
 import { useEffect, useState } from 'react';

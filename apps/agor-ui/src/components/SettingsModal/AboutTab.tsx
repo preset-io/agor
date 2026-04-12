@@ -2,7 +2,7 @@
  * About Tab - Display version, connection info, and system details
  */
 
-import type { AgorClient } from '@agor/core/api';
+import type { AgorClient } from '@agor-live/client';
 import { Card, Descriptions, Space, Typography } from 'antd';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { getDaemonUrl } from '../../config/daemon';

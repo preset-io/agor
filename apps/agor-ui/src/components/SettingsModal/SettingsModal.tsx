@@ -1,4 +1,4 @@
-import type { AgorClient } from '@agor/core/api';
+import type { AgorClient } from '@agor-live/client';
 import type {
   Artifact,
   Board,
@@ -15,8 +15,8 @@ import type {
   UpdateUserInput,
   User,
   Worktree,
-} from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
+} from '@agor-live/client';
+import { hasMinimumRole, ROLES } from '@agor-live/client';
 import {
   ApiOutlined,
   AppstoreOutlined,

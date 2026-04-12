@@ -1,4 +1,4 @@
-import type { Task } from '@agor/core/types';
+import type { Task } from '@agor-live/client';
 import {
   EditOutlined,
   FileTextOutlined,

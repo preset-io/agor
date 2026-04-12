@@ -7,7 +7,7 @@
  * so no Map lookup is needed for this component.
  */
 
-import type { ActiveUser, Board, BoardID } from '@agor/core/types';
+import type { ActiveUser, Board, BoardID } from '@agor-live/client';
 import { Tooltip } from 'antd';
 import type { CSSProperties } from 'react';
 import { AgorAvatar } from '../AgorAvatar';

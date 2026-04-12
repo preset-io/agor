@@ -21,7 +21,7 @@ import type {
   MCPServer,
   PermissionMode,
   Session,
-} from '@agor/core/types';
+} from '@agor-live/client';
 import { DownOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { CollapseProps } from 'antd';
 import { Collapse, Divider, Form, Modal, Typography } from 'antd';

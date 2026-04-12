@@ -1,4 +1,4 @@
-import type { Repo } from '@agor/core/types';
+import type { Repo } from '@agor-live/client';
 import { Form } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';

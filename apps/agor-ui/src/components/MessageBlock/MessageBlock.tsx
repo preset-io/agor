@@ -19,7 +19,7 @@ import {
   PermissionScope,
   PermissionStatus,
   type User,
-} from '@agor/core/types';
+} from '@agor-live/client';
 import { RobotOutlined } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
 import { Tooltip, theme } from 'antd';

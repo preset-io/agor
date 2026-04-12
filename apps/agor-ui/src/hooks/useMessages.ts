@@ -2,9 +2,9 @@
  * React hook for fetching and subscribing to messages for a session
  */
 
-import type { AgorClient } from '@agor/core/api';
-import { PAGINATION } from '@agor/core/config/browser';
-import type { Message, SessionID } from '@agor/core/types';
+import type { AgorClient } from '@agor-live/client';
+import { PAGINATION } from '@agor-live/client';
+import type { Message, SessionID } from '@agor-live/client';
 import { useCallback, useEffect, useState } from 'react';
 
 interface UseMessagesResult {

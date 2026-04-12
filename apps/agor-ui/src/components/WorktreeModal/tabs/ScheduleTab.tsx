@@ -1,5 +1,5 @@
-import type { AgenticToolName, MCPServer, Worktree } from '@agor/core/types';
-import { getDefaultPermissionMode } from '@agor/core/types';
+import type { AgenticToolName, MCPServer, Worktree } from '@agor-live/client';
+import { getDefaultPermissionMode } from '@agor-live/client';
 import { ClockCircleOutlined, PlayCircleOutlined, StopOutlined } from '@ant-design/icons';
 import {
   Alert,

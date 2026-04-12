@@ -1,4 +1,4 @@
-import type { Message } from '@agor/core/types';
+import type { Message } from '@agor-live/client';
 import type { Meta, StoryObj } from '@storybook/react';
 import { AgentChain } from './AgentChain';
 

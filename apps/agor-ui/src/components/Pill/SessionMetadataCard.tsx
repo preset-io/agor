@@ -5,7 +5,7 @@
  * Compact, read-only design focused on quick context ("what is this session?")
  */
 
-import type { Repo, Session, User, Worktree } from '@agor/core/types';
+import type { Repo, Session, User, Worktree } from '@agor-live/client';
 import { CopyOutlined, FolderOutlined } from '@ant-design/icons';
 import { Button, Space, Typography, theme } from 'antd';
 import type React from 'react';

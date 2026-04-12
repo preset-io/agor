@@ -4,15 +4,15 @@
  * Provides functions to create, update, fork, spawn sessions
  */
 
-import type { AgorClient } from '@agor/core/api';
+import type { AgorClient } from '@agor-live/client';
 import type {
   AgenticToolName,
   PermissionMode,
   Session,
   SessionID,
   SpawnConfig,
-} from '@agor/core/types';
-import { getDefaultPermissionMode, SessionStatus } from '@agor/core/types';
+} from '@agor-live/client';
+import { getDefaultPermissionMode, SessionStatus } from '@agor-live/client';
 import { useState } from 'react';
 import type { NewSessionConfig } from '../components/NewSessionModal';
 

@@ -1,4 +1,4 @@
-import type { User } from '@agor/core/types';
+import type { User } from '@agor-live/client';
 import { UnorderedListOutlined } from '@ant-design/icons';
 import { Button, Layout, Space, Typography, theme } from 'antd';
 

@@ -2,7 +2,7 @@
  * AudioSettingsTab - Configure task completion chime settings
  */
 
-import type { User } from '@agor/core/types';
+import type { User } from '@agor-live/client';
 import { InfoCircleOutlined, PlayCircleOutlined, SoundOutlined } from '@ant-design/icons';
 import {
   Alert,

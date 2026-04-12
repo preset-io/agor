@@ -5,7 +5,7 @@
  * Returns Ant Design Tree DataNode format
  */
 
-import type { Session } from '@agor/core/types';
+import type { Session } from '@agor-live/client';
 import type { DataNode } from 'antd/es/tree';
 
 export type SessionRelationshipType = 'root' | 'spawn' | 'fork';

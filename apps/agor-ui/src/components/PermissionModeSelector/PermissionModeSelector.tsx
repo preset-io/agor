@@ -1,4 +1,4 @@
-import type { CodexApprovalPolicy, CodexSandboxMode, PermissionMode } from '@agor/core/types';
+import type { CodexApprovalPolicy, CodexSandboxMode, PermissionMode } from '@agor-live/client';
 import {
   EditOutlined,
   ExperimentOutlined,

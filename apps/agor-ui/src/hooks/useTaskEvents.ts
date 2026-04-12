@@ -5,7 +5,7 @@
  * emitted when tools start and complete execution.
  */
 
-import type { TaskID } from '@agor/core/types';
+import type { TaskID } from '@agor-live/client';
 import { useEffect, useState } from 'react';
 import type { FeathersEventHandler } from './index';
 import type { useAgorClient } from './useAgorClient';

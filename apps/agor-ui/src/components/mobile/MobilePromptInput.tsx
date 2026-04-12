@@ -1,5 +1,5 @@
-import type { AgorClient } from '@agor/core/api';
-import type { SessionID, User } from '@agor/core/types';
+import type { AgorClient } from '@agor-live/client';
+import type { SessionID, User } from '@agor-live/client';
 import { SendOutlined } from '@ant-design/icons';
 import { Button, theme } from 'antd';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';

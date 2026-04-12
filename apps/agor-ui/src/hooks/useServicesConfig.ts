@@ -8,8 +8,8 @@
  * Defaults to 'on' for all services when config is absent (backward-compatible).
  */
 
-import type { DaemonServicesConfig, ServiceGroupName, ServiceTier } from '@agor/core/types';
-import { getServiceTier, isServiceEnabled, isServiceExternallyAccessible } from '@agor/core/types';
+import type { DaemonServicesConfig, ServiceGroupName, ServiceTier } from '@agor-live/client';
+import { getServiceTier, isServiceEnabled, isServiceExternallyAccessible } from '@agor-live/client';
 import { useContext } from 'react';
 import { ServicesConfigContext } from '../contexts/ServicesConfigContext';
 

@@ -8,8 +8,8 @@
  * Highlights @ mentions with a background overlay.
  */
 
-import type { AgorClient } from '@agor/core/api';
-import type { SessionID, User } from '@agor/core/types';
+import type { AgorClient } from '@agor-live/client';
+import type { SessionID, User } from '@agor-live/client';
 import { Input, Popover, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { useEmojiAutocomplete } from '@/hooks/useEmojiAutocomplete';

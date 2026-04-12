@@ -1,4 +1,4 @@
-import { type SessionStatus, TaskStatus } from '@agor/core/types';
+import { type SessionStatus, TaskStatus } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   ClockCircleOutlined,

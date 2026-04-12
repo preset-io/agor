@@ -13,7 +13,7 @@
  * as green message bubbles, NOT in AgentChain.
  */
 
-import type { ContentBlock as CoreContentBlock, DiffEnrichment, Message } from '@agor/core/types';
+import type { ContentBlock as CoreContentBlock, DiffEnrichment, Message } from '@agor-live/client';
 import {
   BranchesOutlined,
   BulbOutlined,

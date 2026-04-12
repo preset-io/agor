@@ -1,4 +1,4 @@
-import type { Board, Repo } from '@agor/core/types';
+import type { Board, Repo } from '@agor-live/client';
 import {
   AppstoreOutlined,
   BranchesOutlined,

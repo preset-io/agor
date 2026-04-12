@@ -5,7 +5,7 @@
  * Uses CSS line-clamp for responsive truncation that adapts to container width.
  */
 
-import type { Session } from '@agor/core/types';
+import type { Session } from '@agor-live/client';
 import type { CSSProperties } from 'react';
 
 export interface FormatSessionTitleOptions {

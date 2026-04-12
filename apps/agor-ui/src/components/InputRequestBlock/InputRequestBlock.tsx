@@ -8,8 +8,8 @@
  * - Visual states: active (pending), answered, timed out
  */
 
-import type { InputRequestContent, Message } from '@agor/core/types';
-import { InputRequestStatus } from '@agor/core/types';
+import type { InputRequestContent, Message } from '@agor-live/client';
+import { InputRequestStatus } from '@agor-live/client';
 import {
   CheckOutlined,
   ClockCircleOutlined,

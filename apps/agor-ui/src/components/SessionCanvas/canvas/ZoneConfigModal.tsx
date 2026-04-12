@@ -2,7 +2,7 @@
  * Modal for configuring zone settings (name, triggers, etc.)
  */
 
-import type { AgenticToolName, BoardObject, ZoneTriggerBehavior } from '@agor/core/types';
+import type { AgenticToolName, BoardObject, ZoneTriggerBehavior } from '@agor-live/client';
 import { Alert, Form, Input, Modal, Select } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../../AgentSelectionGrid';

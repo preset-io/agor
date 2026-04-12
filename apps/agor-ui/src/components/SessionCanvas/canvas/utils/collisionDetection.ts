@@ -5,7 +5,7 @@
  * using measured DOM dimensions and absolute positions.
  */
 
-import type { BoardObject } from '@agor/core/types';
+import type { BoardObject } from '@agor-live/client';
 import type { Node } from 'reactflow';
 import { getNodeAbsolutePosition, getNodeCenter, type Position } from './coordinateTransforms';
 import { getAbsoluteNodePosition } from './nodePositionUtils';

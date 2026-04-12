@@ -1,5 +1,5 @@
-import type { AgorClient } from '@agor/core/api';
-import type { Worktree } from '@agor/core/types';
+import type { AgorClient } from '@agor-live/client';
+import type { Worktree } from '@agor-live/client';
 import { ReloadOutlined } from '@ant-design/icons';
 import Ansi from 'ansi-to-react';
 import { Alert, Button, Checkbox, Modal, Space, Typography, theme } from 'antd';

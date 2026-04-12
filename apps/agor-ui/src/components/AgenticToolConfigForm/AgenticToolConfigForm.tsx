@@ -14,7 +14,7 @@
  * - Codex-specific fields are omitted (rendered separately via CodexSettingsForm)
  */
 
-import type { AgenticToolName, MCPServer } from '@agor/core/types';
+import type { AgenticToolName, MCPServer } from '@agor-live/client';
 import { Form, Select } from 'antd';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useServiceReadable } from '../../hooks/useServicesConfig';

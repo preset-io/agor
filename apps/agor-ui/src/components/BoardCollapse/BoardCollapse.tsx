@@ -1,4 +1,4 @@
-import type { Board } from '@agor/core/types';
+import type { Board } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import { Collapse, Typography, theme } from 'antd';
 import type { ReactNode } from 'react';

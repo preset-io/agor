@@ -5,7 +5,7 @@
  * Used by both useAuth and useAgorClient hooks to avoid duplication.
  */
 
-import type { AgorClient } from '@agor/core/api';
+import type { AgorClient } from '@agor-live/client';
 
 export const ACCESS_TOKEN_KEY = 'agor-access-token';
 export const REFRESH_TOKEN_KEY = 'agor-refresh-token';

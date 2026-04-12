@@ -1,4 +1,4 @@
-import type { Board, Worktree } from '@agor/core/types';
+import type { Board, Worktree } from '@agor-live/client';
 import { DownOutlined, SearchOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Badge, Button, Divider, Dropdown, Input, Space, Typography, theme } from 'antd';

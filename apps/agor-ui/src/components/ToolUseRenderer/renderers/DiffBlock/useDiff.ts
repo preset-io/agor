@@ -6,7 +6,7 @@
  * 2. Otherwise, compute a simple diffLines from old/new strings (client-side fallback).
  */
 
-import type { StructuredPatchHunk } from '@agor/core/types';
+import type { StructuredPatchHunk } from '@agor-live/client';
 import { diffLines, diffWords } from 'diff';
 import { useMemo } from 'react';
 

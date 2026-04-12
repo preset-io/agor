@@ -5,7 +5,7 @@
  * Collapsed by default with summary statistics and expandable to show full tool chain.
  */
 
-import type { Message } from '@agor/core/types';
+import type { Message } from '@agor-live/client';
 import { DownOutlined, RightOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { Collapse, Space, Typography, theme } from 'antd';
 import type React from 'react';

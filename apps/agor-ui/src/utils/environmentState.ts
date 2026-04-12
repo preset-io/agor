@@ -1,4 +1,4 @@
-import type { WorktreeEnvironmentInstance } from '@agor/core/types';
+import type { WorktreeEnvironmentInstance } from '@agor-live/client';
 
 /**
  * Inferred environment state combining runtime status + health check

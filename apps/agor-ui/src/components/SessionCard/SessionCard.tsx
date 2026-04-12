@@ -1,4 +1,4 @@
-import type { Session, Task, User } from '@agor/core/types';
+import type { Session, Task, User } from '@agor-live/client';
 import {
   BranchesOutlined,
   CloseOutlined,

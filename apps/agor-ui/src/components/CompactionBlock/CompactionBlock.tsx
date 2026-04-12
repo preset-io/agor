@@ -10,7 +10,7 @@
  * - [start, complete] → Completion UI with metadata
  */
 
-import type { Message } from '@agor/core/types';
+import type { Message } from '@agor-live/client';
 import { CheckCircleFilled } from '@ant-design/icons';
 import { Space, Spin, Typography, theme } from 'antd';
 import type React from 'react';

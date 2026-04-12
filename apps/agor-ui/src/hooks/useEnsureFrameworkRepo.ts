@@ -1,4 +1,4 @@
-import type { Repo } from '@agor/core/types';
+import type { Repo } from '@agor-live/client';
 import { useEffect, useRef, useState } from 'react';
 import { FRAMEWORK_REPO_SLUG, FRAMEWORK_REPO_URL, useFrameworkRepo } from './useFrameworkRepo';
 

@@ -1,6 +1,6 @@
-import type { AgorClient } from '@agor/core/api';
-import type { AgenticToolName, MCPServer, UpdateUserInput, User } from '@agor/core/types';
-import { getDefaultPermissionMode, hasMinimumRole, ROLES } from '@agor/core/types';
+import type { AgorClient } from '@agor-live/client';
+import type { AgenticToolName, MCPServer, UpdateUserInput, User } from '@agor-live/client';
+import { getDefaultPermissionMode, hasMinimumRole, ROLES } from '@agor-live/client';
 import {
   ApiOutlined,
   CloseOutlined,

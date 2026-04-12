@@ -1,4 +1,4 @@
-import type { User } from '@agor/core/types';
+import type { User } from '@agor-live/client';
 import { Tag } from '../Tag';
 import { UserAvatar } from './UserAvatar';
 

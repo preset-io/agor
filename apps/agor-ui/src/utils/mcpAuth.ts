@@ -1,4 +1,4 @@
-import type { MCPServer } from '@agor/core/types';
+import type { MCPServer } from '@agor-live/client';
 
 /**
  * Determine if an MCP server needs authentication from the current user.

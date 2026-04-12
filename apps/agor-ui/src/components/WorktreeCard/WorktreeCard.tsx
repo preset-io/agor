@@ -1,11 +1,11 @@
-import type { AgorClient } from '@agor/core/api';
-import type { Repo, Session, SessionID, SpawnConfig, User, Worktree } from '@agor/core/types';
+import type { AgorClient } from '@agor-live/client';
+import type { Repo, Session, SessionID, SpawnConfig, User, Worktree } from '@agor-live/client';
 import {
   getAssistantConfig,
   getGatewaySource as getGatewaySourceCore,
   isAssistant,
   isGatewaySession as isGatewaySessionCore,
-} from '@agor/core/types';
+} from '@agor-live/client';
 import {
   BranchesOutlined,
   ClockCircleOutlined,
@@ -254,7 +254,7 @@ const WorktreeCardComponent = ({
     [archiveSession]
   );
 
-  // Gateway session helpers (delegating to @agor/core/types)
+  // Gateway session helpers (delegating to @agor-live/client)
   const getGatewaySource = useCallback(
     (session: Session) => getGatewaySourceCore(session) ?? undefined,
     []

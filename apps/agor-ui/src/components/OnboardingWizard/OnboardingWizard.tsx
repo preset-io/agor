@@ -17,7 +17,7 @@ import type {
   User,
   UserPreferences,
   Worktree,
-} from '@agor/core/types';
+} from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloudDownloadOutlined,

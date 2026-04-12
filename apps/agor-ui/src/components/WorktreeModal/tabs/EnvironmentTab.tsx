@@ -5,9 +5,9 @@
  * 2. Worktree Instance (bottom) - This worktree's variables and preview
  */
 
-import type { AgorClient } from '@agor/core/api';
-import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
-import type { Repo, RepoEnvironmentConfig, Worktree } from '@agor/core/types';
+import type { AgorClient } from '@agor-live/client';
+import { renderTemplate } from '@agor-live/client';
+import type { Repo, RepoEnvironmentConfig, Worktree } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CheckOutlined,

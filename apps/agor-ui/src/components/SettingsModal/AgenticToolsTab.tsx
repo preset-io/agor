@@ -1,5 +1,5 @@
-import type { AgorClient } from '@agor/core/api';
-import type { AgorConfig } from '@agor/core/config';
+import type { AgorClient } from '@agor-live/client';
+import type { AgorConfig } from '@agor-live/client';
 import { InfoCircleOutlined, WarningOutlined } from '@ant-design/icons';
 import { Alert, Button, Divider, Input, Space, Spin, Typography, theme } from 'antd';
 import { useEffect, useState } from 'react';

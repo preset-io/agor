@@ -1,4 +1,4 @@
-import type { Board, Repo } from '@agor/core/types';
+import type { Board, Repo } from '@agor-live/client';
 import { Form } from 'antd';
 import { useEffect } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';

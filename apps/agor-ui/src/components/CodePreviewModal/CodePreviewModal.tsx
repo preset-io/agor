@@ -1,4 +1,4 @@
-import type { FileDetail } from '@agor/core/types';
+import type { FileDetail } from '@agor-live/client';
 import { CopyOutlined } from '@ant-design/icons';
 import { Button, Modal, message } from 'antd';
 import { ThemedSyntaxHighlighter } from '@/components/ThemedSyntaxHighlighter';

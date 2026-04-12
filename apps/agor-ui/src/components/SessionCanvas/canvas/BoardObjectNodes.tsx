@@ -2,7 +2,7 @@
  * Custom React Flow node components for board objects (text labels, zones, etc.)
  */
 
-import type { BoardComment, BoardObject, User } from '@agor/core/types';
+import type { BoardComment, BoardObject, User } from '@agor-live/client';
 import { DeleteOutlined, LockOutlined, SettingOutlined, UnlockOutlined } from '@ant-design/icons';
 import { ColorPicker, theme } from 'antd';
 import type { Color } from 'antd/es/color-picker';

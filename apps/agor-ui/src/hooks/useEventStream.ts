@@ -4,7 +4,7 @@
  * Only listens when enabled, captures all events from the socket
  */
 
-import type { AgorClient } from '@agor/core/api';
+import type { AgorClient } from '@agor-live/client';
 import { useCallback, useEffect, useState } from 'react';
 
 export interface SocketEvent {

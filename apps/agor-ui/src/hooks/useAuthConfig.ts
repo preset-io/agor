@@ -5,7 +5,7 @@
  * Used on app startup to determine if login page should be shown and display instance label.
  */
 
-import type { DaemonServicesConfig } from '@agor/core/types';
+import type { DaemonServicesConfig } from '@agor-live/client';
 import { useEffect, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
 

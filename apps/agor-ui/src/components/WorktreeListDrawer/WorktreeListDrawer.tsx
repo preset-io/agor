@@ -1,4 +1,4 @@
-import type { Board, Session, Worktree } from '@agor/core/types';
+import type { Board, Session, Worktree } from '@agor-live/client';
 import { SearchOutlined } from '@ant-design/icons';
 import { Badge, Drawer, Input, List, Space, Typography, theme } from 'antd';
 import type React from 'react';

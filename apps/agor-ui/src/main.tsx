@@ -1,4 +1,4 @@
-import type { AgorClient } from '@agor/core/api';
+import type { AgorClient } from '@agor-live/client';
 import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';

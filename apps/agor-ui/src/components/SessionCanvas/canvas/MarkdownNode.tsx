@@ -1,4 +1,4 @@
-import type { BoardObject } from '@agor/core/types';
+import type { BoardObject } from '@agor-live/client';
 import { EditOutlined } from '@ant-design/icons';
 import { Button, Card, Typography, theme } from 'antd';
 import { MarkdownRenderer } from '../../MarkdownRenderer/MarkdownRenderer';

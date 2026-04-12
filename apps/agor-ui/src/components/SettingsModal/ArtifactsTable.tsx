@@ -1,4 +1,4 @@
-import type { Artifact, Board, Worktree } from '@agor/core/types';
+import type { Artifact, Board, Worktree } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined } from '@ant-design/icons';
 import {
   Badge,

@@ -1,4 +1,4 @@
-import type { Repo } from '@agor/core/types';
+import type { Repo } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined } from '@ant-design/icons';
 import type { RadioChangeEvent } from 'antd';
 import { Button, Card, Empty, Form, Modal, Space, Typography } from 'antd';

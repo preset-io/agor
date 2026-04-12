@@ -1,8 +1,8 @@
 import type {
   SessionStatus as SessionStatusValue,
   TaskStatus as TaskStatusValue,
-} from '@agor/core/types';
-import { SessionStatus, TaskStatus } from '@agor/core/types';
+} from '@agor-live/client';
+import { SessionStatus, TaskStatus } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   ClockCircleOutlined,

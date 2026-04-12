@@ -1,5 +1,5 @@
 // src/utils/audio.ts
-import type { AudioPreferences, ChimeSound, Task, TaskStatus } from '@agor/core/types';
+import type { AudioPreferences, ChimeSound, Task, TaskStatus } from '@agor-live/client';
 
 /**
  * Map of chime sound names to their filenames in public/sounds/

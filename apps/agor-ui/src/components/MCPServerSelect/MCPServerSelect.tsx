@@ -1,4 +1,4 @@
-import type { MCPServer } from '@agor/core/types';
+import type { MCPServer } from '@agor-live/client';
 import { Select, type SelectProps } from 'antd';
 
 export interface MCPServerSelectProps extends Omit<SelectProps, 'options'> {

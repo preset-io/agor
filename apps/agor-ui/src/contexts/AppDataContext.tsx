@@ -7,7 +7,7 @@ import type {
   Session,
   User,
   Worktree,
-} from '@agor/core/types';
+} from '@agor-live/client';
 import type React from 'react';
 import { createContext, useContext } from 'react';
 

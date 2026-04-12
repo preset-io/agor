@@ -7,7 +7,7 @@
  * - sdk_event → Shows unhandled SDK events (blacklist approach: surface by default)
  */
 
-import type { Message } from '@agor/core/types';
+import type { Message } from '@agor-live/client';
 import { ClockCircleOutlined, InfoCircleOutlined, WarningOutlined } from '@ant-design/icons';
 import { Space, Typography, theme } from 'antd';
 import type React from 'react';

@@ -32,7 +32,7 @@ import type {
   ArtifactID,
   ArtifactPayload,
   BoardObject,
-} from '@agor/core/types';
+} from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
