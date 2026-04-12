@@ -33,6 +33,22 @@ describe('daemon-manager logs', () => {
     expect(readFileSpy).not.toHaveBeenCalled();
   });
 
+  it('returns empty string when lines is zero or negative', () => {
+    const logFile = getLogFilePath();
+    fs.writeFileSync(logFile, 'line-1\nline-2\n');
+
+    expect(readLogs(0)).toBe('');
+    expect(readLogs(-3)).toBe('');
+  });
+
+  it('falls back to default line count for non-finite line values', () => {
+    const logFile = getLogFilePath();
+    const allLines = Array.from({ length: 80 }, (_, i) => `line-${i + 1}`);
+    fs.writeFileSync(logFile, `${allLines.join('\n')}\n`);
+
+    expect(readLogs(Number.NaN)).toBe(allLines.slice(-50).join('\n'));
+  });
+
   it('handles very large log files without ERR_STRING_TOO_LONG', () => {
     const logFile = getLogFilePath();
     const fd = fs.openSync(logFile, 'w');
