@@ -89,7 +89,7 @@ export interface PromptInputHandle {
 }
 
 interface PromptInputProps {
-  sessionId: string;
+  sessionId: SessionID;
   getDraft: (id: string) => string;
   saveDraft: (id: string, value: string) => void;
   deleteDraft: (id: string) => void;
@@ -103,7 +103,6 @@ interface PromptInputProps {
   placeholder?: string;
   autoSize?: { minRows?: number; maxRows?: number };
   client: AgorClient | null;
-  sessionId_autocomplete: SessionID | null;
   userById: Map<string, User>;
   onFilesDrop?: (files: File[]) => void;
   slashCommands?: string[];
@@ -123,7 +122,6 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
       placeholder,
       autoSize,
       client,
-      sessionId_autocomplete,
       userById,
       onFilesDrop,
       slashCommands,
@@ -184,6 +182,17 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
       return () => clearTimeout(timer);
     }, [value, sessionId, saveDraft]);
 
+    // Flush draft on unmount so in-flight debounced writes aren't lost.
+    // Uses refs to capture the latest values without adding deps that would
+    // cause the effect to re-run (we only want the cleanup to fire on unmount).
+    const saveDraftRef = React.useRef(saveDraft);
+    saveDraftRef.current = saveDraft;
+    const sessionIdRef = React.useRef(sessionId);
+    sessionIdRef.current = sessionId;
+    React.useEffect(() => {
+      return () => saveDraftRef.current(sessionIdRef.current, valueRef.current);
+    }, []);
+
     const handleKeyPress = React.useCallback(
       (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -204,7 +213,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         autoSize={autoSize}
         onKeyPress={handleKeyPress}
         client={client}
-        sessionId={sessionId_autocomplete}
+        sessionId={sessionId}
         userById={userById}
         onFilesDrop={onFilesDrop}
         slashCommands={slashCommands}
@@ -764,7 +773,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           }
           autoSize={{ minRows: 1, maxRows: 10 }}
           client={client}
-          sessionId_autocomplete={session?.session_id || null}
           userById={userById}
           onFilesDrop={(files) => {
             // Store dropped files and open modal
