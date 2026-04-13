@@ -930,7 +930,7 @@ export const App: React.FC<AppProps> = ({
                     collapsible
                     collapsedSize={0}
                     defaultSize={selectedSessionId ? sessionPanelSize : 0}
-                    minSize={0}
+                    minSize={selectedSessionId || !eventStreamPanelCollapsed ? 15 : 0}
                     maxSize={75}
                     onExpand={() => {
                       // Restore saved size when panel expands
@@ -968,9 +968,11 @@ export const App: React.FC<AppProps> = ({
                           onNukeEnvironment,
                         }}
                       />
-                    ) : (
-                      // Panel is collapsed — render the last session hidden to keep
-                      // antd component CSS registered (prevents style GC).
+                    ) : null}
+                    {/* Hidden keep-alive: always render SessionPanel when no active
+                        session is selected. This prevents antd CSS-in-JS from GC'ing
+                        component styles that only exist in the panel tree. */}
+                    {!selectedSessionId && panelSession && (
                       <SessionPanel
                         client={null}
                         session={panelSession}
