@@ -559,6 +559,21 @@ export const App: React.FC<AppProps> = ({
     ? worktreeById.get(selectedSession.worktree_id)
     : null;
 
+  // If a session disappears from the active store (e.g. archived/deleted),
+  // clear stale selection so the right panel can recover cleanly.
+  useEffect(() => {
+    if (selectedSessionId && !selectedSession) {
+      setSelectedSessionId(null);
+    }
+  }, [selectedSessionId, selectedSession]);
+
+  // Keep the keep-alive pointer valid; clear it if that session no longer exists.
+  useEffect(() => {
+    if (panelSessionId && !sessionById.has(panelSessionId)) {
+      setPanelSessionId(null);
+    }
+  }, [panelSessionId, sessionById]);
+
   // Derive the "panel session" — the session to render in the panel.
   // Uses selected session when panel is active, falls back to last-opened
   // session to keep the component tree mounted (preventing antd CSS GC).
