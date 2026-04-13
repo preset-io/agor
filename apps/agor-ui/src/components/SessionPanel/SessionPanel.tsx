@@ -156,27 +156,35 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     return session ? getDraft(session.session_id) : '';
   });
 
+  // Mirror inputValue into a ref so memoized children and event handlers
+  // can read the current value without subscribing to state changes.
+  const inputValueRef = React.useRef(inputValue);
+  inputValueRef.current = inputValue;
+
   const prevSessionIdRef = React.useRef(session?.session_id);
 
-  // Handle session switches
+  // Handle session switches — use ref to read current inputValue
+  // so this effect doesn't re-run on every keystroke.
   React.useEffect(() => {
     if (!session) return;
 
     if (prevSessionIdRef.current !== session.session_id) {
       if (prevSessionIdRef.current) {
-        saveDraft(prevSessionIdRef.current, inputValue);
+        saveDraft(prevSessionIdRef.current, inputValueRef.current);
       }
 
       setInputValue(getDraft(session.session_id));
       prevSessionIdRef.current = session.session_id;
     }
-  }, [session, inputValue, saveDraft, getDraft]);
+  }, [session, saveDraft, getDraft]);
 
-  // Save draft on every change (so board switches don't lose it)
+  // Save draft on change — debounced to avoid localStorage writes on every keystroke
   React.useEffect(() => {
-    if (session) {
+    if (!session) return;
+    const timer = setTimeout(() => {
       saveDraft(session.session_id, inputValue);
-    }
+    }, 300);
+    return () => clearTimeout(timer);
   }, [session, inputValue, saveDraft]);
 
   const getDefaultPermissionMode = React.useCallback((agent?: string): PermissionMode => {
@@ -923,7 +931,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           worktree={worktree}
           currentUserId={currentUserId}
           sessionMcpServerIds={sessionMcpServerIds}
-          footerControls={footerControls}
           scrollToBottom={scrollToBottom}
           scrollToTop={scrollToTop}
           setScrollToBottom={setScrollToBottom}
@@ -933,9 +940,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           spawnModalOpen={spawnModalOpen}
           setSpawnModalOpen={setSpawnModalOpen}
           onSpawnModalConfirm={handleSpawnModalConfirm}
-          inputValue={inputValue}
+          inputValueRef={inputValueRef}
           isOpen={open}
         />
+
+        {/* Footer Controls — rendered outside SessionPanelContent so that
+            keystroke-driven re-renders don't propagate to ConversationView */}
+        {footerControls}
 
         {/* File upload modal */}
         {session && (
