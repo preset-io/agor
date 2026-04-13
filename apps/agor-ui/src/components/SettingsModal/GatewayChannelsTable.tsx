@@ -61,6 +61,7 @@ import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { JSONEditor, validateJSON } from '../JSONEditor';
+import { WorktreeSelect } from './WorktreeSelect';
 
 interface GatewayChannelsTableProps {
   client: AgorClient | null;
@@ -306,9 +307,6 @@ const ChannelFormFields: React.FC<{
   const alignGithubUsers = Form.useWatch('github_align_users', form) ?? false;
 
   const sourcesEnabled = enableChannels || enableGroups || enableMpim;
-  const sortedWorktrees = Array.from(worktreeById.values()).sort((a, b) =>
-    (a.name || a.ref || a.worktree_id).localeCompare(b.name || b.ref || b.worktree_id)
-  );
 
   return (
     <>
@@ -349,14 +347,7 @@ const ChannelFormFields: React.FC<{
             : undefined
         }
       >
-        <Select placeholder="Select a worktree" showSearch optionFilterProp="children">
-          {sortedWorktrees.map((wt) => (
-            <Select.Option key={wt.worktree_id} value={wt.worktree_id}>
-              {wt.name || wt.ref || wt.worktree_id}
-              {wt.archived ? ' (archived)' : ''}
-            </Select.Option>
-          ))}
-        </Select>
+        <WorktreeSelect worktreeById={worktreeById} />
       </Form.Item>
 
       {/* For GitHub channels, "Post messages as" lives in the User Alignment section */}

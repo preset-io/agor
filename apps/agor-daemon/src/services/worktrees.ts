@@ -271,10 +271,15 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
         // Now create new board_object if board_id is set
         if (newBoardId) {
+          const position = await this.computeDefaultBoardPositionForWorktree(
+            newBoardId,
+            id,
+            params
+          );
           await boardObjectsService.create({
             board_id: newBoardId,
             worktree_id: id,
-            position: { x: 100, y: 100 }, // Default position
+            position,
           });
         }
       } catch (error) {
