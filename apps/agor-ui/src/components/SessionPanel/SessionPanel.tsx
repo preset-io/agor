@@ -363,7 +363,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   }, [open, scrollToBottom, session]);
 
-  // Early return if no session
+  // When there's no session, render nothing (panel is collapsed to zero).
+  // When open=false, we still render the component tree (hidden) so that
+  // antd's CSS-in-JS doesn't garbage-collect component styles.
   if (!session) {
     return null;
   }
@@ -568,8 +570,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         return 'default';
     }
   };
-
-  if (!open) return null;
 
   // Footer controls
   const footerControls = (
@@ -824,7 +824,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       style={{
         width: '100%',
         height: '100%',
-        display: 'flex',
+        display: open ? 'flex' : 'none',
         flexDirection: 'column',
         background: token.colorBgElevated,
         borderLeft: `1px solid ${token.colorBorder}`,

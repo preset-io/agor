@@ -273,6 +273,12 @@ export const App: React.FC<AppProps> = ({
 
   // Ref for programmatically controlling the comments panel
   const commentsPanelRef = useRef<ImperativePanelHandle>(null);
+  const sessionPanelRef = useRef<ImperativePanelHandle>(null);
+
+  // Track the last-opened session so we can keep the SessionPanel mounted
+  // (hidden) after closing, preventing antd CSS-in-JS from garbage collecting
+  // component styles that are only used inside the panel tree.
+  const [panelSessionId, setPanelSessionId] = useState<string | null>(null);
 
   // Session panel size persistence (percentage of available width)
   const [sessionPanelSize, setSessionPanelSize] = useLocalStorage<number>(
@@ -347,6 +353,7 @@ export const App: React.FC<AppProps> = ({
     },
     onSessionChange: (sessionId) => {
       setSelectedSessionId(sessionId);
+      if (sessionId) setPanelSessionId(sessionId);
     },
   });
 
@@ -392,6 +399,20 @@ export const App: React.FC<AppProps> = ({
     enabled: !eventStreamPanelCollapsed,
   });
 
+  // Imperatively collapse / expand the session panel.
+  // The Panel is always mounted (to prevent antd CSS GC), but its size is
+  // controlled programmatically based on whether content is active.
+  useEffect(() => {
+    const panel = sessionPanelRef.current;
+    if (!panel) return;
+    const shouldBeOpen = !!selectedSessionId || !eventStreamPanelCollapsed;
+    if (shouldBeOpen && panel.isCollapsed()) {
+      panel.expand();
+    } else if (!shouldBeOpen && !panel.isCollapsed()) {
+      panel.collapse();
+    }
+  }, [selectedSessionId, eventStreamPanelCollapsed]);
+
   const handleOpenTerminal = useCallback((commands: string[] = [], worktreeId?: string) => {
     setTerminalCommands(commands);
     setTerminalWorktreeId(worktreeId);
@@ -411,6 +432,7 @@ export const App: React.FC<AppProps> = ({
     // If session was created successfully, open the drawer to show it
     if (sessionId) {
       setSelectedSessionId(sessionId);
+      setPanelSessionId(sessionId);
     }
   };
 
@@ -456,6 +478,7 @@ export const App: React.FC<AppProps> = ({
 
   const handleSessionClick = (sessionId: string) => {
     setSelectedSessionId(sessionId);
+    setPanelSessionId(sessionId);
 
     const session = sessionById.get(sessionId);
 
@@ -535,6 +558,17 @@ export const App: React.FC<AppProps> = ({
   const selectedSessionWorktree = selectedSession
     ? worktreeById.get(selectedSession.worktree_id)
     : null;
+
+  // Derive the "panel session" — the session to render in the panel.
+  // Uses selected session when panel is active, falls back to last-opened
+  // session to keep the component tree mounted (preventing antd CSS GC).
+  const panelSession = selectedSessionId
+    ? selectedSession
+    : panelSessionId
+      ? sessionById.get(panelSessionId) || null
+      : null;
+  const panelSessionWorktree = panelSession ? worktreeById.get(panelSession.worktree_id) : null;
+
   const sessionSettingsSession = sessionSettingsId ? sessionById.get(sessionSettingsId) : null;
   const currentBoard = boardById.get(currentBoardId);
 
@@ -800,7 +834,7 @@ export const App: React.FC<AppProps> = ({
                   style={{ flex: 1 }}
                   onLayout={(sizes) => {
                     // Save right panel size when user resizes (only when panel is open)
-                    if (selectedSessionId && sizes.length === 2) {
+                    if (selectedSessionId && sizes.length === 2 && sizes[1] > 0) {
                       setSessionPanelSize(sizes[1]);
                     }
                   }}
@@ -867,69 +901,87 @@ export const App: React.FC<AppProps> = ({
                       />
                     </div>
                   </Panel>
-                  {(selectedSessionId || !eventStreamPanelCollapsed) && (
-                    <>
-                      <PanelResizeHandle
-                        style={{
-                          width: '4px',
-                          background: 'var(--ant-color-border-secondary)',
-                          cursor: 'col-resize',
-                          transition: 'background 0.2s',
-                        }}
-                        onMouseEnter={(e) => {
-                          (e.currentTarget as unknown as HTMLDivElement).style.background =
-                            'var(--ant-color-primary)';
-                        }}
-                        onMouseLeave={(e) => {
-                          (e.currentTarget as unknown as HTMLDivElement).style.background =
-                            'var(--ant-color-border-secondary)';
+                  {/* Always render the session/event-stream panel to prevent antd
+                      CSS-in-JS from garbage-collecting component styles when the
+                      panel content unmounts. The Panel collapses to 0 when hidden. */}
+                  <PanelResizeHandle
+                    style={{
+                      width: selectedSessionId || !eventStreamPanelCollapsed ? '4px' : '0px',
+                      background: 'var(--ant-color-border-secondary)',
+                      cursor:
+                        selectedSessionId || !eventStreamPanelCollapsed ? 'col-resize' : 'default',
+                      transition: 'background 0.2s, width 0.15s',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (selectedSessionId || !eventStreamPanelCollapsed) {
+                        (e.currentTarget as unknown as HTMLDivElement).style.background =
+                          'var(--ant-color-primary)';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as unknown as HTMLDivElement).style.background =
+                        'var(--ant-color-border-secondary)';
+                    }}
+                  />
+                  <Panel
+                    ref={sessionPanelRef}
+                    id="session-panel"
+                    order={2}
+                    collapsible
+                    collapsedSize={0}
+                    defaultSize={selectedSessionId ? sessionPanelSize : 0}
+                    minSize={0}
+                    maxSize={75}
+                    onExpand={() => {
+                      // Restore saved size when panel expands
+                      sessionPanelRef.current?.resize(sessionPanelSize);
+                    }}
+                  >
+                    {selectedSessionId ? (
+                      <SessionPanel
+                        client={client}
+                        session={selectedSession}
+                        worktree={selectedSessionWorktree}
+                        currentUserId={user?.user_id}
+                        sessionMcpServerIds={
+                          selectedSessionId ? sessionMcpServerIds.get(selectedSessionId) || [] : []
+                        }
+                        open={!!selectedSessionId}
+                        onClose={() => {
+                          setSelectedSessionId(null);
                         }}
                       />
-                      <Panel
-                        id="session-panel"
-                        order={2}
-                        defaultSize={sessionPanelSize}
-                        minSize={25}
-                        maxSize={75}
-                      >
-                        {selectedSessionId ? (
-                          <SessionPanel
-                            client={client}
-                            session={selectedSession}
-                            worktree={selectedSessionWorktree}
-                            currentUserId={user?.user_id}
-                            sessionMcpServerIds={
-                              selectedSessionId
-                                ? sessionMcpServerIds.get(selectedSessionId) || []
-                                : []
-                            }
-                            open={!!selectedSessionId}
-                            onClose={() => {
-                              setSelectedSessionId(null);
-                            }}
-                          />
-                        ) : (
-                          <EventStreamPanel
-                            collapsed={false}
-                            onToggleCollapse={() => setEventStreamPanelCollapsed(true)}
-                            events={events}
-                            onClear={clearEvents}
-                            currentUserId={user?.user_id}
-                            selectedSessionId={selectedSessionId}
-                            currentBoard={currentBoard}
-                            client={client}
-                            worktreeActions={{
-                              onSessionClick: setSelectedSessionId,
-                              onCreateSession: (worktreeId) => setNewSessionWorktreeId(worktreeId),
-                              onOpenSettings: (worktreeId) =>
-                                setWorktreeModalWorktreeId(worktreeId),
-                              onNukeEnvironment,
-                            }}
-                          />
-                        )}
-                      </Panel>
-                    </>
-                  )}
+                    ) : !eventStreamPanelCollapsed ? (
+                      <EventStreamPanel
+                        collapsed={false}
+                        onToggleCollapse={() => setEventStreamPanelCollapsed(true)}
+                        events={events}
+                        onClear={clearEvents}
+                        currentUserId={user?.user_id}
+                        selectedSessionId={selectedSessionId}
+                        currentBoard={currentBoard}
+                        client={client}
+                        worktreeActions={{
+                          onSessionClick: handleSessionClick,
+                          onCreateSession: (worktreeId) => setNewSessionWorktreeId(worktreeId),
+                          onOpenSettings: (worktreeId) => setWorktreeModalWorktreeId(worktreeId),
+                          onNukeEnvironment,
+                        }}
+                      />
+                    ) : (
+                      // Panel is collapsed — render the last session hidden to keep
+                      // antd component CSS registered (prevents style GC).
+                      <SessionPanel
+                        client={null}
+                        session={panelSession}
+                        worktree={panelSessionWorktree}
+                        currentUserId={user?.user_id}
+                        sessionMcpServerIds={[]}
+                        open={false}
+                        onClose={() => {}}
+                      />
+                    )}
+                  </Panel>
                 </PanelGroup>
               </Panel>
             </PanelGroup>
@@ -1038,7 +1090,7 @@ export const App: React.FC<AppProps> = ({
               setWorktreeModalWorktreeId(null);
               openSettings();
             }}
-            onSessionClick={setSelectedSessionId}
+            onSessionClick={handleSessionClick}
           />
           <WorktreeListDrawer
             open={listDrawerOpen}
@@ -1048,7 +1100,7 @@ export const App: React.FC<AppProps> = ({
             onBoardChange={setCurrentBoardId}
             sessionsByWorktree={sessionsByWorktree}
             worktreeById={worktreeById}
-            onSessionClick={setSelectedSessionId}
+            onSessionClick={handleSessionClick}
           />
           <TerminalModal
             open={terminalOpen}
