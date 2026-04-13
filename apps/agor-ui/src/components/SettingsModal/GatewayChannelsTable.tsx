@@ -1145,6 +1145,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     () => new Map()
   );
   const loadingReferencedWorktreeIds = useRef<Set<string>>(new Set());
+  const referencedWorktreesByIdRef = useRef<Map<string, Worktree>>(new Map());
 
   // ── GitHub App Setup State (lifted from ChannelFormFields) ──
   const [githubStep, setGithubStep] = useState(0);
@@ -1173,6 +1174,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   // Keep referenced target worktrees resolvable in CRUD even when archived worktrees
   // are excluded from the core store.
   useEffect(() => {
+    referencedWorktreesByIdRef.current = referencedWorktreesById;
+  }, [referencedWorktreesById]);
+
+  useEffect(() => {
     if (!client) return;
 
     const targetIds = new Set<string>();
@@ -1183,7 +1188,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     }
 
     const missingIds = Array.from(targetIds).filter(
-      (id) => !worktreeById.has(id) && !referencedWorktreesById.has(id)
+      (id) => !worktreeById.has(id) && !referencedWorktreesByIdRef.current.has(id)
     );
     if (missingIds.length === 0) return;
 
@@ -1218,7 +1223,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [client, gatewayChannelById, referencedWorktreesById, worktreeById]);
+  }, [client, gatewayChannelById, worktreeById]);
 
   const worktreeOptionsById = useMemo(() => {
     const merged = new Map<string, Worktree>();
