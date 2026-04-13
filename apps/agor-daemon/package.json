@@ -24,8 +24,8 @@
   "dependencies": {
     "@agor/core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.27.1",
-    "@octokit/auth-app": "^7.1.5",
-    "@octokit/rest": "^22.0.0",
+    "@octokit/auth-app": "^8.2.0",
+    "@octokit/rest": "^22.0.1",
     "compression": "^1.8.1",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
@@ -39,7 +39,7 @@
     "swagger-ui-dist": "^5.32.0"
   },
   "devDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.87",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.104",
     "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",

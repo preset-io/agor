@@ -230,7 +230,7 @@ describe('createClient', () => {
 
       // Get the connect_error handler
       const errorHandler = (mockSocket.on as MockedFunction<any>).mock.calls.find(
-        ([event]) => event === 'connect_error'
+        (call: unknown[]) => call[0] === 'connect_error'
       )?.[1];
 
       expect(errorHandler).toBeDefined();
@@ -255,7 +255,7 @@ describe('createClient', () => {
       createClient('http://localhost:3030', true, { verbose: true });
 
       const errorHandler = (mockSocket.on as MockedFunction<any>).mock.calls.find(
-        ([event]) => event === 'connect_error'
+        (call: unknown[]) => call[0] === 'connect_error'
       )?.[1];
 
       // Simulate two connection errors
@@ -276,10 +276,10 @@ describe('createClient', () => {
       createClient('http://localhost:3030', true, { verbose: true });
 
       const errorHandler = (mockSocket.on as MockedFunction<any>).mock.calls.find(
-        ([event]) => event === 'connect_error'
+        (call: unknown[]) => call[0] === 'connect_error'
       )?.[1];
       const connectHandler = (mockSocket.on as MockedFunction<any>).mock.calls.find(
-        ([event]) => event === 'connect'
+        (call: unknown[]) => call[0] === 'connect'
       )?.[1];
 
       // Simulate error then successful connection
@@ -301,7 +301,7 @@ describe('createClient', () => {
       createClient('http://localhost:3030', true, { verbose: true });
 
       const connectHandler = (mockSocket.on as MockedFunction<any>).mock.calls.find(
-        ([event]) => event === 'connect'
+        (call: unknown[]) => call[0] === 'connect'
       )?.[1];
 
       // Simulate successful first connection (no prior errors)

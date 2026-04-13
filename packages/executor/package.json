@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@agor/core": "workspace:*",
-    "@github/copilot-sdk": "^0.2.0",
+    "@github/copilot-sdk": "^0.2.2",
     "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
     "@iarna/toml": "^2.2.5",
     "@opencode-ai/sdk": "^1.2.15",
