@@ -5,7 +5,9 @@ import type {
   Message,
   PermissionMode,
   Session,
+  SessionID,
   SpawnConfig,
+  User,
   Worktree,
 } from '@agor-live/client';
 import { AGENTIC_TOOL_CAPABILITIES, SessionStatus, TaskStatus } from '@agor-live/client';
@@ -73,6 +75,148 @@ interface SpawnTemplateContext {
 // Compile the spawn subsession template once at module level (after helper registration)
 const compiledSpawnSubsessionTemplate =
   compileTemplate<SpawnTemplateContext>(spawnSubsessionTemplate);
+
+// ---------------------------------------------------------------------------
+// PromptInput — thin wrapper around AutocompleteTextarea that keeps the typed
+// text in *local* state so that keystrokes never trigger a parent re-render.
+// The parent reads/clears the value imperatively via a ref.
+// ---------------------------------------------------------------------------
+
+export interface PromptInputHandle {
+  getValue: () => string;
+  clear: () => void;
+  insertText: (text: string) => void;
+}
+
+interface PromptInputProps {
+  sessionId: string;
+  getDraft: (id: string) => string;
+  saveDraft: (id: string, value: string) => void;
+  deleteDraft: (id: string) => void;
+  /** Fires only on empty↔non-empty transitions, not every keystroke */
+  onHasInputChange: (hasInput: boolean) => void;
+  /** Kept in sync so memoized children can read the latest value */
+  inputValueRef: React.MutableRefObject<string>;
+  /** Called on Enter (without Shift) when there is non-empty text */
+  onSubmit: () => void;
+  // Forwarded to AutocompleteTextarea
+  placeholder?: string;
+  autoSize?: { minRows?: number; maxRows?: number };
+  client: AgorClient | null;
+  sessionId_autocomplete: SessionID | null;
+  userById: Map<string, User>;
+  onFilesDrop?: (files: File[]) => void;
+  slashCommands?: string[];
+  skills?: string[];
+}
+
+const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
+  (
+    {
+      sessionId,
+      getDraft,
+      saveDraft,
+      deleteDraft,
+      onHasInputChange,
+      inputValueRef,
+      onSubmit,
+      placeholder,
+      autoSize,
+      client,
+      sessionId_autocomplete,
+      userById,
+      onFilesDrop,
+      slashCommands,
+      skills,
+    },
+    ref
+  ) => {
+    const [value, setValue] = React.useState(() => getDraft(sessionId));
+    const valueRef = React.useRef(value);
+
+    // Keep refs in sync (zero-cost, no re-render)
+    valueRef.current = value;
+    inputValueRef.current = value;
+
+    // Track empty↔non-empty transitions → notify parent (minimal re-renders)
+    const prevHasInput = React.useRef(!!value.trim());
+    React.useEffect(() => {
+      const has = !!value.trim();
+      if (has !== prevHasInput.current) {
+        prevHasInput.current = has;
+        onHasInputChange(has);
+      }
+    }, [value, onHasInputChange]);
+
+    // Imperative methods for the parent
+    React.useImperativeHandle(
+      ref,
+      () => ({
+        getValue: () => valueRef.current,
+        clear: () => {
+          setValue('');
+          deleteDraft(sessionId);
+        },
+        insertText: (text: string) => {
+          setValue((prev) => {
+            const trimmed = prev.trim();
+            const separator = trimmed ? ' ' : '';
+            return `${trimmed}${separator}${text}`;
+          });
+        },
+      }),
+      [sessionId, deleteDraft]
+    );
+
+    // Session switch: save old draft, load new one
+    const prevSessionId = React.useRef(sessionId);
+    React.useEffect(() => {
+      if (prevSessionId.current !== sessionId) {
+        saveDraft(prevSessionId.current, valueRef.current);
+        setValue(getDraft(sessionId));
+        prevSessionId.current = sessionId;
+      }
+    }, [sessionId, saveDraft, getDraft]);
+
+    // Debounced draft persistence (300ms)
+    React.useEffect(() => {
+      const timer = setTimeout(() => saveDraft(sessionId, value), 300);
+      return () => clearTimeout(timer);
+    }, [value, sessionId, saveDraft]);
+
+    const handleKeyPress = React.useCallback(
+      (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          if (valueRef.current.trim()) {
+            onSubmit();
+          }
+        }
+      },
+      [onSubmit]
+    );
+
+    return (
+      <AutocompleteTextarea
+        value={value}
+        onChange={setValue}
+        placeholder={placeholder}
+        autoSize={autoSize}
+        onKeyPress={handleKeyPress}
+        client={client}
+        sessionId={sessionId_autocomplete}
+        userById={userById}
+        onFilesDrop={onFilesDrop}
+        slashCommands={slashCommands}
+        skills={skills}
+      />
+    );
+  }
+);
+
+PromptInput.displayName = 'PromptInput';
+
+// ---------------------------------------------------------------------------
 
 export interface SessionPanelProps {
   client: AgorClient | null;
@@ -152,40 +296,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   }, []);
 
-  const [inputValue, setInputValue] = React.useState(() => {
-    return session ? getDraft(session.session_id) : '';
-  });
-
-  // Mirror inputValue into a ref so memoized children and event handlers
-  // can read the current value without subscribing to state changes.
-  const inputValueRef = React.useRef(inputValue);
-  inputValueRef.current = inputValue;
-
-  const prevSessionIdRef = React.useRef(session?.session_id);
-
-  // Handle session switches — use ref to read current inputValue
-  // so this effect doesn't re-run on every keystroke.
-  React.useEffect(() => {
-    if (!session) return;
-
-    if (prevSessionIdRef.current !== session.session_id) {
-      if (prevSessionIdRef.current) {
-        saveDraft(prevSessionIdRef.current, inputValueRef.current);
-      }
-
-      setInputValue(getDraft(session.session_id));
-      prevSessionIdRef.current = session.session_id;
-    }
-  }, [session, saveDraft, getDraft]);
-
-  // Save draft on change — debounced to avoid localStorage writes on every keystroke
-  React.useEffect(() => {
-    if (!session) return;
-    const timer = setTimeout(() => {
-      saveDraft(session.session_id, inputValue);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [session, inputValue, saveDraft]);
+  // Input value lives entirely inside PromptInput (local state).
+  // The parent reads it imperatively via promptRef / inputValueRef — no
+  // parent re-renders on keystrokes.
+  const promptRef = React.useRef<PromptInputHandle>(null);
+  const inputValueRef = React.useRef(session ? getDraft(session.session_id) : '');
+  const [hasInput, setHasInput] = React.useState(() => !!inputValueRef.current.trim());
+  const handleHasInputChange = React.useCallback((v: boolean) => setHasInput(v), []);
 
   const getDefaultPermissionMode = React.useCallback((agent?: string): PermissionMode => {
     return agent === 'codex' ? 'auto' : 'acceptEdits';
@@ -397,9 +514,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const isStopping = session.status === SessionStatus.STOPPING;
 
   const handleSendPrompt = async () => {
-    if (!inputValue.trim() || connectionDisabled) return;
+    const value = promptRef.current?.getValue() ?? '';
+    if (!value.trim() || connectionDisabled) return;
 
-    const promptToSend = inputValue.trim();
+    const promptToSend = value.trim();
 
     try {
       if (isRunning && client) {
@@ -418,11 +536,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         }
 
         message.success(`Message queued at position ${response.message.queue_position}`);
-        setInputValue('');
-        deleteDraft(session.session_id);
+        promptRef.current?.clear();
       } else {
-        setInputValue('');
-        deleteDraft(session.session_id);
+        promptRef.current?.clear();
         onSendPrompt?.(session.session_id, promptToSend, permissionMode);
       }
     } catch (error) {
@@ -453,16 +569,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const handleFork = () => {
     if (!session) return;
-    onFork?.(session.session_id, inputValue.trim());
-    setInputValue('');
-    deleteDraft(session.session_id);
+    const value = promptRef.current?.getValue() ?? '';
+    onFork?.(session.session_id, value.trim());
+    promptRef.current?.clear();
   };
 
   const handleBtwSend = async () => {
-    if (!inputValue.trim() || connectionDisabled) return;
-    const promptToSend = inputValue.trim();
-    setInputValue('');
-    deleteDraft(session.session_id);
+    const value = promptRef.current?.getValue() ?? '';
+    if (!value.trim() || connectionDisabled) return;
+    const promptToSend = value.trim();
+    promptRef.current?.clear();
     await onBtwFork?.(session.session_id, promptToSend);
   };
 
@@ -512,7 +628,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
 
     setSpawnModalOpen(false);
-    setInputValue('');
+    promptRef.current?.clear();
   };
 
   const handlePermissionModeChange = (newMode: PermissionMode) => {
@@ -632,25 +748,23 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             banner
           />
         )}
-        <AutocompleteTextarea
-          value={inputValue}
-          onChange={setInputValue}
+        <PromptInput
+          ref={promptRef}
+          sessionId={session.session_id}
+          getDraft={getDraft}
+          saveDraft={saveDraft}
+          deleteDraft={deleteDraft}
+          onHasInputChange={handleHasInputChange}
+          inputValueRef={inputValueRef}
+          onSubmit={handleSendPrompt}
           placeholder={
             isRunning
               ? 'Session is working... Type here to queue, or use "btw" for a side question'
               : 'Send a prompt, fork, or use "btw" for a side question... (type @ for autocomplete)'
           }
           autoSize={{ minRows: 1, maxRows: 10 }}
-          onKeyPress={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              if (inputValue.trim() && !connectionDisabled) {
-                handleSendPrompt();
-              }
-            }
-          }}
           client={client}
-          sessionId={session?.session_id || null}
+          sessionId_autocomplete={session?.session_id || null}
           userById={userById}
           onFilesDrop={(files) => {
             // Store dropped files and open modal
@@ -817,7 +931,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                   type="primary"
                   icon={<SendOutlined />}
                   onClick={handleSendPrompt}
-                  disabled={connectionDisabled || !inputValue.trim()}
+                  disabled={connectionDisabled || !hasInput}
                 />
               </Tooltip>
             </Space.Compact>
@@ -964,11 +1078,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             }}
             onInsertMention={(filepath) => {
               // Insert @filepath mention into the textarea
-              setInputValue((prev) => {
-                const trimmed = prev.trim();
-                const separator = trimmed ? ' ' : '';
-                return `${trimmed}${separator}@${filepath}`;
-              });
+              promptRef.current?.insertText(`@${filepath}`);
             }}
           />
         )}
