@@ -112,16 +112,18 @@ export function useAgorData(
         artifactsList,
         oauthStatusResult,
       ] = await Promise.all([
-        client
-          .service('sessions')
-          .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT, $sort: { updated_at: -1 } } }),
+        client.service('sessions').findAll({
+          query: { archived: false, $limit: PAGINATION.DEFAULT_LIMIT, $sort: { updated_at: -1 } },
+        }),
         client.service('boards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
         client.service('board-objects').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
         client.service('board-comments').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
         client.service('cards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
         client.service('card-types').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
         client.service('repos').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-        client.service('worktrees').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        client
+          .service('worktrees')
+          .findAll({ query: { archived: false, $limit: PAGINATION.DEFAULT_LIMIT } }),
         client.service('users').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
         client.service('mcp-servers').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
         client
@@ -267,6 +269,8 @@ export function useAgorData(
     // Subscribe to session events
     const sessionsService = client.service('sessions');
     const handleSessionCreated = (session: Session) => {
+      if (session.archived) return;
+
       // Update sessionById - only create new Map if session doesn't exist
       setSessionById((prev) => {
         if (prev.has(session.session_id)) return prev; // Already exists, shouldn't happen
@@ -287,69 +291,78 @@ export function useAgorData(
       });
     };
     const handleSessionPatched = (session: Session) => {
+      const isArchived = session.archived === true;
       // Track old worktree_id for migration detection
       let oldWorktreeId: string | null = null;
 
-      // Update sessionById - ONLY create new Map if session changed
+      // Update sessionById - add/update active sessions, remove archived sessions
       setSessionById((prev) => {
         const existing = prev.get(session.session_id);
-        if (existing === session) return prev; // Same reference, no change
 
         // Capture old worktree_id before updating
         oldWorktreeId = existing?.worktree_id || null;
+
+        if (isArchived) {
+          if (!existing) return prev;
+          const next = new Map(prev);
+          next.delete(session.session_id);
+          return next;
+        }
+
+        if (existing === session) return prev; // Same reference, no change
 
         const next = new Map(prev);
         next.set(session.session_id, session);
         return next;
       });
 
-      // Update sessionsByWorktree - handle both in-place updates and worktree migrations
+      // Update sessionsByWorktree - keep active sessions only
       setSessionsByWorktree((prev) => {
+        let changed = false;
+        const next = new Map(prev);
         const newWorktreeId = session.worktree_id;
-        const worktreeSessions = prev.get(newWorktreeId) || [];
+
+        const removeFromWorktree = (worktreeId: string) => {
+          const bucket = next.get(worktreeId) || [];
+          const filtered = bucket.filter((s) => s.session_id !== session.session_id);
+          if (filtered.length !== bucket.length) {
+            changed = true;
+            if (filtered.length > 0) {
+              next.set(worktreeId, filtered);
+            } else {
+              next.delete(worktreeId);
+            }
+          }
+        };
+
+        if (isArchived) {
+          if (oldWorktreeId) {
+            removeFromWorktree(oldWorktreeId);
+          }
+          removeFromWorktree(newWorktreeId);
+          return changed ? next : prev;
+        }
+
+        // Session moved between worktrees - remove from old bucket first
+        const worktreeMigrated = oldWorktreeId && oldWorktreeId !== newWorktreeId;
+        if (worktreeMigrated) {
+          removeFromWorktree(oldWorktreeId!);
+        }
+
+        const worktreeSessions = next.get(newWorktreeId) || [];
         const index = worktreeSessions.findIndex((s) => s.session_id === session.session_id);
 
-        // Check if session migrated to a different worktree
-        const worktreeMigrated = oldWorktreeId && oldWorktreeId !== newWorktreeId;
-
-        if (worktreeMigrated) {
-          // Session moved between worktrees - remove from old, add to new
-          const next = new Map(prev);
-
-          // Remove from old worktree bucket
-          const oldSessions = prev.get(oldWorktreeId!) || [];
-          const filteredOldSessions = oldSessions.filter(
-            (s) => s.session_id !== session.session_id
-          );
-          if (filteredOldSessions.length > 0) {
-            next.set(oldWorktreeId!, filteredOldSessions);
-          } else {
-            next.delete(oldWorktreeId!); // Remove empty bucket
-          }
-
-          // Add to new worktree bucket
-          const newSessions = prev.get(newWorktreeId) || [];
-          next.set(newWorktreeId, [...newSessions, session]);
-
+        if (index === -1) {
+          next.set(newWorktreeId, [...worktreeSessions, session]);
           return next;
         }
 
-        // Session not found in this worktree and didn't migrate (shouldn't happen, but be safe)
-        if (index === -1) {
-          return prev;
-        }
-
-        // Check if session actually changed (reference equality is sufficient for socket updates)
         if (worktreeSessions[index] === session) {
-          return prev;
+          return changed ? next : prev;
         }
 
-        // Create new array with updated session (in-place update)
         const updatedSessions = [...worktreeSessions];
         updatedSessions[index] = session;
-
-        // Only create new Map with updated worktree entry
-        const next = new Map(prev);
         next.set(newWorktreeId, updatedSessions);
         return next;
       });
@@ -486,6 +499,8 @@ export function useAgorData(
     // Subscribe to worktree events
     const worktreesService = client.service('worktrees');
     const handleWorktreeCreated = (worktree: Worktree) => {
+      if (worktree.archived) return;
+
       setWorktreeById((prev) => {
         if (prev.has(worktree.worktree_id)) return prev; // Already exists, shouldn't happen
         const next = new Map(prev);
@@ -494,6 +509,36 @@ export function useAgorData(
       });
     };
     const handleWorktreePatched = (worktree: Worktree) => {
+      if (worktree.archived) {
+        // Remove archived worktree from core map
+        setWorktreeById((prev) => {
+          if (!prev.has(worktree.worktree_id)) return prev;
+          const next = new Map(prev);
+          next.delete(worktree.worktree_id);
+          return next;
+        });
+
+        // Remove sessions under archived worktree from core maps
+        setSessionsByWorktree((prev) => {
+          if (!prev.has(worktree.worktree_id)) return prev;
+          const next = new Map(prev);
+          next.delete(worktree.worktree_id);
+          return next;
+        });
+        setSessionById((prev) => {
+          let changed = false;
+          const next = new Map(prev);
+          for (const [sessionId, session] of prev.entries()) {
+            if (session.worktree_id === worktree.worktree_id) {
+              next.delete(sessionId);
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+        return;
+      }
+
       setWorktreeById((prev) => {
         const existing = prev.get(worktree.worktree_id);
         if (existing === worktree) return prev; // Same reference, no change

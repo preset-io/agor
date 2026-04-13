@@ -771,7 +771,9 @@ function AppContent() {
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     }
   ) => {
-    if (!client) return;
+    if (!client) {
+      throw new Error('Not connected to daemon');
+    }
     try {
       const action = options.metadataAction === 'archive' ? 'archived' : 'deleted';
       showLoading(
@@ -785,11 +787,14 @@ function AppContent() {
         `Failed to ${options.metadataAction} worktree: ${error instanceof Error ? error.message : String(error)}`,
         { key: 'archive-delete' }
       );
+      throw error;
     }
   };
 
   const handleUnarchiveWorktree = async (worktreeId: string, options?: { boardId?: string }) => {
-    if (!client) return;
+    if (!client) {
+      throw new Error('Not connected to daemon');
+    }
     try {
       showLoading('Unarchiving worktree...', { key: 'unarchive' });
       await client.service(`worktrees/${worktreeId}/unarchive`).create(options || {});
@@ -799,6 +804,7 @@ function AppContent() {
         `Failed to unarchive worktree: ${error instanceof Error ? error.message : String(error)}`,
         { key: 'unarchive' }
       );
+      throw error;
     }
   };
 

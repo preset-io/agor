@@ -11,6 +11,137 @@ import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type MessageInsert, type MessageRow, messages } from '../schema';
 
+const DEFAULT_MAX_TOOL_INPUT_BYTES = 8 * 1024;
+const DEFAULT_MAX_TOOL_RESULT_BYTES = 16 * 1024;
+const TRUNCATED_TEXT_SUFFIX = '\n\n[agor: tool payload truncated for storage]';
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function getStorageLimits(): { maxToolInputBytes: number; maxToolResultBytes: number } {
+  return {
+    maxToolInputBytes: parsePositiveInt(
+      process.env.AGOR_MESSAGES_MAX_TOOL_INPUT_BYTES,
+      DEFAULT_MAX_TOOL_INPUT_BYTES
+    ),
+    maxToolResultBytes: parsePositiveInt(
+      process.env.AGOR_MESSAGES_MAX_TOOL_RESULT_BYTES,
+      DEFAULT_MAX_TOOL_RESULT_BYTES
+    ),
+  };
+}
+
+function byteLengthUtf8(value: string): number {
+  return Buffer.byteLength(value, 'utf8');
+}
+
+function truncateStringByBytes(value: string, maxBytes: number): string {
+  if (byteLengthUtf8(value) <= maxBytes) return value;
+
+  let low = 0;
+  let high = value.length;
+
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    const slice = value.slice(0, mid);
+    if (byteLengthUtf8(slice) <= maxBytes) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  return value.slice(0, low);
+}
+
+function encodeTruncatedPayload(
+  value: unknown,
+  maxBytes: number,
+  field: 'input' | 'result'
+): unknown {
+  const serialized = JSON.stringify(value);
+  if (!serialized) return value;
+
+  const originalBytes = byteLengthUtf8(serialized);
+  if (originalBytes <= maxBytes) return value;
+
+  if (typeof value === 'string') {
+    const suffixBytes = byteLengthUtf8(TRUNCATED_TEXT_SUFFIX);
+    const budget = Math.max(maxBytes - suffixBytes, 0);
+    const truncated = truncateStringByBytes(value, budget);
+    return `${truncated}${TRUNCATED_TEXT_SUFFIX}`;
+  }
+
+  const preview = truncateStringByBytes(serialized, Math.min(512, maxBytes));
+  return {
+    __agor_truncated: true,
+    field,
+    original_type: Array.isArray(value) ? 'array' : typeof value,
+    original_bytes: originalBytes,
+    preview,
+  };
+}
+
+function sanitizeToolUseInput(input: Record<string, unknown>): Record<string, unknown> {
+  const { maxToolInputBytes } = getStorageLimits();
+  const sanitized = encodeTruncatedPayload(input, maxToolInputBytes, 'input');
+  if (sanitized && typeof sanitized === 'object' && !Array.isArray(sanitized)) {
+    return sanitized as Record<string, unknown>;
+  }
+
+  // Always keep shape as object for tool_use.input
+  return {
+    __agor_truncated: true,
+    field: 'input',
+    original_type: typeof input,
+    original_bytes: byteLengthUtf8(JSON.stringify(input)),
+    preview: typeof sanitized === 'string' ? sanitized : '',
+  };
+}
+
+function sanitizeContentBlocks(content: Message['content']): Message['content'] {
+  if (!Array.isArray(content)) return content;
+
+  const { maxToolInputBytes, maxToolResultBytes } = getStorageLimits();
+
+  return content.map((block) => {
+    if (!block || typeof block !== 'object') return block;
+
+    const mutableBlock = { ...block } as Record<string, unknown>;
+    const type = typeof mutableBlock.type === 'string' ? mutableBlock.type : undefined;
+
+    if (type === 'tool_use' && 'input' in mutableBlock) {
+      const input = mutableBlock.input;
+      if (input && typeof input === 'object' && !Array.isArray(input)) {
+        mutableBlock.input = sanitizeToolUseInput(input as Record<string, unknown>);
+      } else if (input !== undefined) {
+        mutableBlock.input = encodeTruncatedPayload(input, maxToolInputBytes, 'input');
+      }
+    }
+
+    if (type === 'tool_result' && 'content' in mutableBlock) {
+      mutableBlock.content = encodeTruncatedPayload(
+        mutableBlock.content,
+        maxToolResultBytes,
+        'result'
+      );
+    }
+
+    return mutableBlock;
+  }) as Message['content'];
+}
+
+function sanitizeToolUses(toolUses: Message['tool_uses']): Message['tool_uses'] {
+  if (!toolUses?.length) return toolUses;
+  return toolUses.map((toolUse) => ({
+    ...toolUse,
+    input: sanitizeToolUseInput(toolUse.input),
+  }));
+}
+
 export class MessagesRepository {
   constructor(private db: Database) {}
 
@@ -40,6 +171,9 @@ export class MessagesRepository {
    * Convert Message to database row
    */
   private messageToRow(message: Message): MessageInsert {
+    const sanitizedContent = sanitizeContentBlocks(message.content);
+    const sanitizedToolUses = sanitizeToolUses(message.tool_uses);
+
     return {
       message_id: message.message_id,
       created_at: new Date(),
@@ -54,8 +188,8 @@ export class MessagesRepository {
       status: message.status || null,
       queue_position: message.queue_position ?? null,
       data: {
-        content: message.content,
-        tool_uses: message.tool_uses,
+        content: sanitizedContent,
+        tool_uses: sanitizedToolUses,
         metadata: message.metadata,
       },
     };

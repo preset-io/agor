@@ -355,6 +355,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       case 'worktrees':
         return (
           <WorktreesTable
+            client={client}
             worktreeById={worktreeById}
             repoById={repoById}
             boardById={boardById}

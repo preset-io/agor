@@ -147,6 +147,7 @@ services:
       # Shadow package-level node_modules too (they contain symlinks into root)
       - /app/packages/core/node_modules
       - /app/packages/executor/node_modules
+      - /app/packages/client/node_modules
       - /app/apps/agor-daemon/node_modules
       - /app/apps/agor-cli/node_modules
       - /app/apps/agor-ui/node_modules

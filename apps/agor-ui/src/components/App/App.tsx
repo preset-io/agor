@@ -985,6 +985,7 @@ export const App: React.FC<AppProps> = ({
             onUpdateRepo={onUpdateRepo}
             onDeleteRepo={onDeleteRepo}
             onArchiveOrDeleteWorktree={onArchiveOrDeleteWorktree}
+            onUnarchiveWorktree={onUnarchiveWorktree}
             onUpdateWorktree={onUpdateWorktree}
             onCreateWorktree={onCreateWorktree}
             onStartEnvironment={onStartEnvironment}

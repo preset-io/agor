@@ -1,16 +1,11 @@
 import type { AgorClient, Session, SessionID, Worktree } from '@agor-live/client';
-import {
-  EyeInvisibleOutlined,
-  EyeOutlined,
-  InboxOutlined,
-  SearchOutlined,
-  UndoOutlined,
-} from '@ant-design/icons';
-import { Badge, Button, Input, Space, Switch, Table, Tag, Tooltip, Typography, theme } from 'antd';
+import { EyeInvisibleOutlined, EyeOutlined, SearchOutlined } from '@ant-design/icons';
+import { Badge, Input, Space, Switch, Table, Tag, Tooltip, Typography, theme } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
 import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
+import { ArchiveToggleButton } from '../../ArchiveToggleButton';
 import { TaskStatusIcon } from '../../TaskStatusIcon';
 import { ToolIcon } from '../../ToolIcon/ToolIcon';
 
@@ -32,16 +27,145 @@ const statusColorMap: Record<string, string> = {
   failed: 'error',
 };
 
-const SessionsTabInner: React.FC<SessionsTabProps> = ({ sessions, client, onSessionClick }) => {
+const SessionsTabInner: React.FC<SessionsTabProps> = ({
+  worktree,
+  sessions,
+  client,
+  onSessionClick,
+}) => {
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
   const [searchText, setSearchText] = useState('');
   const [showArchived, setShowArchived] = useState(false);
+  const [activeSessions, setActiveSessions] = useState<Session[]>([]);
+  const [activeLoading, setActiveLoading] = useState(false);
+  const [archivedSessions, setArchivedSessions] = useState<Session[]>([]);
+  const [archivedLoaded, setArchivedLoaded] = useState(false);
+  const [archivedLoading, setArchivedLoading] = useState(false);
   const [archivingIds, setArchivingIds] = useState<Set<string>>(new Set());
+  const initialActiveSessions = useMemo(
+    () => sessions.filter((session) => !session.archived),
+    [sessions]
+  );
 
   // Keep client ref stable for callbacks
   const clientRef = useRef(client);
   clientRef.current = client;
+
+  const upsertSession = useCallback((list: Session[], session: Session): Session[] => {
+    const index = list.findIndex((s) => s.session_id === session.session_id);
+    if (index === -1) return [session, ...list];
+    if (list[index] === session) return list;
+    const next = [...list];
+    next[index] = session;
+    return next;
+  }, []);
+
+  const loadActiveSessions = useCallback(async () => {
+    const currentClient = clientRef.current;
+    if (!currentClient) return;
+
+    setActiveLoading(true);
+    try {
+      const result = await currentClient.service('sessions').findAll({
+        query: {
+          worktree_id: worktree.worktree_id,
+          archived: false,
+          $limit: 1000,
+          $sort: { created_at: -1 },
+        },
+      });
+      setActiveSessions(result as Session[]);
+    } catch {
+      // Keep tab resilient; table still renders from fallback state
+    } finally {
+      setActiveLoading(false);
+    }
+  }, [worktree.worktree_id]);
+
+  const loadArchivedSessions = useCallback(async () => {
+    const currentClient = clientRef.current;
+    if (!currentClient) return;
+
+    setArchivedLoading(true);
+    try {
+      const result = await currentClient.service('sessions').findAll({
+        query: {
+          worktree_id: worktree.worktree_id,
+          archived: true,
+          $limit: 1000,
+          $sort: { created_at: -1 },
+        },
+      });
+      setArchivedSessions(result as Session[]);
+      setArchivedLoaded(true);
+    } catch {
+      // Keep tab resilient; table still renders active sessions
+    } finally {
+      setArchivedLoading(false);
+    }
+  }, [worktree.worktree_id]);
+
+  useEffect(() => {
+    // Reset per-worktree state when switching modal context.
+    // Seed active list from prop for instant render, then refresh from API.
+    setActiveSessions(initialActiveSessions);
+    setActiveLoading(false);
+    setShowArchived(worktree.archived);
+    setArchivedSessions([]);
+    setArchivedLoaded(false);
+    setArchivedLoading(false);
+    void loadActiveSessions();
+  }, [initialActiveSessions, loadActiveSessions, worktree.archived]);
+
+  useEffect(() => {
+    if (showArchived && !archivedLoaded && !archivedLoading) {
+      void loadArchivedSessions();
+    }
+  }, [showArchived, archivedLoaded, archivedLoading, loadArchivedSessions]);
+
+  useEffect(() => {
+    if (!client) return;
+    const sessionsService = client.service('sessions');
+
+    const handleSessionCreated = (session: Session) => {
+      if (session.worktree_id !== worktree.worktree_id) return;
+      if (session.archived) {
+        setArchivedSessions((prev) => upsertSession(prev, session));
+      } else {
+        setActiveSessions((prev) => upsertSession(prev, session));
+      }
+    };
+
+    const handleSessionPatched = (session: Session) => {
+      if (session.worktree_id !== worktree.worktree_id) return;
+      setActiveSessions((prev) => prev.filter((s) => s.session_id !== session.session_id));
+      setArchivedSessions((prev) => prev.filter((s) => s.session_id !== session.session_id));
+      if (session.archived) {
+        setArchivedSessions((prev) => upsertSession(prev, session));
+      } else {
+        setActiveSessions((prev) => upsertSession(prev, session));
+      }
+    };
+
+    const handleSessionRemoved = (session: Session) => {
+      if (session.worktree_id !== worktree.worktree_id) return;
+      setActiveSessions((prev) => prev.filter((s) => s.session_id !== session.session_id));
+      setArchivedSessions((prev) => prev.filter((s) => s.session_id !== session.session_id));
+    };
+
+    sessionsService.on('created', handleSessionCreated);
+    sessionsService.on('patched', handleSessionPatched);
+    sessionsService.on('updated', handleSessionPatched);
+    sessionsService.on('removed', handleSessionRemoved);
+
+    return () => {
+      sessionsService.removeListener('created', handleSessionCreated);
+      sessionsService.removeListener('patched', handleSessionPatched);
+      sessionsService.removeListener('updated', handleSessionPatched);
+      sessionsService.removeListener('removed', handleSessionRemoved);
+    };
+  }, [client, upsertSession, worktree.worktree_id]);
 
   const handleArchiveToggle = useCallback(
     async (sessionId: SessionID, archive: boolean) => {
@@ -54,6 +178,27 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({ sessions, client, onSess
           archived: archive,
           archived_reason: archive ? 'manual' : undefined,
         } as Partial<Session>);
+
+        // Keep local archived cache in sync for this modal view
+        if (archive) {
+          const source = activeSessions.find((s) => s.session_id === sessionId);
+          if (source) {
+            setActiveSessions((prev) => prev.filter((s) => s.session_id !== sessionId));
+            setArchivedSessions((prev) => {
+              if (prev.some((s) => s.session_id === sessionId)) return prev;
+              return [{ ...source, archived: true }, ...prev];
+            });
+          } else if (showArchived) {
+            void loadArchivedSessions();
+          }
+        } else {
+          const source = archivedSessions.find((s) => s.session_id === sessionId);
+          if (source) {
+            setActiveSessions((prev) => upsertSession(prev, { ...source, archived: false }));
+          }
+          setArchivedSessions((prev) => prev.filter((s) => s.session_id !== sessionId));
+        }
+
         showSuccess(archive ? 'Session archived' : 'Session unarchived');
       } catch (err) {
         showError(err instanceof Error ? err.message : 'Failed to update session');
@@ -65,12 +210,36 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({ sessions, client, onSess
         });
       }
     },
-    [showSuccess, showError]
+    [
+      activeSessions,
+      archivedSessions,
+      loadArchivedSessions,
+      showArchived,
+      showSuccess,
+      showError,
+      upsertSession,
+    ]
   );
+
+  const combinedSessions = useMemo(() => {
+    if (!showArchived) return activeSessions;
+    const seen = new Set<string>();
+    const merged: Session[] = [];
+    for (const session of activeSessions) {
+      seen.add(session.session_id);
+      merged.push(session);
+    }
+    for (const session of archivedSessions) {
+      if (!seen.has(session.session_id)) {
+        merged.push(session);
+      }
+    }
+    return merged;
+  }, [activeSessions, archivedSessions, showArchived]);
 
   // Filter sessions based on search and archive toggle
   const filteredSessions = useMemo(() => {
-    let result = sessions;
+    let result = combinedSessions;
 
     // Filter archived
     if (!showArchived) {
@@ -99,10 +268,10 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({ sessions, client, onSess
       if (aRunning !== bRunning) return bRunning - aRunning;
       return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
     });
-  }, [sessions, showArchived, searchText]);
+  }, [combinedSessions, showArchived, searchText]);
 
-  const archivedCount = useMemo(() => sessions.filter((s) => s.archived).length, [sessions]);
-  const activeCount = sessions.length - archivedCount;
+  const activeCount = activeSessions.length;
+  const archivedCount = archivedSessions.length;
 
   const columns: ColumnsType<Session> = [
     {
@@ -178,18 +347,14 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({ sessions, client, onSess
       key: 'actions',
       width: 40,
       render: (_, session) => (
-        <Tooltip title={session.archived ? 'Unarchive session' : 'Archive session'}>
-          <Button
-            type="text"
-            size="small"
-            icon={session.archived ? <UndoOutlined /> : <InboxOutlined />}
-            loading={archivingIds.has(session.session_id)}
-            onClick={(e) => {
-              e.stopPropagation();
-              handleArchiveToggle(session.session_id as SessionID, !session.archived);
-            }}
-          />
-        </Tooltip>
+        <ArchiveToggleButton
+          archived={session.archived}
+          loading={archivingIds.has(session.session_id)}
+          tooltip={session.archived ? 'Archived • Click to unarchive' : 'Click to archive'}
+          onToggle={(nextArchived) =>
+            handleArchiveToggle(session.session_id as SessionID, nextArchived)
+          }
+        />
       ),
     },
   ];
@@ -239,6 +404,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({ sessions, client, onSess
                 size="small"
                 checked={showArchived}
                 onChange={setShowArchived}
+                loading={archivedLoading || activeLoading}
                 checkedChildren={<EyeOutlined />}
                 unCheckedChildren={<EyeInvisibleOutlined />}
               />
@@ -261,7 +427,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({ sessions, client, onSess
           locale={{
             emptyText: showArchived
               ? 'No sessions match your search'
-              : sessions.length > 0
+              : combinedSessions.length > 0
                 ? 'All sessions are archived. Toggle "Show archived" to see them.'
                 : 'No sessions yet',
           }}

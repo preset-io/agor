@@ -92,6 +92,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   private processes = new Map<WorktreeID, ManagedProcess>();
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
   private boardObjectsService?: {
+    find: (params?: unknown) => Promise<unknown>;
     findByWorktreeId: (worktreeId: WorktreeID) => Promise<unknown>;
     create: (data: unknown) => Promise<unknown>;
     remove: (id: string) => Promise<unknown>;
@@ -120,12 +121,71 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   private getBoardObjectsService() {
     if (!this.boardObjectsService) {
       this.boardObjectsService = this.app.service('board-objects') as unknown as {
+        find: (params?: unknown) => Promise<unknown>;
         findByWorktreeId: (worktreeId: WorktreeID) => Promise<unknown>;
         create: (data: unknown) => Promise<unknown>;
         remove: (id: string) => Promise<unknown>;
       };
     }
     return this.boardObjectsService;
+  }
+
+  /**
+   * Compute a smart default position for a worktree on a board, based on existing entities/zones.
+   * Falls back to a small jitter near origin if placement utilities fail.
+   */
+  private async computeDefaultBoardPositionForWorktree(
+    boardId: BoardID,
+    currentWorktreeId: WorktreeID,
+    params?: WorktreeParams
+  ): Promise<{ x: number; y: number }> {
+    try {
+      const boardObjectsService = this.getBoardObjectsService();
+      const board = (await this.app.service('boards').get(boardId, params)) as {
+        objects?: Record<string, { type?: string }>;
+      };
+
+      const existingResult = (await boardObjectsService.find({
+        query: { board_id: boardId },
+        ...params,
+      })) as { data: Array<{ worktree_id?: string | null; position: { x: number; y: number } }> };
+
+      const activeWorktreesResult = await this.app.service('worktrees').find({
+        query: { board_id: boardId, archived: false, $limit: 5000 },
+        paginate: false,
+      });
+      const activeWorktrees = Array.isArray(activeWorktreesResult)
+        ? activeWorktreesResult
+        : (activeWorktreesResult as { data: Array<{ worktree_id: string }> }).data;
+      const activeWorktreeIds = new Set(activeWorktrees.map((wt) => wt.worktree_id));
+
+      const activeEntities = existingResult.data.filter((obj) => {
+        if (!obj.worktree_id) return true;
+        if (obj.worktree_id === currentWorktreeId) return false;
+        return activeWorktreeIds.has(obj.worktree_id);
+      });
+
+      const zones = board?.objects
+        ? Object.entries(board.objects)
+            .filter(([, o]) => (o as { type?: string }).type === 'zone')
+            .map(([id, o]) => ({ id, ...(o as object) }))
+        : [];
+
+      const { resolveEntityAbsolutePositions, computeDefaultBoardPosition } = await import(
+        '@agor/core/utils/board-placement'
+      );
+      const absolutePositions = resolveEntityAbsolutePositions(
+        activeEntities as never,
+        zones as never
+      );
+      return computeDefaultBoardPosition(absolutePositions, zones as never);
+    } catch (error) {
+      console.warn(
+        `⚠️ Failed smart board placement for worktree ${currentWorktreeId}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+      return { x: 100 + Math.random() * 200, y: 100 + Math.random() * 200 };
+    }
   }
 
   /**
@@ -473,7 +533,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           archived_at: new Date().toISOString(),
           archived_by: currentUserId,
           filesystem_status: filesystemAction,
-          board_id: undefined, // Remove from board
+          // Preserve board_id + board_object placement so unarchive can restore in-place
           updated_at: new Date().toISOString(),
         },
         params
@@ -528,19 +588,50 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
     console.log(`📦 Unarchiving worktree: ${worktree.name}`);
 
+    const boardIdExplicitlyProvided = options !== undefined && 'boardId' in options;
+    const targetBoardId = boardIdExplicitlyProvided ? options?.boardId : worktree.board_id;
+
     // Update worktree - clear archive metadata
-    const unarchivedWorktree = await this.patch(
-      id,
-      {
-        archived: false,
-        archived_at: undefined,
-        archived_by: undefined,
-        filesystem_status: undefined,
-        board_id: options?.boardId, // Optionally restore to board
-        updated_at: new Date().toISOString(),
-      },
-      params
-    );
+    const patchData: Partial<Worktree> = {
+      archived: false,
+      archived_at: undefined,
+      archived_by: undefined,
+      filesystem_status: undefined,
+      updated_at: new Date().toISOString(),
+    };
+    if (boardIdExplicitlyProvided) {
+      patchData.board_id = options?.boardId;
+    }
+
+    const unarchivedWorktree = await this.patch(id, patchData, params);
+
+    // Ensure a board object exists when unarchiving to a board.
+    // Older archived worktrees may have had their board object removed.
+    if (targetBoardId) {
+      const boardObjectsService = this.getBoardObjectsService();
+      try {
+        const existingObject = (await boardObjectsService.findByWorktreeId(id)) as {
+          object_id: string;
+        } | null;
+        if (!existingObject) {
+          const position = await this.computeDefaultBoardPositionForWorktree(
+            targetBoardId,
+            id,
+            params
+          );
+          await boardObjectsService.create({
+            board_id: targetBoardId,
+            worktree_id: id,
+            position,
+          });
+        }
+      } catch (error) {
+        console.error(
+          `⚠️ Failed to restore board object for unarchived worktree ${id}:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    }
 
     // Unarchive all sessions that were archived due to worktree archival
     // Use internal call (no provider) to bypass RBAC hooks that would ignore worktree_id filter
