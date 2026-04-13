@@ -135,10 +135,25 @@
       "import": "./dist/callbacks/child-completion-template.js",
       "require": "./dist/callbacks/child-completion-template.cjs"
     },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.js",
+      "require": "./dist/client/index.cjs"
+    },
     "./models": {
       "types": "./dist/models/index.d.ts",
       "import": "./dist/models/index.js",
       "require": "./dist/models/index.cjs"
+    },
+    "./models/browser": {
+      "types": "./dist/models/browser.d.ts",
+      "import": "./dist/models/browser.js",
+      "require": "./dist/models/browser.cjs"
+    },
+    "./models/gemini-shared": {
+      "types": "./dist/models/gemini-shared.d.ts",
+      "import": "./dist/models/gemini-shared.js",
+      "require": "./dist/models/gemini-shared.cjs"
     },
     "./sdk": {
       "types": "./dist/sdk/index.d.ts",

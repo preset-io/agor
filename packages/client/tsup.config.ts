@@ -11,8 +11,6 @@ export default defineConfig({
   splitting: false,
   // Keep FeathersJS + socket.io as runtime dependencies (not bundled)
   external: [
-    '@agor/core',
-    '@agor/core/*',
     '@feathersjs/authentication-client',
     '@feathersjs/feathers',
     '@feathersjs/rest-client',

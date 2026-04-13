@@ -1,6 +1,6 @@
 {
   "name": "@agor-live/client",
-  "version": "0.16.4",
+  "version": "0.16.5",
   "description": "TypeScript client for connecting to the Agor daemon",
   "type": "module",
   "main": "./dist/index.js",
@@ -22,18 +22,22 @@
   ],
   "scripts": {
     "build": "tsup && node scripts/patch-dts.mjs",
+    "check:pack": "node scripts/validate-pack-artifact.mjs",
     "dev": "tsup --watch",
+    "prepublishOnly": "pnpm build && pnpm check:pack",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@agor/core": "workspace:*",
     "@feathersjs/authentication-client": "^5.0.44",
     "@feathersjs/feathers": "^5.0.44",
     "@feathersjs/rest-client": "^5.0.44",
     "@feathersjs/socketio-client": "^5.0.44",
+    "js-yaml": "^4.1.1",
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
+    "@agor/core": "workspace:*",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.10.2",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3"

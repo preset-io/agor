@@ -132,6 +132,7 @@ echo ""
 echo "📦 Building @agor-live/client..."
 cd "$CLIENT_DIR"
 pnpm build
+pnpm check:pack
 
 echo ""
 echo "🖥️  Building CLI..."
