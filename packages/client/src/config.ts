@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import type { AgorConfig } from '@agor/core/client';
 import yaml from 'js-yaml';
-import type { AgorConfig } from '../../core/src/config/types';
 
 const DEFAULT_DAEMON_PORT = 3030;
 const DEFAULT_DAEMON_HOST = 'localhost';

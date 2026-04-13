@@ -1,9 +1,7 @@
-import type { GeminiModel, GeminiModelInfo } from '../../core/src/models/gemini-shared';
-import { GEMINI_MODELS } from '../../core/src/models/gemini-shared';
+import type { GeminiModel, GeminiModelInfo } from '@agor/core/models/browser';
+import { GEMINI_MODELS } from '@agor/core/models/browser';
 
-export * from '../../core/src/models/claude';
-export * from '../../core/src/models/codex';
-export * from '../../core/src/models/gemini-shared';
+export * from '@agor/core/models/browser';
 
 interface ModelCache {
   models: GeminiModelInfo[];

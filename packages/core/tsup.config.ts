@@ -28,6 +28,9 @@ export default defineConfig({
     'utils/logger': 'src/utils/logger.ts', // Console monkey-patch for log level filtering
     'seed/index': 'src/seed/index.ts', // Development database seeding
     'callbacks/child-completion-template': 'src/callbacks/child-completion-template.ts', // Parent session callback templates
+    'client/index': 'src/client/index.ts', // Client-safe core entrypoint for browser/SDK consumers
+    'models/browser': 'src/models/browser.ts', // Browser-safe model metadata only
+    'models/gemini-shared': 'src/models/gemini-shared.ts', // Shared Gemini metadata/constants
     'models/index': 'src/models/index.ts', // Model metadata (browser-safe)
     'sdk/index': 'src/sdk/index.ts', // AI SDK re-exports (Claude, Codex, Gemini, OpenCode)
     'tools/mcp/jwt-auth': 'src/tools/mcp/jwt-auth.ts', // MCP JWT authentication utilities
