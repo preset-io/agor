@@ -704,7 +704,7 @@ export default class SyncUnix extends Command {
       this.log(chalk.cyan.bold('\n━━━ Sync Worktree Groups ━━━\n'));
 
       let allWorktreesForBackfill = targetWorktreeId
-        ? (await select(db).from(worktrees).where(eq(worktrees.worktree_id, targetWorktreeId)).all())
+        ? await select(db).from(worktrees).where(eq(worktrees.worktree_id, targetWorktreeId)).all()
         : await select(db).from(worktrees).all();
 
       if (targetWorktreeId && allWorktreesForBackfill.length === 0) {
@@ -806,7 +806,10 @@ export default class SyncUnix extends Command {
 
         // Refresh for the permission sync phase
         allWorktreesForBackfill = targetWorktreeId
-          ? (await select(db).from(worktrees).where(eq(worktrees.worktree_id, targetWorktreeId)).all())
+          ? await select(db)
+              .from(worktrees)
+              .where(eq(worktrees.worktree_id, targetWorktreeId))
+              .all()
           : await select(db).from(worktrees).all();
       }
 
@@ -955,103 +958,105 @@ export default class SyncUnix extends Command {
       if (targetWorktreeId) {
         this.log(chalk.gray('   ⊘ Skipping repo permission sync phase (--worktree-id mode)\n'));
       } else {
+        // The backfill phase above handled repos without unix_group.
+        // Now we need to ensure permissions are set on repos that already have unix_group.
+        this.log(chalk.cyan.bold('\n━━━ Sync Repo Permissions ━━━\n'));
 
-      // The backfill phase above handled repos without unix_group.
-      // Now we need to ensure permissions are set on repos that already have unix_group.
-      this.log(chalk.cyan.bold('\n━━━ Sync Repo Permissions ━━━\n'));
+        // Get all repos with unix_group set (these already have groups, just need permission check)
+        const allReposForSync = await select(db).from(repos).all();
+        const reposWithGroup = allReposForSync.filter(
+          (r: { unix_group: string | null }) => r.unix_group !== null
+        );
 
-      // Get all repos with unix_group set (these already have groups, just need permission check)
-      const allReposForSync = await select(db).from(repos).all();
-      const reposWithGroup = allReposForSync.filter(
-        (r: { unix_group: string | null }) => r.unix_group !== null
-      );
+        if (reposWithGroup.length === 0) {
+          this.log(chalk.yellow('No repos with unix_group found\n'));
+        } else {
+          this.log(chalk.cyan(`Found ${reposWithGroup.length} repo(s) with unix_group\n`));
 
-      if (reposWithGroup.length === 0) {
-        this.log(chalk.yellow('No repos with unix_group found\n'));
-      } else {
-        this.log(chalk.cyan(`Found ${reposWithGroup.length} repo(s) with unix_group\n`));
+          for (const repo of reposWithGroup) {
+            // Extract local_path from the data JSON blob
+            const rawRepo = repo as {
+              repo_id: string;
+              slug: string;
+              unix_group: string;
+              data: { local_path?: string } | null;
+            };
 
-        for (const repo of reposWithGroup) {
-          // Extract local_path from the data JSON blob
-          const rawRepo = repo as {
-            repo_id: string;
-            slug: string;
-            unix_group: string;
-            data: { local_path?: string } | null;
-          };
+            const repoPath = rawRepo.data?.local_path;
 
-          const repoPath = rawRepo.data?.local_path;
+            // Skip repos without a path
+            if (!repoPath) {
+              this.log(chalk.yellow(`📁 ${rawRepo.slug}`));
+              this.log(chalk.gray(`   repo_id: ${rawRepo.repo_id.substring(0, 8)}`));
+              this.log(chalk.gray(`   unix_group: ${rawRepo.unix_group}`));
+              this.log(chalk.red(`   ⚠ No local_path found in repo data, skipping\n`));
+              continue;
+            }
 
-          // Skip repos without a path
-          if (!repoPath) {
-            this.log(chalk.yellow(`📁 ${rawRepo.slug}`));
+            const gitPath = `${repoPath}/.git`;
+
+            // Skip if .git directory doesn't exist on disk
+            if (!existsSync(gitPath)) {
+              if (verbose) {
+                this.log(
+                  chalk.gray(`   ⊘ ${rawRepo.slug}: .git path missing (${gitPath}), skipping`)
+                );
+              }
+              continue;
+            }
+
+            this.log(chalk.bold(`📁 ${rawRepo.slug}`));
             this.log(chalk.gray(`   repo_id: ${rawRepo.repo_id.substring(0, 8)}`));
             this.log(chalk.gray(`   unix_group: ${rawRepo.unix_group}`));
-            this.log(chalk.red(`   ⚠ No local_path found in repo data, skipping\n`));
-            continue;
-          }
+            this.log(chalk.gray(`   .git path: ${gitPath}`));
+            this.log(chalk.gray(`   mode: ${REPO_GIT_PERMISSION_MODE} (setgid, owner+group rwx)`));
 
-          const gitPath = `${repoPath}/.git`;
-
-          // Skip if .git directory doesn't exist on disk
-          if (!existsSync(gitPath)) {
-            if (verbose) {
-              this.log(
-                chalk.gray(`   ⊘ ${rawRepo.slug}: .git path missing (${gitPath}), skipping`)
-              );
-            }
-            continue;
-          }
-
-          this.log(chalk.bold(`📁 ${rawRepo.slug}`));
-          this.log(chalk.gray(`   repo_id: ${rawRepo.repo_id.substring(0, 8)}`));
-          this.log(chalk.gray(`   unix_group: ${rawRepo.unix_group}`));
-          this.log(chalk.gray(`   .git path: ${gitPath}`));
-          this.log(chalk.gray(`   mode: ${REPO_GIT_PERMISSION_MODE} (setgid, owner+group rwx)`));
-
-          // Ensure daemon user is in this repo group
-          if (daemonUser) {
-            const daemonInThisRepoGroup = dryRun
-              ? false
-              : isUserInGroup(daemonUser, rawRepo.unix_group);
-            if (!daemonInThisRepoGroup) {
-              this.log(
-                chalk.yellow(`   → Adding daemon user ${daemonUser} to ${rawRepo.unix_group}...`)
-              );
-              if (await execCmd(UnixGroupCommands.addUserToGroup(daemonUser, rawRepo.unix_group))) {
-                daemonMembershipsAdded++;
-                this.log(chalk.green(`   ✓ Added daemon user to ${rawRepo.unix_group}`));
-              } else {
-                this.log(chalk.red(`   ✗ Failed to add daemon user to ${rawRepo.unix_group}`));
+            // Ensure daemon user is in this repo group
+            if (daemonUser) {
+              const daemonInThisRepoGroup = dryRun
+                ? false
+                : isUserInGroup(daemonUser, rawRepo.unix_group);
+              if (!daemonInThisRepoGroup) {
+                this.log(
+                  chalk.yellow(`   → Adding daemon user ${daemonUser} to ${rawRepo.unix_group}...`)
+                );
+                if (
+                  await execCmd(UnixGroupCommands.addUserToGroup(daemonUser, rawRepo.unix_group))
+                ) {
+                  daemonMembershipsAdded++;
+                  this.log(chalk.green(`   ✓ Added daemon user to ${rawRepo.unix_group}`));
+                } else {
+                  this.log(chalk.red(`   ✗ Failed to add daemon user to ${rawRepo.unix_group}`));
+                }
+              } else if (verbose) {
+                this.log(chalk.gray(`   ✓ Daemon user already in ${rawRepo.unix_group}`));
               }
-            } else if (verbose) {
-              this.log(chalk.gray(`   ✓ Daemon user already in ${rawRepo.unix_group}`));
+            }
+
+            const repoCmds = UnixGroupCommands.setDirectoryGroup(
+              gitPath,
+              rawRepo.unix_group,
+              REPO_GIT_PERMISSION_MODE
+            );
+            if (await execAllCmds(repoCmds)) {
+              reposPermSynced++;
+              this.log(
+                chalk.green(`   ✓ Applied .git permissions (${REPO_GIT_PERMISSION_MODE})\n`)
+              );
+            } else {
+              syncErrors++;
+              this.log(chalk.red(`   ✗ Failed to set .git permissions\n`));
             }
           }
 
-          const repoCmds = UnixGroupCommands.setDirectoryGroup(
-            gitPath,
-            rawRepo.unix_group,
-            REPO_GIT_PERMISSION_MODE
-          );
-          if (await execAllCmds(repoCmds)) {
-            reposPermSynced++;
-            this.log(chalk.green(`   ✓ Applied .git permissions (${REPO_GIT_PERMISSION_MODE})\n`));
-          } else {
-            syncErrors++;
-            this.log(chalk.red(`   ✗ Failed to set .git permissions\n`));
+          // Summary for repo permission sync
+          this.log(chalk.bold('Repo Permission Sync Summary:'));
+          this.log(`  Repos synced: ${reposPermSynced}${dryRun ? ' (dry-run)' : ''}`);
+          if (syncErrors > 0) {
+            this.log(chalk.red(`  Errors: ${syncErrors}`));
           }
+          this.log('');
         }
-
-        // Summary for repo permission sync
-        this.log(chalk.bold('Repo Permission Sync Summary:'));
-        this.log(`  Repos synced: ${reposPermSynced}${dryRun ? ' (dry-run)' : ''}`);
-        if (syncErrors > 0) {
-          this.log(chalk.red(`  Errors: ${syncErrors}`));
-        }
-        this.log('');
-      }
-
       } // end if (!targetWorktreeId) for repo permission sync
 
       // ========================================
@@ -1062,93 +1067,93 @@ export default class SyncUnix extends Command {
       if (targetWorktreeId) {
         this.log(chalk.gray('   ⊘ Skipping membership pruning phase (--worktree-id mode)\n'));
       } else {
-      this.log(chalk.cyan.bold('\n━━━ Prune Stale Group Memberships ━━━\n'));
+        this.log(chalk.cyan.bold('\n━━━ Prune Stale Group Memberships ━━━\n'));
 
-      {
-        // Build a map of worktree group → expected members (owners + daemon)
-        const allWtForPrune = await select(db).from(worktrees).all();
-        const allOwnerRows = await select(db).from(worktreeOwners).all();
+        {
+          // Build a map of worktree group → expected members (owners + daemon)
+          const allWtForPrune = await select(db).from(worktrees).all();
+          const allOwnerRows = await select(db).from(worktreeOwners).all();
 
-        // Map worktree_id → unix_group
-        const wtGroupMap = new Map<string, string>();
-        for (const wt of allWtForPrune) {
-          const raw = wt as { worktree_id: string; unix_group: string | null };
-          if (raw.unix_group) {
-            wtGroupMap.set(raw.worktree_id, raw.unix_group);
-          }
-        }
-
-        // Map unix_group → set of expected user_ids
-        const groupToOwnerIds = new Map<string, Set<string>>();
-        for (const row of allOwnerRows) {
-          const raw = row as { worktree_id: string; user_id: string };
-          const group = wtGroupMap.get(raw.worktree_id);
-          if (group) {
-            const owners = groupToOwnerIds.get(group) || new Set();
-            owners.add(raw.user_id);
-            groupToOwnerIds.set(group, owners);
-          }
-        }
-
-        // Map user_id → unix_username for all users with unix_username
-        const allUsersForPrune = (await select(db).from(users).all()) as UserWithUnix[];
-        const userIdToUnixName = new Map<string, string>();
-        const unixNameToUserId = new Map<string, string>();
-        for (const u of allUsersForPrune) {
-          if (u.unix_username) {
-            userIdToUnixName.set(u.user_id, u.unix_username);
-            unixNameToUserId.set(u.unix_username, u.user_id);
-          }
-        }
-
-        // Iterate ALL worktree groups (including those with zero owners)
-        let pruneChecked = 0;
-        for (const [, group] of wtGroupMap.entries()) {
-          if (!groupExists(group)) continue;
-          pruneChecked++;
-
-          // Get expected unix_usernames for this group (may be empty if no owners)
-          const ownerIds = groupToOwnerIds.get(group) || new Set<string>();
-          const expectedUsernames = new Set<string>();
-          for (const ownerId of ownerIds) {
-            const uname = userIdToUnixName.get(ownerId);
-            if (uname) expectedUsernames.add(uname);
-          }
-          // Daemon user is always expected
-          if (daemonUser) expectedUsernames.add(daemonUser);
-
-          // Get actual members from OS
-          const actualMembers = getGroupMembers(group);
-
-          for (const member of actualMembers) {
-            if (expectedUsernames.has(member)) continue;
-            // Skip the daemon user (safety)
-            if (daemonUser && member === daemonUser) continue;
-            // Only prune DB-managed users (skip manually-added system users)
-            if (!unixNameToUserId.has(member)) continue;
-
-            this.log(chalk.yellow(`   → Removing ${member} from ${group} (no longer owner)`));
-            if (await execCmd(UnixGroupCommands.removeUserFromGroup(member, group))) {
-              membershipsRemoved++;
-              this.log(chalk.green(`   ✓ Removed ${member} from ${group}`));
-            } else {
-              syncErrors++;
-              this.log(chalk.red(`   ✗ Failed to remove ${member} from ${group}`));
+          // Map worktree_id → unix_group
+          const wtGroupMap = new Map<string, string>();
+          for (const wt of allWtForPrune) {
+            const raw = wt as { worktree_id: string; unix_group: string | null };
+            if (raw.unix_group) {
+              wtGroupMap.set(raw.worktree_id, raw.unix_group);
             }
           }
-        }
 
-        if (membershipsRemoved === 0) {
-          this.log(
-            chalk.green(`   ✓ No stale memberships found (checked ${pruneChecked} groups)\n`)
-          );
-        } else {
-          this.log('');
-          this.log(chalk.bold('Membership Pruning Summary:'));
-          this.log(`  Memberships removed: ${membershipsRemoved}${dryRun ? ' (dry-run)' : ''}`);
-          this.log('');
+          // Map unix_group → set of expected user_ids
+          const groupToOwnerIds = new Map<string, Set<string>>();
+          for (const row of allOwnerRows) {
+            const raw = row as { worktree_id: string; user_id: string };
+            const group = wtGroupMap.get(raw.worktree_id);
+            if (group) {
+              const owners = groupToOwnerIds.get(group) || new Set();
+              owners.add(raw.user_id);
+              groupToOwnerIds.set(group, owners);
+            }
+          }
+
+          // Map user_id → unix_username for all users with unix_username
+          const allUsersForPrune = (await select(db).from(users).all()) as UserWithUnix[];
+          const userIdToUnixName = new Map<string, string>();
+          const unixNameToUserId = new Map<string, string>();
+          for (const u of allUsersForPrune) {
+            if (u.unix_username) {
+              userIdToUnixName.set(u.user_id, u.unix_username);
+              unixNameToUserId.set(u.unix_username, u.user_id);
+            }
+          }
+
+          // Iterate ALL worktree groups (including those with zero owners)
+          let pruneChecked = 0;
+          for (const [, group] of wtGroupMap.entries()) {
+            if (!groupExists(group)) continue;
+            pruneChecked++;
+
+            // Get expected unix_usernames for this group (may be empty if no owners)
+            const ownerIds = groupToOwnerIds.get(group) || new Set<string>();
+            const expectedUsernames = new Set<string>();
+            for (const ownerId of ownerIds) {
+              const uname = userIdToUnixName.get(ownerId);
+              if (uname) expectedUsernames.add(uname);
+            }
+            // Daemon user is always expected
+            if (daemonUser) expectedUsernames.add(daemonUser);
+
+            // Get actual members from OS
+            const actualMembers = getGroupMembers(group);
+
+            for (const member of actualMembers) {
+              if (expectedUsernames.has(member)) continue;
+              // Skip the daemon user (safety)
+              if (daemonUser && member === daemonUser) continue;
+              // Only prune DB-managed users (skip manually-added system users)
+              if (!unixNameToUserId.has(member)) continue;
+
+              this.log(chalk.yellow(`   → Removing ${member} from ${group} (no longer owner)`));
+              if (await execCmd(UnixGroupCommands.removeUserFromGroup(member, group))) {
+                membershipsRemoved++;
+                this.log(chalk.green(`   ✓ Removed ${member} from ${group}`));
+              } else {
+                syncErrors++;
+                this.log(chalk.red(`   ✗ Failed to remove ${member} from ${group}`));
+              }
+            }
+          }
+
+          if (membershipsRemoved === 0) {
+            this.log(
+              chalk.green(`   ✓ No stale memberships found (checked ${pruneChecked} groups)\n`)
+            );
+          } else {
+            this.log('');
+            this.log(chalk.bold('Membership Pruning Summary:'));
+            this.log(`  Memberships removed: ${membershipsRemoved}${dryRun ? ' (dry-run)' : ''}`);
+            this.log('');
+          }
         }
-      }
       } // end if (!targetWorktreeId) for membership pruning
 
       // ========================================
