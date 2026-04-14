@@ -80,9 +80,12 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
         model_config: config.modelConfig
           ? {
               ...config.modelConfig,
+              ...(config.effort && { effort: config.effort }),
               updated_at: new Date().toISOString(),
             }
-          : undefined,
+          : config.effort
+            ? { effort: config.effort, updated_at: new Date().toISOString() }
+            : undefined,
         permission_config: permissionConfig,
       } as Partial<Session>);
 

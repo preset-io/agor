@@ -3,6 +3,7 @@ import type {
   AgorClient,
   CodexApprovalPolicy,
   CodexSandboxMode,
+  EffortLevel,
   MCPServer,
   PermissionMode,
   User,
@@ -28,6 +29,7 @@ export interface NewSessionConfig {
 
   // Advanced configuration
   modelConfig?: ModelConfig;
+  effort?: EffortLevel;
   mcpServerIds?: string[];
   permissionMode?: PermissionMode;
   codexSandboxMode?: CodexSandboxMode;
@@ -89,6 +91,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       title: '',
       initialPrompt: '',
       permissionMode: agentDefaults?.permissionMode || getDefaultPermissionMode('claude-code'),
+      effort: agentDefaults?.modelConfig?.effort,
       mcpServerIds: effectiveMcpServerIds,
       modelConfig: agentDefaults?.modelConfig,
       codexSandboxMode: agentDefaults?.codexSandboxMode || 'workspace-write',
@@ -112,6 +115,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         permissionMode:
           agentDefaults?.permissionMode ||
           getDefaultPermissionMode((selectedAgent as AgenticToolName) || 'claude-code'),
+        effort: agentDefaults?.modelConfig?.effort,
         mcpServerIds: effectiveMcpServerIds,
         modelConfig: agentDefaults?.modelConfig,
         ...(selectedAgent === 'codex'
@@ -151,6 +155,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         initialPrompt: values.initialPrompt,
         // Use form values if present (user expanded advanced), otherwise use defaults
         modelConfig: values.modelConfig ?? agentDefaults?.modelConfig,
+        effort: (values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort,
         mcpServerIds: values.mcpServerIds ?? fallbackMcpServerIds,
         permissionMode:
           (values.permissionMode as PermissionMode | undefined) ??

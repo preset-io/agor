@@ -117,6 +117,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         permissionMode:
           defaults?.['claude-code']?.permissionMode || getDefaultPermissionMode('claude-code'),
         modelConfig: defaults?.['claude-code']?.modelConfig,
+        effort: defaults?.['claude-code']?.modelConfig?.effort,
         mcpServerIds: defaults?.['claude-code']?.mcpServerIds || [],
       });
 
@@ -330,10 +331,17 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
       const values = currentForm.getFieldsValue();
 
+      // Merge effort into modelConfig for persistence
+      const modelConfig = values.modelConfig
+        ? { ...values.modelConfig, effort: values.effort }
+        : values.effort
+          ? { effort: values.effort }
+          : undefined;
+
       const newConfig = {
         ...user.default_agentic_config,
         [tool]: {
-          modelConfig: values.modelConfig,
+          modelConfig,
           permissionMode: values.permissionMode,
           mcpServerIds: values.mcpServerIds,
           ...(tool === 'codex' && {
@@ -371,6 +379,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     currentForm.setFieldsValue({
       modelConfig: undefined,
+      effort: undefined,
       permissionMode: getDefaultPermissionMode(tool),
       mcpServerIds: [],
       ...(tool === 'codex' && {

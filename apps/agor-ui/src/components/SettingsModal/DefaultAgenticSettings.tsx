@@ -56,6 +56,7 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
 
     return {
       modelConfig: toolConfig.modelConfig,
+      effort: toolConfig.modelConfig?.effort,
       permissionMode: toolConfig.permissionMode || getDefaultPermissionMode(tool),
       mcpServerIds: toolConfig.mcpServerIds || [],
       ...(tool === 'codex' && {
@@ -88,10 +89,17 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
       const values = currentForm.getFieldsValue();
 
       // Merge with existing config for other tools
+      // Merge effort into modelConfig for persistence
+      const modelConfig = values.modelConfig
+        ? { ...values.modelConfig, effort: values.effort }
+        : values.effort
+          ? { effort: values.effort }
+          : undefined;
+
       const newConfig: DefaultAgenticConfig = {
         ...defaultConfig,
         [tool]: {
-          modelConfig: values.modelConfig,
+          modelConfig,
           permissionMode: values.permissionMode,
           mcpServerIds: values.mcpServerIds,
           ...(tool === 'codex' && {
@@ -116,6 +124,7 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
     const currentForm = getFormForTool(tool);
     currentForm.setFieldsValue({
       modelConfig: undefined,
+      effort: undefined,
       permissionMode: getDefaultPermissionMode(tool),
       mcpServerIds: [],
       ...(tool === 'codex' && {

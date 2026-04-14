@@ -19,6 +19,7 @@ import { Form, Select } from 'antd';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useServiceReadable } from '../../hooks/useServicesConfig';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
+import { EffortSelector } from '../EffortSelector';
 import { MCPServerSelect } from '../MCPServerSelect';
 import { ModelSelector } from '../ModelSelector';
 import {
@@ -81,6 +82,20 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
       >
         <PermissionModeSelector agentic_tool={agenticTool} compact={compact} />
       </Form.Item>
+
+      {agenticTool === 'claude-code' && (
+        <Form.Item
+          name="effort"
+          label="Reasoning Effort"
+          help={
+            showHelpText
+              ? 'Control how much reasoning Claude applies (low = fast, high = thorough, max = Opus only)'
+              : undefined
+          }
+        >
+          <EffortSelector />
+        </Form.Item>
+      )}
 
       {showCodexFields && (
         <Form.Item
