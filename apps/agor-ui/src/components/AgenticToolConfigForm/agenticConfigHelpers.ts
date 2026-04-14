@@ -9,7 +9,12 @@
  * Used by DefaultAgenticSettings, UserSettingsModal, and NewSessionModal.
  */
 
-import type { AgenticToolName, DefaultAgenticToolConfig } from '@agor-live/client';
+import type {
+  AgenticToolName,
+  DefaultAgenticToolConfig,
+  DefaultModelConfig,
+  EffortLevel,
+} from '@agor-live/client';
 import { getDefaultPermissionMode } from '@agor-live/client';
 
 /**
@@ -20,8 +25,8 @@ import { getDefaultPermissionMode } from '@agor-live/client';
  * of the ModelSelector.
  */
 export interface AgenticFormValues {
-  modelConfig?: { mode?: string; model?: string; provider?: string };
-  effort?: string;
+  modelConfig?: DefaultModelConfig;
+  effort?: EffortLevel;
   permissionMode?: string;
   mcpServerIds?: string[];
   codexSandboxMode?: string;
