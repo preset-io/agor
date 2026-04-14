@@ -730,14 +730,18 @@ export async function getGitState(repoPath: string): Promise<string> {
  */
 export async function deleteRepoDirectory(repoPath: string): Promise<void> {
   const { rm } = await import('node:fs/promises');
+  const { realpathSync, existsSync } = await import('node:fs');
   const { resolve, relative } = await import('node:path');
 
   // Safety check: ensure we're only deleting from ~/.agor/repos/
   const reposDir = getReposDir();
 
-  // Resolve both paths to eliminate symlinks, '..' segments, etc.
-  const resolvedRepoPath = resolve(repoPath);
-  const resolvedReposDir = resolve(reposDir);
+  // Use realpathSync to follow symlinks and canonicalize paths.
+  // If the directory was already removed, fall back to resolving via parent.
+  const resolvedReposDir = realpathSync(reposDir);
+  const resolvedRepoPath = existsSync(repoPath)
+    ? realpathSync(repoPath)
+    : resolve(realpathSync(resolve(repoPath, '..')), resolve(repoPath).split('/').pop()!);
 
   // Get relative path from reposDir to repoPath
   const relativePath = relative(resolvedReposDir, resolvedRepoPath);
@@ -767,14 +771,19 @@ export async function deleteRepoDirectory(repoPath: string): Promise<void> {
  */
 export async function deleteWorktreeDirectory(worktreePath: string): Promise<void> {
   const { rm } = await import('node:fs/promises');
+  const { realpathSync, existsSync } = await import('node:fs');
   const { resolve, relative } = await import('node:path');
 
   // Safety check: ensure we're only deleting from configured worktrees directory
   const worktreesDir = getWorktreesDir();
 
-  // Resolve both paths to eliminate symlinks, '..' segments, etc.
-  const resolvedWorktreePath = resolve(worktreePath);
-  const resolvedWorktreesDir = resolve(worktreesDir);
+  // Use realpathSync to follow symlinks and canonicalize paths.
+  // If the worktree directory was already removed (e.g. by `git worktree remove`),
+  // fall back to resolve() — the safety check still works since the base dir exists.
+  const resolvedWorktreesDir = realpathSync(worktreesDir);
+  const resolvedWorktreePath = existsSync(worktreePath)
+    ? realpathSync(worktreePath)
+    : resolve(realpathSync(resolve(worktreePath, '..')), resolve(worktreePath).split('/').pop()!);
 
   // Get relative path from worktreesDir to worktreePath
   const relativePath = relative(resolvedWorktreesDir, resolvedWorktreePath);
