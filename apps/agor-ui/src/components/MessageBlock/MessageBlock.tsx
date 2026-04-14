@@ -37,6 +37,7 @@ import { PermissionRequestBlock } from '../PermissionRequestBlock';
 import { ThinkingBlock } from '../ThinkingBlock';
 import {
   ALWAYS_EXPANDED_TOOLS,
+  buildBashDescriptionNode,
   deriveToolStatus,
   IMPLICIT_RESULT_TOOLS,
   renderToolStatusIcon,
@@ -673,12 +674,18 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
               });
               const icon = renderToolStatusIcon(status);
 
+              const bashNode =
+                toolUse.name === 'Bash'
+                  ? buildBashDescriptionNode(toolUse.input, token)
+                  : undefined;
+
               return (
                 <ToolBlock
                   key={toolUse.id}
                   icon={icon}
                   name={displayName}
-                  description={getToolDescription(toolUse)}
+                  description={bashNode ? undefined : getToolDescription(toolUse)}
+                  descriptionNode={bashNode}
                   status={status}
                   expandedByDefault={isAlwaysExpanded}
                 >

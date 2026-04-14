@@ -44,6 +44,7 @@ import { CollapsibleText } from '../CollapsibleText';
 import { Tag } from '../Tag';
 import {
   ALWAYS_EXPANDED_TOOLS,
+  buildBashDescriptionNode,
   deriveToolStatus,
   IMPLICIT_RESULT_TOOLS,
   renderToolStatusIcon,
@@ -467,41 +468,12 @@ export const AgentChain = React.memo<AgentChainProps>(
       let description = getToolDescription(toolUse);
       let descriptionNode: React.ReactNode | undefined;
 
-      if (toolUse.name === 'Bash' && toolUse.input.command) {
-        const bashDesc = toolUse.input.description ? String(toolUse.input.description) : null;
-        const cmd = String(toolUse.input.command);
-        const maxCmdLen = 70;
-        const truncatedCmd = cmd.length > maxCmdLen ? cmd.slice(0, maxCmdLen) + '…' : cmd;
-        descriptionNode = (
-          <span
-            style={{
-              display: 'inline-flex',
-              alignItems: 'baseline',
-              gap: 4,
-              minWidth: 0,
-              overflow: 'hidden',
-            }}
-          >
-            {bashDesc && (
-              <Typography.Text
-                type="secondary"
-                ellipsis
-                style={{
-                  fontSize: token.fontSizeSM,
-                  fontWeight: 'normal',
-                  flexShrink: 1,
-                  minWidth: 0,
-                }}
-              >
-                {bashDesc}
-              </Typography.Text>
-            )}
-            <Typography.Text code ellipsis style={{ fontSize: token.fontSizeSM - 1 }}>
-              {truncatedCmd}
-            </Typography.Text>
-          </span>
-        );
-        description = null;
+      if (toolUse.name === 'Bash') {
+        const bashNode = buildBashDescriptionNode(toolUse.input, token);
+        if (bashNode) {
+          descriptionNode = bashNode;
+          description = null;
+        }
       } else if ((toolUse.name === 'Grep' || toolUse.name === 'Glob') && toolUse.input.pattern) {
         descriptionNode = (
           <Typography.Text code style={{ fontSize: token.fontSizeSM - 1 }}>

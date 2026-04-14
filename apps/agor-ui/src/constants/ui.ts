@@ -32,6 +32,11 @@ export const TEXT_TRUNCATION = {
    * Character limit for preview text in collapsed states
    */
   PREVIEW_CHARS: 150,
+
+  /**
+   * Character limit for Bash command preview in collapsed tool headers
+   */
+  BASH_COMMAND_PREVIEW_CHARS: 70,
 } as const;
 
 /**
