@@ -469,17 +469,26 @@ export const AgentChain = React.memo<AgentChainProps>(
 
       if (toolUse.name === 'Bash' && toolUse.input.command) {
         const bashDesc = toolUse.input.description ? String(toolUse.input.description) : null;
-        if (bashDesc) {
-          description = bashDesc;
-        } else {
-          const cmd = String(toolUse.input.command);
-          descriptionNode = (
+        const cmd = String(toolUse.input.command);
+        const maxCmdLen = 70;
+        const truncatedCmd = cmd.length > maxCmdLen ? cmd.slice(0, maxCmdLen) + '…' : cmd;
+        descriptionNode = (
+          <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4, minWidth: 0, overflow: 'hidden' }}>
+            {bashDesc && (
+              <Typography.Text
+                type="secondary"
+                ellipsis
+                style={{ fontSize: token.fontSizeSM, fontWeight: 'normal', flexShrink: 1, minWidth: 0 }}
+              >
+                {bashDesc}
+              </Typography.Text>
+            )}
             <Typography.Text code ellipsis style={{ fontSize: token.fontSizeSM - 1 }}>
-              {cmd}
+              {truncatedCmd}
             </Typography.Text>
-          );
-          description = null;
-        }
+          </span>
+        );
+        description = null;
       } else if ((toolUse.name === 'Grep' || toolUse.name === 'Glob') && toolUse.input.pattern) {
         descriptionNode = (
           <Typography.Text code style={{ fontSize: token.fontSizeSM - 1 }}>
