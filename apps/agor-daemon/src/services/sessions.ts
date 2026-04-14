@@ -189,6 +189,8 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
           children: [],
         },
         contextFiles: [...(parent.contextFiles || [])],
+        permission_config: parent.permission_config,
+        model_config: parent.model_config,
         tasks: [],
         // Don't copy sdk_session_id - fork will get its own via forkSession:true
       },
