@@ -296,7 +296,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         unique_id: worktree.worktree_unique_id,
         name: worktree.name,
         path: worktree.path,
-        gid: (worktree as { data?: { unix_gid?: number } }).data?.unix_gid,
+        // GID is resolved dynamically at execution time by the executor,
+        // not available in the browser for template preview
+        gid: undefined,
       },
       repo: {
         slug: repo.slug,

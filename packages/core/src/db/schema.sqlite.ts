@@ -517,7 +517,8 @@ export const worktrees = sqliteTable(
         mcp_server_ids?: string[];
 
         // Unix integration
-        unix_gid?: number; // GID of worktree's unix_group (best effort capture)
+        // Note: unix_gid was previously stored here but is now resolved dynamically
+        // via getGidFromGroupName(unix_group) at execution time. See id-lookups.ts.
 
         // Schedule configuration (full config in JSON blob)
         schedule?: {

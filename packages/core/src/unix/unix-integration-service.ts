@@ -13,11 +13,8 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import { eq } from 'drizzle-orm';
-import { update } from '../db/database-wrapper.js';
 import type { Database } from '../db/index.js';
 import { RepoRepository, UsersRepository, WorktreeRepository } from '../db/repositories/index.js';
-import * as schema from '../db/schema.sqlite.js';
 import type { RepoID, UserID, UUID, WorktreeID } from '../types/index.js';
 import type { CommandExecutor } from './command-executor.js';
 import { NoOpExecutor } from './command-executor.js';
@@ -29,7 +26,6 @@ import {
   REPO_GIT_PERMISSION_MODE,
   UnixGroupCommands,
 } from './group-manager.js';
-import { getGidFromGroupName } from './id-lookups.js';
 import { getWorktreeSymlinkPath, SymlinkCommands } from './symlink-manager.js';
 import {
   AGOR_DEFAULT_SHELL,
@@ -98,7 +94,6 @@ export interface UnixOperationResult {
 export class UnixIntegrationService {
   private config: Required<Omit<UnixIntegrationConfig, 'daemonUser'>> & { daemonUser?: string };
   private executor: CommandExecutor;
-  private db: Database;
   private worktreeRepo: WorktreeRepository;
   private usersRepo: UsersRepository;
   private repoRepo: RepoRepository;
@@ -108,7 +103,6 @@ export class UnixIntegrationService {
     executor: CommandExecutor,
     config: UnixIntegrationConfig = { enabled: false }
   ) {
-    this.db = db;
     // daemonUser should be resolved by the caller via getAgorDaemonUser()
     // If not provided, daemon user operations will be skipped
     this.config = {
@@ -231,9 +225,6 @@ export class UnixIntegrationService {
       await this.executor.exec(UnixGroupCommands.createGroup(groupName));
     }
 
-    // Lookup GID for the group (best effort, don't fail if can't get it)
-    const unixGid = getGidFromGroupName(groupName);
-
     // Fetch current worktree to get existing data and path
     const worktree = await this.worktreeRepo.findById(worktreeId);
 
@@ -241,18 +232,6 @@ export class UnixIntegrationService {
     await this.worktreeRepo.update(worktreeId, {
       unix_group: groupName,
     });
-
-    // Update data blob separately (direct SQL update since data is JSON)
-    if (unixGid !== undefined && worktree) {
-      const updatedData = {
-        ...((worktree as { data?: Record<string, unknown> }).data ?? {}),
-        unix_gid: unixGid,
-      };
-
-      await update(this.db, schema.worktrees)
-        .set({ data: updatedData })
-        .where(eq(schema.worktrees.worktree_id, worktreeId));
-    }
 
     // Apply group ownership and permissions to worktree directory
     if (worktree?.path) {

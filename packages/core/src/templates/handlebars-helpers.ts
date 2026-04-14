@@ -223,7 +223,7 @@ export function renderTemplate(templateString: string, context: Record<string, u
  * - {{worktree.unique_id}} - Auto-assigned unique number (1, 2, 3, ...)
  * - {{worktree.name}} - Worktree name (slug format)
  * - {{worktree.path}} - Absolute path to worktree directory
- * - {{worktree.gid}} - Unix GID of worktree's unix_group (if captured)
+ * - {{worktree.gid}} - Unix GID of worktree's unix_group (resolved dynamically at execution time)
  * - {{repo.slug}} - Repository slug
  * - {{custom.*}} - Any custom context from worktree.custom_context
  */
