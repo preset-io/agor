@@ -15,12 +15,17 @@ function createServiceHarness() {
     patch: vi.fn(async () => ({})),
   };
 
+  const reposService = {
+    get: vi.fn(async () => ({ repo_id: 'repo-1', local_path: '/tmp/repo', unix_group: null })),
+  };
+
   const app = {
     service(path: string) {
       if (path === 'board-objects') return boardObjectsService;
       if (path === 'sessions') return sessionsService;
       if (path === 'boards') return { get: vi.fn(async () => ({ objects: {} })) };
       if (path === 'worktrees') return { find: vi.fn(async () => []) };
+      if (path === 'repos') return reposService;
       throw new Error(`Unknown service: ${path}`);
     },
   } as unknown as Application;
@@ -38,12 +43,14 @@ describe('WorktreesService.unarchive', () => {
     vi.spyOn(service, 'get').mockResolvedValue({
       worktree_id: worktreeId,
       name: 'WT 1',
+      path: '/tmp',
       archived: true,
       board_id: existingBoardId,
     } as never);
     const patchSpy = vi.spyOn(service, 'patch').mockResolvedValue({
       worktree_id: worktreeId,
       name: 'WT 1',
+      path: '/tmp',
       archived: false,
       board_id: existingBoardId,
     } as never);
@@ -85,12 +92,14 @@ describe('WorktreesService.unarchive', () => {
     vi.spyOn(service, 'get').mockResolvedValue({
       worktree_id: worktreeId,
       name: 'WT 2',
+      path: '/tmp',
       archived: true,
       board_id: boardId,
     } as never);
     vi.spyOn(service, 'patch').mockResolvedValue({
       worktree_id: worktreeId,
       name: 'WT 2',
+      path: '/tmp',
       archived: false,
       board_id: boardId,
     } as never);
@@ -111,12 +120,14 @@ describe('WorktreesService.unarchive', () => {
     vi.spyOn(service, 'get').mockResolvedValue({
       worktree_id: worktreeId,
       name: 'WT 3',
+      path: '/tmp',
       archived: true,
       board_id: oldBoardId,
     } as never);
     const patchSpy = vi.spyOn(service, 'patch').mockResolvedValue({
       worktree_id: worktreeId,
       name: 'WT 3',
+      path: '/tmp',
       archived: false,
       board_id: newBoardId,
     } as never);
