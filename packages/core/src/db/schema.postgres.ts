@@ -18,6 +18,7 @@ import { relations, sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
+  customType,
   index,
   integer,
   jsonb,
@@ -28,6 +29,13 @@ import {
   uniqueIndex,
   varchar,
 } from 'drizzle-orm/pg-core';
+
+// PostgreSQL bytea column mapped to Node.js Buffer
+const bytea = customType<{ data: Buffer | null; driverData: Buffer | null }>({
+  dataType() {
+    return 'bytea';
+  },
+});
 
 // PostgreSQL-specific type helpers (inline to avoid factory pattern type issues)
 const t = {
@@ -214,6 +222,9 @@ export const tasks = pgTable(
     // User attribution
     created_by: varchar('created_by', { length: 36 }).notNull().default('anonymous'),
 
+    // MD5 of SDK session file at task completion (only populated when stateless_fs_mode is enabled)
+    session_md5: text('session_md5'),
+
     data: t
       .json<unknown>('data')
       .$type<{
@@ -248,6 +259,35 @@ export const tasks = pgTable(
     sessionIdx: index('tasks_session_idx').on(table.session_id),
     statusIdx: index('tasks_status_idx').on(table.status),
     createdIdx: index('tasks_created_idx').on(table.created_at),
+  })
+);
+
+/**
+ * Serialized Sessions table - SDK session file snapshots for stateless_fs_mode
+ */
+export const serializedSessions = pgTable(
+  'serialized_sessions',
+  {
+    id: varchar('id', { length: 36 }).primaryKey(),
+    session_id: varchar('session_id', { length: 36 })
+      .notNull()
+      .references(() => sessions.session_id, { onDelete: 'cascade' }),
+    worktree_id: varchar('worktree_id', { length: 36 })
+      .notNull()
+      .references(() => worktrees.worktree_id, { onDelete: 'cascade' }),
+    task_id: varchar('task_id', { length: 36 }).references(() => tasks.task_id),
+    turn_index: integer('turn_index').notNull().default(0),
+    created_at: t.timestamp('created_at').notNull(),
+    md5: text('md5').notNull(),
+    status: text('status').notNull(), // 'processing' | 'done' — validated at app layer
+    payload: bytea('payload'), // gzipped; NULL while status='processing'
+  },
+  (table) => ({
+    sessionTurnIdx: index('serialized_sessions_session_turn_idx').on(
+      table.session_id,
+      table.turn_index
+    ),
+    worktreeIdx: index('serialized_sessions_worktree_idx').on(table.worktree_id),
   })
 );
 
@@ -1246,6 +1286,8 @@ export type GatewayChannelRow = typeof gatewayChannels.$inferSelect;
 export type GatewayChannelInsert = typeof gatewayChannels.$inferInsert;
 export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
+export type SerializedSessionRow = typeof serializedSessions.$inferSelect;
+export type SerializedSessionInsert = typeof serializedSessions.$inferInsert;
 
 /**
  * Drizzle Relations for Relational Queries

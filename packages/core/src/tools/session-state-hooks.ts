@@ -1,0 +1,158 @@
+/**
+ * Session State Hooks
+ *
+ * Pre/post turn hooks for stateless_fs_mode.
+ * pullIfNeeded: restores session file from DB before SDK subprocess starts.
+ * pushAsync: serializes session file to DB after SDK subprocess exits.
+ */
+
+import type { AgenticToolName } from '@agor/core/types';
+import type { Database } from '../db/client';
+import { SerializedSessionRepository } from '../db/repositories/serialized-sessions';
+import { computeFileHash, getSessionFilePath, restoreFile, serializeFile } from './session-state';
+
+const STALE_PROCESSING_THRESHOLD_MS = 30_000; // 30 seconds
+
+interface PullContext {
+  db: Database;
+  sessionId: string;
+  worktreeId: string;
+  sdkSessionId: string;
+  worktreePath: string;
+  tool: AgenticToolName;
+}
+
+interface PushContext {
+  db: Database;
+  sessionId: string;
+  worktreeId: string;
+  taskId: string;
+  sdkSessionId: string;
+  worktreePath: string;
+  tool: AgenticToolName;
+  lastKnownMd5?: string;
+}
+
+/**
+ * Pull: run before spawning the SDK subprocess.
+ * Checks whether the local session file is current. Restores from DB if not.
+ *
+ * Decision table (in order):
+ * 1. No serialized_sessions row → fresh session, proceed
+ * 2. Latest row is 'processing' and created_at < (now - 30s) → stale, delete it,
+ *    fall through to check previous 'done' row
+ * 3. Latest row is 'done', md5 matches local file → fast path, proceed
+ * 4. Latest row is 'done', md5 differs → restore from DB (DB wins)
+ * 5. No 'done' row, no local file → fresh session, proceed
+ */
+export async function pullIfNeeded(ctx: PullContext): Promise<void> {
+  const repo = new SerializedSessionRepository(ctx.db);
+  const filePath = getSessionFilePath(ctx.tool, ctx.worktreePath, ctx.sdkSessionId);
+
+  // Check latest row (any status)
+  let latest = await repo.findLatest(ctx.sessionId);
+
+  if (!latest) {
+    // Case 1: No rows at all → fresh session
+    return;
+  }
+
+  // Case 2: Stale 'processing' row
+  if (latest.status === 'processing') {
+    const age = Date.now() - latest.created_at;
+    if (age > STALE_PROCESSING_THRESHOLD_MS) {
+      console.log(
+        `[session-state] Cleaning stale 'processing' row ${latest.id.substring(0, 8)} (age: ${Math.round(age / 1000)}s)`
+      );
+      await repo.deletePrevious(ctx.sessionId, ''); // delete all rows (excludeId won't match)
+      // Fall through: check if there's a 'done' row behind it
+      latest = await repo.findLatestDone(ctx.sessionId);
+      if (!latest) {
+        // Case 5: No done row after cleanup
+        return;
+      }
+    } else {
+      // Still processing, not stale — another pod is active. Let it finish.
+      console.warn(
+        `[session-state] Latest row is 'processing' (age: ${Math.round(age / 1000)}s), proceeding without restore`
+      );
+      return;
+    }
+  }
+
+  // At this point, latest.status === 'done'
+  const localMd5 = await computeFileHash(filePath);
+
+  // Case 3: MD5 matches → fast path
+  if (latest.md5 === localMd5) {
+    return;
+  }
+
+  // Case 4: MD5 differs → restore from DB
+  if (!latest.payload) {
+    console.warn(
+      `[session-state] 'done' row ${latest.id.substring(0, 8)} has no payload, skipping restore`
+    );
+    return;
+  }
+
+  console.log(
+    `[session-state] Restoring session file from DB (row ${latest.id.substring(0, 8)}, turn ${latest.turn_index})`
+  );
+  await restoreFile(filePath, latest.payload);
+}
+
+/**
+ * Push: run after SDK subprocess exits. Fire-and-forget (never awaited by caller).
+ * Skips if file hash unchanged. Otherwise: insertProcessing → gzip → markDone → deletePrevious.
+ */
+export function pushAsync(ctx: PushContext): void {
+  // Fire and forget — errors are logged but never propagated
+  void doPush(ctx).catch((err) => {
+    console.error('[session-state] pushAsync failed:', err instanceof Error ? err.message : err);
+  });
+}
+
+async function doPush(ctx: PushContext): Promise<void> {
+  const repo = new SerializedSessionRepository(ctx.db);
+  const filePath = getSessionFilePath(ctx.tool, ctx.worktreePath, ctx.sdkSessionId);
+
+  // Compute current hash
+  const currentMd5 = await computeFileHash(filePath);
+
+  // Skip if file doesn't exist
+  if (currentMd5 === '') {
+    return;
+  }
+
+  // Skip if hash unchanged
+  if (ctx.lastKnownMd5 && currentMd5 === ctx.lastKnownMd5) {
+    return;
+  }
+
+  // Determine turn_index
+  const latestRow = await repo.findLatest(ctx.sessionId);
+  const turnIndex = latestRow ? latestRow.turn_index + 1 : 0;
+
+  // Insert processing row (fast — no payload yet)
+  const row = await repo.insertProcessing({
+    sessionId: ctx.sessionId,
+    worktreeId: ctx.worktreeId,
+    taskId: ctx.taskId,
+    turnIndex,
+    md5: currentMd5,
+  });
+
+  // Gzip the file
+  const payload = await serializeFile(filePath);
+
+  // Mark done with payload
+  await repo.markDone(row.id, payload);
+
+  // Clean up old rows
+  await repo.deletePrevious(ctx.sessionId, row.id);
+
+  console.log(
+    `[session-state] Pushed session state (turn ${turnIndex}, ${payload.length} bytes gzipped)`
+  );
+}

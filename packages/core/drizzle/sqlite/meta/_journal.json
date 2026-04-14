@@ -232,6 +232,13 @@
       "when": 1775876000000,
       "tag": "0034_add_session_to_others_can_check",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1776000000000,
+      "tag": "0035_add_serialized_sessions",
+      "breakpoints": true
     }
   ]
 }

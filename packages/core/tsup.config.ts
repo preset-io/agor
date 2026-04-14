@@ -33,6 +33,8 @@ export default defineConfig({
     'models/gemini-shared': 'src/models/gemini-shared.ts', // Shared Gemini metadata/constants
     'models/index': 'src/models/index.ts', // Model metadata (browser-safe)
     'sdk/index': 'src/sdk/index.ts', // AI SDK re-exports (Claude, Codex, Gemini, OpenCode)
+    'tools/session-state': 'src/tools/session-state.ts', // Session state serialization for stateless_fs_mode
+    'tools/session-state-hooks': 'src/tools/session-state-hooks.ts', // Pre/post turn hooks for stateless_fs_mode
     'tools/mcp/jwt-auth': 'src/tools/mcp/jwt-auth.ts', // MCP JWT authentication utilities
     'tools/mcp/oauth-auth': 'src/tools/mcp/oauth-auth.ts', // MCP OAuth 2.0 authentication utilities
     'tools/mcp/oauth-mcp-transport': 'src/tools/mcp/oauth-mcp-transport.ts', // MCP OAuth 2.1 protocol transport

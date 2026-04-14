@@ -36,6 +36,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       created_at: new Date(row.created_at).toISOString(),
       completed_at: row.completed_at ? new Date(row.completed_at).toISOString() : undefined,
       created_by: row.created_by,
+      session_md5: row.session_md5 ?? undefined,
       ...row.data,
     };
   }
@@ -64,6 +65,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       completed_at: task.completed_at ? new Date(task.completed_at) : undefined,
       status: task.status ?? TaskStatus.CREATED,
       created_by: task.created_by ?? 'anonymous',
+      session_md5: task.session_md5 ?? null,
       data: {
         description: task.description ?? '',
         full_prompt: task.full_prompt ?? task.description ?? '',
@@ -327,6 +329,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           .set({
             status: insertData.status,
             completed_at: insertData.completed_at,
+            session_md5: insertData.session_md5,
             data: insertData.data,
           })
           .where(eq(tasks.task_id, fullId))

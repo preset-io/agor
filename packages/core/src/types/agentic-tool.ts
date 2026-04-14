@@ -145,6 +145,8 @@ export interface AgenticToolCapabilities {
   supportsChildSpawn: boolean;
   /** Can import historical sessions from tool's storage */
   supportsSessionImport: boolean;
+  /** Supports stateless filesystem mode (session state serialized to DB) */
+  supportsStatelessFsMode: boolean;
 }
 
 /**
@@ -156,25 +158,30 @@ export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapab
     supportsSessionFork: true,
     supportsChildSpawn: true,
     supportsSessionImport: true,
+    supportsStatelessFsMode: true,
   },
   codex: {
     supportsSessionFork: false,
     supportsChildSpawn: true,
     supportsSessionImport: false,
+    supportsStatelessFsMode: true,
   },
   gemini: {
     supportsSessionFork: false,
     supportsChildSpawn: true,
     supportsSessionImport: false,
+    supportsStatelessFsMode: false,
   },
   opencode: {
     supportsSessionFork: false,
     supportsChildSpawn: true,
     supportsSessionImport: false,
+    supportsStatelessFsMode: false,
   },
   copilot: {
     supportsSessionFork: false,
     supportsChildSpawn: true,
     supportsSessionImport: false,
+    supportsStatelessFsMode: false,
   },
 };

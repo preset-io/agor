@@ -117,6 +117,9 @@ export interface Task {
     approved_at?: string;
   };
 
+  /** MD5 of the SDK session file at task completion (only populated when stateless_fs_mode is enabled) */
+  session_md5?: string;
+
   created_at: string;
   started_at?: string; // When task status changed to RUNNING (UTC ISO string)
   completed_at?: string; // When task reached terminal status (UTC ISO string)

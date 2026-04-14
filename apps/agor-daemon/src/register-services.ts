@@ -18,8 +18,10 @@ import {
   WorktreeRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
+import { computeFileHash, getSessionFilePath } from '@agor/core/tools/session-state';
+import { pullIfNeeded, pushAsync } from '@agor/core/tools/session-state-hooks';
 import type { AuthenticatedParams, HookContext, MessageSource, UserID } from '@agor/core/types';
-import { SessionStatus, TaskStatus } from '@agor/core/types';
+import { AGENTIC_TOOL_CAPABILITIES, SessionStatus, TaskStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import type express from 'express';
 import type {
@@ -449,6 +451,18 @@ function createExecuteHandler(
       throw new Error(`Session ${sessionId} not found`);
     }
 
+    // Validate stateless_fs_mode compatibility with agentic tool
+    if (config.execution?.stateless_fs_mode) {
+      const toolName = session.agentic_tool as import('@agor/core/types').AgenticToolName;
+      const capabilities = AGENTIC_TOOL_CAPABILITIES[toolName];
+      if (capabilities && !capabilities.supportsStatelessFsMode) {
+        throw new Error(
+          `stateless_fs_mode is enabled but tool '${toolName}' does not support it. ` +
+            `Supported tools: claude-code, codex`
+        );
+      }
+    }
+
     // Generate session token for executor authentication
     const appWithExecutor = app as unknown as {
       sessionTokenService?: import('./services/session-token-service.js').SessionTokenService;
@@ -644,6 +658,26 @@ function createExecuteHandler(
       console.log(`[Daemon] Spawning executor as current user (no impersonation)`);
     }
 
+    // Stateless FS mode: restore session file from DB before executor starts
+    if (config.execution?.stateless_fs_mode && session.sdk_session_id) {
+      try {
+        await pullIfNeeded({
+          db,
+          sessionId,
+          worktreeId: session.worktree_id,
+          sdkSessionId: session.sdk_session_id,
+          worktreePath: cwd,
+          tool: session.agentic_tool,
+        });
+      } catch (err) {
+        console.error(
+          '[stateless-fs] pullIfNeeded failed:',
+          err instanceof Error ? err.message : err
+        );
+        // Don't block the executor — proceed with potentially stale/missing session file
+      }
+    }
+
     const executorProcess = spawn(cmd, args, {
       cwd,
       env: executorUnixUser ? undefined : executorEnv,
@@ -726,6 +760,48 @@ function createExecuteHandler(
         }
       } catch (error) {
         console.error(`❌ [Executor] Failed to handle executor exit:`, error);
+      }
+
+      // Stateless FS mode: serialize session file to DB after executor exits
+      if (config.execution?.stateless_fs_mode) {
+        try {
+          // Re-fetch session to get sdk_session_id (may have been set during execution)
+          const freshSession = await app.service('sessions').get(sessionId, params);
+          if (freshSession.sdk_session_id) {
+            pushAsync({
+              db,
+              sessionId,
+              worktreeId: freshSession.worktree_id,
+              taskId,
+              sdkSessionId: freshSession.sdk_session_id,
+              worktreePath: cwd,
+              tool: freshSession.agentic_tool,
+            });
+
+            // Also compute and write session_md5 to the task record
+            try {
+              const filePath = getSessionFilePath(
+                freshSession.agentic_tool,
+                cwd,
+                freshSession.sdk_session_id
+              );
+              const md5 = await computeFileHash(filePath);
+              if (md5) {
+                await app.service('tasks').patch(taskId, { session_md5: md5 }, params);
+              }
+            } catch (md5Err) {
+              console.error(
+                '[stateless-fs] Failed to write session_md5 to task:',
+                md5Err instanceof Error ? md5Err.message : md5Err
+              );
+            }
+          }
+        } catch (pushErr) {
+          console.error(
+            '[stateless-fs] pushAsync setup failed:',
+            pushErr instanceof Error ? pushErr.message : pushErr
+          );
+        }
       }
 
       appWithExecutor.sessionTokenService?.revokeToken(sessionToken);

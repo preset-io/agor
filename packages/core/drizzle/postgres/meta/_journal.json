@@ -169,6 +169,13 @@
       "when": 1775441037758,
       "tag": "0023_tough_magik",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1776000000000,
+      "tag": "0024_add_serialized_sessions",
+      "breakpoints": true
     }
   ]
 }
