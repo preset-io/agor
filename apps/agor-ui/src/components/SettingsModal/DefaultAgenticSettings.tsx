@@ -6,11 +6,15 @@
  */
 
 import type { AgenticToolName, DefaultAgenticConfig, MCPServer } from '@agor-live/client';
-import { getDefaultPermissionMode } from '@agor-live/client';
 import { Button, Form, Space, Tabs, Typography } from 'antd';
 import { useState } from 'react';
 import { useThemedMessage } from '../../utils/message';
-import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
+import {
+  AgenticToolConfigForm,
+  buildConfigFromFormValues,
+  getClearedFormValues,
+  getFormValuesFromConfig,
+} from '../AgenticToolConfigForm';
 
 interface DefaultAgenticSettingsProps {
   /** Current default agentic config */
@@ -44,28 +48,8 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
   });
   const [activeTab, setActiveTab] = useState<AgenticToolName>('claude-code');
 
-  // Initialize form with existing defaults
-  const getInitialValues = (tool: AgenticToolName) => {
-    const toolConfig = defaultConfig?.[tool];
-    if (!toolConfig) {
-      return {
-        permissionMode: getDefaultPermissionMode(tool),
-        mcpServerIds: [],
-      };
-    }
-
-    return {
-      modelConfig: toolConfig.modelConfig,
-      effort: toolConfig.modelConfig?.effort,
-      permissionMode: toolConfig.permissionMode || getDefaultPermissionMode(tool),
-      mcpServerIds: toolConfig.mcpServerIds || [],
-      ...(tool === 'codex' && {
-        codexSandboxMode: toolConfig.codexSandboxMode,
-        codexApprovalPolicy: toolConfig.codexApprovalPolicy,
-        codexNetworkAccess: toolConfig.codexNetworkAccess,
-      }),
-    };
-  };
+  const getInitialValues = (tool: AgenticToolName) =>
+    getFormValuesFromConfig(tool, defaultConfig?.[tool]);
 
   const getFormForTool = (tool: AgenticToolName) => {
     switch (tool) {
@@ -85,29 +69,10 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
   const handleSave = async (tool: AgenticToolName) => {
     setSaving((prev) => ({ ...prev, [tool]: true }));
     try {
-      const currentForm = getFormForTool(tool);
-      const values = currentForm.getFieldsValue();
-
-      // Merge with existing config for other tools
-      // Merge effort into modelConfig for persistence
-      const modelConfig = values.modelConfig
-        ? { ...values.modelConfig, effort: values.effort }
-        : values.effort
-          ? { effort: values.effort }
-          : undefined;
-
+      const values = getFormForTool(tool).getFieldsValue();
       const newConfig: DefaultAgenticConfig = {
         ...defaultConfig,
-        [tool]: {
-          modelConfig,
-          permissionMode: values.permissionMode,
-          mcpServerIds: values.mcpServerIds,
-          ...(tool === 'codex' && {
-            codexSandboxMode: values.codexSandboxMode,
-            codexApprovalPolicy: values.codexApprovalPolicy,
-            codexNetworkAccess: values.codexNetworkAccess,
-          }),
-        },
+        [tool]: buildConfigFromFormValues(tool, values),
       };
 
       await onSave(newConfig);
@@ -121,18 +86,7 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
   };
 
   const handleClear = (tool: AgenticToolName) => {
-    const currentForm = getFormForTool(tool);
-    currentForm.setFieldsValue({
-      modelConfig: undefined,
-      effort: undefined,
-      permissionMode: getDefaultPermissionMode(tool),
-      mcpServerIds: [],
-      ...(tool === 'codex' && {
-        codexSandboxMode: undefined,
-        codexApprovalPolicy: undefined,
-        codexNetworkAccess: undefined,
-      }),
-    });
+    getFormForTool(tool).setFieldsValue(getClearedFormValues(tool));
   };
 
   const tabItems: Array<{

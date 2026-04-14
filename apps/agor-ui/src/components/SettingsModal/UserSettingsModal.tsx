@@ -5,7 +5,7 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { getDefaultPermissionMode, hasMinimumRole, ROLES } from '@agor-live/client';
+import { hasMinimumRole, ROLES } from '@agor-live/client';
 import {
   ApiOutlined,
   CloseOutlined,
@@ -34,7 +34,12 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
-import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
+import {
+  AgenticToolConfigForm,
+  buildConfigFromFormValues,
+  getClearedFormValues,
+  getFormValuesFromConfig,
+} from '../AgenticToolConfigForm';
 import { ApiKeyFields, type ApiKeyStatus } from '../ApiKeyFields';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { EnvVarEditor } from '../EnvVarEditor';
@@ -112,29 +117,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
       // Initialize agentic tool forms with user's defaults
       const defaults = userData.default_agentic_config;
-
-      claudeForm.setFieldsValue({
-        permissionMode:
-          defaults?.['claude-code']?.permissionMode || getDefaultPermissionMode('claude-code'),
-        modelConfig: defaults?.['claude-code']?.modelConfig,
-        effort: defaults?.['claude-code']?.modelConfig?.effort,
-        mcpServerIds: defaults?.['claude-code']?.mcpServerIds || [],
-      });
-
-      codexForm.setFieldsValue({
-        permissionMode: defaults?.codex?.permissionMode || getDefaultPermissionMode('codex'),
-        modelConfig: defaults?.codex?.modelConfig,
-        mcpServerIds: defaults?.codex?.mcpServerIds || [],
-        codexSandboxMode: defaults?.codex?.codexSandboxMode,
-        codexApprovalPolicy: defaults?.codex?.codexApprovalPolicy,
-        codexNetworkAccess: defaults?.codex?.codexNetworkAccess,
-      });
-
-      geminiForm.setFieldsValue({
-        permissionMode: defaults?.gemini?.permissionMode || getDefaultPermissionMode('gemini'),
-        modelConfig: defaults?.gemini?.modelConfig,
-        mcpServerIds: defaults?.gemini?.mcpServerIds || [],
-      });
+      claudeForm.setFieldsValue(getFormValuesFromConfig('claude-code', defaults?.['claude-code']));
+      codexForm.setFieldsValue(getFormValuesFromConfig('codex', defaults?.codex));
+      geminiForm.setFieldsValue(getFormValuesFromConfig('gemini', defaults?.gemini));
 
       // Initialize audio form with user's preferences
       const audioPrefs = userData.preferences?.audio;
@@ -324,32 +309,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       copilot: copilotForm,
     };
 
-    const currentForm = formMap[tool];
-
     try {
       setSavingAgenticConfig((prev) => ({ ...prev, [tool]: true }));
 
-      const values = currentForm.getFieldsValue();
-
-      // Merge effort into modelConfig for persistence
-      const modelConfig = values.modelConfig
-        ? { ...values.modelConfig, effort: values.effort }
-        : values.effort
-          ? { effort: values.effort }
-          : undefined;
-
+      const values = formMap[tool].getFieldsValue();
       const newConfig = {
         ...user.default_agentic_config,
-        [tool]: {
-          modelConfig,
-          permissionMode: values.permissionMode,
-          mcpServerIds: values.mcpServerIds,
-          ...(tool === 'codex' && {
-            codexSandboxMode: values.codexSandboxMode,
-            codexApprovalPolicy: values.codexApprovalPolicy,
-            codexNetworkAccess: values.codexNetworkAccess,
-          }),
-        },
+        [tool]: buildConfigFromFormValues(tool, values),
       };
 
       await onUpdate?.(user.user_id, {
@@ -375,19 +341,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       copilot: copilotForm,
     };
 
-    const currentForm = formMap[tool];
-
-    currentForm.setFieldsValue({
-      modelConfig: undefined,
-      effort: undefined,
-      permissionMode: getDefaultPermissionMode(tool),
-      mcpServerIds: [],
-      ...(tool === 'codex' && {
-        codexSandboxMode: undefined,
-        codexApprovalPolicy: undefined,
-        codexNetworkAccess: undefined,
-      }),
-    });
+    formMap[tool].setFieldsValue(getClearedFormValues(tool));
   };
 
   const handleAudioSave = async () => {
