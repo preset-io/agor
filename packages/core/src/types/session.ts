@@ -1,5 +1,11 @@
 // src/types/session.ts
 
+/**
+ * Effort level controls how much reasoning Claude applies.
+ * Maps to Claude API's output_config.effort and the Claude Code CLI's --effort flag.
+ */
+export type EffortLevel = 'low' | 'medium' | 'high' | 'max';
+
 import type {
   AgenticToolName,
   ClaudeCodePermissionMode,
@@ -219,15 +225,8 @@ export interface Session {
     updated_at: string;
     /** Optional user notes about why this model was selected */
     notes?: string;
-    /**
-     * Thinking mode controls extended thinking token allocation
-     * - auto: Auto-detect keywords in prompts (matches Claude Code CLI behavior)
-     * - manual: Use explicit token budget set by user
-     * - off: Disable thinking (no token budget)
-     */
-    thinkingMode?: 'auto' | 'manual' | 'off';
-    /** Manual thinking token budget (used when thinkingMode='manual') */
-    manualThinkingTokens?: number;
+    /** Effort level for reasoning depth (default: high) */
+    effort?: EffortLevel;
     /**
      * Provider ID for OpenCode sessions (e.g., 'openai', 'anthropic', 'opencode')
      * Used in combination with model to specify which provider's API to use
@@ -510,8 +509,7 @@ export interface SpawnConfig {
   modelConfig?: {
     mode?: 'alias' | 'exact';
     model?: string;
-    thinkingMode?: 'auto' | 'manual' | 'off';
-    manualThinkingTokens?: number;
+    effort?: EffortLevel;
   };
 
   /** Codex sandbox mode (codex only) */

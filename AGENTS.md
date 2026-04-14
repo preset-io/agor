@@ -439,41 +439,30 @@ The `session` tier is the safe default — it lets collaborators work independen
 
 ---
 
-## Extended Thinking Mode
+## Effort Level (Reasoning Depth)
 
-**New in January 2025**: Agor now supports Claude's extended thinking mode with automatic keyword detection!
+Agor exposes Claude's `effort` parameter to control how much reasoning Claude applies to responses. This maps directly to the Claude API's `output_config.effort` and the Claude Code CLI's `--effort` flag.
 
-### What is Extended Thinking?
+### Levels
 
-Extended thinking allocates additional tokens for Claude to use an internal "scratchpad" to reason through problems before generating responses. Great for complex coding tasks, architecture decisions, and refactoring.
+| Level | Description | Use case |
+|-------|-------------|----------|
+| `low` | Minimal thinking, fastest | Simple tasks, quick lookups |
+| `medium` | Moderate thinking | Balanced speed/quality |
+| `high` | Deep reasoning (default) | Complex coding, reviews |
+| `max` | Maximum effort (Opus 4.6 only) | Critical decisions, architecture |
 
-### Usage
+### Extended Context (1M tokens)
 
-**Auto Mode (Default)** - Automatically detects keywords in your prompts:
-
-- `think` → 4,000 tokens
-- `think hard`, `think deeply` → 10,000 tokens
-- `think harder`, `ultrathink` → 31,999 tokens
-
-```bash
-# Example prompts
-"please think about the best architecture for this feature"
-"think hard about potential edge cases"
-"ultrathink this critical migration strategy"
-```
-
-**Manual Mode** - Set explicit token budget in session settings (0-32k)
-
-**Off Mode** - Disable thinking to save costs
+Models with `[1m]` suffix (e.g., `claude-opus-4-6[1m]`) enable the 1M token context window via the `context-1m-2025-08-07` beta flag. These appear as separate entries in the model dropdown.
 
 ### Implementation
 
-- **Keyword Detection**: `packages/core/src/tools/claude/thinking-detector.ts`
-- **SDK Integration**: `packages/core/src/tools/claude/query-builder.ts`
-- **Message Processing**: `packages/core/src/tools/claude/message-processor.ts`
-- **Design Doc**: `context/explorations/thinking-mode.md`
+- **Model utilities**: `packages/executor/src/sdk-handlers/claude/model-utils.ts`
+- **SDK Integration**: `packages/executor/src/sdk-handlers/claude/query-builder.ts`
+- **UI Control**: `apps/agor-ui/src/components/ThinkingModeSelector/` (EffortSelector)
 
-Thinking blocks appear in messages as separate content blocks and stream in real-time via WebSocket (`thinking:chunk` events).
+Effort is configured per-session via `model_config.effort` and can be changed at any time from the session panel footer.
 
 ---
 

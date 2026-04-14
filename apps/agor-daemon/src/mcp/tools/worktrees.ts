@@ -806,8 +806,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
               mode: userToolDefaults.modelConfig.mode || 'alias',
               model: userToolDefaults.modelConfig.model,
               updated_at: new Date().toISOString(),
-              thinkingMode: userToolDefaults.modelConfig.thinkingMode,
-              manualThinkingTokens: userToolDefaults.modelConfig.manualThinkingTokens,
+              effort: userToolDefaults.modelConfig.effort,
             };
           }
 

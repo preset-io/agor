@@ -1,64 +1,72 @@
 /**
- * ThinkingModeSelector - Compact selector for Claude's extended thinking mode
+ * EffortSelector - Compact selector for Claude's effort level
  *
- * Modes:
- * - Auto: Detects keywords ("think", "think hard", "ultrathink") for token budgets
- * - Manual: Fixed token budget (user-specified)
- * - Off: Disable extended thinking
+ * Effort controls how much reasoning Claude applies to responses.
+ * Maps to the SDK's effort parameter (output_config.effort in the API).
+ *
+ * Levels:
+ * - Low: Minimal thinking, fastest responses
+ * - Medium: Moderate thinking
+ * - High: Deep reasoning (default)
+ * - Max: Maximum effort (Opus 4.6 only)
  */
 
-import { BulbOutlined } from '@ant-design/icons';
+import type { EffortLevel } from '@agor-live/client';
+import { ThunderboltOutlined } from '@ant-design/icons';
 import { Select, Tooltip } from 'antd';
 import type React from 'react';
 
-export type ThinkingMode = 'auto' | 'manual' | 'off';
-
-interface ThinkingModeSelectorProps {
-  value?: ThinkingMode;
-  onChange?: (mode: ThinkingMode) => void;
+interface EffortSelectorProps {
+  value?: EffortLevel;
+  onChange?: (effort: EffortLevel) => void;
   size?: 'small' | 'middle' | 'large';
-  compact?: boolean; // Ultra-compact mode for footer
+  compact?: boolean;
 }
 
 /**
- * ThinkingModeSelector - Dropdown for selecting thinking mode
+ * EffortSelector - Dropdown for selecting Claude reasoning effort level
  */
-export const ThinkingModeSelector: React.FC<ThinkingModeSelectorProps> = ({
-  value = 'auto',
+export const EffortSelector: React.FC<EffortSelectorProps> = ({
+  value = 'high',
   onChange,
   size = 'middle',
   compact = false,
 }) => {
   const options = [
     {
-      value: 'auto' as ThinkingMode,
-      label: compact ? 'Auto' : 'Auto (keyword detection)',
-      description: 'Detects "think", "think hard", "ultrathink" in prompts',
+      value: 'low' as EffortLevel,
+      label: compact ? 'Low' : 'Low effort',
+      description: 'Minimal thinking, fastest responses',
     },
     {
-      value: 'manual' as ThinkingMode,
-      label: compact ? 'Manual' : 'Manual (fixed budget)',
-      description: 'Set fixed thinking token budget',
+      value: 'medium' as EffortLevel,
+      label: compact ? 'Med' : 'Medium effort',
+      description: 'Moderate thinking',
     },
     {
-      value: 'off' as ThinkingMode,
-      label: 'Off',
-      description: 'Disable extended thinking',
+      value: 'high' as EffortLevel,
+      label: compact ? 'High' : 'High effort',
+      description: 'Deep reasoning (default)',
+    },
+    {
+      value: 'max' as EffortLevel,
+      label: compact ? 'Max' : 'Max effort',
+      description: 'Maximum effort (Opus 4.6 only)',
     },
   ];
 
   return (
-    <Tooltip title="Extended thinking mode">
+    <Tooltip title="Reasoning effort level">
       <Select
         value={value}
         onChange={onChange}
         size={size}
-        style={{ width: compact ? 90 : 200 }}
+        style={{ width: compact ? 80 : 160 }}
         options={options.map((opt) => ({
           value: opt.value,
           label: (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              {opt.value !== 'off' && <BulbOutlined style={{ fontSize: 12 }} />}
+              <ThunderboltOutlined style={{ fontSize: 12 }} />
               <span>{opt.label}</span>
             </div>
           ),

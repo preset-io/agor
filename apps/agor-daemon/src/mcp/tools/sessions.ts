@@ -229,7 +229,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         agentic_tool: session.agentic_tool,
         title: session.title,
         model: session.model_config?.model || null,
-        thinking_mode: session.model_config?.thinkingMode || null,
+        effort: session.model_config?.effort || null,
 
         // User (who is authenticated / who is prompting)
         user_name: user.name,
@@ -710,8 +710,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           mode: userToolDefaults.modelConfig.mode || 'alias',
           model: userToolDefaults.modelConfig.model,
           updated_at: new Date().toISOString(),
-          thinkingMode: userToolDefaults.modelConfig.thinkingMode,
-          manualThinkingTokens: userToolDefaults.modelConfig.manualThinkingTokens,
+          effort: userToolDefaults.modelConfig.effort,
         };
       }
 

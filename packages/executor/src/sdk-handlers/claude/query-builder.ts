@@ -30,9 +30,9 @@ import type { PermissionService } from '../../permissions/permission-service.js'
 import type { MCPServersConfig, SessionID, TaskID, UserID } from '../../types.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import type { MessagesService, SessionsService, TasksService } from './claude-tool.js';
+import { parseModelWithBetas } from './model-utils.js';
 import { DEFAULT_CLAUDE_MODEL } from './models.js';
 import { createCanUseToolCallback } from './permissions/permission-hooks.js';
-import { detectThinkingLevel, resolveThinkingBudget } from './thinking-detector.js';
 
 /**
  * Summarize MCP config for logging without exposing sensitive env values.
@@ -182,8 +182,10 @@ export async function setupQuery(
   console.log(`[Query Builder] Final contextUserId: ${contextUserId || 'NOT SET'}`);
 
   // Determine model to use (session config or default)
+  // Models may include [1m] suffix for extended context — strip it for SDK and add beta flag
   const modelConfig = session.model_config;
-  const model = modelConfig?.model || DEFAULT_CLAUDE_MODEL;
+  const rawModel = modelConfig?.model || DEFAULT_CLAUDE_MODEL;
+  const { model, betas } = parseModelWithBetas(rawModel);
 
   // Determine CWD from worktree (if session has one)
   let cwd = process.cwd();
@@ -303,28 +305,20 @@ export async function setupQuery(
     );
   }
 
-  // Configure thinking budget based on mode and prompt keywords
-  // Matches Claude Code CLI behavior: auto-detect keywords or use manual setting
-  const thinkingBudget = resolveThinkingBudget(prompt, {
-    thinkingMode: session.model_config?.thinkingMode,
-    manualThinkingTokens: session.model_config?.manualThinkingTokens,
-  });
-
-  if (thinkingBudget !== null && thinkingBudget > 0) {
-    queryOptions.maxThinkingTokens = thinkingBudget;
-    console.log(`🧠 Thinking budget: ${thinkingBudget.toLocaleString()} tokens`);
-
-    // Log detected keywords in auto mode
-    if (session.model_config?.thinkingMode === 'auto' || !session.model_config?.thinkingMode) {
-      const detected = detectThinkingLevel(prompt);
-      if (detected.level !== 'none') {
-        console.log(
-          `   Auto-detected level: ${detected.level} (phrases: ${detected.detectedPhrases.join(', ')})`
-        );
-      }
-    }
+  // Configure effort level — controls reasoning depth via SDK's effort parameter
+  // Matches Claude Code CLI's --effort flag (low/medium/high/max)
+  const effort = session.model_config?.effort;
+  if (effort) {
+    queryOptions.effort = effort;
+    console.log(`🧠 Effort level: ${effort}`);
   } else {
-    console.log(`🧠 Thinking disabled (mode: ${session.model_config?.thinkingMode || 'auto'})`);
+    console.log(`🧠 Effort level: high (default)`);
+  }
+
+  // Add beta flags (e.g., 1M context window for [1m] model variants)
+  if (betas.length > 0) {
+    queryOptions.betas = betas;
+    console.log(`🔬 Beta flags: ${betas.join(', ')}`);
   }
 
   // Add canUseTool callback if permission service is available and taskId provided

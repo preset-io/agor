@@ -8,6 +8,7 @@
 import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
+  EffortLevel,
   Message,
   PermissionMode,
   Session,
@@ -635,8 +636,7 @@ export const users = sqliteTable(
             modelConfig?: {
               mode?: 'alias' | 'exact';
               model?: string;
-              thinkingMode?: 'auto' | 'manual' | 'off';
-              manualThinkingTokens?: number;
+              effort?: EffortLevel;
             };
             permissionMode?: string;
             mcpServerIds?: string[];
@@ -645,8 +645,7 @@ export const users = sqliteTable(
             modelConfig?: {
               mode?: 'alias' | 'exact';
               model?: string;
-              thinkingMode?: 'auto' | 'manual' | 'off';
-              manualThinkingTokens?: number;
+              effort?: EffortLevel;
             };
             permissionMode?: string;
             mcpServerIds?: string[];
@@ -658,8 +657,7 @@ export const users = sqliteTable(
             modelConfig?: {
               mode?: 'alias' | 'exact';
               model?: string;
-              thinkingMode?: 'auto' | 'manual' | 'off';
-              manualThinkingTokens?: number;
+              effort?: EffortLevel;
             };
             permissionMode?: string;
             mcpServerIds?: string[];
@@ -676,8 +674,7 @@ export const users = sqliteTable(
             modelConfig?: {
               mode?: 'alias' | 'exact';
               model?: string;
-              thinkingMode?: 'auto' | 'manual' | 'off';
-              manualThinkingTokens?: number;
+              effort?: EffortLevel;
             };
             permissionMode?: string;
             mcpServerIds?: string[];

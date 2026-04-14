@@ -282,8 +282,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
                 mode: toolDefaults.modelConfig.mode || 'alias',
                 model: toolDefaults.modelConfig.model || '',
                 updated_at: new Date().toISOString(),
-                thinkingMode: toolDefaults.modelConfig.thinkingMode,
-                manualThinkingTokens: toolDefaults.modelConfig.manualThinkingTokens,
+                effort: toolDefaults.modelConfig.effort,
               };
             }
           }
@@ -320,8 +319,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         mode: data.modelConfig.mode || 'alias',
         model: data.modelConfig.model || '',
         updated_at: new Date().toISOString(),
-        thinkingMode: data.modelConfig.thinkingMode,
-        manualThinkingTokens: data.modelConfig.manualThinkingTokens,
+        effort: data.modelConfig.effort,
       };
     }
 

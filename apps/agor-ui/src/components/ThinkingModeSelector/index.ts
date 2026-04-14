@@ -1,1 +1,2 @@
-export { type ThinkingMode, ThinkingModeSelector } from './ThinkingModeSelector';
+export type { EffortLevel } from '@agor-live/client';
+export { EffortSelector } from './ThinkingModeSelector';

@@ -30,16 +30,34 @@ export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
     description: 'Best combination of speed and intelligence',
   },
   {
+    id: 'claude-sonnet-4-6[1m]',
+    displayName: 'Claude Sonnet 4.6 (1M context)',
+    family: 'claude-4',
+    description: 'Sonnet 4.6 with extended 1M token context window',
+  },
+  {
     id: 'claude-opus-4-6',
     displayName: 'Claude Opus 4.6',
     family: 'claude-4',
     description: 'Most intelligent model for agents and coding',
   },
   {
+    id: 'claude-opus-4-6[1m]',
+    displayName: 'Claude Opus 4.6 (1M context)',
+    family: 'claude-4',
+    description: 'Opus 4.6 with extended 1M token context window',
+  },
+  {
     id: 'claude-sonnet-4-5',
     displayName: 'Claude Sonnet 4.5',
     family: 'claude-4',
     description: 'Fast and capable',
+  },
+  {
+    id: 'claude-sonnet-4-5[1m]',
+    displayName: 'Claude Sonnet 4.5 (1M context)',
+    family: 'claude-4',
+    description: 'Sonnet 4.5 with extended 1M token context window',
   },
   {
     id: 'claude-opus-4-5',

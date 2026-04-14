@@ -1,6 +1,6 @@
 import type { CodexApprovalPolicy, CodexNetworkAccess, CodexSandboxMode } from './agentic-tool';
 import type { UserID } from './id';
-import type { PermissionMode } from './session';
+import type { EffortLevel, PermissionMode } from './session';
 
 /**
  * User role types
@@ -61,10 +61,8 @@ export interface DefaultModelConfig {
   mode?: 'alias' | 'exact';
   /** Model identifier (alias or exact ID) */
   model?: string;
-  /** Thinking mode controls extended thinking token allocation */
-  thinkingMode?: 'auto' | 'manual' | 'off';
-  /** Manual thinking token budget (used when thinkingMode='manual') */
-  manualThinkingTokens?: number;
+  /** Effort level for reasoning depth */
+  effort?: EffortLevel;
 }
 
 /**

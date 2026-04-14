@@ -115,7 +115,8 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
         cacheReadTokens,
         cacheCreationTokens,
       },
-      // Default to 200K for Claude models (standard context window)
+      // Fallback for older SDK versions without per-model contextWindow.
+      // Modern SDK reports actual context window (200K or 1M) in modelUsage.
       contextWindowLimit: 200000,
       durationMs,
       costUsd,
