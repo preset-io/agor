@@ -151,3 +151,61 @@ export function getUidFromUsername(username: string | undefined | null): number 
     return undefined;
   }
 }
+
+/**
+ * Get home directory from Unix username
+ *
+ * Strategy:
+ * 1. Try `getent passwd` first (Linux, some BSD)
+ * 2. Fallback to parsing /etc/passwd (macOS, older systems)
+ * 3. Never throw - return undefined if lookup fails
+ *
+ * @param username - Unix username to lookup
+ * @returns Home directory path, or undefined if not found or error
+ */
+export function getHomedirFromUsername(username: string | undefined | null): string | undefined {
+  if (!username) {
+    return undefined;
+  }
+
+  try {
+    // Try getent first (Linux, some BSD)
+    try {
+      const result = execSync(`getent passwd "${username}"`, {
+        encoding: 'utf-8',
+        stdio: 'pipe',
+        timeout: 2000,
+      }).trim();
+
+      // Format: username:password:UID:GID:GECOS:directory:shell
+      const parts = result.split(':');
+      if (parts.length >= 6 && parts[5]) {
+        return parts[5];
+      }
+    } catch {
+      // getent not available or user not found, try fallback
+    }
+
+    // Fallback to /etc/passwd (macOS, older systems)
+    if (fs.existsSync('/etc/passwd')) {
+      const passwdFile = fs.readFileSync('/etc/passwd', 'utf-8');
+      const line = passwdFile.split('\n').find((l) => l.startsWith(`${username}:`));
+
+      if (line) {
+        const parts = line.split(':');
+        if (parts.length >= 6 && parts[5]) {
+          return parts[5];
+        }
+      }
+    }
+
+    console.warn(`⚠️  Could not lookup home directory for username '${username}'`);
+    return undefined;
+  } catch (error) {
+    console.warn(
+      `⚠️  Failed to lookup home directory for username '${username}':`,
+      error instanceof Error ? error.message : error
+    );
+    return undefined;
+  }
+}

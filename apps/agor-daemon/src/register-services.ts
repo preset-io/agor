@@ -18,8 +18,6 @@ import {
   WorktreeRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import { computeFileHash, getSessionFilePath } from '@agor/core/tools/session-state';
-import { pullIfNeeded, pushAsync } from '@agor/core/tools/session-state-hooks';
 import type { AuthenticatedParams, HookContext, MessageSource, UserID } from '@agor/core/types';
 import { AGENTIC_TOOL_CAPABILITIES, SessionStatus, TaskStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
@@ -67,6 +65,8 @@ import { createThreadSessionMapService } from './services/thread-session-map.js'
 import { createUsersService } from './services/users.js';
 import { setupWorktreeOwnersService } from './services/worktree-owners.js';
 import { createWorktreesService } from './services/worktrees.js';
+import { computeFileHash, getSessionFilePath } from './utils/session-state.js';
+import { pullIfNeeded, pushAsync } from './utils/session-state-hooks.js';
 
 /**
  * Interface for dependencies needed by service registration.
@@ -511,6 +511,7 @@ function createExecuteHandler(
       validateResolvedUnixUser,
       UnixUserNotFoundError,
       buildSpawnArgs,
+      getHomedirFromUsername,
     } = await import('@agor/core/unix');
 
     const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
@@ -658,6 +659,9 @@ function createExecuteHandler(
       console.log(`[Daemon] Spawning executor as current user (no impersonation)`);
     }
 
+    // Stateless FS mode: resolve executor home dir for session file path
+    const executorHomeDir = executorUnixUser ? getHomedirFromUsername(executorUnixUser) : undefined;
+
     // Stateless FS mode: restore session file from DB before executor starts
     if (config.execution?.stateless_fs_mode && session.sdk_session_id) {
       try {
@@ -667,6 +671,7 @@ function createExecuteHandler(
           sdkSessionId: session.sdk_session_id,
           worktreePath: cwd,
           tool: session.agentic_tool,
+          executorHomeDir,
         });
       } catch (err) {
         console.error(
@@ -775,6 +780,7 @@ function createExecuteHandler(
               sdkSessionId: freshSession.sdk_session_id,
               worktreePath: cwd,
               tool: freshSession.agentic_tool,
+              executorHomeDir,
             });
 
             // Also compute and write session_md5 to the task record
@@ -782,7 +788,8 @@ function createExecuteHandler(
               const filePath = getSessionFilePath(
                 freshSession.agentic_tool,
                 cwd,
-                freshSession.sdk_session_id
+                freshSession.sdk_session_id,
+                executorHomeDir
               );
               const md5 = await computeFileHash(filePath);
               if (md5) {

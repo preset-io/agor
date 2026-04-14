@@ -4,11 +4,14 @@
  * Pre/post turn hooks for stateless_fs_mode.
  * pullIfNeeded: restores session file from DB before SDK subprocess starts.
  * pushAsync: serializes session file to DB after SDK subprocess exits.
+ *
+ * Lives in the daemon (not core) because these hooks are only invoked from
+ * register-services.ts and operate on the daemon's DB + filesystem directly.
  */
 
+import type { Database } from '@agor/core/db';
+import { SerializedSessionRepository } from '@agor/core/db';
 import type { AgenticToolName } from '@agor/core/types';
-import type { Database } from '../db/client';
-import { SerializedSessionRepository } from '../db/repositories/serialized-sessions';
 import { computeFileHash, getSessionFilePath, restoreFile, serializeFile } from './session-state';
 
 const STALE_PROCESSING_THRESHOLD_MS = 30_000; // 30 seconds
@@ -19,6 +22,8 @@ interface PullContext {
   sdkSessionId: string;
   worktreePath: string;
   tool: AgenticToolName;
+  /** Override for the executor user's home directory (insulated/strict modes) */
+  executorHomeDir?: string;
 }
 
 interface PushContext {
@@ -30,6 +35,8 @@ interface PushContext {
   worktreePath: string;
   tool: AgenticToolName;
   lastKnownMd5?: string;
+  /** Override for the executor user's home directory (insulated/strict modes) */
+  executorHomeDir?: string;
 }
 
 /**
@@ -46,7 +53,12 @@ interface PushContext {
  */
 export async function pullIfNeeded(ctx: PullContext): Promise<void> {
   const repo = new SerializedSessionRepository(ctx.db);
-  const filePath = getSessionFilePath(ctx.tool, ctx.worktreePath, ctx.sdkSessionId);
+  const filePath = getSessionFilePath(
+    ctx.tool,
+    ctx.worktreePath,
+    ctx.sdkSessionId,
+    ctx.executorHomeDir
+  );
 
   // Check latest row (any status)
   let latest = await repo.findLatest(ctx.sessionId);
@@ -103,7 +115,7 @@ export async function pullIfNeeded(ctx: PullContext): Promise<void> {
 
 /**
  * Push: run after SDK subprocess exits. Fire-and-forget (never awaited by caller).
- * Skips if file hash unchanged. Otherwise: insertProcessing → gzip → markDone → deletePrevious.
+ * Skips if file hash unchanged. Otherwise: insertProcessing → gzip → markDone → deletePreviousTurns.
  */
 export function pushAsync(ctx: PushContext): void {
   // Fire and forget — errors are logged but never propagated
@@ -114,7 +126,12 @@ export function pushAsync(ctx: PushContext): void {
 
 async function doPush(ctx: PushContext): Promise<void> {
   const repo = new SerializedSessionRepository(ctx.db);
-  const filePath = getSessionFilePath(ctx.tool, ctx.worktreePath, ctx.sdkSessionId);
+  const filePath = getSessionFilePath(
+    ctx.tool,
+    ctx.worktreePath,
+    ctx.sdkSessionId,
+    ctx.executorHomeDir
+  );
 
   // Compute current hash
   const currentMd5 = await computeFileHash(filePath);
