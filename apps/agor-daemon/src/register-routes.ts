@@ -9,6 +9,7 @@
 import { type AgorConfig, loadConfig } from '@agor/core/config';
 import {
   type Database,
+  generateId,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
@@ -25,6 +26,8 @@ import {
   errorHandler,
   Forbidden,
   LocalStrategy,
+  NotAuthenticated,
+  NotFound,
 } from '@agor/core/feathers';
 import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
 import type {
@@ -429,6 +432,104 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     description: 'Token refresh endpoint - obtain a new access token using a refresh token',
     security: [],
   };
+
+  // ============================================================================
+  // Impersonation endpoint
+  // ============================================================================
+
+  const MAX_IMPERSONATION_EXPIRY_MS = 3_600_000; // 1 hour hard cap
+
+  app.use('/authentication/impersonate', {
+    async create(data: { user_id?: string; expiry_ms?: number }, params?: Params) {
+      // 1. Caller must be authenticated
+      const authParams = params as AuthenticatedParams;
+      if (!authParams?.user || !authParams.user.user_id) {
+        throw new NotAuthenticated('Authentication required');
+      }
+
+      const caller = authParams.user;
+
+      // 2. Caller must have role: superadmin
+      if (!hasMinimumRole(caller.role, ROLES.SUPERADMIN)) {
+        throw new Forbidden('Superadmin role required for impersonation');
+      }
+
+      // 3. Caller token must NOT be an impersonated token (block recursive impersonation)
+      // biome-ignore lint/suspicious/noExplicitAny: JWT payload has dynamic fields
+      const authPayload = (authParams as any).authentication?.payload;
+      if (authPayload?.is_impersonated === true) {
+        throw new Forbidden('Cannot impersonate from an already-impersonated token');
+      }
+
+      // 4. user_id must be provided
+      if (!data?.user_id) {
+        throw new BadRequest('user_id is required');
+      }
+
+      // 5. Target user must exist
+      const usersRepo = new UsersRepository(db);
+      const targetUser = await usersRepo.findById(data.user_id);
+      if (!targetUser) {
+        throw new NotFound(`User not found: ${data.user_id}`);
+      }
+
+      // 6. Compute expiry (default 1h, capped at 1h)
+      const configuredMax =
+        config.daemon?.impersonation_token_expiry_ms ?? MAX_IMPERSONATION_EXPIRY_MS;
+      const maxExpiry = Math.min(configuredMax, MAX_IMPERSONATION_EXPIRY_MS);
+      const requestedExpiry = data.expiry_ms ?? maxExpiry;
+      const expiryMs = Math.min(Math.max(requestedExpiry, 1), maxExpiry);
+
+      // 7. Generate token
+      const jti = generateId();
+      const expiresAt = new Date(Date.now() + expiryMs);
+
+      const accessToken = jwt.sign(
+        {
+          sub: targetUser.user_id,
+          type: 'access',
+          impersonated_by: caller.user_id,
+          is_impersonated: true,
+          jti,
+        },
+        jwtSecret,
+        {
+          expiresIn: Math.ceil(expiryMs / 1000),
+          issuer: 'agor',
+          audience: 'https://agor.dev',
+        }
+      );
+
+      // 8. Audit log
+      console.log(
+        `[auth] impersonation issued: caller=${caller.user_id} target=${targetUser.user_id} jti=${jti} exp=${expiresAt.toISOString()}`
+      );
+
+      return {
+        accessToken,
+        user: {
+          user_id: targetUser.user_id,
+          email: targetUser.email,
+          name: targetUser.name,
+          emoji: targetUser.emoji,
+          role: targetUser.role,
+        },
+      };
+    },
+  });
+
+  // Apply auth hooks to impersonation endpoint
+  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
+  const impersonateService = app.service('authentication/impersonate') as any;
+  impersonateService.docs = {
+    description:
+      'Impersonation endpoint - superadmins can issue short-lived tokens scoped to any user',
+  };
+  impersonateService.hooks({
+    before: {
+      create: [requireAuth],
+    },
+  });
 
   // ============================================================================
   // Initialize repositories and permission service

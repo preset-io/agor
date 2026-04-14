@@ -112,6 +112,9 @@ export interface AgorDaemonSettings {
    * Displayed as a popover around the instance label Tag. */
   instanceDescription?: string;
 
+  /** Maximum expiry for impersonation tokens in ms (default: 3600000 = 1 hour, capped at 1 hour) */
+  impersonation_token_expiry_ms?: number;
+
   /** Allow CORS from Sandpack/CodeSandbox bundler origins (default: true).
    * Enables artifacts on the hosted bundler to call the Agor API. */
   cors_allow_sandpack?: boolean;
