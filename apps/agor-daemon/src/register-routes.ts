@@ -45,6 +45,7 @@ import type {
   User,
 } from '@agor/core/types';
 import {
+  AGENTIC_TOOL_CAPABILITIES,
   hasMinimumRole,
   ROLES,
   SERVICE_GROUP_NAMES,
@@ -648,6 +649,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         let session = await sessionsService.get(id, params);
         id = session.session_id;
+
+        // Early validation: reject unsupported tools when stateless_fs_mode is enabled
+        if (config.execution?.stateless_fs_mode) {
+          const toolName = session.agentic_tool as import('@agor/core/types').AgenticToolName;
+          const capabilities = AGENTIC_TOOL_CAPABILITIES[toolName];
+          if (capabilities && !capabilities.supportsStatelessFsMode) {
+            throw new Error(
+              `stateless_fs_mode is enabled but tool '${toolName}' does not support it. Supported tools: claude-code`
+            );
+          }
+        }
 
         // Auto-unarchive on prompt
         if (session.archived) {
