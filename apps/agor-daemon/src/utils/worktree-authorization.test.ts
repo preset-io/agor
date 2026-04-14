@@ -76,30 +76,25 @@ describe('hasWorktreePermission', () => {
   });
 
   describe('superadmin behavior', () => {
-    it('superadmin can view worktrees with others_can=none', () => {
+    it('superadmin has full access to worktrees with others_can=none', () => {
       const wt = makeWorktree({ others_can: 'none' });
+      expect(hasWorktreePermission(wt, USER_ID, false, 'all', ROLES.SUPERADMIN)).toBe(true);
+      expect(hasWorktreePermission(wt, USER_ID, false, 'prompt', ROLES.SUPERADMIN)).toBe(true);
       expect(hasWorktreePermission(wt, USER_ID, false, 'view', ROLES.SUPERADMIN)).toBe(true);
     });
 
-    it('superadmin CANNOT prompt worktrees with others_can=none (must own first)', () => {
-      const wt = makeWorktree({ others_can: 'none' });
-      expect(hasWorktreePermission(wt, USER_ID, false, 'prompt', ROLES.SUPERADMIN)).toBe(false);
+    it('superadmin has full access regardless of others_can level', () => {
+      for (const othersCan of ['none', 'view', 'session', 'prompt', 'all'] as const) {
+        const wt = makeWorktree({ others_can: othersCan });
+        expect(hasWorktreePermission(wt, USER_ID, false, 'all', ROLES.SUPERADMIN)).toBe(true);
+      }
     });
 
-    it('superadmin CANNOT get all permission on worktrees with others_can=none', () => {
+    it('deprecated owner role gets same superadmin full access', () => {
       const wt = makeWorktree({ others_can: 'none' });
-      expect(hasWorktreePermission(wt, USER_ID, false, 'all', ROLES.SUPERADMIN)).toBe(false);
-    });
-
-    it('superadmin can prompt worktrees with others_can=prompt', () => {
-      const wt = makeWorktree({ others_can: 'prompt' });
-      expect(hasWorktreePermission(wt, USER_ID, false, 'prompt', ROLES.SUPERADMIN)).toBe(true);
-    });
-
-    it('deprecated owner role gets same superadmin bypass', () => {
-      const wt = makeWorktree({ others_can: 'none' });
+      expect(hasWorktreePermission(wt, USER_ID, false, 'all', 'owner')).toBe(true);
+      expect(hasWorktreePermission(wt, USER_ID, false, 'prompt', 'owner')).toBe(true);
       expect(hasWorktreePermission(wt, USER_ID, false, 'view', 'owner')).toBe(true);
-      expect(hasWorktreePermission(wt, USER_ID, false, 'prompt', 'owner')).toBe(false);
     });
   });
 
@@ -157,14 +152,14 @@ describe('resolveWorktreePermission', () => {
     expect(resolveWorktreePermission(wt, USER_ID, true)).toBe('all');
   });
 
-  it('superadmin resolves to at least view on others_can=none', () => {
+  it('superadmin resolves to all on others_can=none', () => {
     const wt = makeWorktree({ others_can: 'none' });
-    expect(resolveWorktreePermission(wt, USER_ID, false, ROLES.SUPERADMIN)).toBe('view');
+    expect(resolveWorktreePermission(wt, USER_ID, false, ROLES.SUPERADMIN)).toBe('all');
   });
 
-  it('superadmin inherits higher permission from others_can', () => {
+  it('superadmin resolves to all regardless of others_can', () => {
     const wt = makeWorktree({ others_can: 'prompt' });
-    expect(resolveWorktreePermission(wt, USER_ID, false, ROLES.SUPERADMIN)).toBe('prompt');
+    expect(resolveWorktreePermission(wt, USER_ID, false, ROLES.SUPERADMIN)).toBe('all');
   });
 
   it('member gets others_can level', () => {
@@ -182,9 +177,9 @@ describe('resolveWorktreePermission', () => {
     expect(resolveWorktreePermission(wt, USER_ID, false, ROLES.MEMBER)).toBe('session');
   });
 
-  it('superadmin inherits session permission from others_can', () => {
+  it('superadmin resolves to all even with others_can=session', () => {
     const wt = makeWorktree({ others_can: 'session' });
-    expect(resolveWorktreePermission(wt, USER_ID, false, ROLES.SUPERADMIN)).toBe('session');
+    expect(resolveWorktreePermission(wt, USER_ID, false, ROLES.SUPERADMIN)).toBe('all');
   });
 });
 
