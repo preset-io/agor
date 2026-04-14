@@ -462,8 +462,9 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     if (filesystemAction === 'cleaned') {
       console.log(`🧹 Spawning executor to clean worktree filesystem: ${worktree.path}`);
 
-      // Resolve Unix user for impersonation (handles simple/insulated/strict modes)
-      const asUser = await resolveGitImpersonationForWorktree(this.db, worktree);
+      // No user impersonation for infrastructure operations — the daemon user
+      // owns all worktrees and impersonation would resolve getWorktreesDir()
+      // to the wrong home directory, causing safety check failures.
 
       appWithToken.sessionTokenService
         ?.generateToken('worktree-clean', userId || 'anonymous')
@@ -479,7 +480,6 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
             },
             {
               logPrefix: `[WorktreesService.clean ${worktree.name}]`,
-              asUser, // Run as resolved user (fresh groups via sudo -u)
             }
           );
         })
@@ -492,8 +492,9 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     } else if (filesystemAction === 'deleted') {
       console.log(`🗑️  Spawning executor to delete worktree from filesystem: ${worktree.path}`);
 
-      // Resolve Unix user for impersonation (handles simple/insulated/strict modes)
-      const asUser = await resolveGitImpersonationForWorktree(this.db, worktree);
+      // No user impersonation for infrastructure operations — the daemon user
+      // owns all worktrees and impersonation would resolve getWorktreesDir()
+      // to the wrong home directory, causing safety check failures.
 
       appWithToken.sessionTokenService
         ?.generateToken('worktree-delete', userId || 'anonymous')
@@ -514,7 +515,6 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
             },
             {
               logPrefix: `[WorktreesService.delete ${worktree.name}]`,
-              asUser, // Run as resolved user (fresh groups via sudo -u)
             }
           );
         })
@@ -634,8 +634,9 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       const { getDaemonUser } = await import('@agor/core/config');
       const daemonUser = getDaemonUser();
 
-      // Resolve Unix user for impersonation
-      const asUser = await resolveGitImpersonationForWorktree(this.db, worktree);
+      // No user impersonation for infrastructure operations — the daemon user
+      // owns all worktrees and impersonation would resolve getWorktreesDir()
+      // to the wrong home directory, causing safety check failures.
 
       try {
         const sessionToken = await appWithToken.sessionTokenService?.generateToken(
@@ -672,7 +673,6 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
             },
             {
               logPrefix: `[WorktreesService.unarchive ${worktree.name}]`,
-              asUser,
             }
           );
         } else {
