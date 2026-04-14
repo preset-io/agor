@@ -466,21 +466,32 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         throw new BadRequest('user_id is required');
       }
 
-      // 5. Target user must exist
-      const usersRepo = new UsersRepository(db);
-      const targetUser = await usersRepo.findById(data.user_id);
-      if (!targetUser) {
+      // 5. Validate expiry_ms if provided
+      if (data.expiry_ms != null) {
+        if (typeof data.expiry_ms !== 'number' || !Number.isFinite(data.expiry_ms)) {
+          throw new BadRequest('expiry_ms must be a finite number');
+        }
+        if (data.expiry_ms <= 0) {
+          throw new BadRequest('expiry_ms must be a positive number');
+        }
+      }
+
+      // 6. Target user must exist (uses usersService for consistency with refresh endpoint)
+      let targetUser: User;
+      try {
+        targetUser = await usersService.get(data.user_id as import('@agor/core/types').UUID);
+      } catch {
         throw new NotFound(`User not found: ${data.user_id}`);
       }
 
-      // 6. Compute expiry (default 1h, capped at 1h)
+      // 8. Compute expiry (default 1h, capped at 1h)
       const configuredMax =
         config.daemon?.impersonation_token_expiry_ms ?? MAX_IMPERSONATION_EXPIRY_MS;
       const maxExpiry = Math.min(configuredMax, MAX_IMPERSONATION_EXPIRY_MS);
       const requestedExpiry = data.expiry_ms ?? maxExpiry;
-      const expiryMs = Math.min(Math.max(requestedExpiry, 1), maxExpiry);
+      const expiryMs = Math.min(requestedExpiry, maxExpiry);
 
-      // 7. Generate token
+      // 9. Generate token
       const jti = generateId();
       const expiresAt = new Date(Date.now() + expiryMs);
 
@@ -500,7 +511,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
       );
 
-      // 8. Audit log
+      // 10. Audit log
       console.log(
         `[auth] impersonation issued: caller=${caller.user_id} target=${targetUser.user_id} jti=${jti} exp=${expiresAt.toISOString()}`
       );
