@@ -18,6 +18,8 @@ export * from './id-lookups.js';
 export * from './run-as-user.js';
 // Symlink management
 export * from './symlink-manager.js';
+// System queries (read-only OS state + pure logic helpers)
+export * from './system-queries.js';
 // Main orchestration service
 export * from './unix-integration-service.js';
 // Unix user management

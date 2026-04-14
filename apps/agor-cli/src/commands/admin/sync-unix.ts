@@ -40,15 +40,25 @@ import {
 } from '@agor/core/db';
 import {
   AGOR_USERS_GROUP,
+  createAdminExecutor,
   generateRepoGroupName,
   generateWorktreeGroupName,
+  getGroupMembers,
+  getUserGroups,
   getUserWorktreesDir,
+  getWorktreeDirectoryAction,
   getWorktreePermissionMode,
   getWorktreeSymlinkPath,
+  groupExists,
+  isUserInGroup,
+  listAgorUsers,
+  listRepoGroups,
+  listWorktreeGroups,
   REPO_GIT_PERMISSION_MODE,
   SymlinkCommands,
   UnixGroupCommands,
   UnixUserCommands,
+  unixUserExists,
 } from '@agor/core/unix';
 import type { RepoID, WorktreeID } from '@agor-live/client';
 import { Command, Flags } from '@oclif/core';
@@ -118,269 +128,6 @@ export default class SyncUnix extends Command {
     }),
   };
 
-  /**
-   * Check if a Unix user exists on the system
-   */
-  private userExists(username: string): boolean {
-    try {
-      execSync(UnixUserCommands.userExists(username), { stdio: 'ignore' });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Get groups a Unix user belongs to
-   */
-  private getUserGroups(username: string): string[] {
-    try {
-      const output = execSync(UnixUserCommands.getUserGroups(username), {
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-      });
-      return output.trim().split(/\s+/).filter(Boolean);
-    } catch {
-      return [];
-    }
-  }
-
-  /**
-   * Check if a Unix group exists
-   */
-  private groupExists(groupName: string): boolean {
-    try {
-      execSync(UnixGroupCommands.groupExists(groupName), { stdio: 'ignore' });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Check if a Unix user is in a group
-   */
-  private isUserInGroup(username: string, groupName: string): boolean {
-    try {
-      execSync(UnixGroupCommands.isUserInGroup(username, groupName), { stdio: 'ignore' });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Create a Unix user (assumes running as root via sudo)
-   */
-  private createUser(username: string, dryRun: boolean): boolean {
-    const cmd = UnixUserCommands.createUser(username);
-    if (dryRun) {
-      this.log(chalk.gray(`  [dry-run] Would run: ${cmd}`));
-      return true;
-    }
-    try {
-      execSync(cmd, { stdio: 'inherit' });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Add user to a group (assumes running as root via sudo)
-   */
-  private addUserToGroup(username: string, groupName: string, dryRun: boolean): boolean {
-    const cmd = UnixGroupCommands.addUserToGroup(username, groupName);
-    if (dryRun) {
-      this.log(chalk.gray(`  [dry-run] Would run: ${cmd}`));
-      return true;
-    }
-    try {
-      execSync(cmd, { stdio: 'inherit' });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Create a Unix group (assumes running as root via sudo)
-   */
-  private createGroup(groupName: string, dryRun: boolean): boolean {
-    const cmd = UnixGroupCommands.createGroup(groupName);
-    if (dryRun) {
-      this.log(chalk.gray(`  [dry-run] Would run: ${cmd}`));
-      return true;
-    }
-    try {
-      execSync(cmd, { stdio: 'inherit' });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Delete a Unix user (keeps home directory)
-   */
-  private deleteUser(username: string, dryRun: boolean): boolean {
-    const cmd = UnixUserCommands.deleteUser(username);
-    if (dryRun) {
-      this.log(chalk.gray(`  [dry-run] Would run: ${cmd}`));
-      return true;
-    }
-    try {
-      execSync(cmd, { stdio: 'inherit' });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Delete a Unix group
-   */
-  private deleteGroup(groupName: string, dryRun: boolean): boolean {
-    const cmd = UnixGroupCommands.deleteGroup(groupName);
-    if (dryRun) {
-      this.log(chalk.gray(`  [dry-run] Would run: ${cmd}`));
-      return true;
-    }
-    try {
-      execSync(cmd, { stdio: 'inherit' });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * List all agor_* users on the system (auto-generated format: agor_<8-hex>)
-   */
-  private listAgorUsers(): string[] {
-    try {
-      // Get all users from /etc/passwd matching agor_* pattern
-      const output = execSync("getent passwd | grep '^agor_' | cut -d: -f1", {
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-      });
-      return output
-        .trim()
-        .split('\n')
-        .filter((u) => u && /^agor_[0-9a-f]{8}$/.test(u));
-    } catch {
-      return [];
-    }
-  }
-
-  /**
-   * List all agor_wt_* groups on the system
-   */
-  private listWorktreeGroups(): string[] {
-    try {
-      // Get all groups from /etc/group matching agor_wt_* pattern
-      const output = execSync("getent group | grep '^agor_wt_' | cut -d: -f1", {
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-      });
-      return output
-        .trim()
-        .split('\n')
-        .filter((g) => g && /^agor_wt_[0-9a-f]{8}$/.test(g));
-    } catch {
-      return [];
-    }
-  }
-
-  /**
-   * List all agor_rp_* (repo) groups on the system
-   */
-  private listRepoGroups(): string[] {
-    try {
-      // Get all groups from /etc/group matching agor_rp_* pattern
-      const output = execSync("getent group | grep '^agor_rp_' | cut -d: -f1", {
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-      });
-      return output
-        .trim()
-        .split('\n')
-        .filter((g) => g && /^agor_rp_[0-9a-f]{8}$/.test(g));
-    } catch {
-      return [];
-    }
-  }
-
-  /**
-   * Get members of a Unix group from the system
-   */
-  private getGroupMembers(groupName: string): string[] {
-    try {
-      const output = execSync(UnixGroupCommands.listGroupMembers(groupName), {
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-      });
-      return output.trim().split(',').filter(Boolean);
-    } catch {
-      return [];
-    }
-  }
-
-  /**
-   * Remove user from a group
-   */
-  private removeUserFromGroup(username: string, groupName: string, dryRun: boolean): boolean {
-    const cmd = UnixGroupCommands.removeUserFromGroup(username, groupName);
-    if (dryRun) {
-      this.log(chalk.gray(`  [dry-run] Would run: ${cmd}`));
-      return true;
-    }
-    try {
-      execSync(cmd, { stdio: 'inherit' });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Check if a worktree directory should be created/synced based on archive state.
-   *
-   * Returns:
-   * - 'sync': Directory exists, apply permissions
-   * - 'create': Directory missing, non-archived — create it
-   * - 'skip': Skip this worktree (archived+deleted, creating, failed, etc.)
-   */
-  private getWorktreeDirectoryAction(
-    dirExists: boolean,
-    archived: boolean,
-    filesystemStatus: string | null | undefined
-  ): 'sync' | 'create' | 'skip' {
-    // Creating or failed worktrees — not ready, skip
-    if (filesystemStatus === 'creating' || filesystemStatus === 'failed') {
-      return 'skip';
-    }
-
-    // Archived + deleted — directory was intentionally removed
-    if (archived && filesystemStatus === 'deleted') {
-      return 'skip';
-    }
-
-    // Directory exists — always sync permissions regardless of archive state
-    if (dirExists) {
-      return 'sync';
-    }
-
-    // Directory missing + not archived — create it
-    if (!archived) {
-      return 'create';
-    }
-
-    // Directory missing + archived (preserved or cleaned) — skip
-    // The directory was expected to exist but doesn't — log info but don't create
-    return 'skip';
-  }
-
   async run(): Promise<void> {
     const { flags } = await this.parse(SyncUnix);
     const dryRun = flags['dry-run'];
@@ -393,6 +140,29 @@ export default class SyncUnix extends Command {
     if (dryRun) {
       this.log(chalk.yellow('🔍 Dry run mode - no changes will be made\n'));
     }
+
+    // Create executor for all privileged operations (handles dry-run + verbose)
+    const executor = createAdminExecutor({ 'dry-run': dryRun, verbose });
+
+    // Helper: execute a single command, return true on success
+    const execCmd = async (cmd: string): Promise<boolean> => {
+      try {
+        await executor.exec(cmd);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    // Helper: execute multiple commands sequentially, return true on success
+    const execAllCmds = async (cmds: string[]): Promise<boolean> => {
+      try {
+        await executor.execAll(cmds);
+        return true;
+      } catch {
+        return false;
+      }
+    };
 
     // Track stats
     let groupsCreated = 0;
@@ -495,9 +265,9 @@ export default class SyncUnix extends Command {
 
       // Ensure agor_users group exists (global group for all managed users)
       this.log(chalk.cyan(`Checking ${AGOR_USERS_GROUP} group...\n`));
-      if (!this.groupExists(AGOR_USERS_GROUP)) {
+      if (!groupExists(AGOR_USERS_GROUP)) {
         this.log(chalk.yellow(`   → Creating ${AGOR_USERS_GROUP} group...`));
-        if (this.createGroup(AGOR_USERS_GROUP, dryRun)) {
+        if (await execCmd(UnixGroupCommands.createGroup(AGOR_USERS_GROUP))) {
           groupsCreated++;
           this.log(chalk.green(`   ✓ Created ${AGOR_USERS_GROUP} group\n`));
         } else {
@@ -595,13 +365,13 @@ export default class SyncUnix extends Command {
             this.log(chalk.gray(`   generated group: ${repoGroup}`));
 
             // Create the Unix group if it doesn't exist
-            const groupExistsOnSystem = this.groupExists(repoGroup);
+            const groupExistsOnSystem = groupExists(repoGroup);
 
             if (groupExistsOnSystem) {
               this.log(chalk.green(`   ✓ Unix group already exists`));
             } else {
               this.log(chalk.yellow(`   → Creating Unix group ${repoGroup}...`));
-              if (this.createGroup(repoGroup, dryRun)) {
+              if (await execCmd(UnixGroupCommands.createGroup(repoGroup))) {
                 groupsCreated++;
                 this.log(chalk.green(`   ✓ Created Unix group ${repoGroup}`));
               } else {
@@ -614,10 +384,10 @@ export default class SyncUnix extends Command {
 
             // Add daemon user to repo group
             if (daemonUser) {
-              const daemonInGroup = dryRun ? false : this.isUserInGroup(daemonUser, repoGroup);
+              const daemonInGroup = dryRun ? false : isUserInGroup(daemonUser, repoGroup);
               if (!daemonInGroup) {
                 this.log(chalk.yellow(`   → Adding daemon user ${daemonUser} to ${repoGroup}...`));
-                if (this.addUserToGroup(daemonUser, repoGroup, dryRun)) {
+                if (await execCmd(UnixGroupCommands.addUserToGroup(daemonUser, repoGroup))) {
                   daemonMembershipsAdded++;
                   this.log(chalk.green(`   ✓ Added daemon user to ${repoGroup}`));
                 } else {
@@ -659,28 +429,19 @@ export default class SyncUnix extends Command {
                 if (verbose) {
                   this.log(chalk.gray(`   ⊘ .git path missing (${gitPath}), skipping permissions`));
                 }
-              } else if (dryRun) {
-                this.log(chalk.gray(`   [dry-run] Would run: chgrp -R ${repoGroup} "${gitPath}"`));
-                this.log(
-                  chalk.gray(
-                    `   [dry-run] Would run: chmod -R ${REPO_GIT_PERMISSION_MODE} "${gitPath}"`
-                  )
-                );
               } else {
-                try {
-                  for (const cmd of UnixGroupCommands.setDirectoryGroup(
-                    gitPath,
-                    repoGroup,
-                    REPO_GIT_PERMISSION_MODE
-                  )) {
-                    execSync(cmd, { stdio: 'pipe' });
-                  }
+                const cmds = UnixGroupCommands.setDirectoryGroup(
+                  gitPath,
+                  repoGroup,
+                  REPO_GIT_PERMISSION_MODE
+                );
+                if (await execAllCmds(cmds)) {
                   this.log(
                     chalk.green(`   ✓ Applied .git permissions (${REPO_GIT_PERMISSION_MODE})`)
                   );
-                } catch (error) {
+                } else {
                   syncErrors++;
-                  this.log(chalk.red(`   ✗ Failed to set .git permissions: ${error}`));
+                  this.log(chalk.red(`   ✗ Failed to set .git permissions`));
                 }
               }
             } else {
@@ -730,7 +491,7 @@ export default class SyncUnix extends Command {
           this.log(chalk.gray(`   user_id: ${user.user_id.substring(0, 8)}`));
 
           // Check if Unix user exists
-          result.unixUserExists = this.userExists(user.unix_username);
+          result.unixUserExists = unixUserExists(user.unix_username);
 
           if (result.unixUserExists) {
             this.log(chalk.green(`   ✓ Unix user exists`));
@@ -738,7 +499,7 @@ export default class SyncUnix extends Command {
             this.log(chalk.red(`   ✗ Unix user does not exist`));
 
             this.log(chalk.yellow(`   → Creating Unix user...`));
-            if (this.createUser(user.unix_username, dryRun)) {
+            if (await execCmd(UnixUserCommands.createUser(user.unix_username))) {
               result.unixUserCreated = true;
               result.unixUserExists = true;
               this.log(chalk.green(`   ✓ Unix user created`));
@@ -750,9 +511,7 @@ export default class SyncUnix extends Command {
 
           // Get current groups (only if user exists)
           if (result.unixUserExists || dryRun) {
-            result.groups.actual = result.unixUserExists
-              ? this.getUserGroups(user.unix_username)
-              : [];
+            result.groups.actual = result.unixUserExists ? getUserGroups(user.unix_username) : [];
 
             if (verbose && result.groups.actual.length > 0) {
               this.log(chalk.gray(`   Current groups: ${result.groups.actual.join(', ')}`));
@@ -761,7 +520,11 @@ export default class SyncUnix extends Command {
             // Ensure user is in agor_users group
             if (!result.groups.actual.includes(AGOR_USERS_GROUP)) {
               this.log(chalk.yellow(`   → Adding to ${AGOR_USERS_GROUP}...`));
-              if (this.addUserToGroup(user.unix_username, AGOR_USERS_GROUP, dryRun)) {
+              if (
+                await execCmd(
+                  UnixGroupCommands.addUserToGroup(user.unix_username, AGOR_USERS_GROUP)
+                )
+              ) {
                 result.groups.added.push(AGOR_USERS_GROUP);
                 this.log(chalk.green(`   ✓ Added to ${AGOR_USERS_GROUP}`));
               } else {
@@ -785,7 +548,7 @@ export default class SyncUnix extends Command {
               result.groups.expected.push(expectedGroup);
 
               const isInGroup = result.groups.actual.includes(expectedGroup);
-              const groupExistsOnSystem = this.groupExists(expectedGroup);
+              const groupExistsOnSystem = groupExists(expectedGroup);
 
               if (verbose) {
                 this.log(
@@ -801,7 +564,7 @@ export default class SyncUnix extends Command {
               // Create group if it doesn't exist
               if (!groupExistsOnSystem) {
                 this.log(chalk.yellow(`   → Creating group ${expectedGroup}...`));
-                if (this.createGroup(expectedGroup, dryRun)) {
+                if (await execCmd(UnixGroupCommands.createGroup(expectedGroup))) {
                   groupsCreated++;
                   groupReady = true;
                   this.log(chalk.green(`   ✓ Created group ${expectedGroup}`));
@@ -814,7 +577,9 @@ export default class SyncUnix extends Command {
               // Add user to group if it exists/was created and user is not already in it
               if (groupReady && !isInGroup) {
                 this.log(chalk.yellow(`   → Adding to group ${expectedGroup}...`));
-                if (this.addUserToGroup(user.unix_username, expectedGroup, dryRun)) {
+                if (
+                  await execCmd(UnixGroupCommands.addUserToGroup(user.unix_username, expectedGroup))
+                ) {
                   result.groups.added.push(expectedGroup);
                   this.log(chalk.green(`   ✓ Added to ${expectedGroup}`));
                 } else {
@@ -825,14 +590,12 @@ export default class SyncUnix extends Command {
 
               // Add daemon user to worktree group
               if (groupReady && daemonUser) {
-                const daemonInWtGroup = dryRun
-                  ? false
-                  : this.isUserInGroup(daemonUser, expectedGroup);
+                const daemonInWtGroup = dryRun ? false : isUserInGroup(daemonUser, expectedGroup);
                 if (!daemonInWtGroup) {
                   this.log(
                     chalk.yellow(`   → Adding daemon user ${daemonUser} to ${expectedGroup}...`)
                   );
-                  if (this.addUserToGroup(daemonUser, expectedGroup, dryRun)) {
+                  if (await execCmd(UnixGroupCommands.addUserToGroup(daemonUser, expectedGroup))) {
                     daemonMembershipsAdded++;
                     this.log(chalk.green(`   ✓ Added daemon user to ${expectedGroup}`));
                   } else {
@@ -856,7 +619,7 @@ export default class SyncUnix extends Command {
               result.groups.expected.push(repoGroup);
 
               const isInRepoGroup = result.groups.actual.includes(repoGroup);
-              const repoGroupExistsOnSystem = this.groupExists(repoGroup);
+              const repoGroupExistsOnSystem = groupExists(repoGroup);
 
               if (verbose) {
                 this.log(
@@ -872,7 +635,7 @@ export default class SyncUnix extends Command {
               // Create repo group if it doesn't exist
               if (!repoGroupExistsOnSystem) {
                 this.log(chalk.yellow(`   → Creating repo group ${repoGroup}...`));
-                if (this.createGroup(repoGroup, dryRun)) {
+                if (await execCmd(UnixGroupCommands.createGroup(repoGroup))) {
                   groupsCreated++;
                   repoGroupReady = true;
                   this.log(chalk.green(`   ✓ Created repo group ${repoGroup}`));
@@ -885,7 +648,9 @@ export default class SyncUnix extends Command {
               // Add user to repo group if it exists/was created and user is not already in it
               if (repoGroupReady && !isInRepoGroup) {
                 this.log(chalk.yellow(`   → Adding to repo group ${repoGroup}...`));
-                if (this.addUserToGroup(user.unix_username, repoGroup, dryRun)) {
+                if (
+                  await execCmd(UnixGroupCommands.addUserToGroup(user.unix_username, repoGroup))
+                ) {
                   result.groups.added.push(repoGroup);
                   this.log(chalk.green(`   ✓ Added to ${repoGroup}`));
                 } else {
@@ -896,12 +661,12 @@ export default class SyncUnix extends Command {
 
               // Add daemon user to repo group
               if (repoGroupReady && daemonUser) {
-                const daemonInRpGroup = dryRun ? false : this.isUserInGroup(daemonUser, repoGroup);
+                const daemonInRpGroup = dryRun ? false : isUserInGroup(daemonUser, repoGroup);
                 if (!daemonInRpGroup) {
                   this.log(
                     chalk.yellow(`   → Adding daemon user ${daemonUser} to ${repoGroup}...`)
                   );
-                  if (this.addUserToGroup(daemonUser, repoGroup, dryRun)) {
+                  if (await execCmd(UnixGroupCommands.addUserToGroup(daemonUser, repoGroup))) {
                     daemonMembershipsAdded++;
                     this.log(chalk.green(`   ✓ Added daemon user to ${repoGroup}`));
                   } else {
@@ -956,13 +721,13 @@ export default class SyncUnix extends Command {
           this.log(chalk.gray(`   generated group: ${wtGroup}`));
 
           // Create the Unix group if it doesn't exist
-          const groupExistsOnSystem = this.groupExists(wtGroup);
+          const groupExistsOnSystem = groupExists(wtGroup);
 
           if (groupExistsOnSystem) {
             this.log(chalk.green(`   ✓ Unix group already exists`));
           } else {
             this.log(chalk.yellow(`   → Creating Unix group ${wtGroup}...`));
-            if (this.createGroup(wtGroup, dryRun)) {
+            if (await execCmd(UnixGroupCommands.createGroup(wtGroup))) {
               groupsCreated++;
               this.log(chalk.green(`   ✓ Created Unix group ${wtGroup}`));
             } else {
@@ -975,10 +740,10 @@ export default class SyncUnix extends Command {
 
           // Add daemon user to worktree group
           if (daemonUser) {
-            const daemonInGroup = dryRun ? false : this.isUserInGroup(daemonUser, wtGroup);
+            const daemonInGroup = dryRun ? false : isUserInGroup(daemonUser, wtGroup);
             if (!daemonInGroup) {
               this.log(chalk.yellow(`   → Adding daemon user ${daemonUser} to ${wtGroup}...`));
-              if (this.addUserToGroup(daemonUser, wtGroup, dryRun)) {
+              if (await execCmd(UnixGroupCommands.addUserToGroup(daemonUser, wtGroup))) {
                 daemonMembershipsAdded++;
                 this.log(chalk.green(`   ✓ Added daemon user to ${wtGroup}`));
               } else {
@@ -1064,7 +829,7 @@ export default class SyncUnix extends Command {
           }
 
           const dirExists = existsSync(worktreePath);
-          const action = this.getWorktreeDirectoryAction(
+          const action = getWorktreeDirectoryAction(
             dirExists,
             rawWorktree.archived,
             rawWorktree.filesystem_status
@@ -1101,19 +866,14 @@ export default class SyncUnix extends Command {
           // Create missing directory for non-archived worktrees
           if (action === 'create') {
             this.log(chalk.yellow(`   → Directory missing, creating...`));
-            if (dryRun) {
-              this.log(chalk.gray(`   [dry-run] Would run: mkdir -p "${worktreePath}"`));
+            if (await execCmd(`sudo -n mkdir -p "${worktreePath}"`)) {
+              worktreeDirsCreated++;
+              this.log(chalk.green(`   ✓ Created directory`));
             } else {
-              try {
-                execSync(`sudo -n mkdir -p "${worktreePath}"`, { stdio: 'pipe' });
-                worktreeDirsCreated++;
-                this.log(chalk.green(`   ✓ Created directory`));
-              } catch (error) {
-                syncErrors++;
-                this.log(chalk.red(`   ✗ Failed to create directory: ${error}`));
-                this.log('');
-                continue;
-              }
+              syncErrors++;
+              this.log(chalk.red(`   ✗ Failed to create directory`));
+              this.log('');
+              continue;
             }
           }
 
@@ -1123,47 +883,30 @@ export default class SyncUnix extends Command {
 
           this.log(chalk.gray(`   others_fs_access: ${othersAccess} → mode: ${permissionMode}`));
 
-          if (dryRun) {
-            this.log(
-              chalk.gray(
-                `   [dry-run] Would set group ${rawWorktree.unix_group} with mode ${permissionMode}`
-              )
-            );
+          const permCmds = UnixGroupCommands.setDirectoryGroup(
+            worktreePath,
+            rawWorktree.unix_group,
+            permissionMode
+          );
+          if (await execAllCmds(permCmds)) {
+            worktreesSynced++;
+            this.log(chalk.green(`   ✓ Applied permissions (${permissionMode})`));
           } else {
-            try {
-              for (const cmd of UnixGroupCommands.setDirectoryGroup(
-                worktreePath,
-                rawWorktree.unix_group,
-                permissionMode
-              )) {
-                execSync(cmd, { stdio: 'pipe' });
-              }
-
-              worktreesSynced++;
-              this.log(chalk.green(`   ✓ Applied permissions (${permissionMode})`));
-            } catch (error) {
-              syncErrors++;
-              this.log(chalk.red(`   ✗ Failed to set permissions: ${error}`));
-            }
+            syncErrors++;
+            this.log(chalk.red(`   ✗ Failed to set permissions`));
           }
 
           // Apply daemon user ACL so the running daemon can access without restart
           if (daemonUser && (dirExists || action === 'create')) {
-            if (dryRun) {
-              this.log(chalk.gray(`   [dry-run] Would set daemon user ACL for ${daemonUser}`));
-            } else {
-              try {
-                for (const cmd of UnixGroupCommands.setUserAcl(worktreePath, daemonUser)) {
-                  execSync(cmd, { stdio: 'pipe' });
-                }
-                daemonAclsApplied++;
-                if (verbose) {
-                  this.log(chalk.green(`   ✓ Applied daemon ACL for ${daemonUser}`));
-                }
-              } catch (error) {
-                syncErrors++;
-                this.log(chalk.red(`   ✗ Failed to set daemon ACL: ${error}`));
+            const aclCmds = UnixGroupCommands.setUserAcl(worktreePath, daemonUser);
+            if (await execAllCmds(aclCmds)) {
+              daemonAclsApplied++;
+              if (verbose) {
+                this.log(chalk.green(`   ✓ Applied daemon ACL for ${daemonUser}`));
               }
+            } else {
+              syncErrors++;
+              this.log(chalk.red(`   ✗ Failed to set daemon ACL`));
             }
           }
 
@@ -1244,12 +987,12 @@ export default class SyncUnix extends Command {
           if (daemonUser) {
             const daemonInThisRepoGroup = dryRun
               ? false
-              : this.isUserInGroup(daemonUser, rawRepo.unix_group);
+              : isUserInGroup(daemonUser, rawRepo.unix_group);
             if (!daemonInThisRepoGroup) {
               this.log(
                 chalk.yellow(`   → Adding daemon user ${daemonUser} to ${rawRepo.unix_group}...`)
               );
-              if (this.addUserToGroup(daemonUser, rawRepo.unix_group, dryRun)) {
+              if (await execCmd(UnixGroupCommands.addUserToGroup(daemonUser, rawRepo.unix_group))) {
                 daemonMembershipsAdded++;
                 this.log(chalk.green(`   ✓ Added daemon user to ${rawRepo.unix_group}`));
               } else {
@@ -1260,35 +1003,17 @@ export default class SyncUnix extends Command {
             }
           }
 
-          if (dryRun) {
-            this.log(
-              chalk.gray(`   [dry-run] Would run: chgrp -R ${rawRepo.unix_group} "${gitPath}"`)
-            );
-            this.log(
-              chalk.gray(
-                `   [dry-run] Would run: chmod -R ${REPO_GIT_PERMISSION_MODE} "${gitPath}"`
-              )
-            );
-            this.log('');
+          const repoCmds = UnixGroupCommands.setDirectoryGroup(
+            gitPath,
+            rawRepo.unix_group,
+            REPO_GIT_PERMISSION_MODE
+          );
+          if (await execAllCmds(repoCmds)) {
+            reposPermSynced++;
+            this.log(chalk.green(`   ✓ Applied .git permissions (${REPO_GIT_PERMISSION_MODE})\n`));
           } else {
-            try {
-              // Run each command separately (no sh -c wrapper for security)
-              for (const cmd of UnixGroupCommands.setDirectoryGroup(
-                gitPath,
-                rawRepo.unix_group,
-                REPO_GIT_PERMISSION_MODE
-              )) {
-                execSync(cmd, { stdio: 'pipe' });
-              }
-
-              reposPermSynced++;
-              this.log(
-                chalk.green(`   ✓ Applied .git permissions (${REPO_GIT_PERMISSION_MODE})\n`)
-              );
-            } catch (error) {
-              syncErrors++;
-              this.log(chalk.red(`   ✗ Failed: ${error}\n`));
-            }
+            syncErrors++;
+            this.log(chalk.red(`   ✗ Failed to set .git permissions\n`));
           }
         }
 
@@ -1348,7 +1073,7 @@ export default class SyncUnix extends Command {
         // Iterate ALL worktree groups (including those with zero owners)
         let pruneChecked = 0;
         for (const [, group] of wtGroupMap.entries()) {
-          if (!this.groupExists(group)) continue;
+          if (!groupExists(group)) continue;
           pruneChecked++;
 
           // Get expected unix_usernames for this group (may be empty if no owners)
@@ -1362,7 +1087,7 @@ export default class SyncUnix extends Command {
           if (daemonUser) expectedUsernames.add(daemonUser);
 
           // Get actual members from OS
-          const actualMembers = this.getGroupMembers(group);
+          const actualMembers = getGroupMembers(group);
 
           for (const member of actualMembers) {
             if (expectedUsernames.has(member)) continue;
@@ -1372,7 +1097,7 @@ export default class SyncUnix extends Command {
             if (!unixNameToUserId.has(member)) continue;
 
             this.log(chalk.yellow(`   → Removing ${member} from ${group} (no longer owner)`));
-            if (this.removeUserFromGroup(member, group, dryRun)) {
+            if (await execCmd(UnixGroupCommands.removeUserFromGroup(member, group))) {
               membershipsRemoved++;
               this.log(chalk.green(`   ✓ Removed ${member} from ${group}`));
             } else {
@@ -1450,31 +1175,20 @@ export default class SyncUnix extends Command {
 
           // Ensure ~/agor/worktrees/ directory exists
           if (!existsSync(worktreesDir)) {
-            if (dryRun) {
-              this.log(chalk.gray(`   [dry-run] Would create ${worktreesDir}`));
-            } else {
-              try {
-                for (const cmd of UnixUserCommands.setupWorktreesDir(user.unix_username)) {
-                  execSync(cmd, { stdio: 'pipe' });
-                }
-              } catch {
-                // May already exist or user home may not exist yet
-                if (verbose) {
-                  this.log(chalk.gray(`   ⚠ Could not create ${worktreesDir}`));
-                }
-                continue;
+            const setupCmds = UnixUserCommands.setupWorktreesDir(user.unix_username);
+            if (!(await execAllCmds(setupCmds))) {
+              // May already exist or user home may not exist yet
+              if (verbose) {
+                this.log(chalk.gray(`   ⚠ Could not create ${worktreesDir}`));
               }
+              continue;
             }
           }
 
           // Clean up broken symlinks
-          if (!dryRun && existsSync(worktreesDir)) {
-            try {
-              execSync(SymlinkCommands.removeBrokenSymlinks(worktreesDir), { stdio: 'pipe' });
-              symlinksCleaned++; // Count users cleaned, not individual symlinks
-            } catch {
-              // Non-fatal
-            }
+          if (existsSync(worktreesDir)) {
+            await execCmd(SymlinkCommands.removeBrokenSymlinks(worktreesDir));
+            symlinksCleaned++; // Count users cleaned, not individual symlinks
           }
 
           // Create symlinks for owned worktrees where directory exists
@@ -1504,33 +1218,24 @@ export default class SyncUnix extends Command {
 
             if (!needsCreate) continue;
 
-            if (dryRun) {
-              this.log(
-                chalk.gray(`   [dry-run] Would create symlink: ${wtInfo.name} → ${wtInfo.path}`)
-              );
+            // SymlinkCommands don't include sudo prefix, so prepend it
+            const symlinkCmds = SymlinkCommands.createSymlinkWithOwnership(
+              wtInfo.path,
+              symlinkPath,
+              user.unix_username
+            ).map((cmd) => `sudo -n ${cmd}`);
+            if (await execAllCmds(symlinkCmds)) {
               symlinksCreated++;
-            } else {
-              try {
-                // Uses ln -sfn which replaces existing symlinks
-                for (const cmd of SymlinkCommands.createSymlinkWithOwnership(
-                  wtInfo.path,
-                  symlinkPath,
-                  user.unix_username
-                )) {
-                  execSync(`sudo -n ${cmd}`, { stdio: 'pipe' });
-                }
-                symlinksCreated++;
-                if (verbose) {
-                  this.log(
-                    chalk.green(`   ✓ ${user.unix_username}: ${wtInfo.name} → ${wtInfo.path}`)
-                  );
-                }
-              } catch {
-                if (verbose) {
-                  this.log(chalk.red(`   ✗ Failed to create symlink for ${wtInfo.name}`));
-                }
-                syncErrors++;
+              if (verbose) {
+                this.log(
+                  chalk.green(`   ✓ ${user.unix_username}: ${wtInfo.name} → ${wtInfo.path}`)
+                );
               }
+            } else {
+              if (verbose) {
+                this.log(chalk.red(`   ✗ Failed to create symlink for ${wtInfo.name}`));
+              }
+              syncErrors++;
             }
           }
         }
@@ -1568,7 +1273,7 @@ export default class SyncUnix extends Command {
         );
 
         // Get all agor_wt_* groups on the system
-        const systemGroups = this.listWorktreeGroups();
+        const systemGroups = listWorktreeGroups();
 
         if (verbose) {
           this.log(chalk.gray(`   Found ${systemGroups.length} agor_wt_* group(s) on system`));
@@ -1585,7 +1290,7 @@ export default class SyncUnix extends Command {
 
           for (const groupName of staleGroups) {
             this.log(chalk.yellow(`   → Deleting group ${groupName}...`));
-            if (this.deleteGroup(groupName, dryRun)) {
+            if (await execCmd(UnixGroupCommands.deleteGroup(groupName))) {
               groupsDeleted++;
               this.log(chalk.green(`   ✓ Deleted ${groupName}`));
             } else {
@@ -1609,7 +1314,7 @@ export default class SyncUnix extends Command {
         );
 
         // Get all agor_rp_* groups on the system
-        const systemRepoGroups = this.listRepoGroups();
+        const systemRepoGroups = listRepoGroups();
 
         if (verbose) {
           this.log(chalk.gray(`   Found ${systemRepoGroups.length} agor_rp_* group(s) on system`));
@@ -1628,7 +1333,7 @@ export default class SyncUnix extends Command {
 
           for (const groupName of staleRepoGroups) {
             this.log(chalk.yellow(`   → Deleting group ${groupName}...`));
-            if (this.deleteGroup(groupName, dryRun)) {
+            if (await execCmd(UnixGroupCommands.deleteGroup(groupName))) {
               groupsDeleted++;
               this.log(chalk.green(`   ✓ Deleted ${groupName}`));
             } else {
@@ -1651,7 +1356,7 @@ export default class SyncUnix extends Command {
         );
 
         // Get all agor_* users on the system (only auto-generated format)
-        const systemUsers = this.listAgorUsers();
+        const systemUsers = listAgorUsers();
 
         if (verbose) {
           this.log(chalk.gray(`   Found ${systemUsers.length} agor_* user(s) on system`));
@@ -1669,7 +1374,7 @@ export default class SyncUnix extends Command {
 
           for (const username of staleUsers) {
             this.log(chalk.yellow(`   → Deleting user ${username}...`));
-            if (this.deleteUser(username, dryRun)) {
+            if (await execCmd(UnixUserCommands.deleteUser(username))) {
               usersDeleted++;
               this.log(chalk.green(`   ✓ Deleted ${username}`));
             } else {
