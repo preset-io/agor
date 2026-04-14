@@ -65,7 +65,12 @@ import { createThreadSessionMapService } from './services/thread-session-map.js'
 import { createUsersService } from './services/users.js';
 import { setupWorktreeOwnersService } from './services/worktree-owners.js';
 import { createWorktreesService } from './services/worktrees.js';
-import { computeFileHash, getSessionFilePath } from './utils/session-state.js';
+import {
+  computeFileHash,
+  findCodexSessionFile,
+  getCodexHome,
+  getSessionFilePath,
+} from './utils/session-state.js';
 import { pullIfNeeded, pushAsync } from './utils/session-state-hooks.js';
 
 /**
@@ -456,9 +461,13 @@ function createExecuteHandler(
       const toolName = session.agentic_tool as import('@agor/core/types').AgenticToolName;
       const capabilities = AGENTIC_TOOL_CAPABILITIES[toolName];
       if (capabilities && !capabilities.supportsStatelessFsMode) {
+        const supported = Object.entries(AGENTIC_TOOL_CAPABILITIES)
+          .filter(([, caps]) => caps.supportsStatelessFsMode)
+          .map(([name]) => name)
+          .join(', ');
         throw new Error(
           `stateless_fs_mode is enabled but tool '${toolName}' does not support it. ` +
-            `Supported tools: claude-code`
+            `Supported tools: ${supported}`
         );
       }
     }
@@ -785,15 +794,24 @@ function createExecuteHandler(
 
             // Also compute and write session_md5 to the task record
             try {
-              const filePath = getSessionFilePath(
-                freshSession.agentic_tool,
-                cwd,
-                freshSession.sdk_session_id,
-                executorHomeDir
-              );
-              const md5 = await computeFileHash(filePath);
-              if (md5) {
-                await app.service('tasks').patch(taskId, { session_md5: md5 }, params);
+              let filePath: string;
+              if (freshSession.agentic_tool === 'codex') {
+                const codexHome = getCodexHome(sessionId);
+                const found = await findCodexSessionFile(codexHome, freshSession.sdk_session_id);
+                filePath = found || '';
+              } else {
+                filePath = getSessionFilePath(
+                  freshSession.agentic_tool,
+                  cwd,
+                  freshSession.sdk_session_id,
+                  executorHomeDir
+                );
+              }
+              if (filePath) {
+                const md5 = await computeFileHash(filePath);
+                if (md5) {
+                  await app.service('tasks').patch(taskId, { session_md5: md5 }, params);
+                }
               }
             } catch (md5Err) {
               console.error(

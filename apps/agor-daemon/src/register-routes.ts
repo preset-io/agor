@@ -655,8 +655,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           const toolName = session.agentic_tool as import('@agor/core/types').AgenticToolName;
           const capabilities = AGENTIC_TOOL_CAPABILITIES[toolName];
           if (capabilities && !capabilities.supportsStatelessFsMode) {
+            const supported = Object.entries(AGENTIC_TOOL_CAPABILITIES)
+              .filter(([, caps]) => caps.supportsStatelessFsMode)
+              .map(([name]) => name)
+              .join(', ');
             throw new Error(
-              `stateless_fs_mode is enabled but tool '${toolName}' does not support it. Supported tools: claude-code`
+              `stateless_fs_mode is enabled but tool '${toolName}' does not support it. Supported tools: ${supported}`
             );
           }
         }

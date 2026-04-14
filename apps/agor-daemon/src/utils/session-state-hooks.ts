@@ -12,7 +12,14 @@
 import type { Database } from '@agor/core/db';
 import { SerializedSessionRepository } from '@agor/core/db';
 import type { AgenticToolName } from '@agor/core/types';
-import { computeFileHash, getSessionFilePath, restoreFile, serializeFile } from './session-state';
+import {
+  computeFileHash,
+  findCodexSessionFile,
+  getCodexHome,
+  getSessionFilePath,
+  restoreFile,
+  serializeFile,
+} from './session-state';
 
 const STALE_PROCESSING_THRESHOLD_MS = 30_000; // 30 seconds
 
@@ -53,12 +60,11 @@ interface PushContext {
  */
 export async function pullIfNeeded(ctx: PullContext): Promise<void> {
   const repo = new SerializedSessionRepository(ctx.db);
-  const filePath = getSessionFilePath(
-    ctx.tool,
-    ctx.worktreePath,
-    ctx.sdkSessionId,
-    ctx.executorHomeDir
-  );
+
+  // For Codex, pass the per-session CODEX_HOME as homeOverride
+  const homeOverride = ctx.tool === 'codex' ? getCodexHome(ctx.sessionId) : ctx.executorHomeDir;
+
+  const filePath = getSessionFilePath(ctx.tool, ctx.worktreePath, ctx.sdkSessionId, homeOverride);
 
   // Check latest row (any status)
   let latest = await repo.findLatest(ctx.sessionId);
@@ -131,12 +137,21 @@ export function pushAsync(ctx: PushContext): void {
 
 async function doPush(ctx: PushContext): Promise<void> {
   const repo = new SerializedSessionRepository(ctx.db);
-  const filePath = getSessionFilePath(
-    ctx.tool,
-    ctx.worktreePath,
-    ctx.sdkSessionId,
-    ctx.executorHomeDir
-  );
+
+  // For Codex, find the actual session file (may be in a date-based subdirectory)
+  let filePath: string;
+  if (ctx.tool === 'codex') {
+    const codexHome = getCodexHome(ctx.sessionId);
+    const found = await findCodexSessionFile(codexHome, ctx.sdkSessionId);
+    if (!found) {
+      // No session file found — Codex may not have written one (e.g. error before first turn)
+      return;
+    }
+    filePath = found;
+  } else {
+    const homeOverride = ctx.executorHomeDir;
+    filePath = getSessionFilePath(ctx.tool, ctx.worktreePath, ctx.sdkSessionId, homeOverride);
+  }
 
   // Compute current hash
   const currentMd5 = await computeFileHash(filePath);

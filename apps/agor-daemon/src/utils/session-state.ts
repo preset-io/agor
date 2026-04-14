@@ -10,7 +10,8 @@
 
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, readFile, stat } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { createGunzip, createGzip } from 'node:zlib';
 
@@ -18,13 +19,13 @@ import { getTranscriptPath } from '@agor/core/claude';
 import type { AgenticToolName } from '@agor/core/types';
 
 /**
- * Derive the local session file path from tool + worktree path + SDK session ID.
- * Delegates to getTranscriptPath for Claude Code to stay DRY with existing path encoding.
- *
- * @param homeOverride - Override for the home directory. When the executor runs as
- *   a different Unix user (insulated/strict mode), pass that user's home directory
- *   so the path resolves correctly. Defaults to the daemon's own homedir().
+ * Get the CODEX_HOME directory for a given Agor session.
+ * Mirrors the logic in executor's prompt-service.ts ensureCodexSessionContext().
  */
+export function getCodexHome(agorSessionId: string): string {
+  return path.join(os.tmpdir(), `agor-codex-${agorSessionId}`);
+}
+
 export function getSessionFilePath(
   tool: AgenticToolName,
   worktreePath: string,
@@ -42,9 +43,66 @@ export function getSessionFilePath(
       }
       return getTranscriptPath(sdkSessionId, worktreePath);
     }
+    case 'codex': {
+      // For Codex, homeOverride is the CODEX_HOME directory (per-session /tmp/ dir).
+      // Canonical restore path: $CODEX_HOME/sessions/<threadId>.jsonl
+      // The Codex CLI searches for threads by ID, so a flat path works.
+      const codexHome = homeOverride || getCodexHome('unknown');
+      return path.join(codexHome, 'sessions', `${sdkSessionId}.jsonl`);
+    }
     default:
       throw new Error(`getSessionFilePath: unsupported tool '${tool}'`);
   }
+}
+
+/**
+ * Find the actual session file on disk for Codex.
+ * Codex stores sessions in date-based directories:
+ *   $CODEX_HOME/sessions/YYYY/MM/DD/rollout-<timestamp>-<threadId>.jsonl
+ *
+ * For push (after execution), the file may be at a dated path OR the canonical
+ * flat path (if restored by pull). This function searches both.
+ *
+ * Returns the absolute path if found, or null.
+ */
+export async function findCodexSessionFile(
+  codexHome: string,
+  threadId: string
+): Promise<string | null> {
+  const sessionsDir = path.join(codexHome, 'sessions');
+
+  // First check the canonical flat path (used by pull/restore)
+  const canonicalPath = path.join(sessionsDir, `${threadId}.jsonl`);
+  try {
+    await stat(canonicalPath);
+    return canonicalPath;
+  } catch {
+    // Not at canonical path, search in date directories
+  }
+
+  // Recursively search for *-{threadId}.jsonl in the sessions directory tree
+  try {
+    return await findFileRecursive(sessionsDir, threadId);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Recursively search a directory for a file containing the threadId in its name.
+ */
+async function findFileRecursive(dir: string, threadId: string): Promise<string | null> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      const found = await findFileRecursive(fullPath, threadId);
+      if (found) return found;
+    } else if (entry.isFile() && entry.name.endsWith('.jsonl') && entry.name.includes(threadId)) {
+      return fullPath;
+    }
+  }
+  return null;
 }
 
 /**
