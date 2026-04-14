@@ -62,42 +62,52 @@ export const BashRenderer: React.FC<ToolRendererProps> = ({ input, result }) => 
       )}
 
       {/* Output with collapsible code block */}
-      {result &&
-        (useAnsi ? (
-          <CollapsibleAnsiText
-            style={{
-              fontSize: token.fontSizeSM,
-              margin: 0,
-              ...((!hasContent && {
-                fontStyle: 'italic',
-                color: token.colorTextTertiary,
-              }) as React.CSSProperties),
-              ...(isError && {
-                color: token.colorError,
-              }),
-            }}
-          >
-            {hasContent ? resultText : '(no output)'}
-          </CollapsibleAnsiText>
-        ) : (
-          <CollapsibleText
-            code
-            preserveWhitespace
-            style={{
-              fontSize: token.fontSizeSM,
-              margin: 0,
-              ...((!hasContent && {
-                fontStyle: 'italic',
-                color: token.colorTextTertiary,
-              }) as React.CSSProperties),
-              ...(isError && {
-                color: token.colorError,
-              }),
-            }}
-          >
-            {hasContent ? resultText : '(no output)'}
-          </CollapsibleText>
-        ))}
+      {result && (
+        <div
+          style={{
+            background: token.colorBgLayout,
+            borderRadius: token.borderRadius,
+            padding: token.sizeUnit,
+            overflow: 'auto',
+          }}
+        >
+          {useAnsi ? (
+            <CollapsibleAnsiText
+              style={{
+                fontSize: token.fontSizeSM,
+                margin: 0,
+                ...((!hasContent && {
+                  fontStyle: 'italic',
+                  color: token.colorTextTertiary,
+                }) as React.CSSProperties),
+                ...(isError && {
+                  color: token.colorError,
+                }),
+              }}
+            >
+              {hasContent ? resultText : '(no output)'}
+            </CollapsibleAnsiText>
+          ) : (
+            <CollapsibleText
+              code
+              preserveWhitespace
+              style={{
+                fontSize: token.fontSizeSM,
+                margin: 0,
+                ...((!hasContent && {
+                  fontStyle: 'italic',
+                  color: token.colorTextTertiary,
+                }) as React.CSSProperties),
+                ...(isError && {
+                  color: token.colorError,
+                }),
+              }}
+            >
+              {hasContent ? resultText : '(no output)'}
+            </CollapsibleText>
+          )}
+        </div>
+      )}
 
       {/* Tool input parameters (collapsible below result) */}
       {result && (
