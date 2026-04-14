@@ -6,7 +6,7 @@ import {
   SafetyOutlined,
   UnlockOutlined,
 } from '@ant-design/icons';
-import { Radio, Select, Space, Typography } from 'antd';
+import { Radio, Select, Space, Tooltip, Typography, theme } from 'antd';
 
 interface ModeOption {
   mode: PermissionMode;
@@ -253,6 +253,7 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   codexApprovalPolicy = 'on-request',
   onCodexChange,
 }) => {
+  const { token } = theme.useToken();
   const modes = getModesForTool(agentic_tool);
   const effectiveValue = value || getDefaultMode(agentic_tool);
 
@@ -262,14 +263,14 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
     // (used by SessionPanel for inline Codex controls)
     if (agentic_tool === 'codex' && onCodexChange) {
       return (
-        <Space size={8}>
+        <Space size={4}>
           <Select
             value={codexSandboxMode}
             onChange={(val) => onCodexChange(val, codexApprovalPolicy)}
             size={size}
             placeholder="Sandbox"
             popupMatchSelectWidth={false}
-            style={{ minWidth: 80 }}
+            style={{ minWidth: 70, fontSize: token.fontSizeSM }}
             optionLabelProp="label"
             options={CODEX_SANDBOX_MODES.map(({ value, label, description }) => ({
               label,
@@ -291,7 +292,7 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
             size={size}
             placeholder="Approval"
             popupMatchSelectWidth={false}
-            style={{ minWidth: 80 }}
+            style={{ minWidth: 70, fontSize: token.fontSizeSM }}
             optionLabelProp="label"
             options={CODEX_APPROVAL_POLICIES.map(({ value, label, description }) => ({
               label,
@@ -312,37 +313,44 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
     }
 
     // All other cases: single permission mode dropdown
-    // Show only label in the selected value, but label + description in dropdown options
+    // Collapsed state: icon-only with color. Dropdown: icon + label + description.
+    const currentMode = modes.find((m) => m.mode === effectiveValue);
     return (
-      <Select
-        value={effectiveValue}
-        onChange={onChange}
-        style={{ width: '100%' }}
-        size={size}
-        popupMatchSelectWidth={false}
-        optionLabelProp="label"
-        options={modes.map(({ mode, label, description, icon, color }) => ({
-          label,
-          value: mode,
-          title: description,
-          icon,
-          color,
-        }))}
-        optionRender={(option) => {
-          const modeData = modes.find((m) => m.mode === option.value);
-          return (
-            <Space size={6} align="start">
-              {modeData && <span style={{ color: modeData.color }}>{modeData.icon}</span>}
-              <div style={{ lineHeight: 1.3 }}>
-                <div>{option.label}</div>
-                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                  {option.data.title}
-                </Typography.Text>
-              </div>
-            </Space>
-          );
-        }}
-      />
+      <Tooltip
+        title={
+          currentMode ? `${currentMode.label} — ${currentMode.description}` : 'Permission mode'
+        }
+      >
+        <Select
+          value={effectiveValue}
+          onChange={onChange}
+          style={{ fontSize: token.fontSizeSM }}
+          size={size}
+          popupMatchSelectWidth={false}
+          optionLabelProp="label"
+          options={modes.map(({ mode, label, description, icon, color }) => ({
+            label: <span style={{ color, fontSize: token.fontSizeSM }}>{icon}</span>,
+            value: mode,
+            title: description,
+            icon,
+            color,
+          }))}
+          optionRender={(option) => {
+            const modeData = modes.find((m) => m.mode === option.value);
+            return (
+              <Space size={6} align="start">
+                {modeData && <span style={{ color: modeData.color }}>{modeData.icon}</span>}
+                <div style={{ lineHeight: 1.3 }}>
+                  <div>{modeData?.label}</div>
+                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                    {modeData?.description}
+                  </Typography.Text>
+                </div>
+              </Space>
+            );
+          }}
+        />
+      </Tooltip>
     );
   }
 

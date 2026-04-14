@@ -12,8 +12,8 @@
  */
 
 import type { EffortLevel } from '@agor-live/client';
-import { ThunderboltOutlined } from '@ant-design/icons';
-import { Select, Tooltip } from 'antd';
+import { BulbOutlined } from '@ant-design/icons';
+import { Select, Space, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 
 interface EffortSelectorProps {
@@ -22,6 +22,23 @@ interface EffortSelectorProps {
   size?: 'small' | 'middle' | 'large';
   compact?: boolean;
 }
+
+const EFFORT_OPTIONS: {
+  value: EffortLevel;
+  shortLabel: string;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: 'low',
+    shortLabel: 'Lo',
+    label: 'Low',
+    description: 'Minimal thinking, fastest responses',
+  },
+  { value: 'medium', shortLabel: 'Md', label: 'Medium', description: 'Moderate thinking' },
+  { value: 'high', shortLabel: 'Hi', label: 'High', description: 'Deep reasoning (default)' },
+  { value: 'max', shortLabel: 'Mx', label: 'Max', description: 'Maximum effort (Opus 4.6 only)' },
+];
 
 /**
  * EffortSelector - Dropdown for selecting Claude reasoning effort level
@@ -32,28 +49,7 @@ export const EffortSelector: React.FC<EffortSelectorProps> = ({
   size = 'middle',
   compact = false,
 }) => {
-  const options = [
-    {
-      value: 'low' as EffortLevel,
-      label: compact ? 'Low' : 'Low effort',
-      description: 'Minimal thinking, fastest responses',
-    },
-    {
-      value: 'medium' as EffortLevel,
-      label: compact ? 'Med' : 'Medium effort',
-      description: 'Moderate thinking',
-    },
-    {
-      value: 'high' as EffortLevel,
-      label: compact ? 'High' : 'High effort',
-      description: 'Deep reasoning (default)',
-    },
-    {
-      value: 'max' as EffortLevel,
-      label: compact ? 'Max' : 'Max effort',
-      description: 'Maximum effort (Opus 4.6 only)',
-    },
-  ];
+  const { token } = theme.useToken();
 
   return (
     <Tooltip title="Reasoning effort level">
@@ -61,16 +57,40 @@ export const EffortSelector: React.FC<EffortSelectorProps> = ({
         value={value}
         onChange={onChange}
         size={size}
-        style={{ width: compact ? 80 : 160 }}
-        options={options.map((opt) => ({
+        style={{
+          width: compact ? undefined : 160,
+          fontSize: compact ? token.fontSizeSM : undefined,
+        }}
+        popupMatchSelectWidth={false}
+        optionLabelProp="label"
+        options={EFFORT_OPTIONS.map((opt) => ({
           value: opt.value,
-          label: (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <ThunderboltOutlined style={{ fontSize: 12 }} />
-              <span>{opt.label}</span>
-            </div>
+          label: compact ? (
+            <span style={{ fontSize: token.fontSizeSM }}>
+              <BulbOutlined style={{ fontSize: token.fontSizeSM - 1, marginRight: 2 }} />
+              {opt.shortLabel}
+            </span>
+          ) : (
+            <span>
+              <BulbOutlined style={{ fontSize: 12, marginRight: 6 }} />
+              {opt.label} effort
+            </span>
           ),
         }))}
+        optionRender={(option) => {
+          const opt = EFFORT_OPTIONS.find((o) => o.value === option.value);
+          return (
+            <Space size={6} align="start">
+              <BulbOutlined style={{ marginTop: 3 }} />
+              <div style={{ lineHeight: 1.3 }}>
+                <div>{opt?.label}</div>
+                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                  {opt?.description}
+                </Typography.Text>
+              </div>
+            </Space>
+          );
+        }}
       />
     </Tooltip>
   );
