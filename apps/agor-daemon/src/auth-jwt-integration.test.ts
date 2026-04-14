@@ -57,7 +57,27 @@ describe('JWT Authentication Integration - Production Auth Hooks', () => {
     // Create Feathers app with authentication configured like production
     app = feathers();
 
-    // Configure authentication with JWT (matching index.ts production setup)
+    // Authentication config must be set before registering strategies
+    // (LocalStrategy requires usernameField to be configured)
+    app.set('authentication', {
+      secret: 'test-jwt-secret',
+      entity: 'user',
+      entityId: 'user_id',
+      service: 'users',
+      authStrategies: ['jwt'],
+      jwtOptions: {
+        header: { typ: 'access' },
+        audience: 'https://agor.dev',
+        issuer: 'agor',
+        algorithm: 'HS256',
+        expiresIn: '7d',
+      },
+      local: {
+        usernameField: 'email',
+        passwordField: 'password',
+      },
+    });
+
     const authService = new AuthenticationService(app);
     authService.register('jwt', new JWTStrategy());
     authService.register('local', new LocalStrategy());
@@ -88,8 +108,8 @@ describe('JWT Authentication Integration - Production Auth Hooks', () => {
       },
     });
 
-    // Should reject unauthenticated request
-    await expect(app.service('/test-protected').find({})).rejects.toThrow();
+    // Should reject unauthenticated request (provider: 'rest' simulates external call)
+    await expect(app.service('/test-protected').find({ provider: 'rest' })).rejects.toThrow();
   });
 
   it('should accept requests with valid user in params', async () => {
@@ -136,6 +156,7 @@ describe('JWT Authentication Integration - Production Auth Hooks', () => {
       app.service('/test-admin').create({}, {
         user: { user_id: 'user-1', email: 'test@example.com', role: ROLES.MEMBER },
         authenticated: true,
+        provider: 'rest',
       } as any)
     ).rejects.toThrow();
 
@@ -143,6 +164,7 @@ describe('JWT Authentication Integration - Production Auth Hooks', () => {
     const result = await app.service('/test-admin').create({}, {
       user: { user_id: 'admin-1', email: 'admin@example.com', role: ROLES.ADMIN },
       authenticated: true,
+      provider: 'rest',
     } as any);
 
     expect(result.success).toBe(true);
@@ -162,6 +184,25 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
   beforeAll(async () => {
     // Create Feathers app with authentication (matching production setup)
     app = feathers();
+
+    app.set('authentication', {
+      secret: 'test-jwt-secret',
+      entity: 'user',
+      entityId: 'user_id',
+      service: 'users',
+      authStrategies: ['jwt'],
+      jwtOptions: {
+        header: { typ: 'access' },
+        audience: 'https://agor.dev',
+        issuer: 'agor',
+        algorithm: 'HS256',
+        expiresIn: '7d',
+      },
+      local: {
+        usernameField: 'email',
+        passwordField: 'password',
+      },
+    });
 
     const authService = new AuthenticationService(app);
     authService.register('jwt', new JWTStrategy());
@@ -187,8 +228,10 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
         },
       });
 
-      // Should reject without user
-      await expect(app.service('/sessions/:id/spawn').create({})).rejects.toThrow();
+      // Should reject without user (provider: 'rest' simulates external call)
+      await expect(
+        app.service('/sessions/:id/spawn').create({}, { provider: 'rest' })
+      ).rejects.toThrow();
     });
 
     it('POST /sessions/:id/spawn accepts authenticated requests', async () => {
@@ -227,7 +270,9 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
         },
       });
 
-      await expect(app.service('/sessions/:id/fork').create({})).rejects.toThrow();
+      await expect(
+        app.service('/sessions/:id/fork').create({}, { provider: 'rest' })
+      ).rejects.toThrow();
     });
 
     it('POST /sessions/:id/stop rejects unauthenticated requests', async () => {
@@ -244,7 +289,9 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
         },
       });
 
-      await expect(app.service('/sessions/:id/stop').create({})).rejects.toThrow();
+      await expect(
+        app.service('/sessions/:id/stop').create({}, { provider: 'rest' })
+      ).rejects.toThrow();
     });
 
     it('GET /sessions/:id/mcp-servers rejects unauthenticated requests', async () => {
@@ -261,7 +308,9 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
         },
       });
 
-      await expect(app.service('/sessions/:id/mcp-servers').find({})).rejects.toThrow();
+      await expect(
+        app.service('/sessions/:id/mcp-servers').find({ provider: 'rest' })
+      ).rejects.toThrow();
     });
   });
 
@@ -280,7 +329,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
         },
       });
 
-      await expect(app.service('/tasks/bulk').create([])).rejects.toThrow();
+      await expect(app.service('/tasks/bulk').create([], { provider: 'rest' })).rejects.toThrow();
     });
 
     it('POST /tasks/:id/complete rejects unauthenticated requests', async () => {
@@ -297,7 +346,9 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
         },
       });
 
-      await expect(app.service('/tasks/:id/complete').create({})).rejects.toThrow();
+      await expect(
+        app.service('/tasks/:id/complete').create({}, { provider: 'rest' })
+      ).rejects.toThrow();
     });
 
     it('POST /tasks/:id/fail rejects unauthenticated requests', async () => {
@@ -314,7 +365,9 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
         },
       });
 
-      await expect(app.service('/tasks/:id/fail').create({})).rejects.toThrow();
+      await expect(
+        app.service('/tasks/:id/fail').create({}, { provider: 'rest' })
+      ).rejects.toThrow();
     });
   });
 
@@ -333,7 +386,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
         },
       });
 
-      await expect(app.service('/repos/local').create({})).rejects.toThrow();
+      await expect(app.service('/repos/local').create({}, { provider: 'rest' })).rejects.toThrow();
     });
 
     it('POST /repos/:id/worktrees rejects unauthenticated requests', async () => {
@@ -350,7 +403,9 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
         },
       });
 
-      await expect(app.service('/repos/:id/worktrees').create({})).rejects.toThrow();
+      await expect(
+        app.service('/repos/:id/worktrees').create({}, { provider: 'rest' })
+      ).rejects.toThrow();
     });
 
     it('DELETE /repos/:id/worktrees/:name rejects unauthenticated requests', async () => {
@@ -367,7 +422,9 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
         },
       });
 
-      await expect(app.service('/repos/:id/worktrees/:name').remove('id')).rejects.toThrow();
+      await expect(
+        app.service('/repos/:id/worktrees/:name').remove('id', { provider: 'rest' })
+      ).rejects.toThrow();
     });
   });
 
@@ -386,7 +443,9 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
         },
       });
 
-      await expect(app.service('/board-comments/:id/toggle-reaction').create({})).rejects.toThrow();
+      await expect(
+        app.service('/board-comments/:id/toggle-reaction').create({}, { provider: 'rest' })
+      ).rejects.toThrow();
     });
 
     it('POST /boards/:id/sessions rejects unauthenticated requests', async () => {
@@ -403,7 +462,9 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
         },
       });
 
-      await expect(app.service('/boards/:id/sessions').create({})).rejects.toThrow();
+      await expect(
+        app.service('/boards/:id/sessions').create({}, { provider: 'rest' })
+      ).rejects.toThrow();
     });
   });
 
@@ -423,13 +484,16 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       });
 
       // Reject unauthenticated
-      await expect(app.service('/worktrees/:id/start').create({})).rejects.toThrow();
+      await expect(
+        app.service('/worktrees/:id/start').create({}, { provider: 'rest' })
+      ).rejects.toThrow();
 
       // Reject non-admin (member role)
       await expect(
         app.service('/worktrees/:id/start').create({}, {
           user: { user_id: 'user-1', email: 'test@example.com', role: ROLES.MEMBER },
           authenticated: true,
+          provider: 'rest',
         } as any)
       ).rejects.toThrow();
     });
@@ -448,7 +512,9 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
         },
       });
 
-      await expect(app.service('/worktrees/:id/stop').create({})).rejects.toThrow();
+      await expect(
+        app.service('/worktrees/:id/stop').create({}, { provider: 'rest' })
+      ).rejects.toThrow();
     });
 
     it('GET /worktrees/:id/health rejects unauthenticated requests', async () => {
@@ -465,7 +531,9 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
         },
       });
 
-      await expect(app.service('/worktrees/:id/health').find({})).rejects.toThrow();
+      await expect(
+        app.service('/worktrees/:id/health').find({ provider: 'rest' })
+      ).rejects.toThrow();
     });
 
     it('GET /worktrees/logs rejects unauthenticated requests', async () => {
@@ -482,7 +550,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
         },
       });
 
-      await expect(app.service('/worktrees/logs').find({})).rejects.toThrow();
+      await expect(app.service('/worktrees/logs').find({ provider: 'rest' })).rejects.toThrow();
     });
   });
 
@@ -501,7 +569,7 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
         },
       });
 
-      await expect(app.service('/files').find({})).rejects.toThrow();
+      await expect(app.service('/files').find({ provider: 'rest' })).rejects.toThrow();
     });
   });
 });
