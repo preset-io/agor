@@ -637,10 +637,6 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       // Resolve Unix user for impersonation
       const asUser = await resolveGitImpersonationForWorktree(this.db, worktree);
 
-      // If the branch was deleted during archive (new_branch worktrees delete their branch),
-      // we need to recreate it from the base ref.
-      const branchWasDeleted = worktree.new_branch === true;
-
       try {
         const sessionToken = await appWithToken.sessionTokenService?.generateToken(
           'worktree-unarchive',
@@ -660,9 +656,13 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
                 worktreePath: worktree.path,
                 branch: worktree.ref,
                 refType: worktree.ref_type || 'branch',
-                // If branch was deleted during archive, recreate it from base_ref
-                createBranch: branchWasDeleted,
-                sourceBranch: branchWasDeleted ? worktree.base_ref : undefined,
+                // Always try to checkout the existing branch first.
+                // If the branch was deleted during archive, git worktree add will fail
+                // and the executor marks filesystem_status as 'failed'.
+                // We intentionally avoid createBranch:true here because createWorktree's
+                // orphan cleanup path would force-delete an existing branch, risking data loss.
+                createBranch: false,
+                sourceBranch: worktree.base_ref,
                 // Unix group isolation
                 initUnixGroup: rbacEnabled,
                 othersAccess: worktree.others_fs_access || 'read',
