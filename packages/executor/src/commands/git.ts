@@ -22,6 +22,7 @@ import {
   cloneRepo,
   createWorktree,
   deleteBranch,
+  deleteWorktreeDirectory,
   getReposDir,
   removeWorktree,
 } from '@agor/core/git';
@@ -648,10 +649,19 @@ export async function handleGitWorktreeRemove(
 
       console.log(`[git.worktree.remove] Repo path: ${repoPath}, Worktree name: ${worktreeName}`);
 
-      // Remove the worktree using git
+      // Remove the worktree using git (deregisters from .git/worktrees/)
       await removeWorktree(repoPath, worktreeName);
-      filesystemRemoved = true;
+      console.log(`[git.worktree.remove] Git worktree deregistered`);
 
+      // git worktree remove --force may leave residual files on disk.
+      // Fully delete the directory to reclaim all disk space.
+      if (existsSync(worktreePath)) {
+        console.log(`[git.worktree.remove] Directory still exists, removing residual files...`);
+        await deleteWorktreeDirectory(worktreePath);
+        console.log(`[git.worktree.remove] Directory fully removed`);
+      }
+
+      filesystemRemoved = true;
       console.log(`[git.worktree.remove] Worktree removed from filesystem`);
 
       // Delete the associated branch if requested
@@ -675,6 +685,15 @@ export async function handleGitWorktreeRemove(
           );
         }
       }
+    } else if (existsSync(worktreePath)) {
+      // No .git file but directory exists — orphaned directory from a previous partial removal.
+      // Clean it up completely.
+      console.log(
+        '[git.worktree.remove] No .git file but directory exists (orphaned), removing directory...'
+      );
+      await deleteWorktreeDirectory(worktreePath);
+      filesystemRemoved = true;
+      console.log('[git.worktree.remove] Orphaned directory removed');
     } else {
       console.log(
         '[git.worktree.remove] Worktree does not exist on filesystem, skipping git removal'

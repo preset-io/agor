@@ -6,10 +6,11 @@
  */
 
 import type { ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { ENVIRONMENT, PAGINATION } from '@agor/core/config';
+import { ENVIRONMENT, isWorktreeRbacEnabled, PAGINATION } from '@agor/core/config';
 import { type Database, WorktreeRepository, type WorktreeWithZoneAndSessions } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
@@ -609,6 +610,75 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     }
 
     const unarchivedWorktree = await this.patch(id, patchData, params);
+
+    // Recreate the git worktree on filesystem if the directory is missing
+    // (e.g., it was archived with filesystemAction: 'deleted')
+    if (!existsSync(worktree.path)) {
+      console.log(`📂 Worktree directory missing, spawning executor to recreate: ${worktree.path}`);
+
+      // Set filesystem_status to 'creating' while we rebuild
+      await this.patch(id, { filesystem_status: 'creating' }, { provider: undefined });
+
+      const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as
+        | UserID
+        | undefined;
+      const appWithToken = this.app as unknown as {
+        sessionTokenService?: import('../services/session-token-service').SessionTokenService;
+      };
+
+      // Look up repo to get local_path
+      const reposService = this.app.service('repos');
+      const repo = (await reposService.get(worktree.repo_id)) as Repo;
+
+      const rbacEnabled = isWorktreeRbacEnabled();
+      const { getDaemonUser } = await import('@agor/core/config');
+      const daemonUser = getDaemonUser();
+
+      // Resolve Unix user for impersonation
+      const asUser = await resolveGitImpersonationForWorktree(this.db, worktree);
+
+      try {
+        const sessionToken = await appWithToken.sessionTokenService?.generateToken(
+          'worktree-unarchive',
+          userId || 'anonymous'
+        );
+        if (sessionToken) {
+          spawnExecutor(
+            {
+              command: 'git.worktree.add',
+              sessionToken,
+              daemonUrl: getDaemonUrl(),
+              params: {
+                worktreeId: worktree.worktree_id,
+                repoId: repo.repo_id,
+                repoPath: repo.local_path,
+                worktreeName: worktree.name,
+                worktreePath: worktree.path,
+                branch: worktree.ref,
+                // Don't create a new branch — the branch already exists from before archival
+                createBranch: false,
+                // Unix group isolation
+                initUnixGroup: rbacEnabled,
+                othersAccess: worktree.others_fs_access || 'read',
+                daemonUser,
+                repoUnixGroup: repo.unix_group,
+              },
+            },
+            {
+              logPrefix: `[WorktreesService.unarchive ${worktree.name}]`,
+              asUser,
+            }
+          );
+        }
+      } catch (error) {
+        console.error(
+          `⚠️  Failed to spawn executor for worktree recreation:`,
+          error instanceof Error ? error.message : String(error)
+        );
+        // Mark as failed so the UI can show the error state
+        await this.patch(id, { filesystem_status: 'failed' }, { provider: undefined });
+      }
+    }
 
     // Ensure a board object exists when unarchiving to a board.
     // Older archived worktrees may have had their board object removed.
