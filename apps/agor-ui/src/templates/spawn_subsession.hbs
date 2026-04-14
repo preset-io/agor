@@ -18,12 +18,9 @@ REQUEST: """
     - Model:
     {{modelConfig.mode}}
     -
-    {{modelConfig.model}}{{#if modelConfig.thinkingMode}}
-      (thinking:
-      {{modelConfig.thinkingMode}}{{#if modelConfig.manualThinkingTokens}}
-        -
-        {{modelConfig.manualThinkingTokens}}
-        tokens{{/if}}){{/if}}
+    {{modelConfig.model}}{{#if modelConfig.effort}}
+      (effort:
+      {{modelConfig.effort}}){{/if}}
   {{/if}}
   {{#if codexSandboxMode}}
     - Codex Sandbox Mode:
@@ -73,10 +70,8 @@ hashing and JWT for tokens."
 {{/if}}
 {{#if modelConfig}}
   - modelConfig: { mode: "{{modelConfig.mode}}", model: "{{modelConfig.model}}"{{#if
-    modelConfig.thinkingMode
-  }}, thinkingMode: "{{modelConfig.thinkingMode}}"{{/if}}{{#if modelConfig.manualThinkingTokens}},
-    manualThinkingTokens:
-    {{modelConfig.manualThinkingTokens}}{{/if}}
+    modelConfig.effort
+  }}, effort: "{{modelConfig.effort}}"{{/if}}
   }
 {{/if}}
 {{#if codexSandboxMode}}
@@ -117,10 +112,8 @@ session will do YOUR EXACT TOOL CALL MUST BE: agor_sessions_spawn({ "prompt": "{
   "agenticTool": "{{agenticTool}}",{{/if}}{{#if permissionMode}}
   "permissionMode": "{{permissionMode}}",{{/if}}{{#if modelConfig}}
   "modelConfig": { "mode": "{{modelConfig.mode}}", "model": "{{modelConfig.model}}"{{#if
-    modelConfig.thinkingMode
-  }}, "thinkingMode": "{{modelConfig.thinkingMode}}"{{/if}}{{#if modelConfig.manualThinkingTokens}},
-    "manualThinkingTokens":
-    {{modelConfig.manualThinkingTokens}}{{/if}}
+    modelConfig.effort
+  }}, "effort": "{{modelConfig.effort}}"{{/if}}
   },{{/if}}{{#if codexSandboxMode}}
   "codexSandboxMode": "{{codexSandboxMode}}",{{/if}}{{#if codexApprovalPolicy}}
   "codexApprovalPolicy": "{{codexApprovalPolicy}}",{{/if}}{{#if codexNetworkAccess}}

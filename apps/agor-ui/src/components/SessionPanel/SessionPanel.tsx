@@ -37,12 +37,12 @@ import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { compileTemplate } from '../../utils/templates';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import { EffortSelector } from '../EffortSelector';
 import { FileUpload, FileUploadButton } from '../FileUpload';
 import { MCPServerPill } from '../MCPServerPill';
 import { CreatedByTag } from '../metadata';
 import { PermissionModeSelector } from '../PermissionModeSelector';
 import { ContextWindowPill, ModelPill, SessionIdPill, TimerPill, TokenCountPill } from '../Pill';
-import { EffortSelector } from '../ThinkingModeSelector';
 import { ToolIcon } from '../ToolIcon';
 import { SessionPanelContent } from './SessionPanelContent';
 
@@ -481,11 +481,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     getDefaultPermissionMode,
   ]);
 
-  // Update effort level when session changes
+  // Update effort level when session changes (default to 'high' for sessions without effort config)
   React.useEffect(() => {
-    if (session?.model_config?.effort) {
-      setEffortLevel(session.model_config.effort);
-    }
+    setEffortLevel(session?.model_config?.effort || 'high');
   }, [session?.model_config?.effort]);
 
   // Scroll to bottom when panel opens or session changes

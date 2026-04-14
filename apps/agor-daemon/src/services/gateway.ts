@@ -600,6 +600,7 @@ export class GatewayService {
               mode: modelConfig.mode ?? 'alias',
               model: modelConfig.model ?? '',
               updated_at: new Date().toISOString(),
+              effort: modelConfig.effort,
             }
           : undefined,
         tasks: [],
