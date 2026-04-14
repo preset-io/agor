@@ -23,7 +23,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '@agor/core/config';
@@ -650,13 +650,16 @@ export default class SyncUnix extends Command {
               }
             }
 
-            // Set .git permissions if the repo has a local_path
+            // Set .git permissions if the repo has a local_path and .git exists
             const repoPath = rawRepo.data?.local_path;
             if (repoPath) {
               const gitPath = `${repoPath}/.git`;
-              this.log(chalk.gray(`   .git path: ${gitPath}`));
 
-              if (dryRun) {
+              if (!existsSync(gitPath)) {
+                if (verbose) {
+                  this.log(chalk.gray(`   ⊘ .git path missing (${gitPath}), skipping permissions`));
+                }
+              } else if (dryRun) {
                 this.log(chalk.gray(`   [dry-run] Would run: chgrp -R ${repoGroup} "${gitPath}"`));
                 this.log(
                   chalk.gray(
@@ -1342,12 +1345,14 @@ export default class SyncUnix extends Command {
           }
         }
 
+        // Iterate ALL worktree groups (including those with zero owners)
         let pruneChecked = 0;
-        for (const [group, ownerIds] of groupToOwnerIds.entries()) {
+        for (const [, group] of wtGroupMap.entries()) {
           if (!this.groupExists(group)) continue;
           pruneChecked++;
 
-          // Get expected unix_usernames for this group
+          // Get expected unix_usernames for this group (may be empty if no owners)
+          const ownerIds = groupToOwnerIds.get(group) || new Set<string>();
           const expectedUsernames = new Set<string>();
           for (const ownerId of ownerIds) {
             const uname = userIdToUnixName.get(ownerId);
@@ -1363,8 +1368,8 @@ export default class SyncUnix extends Command {
             if (expectedUsernames.has(member)) continue;
             // Skip the daemon user (safety)
             if (daemonUser && member === daemonUser) continue;
-            // Skip non-agor users (manually added system users)
-            if (!member.startsWith('agor_') && member !== daemonUser) continue;
+            // Only prune DB-managed users (skip manually-added system users)
+            if (!unixNameToUserId.has(member)) continue;
 
             this.log(chalk.yellow(`   → Removing ${member} from ${group} (no longer owner)`));
             if (this.removeUserFromGroup(member, group, dryRun)) {
@@ -1486,8 +1491,18 @@ export default class SyncUnix extends Command {
 
             const symlinkPath = getWorktreeSymlinkPath(user.unix_username, wtInfo.name);
 
-            // Skip if symlink already exists and points to the right target
-            if (existsSync(symlinkPath)) continue;
+            // Check if symlink already exists and points to the correct target
+            let needsCreate = true;
+            try {
+              const currentTarget = readlinkSync(symlinkPath);
+              if (currentTarget === wtInfo.path) {
+                needsCreate = false;
+              }
+            } catch {
+              // Symlink doesn't exist or isn't a symlink — needs creation
+            }
+
+            if (!needsCreate) continue;
 
             if (dryRun) {
               this.log(
@@ -1496,6 +1511,7 @@ export default class SyncUnix extends Command {
               symlinksCreated++;
             } else {
               try {
+                // Uses ln -sfn which replaces existing symlinks
                 for (const cmd of SymlinkCommands.createSymlinkWithOwnership(
                   wtInfo.path,
                   symlinkPath,
