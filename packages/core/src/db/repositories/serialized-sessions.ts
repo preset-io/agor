@@ -57,7 +57,7 @@ export class SerializedSessionRepository {
         .where(
           and(eq(serializedSessions.session_id, sessionId), eq(serializedSessions.status, 'done'))
         )
-        .orderBy(desc(serializedSessions.turn_index))
+        .orderBy(desc(serializedSessions.turn_index), desc(serializedSessions.created_at))
         .limit(1)
         .one();
 
@@ -78,7 +78,7 @@ export class SerializedSessionRepository {
       const row = await select(this.db)
         .from(serializedSessions)
         .where(eq(serializedSessions.session_id, sessionId))
-        .orderBy(desc(serializedSessions.turn_index))
+        .orderBy(desc(serializedSessions.turn_index), desc(serializedSessions.created_at))
         .limit(1)
         .one();
 

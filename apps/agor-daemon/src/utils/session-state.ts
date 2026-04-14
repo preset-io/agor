@@ -37,7 +37,7 @@ export function getSessionFilePath(
       // When we need a different user's home, construct the path directly
       // using the same encoding logic.
       if (homeOverride) {
-        const projectSlug = worktreePath.replace(/\//g, '-').replace(/\\/g, '-');
+        const projectSlug = worktreePath.replace(/[^a-zA-Z0-9]/g, '-');
         return path.join(homeOverride, '.claude', 'projects', projectSlug, `${sdkSessionId}.jsonl`);
       }
       return getTranscriptPath(sdkSessionId, worktreePath);

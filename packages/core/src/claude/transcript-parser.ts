@@ -42,9 +42,10 @@ export function getTranscriptPath(sessionId: string, projectDir?: string): strin
   // Default to current working directory if not specified
   const cwd = projectDir || process.cwd();
 
-  // Claude Code creates project directories with escaped slashes
+  // Claude Code creates project directories by replacing all non-alphanumeric chars with '-'
   // Example: /Users/max/code/agor → -Users-max-code-agor
-  const projectSlug = cwd.replace(/\//g, '-').replace(/\\/g, '-');
+  // Example: /home/user/.agor/repos/foo → -home-user--agor-repos-foo
+  const projectSlug = cwd.replace(/[^a-zA-Z0-9]/g, '-');
 
   const transcriptPath = path.join(
     homeDir,

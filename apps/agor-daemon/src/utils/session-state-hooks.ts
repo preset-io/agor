@@ -83,11 +83,16 @@ export async function pullIfNeeded(ctx: PullContext): Promise<void> {
         return;
       }
     } else {
-      // Still processing, not stale — another pod is active. Let it finish.
+      // Still processing, not stale — another pod may be active.
+      // Fall back to the latest 'done' row so we don't start with no transcript.
       console.warn(
-        `[session-state] Latest row is 'processing' (age: ${Math.round(age / 1000)}s), proceeding without restore`
+        `[session-state] Latest row is 'processing' (age: ${Math.round(age / 1000)}s), falling back to latest done row`
       );
-      return;
+      latest = await repo.findLatestDone(ctx.sessionId);
+      if (!latest) {
+        // No done row available — proceed without restore
+        return;
+      }
     }
   }
 
