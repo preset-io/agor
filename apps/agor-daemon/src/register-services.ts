@@ -458,7 +458,7 @@ function createExecuteHandler(
       if (capabilities && !capabilities.supportsStatelessFsMode) {
         throw new Error(
           `stateless_fs_mode is enabled but tool '${toolName}' does not support it. ` +
-            `Supported tools: claude-code, codex`
+            `Supported tools: claude-code`
         );
       }
     }
@@ -664,7 +664,6 @@ function createExecuteHandler(
         await pullIfNeeded({
           db,
           sessionId,
-          worktreeId: session.worktree_id,
           sdkSessionId: session.sdk_session_id,
           worktreePath: cwd,
           tool: session.agentic_tool,

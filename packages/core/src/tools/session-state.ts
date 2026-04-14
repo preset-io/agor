@@ -8,38 +8,23 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, readFile, stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import path from 'node:path';
 import { createGunzip, createGzip } from 'node:zlib';
-
 import type { AgenticToolName } from '@agor/core/types';
-
-/**
- * Encode a filesystem path into a Claude Code project directory name.
- * Replaces every non-alphanumeric character with '-'.
- */
-function encodeProjectPath(worktreePath: string): string {
-  return worktreePath.replace(/[^a-zA-Z0-9]/g, '-');
-}
+import { getTranscriptPath } from '../claude/transcript-parser';
 
 /**
  * Derive the local session file path from tool + worktree path + SDK session ID.
+ * Delegates to getTranscriptPath for Claude Code to stay DRY with existing path encoding.
  */
 export function getSessionFilePath(
   tool: AgenticToolName,
   worktreePath: string,
   sdkSessionId: string
 ): string {
-  const home = homedir();
-
   switch (tool) {
-    case 'claude-code': {
-      const encoded = encodeProjectPath(worktreePath);
-      return path.join(home, '.claude', 'projects', encoded, `${sdkSessionId}.jsonl`);
-    }
-    case 'codex': {
-      return path.join(home, '.codex', 'sessions', `${sdkSessionId}.json`);
-    }
+    case 'claude-code':
+      return getTranscriptPath(sdkSessionId, worktreePath);
     default:
       throw new Error(`getSessionFilePath: unsupported tool '${tool}'`);
   }

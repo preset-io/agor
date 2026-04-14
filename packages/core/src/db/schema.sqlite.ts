@@ -267,7 +267,9 @@ export const serializedSessions = sqliteTable(
     worktree_id: text('worktree_id', { length: 36 })
       .notNull()
       .references(() => worktrees.worktree_id, { onDelete: 'cascade' }),
-    task_id: text('task_id', { length: 36 }).references(() => tasks.task_id),
+    task_id: text('task_id', { length: 36 }).references(() => tasks.task_id, {
+      onDelete: 'set null',
+    }),
     turn_index: integer('turn_index').notNull().default(0),
     created_at: t.timestamp('created_at').notNull(),
     md5: text('md5').notNull(),

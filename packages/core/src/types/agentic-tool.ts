@@ -164,7 +164,7 @@ export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapab
     supportsSessionFork: false,
     supportsChildSpawn: true,
     supportsSessionImport: false,
-    supportsStatelessFsMode: true,
+    supportsStatelessFsMode: false,
   },
   gemini: {
     supportsSessionFork: false,

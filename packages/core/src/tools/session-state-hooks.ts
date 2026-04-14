@@ -16,7 +16,6 @@ const STALE_PROCESSING_THRESHOLD_MS = 30_000; // 30 seconds
 interface PullContext {
   db: Database;
   sessionId: string;
-  worktreeId: string;
   sdkSessionId: string;
   worktreePath: string;
   tool: AgenticToolName;
@@ -64,7 +63,7 @@ export async function pullIfNeeded(ctx: PullContext): Promise<void> {
       console.log(
         `[session-state] Cleaning stale 'processing' row ${latest.id.substring(0, 8)} (age: ${Math.round(age / 1000)}s)`
       );
-      await repo.deletePrevious(ctx.sessionId, ''); // delete all rows (excludeId won't match)
+      await repo.deleteById(latest.id);
       // Fall through: check if there's a 'done' row behind it
       latest = await repo.findLatestDone(ctx.sessionId);
       if (!latest) {
@@ -149,8 +148,8 @@ async function doPush(ctx: PushContext): Promise<void> {
   // Mark done with payload
   await repo.markDone(row.id, payload);
 
-  // Clean up old rows
-  await repo.deletePrevious(ctx.sessionId, row.id);
+  // Clean up old rows (only delete turns older than this one — safe against concurrent pushes)
+  await repo.deletePreviousTurns(ctx.sessionId, turnIndex);
 
   console.log(
     `[session-state] Pushed session state (turn ${turnIndex}, ${payload.length} bytes gzipped)`

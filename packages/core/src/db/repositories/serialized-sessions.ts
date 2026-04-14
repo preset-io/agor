@@ -5,7 +5,7 @@
  * Each row stores a gzipped session file keyed by session + turn_index.
  */
 
-import { and, desc, eq, ne } from 'drizzle-orm';
+import { and, desc, eq, lt } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
@@ -157,14 +157,31 @@ export class SerializedSessionRepository {
   }
 
   /**
-   * Delete all rows for a session except the one with the given ID.
-   * Used to clean up old 'done' rows after a new one lands.
+   * Delete a single row by ID.
    */
-  async deletePrevious(sessionId: string, excludeId: string): Promise<void> {
+  async deleteById(id: string): Promise<void> {
+    try {
+      await deleteFrom(this.db, serializedSessions).where(eq(serializedSessions.id, id)).run();
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to delete serialized session: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Delete all rows for a session with turn_index less than the given value.
+   * Used to clean up old snapshots after a new one lands.
+   */
+  async deletePreviousTurns(sessionId: string, beforeTurnIndex: number): Promise<void> {
     try {
       await deleteFrom(this.db, serializedSessions)
         .where(
-          and(eq(serializedSessions.session_id, sessionId), ne(serializedSessions.id, excludeId))
+          and(
+            eq(serializedSessions.session_id, sessionId),
+            lt(serializedSessions.turn_index, beforeTurnIndex)
+          )
         )
         .run();
     } catch (error) {
