@@ -366,9 +366,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
     const handleQueued = (msg: Message) => {
       if (msg.session_id === session.session_id) {
-        setQueuedMessages((prev) =>
-          [...prev, msg].sort((a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0))
-        );
+        setQueuedMessages((prev) => {
+          // Deduplicate: optimistic update from enqueue may have already added this message
+          if (prev.some((m) => m.message_id === msg.message_id)) return prev;
+          return [...prev, msg].sort((a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0));
+        });
       }
     };
 
@@ -537,11 +539,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           })) as { success: boolean; message: Message; queue_position: number };
 
         if (response.message) {
-          setQueuedMessages((prev) =>
-            [...prev, response.message].sort(
+          setQueuedMessages((prev) => {
+            if (prev.some((m) => m.message_id === response.message.message_id)) return prev;
+            return [...prev, response.message].sort(
               (a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0)
-            )
-          );
+            );
+          });
         }
 
         message.success(`Message queued at position ${response.message.queue_position}`);
