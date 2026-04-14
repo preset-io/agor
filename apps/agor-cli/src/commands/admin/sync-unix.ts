@@ -100,6 +100,7 @@ export default class SyncUnix extends Command {
     '<%= config.bin %> <%= command.id %> --dry-run      # Preview what would be done',
     '<%= config.bin %> <%= command.id %> --cleanup      # Full sync + remove stale users/groups',
     '<%= config.bin %> <%= command.id %> --verbose      # Show detailed output',
+    '<%= config.bin %> <%= command.id %> --worktree-id <uuid> --dry-run  # Preview sync for a single worktree',
   ];
 
   static override flags = {
@@ -126,6 +127,10 @@ export default class SyncUnix extends Command {
       description: 'Delete stale agor_* users not in database (keeps home directories)',
       default: false,
     }),
+    'worktree-id': Flags.string({
+      char: 'w',
+      description: 'Only sync a single worktree by ID (skips user/repo/membership/symlink phases)',
+    }),
   };
 
   async run(): Promise<void> {
@@ -136,6 +141,11 @@ export default class SyncUnix extends Command {
     // Cleanup flags - --cleanup enables both
     const cleanupGroups = flags.cleanup || flags['cleanup-groups'];
     const cleanupUsers = flags.cleanup || flags['cleanup-users'];
+    const targetWorktreeId = flags['worktree-id'];
+
+    if (targetWorktreeId) {
+      this.log(chalk.cyan(`🎯 Targeting single worktree: ${targetWorktreeId}\n`));
+    }
 
     if (dryRun) {
       this.log(chalk.yellow('🔍 Dry run mode - no changes will be made\n'));
@@ -283,7 +293,9 @@ export default class SyncUnix extends Command {
 
       const results: SyncResult[] = [];
 
-      if (validUsers.length === 0) {
+      if (targetWorktreeId) {
+        this.log(chalk.gray('   ⊘ Skipping user sync phase (--worktree-id mode)\n'));
+      } else if (validUsers.length === 0) {
         this.log(chalk.yellow('No users with unix_username found in database'));
         this.log(chalk.gray('\nTo set a unix_username for a user:'));
         this.log(chalk.gray('  agor user update <email> --unix-username <username>\n'));
@@ -682,7 +694,7 @@ export default class SyncUnix extends Command {
           results.push(result);
           this.log('');
         }
-      } // end if (validUsers.length > 0)
+      } // end if (targetWorktreeId / validUsers.length)
 
       // ========================================
       // Worktree Group Backfill Phase
@@ -691,7 +703,15 @@ export default class SyncUnix extends Command {
 
       this.log(chalk.cyan.bold('\n━━━ Sync Worktree Groups ━━━\n'));
 
-      let allWorktreesForBackfill = await select(db).from(worktrees).all();
+      let allWorktreesForBackfill = targetWorktreeId
+        ? (await select(db).from(worktrees).where(eq(worktrees.worktree_id, targetWorktreeId)).all())
+        : await select(db).from(worktrees).all();
+
+      if (targetWorktreeId && allWorktreesForBackfill.length === 0) {
+        this.log(chalk.red(`   ✗ Worktree ${targetWorktreeId} not found in database\n`));
+        process.exit(1);
+      }
+
       const worktreesWithoutGroup = allWorktreesForBackfill.filter(
         (wt: { unix_group: string | null; archived: boolean; filesystem_status: string | null }) =>
           wt.unix_group === null && !(wt.archived && wt.filesystem_status === 'deleted')
@@ -785,7 +805,9 @@ export default class SyncUnix extends Command {
         this.log('');
 
         // Refresh for the permission sync phase
-        allWorktreesForBackfill = await select(db).from(worktrees).all();
+        allWorktreesForBackfill = targetWorktreeId
+          ? (await select(db).from(worktrees).where(eq(worktrees.worktree_id, targetWorktreeId)).all())
+          : await select(db).from(worktrees).all();
       }
 
       // ========================================
@@ -930,6 +952,10 @@ export default class SyncUnix extends Command {
       // (For repos that already have unix_group but need permissions applied)
       // ========================================
 
+      if (targetWorktreeId) {
+        this.log(chalk.gray('   ⊘ Skipping repo permission sync phase (--worktree-id mode)\n'));
+      } else {
+
       // The backfill phase above handled repos without unix_group.
       // Now we need to ensure permissions are set on repos that already have unix_group.
       this.log(chalk.cyan.bold('\n━━━ Sync Repo Permissions ━━━\n'));
@@ -1026,11 +1052,16 @@ export default class SyncUnix extends Command {
         this.log('');
       }
 
+      } // end if (!targetWorktreeId) for repo permission sync
+
       // ========================================
       // Membership Pruning Phase
       // Removes users from worktree groups they no longer own
       // ========================================
 
+      if (targetWorktreeId) {
+        this.log(chalk.gray('   ⊘ Skipping membership pruning phase (--worktree-id mode)\n'));
+      } else {
       this.log(chalk.cyan.bold('\n━━━ Prune Stale Group Memberships ━━━\n'));
 
       {
@@ -1118,13 +1149,16 @@ export default class SyncUnix extends Command {
           this.log('');
         }
       }
+      } // end if (!targetWorktreeId) for membership pruning
 
       // ========================================
       // Symlink Sync Phase
       // Creates missing symlinks, removes broken ones
       // ========================================
 
-      if (validUsers.length > 0) {
+      if (targetWorktreeId) {
+        this.log(chalk.gray('   ⊘ Skipping symlink sync phase (--worktree-id mode)\n'));
+      } else if (validUsers.length > 0) {
         this.log(chalk.cyan.bold('\n━━━ Sync User Symlinks ━━━\n'));
 
         // Build worktree ownership data for symlink creation
@@ -1255,12 +1289,14 @@ export default class SyncUnix extends Command {
       // Cleanup Phase
       // ========================================
 
-      if (cleanupGroups || cleanupUsers) {
+      if (targetWorktreeId && (cleanupGroups || cleanupUsers)) {
+        this.log(chalk.gray('   ⊘ Skipping cleanup phase (--worktree-id mode)\n'));
+      } else if (cleanupGroups || cleanupUsers) {
         this.log(chalk.cyan.bold('━━━ Cleanup ━━━\n'));
       }
 
       // Cleanup stale worktree groups
-      if (cleanupGroups) {
+      if (cleanupGroups && !targetWorktreeId) {
         this.log(chalk.cyan('Checking for stale worktree groups...\n'));
 
         // Get all worktree groups that should exist (from DB)
@@ -1346,7 +1382,7 @@ export default class SyncUnix extends Command {
       }
 
       // Cleanup stale users
-      if (cleanupUsers) {
+      if (cleanupUsers && !targetWorktreeId) {
         this.log(chalk.cyan('Checking for stale Agor users...\n'));
 
         // Get all unix_usernames that should exist (from DB)
