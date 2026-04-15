@@ -958,7 +958,9 @@ const WorktreeCardComponent = ({
             {isCreating ? (
               <Typography.Text type="secondary">Creating worktree on filesystem...</Typography.Text>
             ) : isFailed ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, textAlign: 'center' }}>
+              <div
+                style={{ display: 'flex', flexDirection: 'column', gap: 8, textAlign: 'center' }}
+              >
                 <Typography.Text type="danger" strong>
                   Worktree creation failed
                 </Typography.Text>

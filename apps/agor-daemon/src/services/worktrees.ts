@@ -677,7 +677,14 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           );
         } else {
           console.error('⚠️  No session token service available for worktree recreation');
-          await this.patch(id, { filesystem_status: 'failed', error_message: 'Session token service not available for worktree recreation' }, { provider: undefined });
+          await this.patch(
+            id,
+            {
+              filesystem_status: 'failed',
+              error_message: 'Session token service not available for worktree recreation',
+            },
+            { provider: undefined }
+          );
         }
       } catch (error) {
         console.error(
@@ -686,7 +693,11 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
         );
         // Mark as failed so the UI can show the error state
         const errMsg = error instanceof Error ? error.message : String(error);
-        await this.patch(id, { filesystem_status: 'failed', error_message: `Failed to spawn executor: ${errMsg}` }, { provider: undefined });
+        await this.patch(
+          id,
+          { filesystem_status: 'failed', error_message: `Failed to spawn executor: ${errMsg}` },
+          { provider: undefined }
+        );
       }
     }
 
