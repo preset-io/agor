@@ -25,6 +25,29 @@ import { SessionStatus } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
 /**
+ * Session runtime configuration that should be inherited across forks, spawns, and btw.
+ *
+ * Bundled into a single type so that adding a new inheritable field only requires
+ * updating this type and getInheritableConfig() — all creation paths (fork, spawn, btw)
+ * automatically pick it up.
+ */
+interface InheritableSessionConfig {
+  permission_config?: Session['permission_config'];
+  model_config?: Session['model_config'];
+}
+
+/**
+ * Extract the inheritable runtime configuration from a parent session.
+ * Used by fork() and spawn() to ensure consistent config inheritance.
+ */
+function getInheritableConfig(parent: Session): InheritableSessionConfig {
+  return {
+    permission_config: parent.permission_config,
+    model_config: parent.model_config,
+  };
+}
+
+/**
  * Internal service params shared between services that support last-message enrichment.
  * Bypasses Feathers query filtering for internal service-to-service calls.
  */
@@ -189,8 +212,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
           children: [],
         },
         contextFiles: [...(parent.contextFiles || [])],
-        permission_config: parent.permission_config,
-        model_config: parent.model_config,
+        ...getInheritableConfig(parent),
         tasks: [],
         // Don't copy sdk_session_id - fork will get its own via forkSession:true
       },
@@ -249,10 +271,11 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     // Determine settings based on:
     // 1. Explicit overrides in SpawnConfig (highest priority)
     // 2. User preferences (if spawning different tool)
-    // 3. Parent settings (fallback)
+    // 3. Parent settings (fallback via getInheritableConfig)
 
-    let permissionConfig = parent.permission_config;
-    let modelConfig = parent.model_config;
+    const inherited = getInheritableConfig(parent);
+    let permissionConfig = inherited.permission_config;
+    let modelConfig = inherited.model_config;
 
     // If spawning a different tool and no explicit overrides, fetch user preferences
     if (!isSameTool && !data.permissionMode && !data.modelConfig) {
