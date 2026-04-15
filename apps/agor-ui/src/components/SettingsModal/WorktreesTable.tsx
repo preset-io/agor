@@ -88,6 +88,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       return;
     }
 
+    let cancelled = false;
     archivedFetchingRef.current = true;
     setArchivedLoading(true);
 
@@ -95,6 +96,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       .service('worktrees')
       .findAll({ query: { archived: true, $limit: 1000, $sort: { created_at: -1 } } })
       .then((result) => {
+        if (cancelled) return;
         setArchivedWorktrees(result as Worktree[]);
         setArchivedLoaded(true);
       })
@@ -103,8 +105,14 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       })
       .finally(() => {
         archivedFetchingRef.current = false;
-        setArchivedLoading(false);
+        if (!cancelled) {
+          setArchivedLoading(false);
+        }
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, [archiveFilter, archivedLoaded, client]);
 
   // Validate form fields to enable/disable Create button
