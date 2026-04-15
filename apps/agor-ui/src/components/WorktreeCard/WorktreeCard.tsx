@@ -958,10 +958,27 @@ const WorktreeCardComponent = ({
             {isCreating ? (
               <Typography.Text type="secondary">Creating worktree on filesystem...</Typography.Text>
             ) : isFailed ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, textAlign: 'center' }}>
                 <Typography.Text type="danger" strong>
                   Worktree creation failed
                 </Typography.Text>
+                {worktree.error_message && (
+                  <Tooltip title={worktree.error_message} placement="bottom">
+                    <Typography.Text
+                      type="secondary"
+                      style={{
+                        fontSize: 12,
+                        maxWidth: 220,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        cursor: 'help',
+                      }}
+                    >
+                      {worktree.error_message}
+                    </Typography.Text>
+                  </Tooltip>
+                )}
               </div>
             ) : onCreateSession ? (
               <Button

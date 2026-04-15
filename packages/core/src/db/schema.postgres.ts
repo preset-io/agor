@@ -504,6 +504,9 @@ export const worktrees = pgTable(
       enum: ['creating', 'ready', 'failed', 'preserved', 'cleaned', 'deleted'],
     }),
 
+    // Error message when filesystem_status is 'failed' (e.g., git worktree add error details)
+    error_message: text('error_message'),
+
     // RBAC: App-layer permissions (rbac.md)
     others_can: text('others_can', {
       enum: [...WORKTREE_PERMISSION_LEVELS],

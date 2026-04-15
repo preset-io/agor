@@ -176,6 +176,13 @@
       "when": 1776000000000,
       "tag": "0024_add_serialized_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1776100000000,
+      "tag": "0025_add_worktree_error_message",
+      "breakpoints": true
     }
   ]
 }

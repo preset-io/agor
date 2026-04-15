@@ -9,6 +9,7 @@
  * the daemon handles database records and business logic.
  */
 
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import {
@@ -471,6 +472,40 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     }
 
     const worktreePath = getWorktreePath(repo.slug, data.name);
+
+    // Fail-fast: check if target directory already exists on disk
+    if (existsSync(worktreePath)) {
+      throw new Error(
+        `Target directory '${worktreePath}' already exists on disk. ` +
+          `This usually means an archived or partially-cleaned worktree still occupies this path. ` +
+          `Please choose a different name or clean up the existing directory.`
+      );
+    }
+
+    // Fail-fast: check if the branch is already checked out by another git worktree
+    // (covers non-createBranch cases not handled by the pre-flight check above)
+    if (!data.createBranch && repo.local_path) {
+      try {
+        const gitWorktrees = await listWorktrees(repo.local_path);
+        const branchInUse = gitWorktrees.some((wt: { ref?: string }) => wt.ref === data.ref);
+        if (branchInUse) {
+          throw new Error(
+            `Branch '${data.ref}' is already checked out by another worktree. ` +
+              `Git does not allow the same branch to be checked out in multiple worktrees. ` +
+              `Please choose a different branch or create a new branch.`
+          );
+        }
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('already checked out')) {
+          throw error;
+        }
+        // Don't block creation for transient git errors
+        console.warn(
+          `⚠️  Pre-flight branch checkout check failed (continuing anyway):`,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    }
 
     console.log('🔍 RepoService.createWorktree - computed paths:', {
       worktreePath,

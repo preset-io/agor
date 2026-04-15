@@ -324,6 +324,14 @@ export interface Worktree {
    */
   filesystem_status?: 'creating' | 'ready' | 'failed' | 'preserved' | 'cleaned' | 'deleted';
 
+  /**
+   * Error message when filesystem_status is 'failed'
+   *
+   * Contains the reason why worktree creation failed (e.g., git worktree add error).
+   * Cleared when status transitions away from 'failed'.
+   */
+  error_message?: string;
+
   // ===== RBAC: App-layer permissions (rbac.md) =====
 
   /**

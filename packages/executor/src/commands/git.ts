@@ -603,11 +603,22 @@ export async function handleGitWorktreeAdd(
       }
     }
 
-    // Try to mark worktree as failed (if we have a worktreeId and client)
+    // Provide user-friendly error messages for common failures
+    let userMessage = errorMessage;
+    if (errorMessage.includes('already exists')) {
+      if (errorMessage.includes('branch')) {
+        userMessage = `A branch named '${payload.params.branch || payload.params.worktreeName}' already exists and is in use by another worktree. Please choose a different name.`;
+      } else {
+        userMessage = `Directory '${payload.params.worktreePath || payload.params.worktreeName}' already exists. An archived or partially-cleaned worktree may still occupy this path.`;
+      }
+    }
+
+    // Try to mark worktree as failed with error details (if we have a worktreeId and client)
     if (worktreeId && client) {
       try {
         await client.service('worktrees').patch(worktreeId, {
           filesystem_status: 'failed',
+          error_message: userMessage,
         });
         console.log(`[git.worktree.add] Marked worktree as failed`);
       } catch (patchError) {
@@ -616,12 +627,6 @@ export async function handleGitWorktreeAdd(
           patchError instanceof Error ? patchError.message : String(patchError)
         );
       }
-    }
-
-    // Provide user-friendly error messages for common failures
-    let userMessage = errorMessage;
-    if (errorMessage.includes('already exists') && errorMessage.includes('branch')) {
-      userMessage = `A branch named '${payload.params.branch || payload.params.worktreeName}' already exists and is in use by another worktree. Please choose a different name.`;
     }
 
     return {
