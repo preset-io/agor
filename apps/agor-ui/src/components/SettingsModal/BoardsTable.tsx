@@ -103,6 +103,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
             ? values.background_color
             : values.background_color.toHexString()
           : undefined,
+        custom_css: values.custom_css || undefined,
         custom_context: values.custom_context ? JSON.parse(values.custom_context) : undefined,
       });
       form.resetFields();
@@ -120,6 +121,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       icon: board.icon,
       description: board.description,
       background_color: board.background_color,
+      custom_css: board.custom_css,
       custom_context: board.custom_context ? JSON.stringify(board.custom_context, null, 2) : '',
     });
     setEditModalOpen(true);
@@ -138,6 +140,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
             ? values.background_color
             : values.background_color.toHexString()
           : undefined,
+        custom_css: values.custom_css || undefined,
         custom_context: values.custom_context ? JSON.parse(values.custom_context) : undefined,
       });
       form.resetFields();

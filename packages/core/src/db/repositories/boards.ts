@@ -39,6 +39,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       color?: string;
       icon?: string;
       background_color?: string;
+      custom_css?: string;
       objects?: Record<string, BoardObject>;
       custom_context?: Record<string, unknown>;
     };
@@ -83,6 +84,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         color: board.color,
         icon: board.icon,
         background_color: board.background_color,
+        custom_css: board.custom_css,
         objects: board.objects,
         custom_context: board.custom_context,
       },
@@ -540,6 +542,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       icon: board.icon,
       color: board.color,
       background_color: board.background_color,
+      custom_css: board.custom_css,
       objects: board.objects,
       custom_context: board.custom_context,
     };

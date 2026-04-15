@@ -59,6 +59,7 @@ import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
 import { useCursorTracking } from '../../hooks/useCursorTracking';
 import { usePresence } from '../../hooks/usePresence';
 import type { AgenticToolOption } from '../../types';
+import { sanitizeBoardCss } from '../../utils/sanitizeCss';
 import { isDarkTheme } from '../../utils/theme';
 import { AutocompleteTextarea } from '../AutocompleteTextarea/AutocompleteTextarea';
 import CardModal from '../CardModal';
@@ -307,6 +308,13 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const isDarkMode = isDarkTheme(token);
     const defaultBackground = DEFAULT_BACKGROUNDS[isDarkMode ? 'dark' : 'light'];
     const canvasBackground = board?.background_color ?? defaultBackground;
+
+    // Sanitize and scope custom CSS for this board (enables @keyframes, animations, etc.)
+    const boardCssClass = board?.board_id ? `board-css-${board.board_id.slice(0, 8)}` : '';
+    const scopedCustomCss = useMemo(
+      () => sanitizeBoardCss(board?.custom_css, `.${boardCssClass}`),
+      [board?.custom_css, boardCssClass]
+    );
 
     // Note: sessionsByWorktree is now passed as prop (no longer computed locally)
     // This enables efficient O(1) lookups and stable references across re-renders
@@ -2191,8 +2199,10 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           />
         )}
 
+        {scopedCustomCss && <style>{scopedCustomCss}</style>}
         <div
           ref={reactFlowWrapperRef}
+          className={boardCssClass || undefined}
           style={{
             width: '100%',
             height: '100%',

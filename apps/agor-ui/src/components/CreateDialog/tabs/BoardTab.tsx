@@ -31,6 +31,7 @@ export const BoardTab: React.FC<BoardTabProps> = ({ onValidityChange, formRef })
             ? values.background_color
             : values.background_color.toHexString()
           : undefined,
+        custom_css: values.custom_css || undefined,
       };
     } catch {
       return null;

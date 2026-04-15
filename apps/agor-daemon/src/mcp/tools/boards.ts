@@ -98,6 +98,12 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
           .string()
           .optional()
           .describe('Board background color (hex format, optional)'),
+        customCss: z
+          .string()
+          .optional()
+          .describe(
+            'Custom CSS for board canvas animations (@keyframes, animation, background-size, etc.). Rendered in a scoped <style> tag. Dangerous patterns like url(), expression(), @import are blocked.'
+          ),
         slug: z.string().optional().describe('URL-friendly slug (optional)'),
         customContext: z
           .object({})
@@ -129,6 +135,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       if (args.color !== undefined) metadataUpdates.color = args.color;
       if (args.backgroundColor !== undefined)
         metadataUpdates.background_color = args.backgroundColor;
+      if (args.customCss !== undefined) metadataUpdates.custom_css = args.customCss;
       if (args.slug !== undefined) metadataUpdates.slug = args.slug;
       if (args.customContext !== undefined) metadataUpdates.custom_context = args.customContext;
 
@@ -184,6 +191,12 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
           .string()
           .optional()
           .describe('Board background color in hex format (optional)'),
+        customCss: z
+          .string()
+          .optional()
+          .describe(
+            'Custom CSS for board canvas animations (@keyframes, animation, etc.). Optional.'
+          ),
       }),
     },
     async (args) => {
@@ -200,6 +213,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       if (args.color !== undefined) boardData.color = coerceString(args.color);
       if (args.backgroundColor !== undefined)
         boardData.background_color = coerceString(args.backgroundColor);
+      if (args.customCss !== undefined) boardData.custom_css = coerceString(args.customCss);
 
       const board = await ctx.app.service('boards').create(boardData, ctx.baseServiceParams);
       return textResult(board);

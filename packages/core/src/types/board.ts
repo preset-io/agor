@@ -253,6 +253,13 @@ export interface Board {
   background_color?: string;
 
   /**
+   * Custom CSS for the board canvas (rendered in a scoped <style> tag).
+   * Supports @keyframes, animation, background-size, and other CSS that
+   * can't be expressed as inline styles. Sanitized before rendering.
+   */
+  custom_css?: string;
+
+  /**
    * Custom context for Handlebars templates (board-level)
    * Example: { "team": "Backend", "sprint": 42, "deadline": "2025-03-15" }
    * Access in templates: {{ board.context.team }}
@@ -291,6 +298,7 @@ export interface BoardExportBlob {
   icon?: string;
   color?: string;
   background_color?: string;
+  custom_css?: string;
 
   // Annotations (zones, text, markdown)
   objects?: {

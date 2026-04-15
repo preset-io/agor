@@ -72,6 +72,73 @@ export const BACKGROUND_PRESETS = [
   },
 ];
 
+/**
+ * Animation CSS presets — each sets background-size + animation + @keyframes.
+ * Designed to pair with gradient backgrounds from BACKGROUND_PRESETS.
+ */
+export const ANIMATION_PRESETS = [
+  {
+    label: 'Slow gradient shift (12s)',
+    value: `background-size: 400% 400%;
+animation: agorGradientShift 12s ease infinite;
+
+@keyframes agorGradientShift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}`,
+  },
+  {
+    label: 'Fast gradient shift (4s)',
+    value: `background-size: 400% 400%;
+animation: agorGradientFast 4s ease infinite;
+
+@keyframes agorGradientFast {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}`,
+  },
+  {
+    label: 'Diagonal sweep (8s)',
+    value: `background-size: 400% 400%;
+animation: agorDiagonalSweep 8s linear infinite;
+
+@keyframes agorDiagonalSweep {
+  0% { background-position: 0% 0%; }
+  50% { background-position: 100% 100%; }
+  100% { background-position: 0% 0%; }
+}`,
+  },
+  {
+    label: 'Pulse zoom (6s)',
+    value: `background-size: 200% 200%;
+animation: agorPulse 6s ease-in-out infinite;
+
+@keyframes agorPulse {
+  0%, 100% { background-size: 200% 200%; background-position: center; }
+  50% { background-size: 300% 300%; background-position: center; }
+}`,
+  },
+  {
+    label: 'Horizontal scroll (20s)',
+    value: `background-size: 200% 100%;
+animation: agorHScroll 20s linear infinite;
+
+@keyframes agorHScroll {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}`,
+  },
+  {
+    label: 'Rotate (conic, 10s)',
+    value: `animation: agorRotate 10s linear infinite;
+
+@keyframes agorRotate {
+  0% { filter: hue-rotate(0deg); }
+  100% { filter: hue-rotate(360deg); }
+}`,
+  },
+];
+
 export interface BoardFormFieldsProps {
   form: FormInstance;
   useCustomCSS: boolean;
@@ -170,6 +237,40 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
           </Typography.Text>
         </Space>
       </Form.Item>
+
+      {useCustomCSS && (
+        <Form.Item
+          label="Animation CSS"
+          tooltip="Add @keyframes, animation, background-size, and other CSS properties. Rendered in a scoped <style> tag."
+        >
+          <Select
+            placeholder="Load an animation preset..."
+            style={{ width: '100%', marginBottom: 8 }}
+            allowClear
+            showSearch
+            options={ANIMATION_PRESETS}
+            onChange={(value) => {
+              if (value) {
+                form.setFieldsValue({ custom_css: value });
+              }
+            }}
+          />
+          <Form.Item name="custom_css" noStyle>
+            <Input.TextArea
+              placeholder={`@keyframes bioGlow {\n  0%, 100% { background-position: 0% 50%; }\n  50% { background-position: 100% 50%; }\n}\n\nbackground-size: 400% 400%;\nanimation: bioGlow 12s ease infinite;`}
+              rows={6}
+              style={{ fontFamily: 'monospace', fontSize: '12px' }}
+            />
+          </Form.Item>
+          <Typography.Text
+            type="secondary"
+            style={{ fontSize: '12px', display: 'block', marginTop: 4 }}
+          >
+            Supports @keyframes, animation, background-size, and other CSS. Dangerous patterns (url,
+            expression, @import) are blocked for security.
+          </Typography.Text>
+        </Form.Item>
+      )}
 
       {extra}
     </>

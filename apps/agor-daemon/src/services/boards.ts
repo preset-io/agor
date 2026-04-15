@@ -303,6 +303,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
       icon: blob.icon,
       color: blob.color,
       background_color: blob.background_color,
+      custom_css: blob.custom_css,
       objects: blob.objects,
       custom_context: blob.custom_context,
       created_by: userId,
