@@ -476,6 +476,96 @@ export async function createWorktree(
 }
 
 /**
+ * Result of a worktree restoration attempt
+ */
+export interface RestoreWorktreeResult {
+  success: boolean;
+  /** Which strategy was used: 'checkout' (existing branch) or 'create' (new branch from base) */
+  strategy: 'checkout' | 'create';
+  /** Error message if restoration failed */
+  error?: string;
+}
+
+/**
+ * Restore a worktree directory by checking out the branch or creating it from a base ref.
+ *
+ * Shared logic used by both:
+ * - `sync-unix` CLI command (restore action for failed worktrees)
+ * - `unarchive()` daemon method (via executor's git.worktree.add command)
+ *
+ * Strategy:
+ * 1. Fetch from remote to ensure we have latest refs
+ * 2. Check if the branch exists on the remote via `ls-remote`
+ * 3. If YES: `createWorktree(repoPath, path, ref, false)` — checkout existing branch
+ * 4. If NO: `createWorktree(repoPath, path, ref, true, true, baseRef)` — create new branch from base
+ *
+ * This is safe because we only create a new branch when `ls-remote` confirms it
+ * doesn't exist on the remote, avoiding the orphan cleanup force-delete risk
+ * in `createWorktree()`.
+ *
+ * @param repoPath - Absolute path to the base repository
+ * @param worktreePath - Absolute path where the worktree should be created
+ * @param ref - Branch name to restore
+ * @param baseRef - Fallback base branch (e.g., 'main') if ref doesn't exist on remote
+ * @param env - Optional environment variables for git operations (GITHUB_TOKEN, etc.)
+ */
+export async function restoreWorktreeFilesystem(
+  repoPath: string,
+  worktreePath: string,
+  ref: string,
+  baseRef: string,
+  env?: Record<string, string>
+): Promise<RestoreWorktreeResult> {
+  const git = createGit(repoPath, env);
+
+  // Step 1: Fetch from remote
+  try {
+    await git.fetch(['origin']);
+    console.log(`[restoreWorktree] Fetched latest from origin`);
+  } catch (error) {
+    console.warn(
+      `[restoreWorktree] Failed to fetch from origin (will use local refs):`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+
+  // Step 2: Check if branch exists on remote via ls-remote
+  // Using ls-remote instead of local branch list to get authoritative remote state
+  let branchExistsOnRemote = false;
+  try {
+    const lsRemoteOutput = await git.listRemote(['--heads', 'origin', ref]);
+    branchExistsOnRemote = lsRemoteOutput.trim().length > 0;
+  } catch {
+    // ls-remote failed, fall through to local branch check
+    try {
+      const branches = await git.branch(['-r']);
+      branchExistsOnRemote = branches.all.includes(`origin/${ref}`);
+    } catch {
+      // Can't determine remote state
+    }
+  }
+
+  // Step 3/4: Create worktree with appropriate strategy
+  try {
+    if (branchExistsOnRemote) {
+      // Branch exists on remote — checkout it directly
+      console.log(`[restoreWorktree] Branch '${ref}' found on remote, checking out`);
+      await createWorktree(repoPath, worktreePath, ref, false, true, undefined, env);
+      return { success: true, strategy: 'checkout' };
+    }
+
+    // Branch doesn't exist on remote — create new branch from base ref
+    console.log(`[restoreWorktree] Branch '${ref}' not on remote, creating from base '${baseRef}'`);
+    await createWorktree(repoPath, worktreePath, ref, true, true, baseRef, env);
+    return { success: true, strategy: 'create' };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[restoreWorktree] Failed to restore worktree: ${msg}`);
+    return { success: false, strategy: branchExistsOnRemote ? 'checkout' : 'create', error: msg };
+  }
+}
+
+/**
  * List all worktrees for a repository
  */
 export async function listWorktrees(repoPath: string): Promise<WorktreeInfo[]> {

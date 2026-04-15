@@ -38,6 +38,7 @@ import {
   worktreeOwners,
   worktrees,
 } from '@agor/core/db';
+import { restoreWorktreeFilesystem } from '@agor/core/git';
 import {
   AGOR_USERS_GROUP,
   createAdminExecutor,
@@ -182,6 +183,9 @@ export default class SyncUnix extends Command {
     let worktreesSynced = 0;
     let worktreesBackfilled = 0; // Worktrees that needed unix_group set in DB
     let worktreeDirsCreated = 0; // Worktree directories created on disk
+    let worktreesRestored = 0; // Worktrees restored from failed status
+    let groupsCleaned = 0; // Archived+deleted worktree groups removed
+    let statusFixed = 0; // Worktrees with filesystem_status corrected to 'ready'
     let worktreesSkipped = 0; // Worktrees skipped (archived/deleted, missing path, etc.)
     let reposBackfilled = 0; // Repos that needed unix_group set in DB
     let reposPermSynced = 0; // Repos that had .git permissions synced
@@ -826,6 +830,22 @@ export default class SyncUnix extends Command {
         (wt: { unix_group: string | null }) => wt.unix_group !== null
       );
 
+      // Build repo path lookup map for git worktree operations
+      const allReposForWtSync = await select(db).from(repos).all();
+      const repoPathMap = new Map<string, { localPath: string; defaultBranch: string }>();
+      for (const repo of allReposForWtSync) {
+        const r = repo as {
+          repo_id: string;
+          data: { local_path?: string; default_branch?: string } | null;
+        };
+        if (r.data?.local_path) {
+          repoPathMap.set(r.repo_id, {
+            localPath: r.data.local_path,
+            defaultBranch: r.data.default_branch || 'main',
+          });
+        }
+      }
+
       if (worktreesWithGroup.length === 0) {
         this.log(chalk.yellow('No worktrees with unix_group found\n'));
       } else {
@@ -835,11 +855,13 @@ export default class SyncUnix extends Command {
           const rawWorktree = wt as {
             worktree_id: string;
             name: string;
+            ref: string;
+            repo_id: string;
             unix_group: string;
             archived: boolean;
             filesystem_status: string | null;
             others_fs_access: 'none' | 'read' | 'write' | null;
-            data: { path?: string } | null;
+            data: { path?: string; base_ref?: string } | null;
           };
 
           const worktreePath = rawWorktree.data?.path;
@@ -860,21 +882,102 @@ export default class SyncUnix extends Command {
             rawWorktree.filesystem_status
           );
 
+          if (action === 'cleanup') {
+            // Archived+deleted: remove Unix group cruft
+            const wtGroup = rawWorktree.unix_group;
+            if (groupExists(wtGroup)) {
+              this.log(
+                chalk.yellow(
+                  `   🧹 ${rawWorktree.name}: archived+deleted, removing group ${wtGroup}...`
+                )
+              );
+              if (await execCmd(UnixGroupCommands.deleteGroup(wtGroup))) {
+                groupsCleaned++;
+                this.log(chalk.green(`   ✓ Deleted group ${wtGroup}`));
+              } else {
+                syncErrors++;
+                this.log(chalk.red(`   ✗ Failed to delete group ${wtGroup}`));
+              }
+            } else if (verbose) {
+              this.log(
+                chalk.gray(
+                  `   ⊘ ${rawWorktree.name}: archived+deleted, group ${wtGroup} already gone`
+                )
+              );
+            }
+            continue;
+          }
+
           if (action === 'skip') {
             if (verbose) {
               const reason =
-                rawWorktree.filesystem_status === 'deleted'
-                  ? 'archived+deleted'
-                  : rawWorktree.filesystem_status === 'creating'
-                    ? 'still creating'
-                    : rawWorktree.filesystem_status === 'failed'
-                      ? 'creation failed'
-                      : rawWorktree.archived && !dirExists
-                        ? `archived (${rawWorktree.filesystem_status || 'unknown'}), dir missing`
-                        : 'unknown';
+                rawWorktree.filesystem_status === 'creating'
+                  ? 'still creating'
+                  : rawWorktree.archived && !dirExists
+                    ? `archived (${rawWorktree.filesystem_status || 'unknown'}), dir missing`
+                    : 'unknown';
               this.log(chalk.gray(`   ⊘ ${rawWorktree.name}: ${reason}, skipping`));
             }
             worktreesSkipped++;
+            continue;
+          }
+
+          // Restore failed non-archived worktrees via shared restoreWorktreeFilesystem()
+          if (action === 'restore') {
+            const repoInfo = repoPathMap.get(rawWorktree.repo_id);
+            if (!repoInfo) {
+              if (verbose) {
+                this.log(
+                  chalk.gray(
+                    `   ⊘ ${rawWorktree.name}: failed, no repo path found, skipping restore`
+                  )
+                );
+              }
+              worktreesSkipped++;
+              continue;
+            }
+
+            const baseRef = rawWorktree.data?.base_ref || repoInfo.defaultBranch;
+
+            this.log(chalk.bold(`🔧 ${rawWorktree.name}`));
+            this.log(chalk.gray(`   worktree_id: ${rawWorktree.worktree_id.substring(0, 8)}`));
+            this.log(chalk.gray(`   status: failed → attempting restore`));
+            this.log(chalk.gray(`   ref: ${rawWorktree.ref}, base: ${baseRef}`));
+            this.log(chalk.gray(`   path: ${worktreePath}`));
+
+            if (dryRun) {
+              this.log(
+                chalk.gray(
+                  `   [dry-run] Would attempt restoreWorktreeFilesystem() for ${rawWorktree.ref} at ${worktreePath}`
+                )
+              );
+              worktreesRestored++;
+              this.log('');
+              continue;
+            }
+
+            this.log(chalk.yellow(`   → Restoring worktree filesystem...`));
+            const result = await restoreWorktreeFilesystem(
+              repoInfo.localPath,
+              worktreePath,
+              rawWorktree.ref,
+              baseRef
+            );
+
+            if (result.success) {
+              // Update filesystem_status to ready
+              await update(db, worktrees)
+                .set({ filesystem_status: 'ready' })
+                .where(eq(worktrees.worktree_id, rawWorktree.worktree_id))
+                .run();
+
+              worktreesRestored++;
+              this.log(chalk.green(`   ✓ Restored worktree (${result.strategy}), status → ready`));
+            } else {
+              syncErrors++;
+              this.log(chalk.red(`   ✗ Failed to restore worktree: ${result.error}`));
+            }
+            this.log('');
             continue;
           }
 
@@ -888,17 +991,106 @@ export default class SyncUnix extends Command {
             );
           }
 
-          // Create missing directory for non-archived worktrees
+          // Create missing worktree directory using shared restoreWorktreeFilesystem()
           if (action === 'create') {
-            this.log(chalk.yellow(`   → Directory missing, creating...`));
-            if (await execCmd(`sudo -n mkdir -p "${worktreePath}"`)) {
-              worktreeDirsCreated++;
-              this.log(chalk.green(`   ✓ Created directory`));
+            const repoInfo = repoPathMap.get(rawWorktree.repo_id);
+
+            if (repoInfo) {
+              const baseRef = rawWorktree.data?.base_ref || repoInfo.defaultBranch;
+              this.log(
+                chalk.yellow(
+                  `   → Directory missing, creating git worktree (branch: ${rawWorktree.ref}, base: ${baseRef})...`
+                )
+              );
+
+              if (dryRun) {
+                worktreeDirsCreated++;
+                this.log(
+                  chalk.gray(
+                    `   [dry-run] Would run restoreWorktreeFilesystem() for ${rawWorktree.ref} at ${worktreePath}`
+                  )
+                );
+              } else {
+                const result = await restoreWorktreeFilesystem(
+                  repoInfo.localPath,
+                  worktreePath,
+                  rawWorktree.ref,
+                  baseRef
+                );
+
+                if (result.success) {
+                  worktreeDirsCreated++;
+                  this.log(chalk.green(`   ✓ Created git worktree (${result.strategy})`));
+                } else {
+                  // Fallback to mkdir -p
+                  this.log(
+                    chalk.yellow(
+                      `   ⚠ git worktree add failed (${result.error}), falling back to mkdir -p`
+                    )
+                  );
+                  if (await execCmd(`sudo -n mkdir -p "${worktreePath}"`)) {
+                    worktreeDirsCreated++;
+                    this.log(chalk.green(`   ✓ Created directory (mkdir fallback)`));
+                  } else {
+                    syncErrors++;
+                    this.log(chalk.red(`   ✗ Failed to create directory`));
+                    this.log('');
+                    continue;
+                  }
+                }
+              }
             } else {
-              syncErrors++;
-              this.log(chalk.red(`   ✗ Failed to create directory`));
-              this.log('');
-              continue;
+              // No repo info available, fall back to mkdir -p
+              this.log(
+                chalk.yellow(`   → Directory missing, creating (no repo path for git worktree)...`)
+              );
+              if (await execCmd(`sudo -n mkdir -p "${worktreePath}"`)) {
+                worktreeDirsCreated++;
+                this.log(chalk.green(`   ✓ Created directory`));
+              } else {
+                syncErrors++;
+                this.log(chalk.red(`   ✗ Failed to create directory`));
+                this.log('');
+                continue;
+              }
+            }
+          }
+
+          // Fix filesystem_status for active worktrees stuck as 'deleted' or 'preserved'
+          if (
+            action === 'sync' &&
+            !rawWorktree.archived &&
+            (rawWorktree.filesystem_status === 'deleted' ||
+              rawWorktree.filesystem_status === 'preserved')
+          ) {
+            // Verify it's a valid git worktree (has .git file)
+            const gitFilePath = join(worktreePath, '.git');
+            if (existsSync(gitFilePath)) {
+              const oldStatus = rawWorktree.filesystem_status;
+              this.log(chalk.yellow(`   → Fixing filesystem_status: ${oldStatus} → ready`));
+              if (!dryRun) {
+                try {
+                  await update(db, worktrees)
+                    .set({ filesystem_status: 'ready' })
+                    .where(eq(worktrees.worktree_id, rawWorktree.worktree_id))
+                    .run();
+                  this.log(
+                    chalk.green(
+                      `   ✓ Fixed filesystem_status: ${oldStatus} → ready for ${rawWorktree.name}`
+                    )
+                  );
+                } catch (error) {
+                  syncErrors++;
+                  this.log(chalk.red(`   ✗ Failed to fix filesystem_status: ${error}`));
+                }
+              } else {
+                this.log(
+                  chalk.gray(
+                    `   [dry-run] Would fix filesystem_status: ${oldStatus} → ready for ${rawWorktree.name}`
+                  )
+                );
+              }
+              statusFixed++;
             }
           }
 
@@ -942,6 +1134,9 @@ export default class SyncUnix extends Command {
         this.log(chalk.bold('Worktree Sync Summary:'));
         this.log(`  Worktrees synced: ${worktreesSynced}${dryRun ? ' (dry-run)' : ''}`);
         this.log(`  Directories created: ${worktreeDirsCreated}${dryRun ? ' (dry-run)' : ''}`);
+        this.log(`  Worktrees restored: ${worktreesRestored}${dryRun ? ' (dry-run)' : ''}`);
+        this.log(`  Groups cleaned: ${groupsCleaned}${dryRun ? ' (dry-run)' : ''}`);
+        this.log(`  Status fixed: ${statusFixed}${dryRun ? ' (dry-run)' : ''}`);
         this.log(`  Daemon ACLs applied: ${daemonAclsApplied}${dryRun ? ' (dry-run)' : ''}`);
         this.log(`  Skipped: ${worktreesSkipped}`);
         if (syncErrors > 0) {
@@ -1454,6 +1649,9 @@ export default class SyncUnix extends Command {
       this.log(`  WT groups backfilled: ${worktreesBackfilled}${dryRunSuffix}`);
       this.log(`  Worktrees synced:  ${worktreesSynced}${dryRunSuffix}`);
       this.log(`  Dirs created:      ${worktreeDirsCreated}${dryRunSuffix}`);
+      this.log(`  Worktrees restored:${worktreesRestored}${dryRunSuffix}`);
+      this.log(`  Groups cleaned:    ${groupsCleaned}${dryRunSuffix}`);
+      this.log(`  Status fixed:      ${statusFixed}${dryRunSuffix}`);
       this.log(`  Skipped:           ${worktreesSkipped}`);
       this.log(`  Daemon ACLs:       ${daemonAclsApplied}${dryRunSuffix}`);
       this.log(`  Repos backfilled:  ${reposBackfilled}${dryRunSuffix}`);
@@ -1500,6 +1698,9 @@ export default class SyncUnix extends Command {
         worktreesSynced > 0 ||
         worktreesBackfilled > 0 ||
         worktreeDirsCreated > 0 ||
+        worktreesRestored > 0 ||
+        groupsCleaned > 0 ||
+        statusFixed > 0 ||
         daemonAclsApplied > 0 ||
         reposBackfilled > 0 ||
         reposPermSynced > 0 ||

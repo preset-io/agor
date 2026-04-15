@@ -240,6 +240,9 @@ export const GitWorktreeAddPayloadSchema = BasePayloadSchema.extend({
     /** Create new branch */
     createBranch: z.boolean().optional(),
 
+    /** Use restore mode: smart branch detection via ls-remote, falls back to creating from sourceBranch */
+    restoreMode: z.boolean().optional(),
+
     /** Type of ref (branch or tag) */
     refType: z.enum(['branch', 'tag']).optional(),
 

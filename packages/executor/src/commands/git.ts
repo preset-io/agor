@@ -26,6 +26,7 @@ import {
   deleteWorktreeDirectory,
   getReposDir,
   removeWorktree,
+  restoreWorktreeFilesystem,
 } from '@agor/core/git';
 import type {
   ExecutorResult,
@@ -403,23 +404,44 @@ export async function handleGitWorktreeAdd(
     const createBranch = payload.params.createBranch ?? false;
     const sourceBranch = payload.params.sourceBranch;
     const refType = payload.params.refType;
+    const restoreMode = payload.params.restoreMode ?? false;
 
     console.log(`[git.worktree.add] Creating worktree at ${worktreePath}...`);
     console.log(
-      `[git.worktree.add] Repo: ${repoPath}, Branch: ${branch}, CreateBranch: ${createBranch}, RefType: ${refType || 'branch'}`
+      `[git.worktree.add] Repo: ${repoPath}, Branch: ${branch}, CreateBranch: ${createBranch}, RestoreMode: ${restoreMode}, RefType: ${refType || 'branch'}`
     );
 
     // Create the git worktree on filesystem
-    await createWorktree(
-      repoPath,
-      worktreePath,
-      branch,
-      createBranch,
-      true, // pullLatest
-      sourceBranch,
-      env,
-      refType
-    );
+    if (restoreMode && sourceBranch) {
+      // Restore mode: smart branch detection — checks if branch exists on remote,
+      // falls back to creating from base ref if not. Safe because it only creates
+      // a new branch when ls-remote confirms the branch doesn't exist anywhere.
+      console.log(
+        `[git.worktree.add] Using restoreWorktreeFilesystem (branch: ${branch}, base: ${sourceBranch})`
+      );
+      const result = await restoreWorktreeFilesystem(
+        repoPath,
+        worktreePath,
+        branch,
+        sourceBranch,
+        env
+      );
+      if (!result.success) {
+        throw new Error(`restoreWorktreeFilesystem failed: ${result.error}`);
+      }
+      console.log(`[git.worktree.add] Restored worktree via ${result.strategy} strategy`);
+    } else {
+      await createWorktree(
+        repoPath,
+        worktreePath,
+        branch,
+        createBranch,
+        true, // pullLatest
+        sourceBranch,
+        env,
+        refType
+      );
+    }
 
     console.log(`[git.worktree.add] Worktree created at ${worktreePath}`);
 

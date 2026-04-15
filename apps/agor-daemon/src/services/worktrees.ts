@@ -657,13 +657,13 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
                 worktreePath: worktree.path,
                 branch: worktree.ref,
                 refType: worktree.ref_type || 'branch',
-                // Always try to checkout the existing branch first.
-                // If the branch was deleted during archive, git worktree add will fail
-                // and the executor marks filesystem_status as 'failed'.
-                // We intentionally avoid createBranch:true here because createWorktree's
-                // orphan cleanup path would force-delete an existing branch, risking data loss.
+                // Use restore mode: checks if branch exists on remote via ls-remote,
+                // checks out existing branch if found, otherwise creates new branch from base_ref.
+                // This is safe because it only creates a new branch when ls-remote confirms
+                // the branch doesn't exist on the remote (no risk of force-deleting existing branches).
                 createBranch: false,
-                sourceBranch: worktree.base_ref,
+                restoreMode: true,
+                sourceBranch: worktree.base_ref || repo.default_branch || 'main',
                 // Unix group isolation
                 initUnixGroup: rbacEnabled,
                 othersAccess: worktree.others_fs_access || 'read',

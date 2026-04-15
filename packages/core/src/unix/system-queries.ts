@@ -162,22 +162,29 @@ export function listRepoGroups(): string[] {
  * @param filesystemStatus - The worktree's filesystem_status field
  * @returns Action to take:
  *   - 'sync': Directory exists, apply permissions
- *   - 'create': Directory missing, non-archived — create it
- *   - 'skip': Skip this worktree (archived+deleted, creating, failed, etc.)
+ *   - 'create': Directory missing, non-archived — create it (as proper git worktree)
+ *   - 'restore': Non-archived worktree with failed status — attempt git worktree restoration
+ *   - 'cleanup': Archived+deleted — remove Unix group cruft
+ *   - 'skip': Skip this worktree (creating, archived without deletion, etc.)
  */
 export function getWorktreeDirectoryAction(
   dirExists: boolean,
   archived: boolean,
   filesystemStatus: string | null | undefined
-): 'sync' | 'create' | 'skip' {
-  // Creating or failed worktrees — not ready, skip
-  if (filesystemStatus === 'creating' || filesystemStatus === 'failed') {
+): 'sync' | 'create' | 'restore' | 'cleanup' | 'skip' {
+  // Still being created — not ready, skip
+  if (filesystemStatus === 'creating') {
     return 'skip';
   }
 
-  // Archived + deleted — directory was intentionally removed
+  // Non-archived + failed — attempt restoration
+  if (!archived && filesystemStatus === 'failed') {
+    return 'restore';
+  }
+
+  // Archived + deleted — dead worktree, clean up Unix group
   if (archived && filesystemStatus === 'deleted') {
-    return 'skip';
+    return 'cleanup';
   }
 
   // Directory exists — always sync permissions regardless of archive state
