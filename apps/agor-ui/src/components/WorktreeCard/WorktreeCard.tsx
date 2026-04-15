@@ -31,6 +31,7 @@ import {
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import {
+  App,
   Badge,
   Button,
   Card,
@@ -196,6 +197,7 @@ const WorktreeCardComponent = ({
   client,
 }: WorktreeCardProps) => {
   const { token } = theme.useToken();
+  const { modal } = App.useApp();
   const connectionDisabled = useConnectionDisabled();
   const schedulerEnabled = useServiceEnabled('scheduler');
   const gatewayEnabled = useServiceEnabled('gateway');
@@ -239,26 +241,34 @@ const WorktreeCardComponent = ({
   const [archivingSessionIds, setArchivingSessionIds] = useState<Set<string>>(new Set());
 
   const handleArchiveSession = useCallback(
-    async (sessionId: string, e: React.MouseEvent) => {
+    (sessionId: string, e: React.MouseEvent) => {
       e.stopPropagation();
 
-      setArchivingSessionIds((prev) => new Set(prev).add(sessionId));
-      try {
-        const result = await archiveSession(sessionId as SessionID);
-        if (result) {
-          message.success('Session archived');
-        } else {
-          message.error('Failed to archive session');
-        }
-      } finally {
-        setArchivingSessionIds((prev) => {
-          const next = new Set(prev);
-          next.delete(sessionId);
-          return next;
-        });
-      }
+      modal.confirm({
+        title: 'Archive Session',
+        content: 'Are you sure you want to archive this session?',
+        okText: 'Archive',
+        cancelText: 'Cancel',
+        onOk: async () => {
+          setArchivingSessionIds((prev) => new Set(prev).add(sessionId));
+          try {
+            const result = await archiveSession(sessionId as SessionID);
+            if (result) {
+              message.success('Session archived');
+            } else {
+              message.error('Failed to archive session');
+            }
+          } finally {
+            setArchivingSessionIds((prev) => {
+              const next = new Set(prev);
+              next.delete(sessionId);
+              return next;
+            });
+          }
+        },
+      });
     },
-    [archiveSession]
+    [archiveSession, modal]
   );
 
   // Gateway session helpers (delegating to @agor-live/client)
