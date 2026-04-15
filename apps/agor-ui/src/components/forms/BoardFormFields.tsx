@@ -1,5 +1,16 @@
 import type { FormInstance } from 'antd';
-import { Checkbox, ColorPicker, Flex, Form, Input, Select, Space, Typography } from 'antd';
+import {
+  Checkbox,
+  Collapse,
+  ColorPicker,
+  Flex,
+  Form,
+  Input,
+  Select,
+  Space,
+  Typography,
+} from 'antd';
+import { useState } from 'react';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 
 export const BACKGROUND_PRESETS = [
@@ -139,30 +150,74 @@ animation: agorHScroll 20s linear infinite;
   },
 ];
 
+/** Detect if a background value is custom CSS (not a simple hex color or rgba) */
+export function isCustomCSS(value: string | undefined | null): boolean {
+  if (!value) return false;
+  return !value.match(/^#[0-9a-fA-F]{3,8}$/) && !value.match(/^rgba?\(/);
+}
+
+/**
+ * Extract board form values from the form instance.
+ * Uses getFieldsValue(true) to include values from collapsed/unmounted fields.
+ * Sends null for cleared fields so the backend actually clears them.
+ */
+export function extractBoardFormValues(form: FormInstance): Partial<{
+  name: string;
+  icon: string;
+  description: string;
+  background_color: string | null;
+  custom_css: string | null;
+  custom_context: Record<string, unknown> | null;
+}> {
+  const values = form.getFieldsValue(true);
+  const bgColor = values.background_color;
+  return {
+    name: values.name,
+    icon: values.icon || '📋',
+    description: values.description,
+    // Send null to explicitly clear, not undefined (which gets dropped by JSON.stringify)
+    background_color: bgColor
+      ? typeof bgColor === 'string'
+        ? bgColor
+        : bgColor.toHexString()
+      : null,
+    custom_css: values.custom_css || null,
+    custom_context: values.custom_context ? JSON.parse(values.custom_context) : null,
+  };
+}
+
 export interface BoardFormFieldsProps {
   form: FormInstance;
-  useCustomCSS: boolean;
-  onCustomCSSChange: (checked: boolean) => void;
   /** Whether to auto-focus the name input */
   autoFocus?: boolean;
-  /** Extra content rendered after the background section (e.g. custom context JSON) */
+  /** Extra content rendered inside the "Advanced" collapse panel */
   extra?: React.ReactNode;
+  /** Initial custom CSS mode — auto-detected from board values if not provided */
+  initialCustomCSS?: boolean;
 }
 
 /**
  * Shared board form fields used in the CreateDialog BoardTab
  * and the SettingsModal BoardsTable create/edit modals.
  *
- * Renders: Name (icon + text), Description, Background (color picker / CSS presets).
+ * Renders: Name, Description, and collapsible CSS / Advanced sections.
+ * Manages useCustomCSS state internally.
  * Does NOT render a <Form> wrapper — the parent owns the form instance.
  */
 export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
   form,
-  useCustomCSS,
-  onCustomCSSChange,
   autoFocus,
   extra,
+  initialCustomCSS = false,
 }) => {
+  const [useCustomCSS, setUseCustomCSS] = useState(initialCustomCSS);
+
+  // Auto-expand CSS section if the board already has background or custom_css values
+  const defaultActiveKeys: string[] = [];
+  if (initialCustomCSS) {
+    defaultActiveKeys.push('css');
+  }
+
   return (
     <>
       <Form.Item label="Name" style={{ marginBottom: 24 }}>
@@ -185,94 +240,118 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
         <Input.TextArea placeholder="Optional description..." rows={3} />
       </Form.Item>
 
-      <Form.Item label="Background">
-        <Space direction="vertical" style={{ width: '100%' }}>
-          <Checkbox
-            checked={useCustomCSS}
-            onChange={(e) => {
-              onCustomCSSChange(e.target.checked);
-              if (e.target.checked) {
-                form.setFieldsValue({ background_color: undefined });
-              }
-            }}
-          >
-            Use custom CSS background
-          </Checkbox>
+      <Collapse
+        defaultActiveKey={defaultActiveKeys}
+        ghost
+        style={{ marginBottom: 16 }}
+        items={[
+          {
+            key: 'css',
+            label: 'CSS Background',
+            children: (
+              <>
+                <Space direction="vertical" style={{ width: '100%', marginBottom: 16 }}>
+                  <Checkbox
+                    checked={useCustomCSS}
+                    onChange={(e) => {
+                      setUseCustomCSS(e.target.checked);
+                      if (e.target.checked) {
+                        // Clear color picker value when switching to custom CSS mode
+                        const current = form.getFieldValue('background_color');
+                        if (current && typeof current !== 'string') {
+                          form.setFieldsValue({ background_color: current.toHexString() });
+                        }
+                      }
+                    }}
+                  >
+                    Use custom CSS background
+                  </Checkbox>
 
-          {!useCustomCSS ? (
-            <Form.Item name="background_color" noStyle>
-              <ColorPicker showText format="hex" allowClear />
-            </Form.Item>
-          ) : (
-            <>
-              <Select
-                placeholder="Load a preset..."
-                style={{ width: '100%', marginBottom: 8 }}
-                allowClear
-                showSearch
-                options={BACKGROUND_PRESETS}
-                onChange={(value) => {
-                  if (value) {
-                    form.setFieldsValue({ background_color: value });
-                  }
-                }}
-              />
-              <Form.Item name="background_color" noStyle>
-                <Input.TextArea
-                  placeholder="Enter custom CSS or select a preset above"
-                  rows={3}
-                  style={{ fontFamily: 'monospace', fontSize: '12px' }}
-                />
-              </Form.Item>
-            </>
-          )}
+                  {!useCustomCSS ? (
+                    <Form.Item name="background_color" noStyle>
+                      <ColorPicker showText format="hex" allowClear />
+                    </Form.Item>
+                  ) : (
+                    <>
+                      <Select
+                        placeholder="Load a preset..."
+                        style={{ width: '100%', marginBottom: 8 }}
+                        allowClear
+                        showSearch
+                        options={BACKGROUND_PRESETS}
+                        onChange={(value) => {
+                          if (value) {
+                            form.setFieldsValue({ background_color: value });
+                          }
+                        }}
+                      />
+                      <Form.Item name="background_color" noStyle>
+                        <Input.TextArea
+                          placeholder="Enter custom CSS background value (gradients, patterns, etc.)"
+                          rows={3}
+                          style={{ fontFamily: 'monospace', fontSize: '12px' }}
+                        />
+                      </Form.Item>
+                    </>
+                  )}
 
-          <Typography.Text
-            type="secondary"
-            style={{ fontSize: '12px', display: 'block', marginTop: 4 }}
-          >
-            {!useCustomCSS
-              ? 'Set a solid background color for the board canvas'
-              : 'Choose a preset or enter any valid CSS background property (gradients, patterns, etc.)'}
-          </Typography.Text>
-        </Space>
-      </Form.Item>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: '12px', display: 'block', marginTop: 4 }}
+                  >
+                    {!useCustomCSS
+                      ? 'Set a solid background color for the board canvas'
+                      : 'Enter any valid CSS background value (gradients, patterns, etc.)'}
+                  </Typography.Text>
+                </Space>
 
-      {useCustomCSS && (
-        <Form.Item
-          label="Animation CSS"
-          tooltip="Add @keyframes, animation, background-size, and other CSS properties. Rendered in a scoped <style> tag."
-        >
-          <Select
-            placeholder="Load an animation preset..."
-            style={{ width: '100%', marginBottom: 8 }}
-            allowClear
-            showSearch
-            options={ANIMATION_PRESETS}
-            onChange={(value) => {
-              if (value) {
-                form.setFieldsValue({ custom_css: value });
-              }
-            }}
-          />
-          <Form.Item name="custom_css" noStyle>
-            <Input.TextArea
-              placeholder={`@keyframes bioGlow {\n  0%, 100% { background-position: 0% 50%; }\n  50% { background-position: 100% 50%; }\n}\n\nbackground-size: 400% 400%;\nanimation: bioGlow 12s ease infinite;`}
-              rows={6}
-              style={{ fontFamily: 'monospace', fontSize: '12px' }}
-            />
-          </Form.Item>
-          <Typography.Text
-            type="secondary"
-            style={{ fontSize: '12px', display: 'block', marginTop: 4 }}
-          >
-            Supports @keyframes, animation, background-size, and other CSS. Dangerous patterns (url,
-            expression, @import) are blocked for security.
-          </Typography.Text>
-        </Form.Item>
-      )}
-
-      {extra}
+                {useCustomCSS && (
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    <Typography.Text strong style={{ fontSize: '13px' }}>
+                      Animation CSS
+                    </Typography.Text>
+                    <Select
+                      placeholder="Load an animation preset..."
+                      style={{ width: '100%', marginBottom: 8 }}
+                      allowClear
+                      showSearch
+                      options={ANIMATION_PRESETS}
+                      onChange={(value) => {
+                        if (value) {
+                          form.setFieldsValue({ custom_css: value });
+                        }
+                      }}
+                    />
+                    <Form.Item name="custom_css" noStyle>
+                      <Input.TextArea
+                        placeholder={`@keyframes bioGlow {\n  0%, 100% { background-position: 0% 50%; }\n  50% { background-position: 100% 50%; }\n}\n\nbackground-size: 400% 400%;\nanimation: bioGlow 12s ease infinite;`}
+                        rows={6}
+                        style={{ fontFamily: 'monospace', fontSize: '12px' }}
+                      />
+                    </Form.Item>
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: '12px', display: 'block', marginTop: 4 }}
+                    >
+                      Supports @keyframes, animation, background-size, and other CSS. Dangerous
+                      patterns (url, expression, @import) are blocked for security.
+                    </Typography.Text>
+                  </Space>
+                )}
+              </>
+            ),
+          },
+          ...(extra
+            ? [
+                {
+                  key: 'advanced',
+                  label: 'Advanced',
+                  children: extra,
+                },
+              ]
+            : []),
+        ]}
+      />
     </>
   );
 };

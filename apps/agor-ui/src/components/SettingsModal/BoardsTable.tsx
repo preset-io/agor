@@ -26,7 +26,7 @@ import {
 import { useMemo, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
-import { BoardFormFields } from '../forms/BoardFormFields';
+import { BoardFormFields, extractBoardFormValues, isCustomCSS } from '../forms/BoardFormFields';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 
 interface BoardsTableProps {
@@ -58,17 +58,9 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingBoard, setEditingBoard] = useState<Board | null>(null);
-  const [useCustomCSSCreate, setUseCustomCSSCreate] = useState(false);
-  const [useCustomCSSEdit, setUseCustomCSSEdit] = useState(false);
   const [archiveFilter, setArchiveFilter] = useState<'active' | 'archived' | 'all'>('active');
   const [hoveredArchiveButton, setHoveredArchiveButton] = useState<string | null>(null);
   const [form] = Form.useForm();
-
-  // Helper to detect if a background value is custom CSS (not a simple hex color)
-  const isCustomCSS = (value: string | undefined): boolean => {
-    if (!value) return false;
-    return !value.match(/^#[0-9a-fA-F]{3,8}$/) && !value.match(/^rgba?\(/);
-  };
 
   // Calculate session count per board (worktree-centric model)
   const boardSessionCounts = useMemo(() => {
@@ -93,29 +85,18 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   }, [boardById, sessionsByWorktree, worktreeById]);
 
   const handleCreate = () => {
-    form.validateFields().then((values) => {
-      onCreate?.({
-        name: values.name,
-        icon: values.icon || '📋',
-        description: values.description,
-        background_color: values.background_color
-          ? typeof values.background_color === 'string'
-            ? values.background_color
-            : values.background_color.toHexString()
-          : undefined,
-        custom_css: values.custom_css || undefined,
-        custom_context: values.custom_context ? JSON.parse(values.custom_context) : undefined,
-      });
-      form.resetFields();
-      setCreateModalOpen(false);
-      setUseCustomCSSCreate(false);
-    });
+    form
+      .validateFields(['name'])
+      .then(() => {
+        onCreate?.(extractBoardFormValues(form));
+        form.resetFields();
+        setCreateModalOpen(false);
+      })
+      .catch(() => {});
   };
 
   const handleEdit = (board: Board) => {
     setEditingBoard(board);
-    const hasCustomCSS = isCustomCSS(board.background_color);
-    setUseCustomCSSEdit(hasCustomCSS);
     form.setFieldsValue({
       name: board.name,
       icon: board.icon,
@@ -130,24 +111,15 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   const handleUpdate = () => {
     if (!editingBoard) return;
 
-    form.validateFields().then((values) => {
-      onUpdate?.(editingBoard.board_id, {
-        name: values.name,
-        icon: values.icon,
-        description: values.description,
-        background_color: values.background_color
-          ? typeof values.background_color === 'string'
-            ? values.background_color
-            : values.background_color.toHexString()
-          : undefined,
-        custom_css: values.custom_css || undefined,
-        custom_context: values.custom_context ? JSON.parse(values.custom_context) : undefined,
-      });
-      form.resetFields();
-      setEditModalOpen(false);
-      setEditingBoard(null);
-      setUseCustomCSSEdit(false);
-    });
+    form
+      .validateFields(['name'])
+      .then(() => {
+        onUpdate?.(editingBoard.board_id, extractBoardFormValues(form));
+        form.resetFields();
+        setEditModalOpen(false);
+        setEditingBoard(null);
+      })
+      .catch(() => {});
   };
 
   const handleDelete = (boardId: string) => {
@@ -419,17 +391,11 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
         onCancel={() => {
           form.resetFields();
           setCreateModalOpen(false);
-          setUseCustomCSSCreate(false);
         }}
         okText="Create"
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          <BoardFormFields
-            form={form}
-            useCustomCSS={useCustomCSSCreate}
-            onCustomCSSChange={setUseCustomCSSCreate}
-            extra={customContextField}
-          />
+        <Form form={form} layout="vertical" preserve style={{ marginTop: 16 }}>
+          <BoardFormFields form={form} extra={customContextField} />
         </Form>
       </Modal>
 
@@ -442,16 +408,16 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
           form.resetFields();
           setEditModalOpen(false);
           setEditingBoard(null);
-          setUseCustomCSSEdit(false);
         }}
         okText="Save"
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+        <Form form={form} layout="vertical" preserve style={{ marginTop: 16 }}>
           <BoardFormFields
             form={form}
-            useCustomCSS={useCustomCSSEdit}
-            onCustomCSSChange={setUseCustomCSSEdit}
             extra={customContextField}
+            initialCustomCSS={
+              isCustomCSS(editingBoard?.background_color) || Boolean(editingBoard?.custom_css)
+            }
           />
         </Form>
       </Modal>

@@ -1,7 +1,7 @@
 import type { Board } from '@agor-live/client';
 import { Form } from 'antd';
-import { useCallback, useState } from 'react';
-import { BoardFormFields } from '../../forms/BoardFormFields';
+import { useCallback } from 'react';
+import { BoardFormFields, extractBoardFormValues } from '../../forms/BoardFormFields';
 
 export interface BoardTabProps {
   onValidityChange: (valid: boolean) => void;
@@ -10,7 +10,6 @@ export interface BoardTabProps {
 
 export const BoardTab: React.FC<BoardTabProps> = ({ onValidityChange, formRef }) => {
   const [form] = Form.useForm();
-  const [useCustomCSS, setUseCustomCSS] = useState(false);
 
   const handleValuesChange = useCallback(() => {
     setTimeout(() => {
@@ -21,31 +20,16 @@ export const BoardTab: React.FC<BoardTabProps> = ({ onValidityChange, formRef })
 
   formRef.current = async () => {
     try {
-      const values = await form.validateFields();
-      return {
-        name: values.name,
-        icon: values.icon || '📋',
-        description: values.description,
-        background_color: values.background_color
-          ? typeof values.background_color === 'string'
-            ? values.background_color
-            : values.background_color.toHexString()
-          : undefined,
-        custom_css: values.custom_css || undefined,
-      };
+      await form.validateFields(['name']);
+      return extractBoardFormValues(form);
     } catch {
       return null;
     }
   };
 
   return (
-    <Form form={form} layout="vertical" onValuesChange={handleValuesChange}>
-      <BoardFormFields
-        form={form}
-        useCustomCSS={useCustomCSS}
-        onCustomCSSChange={setUseCustomCSS}
-        autoFocus
-      />
+    <Form form={form} layout="vertical" preserve onValuesChange={handleValuesChange}>
+      <BoardFormFields form={form} autoFocus />
     </Form>
   );
 };

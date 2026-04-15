@@ -307,14 +307,29 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const { token } = theme.useToken();
     const isDarkMode = isDarkTheme(token);
     const defaultBackground = DEFAULT_BACKGROUNDS[isDarkMode ? 'dark' : 'light'];
-    const canvasBackground = board?.background_color ?? defaultBackground;
+    const hasCustomCss = Boolean(board?.custom_css?.trim());
+
+    // When custom_css is active, move background into the <style> tag to avoid
+    // specificity conflicts (inline `background` shorthand resets background-size to auto)
+    const canvasBackground = hasCustomCss
+      ? undefined
+      : (board?.background_color ?? defaultBackground);
 
     // Sanitize and scope custom CSS for this board (enables @keyframes, animations, etc.)
     const boardCssClass = board?.board_id ? `board-css-${board.board_id.slice(0, 8)}` : '';
-    const scopedCustomCss = useMemo(
-      () => sanitizeBoardCss(board?.custom_css, `.${boardCssClass}`),
-      [board?.custom_css, boardCssClass]
-    );
+    const scopedCustomCss = useMemo(() => {
+      if (!hasCustomCss) return '';
+      // Prepend background_color as a CSS rule so it's at the same specificity as custom_css
+      const bgValue = board?.background_color || defaultBackground;
+      const bgRule = `background: ${bgValue};\n`;
+      return sanitizeBoardCss(bgRule + (board?.custom_css || ''), `.${boardCssClass}`);
+    }, [
+      board?.custom_css,
+      board?.background_color,
+      boardCssClass,
+      hasCustomCss,
+      defaultBackground,
+    ]);
 
     // Note: sessionsByWorktree is now passed as prop (no longer computed locally)
     // This enables efficient O(1) lookups and stable references across re-renders

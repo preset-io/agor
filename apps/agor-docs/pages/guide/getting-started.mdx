@@ -130,9 +130,37 @@ Agor supports multiple AI coding agents (Claude Code, Codex, Gemini, OpenCode). 
 
 Agor offers **three ways** to configure AI credentials, in order of priority:
 
-#### Option 1: CLI Login (Recommended for Claude)
+#### Option 1: Claude Max Pro / Pro Plan (Recommended) {#claude-max-pro}
 
-The fastest way to get started with Claude Code:
+If you have a **Claude Max Pro** (or Pro) subscription, you can use it directly with Agor — no API key needed.
+
+**Step 1: Install Claude CLI** on your local machine (skip if you already have it):
+
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+> Don't have `npm`? Install [Node.js](https://nodejs.org) first (download the LTS version), then retry the command above.
+
+**Step 2: Generate a session token:**
+
+```bash
+claude setup-token
+```
+
+This outputs a token value — copy it.
+
+**Step 3: Paste the token into Agor:**
+
+1. In Agor, click the **gear icon** (top right) to open **User Settings**
+2. Go to the **"Env vars"** section
+3. Add: **`CLAUDE_CODE_OAUTH_TOKEN`** = _your token_
+
+That's it! Agor will use your Claude subscription for all Claude Code sessions.
+
+#### Option 1b: CLI Login (Alternative for self-hosted)
+
+If you're running Agor on a machine where you can SSH in and run commands directly:
 
 ```bash
 claude login
@@ -189,10 +217,11 @@ export GOOGLE_AI_API_KEY="..."
 When you start a session, Agor checks for credentials in this order:
 
 1. **Per-user API keys** (if set in Settings → Agentic Tools)
-2. **`claude login` credentials** (if you ran `claude login`)
-3. **Environment variables** (global fallback)
+2. **`CLAUDE_CODE_OAUTH_TOKEN`** (if set via `claude setup-token` in User Settings → Env vars)
+3. **`claude login` credentials** (if you ran `claude login` on the server)
+4. **Environment variables** (global fallback)
 
-This lets you mix approaches - use `claude login` for yourself while teammates use per-user keys.
+This lets you mix approaches — use `claude setup-token` with your Max Pro plan while teammates use per-user API keys.
 
 ---
 

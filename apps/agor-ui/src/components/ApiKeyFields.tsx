@@ -140,6 +140,15 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
               {docUrl}
             </Link>
           </Text>
+          {field === 'ANTHROPIC_API_KEY' && !isSet && (
+            <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+              Claude Max/Pro plan user? You don't need an API key — use{' '}
+              <Text code style={{ fontSize: token.fontSizeSM }}>claude setup-token</Text> instead.{' '}
+              <Link href="/guide/getting-started#claude-max-pro" target="_blank">
+                See the docs
+              </Link>
+            </Text>
+          )}
         </Space>
       </div>
     );
