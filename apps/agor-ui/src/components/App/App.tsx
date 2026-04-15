@@ -945,7 +945,11 @@ export const App: React.FC<AppProps> = ({
           {/* Invisible mount of antd Upload so its CSS-in-JS styles stay
               registered even after the SessionPanel (which contains FileUpload)
               unmounts. Without this, antd GC's the Upload CSS on panel close. */}
-          <Upload style={{ display: 'none' }} openFileDialogOnClick={false} showUploadList={false} />
+          <Upload
+            style={{ display: 'none' }}
+            openFileDialogOnClick={false}
+            showUploadList={false}
+          />
           {newSessionWorktreeId && (
             <NewSessionModal
               open={true}
