@@ -9,7 +9,7 @@ import {
   RobotOutlined,
 } from '@ant-design/icons';
 import { Button, Empty, Form, Input, Modal, Select, Space, Table, Typography, theme } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import { ArchiveToggleButton } from '../ArchiveToggleButton';
@@ -76,6 +76,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   const [archivedWorktrees, setArchivedWorktrees] = useState<Worktree[]>([]);
   const [archivedLoaded, setArchivedLoaded] = useState(false);
   const [archivedLoading, setArchivedLoading] = useState(false);
+  const archivedFetchingRef = useRef(false);
 
   // No need for reposById anymore, we already have it as a prop
 
@@ -83,18 +84,17 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
     if (archiveFilter !== 'archived' && archiveFilter !== 'all') {
       return;
     }
-    if (archivedLoaded || archivedLoading || !client) {
+    if (archivedLoaded || archivedFetchingRef.current || !client) {
       return;
     }
 
-    let cancelled = false;
+    archivedFetchingRef.current = true;
     setArchivedLoading(true);
 
     client
       .service('worktrees')
       .findAll({ query: { archived: true, $limit: 1000, $sort: { created_at: -1 } } })
       .then((result) => {
-        if (cancelled) return;
         setArchivedWorktrees(result as Worktree[]);
         setArchivedLoaded(true);
       })
@@ -102,15 +102,10 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
         // Keep table functional with active-only data if archived fetch fails
       })
       .finally(() => {
-        if (!cancelled) {
-          setArchivedLoading(false);
-        }
+        archivedFetchingRef.current = false;
+        setArchivedLoading(false);
       });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [archiveFilter, archivedLoaded, archivedLoading, client]);
+  }, [archiveFilter, archivedLoaded, client]);
 
   // Validate form fields to enable/disable Create button
   const validateForm = useCallback(() => {
