@@ -98,7 +98,6 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
       archived_by: (row.archived_by as UUID | null) ?? undefined,
       filesystem_status: row.filesystem_status ?? undefined,
-      error_message: row.error_message ?? undefined,
       // RBAC fields
       others_can: row.others_can ?? undefined,
       others_fs_access: row.others_fs_access ?? undefined,
@@ -142,7 +141,6 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       archived_at: worktree.archived_at ? new Date(worktree.archived_at) : null,
       archived_by: worktree.archived_by ?? null,
       filesystem_status: worktree.filesystem_status ?? null,
-      error_message: worktree.error_message ?? null,
       // RBAC fields (default 'session' for others_can matches schema default)
       others_can: worktree.others_can ?? 'session',
       others_fs_access: worktree.others_fs_access ?? null,
@@ -157,6 +155,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
         issue_url: worktree.issue_url,
         pull_request_url: worktree.pull_request_url,
         notes: worktree.notes,
+        error_message: worktree.error_message,
         environment_instance: worktree.environment_instance,
         last_used: worktree.last_used ?? new Date(now).toISOString(),
         custom_context: worktree.custom_context,

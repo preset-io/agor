@@ -504,9 +504,6 @@ export const worktrees = pgTable(
       enum: ['creating', 'ready', 'failed', 'preserved', 'cleaned', 'deleted'],
     }),
 
-    // Error message when filesystem_status is 'failed' (e.g., git worktree add error details)
-    error_message: text('error_message'),
-
     // RBAC: App-layer permissions (rbac.md)
     others_can: text('others_can', {
       enum: [...WORKTREE_PERMISSION_LEVELS],
@@ -538,6 +535,7 @@ export const worktrees = pgTable(
         issue_url?: string; // GitHub/GitLab issue
         pull_request_url?: string; // PR link
         notes?: string; // Freeform user notes
+        error_message?: string; // Error details when filesystem_status is 'failed'
 
         // Environment instance (runtime state only, no variables)
         environment_instance?: {
