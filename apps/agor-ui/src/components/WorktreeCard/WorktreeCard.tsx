@@ -367,7 +367,7 @@ const WorktreeCardComponent = ({
       if (node.relationshipType === 'fork') {
         if (session.fork_origin === 'btw') {
           return (
-            <Typography.Text style={{ fontSize: 9, color: token.colorWarning, fontWeight: 'bold' }}>
+            <Typography.Text style={{ fontSize: 9, color: token.colorWarning, fontWeight: 'bold', whiteSpace: 'nowrap', flexShrink: 0 }}>
               btw
             </Typography.Text>
           );
@@ -448,7 +448,7 @@ const WorktreeCardComponent = ({
             }
           }}
         >
-          <Space size={4} align="center" style={{ flex: 1, minWidth: 0 }}>
+          <Space size={4} align="center" style={{ flex: 1, minWidth: 0, flexWrap: 'nowrap' }}>
             {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
             {getRelationshipIcon()}
             <Typography.Text
@@ -456,6 +456,7 @@ const WorktreeCardComponent = ({
               style={{
                 fontSize: 12,
                 flex: 1,
+                minWidth: 0,
                 ...getSessionTitleStyles(2),
               }}
             >
