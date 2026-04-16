@@ -638,49 +638,37 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
         const sessionToken = generateSessionToken(
           this.app as unknown as { settings: { authentication?: { secret?: string } } }
         );
-        if (sessionToken) {
-          spawnExecutor(
-            {
-              command: 'git.worktree.add',
-              sessionToken,
-              daemonUrl: getDaemonUrl(),
-              params: {
-                worktreeId: worktree.worktree_id,
-                repoId: repo.repo_id,
-                repoPath: repo.local_path,
-                worktreeName: worktree.name,
-                worktreePath: worktree.path,
-                branch: worktree.ref,
-                refType: worktree.ref_type || 'branch',
-                // Use restore mode: checks if branch exists on remote via ls-remote,
-                // checks out existing branch if found, otherwise creates new branch from base_ref.
-                // This is safe because it only creates a new branch when ls-remote confirms
-                // the branch doesn't exist on the remote (no risk of force-deleting existing branches).
-                createBranch: false,
-                restoreMode: true,
-                sourceBranch: worktree.base_ref || repo.default_branch || 'main',
-                // Unix group isolation
-                initUnixGroup: rbacEnabled,
-                othersAccess: worktree.others_fs_access || 'read',
-                daemonUser,
-                repoUnixGroup: repo.unix_group,
-              },
+        spawnExecutor(
+          {
+            command: 'git.worktree.add',
+            sessionToken,
+            daemonUrl: getDaemonUrl(),
+            params: {
+              worktreeId: worktree.worktree_id,
+              repoId: repo.repo_id,
+              repoPath: repo.local_path,
+              worktreeName: worktree.name,
+              worktreePath: worktree.path,
+              branch: worktree.ref,
+              refType: worktree.ref_type || 'branch',
+              // Use restore mode: checks if branch exists on remote via ls-remote,
+              // checks out existing branch if found, otherwise creates new branch from base_ref.
+              // This is safe because it only creates a new branch when ls-remote confirms
+              // the branch doesn't exist on the remote (no risk of force-deleting existing branches).
+              createBranch: false,
+              restoreMode: true,
+              sourceBranch: worktree.base_ref || repo.default_branch || 'main',
+              // Unix group isolation
+              initUnixGroup: rbacEnabled,
+              othersAccess: worktree.others_fs_access || 'read',
+              daemonUser,
+              repoUnixGroup: repo.unix_group,
             },
-            {
-              logPrefix: `[WorktreesService.unarchive ${worktree.name}]`,
-            }
-          );
-        } else {
-          console.error('⚠️  No session token service available for worktree recreation');
-          await this.patch(
-            id,
-            {
-              filesystem_status: 'failed',
-              error_message: 'Session token service not available for worktree recreation',
-            },
-            { provider: undefined }
-          );
-        }
+          },
+          {
+            logPrefix: `[WorktreesService.unarchive ${worktree.name}]`,
+          }
+        );
       } catch (error) {
         console.error(
           `⚠️  Failed to spawn executor for worktree recreation:`,

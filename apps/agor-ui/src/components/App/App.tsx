@@ -19,7 +19,7 @@ import type {
   User,
   Worktree,
 } from '@agor-live/client';
-import { hasMinimumRole, PermissionScope, ROLES } from '@agor-live/client';
+import { hasMinimumRole, PermissionScope } from '@agor-live/client';
 import { Layout, Upload } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -55,7 +55,7 @@ import { SessionCanvas, type SessionCanvasRef } from '../SessionCanvas';
 import { SessionPanel } from '../SessionPanel';
 import { SessionSettingsModal } from '../SessionSettingsModal';
 import { SettingsModal, UserSettingsModal } from '../SettingsModal';
-import { TerminalModal } from '../TerminalModal';
+import { TerminalModal, WEB_TERMINAL_MIN_ROLE } from '../TerminalModal';
 import { ThemeEditorModal } from '../ThemeEditorModal';
 import { WorktreeListDrawer } from '../WorktreeListDrawer';
 import { WorktreeModal, type WorktreeModalTab } from '../WorktreeModal';
@@ -644,10 +644,11 @@ export const App: React.FC<AppProps> = ({
   );
 
   // Web terminal is gated by both the instance-level feature flag and the
-  // user's role. Members and above can open terminals when the feature is on.
-  // When disabled, we pass `undefined` so consumers (WorktreeCard, SessionPanel,
-  // EventStreamPanel) can hide their terminal buttons via `{onOpenTerminal && ...}`.
-  const canOpenTerminal = webTerminalEnabled && hasMinimumRole(user?.role, ROLES.MEMBER);
+  // user's role (`WEB_TERMINAL_MIN_ROLE`, shared with TerminalModal so the
+  // threshold lives in one place). When disabled, we pass `undefined` so
+  // consumers (WorktreeCard, SessionPanel, EventStreamPanel) can hide their
+  // terminal buttons via `{onOpenTerminal && ...}`.
+  const canOpenTerminal = webTerminalEnabled && hasMinimumRole(user?.role, WEB_TERMINAL_MIN_ROLE);
 
   // Memoize AppActionsContext value with useCallback-wrapped handlers
   const appActionsValue = useMemo(

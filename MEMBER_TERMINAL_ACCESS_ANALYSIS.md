@@ -1,8 +1,9 @@
 # Member Terminal Access — Analysis
 
 **Status:** Implemented. The design below led to an `execution.allow_web_terminal`
-config flag (default `false`). When on, any user with role `member` or higher can
-open the web terminal; worktree-level RBAC still applies. See
+config flag (default `true`). When enabled (the default), any user with role
+`member` or higher can open the web terminal; worktree-level RBAC still applies.
+Set to `false` to disable the terminal for everyone, including admins. See
 `apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx` for the user-facing
 docs.
 

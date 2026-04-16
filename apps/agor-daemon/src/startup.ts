@@ -211,16 +211,18 @@ export async function startup(ctx: StartupContext): Promise<void> {
   console.log(`     - /context`);
   console.log(`     - /users`);
 
-  // Security warning: web terminal + simple unix mode = daemon-user shell access
-  if (config.execution?.allow_web_terminal === true) {
+  // Security warning: web terminal + simple unix mode = daemon-user shell access.
+  // `allow_web_terminal` defaults to true, so the check treats undefined as enabled.
+  if (config.execution?.allow_web_terminal !== false) {
     const unixMode = config.execution?.unix_user_mode ?? 'simple';
     if (unixMode === 'simple') {
       console.warn(
-        '\x1b[33m⚠️  SECURITY: allow_web_terminal is enabled with unix_user_mode=simple.\x1b[0m\n' +
+        '\x1b[33m⚠️  SECURITY: allow_web_terminal is enabled (default) with unix_user_mode=simple.\x1b[0m\n' +
           '   Any member-role user can open a shell running as the daemon user, with read\n' +
           '   access to ~/.agor/config.yaml, agor.db, and the JWT secret.\n' +
           "   Recommended: set execution.unix_user_mode to 'insulated' or 'strict' to\n" +
-          '   isolate terminal sessions from the daemon process.'
+          '   isolate terminal sessions from the daemon process, or set\n' +
+          '   execution.allow_web_terminal: false to disable the web terminal entirely.'
       );
     } else {
       console.log(`🖥️  Web terminal enabled (members+, unix mode: ${unixMode})`);

@@ -943,12 +943,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   });
 
   // Terminal access gate:
-  // - When `execution.allow_web_terminal` is unset/false, the terminal is
-  //   disabled for everyone (including admins). The modal is hidden from the UI.
-  // - When `execution.allow_web_terminal` is true, any authenticated user with
-  //   role `member` or higher may open a terminal. Worktree-level RBAC still
-  //   applies inside the service (see services/terminals.ts).
-  const webTerminalEnabled = config.execution?.allow_web_terminal === true;
+  // - `execution.allow_web_terminal` defaults to true. Any authenticated user
+  //   with role `member` or higher may open a terminal. Worktree-level RBAC
+  //   still applies inside the service (see services/terminals.ts).
+  // - Setting the flag to false disables the terminal for everyone (including
+  //   admins). The modal is hidden from the UI in that case.
+  const webTerminalEnabled = config.execution?.allow_web_terminal !== false;
   safeService('terminals')?.hooks({
     before: {
       all: [
@@ -956,7 +956,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         (context: HookContext) => {
           if (!webTerminalEnabled) {
             throw new Forbidden(
-              'Web terminal is disabled on this instance. Ask an administrator to set execution.allow_web_terminal: true in the daemon config.'
+              'Web terminal is disabled on this instance. Ask an administrator to unset or enable execution.allow_web_terminal in the daemon config.'
             );
           }
           return context;

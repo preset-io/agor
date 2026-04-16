@@ -229,19 +229,18 @@ export interface AgorExecutionSettings {
   worktree_rbac?: boolean;
 
   /**
-   * Allow authenticated members (and above) to open the web terminal (default: false).
+   * Allow authenticated members (and above) to open the web terminal (default: true).
    *
-   * When false (default), the terminal is disabled for everyone — no user role,
-   * including admin, can open one. When true, any user with role `member` or
-   * higher can open a terminal.
+   * When true (default), any user with role `member` or higher can open a
+   * terminal. Set to false to disable the terminal for everyone, including
+   * admins; the modal is hidden from the UI in that case.
    *
    * ⚠️ Security note: this flag does NOT reason about Unix isolation. In
    * `unix_user_mode: simple` the terminal runs as the daemon user and gives the
    * user a shell with access to `~/.agor/config.yaml`, `agor.db`, and the JWT
-   * secret — enable with care. Safe defaults are `unix_user_mode: strict`
-   * (per-user Unix account) or `insulated` (shared executor user, no daemon
-   * access). The daemon emits a startup warning when this flag is enabled in
-   * `simple` mode.
+   * secret. Safe combinations are `unix_user_mode: strict` (per-user Unix
+   * account) or `insulated` (shared executor user, no daemon access). The
+   * daemon emits a startup warning when this flag is enabled in `simple` mode.
    *
    * Worktree-level permissions still apply: opening a terminal against a
    * worktree requires at least `session` permission on that worktree.

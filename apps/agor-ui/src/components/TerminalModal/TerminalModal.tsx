@@ -1,4 +1,4 @@
-import type { AgorClient, User, UserID } from '@agor-live/client';
+import type { AgorClient, User, UserID, UserRole } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { WebLinksAddon } from '@xterm/addon-web-links';
@@ -6,6 +6,13 @@ import { Terminal } from '@xterm/xterm';
 import { App, Modal } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import '@xterm/xterm/css/xterm.css';
+
+/**
+ * Minimum role required to open a web terminal when the instance-level
+ * `execution.allow_web_terminal` flag is enabled. Shared with the app shell
+ * (`components/App/App.tsx`) so the gate only exists in one place.
+ */
+export const WEB_TERMINAL_MIN_ROLE: UserRole = ROLES.MEMBER;
 
 const OSC_SEQUENCE_START = '\u001B]8;';
 const OSC_SEQUENCE_END = '\u001B]8;;\u0007';
@@ -90,10 +97,11 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
     worktreeName?: string;
   }>({});
 
-  // Terminal requires at least member role. The instance-level
-  // `execution.allow_web_terminal` flag is enforced server-side (and also
-  // gates whether the open-terminal buttons appear at all in the UI).
-  const canUseTerminal = hasMinimumRole(user?.role, ROLES.MEMBER);
+  // The instance-level `execution.allow_web_terminal` flag is enforced
+  // server-side and also gates whether the open-terminal buttons appear at
+  // all in the UI; here we only re-check the role as a belt-and-suspenders
+  // safeguard.
+  const canUseTerminal = hasMinimumRole(user?.role, WEB_TERMINAL_MIN_ROLE);
 
   useEffect(() => {
     if (!open || !modalReady || !terminalDivRef.current || !client) return;
@@ -346,7 +354,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       {!canUseTerminal ? (
         <div style={{ padding: '24px', color: '#fff' }}>
           <p>
-            Terminal access requires at least <strong>member</strong> role.
+            Terminal access requires at least <strong>{WEB_TERMINAL_MIN_ROLE}</strong> role.
           </p>
           <p style={{ marginBottom: 0 }}>
             Contact your Agor administrator to request elevated permissions.

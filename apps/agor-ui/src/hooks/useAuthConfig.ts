@@ -34,7 +34,10 @@ interface OnboardingConfig {
 }
 
 interface FeaturesConfig {
-  /** Whether the web terminal is enabled for members (execution.allow_web_terminal) */
+  /**
+   * Whether the web terminal is enabled for members (execution.allow_web_terminal).
+   * Defaults to true when the daemon config key is unset.
+   */
   webTerminal?: boolean;
 }
 
