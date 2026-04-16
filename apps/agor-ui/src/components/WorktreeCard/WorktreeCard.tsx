@@ -456,7 +456,7 @@ const WorktreeCardComponent = ({
             }
           }}
         >
-          <Space size={4} align="center" style={{ flex: 1, minWidth: 0, flexWrap: 'nowrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
             {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
             {getRelationshipIcon()}
             <Typography.Text
@@ -470,7 +470,7 @@ const WorktreeCardComponent = ({
             >
               {getSessionDisplayTitle(session, { includeAgentFallback: true })}
             </Typography.Text>
-          </Space>
+          </div>
         </div>
       </SessionItemWithActions>
     );
