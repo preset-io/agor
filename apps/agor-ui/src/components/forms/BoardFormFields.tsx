@@ -1,3 +1,4 @@
+import type { Board } from '@agor-live/client';
 import type { FormInstance } from 'antd';
 import {
   Checkbox,
@@ -159,23 +160,19 @@ export function isCustomCSS(value: string | undefined | null): boolean {
 /**
  * Extract board form values from the form instance.
  * Uses getFieldsValue(true) to include values from collapsed/unmounted fields.
- * Sends null for cleared fields so the backend actually clears them.
+ * Sends `null` for cleared fields so the backend actually clears them
+ * (undefined is dropped by JSON.stringify and never reaches the server's
+ * shallow-merge patch). The `Board` type uses `string | undefined`, but at
+ * runtime the boards repository treats `null` as "clear this field", so the
+ * cast is honest about wire semantics even though TS can't express them.
  */
-export function extractBoardFormValues(form: FormInstance): Partial<{
-  name: string;
-  icon: string;
-  description: string;
-  background_color: string | null;
-  custom_css: string | null;
-  custom_context: Record<string, unknown> | null;
-}> {
+export function extractBoardFormValues(form: FormInstance): Partial<Board> {
   const values = form.getFieldsValue(true);
   const bgColor = values.background_color;
   return {
     name: values.name,
     icon: values.icon || '📋',
     description: values.description,
-    // Send null to explicitly clear, not undefined (which gets dropped by JSON.stringify)
     background_color: bgColor
       ? typeof bgColor === 'string'
         ? bgColor
@@ -183,7 +180,7 @@ export function extractBoardFormValues(form: FormInstance): Partial<{
       : null,
     custom_css: values.custom_css || null,
     custom_context: values.custom_context ? JSON.parse(values.custom_context) : null,
-  };
+  } as unknown as Partial<Board>;
 }
 
 export interface BoardFormFieldsProps {
