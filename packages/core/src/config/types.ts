@@ -228,6 +228,26 @@ export interface AgorExecutionSettings {
   /** Enable worktree RBAC and ownership system (default: false). When enabled, enforces permission checks and Unix group isolation. */
   worktree_rbac?: boolean;
 
+  /**
+   * Allow authenticated members (and above) to open the web terminal (default: false).
+   *
+   * When false (default), the terminal is disabled for everyone — no user role,
+   * including admin, can open one. When true, any user with role `member` or
+   * higher can open a terminal.
+   *
+   * ⚠️ Security note: this flag does NOT reason about Unix isolation. In
+   * `unix_user_mode: simple` the terminal runs as the daemon user and gives the
+   * user a shell with access to `~/.agor/config.yaml`, `agor.db`, and the JWT
+   * secret — enable with care. Safe defaults are `unix_user_mode: strict`
+   * (per-user Unix account) or `insulated` (shared executor user, no daemon
+   * access). The daemon emits a startup warning when this flag is enabled in
+   * `simple` mode.
+   *
+   * Worktree-level permissions still apply: opening a terminal against a
+   * worktree requires at least `session` permission on that worktree.
+   */
+  allow_web_terminal?: boolean;
+
   /** Allow superadmin role (default: false). When true, superadmin role gets worktree RBAC bypass. Opt-in for self-hosted deployments. */
   allow_superadmin?: boolean;
 

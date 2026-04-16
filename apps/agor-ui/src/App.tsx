@@ -99,6 +99,7 @@ function AppContent() {
     instanceConfig,
     onboardingConfig,
     servicesConfig,
+    featuresConfig,
     loading: authConfigLoading,
     error: authConfigError,
   } = useAuthConfig();
@@ -1282,6 +1283,7 @@ function AppContent() {
                   onRetryConnection={retryConnection}
                   instanceLabel={instanceConfig?.label}
                   instanceDescription={instanceConfig?.description}
+                  webTerminalEnabled={featuresConfig?.webTerminal === true}
                 />
               </>
             }
@@ -1365,6 +1367,7 @@ function AppContent() {
                   onRetryConnection={retryConnection}
                   instanceLabel={instanceConfig?.label}
                   instanceDescription={instanceConfig?.description}
+                  webTerminalEnabled={featuresConfig?.webTerminal === true}
                 />
               </>
             }
@@ -1448,6 +1451,7 @@ function AppContent() {
                   onRetryConnection={retryConnection}
                   instanceLabel={instanceConfig?.label}
                   instanceDescription={instanceConfig?.description}
+                  webTerminalEnabled={featuresConfig?.webTerminal === true}
                 />
               </>
             }

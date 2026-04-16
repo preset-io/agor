@@ -90,14 +90,16 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
     worktreeName?: string;
   }>({});
 
-  // Check if user has admin role
-  const isAdmin = hasMinimumRole(user?.role, ROLES.ADMIN);
+  // Terminal requires at least member role. The instance-level
+  // `execution.allow_web_terminal` flag is enforced server-side (and also
+  // gates whether the open-terminal buttons appear at all in the UI).
+  const canUseTerminal = hasMinimumRole(user?.role, ROLES.MEMBER);
 
   useEffect(() => {
     if (!open || !modalReady || !terminalDivRef.current || !client) return;
 
-    // Skip terminal setup for non-admin users
-    if (!isAdmin) return;
+    // Skip terminal setup for users without terminal access
+    if (!canUseTerminal) return;
 
     // Executor mode requires user to be logged in
     if (!user?.user_id) {
@@ -305,7 +307,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       setIsConnected(false);
       setSessionInfo({});
     };
-  }, [open, modalReady, client, initialCommands, isAdmin, worktreeId, user?.user_id]);
+  }, [open, modalReady, client, initialCommands, canUseTerminal, worktreeId, user?.user_id]);
 
   const handleClose = () => {
     if (isConnected) {
@@ -341,13 +343,12 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       }}
       centered
     >
-      {!isAdmin ? (
+      {!canUseTerminal ? (
         <div style={{ padding: '24px', color: '#fff' }}>
           <p>
-            Terminal access requires <strong>admin</strong> or <strong>owner</strong> role.
+            Terminal access requires at least <strong>member</strong> role.
           </p>
           <p style={{ marginBottom: 0 }}>
-            Terminal sessions run as the daemon's system user and can execute arbitrary code.
             Contact your Agor administrator to request elevated permissions.
           </p>
         </div>

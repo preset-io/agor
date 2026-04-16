@@ -211,6 +211,22 @@ export async function startup(ctx: StartupContext): Promise<void> {
   console.log(`     - /context`);
   console.log(`     - /users`);
 
+  // Security warning: web terminal + simple unix mode = daemon-user shell access
+  if (config.execution?.allow_web_terminal === true) {
+    const unixMode = config.execution?.unix_user_mode ?? 'simple';
+    if (unixMode === 'simple') {
+      console.warn(
+        '\x1b[33m⚠️  SECURITY: allow_web_terminal is enabled with unix_user_mode=simple.\x1b[0m\n' +
+          '   Any member-role user can open a shell running as the daemon user, with read\n' +
+          '   access to ~/.agor/config.yaml, agor.db, and the JWT secret.\n' +
+          "   Recommended: set execution.unix_user_mode to 'insulated' or 'strict' to\n" +
+          '   isolate terminal sessions from the daemon process.'
+      );
+    } else {
+      console.log(`🖥️  Web terminal enabled (members+, unix mode: ${unixMode})`);
+    }
+  }
+
   // 5. Start scheduler service (background worker)
   let schedulerService: SchedulerService | null = null;
   if (svcEnabled('scheduler')) {

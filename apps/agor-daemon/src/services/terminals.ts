@@ -29,6 +29,7 @@ import {
 } from '@agor/core/config';
 import { type Database, formatShortId, UsersRepository, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
+import { Forbidden } from '@agor/core/feathers';
 import type { AuthenticatedParams, UserID, WorktreeID } from '@agor/core/types';
 import {
   resolveUnixUserForImpersonation,
@@ -37,6 +38,7 @@ import {
   validateResolvedUnixUser,
 } from '@agor/core/unix';
 import { generateSessionToken, spawnExecutorFireAndForget } from '../utils/spawn-executor.js';
+import { hasWorktreePermission } from '../utils/worktree-authorization.js';
 
 interface CreateTerminalData {
   rows?: number;
@@ -183,6 +185,36 @@ export class TerminalsService {
         'Terminal functionality is unavailable: Zellij is not installed.\n' +
           'Please install Zellij to enable terminal support.'
       );
+    }
+
+    // Worktree RBAC check: if a worktree is provided and RBAC is enabled,
+    // the user must have at least 'session' permission on that worktree.
+    // This prevents members from opening a terminal tab in a worktree they
+    // cannot see or prompt in.
+    if (data.worktreeId && params?.provider) {
+      const config = await loadConfig();
+      const rbacEnabled = config.execution?.worktree_rbac === true;
+      if (rbacEnabled) {
+        const userId = params?.user?.user_id as UserID | undefined;
+        if (!userId) {
+          throw new Forbidden('Authentication required to open terminals');
+        }
+        const worktreeRepo = new WorktreeRepository(this.db);
+        const worktree = await worktreeRepo.findById(data.worktreeId);
+        if (!worktree) {
+          throw new Forbidden(`Worktree not found: ${data.worktreeId}`);
+        }
+        const isOwner = await worktreeRepo.isOwner(worktree.worktree_id, userId);
+        const allowSuperadmin = config.execution?.allow_superadmin === true;
+        const userRole = params?.user?.role as string | undefined;
+        if (
+          !hasWorktreePermission(worktree, userId, isOwner, 'session', userRole, allowSuperadmin)
+        ) {
+          throw new Forbidden(
+            `You need 'session' permission on worktree ${worktree.name} to open a terminal there.`
+          );
+        }
+      }
     }
 
     return this.createExecutorTerminal(

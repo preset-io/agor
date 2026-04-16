@@ -249,6 +249,39 @@ execution:
 - **`insulated`** - Recommended for shared development, isolates daemon from executors
 - **`strict`** - Production environments, compliance requirements, full audit trail
 
+### 4b. (Optional) Enable the Web Terminal
+
+The browser-based terminal (xterm.js modal) is disabled by default for every
+role, including admins. To open it to `member`-role users and above, set:
+
+```yaml
+execution:
+  allow_web_terminal: true
+```
+
+Behavior when enabled:
+
+- Any authenticated user with role `member` or higher can open a terminal.
+- Terminal buttons are hidden in the UI when this flag is off.
+- Worktree-level permissions still apply — opening a terminal tab against a
+  worktree requires at least `session` permission on that worktree (when
+  `worktree_rbac` is on).
+
+> ⚠️ **Security caveat — this flag does not reason about Unix isolation.**
+>
+> - In `unix_user_mode: simple`, the terminal runs as the daemon user. A member
+>   opening a terminal gains a shell with read access to `~/.agor/config.yaml`,
+>   `agor.db`, and the JWT secret. The daemon prints a startup warning when
+>   this combination is detected.
+> - In `unix_user_mode: insulated`, the terminal runs as the shared executor
+>   user — daemon secrets are protected, but members share `$HOME`/`/tmp` with
+>   each other.
+> - In `unix_user_mode: strict`, terminals run as the user's own Unix account,
+>   which is the SSH-equivalent safe default.
+>
+> Enable `allow_web_terminal` only in `insulated` or `strict` modes for any
+> deployment where you do not trust all members with daemon-level access.
+
 ### 5. Observability Setup
 
 For production deployments, configure logging and monitoring:
