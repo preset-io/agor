@@ -116,10 +116,14 @@ echo ""
 # ── Clean previous builds ────────────────────────────────────────────────────
 
 echo "🧹 Cleaning previous builds..."
-rm -rf "$SCRIPT_DIR/dist"
+# Build into a staging directory, then swap atomically at the end.
+# This keeps the existing dist/ available while rebuilding, so a running
+# daemon/executor isn't knocked offline during the build window.
+DIST_STAGE="$SCRIPT_DIR/dist.stage"
+rm -rf "$DIST_STAGE"
 rm -rf "$SCRIPT_DIR/node_modules/@agor"
 rm -rf "$CLIENT_DIR/dist"
-mkdir -p "$SCRIPT_DIR/dist"
+mkdir -p "$DIST_STAGE"
 
 # ── Build all components ─────────────────────────────────────────────────────
 
@@ -215,8 +219,8 @@ echo ""
 echo "📋 Copying build artifacts to agor-live..."
 
 echo "  → Copying core..."
-mkdir -p "$SCRIPT_DIR/dist/core"
-cp -r "$REPO_ROOT/packages/core/dist/"* "$SCRIPT_DIR/dist/core/"
+mkdir -p "$DIST_STAGE/core"
+cp -r "$REPO_ROOT/packages/core/dist/"* "$DIST_STAGE/core/"
 
 echo "  → Creating package.json for bundled @agor/core..."
 jq '
@@ -229,23 +233,23 @@ jq '
     types: "./index.d.ts",
     exports: (.exports | walk(if type == "string" then strip_dist else . end))
   }
-' "$REPO_ROOT/packages/core/package.json" > "$SCRIPT_DIR/dist/core/package.json"
+' "$REPO_ROOT/packages/core/package.json" > "$DIST_STAGE/core/package.json"
 
 echo "  → Copying CLI..."
-mkdir -p "$SCRIPT_DIR/dist/cli"
-cp -r "$REPO_ROOT/apps/agor-cli/dist/"* "$SCRIPT_DIR/dist/cli/"
+mkdir -p "$DIST_STAGE/cli"
+cp -r "$REPO_ROOT/apps/agor-cli/dist/"* "$DIST_STAGE/cli/"
 
 echo "  → Copying daemon..."
-mkdir -p "$SCRIPT_DIR/dist/daemon"
-cp -r "$REPO_ROOT/apps/agor-daemon/dist/"* "$SCRIPT_DIR/dist/daemon/"
+mkdir -p "$DIST_STAGE/daemon"
+cp -r "$REPO_ROOT/apps/agor-daemon/dist/"* "$DIST_STAGE/daemon/"
 
 echo "  → Copying executor..."
-mkdir -p "$SCRIPT_DIR/dist/executor"
-cp -r "$REPO_ROOT/packages/executor/dist/"* "$SCRIPT_DIR/dist/executor/"
+mkdir -p "$DIST_STAGE/executor"
+cp -r "$REPO_ROOT/packages/executor/dist/"* "$DIST_STAGE/executor/"
 
 echo "  → Copying UI..."
-mkdir -p "$SCRIPT_DIR/dist/ui"
-cp -r "$REPO_ROOT/apps/agor-ui/dist/"* "$SCRIPT_DIR/dist/ui/"
+mkdir -p "$DIST_STAGE/ui"
+cp -r "$REPO_ROOT/apps/agor-ui/dist/"* "$DIST_STAGE/ui/"
 
 if [[ "$WITH_SANDPACK" == true ]]; then
   # sandpack-bundler outputs to www/ or dist/ depending on version
@@ -254,12 +258,24 @@ if [[ "$WITH_SANDPACK" == true ]]; then
   if [[ -d "$SANDPACK_DIR/dist" ]]; then SANDPACK_OUT="$SANDPACK_DIR/dist"; fi
   if [[ -n "$SANDPACK_OUT" ]]; then
     echo "  → Copying Sandpack bundler..."
-    mkdir -p "$SCRIPT_DIR/dist/static/sandpack"
-    cp -r "$SANDPACK_OUT/"* "$SCRIPT_DIR/dist/static/sandpack/"
+    mkdir -p "$DIST_STAGE/static/sandpack"
+    cp -r "$SANDPACK_OUT/"* "$DIST_STAGE/static/sandpack/"
   else
     echo "  ⚠️  Sandpack bundler build output not found, skipping"
   fi
 fi
+
+# ── Atomic swap: stage → dist ───────────────────────────────────────────────
+# Swap the old dist with the new one in two fast renames. The running daemon
+# only loses its backing files for the instant between mv commands (~ms).
+
+echo ""
+echo "🔄 Swapping dist (atomic-ish)..."
+if [[ -d "$SCRIPT_DIR/dist" ]]; then
+  mv "$SCRIPT_DIR/dist" "$SCRIPT_DIR/dist.old"
+fi
+mv "$DIST_STAGE" "$SCRIPT_DIR/dist"
+rm -rf "$SCRIPT_DIR/dist.old"
 
 echo ""
 echo "📦 Setting up @agor/core symlink for local development..."
