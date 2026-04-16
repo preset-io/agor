@@ -238,6 +238,23 @@ export const App: React.FC<AppProps> = ({
     y: number;
   } | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+
+  // Synchronously derive the effective session selection. When a session is
+  // archived/deleted, it vanishes from sessionById. Without this, there is a
+  // two-phase unmount: first SessionPanel renders null (session gone but
+  // selectedSessionId still set), then a useEffect clears selectedSessionId
+  // on the *next* render. During that intermediate render, every antd
+  // component inside SessionPanel unmounts while the Panel container stays,
+  // causing @ant-design/cssinjs to GC component-level CSS-variable <style>
+  // tags (via useCSSVarRegister ref-counting) and potentially the global
+  // theme token styles. By computing the effective ID synchronously, the
+  // Panel conditional evaluates to false in the *same* render, producing a
+  // single-phase unmount identical to the explicit-close path.
+  const effectiveSelectedSessionId = useMemo(
+    () => (selectedSessionId && sessionById.has(selectedSessionId) ? selectedSessionId : null),
+    [selectedSessionId, sessionById]
+  );
+
   const [listDrawerOpen, setListDrawerOpen] = useState(false);
   const [userSettingsOpen, setUserSettingsOpen] = useState(false);
 
@@ -338,7 +355,7 @@ export const App: React.FC<AppProps> = ({
   // URL state synchronization - bidirectional sync between URL and state
   useUrlState({
     currentBoardId,
-    currentSessionId: selectedSessionId,
+    currentSessionId: effectiveSelectedSessionId,
     boardById,
     sessionById,
     onBoardChange: (boardId) => {
@@ -530,18 +547,20 @@ export const App: React.FC<AppProps> = ({
     [client, user?.user_id]
   );
 
-  const selectedSession = selectedSessionId ? sessionById.get(selectedSessionId) || null : null;
+  const selectedSession = effectiveSelectedSessionId
+    ? sessionById.get(effectiveSelectedSessionId) || null
+    : null;
   const selectedSessionWorktree = selectedSession
     ? worktreeById.get(selectedSession.worktree_id)
     : null;
 
-  // If a session disappears from the active store (e.g. archived/deleted),
-  // clear stale selection so the right panel can recover cleanly.
+  // Sync the actual state when a session disappears (for URL, localStorage, etc.).
+  // The rendering already uses effectiveSelectedSessionId so this is cosmetic.
   useEffect(() => {
-    if (selectedSessionId && !selectedSession) {
+    if (selectedSessionId && !sessionById.has(selectedSessionId)) {
       setSelectedSessionId(null);
     }
-  }, [selectedSessionId, selectedSession]);
+  }, [selectedSessionId, sessionById]);
 
   const sessionSettingsSession = sessionSettingsId ? sessionById.get(sessionSettingsId) : null;
   const currentBoard = boardById.get(currentBoardId);
@@ -692,7 +711,7 @@ export const App: React.FC<AppProps> = ({
             onCommentsClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
             onEventStreamClick={() => {
               // If session is open, close it and show event stream
-              if (selectedSessionId) {
+              if (effectiveSelectedSessionId) {
                 setSelectedSessionId(null);
                 setEventStreamPanelCollapsed(false);
               } else {
@@ -808,7 +827,7 @@ export const App: React.FC<AppProps> = ({
                   style={{ flex: 1 }}
                   onLayout={(sizes) => {
                     // Save right panel size when user resizes (only when panel is open)
-                    if (selectedSessionId && sizes.length === 2) {
+                    if (effectiveSelectedSessionId && sizes.length === 2) {
                       setSessionPanelSize(sizes[1]);
                     }
                   }}
@@ -816,7 +835,7 @@ export const App: React.FC<AppProps> = ({
                   <Panel
                     id="canvas-panel"
                     order={1}
-                    defaultSize={selectedSessionId ? 100 - sessionPanelSize : 100}
+                    defaultSize={effectiveSelectedSessionId ? 100 - sessionPanelSize : 100}
                     minSize={20}
                   >
                     <div style={{ position: 'relative', overflow: 'hidden', height: '100%' }}>
@@ -834,7 +853,7 @@ export const App: React.FC<AppProps> = ({
                         commentById={commentById}
                         cardById={cardById}
                         currentUserId={user?.user_id}
-                        selectedSessionId={selectedSessionId}
+                        selectedSessionId={effectiveSelectedSessionId}
                         availableAgents={availableAgents}
                         mcpServerById={mcpServerById}
                         sessionMcpServerIds={sessionMcpServerIds}
@@ -875,7 +894,7 @@ export const App: React.FC<AppProps> = ({
                       />
                     </div>
                   </Panel>
-                  {(selectedSessionId || !eventStreamPanelCollapsed) && (
+                  {(effectiveSelectedSessionId || !eventStreamPanelCollapsed) && (
                     <>
                       <PanelResizeHandle
                         style={{
@@ -900,18 +919,18 @@ export const App: React.FC<AppProps> = ({
                         minSize={15}
                         maxSize={75}
                       >
-                        {selectedSessionId ? (
+                        {effectiveSelectedSessionId ? (
                           <SessionPanel
                             client={client}
                             session={selectedSession}
                             worktree={selectedSessionWorktree}
                             currentUserId={user?.user_id}
                             sessionMcpServerIds={
-                              selectedSessionId
-                                ? sessionMcpServerIds.get(selectedSessionId) || []
+                              effectiveSelectedSessionId
+                                ? sessionMcpServerIds.get(effectiveSelectedSessionId) || []
                                 : []
                             }
-                            open={!!selectedSessionId}
+                            open={!!effectiveSelectedSessionId}
                             onClose={() => {
                               setSelectedSessionId(null);
                             }}
@@ -923,7 +942,7 @@ export const App: React.FC<AppProps> = ({
                             events={events}
                             onClear={clearEvents}
                             currentUserId={user?.user_id}
-                            selectedSessionId={selectedSessionId}
+                            selectedSessionId={effectiveSelectedSessionId}
                             currentBoard={currentBoard}
                             client={client}
                             worktreeActions={{
