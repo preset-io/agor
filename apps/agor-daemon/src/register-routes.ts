@@ -76,7 +76,10 @@ import {
   requireMinimumRole,
 } from './utils/authorization.js';
 import { createUploadMiddleware } from './utils/upload.js';
-import { ensureWorktreePermission } from './utils/worktree-authorization.js';
+import {
+  ensureWorktreePermission,
+  hasWorktreePermission,
+} from './utils/worktree-authorization.js';
 
 /**
  * Extended Params with route ID parameter.
@@ -1085,11 +1088,29 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         return res.status(404).json({ error: 'Session not found' });
       }
 
-      if (session.created_by !== params.user?.user_id) {
-        console.error(
-          `❌ [Upload Handler] User ${params.user?.user_id?.substring(0, 8)} not authorized for session ${sessionId.substring(0, 8)}`
-        );
-        return res.status(403).json({ error: 'Not authorized to upload to this session' });
+      // Worktree RBAC: check worktree-level permission instead of session ownership.
+      // Users with 'prompt' or higher on the worktree can upload files.
+      // When RBAC is disabled, fall back to allowing any authenticated member.
+      if (worktreeRbacEnabled && session.worktree_id && params.user?.user_id) {
+        const wt = await worktreeRepo.findById(session.worktree_id);
+        if (wt) {
+          const isOwner = await worktreeRepo.isOwner(wt.worktree_id, params.user.user_id);
+          if (
+            !hasWorktreePermission(
+              wt,
+              params.user.user_id,
+              isOwner,
+              'prompt',
+              params.user.role,
+              superadminOpts.allowSuperadmin
+            )
+          ) {
+            console.error(
+              `❌ [Upload Handler] User ${params.user.user_id.substring(0, 8)} lacks 'prompt' permission on worktree ${wt.worktree_id.substring(0, 8)}`
+            );
+            return res.status(403).json({ error: 'Not authorized to upload to this session' });
+          }
+        }
       }
 
       if (!files || files.length === 0) {
