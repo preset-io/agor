@@ -46,6 +46,7 @@ import type {
   StreamingEventType,
   Task,
   User,
+  UUID,
 } from '@agor/core/types';
 import {
   AGENTIC_TOOL_CAPABILITIES,
@@ -76,10 +77,7 @@ import {
   requireMinimumRole,
 } from './utils/authorization.js';
 import { createUploadMiddleware } from './utils/upload.js';
-import {
-  ensureWorktreePermission,
-  hasWorktreePermission,
-} from './utils/worktree-authorization.js';
+import { ensureWorktreePermission, hasWorktreePermission } from './utils/worktree-authorization.js';
 
 /**
  * Extended Params with route ID parameter.
@@ -1094,11 +1092,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       if (worktreeRbacEnabled && session.worktree_id && params.user?.user_id) {
         const wt = await worktreeRepo.findById(session.worktree_id);
         if (wt) {
-          const isOwner = await worktreeRepo.isOwner(wt.worktree_id, params.user.user_id);
+          const userId = params.user.user_id as UUID;
+          const isOwner = await worktreeRepo.isOwner(wt.worktree_id, userId);
           if (
             !hasWorktreePermission(
               wt,
-              params.user.user_id,
+              userId,
               isOwner,
               'prompt',
               params.user.role,
