@@ -367,7 +367,15 @@ const WorktreeCardComponent = ({
       if (node.relationshipType === 'fork') {
         if (session.fork_origin === 'btw') {
           return (
-            <Typography.Text style={{ fontSize: 9, color: token.colorWarning, fontWeight: 'bold', whiteSpace: 'nowrap', flexShrink: 0 }}>
+            <Typography.Text
+              style={{
+                fontSize: 9,
+                color: token.colorWarning,
+                fontWeight: 'bold',
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
+              }}
+            >
               btw
             </Typography.Text>
           );
