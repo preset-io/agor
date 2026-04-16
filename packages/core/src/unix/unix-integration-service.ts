@@ -559,7 +559,11 @@ export class UnixIntegrationService {
     );
 
     await this.executor.execAll(
-      UnixGroupCommands.setDirectoryGroupShallow(repoPath, repo.unix_group, REPO_GIT_PERMISSION_MODE)
+      UnixGroupCommands.setDirectoryGroupShallow(
+        repoPath,
+        repo.unix_group,
+        REPO_GIT_PERMISSION_MODE
+      )
     );
 
     if (gitExists) {
