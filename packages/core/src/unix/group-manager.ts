@@ -3,7 +3,7 @@
  *
  * Provides utilities for managing:
  * - Worktree Unix groups (agor_wt_<short-id>) - for worktree directory access
- * - Repo Unix groups (agor_rp_<short-id>) - for .git/ directory access
+ * - Repo Unix groups (agor_rp_<short-id>) - for repo-root traversal and .git access
  *
  * These functions are designed to be called via `sudo agor admin` commands
  * to perform privileged operations safely.
@@ -62,8 +62,8 @@ export function isValidWorktreeGroupName(groupName: string): boolean {
  * Format: agor_rp_<short-id>
  * Example: agor_rp_03b62447
  *
- * This group controls access to the repo's .git/ directory,
- * which is shared across all worktrees.
+ * This group controls access to repo Unix-group-managed paths:
+ * repo-root traversal and the shared .git/ directory.
  *
  * @param repoId - Full repo UUID
  * @returns Unix group name (e.g., 'agor_rp_03b62447')
@@ -241,6 +241,41 @@ export const UnixGroupCommands = {
   },
 
   /**
+   * Set group ownership and ACL on a single directory (non-recursive)
+   *
+   * Use this when only directory traversal/group on the root itself is needed
+   * and child files/directories should not be recursively rewritten.
+   *
+   * @param path - Directory path
+   * @param groupName - Group to own the directory
+   * @param permissions - Permissions mode (e.g., '2770' for no others access)
+   * @returns Array of command strings with sudo to execute sequentially
+   */
+  setDirectoryGroupShallow: (path: string, groupName: string, permissions: string): string[] => {
+    const othersDigit = permissions.charAt(3);
+    let othersAcl: string;
+    switch (othersDigit) {
+      case '7':
+        othersAcl = 'o::rwX';
+        break;
+      case '5':
+        othersAcl = 'o::rX';
+        break;
+      default:
+        othersAcl = 'o::---';
+    }
+
+    return [
+      `sudo -n chgrp ${groupName} "${path}"`,
+      `sudo -n setfacl -m u::rwX "${path}"`,
+      `sudo -n setfacl -m g:${groupName}:rwX "${path}"`,
+      `sudo -n setfacl -m ${othersAcl} "${path}"`,
+      `sudo -n setfacl -m m::rwX "${path}"`,
+      `sudo -n chmod g+s "${path}"`,
+    ];
+  },
+
+  /**
    * Set explicit user ACL on a directory (recursive with defaults)
    *
    * Grants a specific user rwX access to all existing files/dirs and sets
@@ -258,6 +293,19 @@ export const UnixGroupCommands = {
     `sudo -n setfacl -R -m u:${username}:rwX "${path}"`,
     // Set default ACL so new files/dirs inherit the same access
     `sudo -n setfacl -R -d -m u:${username}:rwX "${path}"`,
+  ],
+
+  /**
+   * Set explicit user ACL on a single directory (non-recursive)
+   *
+   * Useful when only root-level traversal/access is required.
+   *
+   * @param path - Directory path
+   * @param username - Unix username to grant access to
+   * @returns Array of command strings with sudo to execute sequentially
+   */
+  setUserAclShallow: (path: string, username: string): string[] => [
+    `sudo -n setfacl -m u:${username}:rwX "${path}"`,
   ],
 } as const;
 
@@ -301,13 +349,9 @@ export function getWorktreePermissionMode(
 /**
  * Permission mode for repo directories
  *
- * Applied recursively to the repo root. This covers the shared `.git`
- * directory (where objects/refs live and are shared across all worktrees)
- * as well as the root itself — the latter is required so members of the
- * repo group can traverse into `.git/worktrees/<name>` from their own
- * worktree's `gitdir:` pointer. Users who have access to ANY worktree in
- * the repo get added to the repo group to enable git operations (commit,
- * push, etc).
+ * Applied to repo Unix-group-managed paths (repo root traversal and `.git`).
+ * Users who have access to ANY worktree in the repo get added to the repo
+ * group to enable git operations (commit, push, etc).
  *
  * Mode: 2770 (drwxrws---)
  * - Owner: full access (rwx)

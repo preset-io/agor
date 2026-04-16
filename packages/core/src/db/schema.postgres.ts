@@ -419,11 +419,11 @@ export const repos = pgTable(
       .notNull()
       .default('remote'),
 
-    // Unix group for repo directory access (agor_rp_<short-id>)
+    // Unix group for repo-level git access (agor_rp_<short-id>)
     // Users who have access to ANY worktree in this repo get added to this group.
-    // Applied recursively to the repo root so members can both traverse into
-    // .git/worktrees/<name> from their worktree's gitdir: pointer and run git
-    // operations (commit, push, etc) against shared .git objects.
+    // Applied to repo Unix-group-managed paths:
+    // - repo root (non-recursive) for traversal into .git/worktrees/<name>
+    // - .git (recursive) for shared git objects/refs and git operations
     unix_group: text('unix_group'),
 
     data: t

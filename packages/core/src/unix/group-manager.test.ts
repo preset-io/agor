@@ -218,6 +218,13 @@ describe('group-manager', () => {
       });
     });
 
+    describe('setUserAclShallow', () => {
+      it('returns non-recursive ACL command for a specific user', () => {
+        const cmds = UnixGroupCommands.setUserAclShallow('/data/repo', 'agorpg');
+        expect(cmds).toEqual(['sudo -n setfacl -m u:agorpg:rwX "/data/repo"']);
+      });
+    });
+
     describe('setDirectoryGroup', () => {
       it('returns ACL-based commands for others read (2775)', () => {
         const cmds = UnixGroupCommands.setDirectoryGroup('/data/project', 'developers', '2775');
@@ -255,6 +262,20 @@ describe('group-manager', () => {
           'sudo -n setfacl -R -m m::rwX "/data/public"',
           'sudo -n setfacl -R -d -m u::rwX,g:everyone:rwX,o::rwX,m::rwX "/data/public"',
           'sudo -n find "/data/public" -type d -exec chmod g+s {} +',
+        ]);
+      });
+    });
+
+    describe('setDirectoryGroupShallow', () => {
+      it('returns ACL-based commands without recursion for no others access (2770)', () => {
+        const cmds = UnixGroupCommands.setDirectoryGroupShallow('/data/repo', 'developers', '2770');
+        expect(cmds).toEqual([
+          'sudo -n chgrp developers "/data/repo"',
+          'sudo -n setfacl -m u::rwX "/data/repo"',
+          'sudo -n setfacl -m g:developers:rwX "/data/repo"',
+          'sudo -n setfacl -m o::--- "/data/repo"',
+          'sudo -n setfacl -m m::rwX "/data/repo"',
+          'sudo -n chmod g+s "/data/repo"',
         ]);
       });
     });

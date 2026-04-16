@@ -216,7 +216,7 @@ export default class SyncUnix extends Command {
     let statusFixed = 0; // Worktrees with filesystem_status corrected to 'ready'
     let worktreesSkipped = 0; // Worktrees skipped (archived/deleted, missing path, etc.)
     let reposBackfilled = 0; // Repos that needed unix_group set in DB
-    let reposPermSynced = 0; // Repos that had permissions synced (repo root + .git)
+    let reposPermSynced = 0; // Repos that had root/.git permissions synced
     let membershipsRemoved = 0; // Stale group memberships pruned
     let daemonAclsApplied = 0; // Daemon user ACLs applied
     let symlinksCreated = 0; // User symlinks created
@@ -354,9 +354,9 @@ export default class SyncUnix extends Command {
       //      but /etc/group was not carried over).
       //   2. Daemon user is a member of the group.
       //   3. unix_group is backfilled in the DB if NULL.
-      //   4. Group ownership + ACLs + setgid applied recursively to the
-      //      repo root (covers .git and keeps the root traversable for
-      //      members of the group).
+      //   4. Group ownership + ACLs + setgid applied to repo root
+      //      (non-recursive, for traversal) and recursively to `.git`
+      //      (shared git objects/refs + worktree metadata).
       //
       // Idempotent: steps 1–3 only run when state drift is detected; step 4
       // always runs because ACL/perm drift is cheap to fix and hard to detect.
@@ -464,7 +464,7 @@ export default class SyncUnix extends Command {
             }
           }
 
-          // 4. Apply recursive permissions (idempotent; always run unless error)
+          // 4. Apply permissions (idempotent; always run unless error)
           if (!hadError) {
             if (!repoPath) {
               this.log(chalk.yellow(`   ⚠ No local_path in repo data, skipping permissions`));
@@ -473,16 +473,30 @@ export default class SyncUnix extends Command {
                 this.log(chalk.gray(`   ⊘ Repo path missing on disk, skipping permissions`));
               }
             } else {
-              const cmds = UnixGroupCommands.setDirectoryGroup(
+              const gitPath = `${repoPath}/.git`;
+              const rootCmds = UnixGroupCommands.setDirectoryGroupShallow(
                 repoPath,
                 expectedGroup,
                 REPO_GIT_PERMISSION_MODE
               );
+              const cmds = existsSync(gitPath)
+                ? [
+                    ...rootCmds,
+                    ...UnixGroupCommands.setDirectoryGroup(
+                      gitPath,
+                      expectedGroup,
+                      REPO_GIT_PERMISSION_MODE
+                    ),
+                  ]
+                : rootCmds;
               if (await execAllCmds(cmds)) {
                 reposPermSynced++;
                 this.log(
                   chalk.green(`   ✓ Applied repo permissions (${REPO_GIT_PERMISSION_MODE})`)
                 );
+                if (!existsSync(gitPath) && verbose) {
+                  this.log(chalk.gray(`   ⊘ .git path missing on disk, root traversal only`));
+                }
               } else {
                 syncErrors++;
                 this.log(chalk.red(`   ✗ Failed to set repo permissions`));

@@ -271,10 +271,18 @@ fi
 
 echo ""
 echo "🔄 Swapping dist (atomic-ish)..."
+rm -rf "$SCRIPT_DIR/dist.old"
 if [[ -d "$SCRIPT_DIR/dist" ]]; then
   mv "$SCRIPT_DIR/dist" "$SCRIPT_DIR/dist.old"
 fi
-mv "$DIST_STAGE" "$SCRIPT_DIR/dist"
+if ! mv "$DIST_STAGE" "$SCRIPT_DIR/dist"; then
+  echo "  ✗ Failed to move dist.stage into place"
+  if [[ -d "$SCRIPT_DIR/dist.old" ]]; then
+    echo "  ↺ Restoring previous dist..."
+    mv "$SCRIPT_DIR/dist.old" "$SCRIPT_DIR/dist" || true
+  fi
+  exit 1
+fi
 rm -rf "$SCRIPT_DIR/dist.old"
 
 echo ""
