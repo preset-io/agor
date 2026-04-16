@@ -299,11 +299,15 @@ export function getWorktreePermissionMode(
 }
 
 /**
- * Permission mode for repo .git directories
+ * Permission mode for repo directories
  *
- * The .git directory is shared across all worktrees in a repo.
- * Users who have access to ANY worktree in the repo get added
- * to the repo group to enable git operations (commit, push, etc).
+ * Applied recursively to the repo root. This covers the shared `.git`
+ * directory (where objects/refs live and are shared across all worktrees)
+ * as well as the root itself — the latter is required so members of the
+ * repo group can traverse into `.git/worktrees/<name>` from their own
+ * worktree's `gitdir:` pointer. Users who have access to ANY worktree in
+ * the repo get added to the repo group to enable git operations (commit,
+ * push, etc).
  *
  * Mode: 2770 (drwxrws---)
  * - Owner: full access (rwx)

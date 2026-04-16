@@ -411,9 +411,11 @@ export const repos = sqliteTable(
       .notNull()
       .default('remote'),
 
-    // Unix group for .git/ directory access (agor_rp_<short-id>)
-    // Users who have access to ANY worktree in this repo get added to this group
-    // Enables git operations (commit, push, etc) by granting .git/ access
+    // Unix group for repo directory access (agor_rp_<short-id>)
+    // Users who have access to ANY worktree in this repo get added to this group.
+    // Applied recursively to the repo root so members can both traverse into
+    // .git/worktrees/<name> from their worktree's gitdir: pointer and run git
+    // operations (commit, push, etc) against shared .git objects.
     unix_group: text('unix_group'),
 
     data: t
