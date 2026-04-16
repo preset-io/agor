@@ -20,9 +20,12 @@ export const BoardTab: React.FC<BoardTabProps> = ({ onValidityChange, formRef })
 
   formRef.current = async () => {
     try {
-      await form.validateFields(['name']);
+      // Validate all fields (not just 'name') so custom_context JSON rules run
+      // before the extractor calls JSON.parse on it.
+      await form.validateFields();
       return extractBoardFormValues(form);
     } catch {
+      // Antd displays inline field errors; parent treats null as "not valid".
       return null;
     }
   };

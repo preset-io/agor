@@ -308,28 +308,24 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const isDarkMode = isDarkTheme(token);
     const defaultBackground = DEFAULT_BACKGROUNDS[isDarkMode ? 'dark' : 'light'];
     const hasCustomCss = Boolean(board?.custom_css?.trim());
+    const hasUserBg = Boolean(board?.background_color?.trim());
+    // Any user-provided styling goes through the sanitized <style> tag so that
+    // background_color can't bypass the sanitizer with url()/expression()/etc.
+    const hasUserStyling = hasCustomCss || hasUserBg;
 
-    // When custom_css is active, move background into the <style> tag to avoid
-    // specificity conflicts (inline `background` shorthand resets background-size to auto)
-    const canvasBackground = hasCustomCss
-      ? undefined
-      : (board?.background_color ?? defaultBackground);
+    // Only the trusted defaultBackground is applied inline; anything user-provided
+    // is sanitized and routed through the scoped <style> tag below.
+    const canvasBackground = hasUserStyling ? undefined : defaultBackground;
 
     // Sanitize and scope custom CSS for this board (enables @keyframes, animations, etc.)
     const boardCssClass = board?.board_id ? `board-css-${board.board_id.slice(0, 8)}` : '';
     const scopedCustomCss = useMemo(() => {
-      if (!hasCustomCss) return '';
+      if (!hasUserStyling) return '';
       // Prepend background_color as a CSS rule so it's at the same specificity as custom_css
-      const bgValue = board?.background_color || defaultBackground;
-      const bgRule = `background: ${bgValue};\n`;
+      // and goes through the same sanitizer.
+      const bgRule = hasUserBg ? `background: ${board?.background_color};\n` : '';
       return sanitizeBoardCss(bgRule + (board?.custom_css || ''), `.${boardCssClass}`);
-    }, [
-      board?.custom_css,
-      board?.background_color,
-      boardCssClass,
-      hasCustomCss,
-      defaultBackground,
-    ]);
+    }, [board?.custom_css, board?.background_color, boardCssClass, hasUserStyling, hasUserBg]);
 
     // Note: sessionsByWorktree is now passed as prop (no longer computed locally)
     // This enables efficient O(1) lookups and stable references across re-renders

@@ -85,14 +85,18 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   }, [boardById, sessionsByWorktree, worktreeById]);
 
   const handleCreate = () => {
+    // Validate all fields (not just 'name') so custom_context JSON rules run.
+    // Otherwise the extractor's JSON.parse can throw and get swallowed.
     form
-      .validateFields(['name'])
+      .validateFields()
       .then(() => {
         onCreate?.(extractBoardFormValues(form));
         form.resetFields();
         setCreateModalOpen(false);
       })
-      .catch(() => {});
+      .catch(() => {
+        // Antd displays inline field errors; nothing to do here.
+      });
   };
 
   const handleEdit = (board: Board) => {
@@ -112,14 +116,16 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
     if (!editingBoard) return;
 
     form
-      .validateFields(['name'])
+      .validateFields()
       .then(() => {
         onUpdate?.(editingBoard.board_id, extractBoardFormValues(form));
         form.resetFields();
         setEditModalOpen(false);
         setEditingBoard(null);
       })
-      .catch(() => {});
+      .catch(() => {
+        // Antd displays inline field errors; nothing to do here.
+      });
   };
 
   const handleDelete = (boardId: string) => {
@@ -412,7 +418,10 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
         okText="Save"
       >
         <Form form={form} layout="vertical" preserve style={{ marginTop: 16 }}>
+          {/* Keyed on board_id so useCustomCSS state and Collapse defaultActiveKey
+              re-initialize when switching between boards (Modal stays mounted). */}
           <BoardFormFields
+            key={editingBoard?.board_id}
             form={form}
             extra={customContextField}
             initialCustomCSS={
