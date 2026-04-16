@@ -46,7 +46,11 @@ import type {
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import { resolveGitImpersonationForUser } from '../utils/git-impersonation.js';
-import { getDaemonUrl, spawnExecutorFireAndForget } from '../utils/spawn-executor.js';
+import {
+  generateSessionToken,
+  getDaemonUrl,
+  spawnExecutorFireAndForget,
+} from '../utils/spawn-executor.js';
 
 /**
  * Repo service params
@@ -162,16 +166,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       userEnv = (await resolveUserEnvironment(userId, this.db)) || {};
     }
 
-    // Generate session token for executor authentication
-    const appWithToken = this.app as unknown as {
-      sessionTokenService?: import('../services/session-token-service').SessionTokenService;
-    };
-    if (!appWithToken.sessionTokenService) {
-      throw new Error('Session token service not initialized');
-    }
-    const sessionToken = await appWithToken.sessionTokenService.generateToken(
-      'clone-operation',
-      userId || 'anonymous'
+    // Generate service JWT for executor authentication. The executor talks back
+    // to the daemon to create the repo record (which may include
+    // environment_config from .agor.yml) and patch status — operations that
+    // materialize admin-defined templates rather than user edits. Using a
+    // service token ensures hooks like requireAdminForEnvConfig bypass via
+    // _isServiceAccount, while user git credentials still flow via `env`.
+    const sessionToken = generateSessionToken(
+      this.app as unknown as { settings: { authentication?: { secret?: string } } }
     );
 
     // Check if Unix group isolation should be initialized
@@ -678,15 +680,17 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       );
     }
 
-    // Fire-and-forget: spawn executor to create git worktree on filesystem
-    // Executor will patch filesystem_status to 'ready' when done (or 'failed' on error)
-    const appWithToken = this.app as unknown as {
-      sessionTokenService?: import('../services/session-token-service').SessionTokenService;
-    };
-    if (appWithToken.sessionTokenService) {
-      const sessionToken = await appWithToken.sessionTokenService.generateToken(
-        'worktree-operation',
-        userId || 'anonymous'
+    // Fire-and-forget: spawn executor to create git worktree on filesystem.
+    // Executor will patch filesystem_status to 'ready' when done (or 'failed'
+    // on error), and along the way render environment command templates
+    // (start_command, stop_command, etc.) onto the worktree. Those fields
+    // trip the requireAdminForEnvConfig hook on patch, so we authenticate
+    // the executor with a service JWT to bypass admin checks for internal
+    // materialization of admin-defined templates. User git credentials still
+    // flow via the `env` field (userEnv) independently of the JWT.
+    try {
+      const sessionToken = generateSessionToken(
+        this.app as unknown as { settings: { authentication?: { secret?: string } } }
       );
 
       // Check if Unix group isolation should be initialized
@@ -726,8 +730,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           asUser, // Run as resolved user (fresh groups via sudo -u)
         }
       );
-    } else {
-      console.error('Session token service not initialized, cannot spawn executor');
+    } catch (error) {
+      console.error(
+        '[ReposService.createWorktree] Failed to spawn executor:',
+        error instanceof Error ? error.message : String(error)
+      );
     }
 
     // Return immediately with 'creating' status - UI will see updates via WebSocket

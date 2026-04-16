@@ -28,7 +28,7 @@ import { getNextRunTime, validateCron } from '@agor/core/utils/cron';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService } from '../adapters/drizzle';
 import { resolveGitImpersonationForWorktree } from '../utils/git-impersonation.js';
-import { getDaemonUrl, spawnExecutor } from '../utils/spawn-executor.js';
+import { generateSessionToken, getDaemonUrl, spawnExecutor } from '../utils/spawn-executor.js';
 import type { InternalEnrichmentParams } from './sessions';
 
 /**
@@ -619,13 +619,6 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       // Set filesystem_status to 'creating' while we rebuild
       await this.patch(id, { filesystem_status: 'creating' }, { provider: undefined });
 
-      const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as
-        | UserID
-        | undefined;
-      const appWithToken = this.app as unknown as {
-        sessionTokenService?: import('../services/session-token-service').SessionTokenService;
-      };
-
       // Look up repo to get local_path
       const reposService = this.app.service('repos');
       const repo = (await reposService.get(worktree.repo_id)) as Repo;
@@ -639,9 +632,11 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       // to the wrong home directory, causing safety check failures.
 
       try {
-        const sessionToken = await appWithToken.sessionTokenService?.generateToken(
-          'worktree-unarchive',
-          userId || 'anonymous'
+        // Use a service JWT so the executor can patch rendered env command
+        // templates without tripping requireAdminForEnvConfig when unarchive
+        // is performed by a non-admin user.
+        const sessionToken = generateSessionToken(
+          this.app as unknown as { settings: { authentication?: { secret?: string } } }
         );
         if (sessionToken) {
           spawnExecutor(
