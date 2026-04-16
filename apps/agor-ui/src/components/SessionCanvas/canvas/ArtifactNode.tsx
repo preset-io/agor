@@ -41,7 +41,12 @@ import {
   LoadingOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import { SandpackPreview, SandpackProvider, useSandpackConsole } from '@codesandbox/sandpack-react';
+import {
+  SandpackPreview,
+  SandpackProvider,
+  useSandpack,
+  useSandpackConsole,
+} from '@codesandbox/sandpack-react';
 import { Badge, Button, Card, Spin, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NodeResizer } from 'reactflow';
@@ -132,6 +137,78 @@ function ConsoleReporter({ artifactId }: { artifactId: string }) {
       }
     };
   }, [logs, artifactId]);
+
+  return null;
+}
+
+/**
+ * Inner component that captures Sandpack bundler/runtime errors and forwards them to the daemon.
+ * These errors (e.g. "Could not find module './data'") happen inside Sandpack's bundler
+ * before any user JS executes, so they never reach console.error.
+ * Must be inside SandpackProvider.
+ */
+const SANDPACK_ERROR_THROTTLE_MS = 1000;
+
+function SandpackErrorReporter({ artifactId }: { artifactId: string }) {
+  const { sandpack } = useSandpack();
+  const lastSentRef = useRef<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    // Serialize current error state for comparison
+    const errorKey = sandpack.error ? sandpack.error.message : null;
+
+    // Skip if we already sent this exact error (or lack thereof)
+    if (errorKey === lastSentRef.current) return;
+
+    const sendError = () => {
+      lastSentRef.current = errorKey;
+
+      const payload: {
+        error: {
+          message: string;
+          title?: string;
+          path?: string;
+          line?: number;
+          column?: number;
+        } | null;
+        status: string;
+      } = {
+        error: sandpack.error
+          ? {
+              message: sandpack.error.message,
+              ...(sandpack.error.title ? { title: sandpack.error.title } : {}),
+              ...(sandpack.error.path ? { path: sandpack.error.path } : {}),
+              ...(sandpack.error.line != null ? { line: sandpack.error.line } : {}),
+              ...(sandpack.error.column != null ? { column: sandpack.error.column } : {}),
+            }
+          : null,
+        status: sandpack.status,
+      };
+
+      fetch(`${getDaemonUrl()}/artifacts/${artifactId}/sandpack-error`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+    };
+
+    // Throttle to avoid spamming during rapid error state changes
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+    }
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      sendError();
+    }, SANDPACK_ERROR_THROTTLE_MS);
+
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [sandpack.error, sandpack.status, artifactId]);
 
   return null;
 }
@@ -404,6 +481,7 @@ export const ArtifactNode = ({
               {...(payload.bundlerURL ? { startRoute: './' } : {})}
             />
             <ConsoleReporter artifactId={data.artifactId} />
+            <SandpackErrorReporter artifactId={data.artifactId} />
           </SandpackProvider>
         </div>
       </Card>

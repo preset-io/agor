@@ -31,6 +31,7 @@ import type {
   ArtifactStatus,
   BoardID,
   QueryParams,
+  SandpackError,
   SandpackManifest,
   SandpackTemplate,
   UserID,
@@ -68,6 +69,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
   /** In-memory ring buffer for console logs per artifact */
   private consoleLogs: Map<string, ArtifactConsoleEntry[]> = new Map();
+
+  /** In-memory Sandpack error state per artifact (from browser iframe) */
+  private sandpackErrors: Map<string, SandpackError | null> = new Map();
+
+  /** In-memory Sandpack status per artifact (from browser iframe) */
+  private sandpackStatuses: Map<string, string> = new Map();
 
   /** URL of self-hosted Sandpack bundler (detected at startup, null if not available) */
   selfHostedBundlerURL: string | null = null;
@@ -371,16 +378,46 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   /**
-   * Get artifact status (build + console logs) for agent debugging
+   * Store Sandpack error state from the browser frontend.
+   * Called when useSandpack() reports an error change in the iframe.
+   */
+  setSandpackError(artifactId: string, error: SandpackError | null, status?: string): void {
+    this.sandpackErrors.set(artifactId, error);
+    if (status !== undefined) {
+      this.sandpackStatuses.set(artifactId, status);
+    }
+  }
+
+  /**
+   * Get artifact status (build + console logs + Sandpack state) for agent debugging.
+   *
+   * build_status reflects the worst state: if Sandpack reports an error,
+   * it overrides the file-validation status even if files are structurally valid.
    */
   async getStatus(artifactId: string): Promise<ArtifactStatus> {
     const artifact = await this.artifactRepo.findById(artifactId);
     if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
 
+    const sandpackError = this.sandpackErrors.get(artifactId) ?? null;
+    const sandpackStatus = this.sandpackStatuses.get(artifactId);
+
+    // Override build_status if Sandpack reports an error
+    let buildStatus = artifact.build_status;
+    let buildErrors = artifact.build_errors;
+
+    if (sandpackError) {
+      buildStatus = 'error';
+      // Merge Sandpack error into build_errors so agents see it in one place
+      const sandpackMsg = `[Sandpack] ${sandpackError.message}`;
+      buildErrors = [...(buildErrors ?? []), sandpackMsg];
+    }
+
     return {
       artifact_id: artifact.artifact_id,
-      build_status: artifact.build_status,
-      build_errors: artifact.build_errors,
+      build_status: buildStatus,
+      build_errors: buildErrors,
+      sandpack_error: sandpackError,
+      sandpack_status: sandpackStatus,
       console_logs: this.consoleLogs.get(artifactId) ?? [],
       content_hash: artifact.content_hash,
     };
@@ -405,8 +442,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       // Board object may not exist or board may be deleted
     }
 
-    // Clear console logs
+    // Clear in-memory state
     this.consoleLogs.delete(artifactId);
+    this.sandpackErrors.delete(artifactId);
+    this.sandpackStatuses.delete(artifactId);
 
     // Delete DB record
     await this.artifactRepo.delete(artifactId);

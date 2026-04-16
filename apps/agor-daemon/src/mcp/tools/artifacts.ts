@@ -165,8 +165,18 @@ When in doubt, leave unset — the hosted bundler supports the widest range of p
   server.registerTool(
     'agor_artifacts_status',
     {
-      description:
-        'Get artifact build status and recent console logs from the browser runtime. Use this to debug rendering issues. Console logs are captured from the Sandpack iframe in connected browsers.',
+      description: `Get artifact build status, Sandpack bundler errors, and recent console logs from the browser runtime. Use this to debug rendering issues.
+
+build_status reflects both file validation AND Sandpack runtime state. If the Sandpack bundler reports an error (e.g. "Could not find module './data'"), build_status will be 'error' even if files were accepted.
+
+Fields:
+- build_status: 'success' | 'error' | 'unknown' — reflects the worst of file validation and Sandpack runtime
+- build_errors: array of error messages (includes Sandpack errors prefixed with [Sandpack])
+- sandpack_error: the raw Sandpack bundler/runtime error object (null if no error)
+- sandpack_status: Sandpack bundler status ('idle', 'running', 'timeout', etc.)
+- console_logs: console.log/warn/error output from the running app
+
+NOTE: sandpack_error and console_logs require a browser to be viewing the artifact. If no browser is connected, these fields will be empty/null.`,
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         artifactId: z.string().describe('Artifact ID'),

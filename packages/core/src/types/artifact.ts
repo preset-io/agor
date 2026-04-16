@@ -126,12 +126,33 @@ export interface ArtifactConsoleEntry {
 }
 
 /**
+ * Sandpack bundler/runtime error captured from the browser iframe.
+ * These errors (e.g. "Could not find module './data'") happen inside
+ * Sandpack's bundler before any user JS executes, so they never reach
+ * console.error and are invisible to console_logs.
+ */
+export interface SandpackError {
+  message: string;
+  title?: string;
+  path?: string;
+  line?: number;
+  column?: number;
+}
+
+/**
  * Full artifact status returned to agents via MCP
  */
 export interface ArtifactStatus {
   artifact_id: ArtifactID;
+  /** Reflects file validation AND Sandpack runtime state.
+   *  If Sandpack reports an error, this is overridden to 'error'
+   *  even if file validation passed. */
   build_status: ArtifactBuildStatus;
   build_errors?: string[];
+  /** Sandpack bundler/runtime error from the browser iframe (null = no error) */
+  sandpack_error?: SandpackError | null;
+  /** Sandpack bundler status: 'idle', 'running', 'timeout', etc. */
+  sandpack_status?: string;
   console_logs: ArtifactConsoleEntry[];
   content_hash?: string;
 }
