@@ -14,40 +14,140 @@ on:
       - '*.md'
       - 'context/**'
 
+env:
+  PNPM_VERSION: '9.15.1'
+  NODE_VERSION: '22'
+  TURBO_CACHE_KEY: turbo-${{ github.sha }}
+
 jobs:
-  check:
-    name: Typecheck, Lint & Build
+  install:
+    name: Install & Build deps
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4
         with:
-          version: 9.15.1
+          version: ${{ env.PNPM_VERSION }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile
 
-      - name: Check agor-live deps
-        run: pnpm check:agor-live-deps
+      # Build all packages to populate turbo cache for parallel jobs
+      - run: pnpm turbo run build --filter='!@agor/docs'
 
-      - name: Typecheck
-        run: pnpm typecheck
+      - name: Save turbo cache
+        uses: actions/cache/save@v4
+        with:
+          path: .turbo/cache
+          key: ${{ env.TURBO_CACHE_KEY }}
 
-      - name: Lint
-        run: pnpm lint
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    needs: [install]
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Build
-        run: pnpm turbo run build --filter='!@agor/docs'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
 
-      - name: Test
-        run: pnpm turbo run test --filter=agor-ui --filter=@agor/daemon
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Restore turbo cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .turbo/cache
+          key: ${{ env.TURBO_CACHE_KEY }}
+
+      - run: pnpm typecheck
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    needs: [install]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Restore turbo cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .turbo/cache
+          key: ${{ env.TURBO_CACHE_KEY }}
+
+      - run: pnpm check:agor-live-deps
+
+      - run: pnpm lint
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [install]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Restore turbo cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .turbo/cache
+          key: ${{ env.TURBO_CACHE_KEY }}
+
+      - run: pnpm turbo run build --filter='!@agor/docs'
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: [install]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Restore turbo cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .turbo/cache
+          key: ${{ env.TURBO_CACHE_KEY }}
+
+      - run: pnpm turbo run test --filter=agor-ui --filter=@agor/daemon
