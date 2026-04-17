@@ -412,4 +412,168 @@ describe('LeaderboardService bucketing', () => {
       /Invalid bucket/
     );
   });
+
+  dbTest('bucket: "week" groups Mon-Sun (ISO) into one row', async ({ db }) => {
+    // Apr 13 2026 is a Monday. Apr 15/16/17 all fall into that week; Apr 20 is
+    // the start of the next week. We explicitly span the Sun→Mon boundary to
+    // verify the ISO-Monday truncation.
+    const aliceId = 'user-alice';
+    const worktreeId = 'wt-main';
+    const claudeSessionId = 'sess-claude';
+
+    await seedUser(db, aliceId, 'Alice', 'alice@example.com');
+    await seedRepoAndWorktree(db, {
+      slug: 'main',
+      worktreeId,
+      worktreeName: 'main-wt',
+      uniqueId: 1,
+    });
+    await seedSession(db, { sessionId: claudeSessionId, worktreeId, tool: 'claude-code' });
+
+    // Monday Apr 13
+    await seedTask(db, {
+      sessionId: claudeSessionId,
+      createdBy: aliceId,
+      createdAt: new Date('2026-04-13T10:00:00.000Z'),
+      model: 'claude-sonnet-4-6',
+      inputTokens: 100,
+      outputTokens: 50,
+      costUsd: 0.01,
+      durationMs: 1000,
+    });
+    // Sunday Apr 19 (still in the Apr 13 ISO week)
+    await seedTask(db, {
+      sessionId: claudeSessionId,
+      createdBy: aliceId,
+      createdAt: new Date('2026-04-19T23:30:00.000Z'),
+      model: 'claude-sonnet-4-6',
+      inputTokens: 200,
+      outputTokens: 100,
+      costUsd: 0.02,
+      durationMs: 2000,
+    });
+    // Monday Apr 20 (next ISO week)
+    await seedTask(db, {
+      sessionId: claudeSessionId,
+      createdBy: aliceId,
+      createdAt: new Date('2026-04-20T09:00:00.000Z'),
+      model: 'claude-sonnet-4-6',
+      inputTokens: 300,
+      outputTokens: 150,
+      costUsd: 0.03,
+      durationMs: 3000,
+    });
+
+    const service = new LeaderboardService(db);
+    const result = await service.find({ query: { bucket: 'week', groupBy: '' } });
+
+    expect(result.data).toHaveLength(2);
+    expect(result.data[0].bucket).toBe('2026-04-13T00:00:00.000Z');
+    expect(result.data[0].taskCount).toBe(2);
+    expect(result.data[1].bucket).toBe('2026-04-20T00:00:00.000Z');
+    expect(result.data[1].taskCount).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Date filters
+// ---------------------------------------------------------------------------
+
+describe('LeaderboardService date filters', () => {
+  dbTest('startDate/endDate bound the result set', async ({ db }) => {
+    await seedCanonicalDataset(db);
+    const service = new LeaderboardService(db);
+
+    // Include only Apr 16 (the opus task)
+    const result = await service.find({
+      query: {
+        startDate: '2026-04-16T00:00:00.000Z',
+        endDate: '2026-04-16T23:59:59.999Z',
+        groupBy: 'model',
+      },
+    });
+
+    expect(result.data).toHaveLength(1);
+    expect(result.data[0].model).toBe('claude-opus-4-6');
+    expect(result.data[0].taskCount).toBe(1);
+  });
+
+  dbTest('invalid startDate rejects with a clear error', async ({ db }) => {
+    const service = new LeaderboardService(db);
+    await expect(service.find({ query: { startDate: 'not-a-date' } })).rejects.toThrow(
+      /Invalid startDate/
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Legacy / partial rows
+// ---------------------------------------------------------------------------
+
+describe('LeaderboardService legacy rows', () => {
+  dbTest('tasks without normalized_sdk_response contribute 0 and still count', async ({ db }) => {
+    const aliceId = 'user-alice';
+    const worktreeId = 'wt-main';
+    const claudeSessionId = 'sess-claude';
+
+    await seedUser(db, aliceId, 'Alice', 'alice@example.com');
+    await seedRepoAndWorktree(db, {
+      slug: 'main',
+      worktreeId,
+      worktreeName: 'main-wt',
+      uniqueId: 1,
+    });
+    await seedSession(db, { sessionId: claudeSessionId, worktreeId, tool: 'claude-code' });
+
+    // Legacy task: no normalized_sdk_response at all, only top-level duration_ms
+    await insert(db, tasks)
+      .values({
+        task_id: generateId(),
+        session_id: claudeSessionId,
+        created_at: new Date('2026-04-15T12:00:00.000Z'),
+        status: TaskStatus.COMPLETED,
+        created_by: aliceId,
+        data: {
+          description: 'legacy',
+          full_prompt: 'legacy',
+          message_range: {
+            start_index: 0,
+            end_index: 0,
+            start_timestamp: '2026-04-15T12:00:00.000Z',
+          },
+          git_state: { ref_at_start: 'main', sha_at_start: 'abc' },
+          model: 'claude-sonnet-4-6',
+          tool_use_count: 0,
+          duration_ms: 1500,
+          // normalized_sdk_response intentionally absent
+        },
+      })
+      .run();
+
+    const service = new LeaderboardService(db);
+    const result = await service.find({ query: { groupBy: 'user' } });
+
+    const alice = result.data.find((r) => r.userId === aliceId);
+    expect(alice).toBeDefined();
+    expect(alice?.taskCount).toBe(1);
+    // Token/cost are absent → 0, duration falls back to top-level duration_ms
+    expect(alice?.totalTokens).toBe(0);
+    expect(alice?.totalInputTokens).toBe(0);
+    expect(alice?.totalOutputTokens).toBe(0);
+    expect(alice?.totalCost).toBe(0);
+    expect(alice?.totalDurationMs).toBe(1500);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Input validation
+// ---------------------------------------------------------------------------
+
+describe('LeaderboardService input validation', () => {
+  dbTest('unknown groupBy dimension rejects with a clear error', async ({ db }) => {
+    const service = new LeaderboardService(db);
+    await expect(service.find({ query: { groupBy: 'user,wombat' } })).rejects.toThrow(
+      /Invalid groupBy dimension/
+    );
+  });
 });

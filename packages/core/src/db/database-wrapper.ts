@@ -167,7 +167,13 @@ export function dateTruncUtc(db: Database, column: SQL | any, bucket: DateBucket
     }
   } else {
     // PostgreSQL date_trunc accepts 'hour'|'day'|'week'|'month'; week is already ISO (Monday).
-    return sql`to_char(date_trunc(${bucket}, ${column}) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
+    // IMPORTANT: `date_trunc(unit, timestamptz)` truncates in the session's timezone, so we
+    // convert to a UTC wall-clock timestamp *first* (`column AT TIME ZONE 'UTC'`) and truncate
+    // that. Otherwise day/week/month buckets misalign for any session not set to UTC.
+    return sql`to_char(
+      date_trunc(${bucket}, ${column} AT TIME ZONE 'UTC'),
+      'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+    )`;
   }
 }
 

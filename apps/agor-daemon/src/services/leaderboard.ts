@@ -14,7 +14,9 @@ import {
   dateTruncUtc,
   desc,
   eq,
+  gte,
   jsonExtract,
+  lte,
   type SQL,
   sessions,
   sql,
@@ -100,15 +102,21 @@ const VALID_BUCKETS = new Set<DateBucket>(['hour', 'day', 'week', 'month']);
 
 /**
  * Parse the comma-separated groupBy string into a set of known dimensions.
- * Unknown values are ignored (preserving forward compatibility).
+ * Throws on unknown values so typos surface loudly rather than silently
+ * collapsing the result set to an unexpected grouping. Matches the strict
+ * validation we do for `bucket`.
  */
 function parseGroupBy(groupBy: string): Set<LeaderboardDimension> {
   const dims = new Set<LeaderboardDimension>();
   for (const raw of groupBy.split(',')) {
-    const trimmed = raw.trim() as LeaderboardDimension;
-    if (ALL_DIMENSIONS.includes(trimmed)) {
-      dims.add(trimmed);
+    const trimmed = raw.trim();
+    if (trimmed === '') continue;
+    if (!ALL_DIMENSIONS.includes(trimmed as LeaderboardDimension)) {
+      throw new Error(
+        `Invalid groupBy dimension: "${trimmed}". Expected one of: ${ALL_DIMENSIONS.join(', ')}.`
+      );
     }
+    dims.add(trimmed as LeaderboardDimension);
   }
   return dims;
 }
@@ -174,12 +182,16 @@ export class LeaderboardService {
       conditions.push(eq(worktrees.repo_id, repoId));
     }
 
+    // Use gte/lte so drizzle encodes the bound via the column's timestamp mapper
+    // (integer ms on SQLite, timestamp-with-tz on Postgres). Passing an ISO string
+    // through `sql` compared SQLite ms-epoch integers against text and excluded
+    // everything.
     if (startDate) {
       const parsed = new Date(startDate);
       if (Number.isNaN(parsed.getTime())) {
         throw new Error(`Invalid startDate: "${startDate}". Expected ISO 8601 format.`);
       }
-      conditions.push(sql`${tasks.created_at} >= ${parsed.toISOString()}`);
+      conditions.push(gte(tasks.created_at, parsed));
     }
 
     if (endDate) {
@@ -187,7 +199,7 @@ export class LeaderboardService {
       if (Number.isNaN(parsed.getTime())) {
         throw new Error(`Invalid endDate: "${endDate}". Expected ISO 8601 format.`);
       }
-      conditions.push(sql`${tasks.created_at} <= ${parsed.toISOString()}`);
+      conditions.push(lte(tasks.created_at, parsed));
     }
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
@@ -316,47 +328,38 @@ export class LeaderboardService {
       .limit(limit)
       .offset(offset);
 
-    // Build distinct count for pagination. Each part is wrapped in COALESCE so NULLs
-    // (e.g. model on legacy rows) don't collapse the concatenation.
-    const distinctParts: string[] = [];
-    if (includeUser) distinctParts.push("COALESCE(tasks.created_by, '')");
-    if (includeWorktree) distinctParts.push("COALESCE(worktrees.worktree_id, '')");
-    if (includeRepo) distinctParts.push("COALESCE(worktrees.repo_id, '')");
-    if (includeTool) distinctParts.push("COALESCE(sessions.agentic_tool, '')");
-    // Model and bucket are SQL expressions, not columns; they're inlined separately below.
-
-    // biome-ignore lint/suspicious/noExplicitAny: Building dynamic SQL requires any
-    const distinctPieces: any[] = distinctParts.map((p) => sql.raw(p));
-    if (includeModel) {
-      distinctPieces.push(sql`COALESCE(${modelExpr}, '')`);
-    }
-    if (bucketExpr) {
-      distinctPieces.push(sql`COALESCE(${bucketExpr}, '')`);
-    }
-
-    let distinctExpr: SQL;
-    if (distinctPieces.length === 0) {
-      distinctExpr = sql`COUNT(*)`;
+    // Build distinct count for pagination. We wrap the aggregation query (without
+    // ordering/limits) as a subquery and COUNT its groups. This is exact — no NULL
+    // collisions and no dependence on a separator character — and always matches
+    // the GROUP BY used for the paginated query above.
+    let total: number;
+    if (groupByFields.length === 0) {
+      // No grouping: the main query returns a single aggregate row.
+      total = results.length;
     } else {
-      distinctExpr = sql`COUNT(DISTINCT ${sql.join(distinctPieces, sql` || '-' || `)})`;
+      // biome-ignore lint/suspicious/noExplicitAny: Database union type prevents calling .select() with dynamic fields
+      let countInner = (this.db as any)
+        .select({ one: sql`1` })
+        .from(tasks)
+        .innerJoin(sessions, eq(tasks.session_id, sessions.session_id))
+        .innerJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id));
+
+      if (includeUser) {
+        countInner = countInner.leftJoin(users, eq(tasks.created_by, users.user_id));
+      }
+
+      const groupedSubquery = countInner
+        .where(whereClause)
+        .groupBy(...groupByFields)
+        .as('g');
+
+      // biome-ignore lint/suspicious/noExplicitAny: Database union type prevents calling .select() with dynamic fields
+      const countResult = await (this.db as any)
+        .select({ count: sql<number>`COUNT(*)` })
+        .from(groupedSubquery);
+
+      total = Number(countResult[0]?.count) || 0;
     }
-
-    // biome-ignore lint/suspicious/noExplicitAny: Database union type prevents calling .select() with dynamic fields
-    let countQb = (this.db as any)
-      .select({
-        count: sql<number>`${distinctExpr}`,
-      })
-      .from(tasks)
-      .innerJoin(sessions, eq(tasks.session_id, sessions.session_id))
-      .innerJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id));
-
-    if (includeUser) {
-      countQb = countQb.leftJoin(users, eq(tasks.created_by, users.user_id));
-    }
-
-    const countResult = await countQb.where(whereClause);
-
-    const total = countResult[0]?.count || 0;
 
     // Define result row type based on selected fields
     interface ResultRow {
