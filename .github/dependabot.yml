@@ -37,7 +37,28 @@ updates:
         update-types:
           - 'minor'
           - 'patch'
+      # Catch-all for remaining production minor+patch updates so we get
+      # one batched PR per week instead of one PR per dependency.
+      prod-minor-patch:
+        dependency-type: 'production'
+        update-types:
+          - 'minor'
+          - 'patch'
     ignore:
       # agor-live-only deps are managed manually when packaging/releasing
       - dependency-name: 'md-to-slack'
       - dependency-name: 'uuidv7'
+
+  # GitHub Actions workflow dependencies
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns:
+          - '*'
+        update-types:
+          - 'minor'
+          - 'patch'
