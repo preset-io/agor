@@ -17,7 +17,7 @@ on:
 env:
   PNPM_VERSION: '9.15.1'
   NODE_VERSION: '22'
-  TURBO_CACHE_KEY: turbo-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ github.sha }}
+  TURBO_CACHE_KEY: turbo-Linux-node22-${{ github.sha }}
 
 jobs:
   install:
