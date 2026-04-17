@@ -77,6 +77,36 @@ export function isValidUnixUsername(username: string): boolean {
 }
 
 /**
+ * Validate that a username/password pair is safe to feed to chpasswd via stdin.
+ *
+ * chpasswd parses input as `username:password\n` records. Newlines in the
+ * password would break into new records, and a colon in the username would be
+ * interpreted as the username/password separator — both allowing an attacker
+ * to change other users' passwords.
+ *
+ * @throws Error if username or password would corrupt chpasswd's parser.
+ */
+export function assertChpasswdInputSafe(username: string, password: string): void {
+  if (typeof username !== 'string' || username.length === 0) {
+    throw new Error('Refusing to sync password: unix_username is empty');
+  }
+  if (username.includes(':')) {
+    throw new Error(
+      'Refusing to sync password: unix_username contains ":" (chpasswd field separator)'
+    );
+  }
+  if (/[\r\n\0]/.test(username)) {
+    throw new Error('Refusing to sync password: unix_username contains newline or NUL byte');
+  }
+  if (typeof password !== 'string' || password.length === 0) {
+    throw new Error('Refusing to sync password: password is empty');
+  }
+  if (/[\r\n\0]/.test(password)) {
+    throw new Error('Refusing to sync password: password contains newline or NUL byte');
+  }
+}
+
+/**
  * Get home directory path for a Unix user
  *
  * @param username - Unix username
@@ -181,11 +211,16 @@ export const UnixUserCommands = {
   /**
    * Format stdin input for chpasswd command
    *
+   * Validates inputs via {@link assertChpasswdInputSafe} to prevent a caller
+   * from injecting extra `username:password` records into chpasswd's stdin.
+   *
    * @param username - Unix username
    * @param password - Plaintext password to set
    * @returns Formatted stdin input: "username:password\n"
+   * @throws Error if username or password contain chpasswd-unsafe characters
    */
   formatPasswordInput: (username: string, password: string): string => {
+    assertChpasswdInputSafe(username, password);
     return `${username}:${password}\n`;
   },
 

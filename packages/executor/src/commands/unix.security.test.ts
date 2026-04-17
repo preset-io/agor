@@ -8,8 +8,9 @@
  *    real sudo environment.
  */
 
+import { assertChpasswdInputSafe } from '@agor/core/unix';
 import { describe, expect, it } from 'vitest';
-import { assertChpasswdInputSafe, fixWorktreeGitDirPermissionsBasic } from './unix';
+import { fixWorktreeGitDirPermissionsBasic } from './unix';
 
 describe('fixWorktreeGitDirPermissionsBasic — worktree name validation', () => {
   const repoPath = '/tmp/repo-that-does-not-exist-for-this-test';
@@ -31,6 +32,17 @@ describe('fixWorktreeGitDirPermissionsBasic — worktree name validation', () =>
       /Invalid worktree name/
     );
     await expect(fixWorktreeGitDirPermissionsBasic(repoPath, 'foo\\nbar')).rejects.toThrow(
+      /Invalid worktree name/
+    );
+    // Literal newline, CR, NUL must also be rejected (not just the backslash-n
+    // escape above — that already fails the alnum check).
+    await expect(fixWorktreeGitDirPermissionsBasic(repoPath, 'foo\nbar')).rejects.toThrow(
+      /Invalid worktree name/
+    );
+    await expect(fixWorktreeGitDirPermissionsBasic(repoPath, 'foo\rbar')).rejects.toThrow(
+      /Invalid worktree name/
+    );
+    await expect(fixWorktreeGitDirPermissionsBasic(repoPath, 'foo\u0000bar')).rejects.toThrow(
       /Invalid worktree name/
     );
   });
@@ -95,9 +107,8 @@ describe('assertChpasswdInputSafe — stdin-injection guard', () => {
   });
 
   it('rejects non-string inputs', () => {
-    // biome-ignore lint/suspicious/noExplicitAny: intentionally invalid types
-    expect(() => assertChpasswdInputSafe(undefined as any, 'pw')).toThrow();
-    expect(() => assertChpasswdInputSafe('alice', null as any)).toThrow();
+    expect(() => assertChpasswdInputSafe(undefined as unknown as string, 'pw')).toThrow();
+    expect(() => assertChpasswdInputSafe('alice', null as unknown as string)).toThrow();
   });
 
   it('accepts well-formed inputs', () => {

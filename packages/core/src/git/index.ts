@@ -97,6 +97,47 @@ export function isLikelyGitToken(token: string): boolean {
 }
 
 /**
+ * Build the argv for `git worktree add`, always inserting a `--` separator
+ * before positional arguments.
+ *
+ * Even when {@link validateGitRef} has rejected option-shaped refs, we keep
+ * the `--` separator as defence-in-depth — any value that slips through (e.g.
+ * a future regression in validation, or a sourceBranch path) is still forced
+ * into positional-argument semantics.
+ *
+ * Exported so tests can assert the argv shape without spawning a real git.
+ */
+export function buildWorktreeAddArgs(params: {
+  worktreePath: string;
+  ref: string;
+  createBranch: boolean;
+  sourceBranch?: string;
+  refType?: 'branch' | 'tag';
+  fetchSucceeded: boolean;
+}): string[] {
+  const { worktreePath, ref, createBranch, sourceBranch, refType, fetchSucceeded } = params;
+
+  const optionArgs: string[] = [];
+  const positionalArgs: string[] = [worktreePath];
+
+  if (createBranch) {
+    optionArgs.push('-b', ref);
+    if (sourceBranch) {
+      if (refType === 'tag') {
+        positionalArgs.push(sourceBranch);
+      } else {
+        const baseRef = fetchSucceeded ? `origin/${sourceBranch}` : sourceBranch;
+        positionalArgs.push(baseRef);
+      }
+    }
+  } else {
+    positionalArgs.push(ref);
+  }
+
+  return ['worktree', 'add', ...optionArgs, '--', ...positionalArgs];
+}
+
+/**
  * Track temp credential files so a process-exit handler can best-effort
  * clean them up if a caller forgot to (or a synchronous crash happened).
  */
@@ -276,21 +317,29 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
   const reposDir = getReposDir();
   const targetPath = options.targetDir || join(reposDir, repoName);
 
-  // Inject token into URL for reliability (credential helper is also configured as backup)
-  if (options.env?.GITHUB_TOKEN && cloneUrl.startsWith('https://github.com/')) {
-    const token = options.env.GITHUB_TOKEN;
-    cloneUrl = cloneUrl.replace(
-      'https://github.com/',
-      `https://x-access-token:${token}@github.com/`
-    );
-    console.debug('🔑 Injected GITHUB_TOKEN into URL');
-  } else if (options.env?.GH_TOKEN && cloneUrl.startsWith('https://github.com/')) {
-    const token = options.env.GH_TOKEN;
-    cloneUrl = cloneUrl.replace(
-      'https://github.com/',
-      `https://x-access-token:${token}@github.com/`
-    );
-    console.debug('🔑 Injected GH_TOKEN into URL');
+  // Inject token into URL for reliability (credential helper is also configured as backup).
+  //
+  // SECURITY: the token is interpolated into a URL's userinfo component. Any
+  // `@`, `/`, `:`, `#`, `?`, whitespace, or control character in the token
+  // would either change which host git connects to or break the URL parser.
+  // We also shape-check the token with `isLikelyGitToken` so we never emit a
+  // URL containing attacker-shaped bytes — and we percent-encode the value as
+  // belt-and-braces.
+  const rawToken = options.env?.GITHUB_TOKEN || options.env?.GH_TOKEN;
+  const tokenSource = options.env?.GITHUB_TOKEN ? 'GITHUB_TOKEN' : 'GH_TOKEN';
+  if (rawToken && cloneUrl.startsWith('https://github.com/')) {
+    if (!isLikelyGitToken(rawToken)) {
+      console.warn(
+        `🔑 Skipping ${tokenSource} URL injection: value does not match expected token shape`
+      );
+    } else {
+      const encodedToken = encodeURIComponent(rawToken);
+      cloneUrl = cloneUrl.replace(
+        'https://github.com/',
+        `https://x-access-token:${encodedToken}@github.com/`
+      );
+      console.debug(`🔑 Injected ${tokenSource} into URL`);
+    }
   }
 
   // Ensure repos directory exists
@@ -557,32 +606,18 @@ export async function createWorktree(
       }
     }
 
-    // Build argv with a `--` separator so any value that slipped through
-    // validation still can't be interpreted as an option.
-    //
-    // Layout (createBranch=true):
-    //   worktree add -b <ref> -- <worktreePath> [<sourceBranch-or-origin/sourceBranch>]
-    // Layout (createBranch=false):
-    //   worktree add -- <worktreePath> <ref>
-    const optionArgs: string[] = [];
-    const positionalArgs: string[] = [worktreePath];
+    const worktreeAddArgs = buildWorktreeAddArgs({
+      worktreePath,
+      ref,
+      createBranch,
+      sourceBranch,
+      refType,
+      fetchSucceeded,
+    });
 
-    if (createBranch) {
-      optionArgs.push('-b', ref);
-      if (sourceBranch) {
-        if (refType === 'tag') {
-          positionalArgs.push(sourceBranch);
-          console.log(`📌 Creating branch '${ref}' from tag '${sourceBranch}'`);
-        } else {
-          const baseRef = fetchSucceeded ? `origin/${sourceBranch}` : sourceBranch;
-          positionalArgs.push(baseRef);
-        }
-      }
-    } else {
-      positionalArgs.push(ref);
+    if (createBranch && sourceBranch && refType === 'tag') {
+      console.log(`📌 Creating branch '${ref}' from tag '${sourceBranch}'`);
     }
-
-    const worktreeAddArgs = ['worktree', 'add', ...optionArgs, '--', ...positionalArgs];
 
     try {
       await git.raw(worktreeAddArgs);

@@ -17,10 +17,12 @@
  */
 
 import { exec, execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import type { RepoID, WorktreeID } from '@agor/core/types';
 import {
   AGOR_USERS_GROUP,
+  assertChpasswdInputSafe,
   generateRepoGroupName,
   generateWorktreeGroupName,
   getWorktreePermissionMode,
@@ -53,30 +55,21 @@ export function isValidWorktreeName(name: string): boolean {
 }
 
 /**
- * Validate (username, password) before they are written to `chpasswd` stdin.
+ * Resolve an absolute path to the `chmod` binary. Using an absolute path
+ * prevents a poisoned `$PATH` from substituting a different `chmod`.
  *
- * chpasswd reads lines of the form `username:password\n`. A `:` in the
- * username or a newline in the password lets a caller inject additional
- * entries and rewrite ANY user's password in a single batch.
- *
- * Throws on rejection so caller code cannot forget to check the boolean.
+ * Falls back to bare `chmod` if no known location exists (macOS / Linux
+ * distros put it in different places). execFile runs argv-style regardless.
  */
-export function assertChpasswdInputSafe(username: string, password: string): void {
-  if (typeof username !== 'string' || username.length === 0) {
-    throw new Error('Refusing to sync password: unix_username is empty');
+function resolveChmodBinary(): string {
+  for (const candidate of ['/bin/chmod', '/usr/bin/chmod']) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
   }
-  if (username.includes(':')) {
-    throw new Error(
-      'Refusing to sync password: unix_username contains ":" (chpasswd field separator)'
-    );
-  }
-  if (typeof password !== 'string' || password.length === 0) {
-    throw new Error('Refusing to sync password: password is empty');
-  }
-  if (/[\r\n\0]/.test(password)) {
-    throw new Error('Refusing to sync password: password contains newline or NUL byte');
-  }
+  return 'chmod';
 }
+const CHMOD_BIN = resolveChmodBinary();
 
 // ============================================================
 // SHELL COMMAND HELPERS
@@ -986,7 +979,8 @@ export async function fixWorktreeGitDirPermissionsBasic(
   console.log(`[unix] Setting basic permissions for .git/worktrees/${worktreeName}`);
 
   // Use argv form (execFile) so the name cannot be interpreted as shell even
-  // if validation were weaker. u+rwX,g+rX,o+rX: capital X only adds execute
+  // if validation were weaker. Use absolute chmod path so a poisoned $PATH
+  // can't substitute the binary. u+rwX,g+rX,o+rX: capital X only adds execute
   // bit to directories, not files — so metadata files stay non-executable.
-  await execFileAsync('chmod', ['-R', 'u+rwX,g+rX,o+rX', worktreeGitDir]);
+  await execFileAsync(CHMOD_BIN, ['-R', 'u+rwX,g+rX,o+rX', worktreeGitDir]);
 }

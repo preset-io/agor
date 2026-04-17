@@ -15,7 +15,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createWorktree, deleteBranch, isLikelyGitToken, validateGitRef } from './index';
+import {
+  buildWorktreeAddArgs,
+  createWorktree,
+  deleteBranch,
+  isLikelyGitToken,
+  validateGitRef,
+} from './index';
 
 async function createTestRepo(dirPath: string): Promise<void> {
   await fs.mkdir(dirPath, { recursive: true });
@@ -54,12 +60,10 @@ describe('validateGitRef', () => {
   });
 
   it('rejects non-string values', async () => {
-    // biome-ignore lint/suspicious/noExplicitAny: intentionally invalid type
-    await expect(validateGitRef(undefined as any)).rejects.toThrow();
-    // biome-ignore lint/suspicious/noExplicitAny: intentionally invalid type
-    await expect(validateGitRef(null as any)).rejects.toThrow();
-    // biome-ignore lint/suspicious/noExplicitAny: intentionally invalid type
-    await expect(validateGitRef(123 as any)).rejects.toThrow();
+    // validateGitRef accepts `unknown`, so no cast needed.
+    await expect(validateGitRef(undefined)).rejects.toThrow();
+    await expect(validateGitRef(null)).rejects.toThrow();
+    await expect(validateGitRef(123)).rejects.toThrow();
   });
 
   it('accepts well-formed refs', async () => {
@@ -99,21 +103,78 @@ describe('createWorktree — argv hardening', () => {
   });
 
   it('places `--` before positional path argument in worktree add', async () => {
-    // Exercise createWorktree via a real git binary and then introspect
-    // the resulting worktree list to confirm it worked with `--` present.
-    // The presence of `--` is indirectly verified by the fact that a ref
-    // like "main" works, since any regression that dropped `--` would
-    // still pass but any attacker-shaped path would also succeed. We
-    // additionally spy on git.raw by wrapping simpleGit below.
-    const wt = path.join(tmpRoot, 'wt-ok');
+    // End-to-end sanity: createWorktree actually succeeds against a real git.
     // Use createBranch=true with sourceBranch=main, because `main` is already
     // checked out at repoPath, so `git worktree add main` would fail.
+    const wt = path.join(tmpRoot, 'wt-ok');
     await createWorktree(repoPath, wt, 'feat/ok', true, false, 'main');
     const exists = await fs
       .stat(wt)
       .then((s) => s.isDirectory())
       .catch(() => false);
     expect(exists).toBe(true);
+  });
+});
+
+describe('buildWorktreeAddArgs — argv shape', () => {
+  it('always inserts `--` before positional arguments', () => {
+    // createBranch=false, no sourceBranch
+    const basic = buildWorktreeAddArgs({
+      worktreePath: '/tmp/wt',
+      ref: 'main',
+      createBranch: false,
+      fetchSucceeded: false,
+    });
+    const dashIdx = basic.indexOf('--');
+    expect(dashIdx).toBeGreaterThanOrEqual(0);
+    // Every positional (worktreePath, ref) must come after `--`.
+    expect(basic.indexOf('/tmp/wt')).toBeGreaterThan(dashIdx);
+    expect(basic.indexOf('main')).toBeGreaterThan(dashIdx);
+  });
+
+  it('keeps `-b <ref>` before `--` and positional path after it', () => {
+    // createBranch=true — `-b` is an option flag, must be BEFORE `--`.
+    const withBranch = buildWorktreeAddArgs({
+      worktreePath: '/tmp/wt',
+      ref: 'feat/new',
+      createBranch: true,
+      sourceBranch: 'main',
+      fetchSucceeded: true,
+    });
+    const dashIdx = withBranch.indexOf('--');
+    expect(dashIdx).toBeGreaterThanOrEqual(0);
+    // `-b` is an option, must be before `--`.
+    expect(withBranch.indexOf('-b')).toBeLessThan(dashIdx);
+    // Branch name follows `-b` and is also before `--`.
+    expect(withBranch.indexOf('feat/new')).toBeLessThan(dashIdx);
+    // worktreePath and the source ref are positionals, must be after `--`.
+    expect(withBranch.indexOf('/tmp/wt')).toBeGreaterThan(dashIdx);
+    expect(withBranch.indexOf('origin/main')).toBeGreaterThan(dashIdx);
+  });
+
+  it('uses local ref (no origin/ prefix) when fetch failed', () => {
+    const args = buildWorktreeAddArgs({
+      worktreePath: '/tmp/wt',
+      ref: 'feat/new',
+      createBranch: true,
+      sourceBranch: 'main',
+      fetchSucceeded: false,
+    });
+    expect(args).toContain('main');
+    expect(args).not.toContain('origin/main');
+  });
+
+  it('uses tag name verbatim when refType is tag', () => {
+    const args = buildWorktreeAddArgs({
+      worktreePath: '/tmp/wt',
+      ref: 'feat/from-tag',
+      createBranch: true,
+      sourceBranch: 'v1.2.3',
+      refType: 'tag',
+      fetchSucceeded: true,
+    });
+    expect(args).toContain('v1.2.3');
+    expect(args).not.toContain('origin/v1.2.3');
   });
 });
 

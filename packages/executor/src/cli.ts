@@ -139,7 +139,7 @@ async function handlePromptPayload(
   if (payload.env && Object.keys(payload.env).length > 0) {
     // Filter out process-hijacking env vars (NODE_OPTIONS, LD_PRELOAD, PYTHON*, etc.)
     // These could give an attacker RCE inside the executor context.
-    const { filterEnv } = await import('@agor/core/utils/env-denylist');
+    const { filterEnv } = await import('@agor/core/config');
     const { env: safeEnv, rejected } = filterEnv(payload.env as Record<string, string>, (key) => {
       // Log key only — never the value, which is attacker-controlled.
       console.warn(`[executor] Rejected denied env var from payload: ${key}`);

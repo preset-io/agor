@@ -125,11 +125,6 @@
       "import": "./dist/utils/logger.js",
       "require": "./dist/utils/logger.cjs"
     },
-    "./utils/env-denylist": {
-      "types": "./dist/utils/env-denylist.d.ts",
-      "import": "./dist/utils/env-denylist.js",
-      "require": "./dist/utils/env-denylist.cjs"
-    },
     "./seed": {
       "types": "./dist/seed/index.d.ts",
       "import": "./dist/seed/index.js",

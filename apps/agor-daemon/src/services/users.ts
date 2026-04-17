@@ -20,6 +20,7 @@ import {
   update,
   users,
 } from '@agor/core/db';
+import { isLikelyGitToken } from '@agor/core/git';
 import type { Paginated, Params, User, UserID, UserRole } from '@agor/core/types';
 import { normalizeRole, ROLES } from '@agor/core/types';
 
@@ -227,12 +228,12 @@ export class UsersService {
             throw new Error(`Cannot set environment variable "${key}": ${reason}`);
           }
 
-          // Git tokens are embedded into a git-credentials file at runtime.
-          // Reject anything that could smuggle shell metacharacters through
-          // even if the credential-file path is later swapped for a shell
-          // helper (defence-in-depth against a regression).
+          // Git tokens are embedded into a git-credentials file and a clone URL
+          // at runtime. Reject at ingest anything that doesn't match the
+          // `isLikelyGitToken` shape so shell metacharacters / whitespace cannot
+          // smuggle in even if the credential-file path later regresses.
           if ((key === 'GITHUB_TOKEN' || key === 'GH_TOKEN') && value) {
-            if (!/^[A-Za-z0-9_-]{20,255}$/.test(value)) {
+            if (!isLikelyGitToken(value)) {
               throw new Error(
                 `Invalid ${key}: must match [A-Za-z0-9_-]{20,255}. ` +
                   `GitHub / GitLab tokens should not contain spaces, newlines, or special characters.`

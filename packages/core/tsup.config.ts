@@ -26,7 +26,6 @@ export default defineConfig({
     'utils/board-placement': 'src/utils/board-placement.ts', // Zone-relative positioning for worktree cards
     'utils/path': 'src/utils/path.ts', // Path expansion utilities (tilde to home directory)
     'utils/logger': 'src/utils/logger.ts', // Console monkey-patch for log level filtering
-    'utils/env-denylist': 'src/utils/env-denylist.ts', // Denylist of process-hijacking env vars
     'seed/index': 'src/seed/index.ts', // Development database seeding
     'callbacks/child-completion-template': 'src/callbacks/child-completion-template.ts', // Parent session callback templates
     'client/index': 'src/client/index.ts', // Client-safe core entrypoint for browser/SDK consumers

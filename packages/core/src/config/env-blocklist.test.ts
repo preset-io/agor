@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { BLOCKED_ENV_VARS, getEnvVarBlockReason, isEnvVarAllowed } from './env-blocklist';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  BLOCKED_ENV_VARS,
+  filterEnv,
+  getEnvVarBlockReason,
+  isEnvVarAllowed,
+} from './env-blocklist';
 
 describe('env-blocklist', () => {
   describe('BLOCKED_ENV_VARS set', () => {
@@ -295,6 +300,72 @@ describe('env-blocklist', () => {
       expect(isEnvVarAllowed('PATH')).toBe(false);
       expect(isEnvVarAllowed('Path')).toBe(false);
       expect(isEnvVarAllowed('pAtH')).toBe(false);
+    });
+  });
+
+  describe('process-hijacking blocks (pattern + extended set)', () => {
+    it('blocks NODE_OPTIONS', () => {
+      expect(isEnvVarAllowed('NODE_OPTIONS')).toBe(false);
+    });
+
+    it('blocks any LD_* variant via pattern', () => {
+      expect(isEnvVarAllowed('LD_AUDIT')).toBe(false);
+      expect(isEnvVarAllowed('LD_SOMETHING_NEW')).toBe(false);
+      expect(isEnvVarAllowed('ld_preload')).toBe(false); // case-insensitive
+    });
+
+    it('blocks any DYLD_* variant via pattern', () => {
+      expect(isEnvVarAllowed('DYLD_FALLBACK_LIBRARY_PATH')).toBe(false);
+      expect(isEnvVarAllowed('DYLD_FRAMEWORK_PATH')).toBe(false);
+    });
+
+    it('blocks PYTHON* except the PYTHON_AGOR_* carve-out', () => {
+      expect(isEnvVarAllowed('PYTHONSTARTUP')).toBe(false);
+      expect(isEnvVarAllowed('PYTHONFAULTHANDLER')).toBe(false);
+      expect(isEnvVarAllowed('PYTHON_AGOR_TEST')).toBe(true);
+    });
+
+    it('blocks PERL5LIB, PERL5OPT, RUBYOPT, RUBYLIB, GEM_PATH', () => {
+      expect(isEnvVarAllowed('PERL5LIB')).toBe(false);
+      expect(isEnvVarAllowed('PERL5OPT')).toBe(false);
+      expect(isEnvVarAllowed('RUBYOPT')).toBe(false);
+      expect(isEnvVarAllowed('RUBYLIB')).toBe(false);
+      expect(isEnvVarAllowed('GEM_PATH')).toBe(false);
+    });
+
+    it('blocks BASH_ENV and POSIX shell ENV', () => {
+      expect(isEnvVarAllowed('BASH_ENV')).toBe(false);
+      expect(isEnvVarAllowed('ENV')).toBe(false);
+    });
+  });
+
+  describe('filterEnv', () => {
+    it('strips blocked keys and preserves the rest', () => {
+      const input = {
+        GITHUB_TOKEN: 'ghp_xxx',
+        PATH: '/evil',
+        NODE_OPTIONS: '--require /tmp/payload',
+        MY_APP_VAR: 'ok',
+      };
+      const { env, rejected } = filterEnv(input);
+      expect(env).toEqual({ GITHUB_TOKEN: 'ghp_xxx', MY_APP_VAR: 'ok' });
+      expect(rejected.sort()).toEqual(['NODE_OPTIONS', 'PATH']);
+    });
+
+    it('invokes onReject for each rejected key with the key name only', () => {
+      const onReject = vi.fn();
+      filterEnv({ LD_PRELOAD: '/evil.so', OK: 'yes' }, onReject);
+      expect(onReject).toHaveBeenCalledTimes(1);
+      expect(onReject).toHaveBeenCalledWith('LD_PRELOAD');
+    });
+
+    it('handles undefined / missing input', () => {
+      expect(filterEnv(undefined)).toEqual({ env: {}, rejected: [] });
+    });
+
+    it('skips entries whose value is undefined', () => {
+      const { env } = filterEnv({ A: 'a', B: undefined });
+      expect(env).toEqual({ A: 'a' });
     });
   });
 });

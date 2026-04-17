@@ -4,7 +4,7 @@ import { select } from '../db/database-wrapper';
 import { decryptApiKey } from '../db/encryption';
 import { users } from '../db/schema';
 import type { GatewayEnvVar, UserID } from '../types';
-import { filterEnv } from '../utils/env-denylist';
+import { filterEnv } from './env-blocklist';
 
 /**
  * SECURITY: Allowlisted environment variable names that are safe to pass
