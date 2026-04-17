@@ -258,6 +258,18 @@ describe('scopeFindToAccessibleSessions', () => {
     expect((ctx.params.query as any).session_id).toBeUndefined();
   });
 
+  it('honors allow_superadmin=false', async () => {
+    const repo = fakeSessionRepo([makeSession('s1', 'wt1')]);
+    const hook = scopeFindToAccessibleSessions(repo, { allowSuperadmin: false });
+    const ctx = makeContext({
+      provider: 'rest',
+      user: { user_id: USER_ID, role: ROLES.SUPERADMIN },
+    });
+    await hook(ctx);
+    // biome-ignore lint/suspicious/noExplicitAny: test shape
+    expect((ctx.params.query as any).session_id).toEqual({ $in: ['s1'] });
+  });
+
   it('injects session_id $in when no explicit filter', async () => {
     const repo = fakeSessionRepo([makeSession('s1', 'wt1'), makeSession('s2', 'wt2')]);
     const hook = scopeFindToAccessibleSessions(repo);

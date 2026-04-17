@@ -1179,6 +1179,85 @@ function emptyFindResult(context: HookContext): HookContext {
 }
 
 /**
+ * Result of the common find-scope guard checks (provider/service-account/
+ * auth/superadmin). Returned by {@link resolveFindScopeAccess} so the two
+ * scope hook factories below don't repeat the same preamble.
+ */
+type FindScopeDecision =
+  | { kind: 'passThrough' }
+  | { kind: 'handled' }
+  | { kind: 'filter'; accessibleIds: Set<string> };
+
+/**
+ * Shared guard for the find-scoping hooks. Handles internal/service-account
+ * pass-through, unauthenticated short-circuit, and superadmin bypass. If the
+ * caller is a regular user, resolves accessible ids via `loadAccessibleIds`.
+ *
+ * Callers inspect the returned decision:
+ * - 'passThrough': nothing to do, return context unchanged.
+ * - 'handled':     context.result was set (empty result); return context.
+ * - 'filter':      apply intersection using `accessibleIds`.
+ */
+async function resolveFindScopeAccess(
+  context: HookContext,
+  options: { allowSuperadmin?: boolean } | undefined,
+  loadAccessibleIds: (userId: UUID) => Promise<string[]>
+): Promise<FindScopeDecision> {
+  if (context.method !== 'find') return { kind: 'passThrough' };
+  if (!context.params.provider) return { kind: 'passThrough' };
+  if (context.params.user?._isServiceAccount) return { kind: 'passThrough' };
+
+  const userId = context.params.user?.user_id as UUID | undefined;
+  if (!userId) {
+    emptyFindResult(context);
+    return { kind: 'handled' };
+  }
+
+  const userRole = context.params.user?.role as string | undefined;
+  const allowSuperadmin = options?.allowSuperadmin ?? true;
+  if (isSuperAdmin(userRole, allowSuperadmin)) return { kind: 'passThrough' };
+
+  const ids = await loadAccessibleIds(userId);
+  return { kind: 'filter', accessibleIds: new Set<string>(ids) };
+}
+
+/**
+ * Intersect the existing `query[field]` filter with the caller's accessible
+ * id set. Handles scalar string, `{ $in: [...] }`, and unset cases.
+ *
+ * - Scalar outside the accessible set → empty result.
+ * - `$in` intersected with accessible set; empty intersection → empty result.
+ * - Unset → inject `{ $in: [...accessibleIds] }` (empty set → empty result).
+ */
+function intersectFindQuery(
+  context: HookContext,
+  field: string,
+  accessibleIds: Set<string>
+): HookContext {
+  // biome-ignore lint/suspicious/noExplicitAny: Feathers query shape is dynamic
+  const query = (context.params.query ?? {}) as any;
+  const existing = query[field];
+
+  if (typeof existing === 'string') {
+    if (!accessibleIds.has(existing)) return emptyFindResult(context);
+    return context;
+  }
+
+  if (existing && typeof existing === 'object' && Array.isArray(existing.$in)) {
+    const intersect = (existing.$in as string[]).filter((id) => accessibleIds.has(id));
+    if (intersect.length === 0) return emptyFindResult(context);
+    query[field] = { $in: intersect };
+    context.params.query = query;
+    return context;
+  }
+
+  if (accessibleIds.size === 0) return emptyFindResult(context);
+  query[field] = { $in: Array.from(accessibleIds) };
+  context.params.query = query;
+  return context;
+}
+
+/**
  * Scope find() queries on worktree-scoped resources to the set of worktrees
  * the caller can access.
  *
@@ -1211,68 +1290,13 @@ export function scopeFindToAccessibleWorktrees(
   options?: { allowSuperadmin?: boolean }
 ) {
   return async (context: HookContext) => {
-    // Only applies to find()
-    if (context.method !== 'find') {
-      return context;
-    }
+    const decision = await resolveFindScopeAccess(context, options, async (uid) => {
+      const accessible = await worktreeRepo.findAccessibleWorktrees(uid);
+      return accessible.map((w) => w.worktree_id as string);
+    });
 
-    // Skip for internal calls
-    if (!context.params.provider) {
-      return context;
-    }
-
-    // Service accounts bypass RBAC
-    if (context.params.user?._isServiceAccount) {
-      return context;
-    }
-
-    const userId = context.params.user?.user_id as UUID | undefined;
-    if (!userId) {
-      return emptyFindResult(context);
-    }
-
-    // Superadmins bypass scoping
-    const userRole = context.params.user?.role as string | undefined;
-    const allowSuperadmin = options?.allowSuperadmin ?? true;
-    if (isSuperAdmin(userRole, allowSuperadmin)) {
-      return context;
-    }
-
-    // Resolve accessible worktree ids (cast to string set for query comparisons;
-    // Feathers queries carry raw strings, not branded IDs).
-    const accessible = await worktreeRepo.findAccessibleWorktrees(userId);
-    const accessibleIds = new Set<string>(accessible.map((w) => w.worktree_id as string));
-
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers query shape is dynamic
-    const query = (context.params.query ?? {}) as any;
-    const existing = query.worktree_id;
-
-    if (typeof existing === 'string') {
-      // Caller pre-scoped to a specific worktree — must be accessible
-      if (!accessibleIds.has(existing)) {
-        return emptyFindResult(context);
-      }
-      // Already scoped; no change needed.
-      return context;
-    }
-
-    if (existing && typeof existing === 'object' && Array.isArray(existing.$in)) {
-      const intersect = (existing.$in as string[]).filter((id) => accessibleIds.has(id));
-      if (intersect.length === 0) {
-        return emptyFindResult(context);
-      }
-      query.worktree_id = { $in: intersect };
-      context.params.query = query;
-      return context;
-    }
-
-    // No explicit worktree_id filter — restrict to accessible set
-    if (accessibleIds.size === 0) {
-      return emptyFindResult(context);
-    }
-    query.worktree_id = { $in: Array.from(accessibleIds) };
-    context.params.query = query;
-    return context;
+    if (decision.kind !== 'filter') return context;
+    return intersectFindQuery(context, 'worktree_id', decision.accessibleIds);
   };
 }
 
@@ -1302,58 +1326,12 @@ export function scopeFindToAccessibleSessions(
   options?: { allowSuperadmin?: boolean }
 ) {
   return async (context: HookContext) => {
-    if (context.method !== 'find') {
-      return context;
-    }
+    const decision = await resolveFindScopeAccess(context, options, async (uid) => {
+      const accessible = await sessionRepo.findAccessibleSessions(uid);
+      return accessible.map((s) => s.session_id as string);
+    });
 
-    if (!context.params.provider) {
-      return context;
-    }
-
-    if (context.params.user?._isServiceAccount) {
-      return context;
-    }
-
-    const userId = context.params.user?.user_id as UUID | undefined;
-    if (!userId) {
-      return emptyFindResult(context);
-    }
-
-    const userRole = context.params.user?.role as string | undefined;
-    const allowSuperadmin = options?.allowSuperadmin ?? true;
-    if (isSuperAdmin(userRole, allowSuperadmin)) {
-      return context;
-    }
-
-    const accessible = await sessionRepo.findAccessibleSessions(userId);
-    const accessibleIds = new Set<string>(accessible.map((s) => s.session_id as string));
-
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers query shape is dynamic
-    const query = (context.params.query ?? {}) as any;
-    const existing = query.session_id;
-
-    if (typeof existing === 'string') {
-      if (!accessibleIds.has(existing)) {
-        return emptyFindResult(context);
-      }
-      return context;
-    }
-
-    if (existing && typeof existing === 'object' && Array.isArray(existing.$in)) {
-      const intersect = (existing.$in as string[]).filter((id) => accessibleIds.has(id));
-      if (intersect.length === 0) {
-        return emptyFindResult(context);
-      }
-      query.session_id = { $in: intersect };
-      context.params.query = query;
-      return context;
-    }
-
-    if (accessibleIds.size === 0) {
-      return emptyFindResult(context);
-    }
-    query.session_id = { $in: Array.from(accessibleIds) };
-    context.params.query = query;
-    return context;
+    if (decision.kind !== 'filter') return context;
+    return intersectFindQuery(context, 'session_id', decision.accessibleIds);
   };
 }
