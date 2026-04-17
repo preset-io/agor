@@ -136,9 +136,7 @@ function getToolIcon(toolName: string): React.ReactElement {
 export const AgentChain = React.memo<AgentChainProps>(
   ({ messages, isTaskRunning = false, isLatest }) => {
     const { token } = theme.useToken();
-    // Track whether user manually toggled this chain
-    const [userOverride, setUserOverride] = useState<boolean | null>(null);
-    const expanded = userOverride !== null ? userOverride : true;
+    const [expanded, setExpanded] = useState(true);
 
     // Extract chain items (thoughts and tools) from messages
     const chainItems = useMemo(() => {
@@ -587,7 +585,7 @@ export const AgentChain = React.memo<AgentChainProps>(
       <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>
         {/* Collapsed summary - clickable */}
         <div
-          onClick={() => setUserOverride(!expanded)}
+          onClick={() => setExpanded(!expanded)}
           style={{
             padding: token.sizeUnit * 1.5,
             borderRadius: token.borderRadius,
