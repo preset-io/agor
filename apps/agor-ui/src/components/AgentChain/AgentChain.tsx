@@ -47,6 +47,7 @@ import {
   deriveToolStatus,
   IMPLICIT_RESULT_TOOLS,
   renderToolStatusIcon,
+  shouldExpandToolByDefault,
   ToolBlock,
 } from '../ToolBlock';
 import { ToolUseRenderer } from '../ToolUseRenderer';
@@ -486,10 +487,7 @@ export const AgentChain = React.memo<AgentChainProps>(
           description={description ?? undefined}
           descriptionNode={descriptionNode}
           status={status}
-          // Tool bodies stay collapsed by default so the chain reads as a
-          // scannable list of headers. Write is the exception — its diff is
-          // the whole point of the call, so land it open.
-          expandedByDefault={toolUse.name === 'Write'}
+          expandedByDefault={shouldExpandToolByDefault(toolUse.name)}
         >
           <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
         </ToolBlock>

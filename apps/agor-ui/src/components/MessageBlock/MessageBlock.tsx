@@ -40,6 +40,7 @@ import {
   deriveToolStatus,
   IMPLICIT_RESULT_TOOLS,
   renderToolStatusIcon,
+  shouldExpandToolByDefault,
   ToolBlock,
 } from '../ToolBlock';
 import { ToolIcon } from '../ToolIcon';
@@ -685,9 +686,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
                   description={bashNode ? undefined : getToolDescription(toolUse)}
                   descriptionNode={bashNode}
                   status={status}
-                  // Match AgentChain: tools land collapsed except Write,
-                  // whose diff is the primary content of the call.
-                  expandedByDefault={toolUse.name === 'Write'}
+                  expandedByDefault={shouldExpandToolByDefault(toolUse.name)}
                 >
                   <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
                 </ToolBlock>
