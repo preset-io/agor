@@ -24,6 +24,18 @@ export interface ClaudeModel {
  */
 export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
   {
+    id: 'claude-opus-4-7',
+    displayName: 'Claude Opus 4.7',
+    family: 'claude-4',
+    description: 'Most intelligent model for agents and coding',
+  },
+  {
+    id: 'claude-opus-4-7[1m]',
+    displayName: 'Claude Opus 4.7 (1M context)',
+    family: 'claude-4',
+    description: 'Opus 4.7 with extended 1M token context window',
+  },
+  {
     id: 'claude-sonnet-4-6',
     displayName: 'Claude Sonnet 4.6',
     family: 'claude-4',
@@ -39,7 +51,7 @@ export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
     id: 'claude-opus-4-6',
     displayName: 'Claude Opus 4.6',
     family: 'claude-4',
-    description: 'Most intelligent model for agents and coding',
+    description: 'Previous generation Opus',
   },
   {
     id: 'claude-opus-4-6[1m]',

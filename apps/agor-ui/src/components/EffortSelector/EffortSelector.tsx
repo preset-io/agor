@@ -8,7 +8,7 @@
  * - Low: Minimal thinking, fastest responses
  * - Medium: Moderate thinking
  * - High: Deep reasoning (default)
- * - Max: Maximum effort (Opus 4.6 only)
+ * - Max: Maximum effort (Opus only)
  */
 
 import type { EffortLevel } from '@agor-live/client';
@@ -37,7 +37,7 @@ const EFFORT_OPTIONS: {
   },
   { value: 'medium', shortLabel: 'Md', label: 'Medium', description: 'Moderate thinking' },
   { value: 'high', shortLabel: 'Hi', label: 'High', description: 'Deep reasoning (default)' },
-  { value: 'max', shortLabel: 'Mx', label: 'Max', description: 'Maximum effort (Opus 4.6 only)' },
+  { value: 'max', shortLabel: 'Mx', label: 'Max', description: 'Maximum effort (Opus only)' },
 ];
 
 /**
