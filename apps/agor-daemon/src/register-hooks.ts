@@ -84,6 +84,52 @@ import {
 } from './utils/worktree-authorization.js';
 
 /**
+ * Session fields written as runtime bookkeeping during the prompt/execution
+ * lifecycle, on behalf of the session's authenticated user. These are NOT
+ * session metadata (name, model_config, permission_config, callback_config).
+ *
+ * Sources:
+ *   - `/sessions/:id/prompt`  → `tasks`, `archived`, `archived_reason`
+ *   - `/sessions/:id/stop`    → `status`, `ready_for_prompt`
+ *   - executor status updates → `status`, `ready_for_prompt`
+ *     (claude/copilot permission-hooks, see packages/executor)
+ *   - executor git-SHA capture → `git_state` (per-message current_sha)
+ *   - executor opencode init   → `sdk_session_id` (SDK session handle)
+ *
+ * When a `patch` touches ONLY these fields, the sessions hook chain downgrades
+ * the required worktree permission from `'all'` to the same tier that
+ * {@link ensureCanPromptInSession} enforces:
+ *   - `'prompt'` or `'all'` → can patch any session's prompt-flow fields
+ *   - `'session'`           → can patch own session's prompt-flow fields
+ *   - `'view'` or `'none'`  → denied
+ *
+ * Any mixed-field patch (e.g. `{ tasks: [...], name: 'x' }`) fails the
+ * `isPromptFlowPatchOnly` check and falls through to the strict `'all'` path,
+ * so widening the whitelist here cannot accidentally leak metadata writes.
+ *
+ * NOTE: `git_state` and `sdk_session_id` are on this list because the executor
+ * authenticates as the session creator (see auth/session-token-strategy.ts),
+ * not as a service account. Proper long-term fix is to give the executor a
+ * service-account token so these patches bypass RBAC entirely.
+ */
+export const PROMPT_FLOW_PATCH_FIELDS: readonly string[] = [
+  'tasks',
+  'archived',
+  'archived_reason',
+  'status',
+  'ready_for_prompt',
+  'git_state',
+  'sdk_session_id',
+];
+
+export function isPromptFlowPatchOnly(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const keys = Object.keys(data);
+  if (keys.length === 0) return false;
+  return keys.every((key) => PROMPT_FLOW_PATCH_FIELDS.includes(key));
+}
+
+/**
  * Extended Params with route ID parameter (needed by artifact routes in hooks).
  */
 interface RouteParams extends Params {
@@ -1456,7 +1502,25 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               resolveSessionContext(),
               loadSession(sessionsService),
               loadWorktreeFromSession(worktreeRepository),
-              ensureWorktreePermission('all', 'update sessions', superadminOpts), // Require 'all' permission
+              // Branch permission by patch type:
+              //   - Prompt-flow patches (tasks, archived, status, …) are bookkeeping
+              //     emitted by /sessions/:id/prompt and /sessions/:id/stop on behalf
+              //     of the authenticated user. They need only the same tier as
+              //     prompting the session (session-tier for own, prompt-tier for
+              //     others), matching the permission table in CLAUDE.md.
+              //   - Everything else is session metadata and still requires 'all'.
+              // Mixed-field patches fail isPromptFlowPatchOnly and fall through to
+              // the strict 'all' path, so there's no partial-trust footgun.
+              (context: HookContext) => {
+                if (isPromptFlowPatchOnly(context.data)) {
+                  return ensureCanPromptInSession(superadminOpts)(context);
+                }
+                return ensureWorktreePermission(
+                  'all',
+                  'update session metadata',
+                  superadminOpts
+                )(context);
+              },
             ]
           : []),
         // Validate user has prompt permission on callback target session's worktree
