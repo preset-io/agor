@@ -1757,7 +1757,20 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ]
           : []),
       ],
-      remove: [requireMinimumRole(ROLES.MEMBER, 'delete tasks')],
+      remove: [
+        requireMinimumRole(ROLES.MEMBER, 'delete tasks'),
+        // RBAC: deleting a task requires 'all' permission on the worktree
+        // (mirrors sessions.remove). Without this, any member with 'session'
+        // access could delete tasks owned by other users on shared worktrees.
+        ...(worktreeRbacEnabled
+          ? [
+              resolveSessionContext(),
+              loadSession(sessionsService),
+              loadWorktreeFromSession(worktreeRepository),
+              ensureWorktreePermission('all', 'delete tasks', superadminOpts),
+            ]
+          : []),
+      ],
     },
   });
 
