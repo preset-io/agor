@@ -53,10 +53,16 @@ export async function validateGitRef(ref: unknown): Promise<void> {
   }
 
   // Final authoritative check: ask git itself.
+  //
+  // Use `check-ref-format refs/heads/<name>` (not `--branch`). `--branch`
+  // mode resolves `@{-N}` against the current repository, which means it
+  // fails outside a git worktree — breaking callers like the seed script
+  // that validate refs before a repo exists. The non-`--branch` form is
+  // pure syntactic validation and needs no git context.
   const gitBinary = getGitBinary();
   const git = simpleGit({ binary: gitBinary });
   try {
-    await git.raw(['check-ref-format', '--branch', ref]);
+    await git.raw(['check-ref-format', `refs/heads/${ref}`]);
   } catch {
     throw new Error(`Invalid git ref: rejected by git check-ref-format: ${ref}`);
   }
