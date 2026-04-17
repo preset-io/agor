@@ -73,6 +73,8 @@ import {
   loadWorktreeFromSession,
   PERMISSION_RANK,
   resolveSessionContext,
+  scopeFindToAccessibleSessions,
+  scopeFindToAccessibleWorktrees,
   scopeSessionQuery,
   scopeWorktreeQuery,
   setSessionUnixUsername,
@@ -156,6 +158,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   app.service('messages').hooks({
     before: {
       all: [requireAuth],
+      find: [
+        // RBAC: Scope messages.find() to sessions the caller can access.
+        // Without this backstop, any authenticated member could list messages
+        // across every session/worktree by omitting the session_id filter.
+        ...(worktreeRbacEnabled
+          ? [scopeFindToAccessibleSessions(sessionsRepository, superadminOpts)]
+          : []),
+      ],
       get: [
         ...(worktreeRbacEnabled
           ? [
@@ -249,6 +259,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ...getReadAuthHooks(),
         ...(allowAnonymous ? [] : [requireMinimumRole(ROLES.MEMBER, 'manage board objects')]),
       ],
+      // NOTE: We deliberately do NOT add scopeFindToAccessibleWorktrees here.
+      // Board-objects may reference `worktree_id` (worktree cards) OR `card_id`
+      // (kanban cards with no worktree) OR neither (zones, layout objects).
+      // The before-hook would filter out rows with null worktree_id, breaking
+      // card-only boards. Access control lives in the after-hook below, which
+      // correctly preserves card/zone rows while scoping worktree-bound ones.
     },
     after: {
       find: [
@@ -348,6 +364,16 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   safeService('artifacts')?.hooks({
     before: {
       all: [...getReadAuthHooks()],
+      find: [
+        // RBAC: Artifacts carry a `worktree_id` (nullable — survives worktree deletion).
+        // Scope find() to the worktrees the caller can access. Rows with null
+        // worktree_id (orphaned artifacts) will be excluded by the $in filter,
+        // which is the safe default — orphans can only be surfaced via explicit
+        // board-scoped queries.
+        ...(worktreeRbacEnabled
+          ? [scopeFindToAccessibleWorktrees(worktreeRepository, superadminOpts)]
+          : []),
+      ],
       create: [requireMinimumRole(ROLES.MEMBER, 'create artifacts')],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update artifacts')],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete artifacts')],
@@ -718,6 +744,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
+  // NOTE: mcp-servers is global admin-managed configuration. These rows are
+  // not worktree- or session-scoped, so no RBAC find() scoping is applied.
+  // Creation/update/removal remain gated by requireMinimumRole(ADMIN).
   safeService('mcp-servers')?.hooks({
     before: {
       all: [typedValidateQuery(mcpServerQueryValidator), ...getReadAuthHooks()],
@@ -734,7 +763,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   safeService('session-mcp-servers')?.hooks({
     before: {
       all: [requireAuth],
-      find: [requireMinimumRole(ROLES.MEMBER, 'list session MCP servers')],
+      find: [
+        requireMinimumRole(ROLES.MEMBER, 'list session MCP servers'),
+        // RBAC: Scope to sessions the caller can access.
+        ...(worktreeRbacEnabled
+          ? [scopeFindToAccessibleSessions(sessionsRepository, superadminOpts)]
+          : []),
+      ],
     },
     after: {
       find: [injectPerUserOAuthTokens],
@@ -962,7 +997,46 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('files')?.hooks({
     before: {
-      all: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'search files')],
+      all: [
+        requireAuth,
+        requireMinimumRole(ROLES.MEMBER, 'search files'),
+        // RBAC: files service takes a sessionId query param and returns files
+        // from that session's worktree. Verify the caller can at least 'view'
+        // that worktree before running git ls-files. If sessionId is missing
+        // the service itself returns []; we skip the permission check in that
+        // case rather than throwing.
+        ...(worktreeRbacEnabled
+          ? [
+              async (context: HookContext) => {
+                if (!context.params.provider) return context;
+                if (context.params.user?._isServiceAccount) return context;
+                const query = context.params.query as { sessionId?: string } | undefined;
+                const sessionId = query?.sessionId;
+                if (!sessionId) return context;
+                context.params.sessionId = sessionId;
+                // Delegate to the existing chain now that sessionId is primed.
+                await loadSession(sessionsService)(context);
+                await loadWorktreeFromSession(worktreeRepository)(context);
+                await ensureCanView(superadminOpts)(context);
+                return context;
+              },
+            ]
+          : []),
+      ],
+    },
+  });
+
+  // /file (singular): read-only worktree filesystem browser. Takes worktree_id
+  // as a query param. Gate with worktree RBAC 'view' permission when enabled.
+  safeService('/file')?.hooks({
+    before: {
+      all: [
+        requireAuth,
+        requireMinimumRole(ROLES.MEMBER, 'read files'),
+        ...(worktreeRbacEnabled
+          ? [loadWorktree(worktreeRepository, 'worktree_id'), ensureCanView(superadminOpts)]
+          : []),
+      ],
     },
   });
 
@@ -1623,6 +1697,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   app.service('tasks').hooks({
     before: {
       all: [typedValidateQuery(taskQueryValidator), requireAuth],
+      find: [
+        // RBAC: Scope tasks.find() to sessions the caller can access.
+        ...(worktreeRbacEnabled
+          ? [scopeFindToAccessibleSessions(sessionsRepository, superadminOpts)]
+          : []),
+      ],
       get: [
         ...(worktreeRbacEnabled
           ? [
