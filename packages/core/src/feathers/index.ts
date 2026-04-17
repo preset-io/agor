@@ -20,7 +20,14 @@ export {
 export { default as authClient } from '@feathersjs/authentication-client';
 export { LocalStrategy } from '@feathersjs/authentication-local';
 // Errors
-export { BadRequest, Conflict, Forbidden, NotAuthenticated, NotFound } from '@feathersjs/errors';
+export {
+  BadRequest,
+  Conflict,
+  Forbidden,
+  NotAuthenticated,
+  NotFound,
+  TooManyRequests,
+} from '@feathersjs/errors';
 export type { Application as ExpressApplication } from '@feathersjs/express';
 // Express Integration
 export { default as feathersExpress, errorHandler, rest } from '@feathersjs/express';

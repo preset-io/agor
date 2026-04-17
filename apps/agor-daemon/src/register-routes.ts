@@ -29,6 +29,7 @@ import {
   LocalStrategy,
   NotAuthenticated,
   NotFound,
+  TooManyRequests,
 } from '@agor/core/feathers';
 import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
 import type {
@@ -84,7 +85,11 @@ import {
   registerAuthenticatedRoute,
   requireMinimumRole,
 } from './utils/authorization.js';
-import { createUploadMiddleware } from './utils/upload.js';
+import {
+  createUploadMiddleware,
+  enforceParsedTotalUploadSize,
+  enforceTotalUploadSize,
+} from './utils/upload.js';
 import {
   ensureWorktreePermission,
   PERMISSION_RANK,
@@ -213,6 +218,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     authStrategiesArray.push('session-token');
   }
 
+  // Access token TTL — short by design. The /authentication/refresh route
+  // (and the after-hook below) issues a 30-day refresh token so users stay
+  // logged in across browser restarts; the access token itself stays
+  // short-lived so that a leaked one expires quickly. Both the auth-service
+  // config AND the refresh endpoint MUST use this constant — if they drift,
+  // the refresh path silently downgrades the security of the auth path.
+  const ACCESS_TOKEN_TTL = '15m';
+  const REFRESH_TOKEN_TTL = '30d';
+
   app.set('authentication', {
     secret: jwtSecret,
     entity: 'user',
@@ -224,11 +238,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       audience: 'https://agor.dev',
       issuer: 'agor',
       algorithm: 'HS256',
-      // Access token: 15 minutes. The 30-day refresh token (issued in the
-      // /authentication after-hook below) is what gives users a "stay logged
-      // in" experience; access tokens are kept short-lived so a leaked one
-      // expires quickly.
-      expiresIn: '15m',
+      expiresIn: ACCESS_TOKEN_TTL,
     },
     local: {
       usernameField: 'email',
@@ -309,7 +319,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               console.warn(
                 `⚠️  Rate limit exceeded for authentication attempt: ${authRateLimiter.buildKey(ip, data?.email)}`
               );
-              throw new Error('Too many authentication attempts. Please try again in 15 minutes.');
+              throw new TooManyRequests(
+                'Too many authentication attempts. Please try again in 15 minutes.'
+              );
             }
           }
 
@@ -341,7 +353,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               },
               jwtSecret,
               {
-                expiresIn: '30d',
+                expiresIn: REFRESH_TOKEN_TTL,
                 issuer: 'agor',
                 audience: 'https://agor.dev',
               }
@@ -373,7 +385,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           console.warn(
             `⚠️  Rate limit exceeded for token refresh: ${authRateLimiter.buildKey(ip, null)}`
           );
-          throw new Error('Too many token refresh attempts. Please try again in 15 minutes.');
+          throw new TooManyRequests(
+            'Too many token refresh attempts. Please try again in 15 minutes.'
+          );
         }
       }
 
@@ -389,14 +403,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         const user = await usersService.get(decoded.sub as import('@agor/core/types').UUID);
 
+        // Use the SAME ACCESS_TOKEN_TTL as the auth-service config above —
+        // otherwise this endpoint silently downgrades the access-token
+        // hardening. Refresh tokens get the standard 30-day TTL.
         const accessToken = jwt.sign({ sub: user.user_id, type: 'access' }, jwtSecret, {
-          expiresIn: '7d',
+          expiresIn: ACCESS_TOKEN_TTL,
           issuer: 'agor',
           audience: 'https://agor.dev',
         });
 
         const newRefreshToken = jwt.sign({ sub: user.user_id, type: 'refresh' }, jwtSecret, {
-          expiresIn: '30d',
+          expiresIn: REFRESH_TOKEN_TTL,
           issuer: 'agor',
           audience: 'https://agor.dev',
         });
@@ -1251,8 +1268,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       next();
       // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     }) as any,
+    // Cheap pre-multer Content-Length check — short-circuits before we spend
+    // time writing oversize uploads to disk.
+    // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
+    enforceTotalUploadSize() as any,
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
     uploadMiddleware.array('files', 10) as any,
+    // Defence-in-depth aggregate-size check using the actual file sizes that
+    // multer wrote — catches Content-Length-spoofing clients.
+    // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
+    enforceParsedTotalUploadSize() as any,
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     ((req: any, res: any, next: any) => {
       if (DEBUG_UPLOAD) {
