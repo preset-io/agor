@@ -137,9 +137,19 @@ async function handlePromptPayload(
   // and we apply them here before starting the SDK.
   // =========================================================================
   if (payload.env && Object.keys(payload.env).length > 0) {
-    console.log(`[executor] Applying ${Object.keys(payload.env).length} env vars from payload`);
-    for (const [key, value] of Object.entries(payload.env)) {
-      process.env[key] = value as string;
+    // Filter out process-hijacking env vars (NODE_OPTIONS, LD_PRELOAD, PYTHON*, etc.)
+    // These could give an attacker RCE inside the executor context.
+    const { filterEnv } = await import('@agor/core/utils/env-denylist');
+    const { env: safeEnv, rejected } = filterEnv(payload.env as Record<string, string>, (key) => {
+      // Log key only — never the value, which is attacker-controlled.
+      console.warn(`[executor] Rejected denied env var from payload: ${key}`);
+    });
+    console.log(
+      `[executor] Applying ${Object.keys(safeEnv).length} env vars from payload` +
+        (rejected.length > 0 ? ` (${rejected.length} rejected)` : '')
+    );
+    for (const [key, value] of Object.entries(safeEnv)) {
+      process.env[key] = value;
     }
   }
 

@@ -4,6 +4,7 @@ import { select } from '../db/database-wrapper';
 import { decryptApiKey } from '../db/encryption';
 import { users } from '../db/schema';
 import type { GatewayEnvVar, UserID } from '../types';
+import { filterEnv } from '../utils/env-denylist';
 
 /**
  * SECURITY: Allowlisted environment variable names that are safe to pass
@@ -184,7 +185,19 @@ export async function resolveUserEnvironment(
     console.error(`Failed to resolve environment for user ${userId}:`, err);
   }
 
-  return env;
+  // Strip process-hijacking env vars (NODE_OPTIONS, LD_PRELOAD, PYTHON*, etc.)
+  // before returning, so callers who spawn subprocesses with this env cannot
+  // be hijacked by an attacker who stored such a key in their user env.
+  const { env: safeEnv, rejected } = filterEnv(env, (key) => {
+    console.warn(`[resolveUserEnvironment] Rejected denied env key from user ${userId}: ${key}`);
+  });
+  if (rejected.length > 0) {
+    console.warn(
+      `[resolveUserEnvironment] Stripped ${rejected.length} denied env key(s) for user ${userId}`
+    );
+  }
+
+  return safeEnv;
 }
 
 /**
