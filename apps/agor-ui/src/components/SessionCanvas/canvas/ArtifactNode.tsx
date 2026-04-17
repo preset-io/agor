@@ -153,16 +153,18 @@ function SandpackErrorReporter({ artifactId }: { artifactId: string }) {
   const { sandpack } = useSandpack();
   const lastSentRef = useRef<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSendRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    // Serialize current error state for comparison
-    const errorKey = sandpack.error ? sandpack.error.message : null;
+    // Serialize current state for comparison (includes status so status-only changes are sent)
+    const stateKey = `${sandpack.error?.message ?? ''}\0${sandpack.status}`;
 
-    // Skip if we already sent this exact error (or lack thereof)
-    if (errorKey === lastSentRef.current) return;
+    // Skip if we already sent this exact state
+    if (stateKey === lastSentRef.current) return;
 
     const sendError = () => {
-      lastSentRef.current = errorKey;
+      lastSentRef.current = stateKey;
+      pendingSendRef.current = null;
 
       const payload: {
         error: {
@@ -193,10 +195,11 @@ function SandpackErrorReporter({ artifactId }: { artifactId: string }) {
       }).catch(() => {});
     };
 
-    // Throttle to avoid spamming during rapid error state changes
+    // Throttle to avoid spamming during rapid state changes
     if (timerRef.current) {
       clearTimeout(timerRef.current);
     }
+    pendingSendRef.current = sendError;
     timerRef.current = setTimeout(() => {
       timerRef.current = null;
       sendError();
@@ -206,6 +209,8 @@ function SandpackErrorReporter({ artifactId }: { artifactId: string }) {
       if (timerRef.current) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
+        // Flush pending update on unmount to avoid stale backend state
+        pendingSendRef.current?.();
       }
     };
   }, [sandpack.error, sandpack.status, artifactId]);

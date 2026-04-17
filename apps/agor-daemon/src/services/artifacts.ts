@@ -198,6 +198,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         build_errors: buildResult.errors.length > 0 ? buildResult.errors : undefined,
       });
 
+      // Clear stale in-memory Sandpack state — new content will produce fresh state from the browser
+      this.sandpackErrors.delete(data.artifact_id);
+      this.sandpackStatuses.delete(data.artifact_id);
+
       this.app.service('artifacts').emit('patched', updated);
       return updated;
     }

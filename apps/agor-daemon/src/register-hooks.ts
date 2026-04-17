@@ -398,13 +398,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       {
         async create(
           data: {
-            error: {
-              message: string;
-              title?: string;
-              path?: string;
-              line?: number;
-              column?: number;
-            } | null;
+            error: import('@agor/core/types').SandpackError | null;
             status?: string;
           },
           _params: RouteParams
