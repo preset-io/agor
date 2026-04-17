@@ -3,12 +3,24 @@
  *
  * Express routes for creating and configuring a GitHub App for Agor:
  *
- * 1. GET  /api/github/setup/new        — Shows instruction page, then links to GitHub
- *                                         with URL parameters to pre-fill the App creation
- *                                         form. After install, GitHub redirects the browser
- *                                         directly to the Agor UI with ?installation_id=ID.
- * 2. GET  /api/github/installations     — Lists installations for a GitHub App so the
- *                                         admin can pick which org/repos to connect.
+ * 1. POST /api/github/setup/state     — Authenticated endpoint that issues a
+ *                                        one-time CSRF state token bound to the
+ *                                        requesting admin's user_id. The UI
+ *                                        calls this first, then opens the
+ *                                        instruction page with the token.
+ * 2. GET  /api/github/setup/new        — Shows instruction page, links to GitHub
+ *                                        with URL parameters to pre-fill the App
+ *                                        creation form. Embeds the state token
+ *                                        in `setup_url` so it's returned on the
+ *                                        post-install redirect.
+ * 3. GET  /api/github/setup/callback   — Consumes the state token (one-shot),
+ *                                        verifying the install originated from
+ *                                        an authenticated admin session. Writes
+ *                                        installation_id to the GitHub gateway
+ *                                        channel.
+ * 4. GET  /api/github/installations    — Lists installations for a GitHub App
+ *                                        so the admin can pick which org/repos
+ *                                        to connect.
  *
  * We use GitHub's "URL parameters" registration method instead of the Manifest POST
  * flow because cross-origin POST bodies get dropped during GitHub's auth redirect
@@ -22,10 +34,120 @@
 
 import type { Database } from '@agor/core/db';
 import type express from 'express';
+import { consumeInstallState, issueInstallState } from './github-install-state.js';
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/**
+ * Escape a string for safe insertion into HTML text / attribute contexts.
+ * Covers the five characters required for attribute-quote + element-text
+ * contexts. Do NOT use for URL attributes — use encodeURI / URL for those.
+ */
+function escapeHtml(value: unknown): string {
+  const str = value === null || value === undefined ? '' : String(value);
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Extract a bearer JWT from the Authorization header. Returns null if absent.
+ */
+function readBearerToken(req: express.Request): string | null {
+  const header = req.headers.authorization;
+  if (!header || typeof header !== 'string') return null;
+  if (!header.startsWith('Bearer ')) return null;
+  const token = header.slice(7).trim();
+  return token.length > 0 ? token : null;
+}
+
+/**
+ * Authenticate an Express request against the Feathers JWT strategy.
+ * Returns the authenticated user or null if auth fails.
+ */
+async function authenticateRequest(
+  // biome-ignore lint/suspicious/noExplicitAny: FeathersExpress app has mixed typing
+  app: any,
+  req: express.Request
+): Promise<{ user_id: string; role?: string } | null> {
+  const token = readBearerToken(req);
+  if (!token) return null;
+  try {
+    const authService = app.service('authentication');
+    const result = await authService.create({ strategy: 'jwt', accessToken: token });
+    const user = result?.user as { user_id?: string; role?: string } | undefined;
+    if (!user?.user_id) return null;
+    return { user_id: user.user_id, role: user.role };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * HTML shell for helpful 401/400 error pages.
+ */
+function renderErrorPage(opts: {
+  title: string;
+  heading: string;
+  body: string;
+  uiUrl: string;
+}): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <title>${escapeHtml(opts.title)} — Agor</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #0d1117; color: #e6edf3; }
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 32px; max-width: 520px; text-align: center; }
+    h2 { margin: 0 0 12px; color: #f85149; }
+    p { color: #8b949e; margin: 0 0 12px; line-height: 1.6; }
+    .btn { display: inline-block; margin-top: 16px; background: #238636; color: #fff; border-radius: 6px; padding: 10px 20px; font-weight: 600; text-decoration: none; }
+    .btn:hover { background: #2ea043; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>${escapeHtml(opts.heading)}</h2>
+    <p>${opts.body}</p>
+    <a class="btn" href="${escapeHtml(opts.uiUrl)}">Return to Agor</a>
+  </div>
+</body>
+</html>`;
+}
 
 // ============================================================================
 // Route Handlers
 // ============================================================================
+
+/**
+ * POST /api/github/setup/state
+ *
+ * Authenticated endpoint that issues a one-time CSRF state token bound to
+ * the calling admin's user_id. The UI fetches this before opening the
+ * install instruction page and passes the token along as a query parameter.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: Feathers app typing
+function handleIssueState(app: any) {
+  return async (req: express.Request, res: express.Response) => {
+    const authed = await authenticateRequest(app, req);
+    if (!authed) {
+      res.status(401).json({ error: 'Authentication required to initiate GitHub App install' });
+      return;
+    }
+    // Admin-only. 'owner' and 'admin' are the elevated roles; default 'member' is not.
+    if (authed.role !== 'admin' && authed.role !== 'owner') {
+      res.status(403).json({ error: 'Admin role required to initiate GitHub App install' });
+      return;
+    }
+    const state = issueInstallState(authed.user_id);
+    res.json({ state });
+  };
+}
 
 /**
  * GET /api/github/setup/new
@@ -38,15 +160,32 @@ import type express from 'express';
  * Query params:
  *   ?name=MyApp     — Custom app name (default: "Agor")
  *   ?org=my-org     — Create under an org (default: user's personal account)
+ *   ?state=XYZ      — CSRF state token previously issued via POST /state.
+ *                     Required — embedded in setup_url so GitHub returns it
+ *                     on the post-install redirect.
  */
 function handleNewApp(uiUrl: string, daemonUrl: string) {
   return (req: express.Request, res: express.Response) => {
     const appName = (req.query.name as string) || 'Agor';
     const org = req.query.org as string | undefined;
+    const state = typeof req.query.state === 'string' ? req.query.state : '';
+
+    if (!state) {
+      res.setHeader('Content-Type', 'text/html');
+      res.status(401).send(
+        renderErrorPage({
+          title: 'Install session missing',
+          heading: 'Install session missing',
+          body: 'Open this page from the Agor Settings → Gateway Channels flow. The install needs a one-time token that is only issued from an authenticated session.',
+          uiUrl,
+        })
+      );
+      return;
+    }
 
     // GitHub's app creation endpoint
     const githubUrl = org
-      ? `https://github.com/organizations/${org}/settings/apps/new`
+      ? `https://github.com/organizations/${encodeURIComponent(org)}/settings/apps/new`
       : 'https://github.com/settings/apps/new';
 
     // Pre-fill the form using GitHub's URL parameters approach.
@@ -58,9 +197,11 @@ function handleNewApp(uiUrl: string, daemonUrl: string) {
     // Do NOT set webhook_active — GitHub docs say "Webhook is disabled by default"
     // when the parameter is omitted. Setting it to any value (even "false") enables it.
     // setup_url points to the daemon callback — GitHub redirects the browser there
-    // after installation with ?installation_id=ID. The callback writes the
-    // installation_id directly to the GitHub channel config in the DB.
-    params.set('setup_url', `${daemonUrl}/api/github/setup/callback`);
+    // after installation with ?installation_id=ID (and our state param preserved).
+    // Embed state in setup_url so GitHub echoes it back post-install.
+    const setupUrl = new URL(`${daemonUrl}/api/github/setup/callback`);
+    setupUrl.searchParams.set('state', state);
+    params.set('setup_url', setupUrl.toString());
     // Permissions
     params.set('issues', 'write');
     params.set('pull_requests', 'write');
@@ -97,7 +238,7 @@ function handleNewApp(uiUrl: string, daemonUrl: string) {
       <li>Install the app on your org when prompted</li>
       <li>You'll be redirected back to Agor to finish setup</li>
     </ol>
-    <a class="btn" href="${githubLink}" target="_blank" rel="noopener noreferrer">
+    <a class="btn" href="${escapeHtml(githubLink)}" target="_blank" rel="noopener noreferrer">
       Open GitHub App Settings
     </a>
     <p class="hint">The form will be pre-filled with the right permissions for Agor.</p>
@@ -108,24 +249,52 @@ function handleNewApp(uiUrl: string, daemonUrl: string) {
 }
 
 /**
- * GET /api/github/setup/callback?installation_id=ID
+ * GET /api/github/setup/callback?installation_id=ID&state=XYZ
  *
  * GitHub redirects the browser here after the app is installed.
- * Finds the GitHub gateway channel and sets the installation_id on it,
- * then shows a "done, close this tab" page.
+ * Verifies the CSRF state token (one-shot), finds the GitHub gateway
+ * channel and sets the installation_id on it, then shows a "done,
+ * close this tab" page.
+ *
+ * Authentication: callers do not (and cannot) attach a Bearer header here
+ * because the request is a browser redirect from GitHub. Authentication is
+ * proven by the state token — it is only issued from an authenticated
+ * admin session (POST /api/github/setup/state) and is validated here.
  */
-function handleSetupCallback(db: Database) {
+function handleSetupCallback(db: Database, uiUrl: string) {
   return async (req: express.Request, res: express.Response) => {
-    const installationId = req.query.installation_id as string | undefined;
+    const state = typeof req.query.state === 'string' ? req.query.state : undefined;
+    const installationIdRaw =
+      typeof req.query.installation_id === 'string' ? req.query.installation_id : undefined;
 
-    if (!installationId) {
+    const consumed = consumeInstallState(state);
+    if (!consumed.ok) {
+      res.setHeader('Content-Type', 'text/html');
+      const status = consumed.reason === 'missing' ? 401 : 400;
+      const heading =
+        consumed.reason === 'missing'
+          ? 'Install session missing'
+          : consumed.reason === 'expired'
+            ? 'Install session expired'
+            : 'Install session invalid';
+      const body =
+        consumed.reason === 'missing'
+          ? 'This callback is missing its one-time install token. Restart the install from Agor Settings → Gateway Channels.'
+          : consumed.reason === 'expired'
+            ? 'The one-time install token expired (10 min TTL). Restart the install from Agor Settings → Gateway Channels.'
+            : 'The one-time install token was not recognized or has already been used. Restart the install from Agor Settings → Gateway Channels.';
+      res.status(status).send(renderErrorPage({ title: heading, heading, body, uiUrl }));
+      return;
+    }
+
+    if (!installationIdRaw) {
       res.status(400).send('Missing installation_id parameter');
       return;
     }
 
-    const installationIdNum = Number(installationId);
-    if (Number.isNaN(installationIdNum)) {
-      res.status(400).send('installation_id must be a number');
+    const installationIdNum = Number(installationIdRaw);
+    if (!Number.isFinite(installationIdNum) || !Number.isInteger(installationIdNum)) {
+      res.status(400).send('installation_id must be an integer');
       return;
     }
 
@@ -146,7 +315,7 @@ function handleSetupCallback(db: Database) {
       await channelRepo.update(githubChannel.id, { config });
 
       console.log(
-        `[github-app-setup] Set installation_id=${installationIdNum} on channel "${githubChannel.name}"`
+        `[github-app-setup] Set installation_id=${installationIdNum} on channel id=${githubChannel.id} (initiated by user=${consumed.userId.substring(0, 8)})`
       );
 
       res.setHeader('Content-Type', 'text/html');
@@ -165,7 +334,7 @@ function handleSetupCallback(db: Database) {
 <body>
   <div class="card">
     <h2>GitHub App Installed</h2>
-    <p>Installation ID <code>${installationIdNum}</code> saved to channel <strong>${githubChannel.name}</strong>.</p>
+    <p>Installation ID <code>${escapeHtml(installationIdNum)}</code> saved to channel <strong>${escapeHtml(githubChannel.name)}</strong>.</p>
     <p style="margin-top: 12px;">You can close this tab. The gateway will start polling shortly.</p>
   </div>
 </body>
@@ -285,11 +454,21 @@ export function registerGitHubAppSetupRoutes(
     db: Database;
   }
 ): void {
+  app.post('/api/github/setup/state', handleIssueState(app));
   app.get('/api/github/setup/new', handleNewApp(opts.uiUrl, opts.daemonUrl));
-  app.get('/api/github/setup/callback', handleSetupCallback(opts.db));
+  app.get('/api/github/setup/callback', handleSetupCallback(opts.db, opts.uiUrl));
   app.get('/api/github/installations', handleListInstallations(opts.db));
 
   console.log(
-    '[github-app-setup] Routes registered: /api/github/setup/new, callback, installations'
+    '[github-app-setup] Routes registered: POST /state, GET /setup/new, /setup/callback, /installations'
   );
 }
+
+// Internal test hooks (for unit tests only).
+export const __testables = {
+  escapeHtml,
+  readBearerToken,
+  handleIssueState,
+  handleSetupCallback,
+  handleNewApp,
+};

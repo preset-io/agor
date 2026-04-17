@@ -29,6 +29,7 @@ import {
 } from '@ant-design/icons';
 import {
   Alert,
+  message as antdMessage,
   Badge,
   Button,
   Checkbox,
@@ -445,15 +446,55 @@ const ChannelFormFields: React.FC<{
                 type="primary"
                 icon={<GithubOutlined />}
                 block
-                onClick={() => {
+                onClick={async () => {
                   const daemonUrl = getDaemonUrl();
                   const params = new URLSearchParams();
                   const appName = form.getFieldValue('github_app_name');
                   const org = form.getFieldValue('github_org');
                   if (appName) params.set('name', appName);
                   if (org) params.set('org', org);
-                  const qs = params.toString();
-                  window.open(`${daemonUrl}/api/github/setup/new${qs ? `?${qs}` : ''}`, '_blank');
+
+                  // Fetch a one-time CSRF state token bound to the current admin.
+                  // This authenticates the install-initiation step and binds the
+                  // post-install callback to this user_id.
+                  try {
+                    const accessToken = localStorage.getItem('agor-access-token');
+                    if (!accessToken) {
+                      antdMessage.error(
+                        'You must be logged in as an admin to install the GitHub App.'
+                      );
+                      return;
+                    }
+                    const stateRes = await fetch(`${daemonUrl}/api/github/setup/state`, {
+                      method: 'POST',
+                      headers: {
+                        Authorization: `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json',
+                      },
+                    });
+                    if (!stateRes.ok) {
+                      const body = await stateRes
+                        .json()
+                        .catch(() => ({}) as Record<string, unknown>);
+                      const err =
+                        typeof body?.error === 'string'
+                          ? body.error
+                          : `Failed to start GitHub App install (HTTP ${stateRes.status})`;
+                      antdMessage.error(err);
+                      return;
+                    }
+                    const { state } = (await stateRes.json()) as { state?: string };
+                    if (!state) {
+                      antdMessage.error('Daemon did not return an install state token.');
+                      return;
+                    }
+                    params.set('state', state);
+                    window.open(`${daemonUrl}/api/github/setup/new?${params.toString()}`, '_blank');
+                  } catch (err) {
+                    antdMessage.error(
+                      err instanceof Error ? err.message : 'Failed to initiate GitHub App install'
+                    );
+                  }
                 }}
               >
                 Create GitHub App on GitHub
