@@ -175,8 +175,8 @@ jobs:
       - name: pnpm audit (prod, critical — blocking)
         run: pnpm audit --audit-level=critical --prod
 
-      # Advisory: HIGH+ advisories are surfaced but non-blocking until
-      # the remaining items in SECURITY_DEPS.md are resolved.
+      # Advisory: HIGH+ advisories are surfaced but non-blocking.
+      # Promote to blocking once the prod tree is clean at the HIGH level.
       - name: pnpm audit (prod, high — advisory)
         if: always()
         run: pnpm audit --audit-level=high --prod || true
