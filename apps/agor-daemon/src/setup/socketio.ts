@@ -27,6 +27,13 @@ export interface SocketIOOptions {
   jwtSecret: string;
   /** Whether anonymous access is allowed */
   allowAnonymous: boolean;
+  /**
+   * Whether the HTTP CORS layer is allowing credentials. The socket.io
+   * transport must mirror this — when the HTTP side has dropped credentials
+   * (wildcard mode), letting socket.io still claim `credentials: true`
+   * creates spec-noncompliant credentialed cross-origin behavior.
+   */
+  credentialsAllowed: boolean;
 }
 
 export interface SocketIOResult {
@@ -58,7 +65,7 @@ export function createSocketIOConfig(
   callback: (io: Server) => void;
   getSocketServer: () => Server | null;
 } {
-  const { corsOrigin, jwtSecret, allowAnonymous } = options;
+  const { corsOrigin, jwtSecret, allowAnonymous, credentialsAllowed } = options;
 
   let socketServer: Server | null = null;
 
@@ -66,7 +73,10 @@ export function createSocketIOConfig(
     cors: {
       origin: corsOrigin,
       methods: ['GET', 'POST', 'PATCH', 'DELETE'],
-      credentials: true,
+      // Mirror the HTTP CORS layer's credential decision. In wildcard mode
+      // credentials must be off — leaving this hard-coded `true` creates a
+      // policy-drift across transports.
+      credentials: credentialsAllowed,
     },
     // Socket.io server options for better connection management
     pingTimeout: 60000, // How long to wait for pong before considering connection dead

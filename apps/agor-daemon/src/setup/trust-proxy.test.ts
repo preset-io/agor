@@ -62,6 +62,45 @@ afterEach(async () => {
   }
 });
 
+/**
+ * Mirror the parsing the daemon entrypoint does. Kept here as a tiny pure
+ * function so we can regression-test the edge cases (Infinity, NaN) without
+ * standing up the whole daemon. The shape of this MUST stay in sync with
+ * the inline parsing in apps/agor-daemon/src/index.ts.
+ */
+function parseTrustProxyHops(raw: unknown): number {
+  const n = Number(raw ?? 0);
+  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+}
+
+describe('parseTrustProxyHops', () => {
+  it('defaults to 0 for nullish / non-numeric input', () => {
+    expect(parseTrustProxyHops(undefined)).toBe(0);
+    expect(parseTrustProxyHops(null)).toBe(0);
+    expect(parseTrustProxyHops('garbage')).toBe(0);
+  });
+
+  it('rejects non-finite numbers (Infinity, NaN) to 0', () => {
+    // The bug we are guarding against: `Number(Infinity) || 0` returns
+    // Infinity (truthy), and Express interprets `trust proxy = Infinity`
+    // as "trust everything" — i.e. accept ANY X-Forwarded-For. That is
+    // the exact spoofing posture this hardening is meant to prevent.
+    expect(parseTrustProxyHops(Number.POSITIVE_INFINITY)).toBe(0);
+    expect(parseTrustProxyHops(Number.NEGATIVE_INFINITY)).toBe(0);
+    expect(parseTrustProxyHops(Number.NaN)).toBe(0);
+  });
+
+  it('floors fractional values and clamps negatives to 0', () => {
+    expect(parseTrustProxyHops(1.9)).toBe(1);
+    expect(parseTrustProxyHops(-3)).toBe(0);
+  });
+
+  it('passes through positive integers', () => {
+    expect(parseTrustProxyHops(1)).toBe(1);
+    expect(parseTrustProxyHops(5)).toBe(5);
+  });
+});
+
 describe('trust proxy wiring', () => {
   it('ignores X-Forwarded-For when trust_proxy_hops = 0', async () => {
     let captured: Request | undefined;
