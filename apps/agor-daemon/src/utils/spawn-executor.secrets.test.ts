@@ -51,13 +51,18 @@ describe('spawn-executor log hygiene (source-level)', () => {
     expect(source).not.toMatch(/Env vars being passed/);
   });
 
-  it('routes secret env vars through writeUserEnvFile', () => {
-    expect(source).toMatch(/writeUserEnvFile\s*\(/);
+  it('routes secret env vars through the impersonation-env helper', () => {
+    // Uses `prepareImpersonationEnv` (DRY: splits + writes env-file in one call)
+    // rather than open-coding the secret/inline split per call site.
+    expect(source).toMatch(/prepareImpersonationEnv\s*\(/);
+    // Still uses isSecretEnvKey for the safe log-summary filter.
     expect(source).toMatch(/isSecretEnvKey\s*\(/);
   });
 
-  it('registers a best-effort cleanup via tryUnlinkEnvFile', () => {
-    expect(source).toMatch(/tryUnlinkEnvFile/);
+  it('registers a best-effort cleanup via attachEnvFileCleanup', () => {
+    // New helper that sudo-unlinks the file when asUser owns it, so it works
+    // under sticky /tmp where the daemon cannot unlink files owned by asUser.
+    expect(source).toMatch(/attachEnvFileCleanup\s*\(/);
   });
 });
 

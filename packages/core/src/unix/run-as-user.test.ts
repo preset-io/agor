@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  buildSpawnArgs,
-  escapeShellArg,
-  isSecretEnvKey,
-  redactSecretEnv,
-  SECRET_ENV_KEY_PATTERN,
-} from './run-as-user.js';
+import { buildSpawnArgs, escapeShellArg } from './run-as-user.js';
 
 describe('run-as-user', () => {
   describe('escapeShellArg', () => {
@@ -143,15 +137,29 @@ describe('run-as-user', () => {
         expect(result.cmd).toBe('sudo');
         expect(result.args.slice(0, 4)).toEqual(['-n', '-u', 'alice', 'bash']);
         expect(result.args[4]).toBe('-c');
-        // Script references ENVFILE from $1, not interpolated
+        // Script references ENVFILE from $1, not interpolated. Uses `set -eu`
+        // so a failed source aborts BEFORE rm+exec (fail-closed).
         expect(result.args[5]).toBe(
-          'ENVFILE="$1"; shift; set -a; . "$ENVFILE"; set +a; rm -f "$ENVFILE"; exec "$@"'
+          'set -eu; ENVFILE="$1"; shift; set -a; . "$ENVFILE"; set +a; rm -f -- "$ENVFILE"; exec "$@"'
         );
         // Positional args: separator, envFilePath, then the real command
         expect(result.args[6]).toBe('--');
         expect(result.args[7]).toBe('/tmp/agor-env-abc123');
         expect(result.args[8]).toBe('node');
         expect(result.args[9]).toBe('script.js');
+      });
+
+      it('inner script is fail-closed (set -eu aborts before exec on source failure)', () => {
+        const result = buildSpawnArgs('node', [], {
+          asUser: 'alice',
+          envFilePath: '/tmp/agor-env-x',
+        });
+        // `set -eu` MUST appear before the source step so that a failed
+        // `.  "$ENVFILE"` prevents the `exec "$@"` from launching with
+        // missing secrets.
+        const script = result.args[5];
+        expect(script.indexOf('set -eu')).toBeLessThan(script.indexOf('. "$ENVFILE"'));
+        expect(script.indexOf('. "$ENVFILE"')).toBeLessThan(script.indexOf('exec "$@"'));
       });
 
       it('REGRESSION: does NOT contain any secret values in argv', () => {
@@ -175,85 +183,47 @@ describe('run-as-user', () => {
         }
       });
 
-      it('rejects envFilePath containing shell metacharacters', () => {
-        expect(() =>
-          buildSpawnArgs('node', [], {
-            asUser: 'alice',
-            envFilePath: '/tmp/evil; rm -rf /',
-          })
-        ).toThrow(/suspicious envFilePath/);
-        expect(() =>
-          buildSpawnArgs('node', [], {
-            asUser: 'alice',
-            envFilePath: '/tmp/evil`whoami`',
-          })
-        ).toThrow(/suspicious envFilePath/);
+      it('throws when envFilePath is provided without asUser', () => {
+        expect(() => buildSpawnArgs('node', [], { envFilePath: '/tmp/agor-env-abc' })).toThrow(
+          /envFilePath requires asUser/
+        );
       });
-    });
-  });
 
-  describe('isSecretEnvKey / SECRET_ENV_KEY_PATTERN', () => {
-    it('matches *_API_KEY', () => {
-      expect(isSecretEnvKey('ANTHROPIC_API_KEY')).toBe(true);
-      expect(isSecretEnvKey('OPENAI_API_KEY')).toBe(true);
-      expect(isSecretEnvKey('GEMINI_API_KEY')).toBe(true);
-      expect(isSecretEnvKey('GOOGLE_API_KEY')).toBe(true);
-    });
+      it('rejects relative envFilePath', () => {
+        expect(() =>
+          buildSpawnArgs('node', [], {
+            asUser: 'alice',
+            envFilePath: 'relative/path',
+          })
+        ).toThrow(/envFilePath must be absolute/);
+      });
 
-    it('matches *_TOKEN', () => {
-      expect(isSecretEnvKey('GITHUB_TOKEN')).toBe(true);
-      expect(isSecretEnvKey('ANTHROPIC_AUTH_TOKEN')).toBe(true);
-    });
+      it('rejects envFilePath with NUL bytes or control chars', () => {
+        expect(() =>
+          buildSpawnArgs('node', [], {
+            asUser: 'alice',
+            envFilePath: '/tmp/evil\x00ish',
+          })
+        ).toThrow(/control characters/);
+        expect(() =>
+          buildSpawnArgs('node', [], {
+            asUser: 'alice',
+            envFilePath: '/tmp/line\nbreak',
+          })
+        ).toThrow(/control characters/);
+      });
 
-    it('matches *_SECRET', () => {
-      expect(isSecretEnvKey('JWT_SECRET')).toBe(true);
-      expect(isSecretEnvKey('CLIENT_SECRET')).toBe(true);
-    });
-
-    it('matches OAUTH_* prefix', () => {
-      expect(isSecretEnvKey('OAUTH_ACCESS_TOKEN')).toBe(true);
-      expect(isSecretEnvKey('OAUTH_REFRESH_TOKEN')).toBe(true);
-    });
-
-    it('does not match non-secret names', () => {
-      expect(isSecretEnvKey('PATH')).toBe(false);
-      expect(isSecretEnvKey('HOME')).toBe(false);
-      expect(isSecretEnvKey('NODE_ENV')).toBe(false);
-      expect(isSecretEnvKey('DAEMON_URL')).toBe(false);
-      expect(isSecretEnvKey('TERM')).toBe(false);
-    });
-
-    it('pattern is exported for caller use', () => {
-      expect(SECRET_ENV_KEY_PATTERN).toBeInstanceOf(RegExp);
-    });
-  });
-
-  describe('redactSecretEnv', () => {
-    it('drops secret keys by default', () => {
-      const input = {
-        PATH: '/usr/bin',
-        ANTHROPIC_API_KEY: 'sk-ant-leak',
-        GITHUB_TOKEN: 'ghp-leak',
-      };
-      const out = redactSecretEnv(input);
-      expect(out).toEqual({ PATH: '/usr/bin' });
-      // Values never appear
-      expect(JSON.stringify(out)).not.toContain('sk-ant-leak');
-      expect(JSON.stringify(out)).not.toContain('ghp-leak');
-    });
-
-    it('with keepKeys=true, redacts values but keeps keys', () => {
-      const out = redactSecretEnv(
-        { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'sk-ant-leak' },
-        { keepKeys: true }
-      );
-      expect(out).toEqual({ PATH: '/usr/bin', ANTHROPIC_API_KEY: '***' });
-      expect(JSON.stringify(out)).not.toContain('sk-ant-leak');
-    });
-
-    it('drops undefined values', () => {
-      const out = redactSecretEnv({ PATH: '/usr/bin', MAYBE: undefined });
-      expect(out).toEqual({ PATH: '/usr/bin' });
+      it('accepts envFilePath with spaces (macOS TMPDIR, etc.)', () => {
+        // Path is passed as a positional argv entry and referenced as "$1"
+        // inside bash, so shell metachars like spaces are safe and must be
+        // accepted — e.g. macOS `/var/folders/.../T/` and custom TMPDIRs.
+        const result = buildSpawnArgs('node', [], {
+          asUser: 'alice',
+          envFilePath: '/var/folders/xx/T/agor env with spaces',
+        });
+        expect(result.cmd).toBe('sudo');
+        expect(result.args).toContain('/var/folders/xx/T/agor env with spaces');
+      });
     });
   });
 });

@@ -10,12 +10,8 @@ import { createUserProcessEnvironment } from '../config/index.js';
 import type { Database } from '../db/index.js';
 import { UsersRepository } from '../db/repositories/index.js';
 import type { Worktree } from '../types/index.js';
-import {
-  buildSpawnArgs,
-  isSecretEnvKey,
-  tryUnlinkEnvFile,
-  writeUserEnvFile,
-} from './run-as-user.js';
+import { buildSpawnArgs } from './run-as-user.js';
+import { attachEnvFileCleanup, prepareImpersonationEnv } from './user-env-file.js';
 import { resolveUnixUserForImpersonation, validateResolvedUnixUser } from './user-manager.js';
 
 /**
@@ -100,29 +96,15 @@ export async function spawnEnvironmentCommand(
   // Route secret-looking env vars through an on-disk env file owned by the
   // target user (mode 0600) so user-scoped API keys/tokens never appear in
   // the `sudo bash -c '...'` argv exposed to /proc/<pid>/cmdline.
-  let envFilePath: string | undefined;
-  let inlineEnv: Record<string, string> | undefined;
-  if (asUser) {
-    const secretEnv: Record<string, string> = {};
-    inlineEnv = {};
-    for (const [key, value] of Object.entries(env)) {
-      if (value === undefined) continue;
-      if (isSecretEnvKey(key)) {
-        secretEnv[key] = value;
-      } else {
-        inlineEnv[key] = value;
-      }
-    }
-    if (Object.keys(secretEnv).length > 0) {
-      envFilePath = writeUserEnvFile(asUser, secretEnv);
-    }
-  }
+  const prepared = asUser
+    ? prepareImpersonationEnv({ asUser, env })
+    : { inlineEnv: undefined, envFilePath: undefined };
 
   // Build spawn args with impersonation
   const { cmd, args } = buildSpawnArgs(command, [], {
     asUser,
-    env: asUser ? inlineEnv : undefined, // Non-secret env only; secrets are sourced from envFilePath
-    envFilePath,
+    env: asUser ? prepared.inlineEnv : undefined, // Non-secret env only; secrets are sourced from envFilePath
+    envFilePath: prepared.envFilePath,
   });
 
   // Spawn the command
@@ -135,14 +117,11 @@ export async function spawnEnvironmentCommand(
     shell: !asUser, // Use shell for simple mode, buildSpawnArgs wraps sudo in bash -c
   });
 
-  // Safety-net cleanup. Inner bash script rm -fs the file before exec,
-  // so this only fires if sudo/bash failed to launch at all.
-  if (envFilePath) {
-    const capturedPath = envFilePath;
-    const cleanup = () => tryUnlinkEnvFile(capturedPath);
-    child.once('error', cleanup);
-    child.once('exit', cleanup);
-  }
+  // Safety-net cleanup. The inner bash script `rm -f`s the file before exec
+  // in the normal path, so this only fires if sudo/bash fails to launch, or
+  // if `set -eu` aborts the source step. Uses sudo when asUser is set so
+  // it works under sticky /tmp.
+  attachEnvFileCleanup(child, { envFilePath: prepared.envFilePath, asUser });
 
   return child;
 }

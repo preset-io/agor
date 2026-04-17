@@ -16,11 +16,15 @@ export * from './group-manager.js';
 export * from './id-lookups.js';
 // Central command execution as another user (preferred API)
 export * from './run-as-user.js';
+// Secret-aware env classification / redaction
+export * from './secret-env.js';
 // Symlink management
 export * from './symlink-manager.js';
 // System queries (read-only OS state + pure logic helpers)
 export * from './system-queries.js';
 // Main orchestration service
 export * from './unix-integration-service.js';
+// 0600 env-file primitive + impersonation-env helpers
+export * from './user-env-file.js';
 // Unix user management
 export * from './user-manager.js';

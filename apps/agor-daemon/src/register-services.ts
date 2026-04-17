@@ -521,9 +521,8 @@ function createExecuteHandler(
       UnixUserNotFoundError,
       buildSpawnArgs,
       getHomedirFromUsername,
-      isSecretEnvKey,
-      writeUserEnvFile,
-      tryUnlinkEnvFile,
+      prepareImpersonationEnv,
+      attachEnvFileCleanup,
     } = await import('@agor/core/unix');
 
     const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
@@ -662,34 +661,20 @@ function createExecuteHandler(
 
     // Route secret-looking env vars through an on-disk env file owned by the
     // target user (mode 0600) so API keys/tokens never appear in argv.
-    let executorEnvFilePath: string | undefined;
-    let executorInlineEnv: Record<string, string> | undefined;
-    if (executorUnixUser) {
-      const secretEnv: Record<string, string> = {};
-      executorInlineEnv = {};
-      for (const [key, value] of Object.entries(executorEnv)) {
-        if (value === undefined) continue;
-        if (isSecretEnvKey(key)) {
-          secretEnv[key] = value;
-        } else {
-          executorInlineEnv[key] = value;
-        }
-      }
-      if (Object.keys(secretEnv).length > 0) {
-        executorEnvFilePath = writeUserEnvFile(executorUnixUser, secretEnv);
-      }
-    }
+    const prepared = executorUnixUser
+      ? prepareImpersonationEnv({ asUser: executorUnixUser, env: executorEnv })
+      : { inlineEnv: undefined, envFilePath: undefined };
 
     const { cmd, args } = buildSpawnArgs('node', [executorPath, '--stdin'], {
       asUser: executorUnixUser || undefined,
-      env: executorUnixUser ? executorInlineEnv : undefined,
-      envFilePath: executorEnvFilePath,
+      env: executorUnixUser ? prepared.inlineEnv : undefined,
+      envFilePath: prepared.envFilePath,
     });
 
     if (executorUnixUser) {
       console.log(
         `[Daemon] Spawning executor as user=${executorUnixUser}${
-          executorEnvFilePath ? ' (secrets in env-file)' : ''
+          prepared.envFilePath ? ' (secrets in env-file)' : ''
         }`
       );
     } else {
@@ -727,13 +712,12 @@ function createExecuteHandler(
 
     // Safety-net cleanup for the env file. The inner bash script `rm -f`s
     // the file before exec in the normal path, so this only fires if sudo
-    // or bash failed to launch at all.
-    if (executorEnvFilePath) {
-      const capturedEnvFile = executorEnvFilePath;
-      const cleanupEnvFile = () => tryUnlinkEnvFile(capturedEnvFile);
-      executorProcess.once('error', cleanupEnvFile);
-      executorProcess.once('exit', cleanupEnvFile);
-    }
+    // or bash failed to launch at all, or `set -eu` aborted the source
+    // step. Uses sudo when asUser is set so it works under sticky /tmp.
+    attachEnvFileCleanup(executorProcess, {
+      envFilePath: prepared.envFilePath,
+      asUser: executorUnixUser || undefined,
+    });
 
     if (executorProcess.pid) {
       trackExecutorProcess(sessionId, executorProcess.pid);
