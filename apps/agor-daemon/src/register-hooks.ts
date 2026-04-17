@@ -869,7 +869,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [requireAuth],
       create: [
-        requireMinimumRole(ROLES.MEMBER, 'create gateway channels'),
+        requireMinimumRole(ROLES.ADMIN, 'create gateway channels'),
         // Encrypt env var values at rest (same pattern as user env vars / API keys)
         async (context: HookContext) => {
           const data = context.data as Record<string, unknown> | undefined;
@@ -886,7 +886,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
       patch: [
-        requireMinimumRole(ROLES.MEMBER, 'update gateway channels'),
+        requireMinimumRole(ROLES.ADMIN, 'update gateway channels'),
         // Resolve redacted env var sentinel values ('••••••••') back to real
         // values from the database. Uses the repository directly to bypass
         // the after-hook redaction that the service layer applies.
@@ -969,7 +969,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           return context;
         },
       ],
-      remove: [requireMinimumRole(ROLES.MEMBER, 'delete gateway channels')],
+      remove: [requireMinimumRole(ROLES.ADMIN, 'delete gateway channels')],
     },
     after: {
       all: [

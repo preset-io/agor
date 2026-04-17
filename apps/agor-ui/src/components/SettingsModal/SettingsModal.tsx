@@ -201,6 +201,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const artifactsEnabled = useServiceEnabled('artifacts');
   const cardsEnabled = useServiceEnabled('cards');
 
+  // Role gate — MCP Servers and Gateway Channels are global admin-managed
+  // configuration (credentials, webhook URLs, env vars). The daemon enforces
+  // ADMIN role on writes for both services (see register-hooks.ts); hiding
+  // the menu entries here avoids showing members a tab where every action
+  // would 403.
+  const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+
   // Menu items for left sidebar navigation
   const menuItems: MenuProps['items'] = useMemo(
     () => [
@@ -272,7 +279,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         label: 'Integrations',
         type: 'group' as const,
         children: [
-          ...(mcpEnabled
+          ...(mcpEnabled && isAdmin
             ? [
                 {
                   key: 'mcp',
@@ -286,7 +293,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             label: 'Agentic Tools',
             icon: <ThunderboltOutlined />,
           },
-          ...(gatewayEnabled
+          ...(gatewayEnabled && isAdmin
             ? [
                 {
                   key: 'gateway',
@@ -322,7 +329,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         ],
       },
     ],
-    [gatewayEnabled, mcpEnabled, artifactsEnabled, cardsEnabled, token]
+    [gatewayEnabled, mcpEnabled, artifactsEnabled, cardsEnabled, isAdmin, token]
   );
 
   // Render content based on active section
