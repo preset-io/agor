@@ -63,8 +63,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    * Override find to support session-based filtering
    */
   async find(params?: TaskParams): Promise<Task[] | Paginated<Task>> {
-    // If filtering by session_id, use repository method
-    if (params?.query?.session_id) {
+    // If filtering by session_id as a scalar string, use repository shortcut.
+    // Note: `session_id` may be injected as `{ $in: [...] }` by the RBAC scoping
+    // hook — in that case we fall through to `super.find`, whose adapter's
+    // `filterData` handles $in natively.
+    if (typeof params?.query?.session_id === 'string') {
       const tasks = await this.taskRepo.findBySession(params.query.session_id);
 
       // Apply pagination if enabled

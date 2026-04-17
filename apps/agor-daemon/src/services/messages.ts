@@ -45,9 +45,21 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
    * Override find to support task-based and session-based filtering
    */
   async find(params?: MessageParams): Promise<Message[] | Paginated<Message>> {
-    // If filtering by task_id, use repository method
-    if (params?.query?.task_id) {
-      const messages = await this.messagesRepo.findByTaskId(params.query.task_id);
+    // If filtering by task_id (scalar string), use repository method.
+    // The RBAC scoping hook may also inject `session_id` (scalar or `$in`)
+    // alongside a user-supplied `task_id`; without intersecting here, callers
+    // with only `task_id` would bypass worktree scoping. Filter the task_id
+    // rows by the accessible session_id set before returning.
+    if (typeof params?.query?.task_id === 'string') {
+      let messages = await this.messagesRepo.findByTaskId(params.query.task_id);
+
+      const sid = params.query.session_id;
+      if (typeof sid === 'string') {
+        messages = messages.filter((m) => m.session_id === sid);
+      } else if (sid && typeof sid === 'object' && Array.isArray((sid as { $in?: unknown }).$in)) {
+        const allowed = new Set((sid as { $in: string[] }).$in);
+        messages = messages.filter((m) => allowed.has(m.session_id as string));
+      }
 
       // Apply pagination if enabled
       if (this.paginate) {
@@ -65,8 +77,10 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
       return messages;
     }
 
-    // If filtering by session_id, use repository method
-    if (params?.query?.session_id) {
+    // If filtering by session_id as a scalar string, use repository shortcut.
+    // A `$in` object (from the RBAC scoping hook) falls through to `super.find`
+    // where the adapter's `filterData` handles $in natively.
+    if (typeof params?.query?.session_id === 'string') {
       // Use type-filtered query when type is specified (e.g., 'permission_request')
       const messages = params.query.type
         ? await this.messagesRepo.findBySessionIdAndType(params.query.session_id, params.query.type)

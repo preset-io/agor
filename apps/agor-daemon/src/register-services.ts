@@ -10,6 +10,7 @@ import {
   and,
   type Database,
   eq,
+  inArray,
   MCPServerRepository,
   type SessionMCPServerRow,
   select,
@@ -367,11 +368,27 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   if (svcEnabled('mcp_servers')) {
     app.use('/session-mcp-servers', {
       async find(params?: {
-        query?: { session_id?: string; mcp_server_id?: string; enabled?: boolean };
+        query?: {
+          session_id?: string | { $in?: string[] };
+          mcp_server_id?: string;
+          enabled?: boolean;
+        };
       }) {
         const conditions: ReturnType<typeof eq>[] = [];
-        if (params?.query?.session_id) {
-          conditions.push(eq(sessionMcpServers.session_id, params.query.session_id));
+        // session_id may be a scalar string or `{ $in: [...] }` — the latter is
+        // injected by the RBAC scoping hook to restrict rows to accessible sessions.
+        const sessionIdFilter = params?.query?.session_id;
+        if (typeof sessionIdFilter === 'string') {
+          conditions.push(eq(sessionMcpServers.session_id, sessionIdFilter));
+        } else if (
+          sessionIdFilter &&
+          typeof sessionIdFilter === 'object' &&
+          Array.isArray(sessionIdFilter.$in)
+        ) {
+          if (sessionIdFilter.$in.length === 0) {
+            return [];
+          }
+          conditions.push(inArray(sessionMcpServers.session_id, sessionIdFilter.$in));
         }
         if (params?.query?.mcp_server_id) {
           conditions.push(eq(sessionMcpServers.mcp_server_id, params.query.mcp_server_id));
