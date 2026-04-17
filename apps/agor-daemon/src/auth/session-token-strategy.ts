@@ -40,7 +40,9 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
     const handshake = (socket as { handshake?: { auth?: { sessionToken?: string } } })?.handshake;
     const handshakeToken = handshake?.auth?.sessionToken;
 
-    // Debug logging to see what we're receiving
+    // Debug logging. SECURITY: never log any portion of the token value —
+    // session tokens are bearer credentials, even an 8-char prefix narrows a
+    // guess significantly. Log presence booleans only.
     console.log('[SessionTokenStrategy] parse() called:', {
       socketId: socket?.id,
       hasFeathers: !!socket?.feathers,
@@ -48,7 +50,6 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
       hasAuth: !!auth,
       strategy: auth?.strategy,
       hasToken: !!auth?.accessToken,
-      tokenPreview: auth?.accessToken?.substring(0, 8),
       hasHandshakeToken: !!handshakeToken,
       socketRef: socket === req ? 'same' : 'different',
     });
@@ -77,9 +78,11 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
     authentication: { sessionToken: string },
     params: Params
   ): Promise<AuthenticationResult> {
+    // SECURITY: do not log the authentication object — it contains the
+    // session token. Log shape only.
     console.log('[SessionTokenStrategy] authenticate() CALLED with:', {
       authKeys: Object.keys(authentication || {}),
-      authentication: authentication,
+      hasSessionToken: !!authentication?.sessionToken,
     });
 
     const { sessionToken } = authentication;
@@ -116,7 +119,8 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
       console.log('[SessionTokenStrategy] ✅ Stored auth on socket during authenticate():', {
         socketId,
         storedStrategy: socket.feathers.authentication.strategy,
-        storedTokenPreview: socket.feathers.authentication.accessToken?.substring(0, 8),
+        // SECURITY: no token preview — bearer credentials must never be logged.
+        hasStoredToken: !!socket.feathers.authentication.accessToken,
       });
     }
 
@@ -138,7 +142,7 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
 
     console.log('[SessionTokenStrategy] authenticate() returning:', {
       strategy: result.authentication.strategy,
-      tokenPreview: result.accessToken.substring(0, 8),
+      // SECURITY: no token preview.
       user_id: sessionInfo.user_id,
     });
 
@@ -150,8 +154,9 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
    * Called by Feathers authentication to validate stored tokens
    */
   async verifyAccessToken(accessToken: string): Promise<AuthenticationResult> {
+    // SECURITY: no token preview.
     console.log('[SessionTokenStrategy] verifyAccessToken() called:', {
-      tokenPreview: accessToken?.substring(0, 8),
+      hasToken: !!accessToken,
     });
 
     // Session tokens are opaque UUIDs, not JWTs

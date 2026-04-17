@@ -332,9 +332,12 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     jwtSecret = crypto.randomBytes(32).toString('hex');
     const { setConfigValue } = await import('@agor/core/config');
     await setConfigValue('daemon.jwtSecret', jwtSecret);
-    console.log('🔑 Generated and saved persistent JWT secret to config');
+    console.log(
+      `🔑 Generated and saved persistent JWT secret to config (length=${jwtSecret.length})`
+    );
   } else {
-    console.log('🔑 Loaded existing JWT secret from config:', `${jwtSecret.substring(0, 16)}...`);
+    // SECURITY: never log any prefix/substring of the secret. Length only.
+    console.log(`🔑 Loaded existing JWT secret from config (length=${jwtSecret.length})`);
   }
 
   const socketIOConfig = createSocketIOConfig(app, { corsOrigin, jwtSecret, allowAnonymous });
