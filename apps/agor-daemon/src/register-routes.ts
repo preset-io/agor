@@ -78,6 +78,7 @@ import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { applyTierHooks } from './setup/service-tiers.js';
 import { AnonymousStrategy } from './strategies/anonymous.js';
+import { createAuthRateLimiter } from './utils/auth-rate-limit.js';
 import {
   ensureMinimumRole,
   registerAuthenticatedRoute,
@@ -223,7 +224,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       audience: 'https://agor.dev',
       issuer: 'agor',
       algorithm: 'HS256',
-      expiresIn: '7d', // Access token: 7 days (refresh token: 30 days)
+      // Access token: 15 minutes. The 30-day refresh token (issued in the
+      // /authentication after-hook below) is what gives users a "stay logged
+      // in" experience; access tokens are kept short-lived so a leaked one
+      // expires quickly.
+      expiresIn: '15m',
     },
     local: {
       usernameField: 'email',
@@ -252,38 +257,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const userApiKeysRepo = new UserApiKeysRepository(db);
   apiKeyStrategy.setDependencies(userApiKeysRepo, usersService);
 
-  // SECURITY: Simple in-memory rate limiter for authentication endpoints
-  const authAttempts = new Map<string, { count: number; resetAt: number }>();
-  const AUTH_RATE_LIMIT = 50; // Max attempts (increased for development/multiple tabs)
-  const AUTH_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
-
-  const checkAuthRateLimit = (identifier: string): boolean => {
-    const now = Date.now();
-    const record = authAttempts.get(identifier);
-
-    if (!record || now > record.resetAt) {
-      authAttempts.set(identifier, { count: 1, resetAt: now + AUTH_WINDOW_MS });
-      return true;
-    }
-
-    if (record.count >= AUTH_RATE_LIMIT) {
-      return false;
-    }
-
-    record.count++;
-    return true;
-  };
+  // SECURITY: Simple in-memory rate limiter for authentication endpoints.
+  // Composite-keyed on (ip, email) — see ./utils/auth-rate-limit.ts.
+  const authRateLimiter = createAuthRateLimiter({
+    limit: 50, // Max attempts (high enough for dev/multiple tabs)
+    windowMs: 15 * 60 * 1000, // 15 minutes
+  });
 
   // Cleanup old rate limit entries every hour
   const rateLimitCleanupInterval = setInterval(
-    () => {
-      const now = Date.now();
-      for (const [key, record] of authAttempts.entries()) {
-        if (now > record.resetAt) {
-          authAttempts.delete(key);
-        }
-      }
-    },
+    () => authRateLimiter.sweepExpired(),
     60 * 60 * 1000
   );
 
@@ -316,18 +299,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           if (context.params.provider) {
             const httpParams = context.params as AuthenticatedParams & {
               ip?: string;
-              headers?: Record<string, string | string[] | undefined>;
               connection?: { remoteAddress?: string };
             };
-            const ip =
-              httpParams.ip ||
-              (httpParams.headers?.['x-forwarded-for'] as string | undefined)?.split(',')[0] ||
-              httpParams.connection?.remoteAddress ||
-              'unknown';
-            const identifier = data?.email || ip;
-
-            if (!checkAuthRateLimit(identifier)) {
-              console.warn(`⚠️  Rate limit exceeded for authentication attempt: ${identifier}`);
+            // Trust only Express's resolved req.ip (which respects
+            // `app.set('trust proxy', n)`) — never X-Forwarded-For directly,
+            // since that header is client-controlled when no proxy is trusted.
+            const ip = httpParams.ip || httpParams.connection?.remoteAddress || 'unknown';
+            if (!authRateLimiter.check(ip, data?.email)) {
+              console.warn(
+                `⚠️  Rate limit exceeded for authentication attempt: ${authRateLimiter.buildKey(ip, data?.email)}`
+              );
               throw new Error('Too many authentication attempts. Please try again in 15 minutes.');
             }
           }
@@ -383,17 +364,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       if (params?.provider) {
         const p = params as Params & {
           ip?: string;
-          headers?: Record<string, string | string[] | undefined>;
           connection?: { remoteAddress?: string };
         };
-        const ip =
-          p.ip ||
-          (p.headers?.['x-forwarded-for'] as string | undefined)?.split(',')[0] ||
-          p.connection?.remoteAddress ||
-          'unknown';
-        const identifier = ip;
-        if (!checkAuthRateLimit(identifier)) {
-          console.warn(`⚠️  Rate limit exceeded for token refresh: ${identifier}`);
+        const ip = p.ip || p.connection?.remoteAddress || 'unknown';
+        // Refresh has no email; bucket purely by IP (composite-key form with
+        // empty email part keeps the keyspace consistent with the auth map).
+        if (!authRateLimiter.check(ip, null)) {
+          console.warn(
+            `⚠️  Rate limit exceeded for token refresh: ${authRateLimiter.buildKey(ip, null)}`
+          );
           throw new Error('Too many token refresh attempts. Please try again in 15 minutes.');
         }
       }
@@ -1217,24 +1196,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
       let token = null;
 
+      // Bearer-only. We previously fell back to feathers-jwt / agor-access-token
+      // / jwt cookies, which made the upload endpoint vulnerable to CSRF (a
+      // forged form-post would inherit the user's cookie). All in-tree callers
+      // (UI FileUpload component) already send `Authorization: Bearer …`.
       const authHeader = req.headers.authorization;
       if (authHeader?.startsWith('Bearer ')) {
         token = authHeader.substring(7);
         if (DEBUG_UPLOAD) console.log('   Found token in Authorization header');
-      }
-
-      if (!token) {
-        const cookies = req.headers.cookie || '';
-        const patterns = [/feathers-jwt=([^;]+)/, /agor-access-token=([^;]+)/, /jwt=([^;]+)/];
-
-        for (const pattern of patterns) {
-          const match = cookies.match(pattern);
-          if (match) {
-            token = match[1];
-            if (DEBUG_UPLOAD) console.log('   Found token in cookie');
-            break;
-          }
-        }
       }
 
       if (!token) {

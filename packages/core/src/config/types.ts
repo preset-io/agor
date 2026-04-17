@@ -130,6 +130,20 @@ export interface AgorDaemonSettings {
    * ```
    */
   cors_origins?: string[];
+
+  /**
+   * Number of reverse proxies in front of the daemon.
+   *
+   * Maps directly to Express's `app.set('trust proxy', n)`. When > 0, Express
+   * (and rate-limit middleware that reads `req.ip`) will honour the rightmost
+   * `n` entries of `X-Forwarded-For` and `X-Forwarded-Proto`. Setting this
+   * higher than the actual hop count lets a client spoof their IP via
+   * `X-Forwarded-For`, so leave it at 0 unless you actually have a proxy in
+   * front of the daemon.
+   *
+   * Default: 0 (do not trust X-Forwarded-* headers).
+   */
+  trust_proxy_hops?: number;
 }
 
 /**
