@@ -5,8 +5,15 @@
  * an install via the UI (authenticated request), we issue a random one-time
  * state token bound to the admin's user_id and embed it in the GitHub App's
  * setup_url. GitHub forwards the state query param on the post-install
- * redirect; the callback route consumes the state once and verifies the
- * bound user still matches.
+ * redirect; the callback route consumes the state once, which is what
+ * proves the request originated from our authenticated initiation endpoint.
+ *
+ * The stored user_id is available via the `expectedUserId` parameter of
+ * `consumeInstallState` but is not currently enforced at the callback —
+ * the browser redirect back from GitHub has no way to re-authenticate
+ * the caller. Possession of the state itself is the auth proof. The
+ * user_id is retained so future flows (or audit logs) can compare the
+ * bound user against whatever context they do have.
  *
  * Tradeoff: state is kept in an in-memory Map. Daemon restart between
  * initiation and GitHub redirect will drop the state and force the admin

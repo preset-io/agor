@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { coerceJsonRecord, setupMCPRoutes } from './server.js';
 
 describe('coerceJsonRecord', () => {
@@ -96,6 +96,12 @@ function buildRes() {
 }
 
 describe('POST /mcp token source', () => {
+  afterEach(() => {
+    // Restore any spies installed per-test (e.g. console.warn) so later
+    // suites start from a clean slate.
+    vi.restoreAllMocks();
+  });
+
   it('rejects requests with ?sessionToken= query param (400)', async () => {
     const handler = captureMcpHandler();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
