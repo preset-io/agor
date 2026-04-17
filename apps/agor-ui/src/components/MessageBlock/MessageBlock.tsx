@@ -36,7 +36,6 @@ import { MarkdownRenderer } from '../MarkdownRenderer';
 import { PermissionRequestBlock } from '../PermissionRequestBlock';
 import { ThinkingBlock } from '../ThinkingBlock';
 import {
-  ALWAYS_EXPANDED_TOOLS,
   buildBashDescriptionNode,
   deriveToolStatus,
   IMPLICIT_RESULT_TOOLS,
@@ -657,7 +656,6 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
             }
             return toolBlocks.map(({ toolUse, toolResult }, toolIndex) => {
               const displayName = getToolDisplayName(toolUse.name, toolUse.input);
-              const isAlwaysExpanded = ALWAYS_EXPANDED_TOOLS.has(toolUse.name);
               const hasImplicitResult = IMPLICIT_RESULT_TOOLS.has(toolUse.name);
 
               // A tool is potentially still running when no subsequent tool in
@@ -687,7 +685,7 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
                   description={bashNode ? undefined : getToolDescription(toolUse)}
                   descriptionNode={bashNode}
                   status={status}
-                  expandedByDefault={isAlwaysExpanded}
+                  expandedByDefault
                 >
                   <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
                 </ToolBlock>

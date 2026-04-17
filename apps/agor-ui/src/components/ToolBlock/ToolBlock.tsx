@@ -35,7 +35,7 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
   description,
   descriptionNode,
   status,
-  expandedByDefault = false,
+  expandedByDefault = true,
   children,
 }) => {
   const [expanded, setExpanded] = useState(expandedByDefault);
