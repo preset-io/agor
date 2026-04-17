@@ -105,12 +105,24 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
   );
 
   return (
-    <div>
+    <div style={{ minWidth: 0, maxWidth: '100%' }}>
       {header}
 
-      {/* Body — shown when expanded */}
+      {/* Body — shown when expanded.
+          `minWidth: 0` lets this shrink inside flex parents so wide children
+          (e.g. long Bash commands) scroll inside their own container rather
+          than forcing the whole conversation pane to scroll horizontally. */}
       {expanded && children && (
-        <div style={{ marginTop: 2, paddingLeft: token.sizeUnit * 4 }}>{children}</div>
+        <div
+          style={{
+            marginTop: 2,
+            paddingLeft: token.sizeUnit * 4,
+            minWidth: 0,
+            maxWidth: '100%',
+          }}
+        >
+          {children}
+        </div>
       )}
     </div>
   );

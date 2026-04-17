@@ -47,18 +47,34 @@ export const BashRenderer: React.FC<ToolRendererProps> = ({ input, result }) => 
 
   return (
     <div>
-      {/* Full command as syntax-highlighted code block */}
+      {/* Full command as syntax-highlighted code block.
+          Wrapped in a constrained block container so long one-liners scroll
+          horizontally inside the ToolBlock instead of leaking out and forcing
+          the whole conversation pane to scroll sideways. */}
       {command && (
-        <ThemedSyntaxHighlighter
-          language="bash"
-          customStyle={{
-            fontSize: token.fontSizeSM,
-            padding: token.sizeUnit,
+        <div
+          style={{
+            maxWidth: '100%',
+            minWidth: 0,
+            overflowX: 'auto',
             marginBottom: result ? token.sizeUnit : 0,
           }}
         >
-          {command}
-        </ThemedSyntaxHighlighter>
+          <ThemedSyntaxHighlighter
+            language="bash"
+            PreTag="pre"
+            customStyle={{
+              fontSize: token.fontSizeSM,
+              padding: token.sizeUnit,
+              margin: 0,
+              whiteSpace: 'pre',
+              wordBreak: 'normal',
+              overflowWrap: 'normal',
+            }}
+          >
+            {command}
+          </ThemedSyntaxHighlighter>
+        </div>
       )}
 
       {/* Output with collapsible code block */}
