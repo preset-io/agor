@@ -486,7 +486,10 @@ export const AgentChain = React.memo<AgentChainProps>(
           description={description ?? undefined}
           descriptionNode={descriptionNode}
           status={status}
-          expandedByDefault
+          // Tool bodies stay collapsed by default so the chain reads as a
+          // scannable list of headers. Write is the exception — its diff is
+          // the whole point of the call, so land it open.
+          expandedByDefault={toolUse.name === 'Write'}
         >
           <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
         </ToolBlock>

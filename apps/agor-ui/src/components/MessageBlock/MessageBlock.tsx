@@ -685,7 +685,9 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
                   description={bashNode ? undefined : getToolDescription(toolUse)}
                   descriptionNode={bashNode}
                   status={status}
-                  expandedByDefault
+                  // Match AgentChain: tools land collapsed except Write,
+                  // whose diff is the primary content of the call.
+                  expandedByDefault={toolUse.name === 'Write'}
                 >
                   <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
                 </ToolBlock>
