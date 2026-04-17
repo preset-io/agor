@@ -227,6 +227,19 @@ export class UsersService {
             throw new Error(`Cannot set environment variable "${key}": ${reason}`);
           }
 
+          // Git tokens are embedded into a git-credentials file at runtime.
+          // Reject anything that could smuggle shell metacharacters through
+          // even if the credential-file path is later swapped for a shell
+          // helper (defence-in-depth against a regression).
+          if ((key === 'GITHUB_TOKEN' || key === 'GH_TOKEN') && value) {
+            if (!/^[A-Za-z0-9_-]{20,255}$/.test(value)) {
+              throw new Error(
+                `Invalid ${key}: must match [A-Za-z0-9_-]{20,255}. ` +
+                  `GitHub / GitLab tokens should not contain spaces, newlines, or special characters.`
+              );
+            }
+          }
+
           if (value === null || value === undefined) {
             // Clear variable
             delete encryptedEnvVars[key];
