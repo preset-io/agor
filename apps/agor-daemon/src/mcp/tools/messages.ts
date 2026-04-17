@@ -1,7 +1,20 @@
-import { and, asc, desc, eq, messages as messagesTable, or, select, sql } from '@agor/core/db';
+import { isWorktreeRbacEnabled } from '@agor/core/config';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  messages as messagesTable,
+  or,
+  SessionRepository,
+  select,
+  sql,
+} from '@agor/core/db';
 import type { ContentBlock } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { isSuperAdmin } from '../../utils/worktree-authorization.js';
 import { resolveSessionId, resolveTaskId } from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
@@ -101,6 +114,23 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
             ? and(...orGroups[0])
             : or(...orGroups.map((andTerms) => and(...andTerms)));
         if (searchCondition) conditions.push(searchCondition);
+      }
+
+      // RBAC enforcement: when worktree_rbac is enabled, restrict this search
+      // to sessions the caller can access. Superadmins bypass. When RBAC is
+      // disabled (default / open-access mode), skip this filter entirely to
+      // preserve backward-compatible behavior.
+      if (isWorktreeRbacEnabled()) {
+        const userRole = ctx.authenticatedUser?.role as string | undefined;
+        if (!isSuperAdmin(userRole)) {
+          const sessionRepo = new SessionRepository(ctx.db);
+          const accessibleSessions = await sessionRepo.findAccessibleSessions(ctx.userId);
+          const accessibleIds = accessibleSessions.map((s) => s.session_id);
+          if (accessibleIds.length === 0) {
+            return textResult({ messages: [], total: 0, offset, limit });
+          }
+          conditions.push(inArray(messagesTable.session_id, accessibleIds));
+        }
       }
 
       const orderCol = sessionId ? messagesTable.index : messagesTable.timestamp;
