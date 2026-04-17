@@ -319,9 +319,15 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Must run after CORS so preflights still get the Access-Control-* headers.
   app.use(securityHeaders({ daemonUrl }) as never);
 
-  // Default to a 1MB JSON body. Upload routes raise this on a per-route basis.
-  app.use(express.json({ limit: '1mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+  // Default to a 10MB JSON body. The previous 10MB pre-hardening default was
+  // unbounded enough to allow trivial memory-pressure DoS, and a 1MB ceiling
+  // turned out to break legitimate flows (large prompts, /messages/bulk
+  // batches, oversized template payloads). 10MB is the balance: tight enough
+  // to bound a single attacker request, loose enough that real bulk-message
+  // payloads pass without per-route overrides. Multipart uploads bypass this
+  // limit (multer parses the body itself) and are capped separately.
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
   // --------------------------------------------------------------------------
   // Static file serving (production only)
