@@ -1765,6 +1765,54 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Boards hooks
   // ============================================================================
 
+  // Boards.find RBAC filter (registered only when worktree_rbac enabled).
+  // Boards are not worktree-scoped directly, but they contain worktrees/cards.
+  // A board the caller cannot read any worktree from (and did not create
+  // themselves) should not appear in listings. Superadmins bypass this.
+  const filterBoardsByAccessibleWorktrees = async (context: HookContext<Board>) => {
+    if (!context.params.provider) return context;
+    if (context.params.user?._isServiceAccount) return context;
+    const userId = context.params.user?.user_id as import('@agor/core/types').UUID | undefined;
+    if (!userId) {
+      // Unauthenticated -> no boards
+      context.result = { total: 0, limit: 0, skip: 0, data: [] };
+      return context;
+    }
+    // Superadmin bypass
+    const userRole = context.params.user?.role as string | undefined;
+    if (
+      (superadminOpts.allowSuperadmin ?? true) &&
+      (userRole === ROLES.SUPERADMIN || userRole === 'owner')
+    ) {
+      return context;
+    }
+
+    const result = context.result;
+    if (!result) return context;
+    const boards = Array.isArray(result) ? result : (result as { data?: Board[] }).data;
+    if (!boards?.length) return context;
+
+    // Collect accessible board_ids from the user's worktrees.
+    const accessibleWorktrees = await worktreeRepository.findAccessibleWorktrees(userId);
+    const accessibleBoardIds = new Set<string>(
+      accessibleWorktrees
+        .map((wt) => (wt as { board_id?: string | null }).board_id)
+        .filter((id): id is string => !!id)
+    );
+
+    const filtered = boards.filter(
+      (board) => board.created_by === userId || accessibleBoardIds.has(board.board_id as string)
+    );
+
+    if (Array.isArray(result)) {
+      context.result = filtered as unknown as typeof context.result;
+    } else {
+      (context.result as { data: Board[]; total: number }).data = filtered;
+      (context.result as { data: Board[]; total: number }).total = filtered.length;
+    }
+    return context;
+  };
+
   safeService('boards')?.hooks({
     before: {
       all: [typedValidateQuery(boardQueryValidator), ...getReadAuthHooks()],
@@ -1928,6 +1976,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
       find: [
+        // RBAC: Restrict boards to those the caller created or has worktree
+        // access on. Runs before artifact stripping so the subsequent hook
+        // only iterates permitted boards.
+        ...(worktreeRbacEnabled ? [filterBoardsByAccessibleWorktrees] : []),
         async (context: HookContext<Board>) => {
           const result = context.result;
           if (!result) return context;
