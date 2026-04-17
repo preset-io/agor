@@ -119,6 +119,59 @@ export function jsonExtract(db: Database, column: SQL.Aliased | SQL | any, path:
 }
 
 /**
+ * Supported bucket granularities for {@link dateTruncUtc}.
+ */
+export type DateBucket = 'hour' | 'day' | 'week' | 'month';
+
+/**
+ * Truncate a timestamp column to a bucket boundary in UTC and return an ISO 8601 string.
+ *
+ * Produces stable bucket keys that can be grouped and ordered chronologically in both
+ * SQLite and PostgreSQL. Week buckets use ISO-8601 semantics (Monday as start of week).
+ *
+ * - SQLite: `created_at` is stored as integer ms since epoch (`mode: 'timestamp_ms'`),
+ *   so the column value is divided by 1000 to feed into `strftime` via the `unixepoch` modifier.
+ * - PostgreSQL: uses `date_trunc` on a `timestamp with time zone` column, cast to text in
+ *   `YYYY-MM-DDTHH24:MI:SS.MSZ` so the output matches SQLite's.
+ *
+ * @param db - Database instance (for dialect detection)
+ * @param column - Timestamp column to truncate
+ * @param bucket - Granularity
+ * @returns SQL expression producing an ISO-8601 UTC timestamp string
+ *
+ * @example
+ * // SELECT ... dateTruncUtc(db, tasks.created_at, 'day') AS bucket
+ * // → '2026-04-17T00:00:00.000Z'
+ */
+// biome-ignore lint/suspicious/noExplicitAny: Drizzle columns have complex union types
+export function dateTruncUtc(db: Database, column: SQL | any, bucket: DateBucket): SQL {
+  if (isSQLiteDatabase(db)) {
+    // SQLite columns with timestamp_ms mode store integer ms — convert to unix seconds.
+    const unixSeconds = sql`${column} / 1000`;
+    switch (bucket) {
+      case 'hour':
+        return sql`strftime('%Y-%m-%dT%H:00:00.000Z', ${unixSeconds}, 'unixepoch')`;
+      case 'day':
+        return sql`strftime('%Y-%m-%dT00:00:00.000Z', ${unixSeconds}, 'unixepoch')`;
+      case 'month':
+        return sql`strftime('%Y-%m-01T00:00:00.000Z', ${unixSeconds}, 'unixepoch')`;
+      case 'week':
+        // Shift to the Monday of the same ISO week, then emit midnight UTC.
+        // %w returns 0 (Sun) … 6 (Sat); (wd + 6) mod 7 = days since Monday.
+        return sql`strftime(
+          '%Y-%m-%dT00:00:00.000Z',
+          ${unixSeconds},
+          'unixepoch',
+          '-' || ((strftime('%w', ${unixSeconds}, 'unixepoch') + 6) % 7) || ' days'
+        )`;
+    }
+  } else {
+    // PostgreSQL date_trunc accepts 'hour'|'day'|'week'|'month'; week is already ISO (Monday).
+    return sql`to_char(date_trunc(${bucket}, ${column}) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
+  }
+}
+
+/**
  * Acquire a row-level lock within a transaction (PostgreSQL FOR UPDATE).
  *
  * On PostgreSQL, executes `SELECT 1 FROM <table> WHERE <pk> = <id> FOR UPDATE`
