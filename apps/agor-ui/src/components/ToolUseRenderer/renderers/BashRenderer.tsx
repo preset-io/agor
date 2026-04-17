@@ -48,15 +48,16 @@ export const BashRenderer: React.FC<ToolRendererProps> = ({ input, result }) => 
   return (
     <div>
       {/* Full command as syntax-highlighted code block.
-          Wrapped in a constrained block container so long one-liners scroll
-          horizontally inside the ToolBlock instead of leaking out and forcing
-          the whole conversation pane to scroll sideways. */}
+          Wraps long one-liners inside the ToolBlock so the whole command
+          is visible without horizontal scroll on the conversation pane.
+          `pre-wrap` preserves newlines (heredocs, && chains) while letting
+          lines wrap; `break-all` ensures long URL-like tokens with no
+          whitespace still break at container edges. */}
       {command && (
         <div
           style={{
             maxWidth: '100%',
             minWidth: 0,
-            overflowX: 'auto',
             marginBottom: result ? token.sizeUnit : 0,
           }}
         >
@@ -67,9 +68,9 @@ export const BashRenderer: React.FC<ToolRendererProps> = ({ input, result }) => 
               fontSize: token.fontSizeSM,
               padding: token.sizeUnit,
               margin: 0,
-              whiteSpace: 'pre',
-              wordBreak: 'normal',
-              overflowWrap: 'normal',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+              overflowWrap: 'anywhere',
             }}
           >
             {command}
