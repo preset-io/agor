@@ -510,7 +510,10 @@ export async function setupQuery(
       const mcpConfig = {
         agor: {
           type: 'http' as const,
-          url: `${daemonUrl}/mcp?sessionToken=${mcpToken}`,
+          url: `${daemonUrl}/mcp`,
+          headers: {
+            Authorization: `Bearer ${mcpToken}`,
+          },
         },
       };
       queryOptions.mcpServers = mcpConfig;

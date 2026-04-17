@@ -194,7 +194,7 @@ export class OpenCodeTool implements ITool {
 
       try {
         const daemonUrl = await getDaemonUrl();
-        const mcpUrl = `${daemonUrl}/mcp?sessionToken=${encodeURIComponent(mcpToken)}`;
+        const mcpUrl = `${daemonUrl}/mcp`;
 
         const mcpResult = await client.mcp.add({
           body: {
@@ -203,6 +203,7 @@ export class OpenCodeTool implements ITool {
               type: 'remote' as const,
               url: mcpUrl,
               enabled: true,
+              headers: { Authorization: `Bearer ${mcpToken}` },
             },
           },
           query: worktreePath ? { directory: worktreePath } : undefined,

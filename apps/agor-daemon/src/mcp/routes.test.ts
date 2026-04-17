@@ -32,9 +32,12 @@ beforeAll(async () => {
 });
 
 async function callMCPTool(name: string, args: Record<string, unknown> = {}) {
-  const resp = await fetch(`${DAEMON_URL}/mcp?sessionToken=${sessionToken}`, {
+  const resp = await fetch(`${DAEMON_URL}/mcp`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${sessionToken}`,
+    },
     body: JSON.stringify({
       jsonrpc: '2.0',
       id: 1,
@@ -57,9 +60,12 @@ async function callMCPTool(name: string, args: Record<string, unknown> = {}) {
 
 describeIntegration('MCP Tools - Session Tools', () => {
   it('tools/list returns all 25 tools', async () => {
-    const resp = await fetch(`${DAEMON_URL}/mcp?sessionToken=${sessionToken}`, {
+    const resp = await fetch(`${DAEMON_URL}/mcp`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sessionToken}`,
+      },
       body: JSON.stringify({
         jsonrpc: '2.0',
         id: 1,

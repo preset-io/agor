@@ -663,15 +663,16 @@ export class GeminiPromptService {
         const daemonUrl = await getDaemonUrl();
 
         console.log(`🔌 Configuring Agor MCP server at ${daemonUrl}/mcp`);
-        // Use httpUrl parameter for HTTP transport
+        // Use httpUrl parameter for HTTP transport. Token goes in the
+        // Authorization header (not the URL) to avoid leaking via logs / history.
         mcpServersConfig.agor = new Gemini.MCPServerConfig(
           undefined, // command
           undefined, // args
           {}, // env
           undefined, // cwd
           undefined, // url (websocket)
-          `${daemonUrl}/mcp?sessionToken=${mcpToken}`, // httpUrl
-          {} // headers
+          `${daemonUrl}/mcp`, // httpUrl
+          { Authorization: `Bearer ${mcpToken}` } // headers
         );
       } else {
         console.warn(

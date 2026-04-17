@@ -290,8 +290,9 @@ describe('OpenCodeTool', () => {
       expect(agorCall).toBeDefined();
       expect(agorCall!.config).toEqual({
         type: 'remote',
-        url: 'http://localhost:3030/mcp?sessionToken=test-token',
+        url: 'http://localhost:3030/mcp',
         enabled: true,
+        headers: { Authorization: 'Bearer test-token' },
       });
     });
 
@@ -490,7 +491,7 @@ describe('OpenCodeTool', () => {
       expect(getMcpServersForSession).not.toHaveBeenCalled();
     });
 
-    it('should URL-encode the MCP token in the Agor MCP server URL', async () => {
+    it('should pass the MCP token in the Authorization header, never in the URL', async () => {
       const tool = new OpenCodeTool(
         { enabled: true, serverUrl: 'http://localhost:4096' },
         mockMessagesService,
@@ -505,9 +506,18 @@ describe('OpenCodeTool', () => {
 
       const agorCall = mockMcpAddCalls.find((c) => c.name === 'agor_session-');
       expect(agorCall).toBeDefined();
-      expect((agorCall!.config as any).url).toBe(
-        `http://localhost:3030/mcp?sessionToken=${encodeURIComponent(tokenWithSpecialChars)}`
-      );
+      const config = agorCall!.config as {
+        url: string;
+        headers?: Record<string, string>;
+      };
+      // URL must not contain the token as a query parameter.
+      expect(config.url).toBe('http://localhost:3030/mcp');
+      expect(config.url).not.toContain('sessionToken');
+      expect(config.url).not.toContain(encodeURIComponent(tokenWithSpecialChars));
+      // Token travels via the Authorization header instead.
+      expect(config.headers).toEqual({
+        Authorization: `Bearer ${tokenWithSpecialChars}`,
+      });
     });
   });
 

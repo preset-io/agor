@@ -123,6 +123,27 @@ Continue or fork an existing session:
 Discover tools: search (list detail) → search (full detail for schemas) → execute`;
 
 /**
+ * One-time-per-caller deprecation warning for clients that still send the
+ * MCP session token in the query string. Keyed by remote IP so noisy callers
+ * don't drown out other logs. The token value is never logged.
+ */
+const deprecationWarningsEmitted = new Set<string>();
+
+function logQueryParamDeprecation(req: Request): void {
+  const ip = (req.ip || req.socket.remoteAddress || 'unknown').toString();
+  if (deprecationWarningsEmitted.has(ip)) return;
+  deprecationWarningsEmitted.add(ip);
+  // Cap the set so a rotating IP attacker can't grow memory unbounded.
+  if (deprecationWarningsEmitted.size > 1024) {
+    const oldest = deprecationWarningsEmitted.values().next().value;
+    if (oldest) deprecationWarningsEmitted.delete(oldest);
+  }
+  console.warn(
+    `⚠️  MCP request from ${ip} used deprecated ?sessionToken= query param — rejecting. Migrate callers to Authorization: Bearer header.`
+  );
+}
+
+/**
  * Module-level cached registry and tools/list response.
  *
  * Built once on first request, reused for all subsequent requests.
@@ -404,24 +425,42 @@ export function setupMCPRoutes(
     try {
       console.log(`🔌 Incoming MCP request: ${req.method} /mcp`);
 
-      // Extract session token from query params or Authorization header
-      let sessionToken = req.query.sessionToken as string | undefined;
-      if (!sessionToken) {
-        const authHeader = req.headers.authorization;
-        if (authHeader?.startsWith('Bearer ')) {
-          sessionToken = authHeader.slice(7);
-        }
+      // Reject session tokens in query strings — they leak via Referer, browser
+      // history, reverse-proxy access logs, and any verbose request logger that
+      // captures req.url. The canonical carrier for MCP streamable HTTP auth is
+      // `Authorization: Bearer <token>`.
+      //
+      // We check for the presence of the query parameter (not its value) so we
+      // don't echo or log the token itself.
+      if ('sessionToken' in req.query) {
+        logQueryParamDeprecation(req);
+        return res.status(400).json({
+          jsonrpc: '2.0',
+          id: (req.body as { id?: unknown })?.id,
+          error: {
+            code: -32600,
+            message:
+              'Session token in query string is no longer accepted. Send it as an Authorization: Bearer <token> header instead.',
+          },
+        });
+      }
+
+      // Extract session token from Authorization header only
+      let sessionToken: string | undefined;
+      const authHeader = req.headers.authorization;
+      if (authHeader?.startsWith('Bearer ')) {
+        sessionToken = authHeader.slice(7);
       }
 
       if (!sessionToken) {
-        console.warn('⚠️  MCP request missing sessionToken');
+        console.warn('⚠️  MCP request missing Authorization header');
         return res.status(401).json({
           jsonrpc: '2.0',
           id: (req.body as { id?: unknown })?.id,
           error: {
             code: -32001,
             message:
-              'Authentication required: session token must be provided in query params or Authorization header',
+              'Authentication required: session token must be provided via Authorization: Bearer header',
           },
         });
       }

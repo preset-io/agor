@@ -363,14 +363,18 @@ export class CodexPromptService {
 
     const managedServerNames = new Set<string>();
 
-    // Configure built-in Agor MCP server (streamable HTTP)
+    // Configure built-in Agor MCP server (streamable HTTP).
+    // Token travels in the Authorization header via bearer_token_env_var —
+    // never in the URL (URL query params leak via Referer, history, logs).
     if (mcpToken) {
       const daemonUrl = await getDaemonUrl();
-      const agorMcpUrl = `${daemonUrl}/mcp?sessionToken=${encodeURIComponent(mcpToken)}`;
+      const agorBearerEnvVar = `AGOR_MCP_${sessionId.substring(0, 8)}_AGOR`;
+      process.env[agorBearerEnvVar] = mcpToken;
 
       managedServerNames.add('agor');
       mcpServersConfig.agor = {
-        url: agorMcpUrl,
+        url: `${daemonUrl}/mcp`,
+        bearer_token_env_var: agorBearerEnvVar,
         required: false,
       } as JsonMap;
       console.log(
