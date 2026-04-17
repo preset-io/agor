@@ -10,7 +10,7 @@
  * @see context/explorations/unix-user-modes.md
  */
 
-import type { SessionRepository, WorktreeRepository } from '@agor/core/db';
+import type { BoardRepository, SessionRepository, WorktreeRepository } from '@agor/core/db';
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
   HookContext,
@@ -1333,5 +1333,36 @@ export function scopeFindToAccessibleSessions(
 
     if (decision.kind !== 'filter') return context;
     return intersectFindQuery(context, 'session_id', decision.accessibleIds);
+  };
+}
+
+/**
+ * Scope find() queries on the boards service to the set of boards the caller
+ * can see.
+ *
+ * A board is visible if the caller created it OR any worktree on the board is
+ * accessible to them (owner or `others_can` permits at least 'view'). Empty
+ * boards stay visible to their creator; superadmins bypass.
+ *
+ * Resolution happens in a single SQL EXISTS query via
+ * {@link BoardRepository.findVisibleBoardIds}, avoiding the hydrate-every-
+ * worktree cost of the previous in-memory after-hook and letting Feathers'
+ * pagination/sort run against the already-scoped id set.
+ *
+ * @param boardRepo - BoardRepository instance
+ * @param options - Optional flags (allowSuperadmin)
+ * @returns Feathers hook
+ */
+export function scopeFindToAccessibleBoards(
+  boardRepo: BoardRepository,
+  options?: { allowSuperadmin?: boolean }
+) {
+  return async (context: HookContext) => {
+    const decision = await resolveFindScopeAccess(context, options, (uid) =>
+      boardRepo.findVisibleBoardIds(uid)
+    );
+
+    if (decision.kind !== 'filter') return context;
+    return intersectFindQuery(context, 'board_id', decision.accessibleIds);
   };
 }

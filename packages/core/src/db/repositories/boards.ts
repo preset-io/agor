@@ -5,7 +5,8 @@
  */
 
 import type { Board, BoardExportBlob, BoardObject, UUID } from '@agor/core/types';
-import { and, eq, like, ne } from 'drizzle-orm';
+import { WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
+import { and, eq, exists, inArray, isNotNull, like, ne, or, sql } from 'drizzle-orm';
 import * as yaml from 'js-yaml';
 import { getBaseUrl } from '../../config/config-manager';
 import { formatShortId, generateId } from '../../lib/ids';
@@ -13,7 +14,7 @@ import { generateSlug } from '../../lib/slugs';
 import { getBoardUrl } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
-import { type BoardInsert, type BoardRow, boards } from '../schema';
+import { type BoardInsert, type BoardRow, boards, worktreeOwners, worktrees } from '../schema';
 import {
   AmbiguousIdError,
   type BaseRepository,
@@ -279,6 +280,57 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         error
       );
     }
+  }
+
+  /**
+   * Find the ids of boards visible to a user under worktree RBAC.
+   *
+   * A board is visible if either:
+   * - The user created it (self-created boards are always visible, even when
+   *   they carry no worktrees yet), OR
+   * - At least one worktree on the board is accessible to the user (owner
+   *   row, or `others_can` permits at least 'view').
+   *
+   * Implemented as a single correlated `EXISTS` subquery against `boards` so
+   * each board row is emitted at most once — no `DISTINCT` or `UNION` needed.
+   * Portable SQL: `EXISTS`, `LEFT JOIN`, `IN`, `OR`, `IS NOT NULL` behave
+   * identically on SQLite and Postgres, and both planners short-circuit the
+   * semi-join on the first qualifying worktree per board.
+   *
+   * Should only be called when worktree RBAC is enabled.
+   *
+   * @param userId - User ID to check board visibility for
+   * @returns Array of board ids the user can see
+   */
+  async findVisibleBoardIds(userId: UUID): Promise<string[]> {
+    const permissiveLevels = WORKTREE_PERMISSION_LEVELS.filter((l) => l !== 'none');
+    // Raw drizzle builder for the EXISTS subquery — `exists()` expects a
+    // drizzle SelectQueryBuilder, not the cross-dialect wrapper shape, and
+    // the subquery doesn't need `.all()` / `.one()` execution methods.
+    const accessibleWorktreeExists = exists(
+      // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+      (this.db as any)
+        .select({ _: sql`1` })
+        .from(worktrees)
+        .leftJoin(
+          worktreeOwners,
+          and(
+            eq(worktreeOwners.worktree_id, worktrees.worktree_id),
+            eq(worktreeOwners.user_id, userId)
+          )
+        )
+        .where(
+          and(
+            eq(worktrees.board_id, boards.board_id),
+            or(isNotNull(worktreeOwners.user_id), inArray(worktrees.others_can, permissiveLevels))
+          )
+        )
+    );
+    const rows = await select(this.db, { board_id: boards.board_id })
+      .from(boards)
+      .where(or(eq(boards.created_by, userId), accessibleWorktreeExists))
+      .all();
+    return rows.map((r: { board_id: string }) => r.board_id);
   }
 
   /**
