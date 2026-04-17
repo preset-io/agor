@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { buildCorsConfig } from './cors';
+import { buildCorsConfig, isSandpackOrigin } from './cors';
 
 describe('buildCorsConfig', () => {
   it('drops credentials when CORS_ORIGIN=* is set', () => {
@@ -21,7 +21,13 @@ describe('buildCorsConfig', () => {
     });
     expect(result.isWildcard).toBe(true);
     expect(result.credentialsAllowed).toBe(false);
-    expect(result.isAllowedOrigin('https://anything.example.com')).toBe(true);
+    // The cors() origin callback returns true (accept any origin), but the
+    // isAllowedOrigin predicate is the gate for PNA / credentials. Even in
+    // wildcard mode, only the localhost UI port range gets PNA — random
+    // origins do NOT, so a public site cannot use the daemon to reach a
+    // private/loopback target.
+    expect(result.isAllowedOrigin('http://localhost:5173')).toBe(true);
+    expect(result.isAllowedOrigin('https://anything.example.com')).toBe(false);
     warn.mockRestore();
   });
 
@@ -55,5 +61,22 @@ describe('buildCorsConfig', () => {
     expect(result.isAllowedOrigin('https://dash.example.com')).toBe(true);
     expect(result.isAllowedOrigin('https://api.internal.example.com')).toBe(true);
     expect(result.isAllowedOrigin('https://other.example.com')).toBe(false);
+  });
+});
+
+describe('isSandpackOrigin', () => {
+  // Exported helper so the daemon entrypoint doesn't have to reproduce the
+  // regex (and risk drifting from the cors() origin-allow list).
+  it('matches *.codesandbox.io subdomains', () => {
+    expect(isSandpackOrigin('https://2-19-8-sandpack.codesandbox.io')).toBe(true);
+    expect(isSandpackOrigin('https://anything-here.codesandbox.io')).toBe(true);
+  });
+
+  it('rejects non-Sandpack origins', () => {
+    expect(isSandpackOrigin('https://attacker.com')).toBe(false);
+    expect(isSandpackOrigin('http://localhost:5173')).toBe(false);
+    // Defence: must be HTTPS, must be the exact codesandbox.io suffix.
+    expect(isSandpackOrigin('http://x.codesandbox.io')).toBe(false);
+    expect(isSandpackOrigin('https://codesandbox.io.attacker.com')).toBe(false);
   });
 });

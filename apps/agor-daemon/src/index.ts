@@ -41,7 +41,7 @@ import expressStaticGzip from 'express-static-gzip';
 import { registerHooks } from './register-hooks.js';
 import { registerRoutes } from './register-routes.js';
 import { registerServices } from './register-services.js';
-import { buildCorsConfig } from './setup/cors.js';
+import { buildCorsConfig, isSandpackOrigin } from './setup/cors.js';
 import {
   initializeAnthropicApiKey,
   initializeAnthropicAuthToken,
@@ -222,7 +222,12 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Default 0 = ignore X-Forwarded-* entirely (so a client cannot spoof their
   // IP via headers). Operators with an explicit proxy chain set
   // `daemon.trust_proxy_hops` to the hop count.
-  const trustProxyHops = Math.max(0, Math.floor(Number(config.daemon?.trust_proxy_hops ?? 0)) || 0);
+  // The Number.isFinite guard is critical: `Number(Infinity) || 0` returns
+  // Infinity (truthy), and Express interprets `trust proxy = Infinity` as
+  // "trust everything" — which is the exact spoofing posture we are
+  // defending against. Reject non-finite values (Infinity, NaN) to 0.
+  const rawHops = Number(config.daemon?.trust_proxy_hops ?? 0);
+  const trustProxyHops = Number.isFinite(rawHops) ? Math.max(0, Math.floor(rawHops)) : 0;
   app.set('trust proxy', trustProxyHops);
   if (trustProxyHops > 0) {
     console.log(
@@ -277,11 +282,14 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     }
   }
 
-  // Per-request middleware:
-  //   - Echo Access-Control-Allow-Private-Network ONLY for explicit allow-list
-  //     origins (not the multi-tenant Sandpack domain, not wildcard reflection).
-  //   - Strip Access-Control-Allow-Credentials on Sandpack origins so a
-  //     third-party tenant cannot ride a user's session cookie.
+  // Per-request middleware (runs BEFORE cors()):
+  //   1. Echo Access-Control-Allow-Private-Network ONLY for explicit allow-list
+  //      origins (never for Sandpack, never for unknown wildcard origins).
+  //   2. Patch res.setHeader so that Access-Control-Allow-Credentials is
+  //      suppressed on Sandpack-origin responses — INCLUDING preflights. The
+  //      previous post-cors() removeHeader middleware never ran for OPTIONS,
+  //      because cors() short-circuits the preflight chain via res.end().
+  //      Patching setHeader catches headers cors() sets on its way to end().
   app.use((req, res, next) => {
     const origin = req.headers.origin;
     if (
@@ -291,6 +299,17 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     ) {
       res.setHeader('Access-Control-Allow-Private-Network', 'true');
     }
+
+    if (typeof origin === 'string' && isSandpackOrigin(origin)) {
+      const originalSetHeader = res.setHeader.bind(res);
+      // biome-ignore lint/suspicious/noExplicitAny: setHeader has many overloads
+      (res as any).setHeader = (name: string, value: any) => {
+        if (typeof name === 'string' && name.toLowerCase() === 'access-control-allow-credentials') {
+          return res;
+        }
+        return originalSetHeader(name, value);
+      };
+    }
     next();
   });
 
@@ -299,16 +318,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Security headers (CSP, X-Frame-Options, nosniff, Referrer-Policy, HSTS).
   // Must run after CORS so preflights still get the Access-Control-* headers.
   app.use(securityHeaders({ daemonUrl }) as never);
-
-  // Defence-in-depth: even if cors() sets the credentials header for a
-  // multi-tenant Sandpack origin, strip it on the way out.
-  app.use((req, res, next) => {
-    const origin = req.headers.origin;
-    if (typeof origin === 'string' && /^https:\/\/[\w.-]+\.codesandbox\.io$/.test(origin)) {
-      res.removeHeader('Access-Control-Allow-Credentials');
-    }
-    next();
-  });
 
   // Default to a 1MB JSON body. Upload routes raise this on a per-route basis.
   app.use(express.json({ limit: '1mb' }));
@@ -409,7 +418,12 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     console.log(`🔑 Loaded existing JWT secret from config (length=${jwtSecret.length})`);
   }
 
-  const socketIOConfig = createSocketIOConfig(app, { corsOrigin, jwtSecret, allowAnonymous });
+  const socketIOConfig = createSocketIOConfig(app, {
+    corsOrigin,
+    jwtSecret,
+    allowAnonymous,
+    credentialsAllowed,
+  });
   app.configure(socketio(socketIOConfig.serverOptions, socketIOConfig.callback));
   configureChannels(app);
   configureSwagger(app, { version: DAEMON_VERSION, port: DAEMON_PORT });

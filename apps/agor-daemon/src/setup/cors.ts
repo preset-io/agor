@@ -55,6 +55,15 @@ export interface CorsConfigResult {
 const SANDPACK_ORIGIN_PATTERN = /^https:\/\/[\w.-]+\.codesandbox\.io$/;
 
 /**
+ * True when `origin` is a Sandpack/CodeSandbox bundler origin. Exported so
+ * the daemon entrypoint can strip credentialed CORS responses on every
+ * Sandpack request (including preflights) without redefining the regex.
+ */
+export function isSandpackOrigin(origin: string): boolean {
+  return SANDPACK_ORIGIN_PATTERN.test(origin);
+}
+
+/**
  * Parse a string as a regex pattern if wrapped in /slashes/, otherwise return null.
  * Returns null and warns on invalid regex syntax rather than throwing.
  */
@@ -104,7 +113,13 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
       localhostOrigins,
       credentialsAllowed: false,
       isWildcard: true,
-      isAllowedOrigin: () => true,
+      // SECURITY: in wildcard mode we accept ANY origin for normal CORS, but
+      // we deliberately do NOT echo Access-Control-Allow-Private-Network for
+      // unknown origins. PNA is a chrome-style escape hatch that lets a
+      // public origin reach a private/loopback target — even in wildcard
+      // mode, only localhost (the configured UI dev port range) gets the
+      // PNA header. Anyone else has to be added to the explicit allow-list.
+      isAllowedOrigin: (origin: string) => localhostOrigins.includes(origin),
     };
   }
 
