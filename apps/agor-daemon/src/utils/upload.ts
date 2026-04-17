@@ -11,7 +11,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { SessionRepository, WorktreeRepository } from '@agor/core/db';
-import type { Request } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 
 /**
@@ -178,11 +178,17 @@ export function createUploadMiddleware(
   return multer({
     storage,
     limits: {
+      // Per-file ceiling. Multer aborts the upload with `LIMIT_FILE_SIZE`
+      // if any single file exceeds this.
       fileSize: MAX_UPLOAD_FILE_SIZE,
+      // Hard ceiling on number of files per request.
       files: MAX_UPLOAD_FILES_PER_REQUEST,
-      // Hard ceiling on total request body — multer applies this against the
-      // raw multipart bytes which is a reasonable proxy for total file size.
-      fieldSize: MAX_UPLOAD_TOTAL_SIZE,
+      // NOTE: aggregate file-size enforcement is NOT a multer option —
+      // `fieldSize` only governs non-file form-field VALUES, not file payload.
+      // The cap on combined file size is enforced separately via
+      // `enforceTotalUploadSize()` (pre-multer Content-Length check) and
+      // `enforceParsedTotalUploadSize()` (post-multer `req.files` sum), both
+      // exported below.
     },
     fileFilter: (_req, file, cb) => {
       // Match on the bare MIME (drop any `; charset=...` parameters).
@@ -204,4 +210,58 @@ export function createUploadMiddleware(
       cb(null, true);
     },
   });
+}
+
+/**
+ * Pre-multer middleware: reject any request whose declared `Content-Length`
+ * exceeds {@link MAX_UPLOAD_TOTAL_SIZE} before we spend time streaming bytes
+ * to disk. This is a cheap content-length check — clients can lie about it,
+ * so it is paired with {@link enforceParsedTotalUploadSize} after multer runs.
+ *
+ * Returns a 413 (Payload Too Large) and short-circuits the chain.
+ */
+export function enforceTotalUploadSize() {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const declared = Number.parseInt(req.headers['content-length'] ?? '', 10);
+    if (Number.isFinite(declared) && declared > MAX_UPLOAD_TOTAL_SIZE) {
+      res.status(413).json({
+        error: 'Upload too large',
+        details: `Combined upload size ${declared} exceeds ceiling ${MAX_UPLOAD_TOTAL_SIZE}`,
+        code: 'PAYLOAD_TOO_LARGE',
+      });
+      return;
+    }
+    next();
+  };
+}
+
+/**
+ * Post-multer middleware: sum the actual sizes of files multer wrote to disk
+ * and reject if the aggregate exceeds {@link MAX_UPLOAD_TOTAL_SIZE}. Cleans
+ * up the on-disk files before responding so we don't leak bytes when a
+ * Content-Length-spoofing client slipped past the pre-check.
+ *
+ * Returns a 413 (Payload Too Large).
+ */
+export function enforceParsedTotalUploadSize() {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const files = (req as Request & { files?: Express.Multer.File[] }).files;
+    if (!Array.isArray(files) || files.length === 0) {
+      next();
+      return;
+    }
+    const total = files.reduce((sum, f) => sum + (f.size || 0), 0);
+    if (total <= MAX_UPLOAD_TOTAL_SIZE) {
+      next();
+      return;
+    }
+    // Best-effort cleanup of the rejected files. We don't await individual
+    // failures; an orphaned file is much less bad than a hung response.
+    await Promise.allSettled(files.map((f) => fs.unlink(f.path)));
+    res.status(413).json({
+      error: 'Upload too large',
+      details: `Combined file size ${total} exceeds ceiling ${MAX_UPLOAD_TOTAL_SIZE}`,
+      code: 'PAYLOAD_TOO_LARGE',
+    });
+  };
 }
