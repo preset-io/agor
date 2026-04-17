@@ -67,6 +67,7 @@ import {
   ensureCanView,
   ensureSessionImmutability,
   ensureWorktreePermission,
+  isSuperAdmin,
   loadSession,
   loadSessionWorktree,
   loadWorktree,
@@ -1793,10 +1794,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     }
     // Superadmin bypass
     const userRole = context.params.user?.role as string | undefined;
-    if (
-      (superadminOpts.allowSuperadmin ?? true) &&
-      (userRole === ROLES.SUPERADMIN || userRole === 'owner')
-    ) {
+    if (isSuperAdmin(userRole, superadminOpts.allowSuperadmin ?? true)) {
       return context;
     }
 
