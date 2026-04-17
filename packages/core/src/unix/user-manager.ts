@@ -8,6 +8,7 @@
  */
 
 import { execSync } from 'node:child_process';
+import type { UnixUserMode } from '../config/types.js';
 import { formatShortId } from '../lib/ids.js';
 import type { UserID, UUID } from '../types/index.js';
 
@@ -311,9 +312,12 @@ export function unixUserExists(username: string): boolean {
 }
 
 /**
- * Unix user mode types
+ * Re-export of {@link UnixUserMode} for existing `@agor/core/unix` consumers.
+ * Canonical definition lives in `@agor/core/config/types` so browser-safe
+ * surfaces (e.g. `@agor/core/client`) can use it without pulling in this
+ * Node-only module.
  */
-export type UnixUserMode = 'simple' | 'insulated' | 'strict';
+export type { UnixUserMode };
 
 /**
  * Result of resolving which Unix user to impersonate

@@ -216,6 +216,16 @@ export interface AgorCodexSettings {
 }
 
 /**
+ * Unix user isolation mode controlling how session processes get mapped to
+ * OS identities.
+ *
+ * - `simple` — all processes run as the daemon user (no OS isolation)
+ * - `insulated` — executors run as a dedicated user with per-worktree groups
+ * - `strict` — sessions run as the session creator's own Unix user
+ */
+export type UnixUserMode = 'simple' | 'insulated' | 'strict';
+
+/**
  * Execution settings
  */
 export interface AgorExecutionSettings {
@@ -223,7 +233,7 @@ export interface AgorExecutionSettings {
   executor_unix_user?: string;
 
   /** Unix user mode: simple (no isolation), insulated (worktree groups), strict (enforce process impersonation) */
-  unix_user_mode?: 'simple' | 'insulated' | 'strict';
+  unix_user_mode?: UnixUserMode;
 
   /** Enable worktree RBAC and ownership system (default: false). When enabled, enforces permission checks and Unix group isolation. */
   worktree_rbac?: boolean;

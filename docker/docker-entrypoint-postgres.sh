@@ -56,24 +56,14 @@ if [ "$CREATE_RBAC_TEST_USERS" = "true" ]; then
   echo ""
 fi
 
-# Configure RBAC settings if environment variables are set
-# This must happen BEFORE the base entrypoint runs, so config is set before daemon starts
+# Log the RBAC config the base entrypoint will apply. The public-facing
+# AGOR_RBAC_ENABLED / AGOR_UNIX_USER_MODE → internal AGOR_SET_* translation is
+# handled by the base entrypoint (docker-entrypoint.sh), so both the postgres
+# and plain profiles use the same naming contract.
 if [ -n "$AGOR_RBAC_ENABLED" ] || [ -n "$AGOR_UNIX_USER_MODE" ]; then
-  echo "⚙️  Configuring RBAC settings from environment..."
-
-  # Wait for base initialization to create config file
-  # (base entrypoint will call 'agor init' which creates ~/.agor/config.yaml)
-
-  if [ "$AGOR_RBAC_ENABLED" = "true" ]; then
-    echo "  Setting execution.worktree_rbac = true"
-    export AGOR_SET_RBAC_FLAG="true"
-  fi
-
-  if [ -n "$AGOR_UNIX_USER_MODE" ]; then
-    echo "  Setting execution.unix_user_mode = $AGOR_UNIX_USER_MODE"
-    export AGOR_SET_UNIX_MODE="$AGOR_UNIX_USER_MODE"
-  fi
-
+  echo "⚙️  RBAC settings from environment:"
+  [ "$AGOR_RBAC_ENABLED" = "true" ] && echo "  execution.worktree_rbac = true"
+  [ -n "$AGOR_UNIX_USER_MODE" ] && echo "  execution.unix_user_mode = $AGOR_UNIX_USER_MODE"
   echo ""
 fi
 
@@ -82,7 +72,7 @@ fi
 # - Building @agor/core
 # - Database migrations
 # - Creating admin user
-# - Applying RBAC config (via AGOR_SET_* env vars)
+# - Applying RBAC config (AGOR_RBAC_ENABLED / AGOR_UNIX_USER_MODE)
 # - Starting daemon and UI
 echo "🚀 Running base initialization..."
 exec /usr/local/bin/docker-entrypoint.sh

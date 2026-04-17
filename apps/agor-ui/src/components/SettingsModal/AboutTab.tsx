@@ -2,7 +2,7 @@
  * About Tab - Display version, connection info, and system details
  */
 
-import type { AgorClient } from '@agor-live/client';
+import type { AgorClient, UnixUserMode } from '@agor-live/client';
 import { Card, Descriptions, Space, Typography } from 'antd';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { getDaemonUrl } from '../../config/daemon';
@@ -41,6 +41,10 @@ interface HealthInfo {
   encryption?: {
     enabled: boolean;
     method: string | null;
+  };
+  execution?: {
+    worktreeRbac: boolean;
+    unixUserMode: UnixUserMode;
   };
 }
 
@@ -174,6 +178,35 @@ export const AboutTab: React.FC<AboutTabProps> = ({
                       </Descriptions.Item>
                       <Descriptions.Item label="Anonymous Access">
                         {healthInfo.auth.allowAnonymous ? '✓ Enabled' : '✗ Disabled'}
+                      </Descriptions.Item>
+                    </>
+                  )}
+                  {healthInfo?.execution && (
+                    <>
+                      <Descriptions.Item label="Worktree RBAC">
+                        {healthInfo.execution.worktreeRbac ? (
+                          <span style={{ color: '#52c41a' }}>🛡️ Enabled</span>
+                        ) : (
+                          <span style={{ color: '#faad14' }}>⚠️ Disabled (open access)</span>
+                        )}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Unix User Mode">
+                        <code>{healthInfo.execution.unixUserMode}</code>
+                        {healthInfo.execution.unixUserMode === 'simple' && (
+                          <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
+                            (no OS isolation)
+                          </Typography.Text>
+                        )}
+                        {healthInfo.execution.unixUserMode === 'insulated' && (
+                          <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
+                            (worktree groups)
+                          </Typography.Text>
+                        )}
+                        {healthInfo.execution.unixUserMode === 'strict' && (
+                          <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
+                            (per-user impersonation)
+                          </Typography.Text>
+                        )}
                       </Descriptions.Item>
                     </>
                   )}

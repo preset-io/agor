@@ -129,6 +129,15 @@ services:
       - AGOR_USE_EXECUTOR=${AGOR_USE_EXECUTOR:-false}
       - AGOR_EXECUTOR_USERNAME=${AGOR_EXECUTOR_USERNAME:-agor_executor}
 
+      # Worktree RBAC + Unix isolation tier (written into ~/.agor/config.yaml
+      # by the entrypoint before the daemon boots). Both are optional — when
+      # unset the existing config.yaml values are left alone.
+      #   AGOR_RBAC_ENABLED=true         → execution.worktree_rbac: true
+      #   AGOR_UNIX_USER_MODE=insulated  → execution.unix_user_mode: insulated
+      #                                    (simple | insulated | strict)
+      - AGOR_RBAC_ENABLED=${AGOR_RBAC_ENABLED:-}
+      - AGOR_UNIX_USER_MODE=${AGOR_UNIX_USER_MODE:-}
+
       # Instance identification (optional - displayed in UI navbar)
       - INSTANCE_LABEL=${INSTANCE_LABEL:-}
 

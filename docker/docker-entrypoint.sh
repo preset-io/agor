@@ -131,7 +131,21 @@ if [ "$AGOR_USE_EXECUTOR" = "true" ]; then
   fi
 fi
 
-# Configure RBAC settings from environment (set by postgres entrypoint)
+# Translate public-facing RBAC env vars to the internal AGOR_SET_* contract the
+# sed logic below reads. The postgres entrypoint also performs this translation
+# before exec'ing us — doing it again here is idempotent (same export values)
+# and lets plain `docker-compose.yml` consumers set AGOR_RBAC_ENABLED /
+# AGOR_UNIX_USER_MODE directly, matching the names documented in the postgres
+# profile and CLAUDE.md.
+if [ "$AGOR_RBAC_ENABLED" = "true" ]; then
+  export AGOR_SET_RBAC_FLAG="true"
+fi
+if [ -n "$AGOR_UNIX_USER_MODE" ]; then
+  export AGOR_SET_UNIX_MODE="$AGOR_UNIX_USER_MODE"
+fi
+
+# Configure RBAC settings from environment (set by postgres entrypoint or by
+# the public-facing translation above).
 if [ "$AGOR_SET_RBAC_FLAG" = "true" ] || [ -n "$AGOR_SET_UNIX_MODE" ]; then
   echo "🔐 Configuring RBAC settings..."
 

@@ -2480,6 +2480,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           mcp: {
             enabled: config.daemon?.mcpEnabled !== false,
           },
+          // Execution mode surfaced so admins can confirm which security tier
+          // the daemon booted under. Docker env overrides (AGOR_SET_RBAC_FLAG,
+          // AGOR_SET_UNIX_MODE) are written into ~/.agor/config.yaml by the
+          // entrypoint before boot, so `config.execution` reflects them.
+          execution: {
+            worktreeRbac: config.execution?.worktree_rbac === true,
+            unixUserMode: config.execution?.unix_user_mode ?? 'simple',
+          },
         };
       }
 
