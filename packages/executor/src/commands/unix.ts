@@ -16,7 +16,7 @@
  * Key difference: executor runs commands directly, not via CommandExecutor abstraction.
  */
 
-import { exec } from 'node:child_process';
+import { exec, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { RepoID, WorktreeID } from '@agor/core/types';
 import {
@@ -24,6 +24,7 @@ import {
   generateRepoGroupName,
   generateWorktreeGroupName,
   getWorktreePermissionMode,
+  isValidUnixUsername,
   REPO_GIT_PERMISSION_MODE,
   UnixGroupCommands,
   UnixUserCommands,
@@ -39,6 +40,43 @@ import { createExecutorClient } from '../services/feathers-client.js';
 import type { CommandOptions } from './index.js';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+/**
+ * Shape-check for a worktree name before it is embedded in a shell or
+ * passed to privileged tools. Matches conservative filesystem-friendly set:
+ * starts with alnum, followed by alnum / dot / dash / underscore, max 64
+ * chars. Rejects `..`, `/`, shell metachars, leading `-`.
+ */
+export function isValidWorktreeName(name: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name);
+}
+
+/**
+ * Validate (username, password) before they are written to `chpasswd` stdin.
+ *
+ * chpasswd reads lines of the form `username:password\n`. A `:` in the
+ * username or a newline in the password lets a caller inject additional
+ * entries and rewrite ANY user's password in a single batch.
+ *
+ * Throws on rejection so caller code cannot forget to check the boolean.
+ */
+export function assertChpasswdInputSafe(username: string, password: string): void {
+  if (typeof username !== 'string' || username.length === 0) {
+    throw new Error('Refusing to sync password: unix_username is empty');
+  }
+  if (username.includes(':')) {
+    throw new Error(
+      'Refusing to sync password: unix_username contains ":" (chpasswd field separator)'
+    );
+  }
+  if (typeof password !== 'string' || password.length === 0) {
+    throw new Error('Refusing to sync password: password is empty');
+  }
+  if (/[\r\n\0]/.test(password)) {
+    throw new Error('Refusing to sync password: password contains newline or NUL byte');
+  }
+}
 
 // ============================================================
 // SHELL COMMAND HELPERS
@@ -698,13 +736,25 @@ export async function handleUnixSyncUser(
 
     // Sync password if provided
     if (payload.params.password) {
+      const password = payload.params.password;
+
+      // chpasswd reads lines of the form `username:password\n`. A `:` in the
+      // username or a newline in the password would let an attacker rewrite
+      // ANY user's password in a single batch — validate before writing.
+      if (!isValidUnixUsername(unixUsername)) {
+        throw new Error(
+          `Refusing to sync password: invalid unix_username ${JSON.stringify(unixUsername)}`
+        );
+      }
+      assertChpasswdInputSafe(unixUsername, password);
+
       // Use chpasswd with stdin for security (password not in process list)
       const { spawn } = await import('node:child_process');
       await new Promise<void>((resolve, reject) => {
         const proc = spawn('sudo', ['-n', '/usr/sbin/chpasswd'], {
           stdio: ['pipe', 'pipe', 'pipe'],
         });
-        proc.stdin.write(`${unixUsername}:${payload.params.password}\n`);
+        proc.stdin.write(`${unixUsername}:${password}\n`);
         proc.stdin.end();
         proc.on('close', (code) => {
           if (code === 0) resolve();
@@ -919,14 +969,24 @@ export async function fixWorktreeGitDirPermissionsBasic(
   repoPath: string,
   worktreeName: string
 ): Promise<void> {
+  // Worktree names flow into a path that is then passed to chmod under
+  // sudo. Validate aggressively at the call site — metacharacters in the
+  // name would mean command execution. (The worktree service should also
+  // validate at ingest; that's cross-worktree scope and intentionally not
+  // fixed in this pass.)
+  if (!isValidWorktreeName(worktreeName)) {
+    throw new Error(
+      `Invalid worktree name: ${JSON.stringify(worktreeName)}. ` +
+        `Must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.`
+    );
+  }
+
   const worktreeGitDir = `${repoPath}/.git/worktrees/${worktreeName}`;
 
   console.log(`[unix] Setting basic permissions for .git/worktrees/${worktreeName}`);
 
-  // Set basic world-readable permissions without making files executable
-  // u+rwX,g+rX,o+rX: Capital X only adds execute bit to directories, not files
-  // This allows all users to read and traverse directories, but keeps metadata files non-executable
-  const permCommands = [`chmod -R u+rwX,g+rX,o+rX "${worktreeGitDir}"`];
-
-  await runCommands(permCommands);
+  // Use argv form (execFile) so the name cannot be interpreted as shell even
+  // if validation were weaker. u+rwX,g+rX,o+rX: capital X only adds execute
+  // bit to directories, not files — so metadata files stay non-executable.
+  await execFileAsync('chmod', ['-R', 'u+rwX,g+rX,o+rX', worktreeGitDir]);
 }
