@@ -23,17 +23,13 @@ agor init \
 echo "👤 Ensuring admin user exists..."
 agor user create-admin 2>/dev/null || true
 
-# Display admin credentials for first-time setup
-echo ""
-echo "=========================================="
-echo "🔐 Admin Credentials"
-echo "=========================================="
-echo "Email:    admin@agor.live"
-echo "Password: admin"
-echo ""
-echo "⚠️  CHANGE PASSWORD AFTER FIRST LOGIN!"
-echo "=========================================="
-echo ""
+# SECURITY: do not echo the default admin credentials to stdout — container
+# log aggregators ingest stdout and make it searchable across the org.
+# Emit a short warning to stderr only, and only once per container start.
+# Operators can retrieve the bootstrap credentials via an authenticated
+# `agor user ...` CLI invocation inside the container.
+>&2 printf '\033[1;31m%s\033[0m\n' "⚠️  Admin user exists with the default bootstrap password."
+>&2 printf '\033[1;31m%s\033[0m\n' "⚠️  ROTATE IT NOW via the UI or: docker exec <container> agor user set-password"
 
 # Start daemon in foreground (this keeps container alive)
 echo "🚀 Starting daemon on port ${DAEMON_PORT:-3030}..."
