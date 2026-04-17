@@ -71,6 +71,19 @@ export const BashRenderer: React.FC<ToolRendererProps> = ({ input, result }) => 
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-all',
               overflowWrap: 'anywhere',
+              // Defeat the Prism theme's `overflow: auto` on the outer pre
+              // so long lines wrap inside the container instead of scrolling.
+              overflow: 'visible',
+            }}
+            // Prism themes set `white-space: pre` on the inner <code> element,
+            // which overrides the outer <pre>'s pre-wrap. Override it here so
+            // wrapping actually applies to the highlighted tokens.
+            codeTagProps={{
+              style: {
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-all',
+                overflowWrap: 'anywhere',
+              },
             }}
           >
             {command}

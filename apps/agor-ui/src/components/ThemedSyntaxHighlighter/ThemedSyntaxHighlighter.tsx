@@ -41,6 +41,12 @@ export interface ThemedSyntaxHighlighterProps {
    * @default 'code'
    */
   PreTag?: keyof JSX.IntrinsicElements;
+  /**
+   * Props forwarded to the inner <code> element. Use this to override the
+   * Prism theme's white-space/overflow rules (e.g. to enable wrapping for
+   * long one-liners).
+   */
+  codeTagProps?: React.HTMLAttributes<HTMLElement> & { style?: CSSProperties };
 }
 
 export const ThemedSyntaxHighlighter: React.FC<ThemedSyntaxHighlighterProps> = ({
@@ -49,6 +55,7 @@ export const ThemedSyntaxHighlighter: React.FC<ThemedSyntaxHighlighterProps> = (
   showLineNumbers = false,
   customStyle,
   PreTag = 'code',
+  codeTagProps,
 }) => {
   const { token } = theme.useToken();
   const isDark = isDarkTheme(token);
@@ -64,6 +71,7 @@ export const ThemedSyntaxHighlighter: React.FC<ThemedSyntaxHighlighterProps> = (
         ...customStyle,
       }}
       PreTag={PreTag}
+      codeTagProps={codeTagProps}
     >
       {children}
     </SyntaxHighlighter>
