@@ -10,7 +10,12 @@ import { createUserProcessEnvironment } from '../config/index.js';
 import type { Database } from '../db/index.js';
 import { UsersRepository } from '../db/repositories/index.js';
 import type { Worktree } from '../types/index.js';
-import { buildSpawnArgs } from './run-as-user.js';
+import {
+  buildSpawnArgs,
+  isSecretEnvKey,
+  tryUnlinkEnvFile,
+  writeUserEnvFile,
+} from './run-as-user.js';
 import { resolveUnixUserForImpersonation, validateResolvedUnixUser } from './user-manager.js';
 
 /**
@@ -92,19 +97,52 @@ export async function spawnEnvironmentCommand(
   // If impersonating, strip HOME/USER/LOGNAME/SHELL so sudo -u can set them properly
   const env = await createUserProcessEnvironment(worktree.created_by, db, undefined, !!asUser);
 
+  // Route secret-looking env vars through an on-disk env file owned by the
+  // target user (mode 0600) so user-scoped API keys/tokens never appear in
+  // the `sudo bash -c '...'` argv exposed to /proc/<pid>/cmdline.
+  let envFilePath: string | undefined;
+  let inlineEnv: Record<string, string> | undefined;
+  if (asUser) {
+    const secretEnv: Record<string, string> = {};
+    inlineEnv = {};
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) continue;
+      if (isSecretEnvKey(key)) {
+        secretEnv[key] = value;
+      } else {
+        inlineEnv[key] = value;
+      }
+    }
+    if (Object.keys(secretEnv).length > 0) {
+      envFilePath = writeUserEnvFile(asUser, secretEnv);
+    }
+  }
+
   // Build spawn args with impersonation
   const { cmd, args } = buildSpawnArgs(command, [], {
     asUser,
-    env: asUser ? env : undefined, // Only pass env via sudo wrapper if impersonating
+    env: asUser ? inlineEnv : undefined, // Non-secret env only; secrets are sourced from envFilePath
+    envFilePath,
   });
 
   // Spawn the command
   // When not impersonating (simple mode), buildSpawnArgs returns the raw command string,
   // so we need shell: true to handle multi-word commands like "docker compose up -d"
-  return spawn(cmd, args, {
+  const child = spawn(cmd, args, {
     cwd: worktree.path,
     env: asUser ? undefined : env, // Use process env if not impersonating
     stdio,
     shell: !asUser, // Use shell for simple mode, buildSpawnArgs wraps sudo in bash -c
   });
+
+  // Safety-net cleanup. Inner bash script rm -fs the file before exec,
+  // so this only fires if sudo/bash failed to launch at all.
+  if (envFilePath) {
+    const capturedPath = envFilePath;
+    const cleanup = () => tryUnlinkEnvFile(capturedPath);
+    child.once('error', cleanup);
+    child.once('exit', cleanup);
+  }
+
+  return child;
 }

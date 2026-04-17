@@ -22,7 +22,12 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildSpawnArgs } from '@agor/core/unix';
+import {
+  buildSpawnArgs,
+  isSecretEnvKey,
+  tryUnlinkEnvFile,
+  writeUserEnvFile,
+} from '@agor/core/unix';
 import jwt from 'jsonwebtoken';
 
 /**
@@ -276,17 +281,41 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
 
   const envWithDaemonUrl = essentialEnv;
 
+  // Route secret-looking env vars through an on-disk env file owned by the
+  // target user (mode 0600). This keeps API keys/tokens out of argv and out
+  // of /proc/<pid>/cmdline. Non-secret vars (PATH, DAEMON_URL, NODE_ENV)
+  // are still inlined for simplicity.
+  let envFilePath: string | undefined;
+  let inlineEnv: Record<string, string> | undefined;
+  if (asUser) {
+    const secretEnv: Record<string, string> = {};
+    inlineEnv = {};
+    for (const [key, value] of Object.entries(envWithDaemonUrl)) {
+      if (value === undefined) continue;
+      if (isSecretEnvKey(key)) {
+        secretEnv[key] = value;
+      } else {
+        inlineEnv[key] = value;
+      }
+    }
+    if (Object.keys(secretEnv).length > 0) {
+      envFilePath = writeUserEnvFile(asUser, secretEnv);
+    }
+  }
+
   // Build spawn command - handles impersonation via sudo -u when asUser is set
   const { cmd, args } = buildSpawnArgs('node', [executorPath, '--stdin'], {
     asUser,
-    env: asUser ? envWithDaemonUrl : undefined, // Only inject env when impersonating (sudo -u needs env passed explicitly)
+    env: asUser ? inlineEnv : undefined, // Non-secret env only; secrets are sourced from envFilePath
+    envFilePath,
   });
 
   if (asUser) {
-    console.log(`${logPrefix} Spawning executor as user: ${asUser}`);
-    console.log(`${logPrefix} DAEMON_URL being passed: ${envWithDaemonUrl.DAEMON_URL}`);
-    console.log(`${logPrefix} Env vars being passed: ${Object.keys(envWithDaemonUrl).join(', ')}`);
-    console.log(`${logPrefix} Full command: ${cmd} ${args.join(' ')}`);
+    // Safe summary only — never log secret values or their key names.
+    const safeEnvKeys = Object.keys(inlineEnv ?? {}).filter((k) => !isSecretEnvKey(k));
+    console.log(
+      `${logPrefix} Spawning executor as user=${asUser} tool=${payload.command ?? '?'} envKeys=[${safeEnvKeys.join(',')}]${envFilePath ? ' (secrets in env-file)' : ''}`
+    );
   }
   console.log(`${logPrefix} Spawning executor at: ${executorPath}`);
   console.log(`${logPrefix} Command: ${payload.command}`);
@@ -297,6 +326,15 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     stdio: ['pipe', 'inherit', 'inherit'], // stdin: pipe, stdout/stderr: inherit (show in daemon logs)
     detached: false, // Don't detach - let daemon manage lifecycle
   });
+
+  // Best-effort safety-net cleanup: the inner bash script `rm -f`s the env
+  // file before exec, but if sudo/bash failed to launch the file may remain.
+  if (envFilePath) {
+    const capturedEnvFile = envFilePath;
+    const cleanupEnvFile = () => tryUnlinkEnvFile(capturedEnvFile);
+    executorProcess.once('error', cleanupEnvFile);
+    executorProcess.once('exit', cleanupEnvFile);
+  }
 
   // Log if process fails to spawn
   executorProcess.on('error', (error) => {
