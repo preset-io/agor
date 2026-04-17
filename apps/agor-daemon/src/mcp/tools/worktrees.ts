@@ -3,6 +3,7 @@ import { WorktreeRepository } from '@agor/core/db';
 import type {
   AgenticToolName,
   BoardID,
+  Session,
   UUID,
   Worktree,
   WorktreeID,
@@ -28,6 +29,52 @@ import { coerceString, textResult } from '../server.js';
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9-]+$/;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/i;
+
+export function buildZoneTriggerTemplateContext(args: {
+  worktree: Pick<
+    Worktree,
+    'name' | 'ref' | 'issue_url' | 'pull_request_url' | 'notes' | 'custom_context'
+  >;
+  board: {
+    name?: string;
+    description?: string;
+    custom_context?: Record<string, unknown>;
+  };
+  session?: Pick<Session, 'description' | 'custom_context'> | null;
+  zone: {
+    label?: string;
+    status?: string;
+  };
+}): Record<string, unknown> {
+  const { worktree, board, session, zone } = args;
+
+  return {
+    worktree: {
+      name: worktree.name || '',
+      ref: worktree.ref || '',
+      issue_url: worktree.issue_url || '',
+      pull_request_url: worktree.pull_request_url || '',
+      notes: worktree.notes || '',
+      context: worktree.custom_context || {},
+      custom_context: worktree.custom_context || {},
+    },
+    board: {
+      name: board.name || '',
+      description: board.description || '',
+      context: board.custom_context || {},
+      custom_context: board.custom_context || {},
+    },
+    session: {
+      description: session?.description || '',
+      context: session?.custom_context || {},
+      custom_context: session?.custom_context || {},
+    },
+    zone: {
+      label: zone.label || '',
+      status: zone.status || '',
+    },
+  };
+}
 
 export function registerWorktreeTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_worktrees_get
@@ -678,24 +725,15 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         );
 
         const { renderTemplate } = await import('@agor/core/templates/handlebars-helpers');
-        const templateContext = {
-          worktree: {
-            name: worktree.name,
-            ref: worktree.ref,
-            issue_url: worktree.issue_url,
-            pull_request_url: worktree.pull_request_url,
-            notes: worktree.notes,
-            custom_context: worktree.custom_context,
-          },
-          board: {
-            name: board.name,
-            custom_context: board.custom_context,
-          },
-          zone: {
-            label: zone.label,
-            status: zone.status,
-          },
-        };
+        const targetSession = (await ctx.app
+          .service('sessions')
+          .get(targetSessionId, ctx.baseServiceParams)) as Session;
+        const templateContext = buildZoneTriggerTemplateContext({
+          worktree,
+          board,
+          session: targetSession,
+          zone,
+        });
 
         const renderedPrompt = renderTemplate(zone.trigger!.template, templateContext);
 
@@ -738,24 +776,11 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         );
 
         const { renderTemplate } = await import('@agor/core/templates/handlebars-helpers');
-        const templateContext = {
-          worktree: {
-            name: worktree.name,
-            ref: worktree.ref,
-            issue_url: worktree.issue_url,
-            pull_request_url: worktree.pull_request_url,
-            notes: worktree.notes,
-            custom_context: worktree.custom_context,
-          },
-          board: {
-            name: board.name,
-            custom_context: board.custom_context,
-          },
-          zone: {
-            label: zone.label,
-            status: zone.status,
-          },
-        };
+        const templateContext = buildZoneTriggerTemplateContext({
+          worktree,
+          board,
+          zone,
+        });
 
         const renderedPrompt = renderTemplate(zone.trigger!.template, templateContext);
 
