@@ -155,7 +155,8 @@ jobs:
   audit:
     name: Security Audit
     runs-on: ubuntu-latest
-    needs: [install]
+    # Intentionally independent of the install/build pipeline so security
+    # checks surface as early as possible and don't block on build-prep.
     steps:
       - uses: actions/checkout@v4
 

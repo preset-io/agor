@@ -41,8 +41,15 @@ root `package.json`.
 
 ## Process
 
-- High/Critical advisories must be pinned in root `pnpm.overrides` or
-  documented here with a mitigation.
-- `.github/workflows/ci.yml` runs `pnpm audit --audit-level=high --prod`
-  on every PR; see the `audit` job.
-- `.github/dependabot.yml` runs weekly grouped npm updates.
+- Critical advisories must be pinned in root `pnpm.overrides` or
+  documented here with a mitigation. High advisories should be pinned
+  whenever feasible.
+- `.github/workflows/ci.yml` `audit` job:
+  - **Blocking:** `pnpm audit --audit-level=critical --prod`
+  - **Advisory (non-blocking):** `pnpm audit --audit-level=high --prod`
+    and `pnpm audit --audit-level=high` (full tree)
+  - Runs on pushes to `main` and PRs targeting `main`, excluding
+    `apps/agor-docs/**`, `context/**`, and `*.md` paths (docs-only
+    changes skip the audit job).
+- `.github/dependabot.yml` runs weekly grouped npm and
+  github-actions updates.

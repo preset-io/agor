@@ -39,11 +39,31 @@ updates:
           - 'patch'
       # Catch-all for remaining production minor+patch updates so we get
       # one batched PR per week instead of one PR per dependency.
+      # Exclude patterns owned by the core-runtime and agent-sdks groups
+      # so that intent is explicit and ordering changes don't reshuffle
+      # which group a package lands in.
       prod-minor-patch:
         dependency-type: 'production'
         update-types:
           - 'minor'
           - 'patch'
+        exclude-patterns:
+          - '@feathersjs/*'
+          - '@octokit/*'
+          - '@libsql/*'
+          - 'drizzle-*'
+          - 'express'
+          - 'socket.io'
+          - 'socket.io-client'
+          - 'simple-git'
+          - 'postgres'
+          - 'zod'
+          - '@anthropic-ai/*'
+          - '@openai/*'
+          - '@google/*'
+          - '@github/*'
+          - '@opencode-ai/*'
+          - '@modelcontextprotocol/*'
     ignore:
       # agor-live-only deps are managed manually when packaging/releasing
       - dependency-name: 'md-to-slack'
