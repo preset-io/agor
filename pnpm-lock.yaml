@@ -156,6 +156,9 @@ importers:
       express:
         specifier: ^5.2.0
         version: 5.2.1
+      express-rate-limit:
+        specifier: '>=8.2.2 <9'
+        version: 8.3.2(express@5.2.1)
       express-static-gzip:
         specifier: ^3.0.0
         version: 3.0.0
