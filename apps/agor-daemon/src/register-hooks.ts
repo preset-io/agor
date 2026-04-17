@@ -1783,6 +1783,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Boards are not worktree-scoped directly, but they contain worktrees/cards.
   // A board the caller cannot read any worktree from (and did not create
   // themselves) should not appear in listings. Superadmins bypass this.
+  // TODO: move to SQL-level scope if board count per user grows.
   const filterBoardsByAccessibleWorktrees = async (context: HookContext<Board>) => {
     if (!context.params.provider) return context;
     if (context.params.user?._isServiceAccount) return context;
