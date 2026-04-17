@@ -33,27 +33,14 @@
  */
 
 import type { Database } from '@agor/core/db';
+import { hasMinimumRole, ROLES } from '@agor/core/types';
 import type express from 'express';
+import { escapeHtml } from '../utils/html.js';
 import { consumeInstallState, issueInstallState } from './github-install-state.js';
 
 // ============================================================================
 // Helpers
 // ============================================================================
-
-/**
- * Escape a string for safe insertion into HTML text / attribute contexts.
- * Covers the five characters required for attribute-quote + element-text
- * contexts. Do NOT use for URL attributes — use encodeURI / URL for those.
- */
-function escapeHtml(value: unknown): string {
-  const str = value === null || value === undefined ? '' : String(value);
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 /**
  * Extract a bearer JWT from the Authorization header. Returns null if absent.
@@ -90,6 +77,10 @@ async function authenticateRequest(
 
 /**
  * HTML shell for helpful 401/400 error pages.
+ *
+ * ALL interpolated values (including `body`) are HTML-escaped. Callers
+ * should pass plain text, not pre-rendered HTML — this is a safety rail
+ * against future dynamic content leaking unescaped into the response.
  */
 function renderErrorPage(opts: {
   title: string;
@@ -113,7 +104,7 @@ function renderErrorPage(opts: {
 <body>
   <div class="card">
     <h2>${escapeHtml(opts.heading)}</h2>
-    <p>${opts.body}</p>
+    <p>${escapeHtml(opts.body)}</p>
     <a class="btn" href="${escapeHtml(opts.uiUrl)}">Return to Agor</a>
   </div>
 </body>
@@ -139,8 +130,9 @@ function handleIssueState(app: any) {
       res.status(401).json({ error: 'Authentication required to initiate GitHub App install' });
       return;
     }
-    // Admin-only. 'owner' and 'admin' are the elevated roles; default 'member' is not.
-    if (authed.role !== 'admin' && authed.role !== 'owner') {
+    // Admin-or-higher required. `hasMinimumRole` normalizes legacy 'owner' to
+    // 'superadmin' and admits both 'admin' and 'superadmin'.
+    if (!hasMinimumRole(authed.role, ROLES.ADMIN)) {
       res.status(403).json({ error: 'Admin role required to initiate GitHub App install' });
       return;
     }
@@ -293,8 +285,8 @@ function handleSetupCallback(db: Database, uiUrl: string) {
     }
 
     const installationIdNum = Number(installationIdRaw);
-    if (!Number.isFinite(installationIdNum) || !Number.isInteger(installationIdNum)) {
-      res.status(400).send('installation_id must be an integer');
+    if (!Number.isSafeInteger(installationIdNum) || installationIdNum <= 0) {
+      res.status(400).send('installation_id must be a positive integer');
       return;
     }
 

@@ -65,6 +65,7 @@ import { createThreadSessionMapService } from './services/thread-session-map.js'
 import { createUsersService } from './services/users.js';
 import { setupWorktreeOwnersService } from './services/worktree-owners.js';
 import { createWorktreesService } from './services/worktrees.js';
+import { escapeHtml } from './utils/html.js';
 import {
   computeFileHash,
   findCodexSessionFile,
@@ -873,14 +874,6 @@ async function registerMCPServices(
   const { db, app } = ctx;
 
   // Helper to generate a simple HTML page for OAuth callback results
-  function escapeHtml(str: string): string {
-    return str
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  }
-
   function oauthResultPage(success: boolean, message: string): string {
     const color = success ? '#52c41a' : '#ff4d4f';
     const icon = success ? '&#10003;' : '&#10007;';

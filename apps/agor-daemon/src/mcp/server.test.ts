@@ -152,4 +152,41 @@ describe('POST /mcp token source', () => {
     await handler(req, res as unknown as Response);
     expect(res.statusCode).toBe(400);
   });
+
+  it('logs the deprecation warning at most once per caller IP', async () => {
+    const handler = captureMcpHandler();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Use a unique IP so the module-level Set isn't already populated for it.
+    const uniqueIp = `10.9.8.${Math.floor(Math.random() * 255)}`;
+    const makeReq = () =>
+      ({
+        method: 'POST',
+        query: { sessionToken: 'x' },
+        headers: {},
+        body: { id: 1 },
+        ip: uniqueIp,
+        socket: { remoteAddress: uniqueIp },
+      }) as unknown as Request;
+
+    await handler(makeReq(), buildRes() as unknown as Response);
+    const firstCount = warn.mock.calls.length;
+    await handler(makeReq(), buildRes() as unknown as Response);
+    await handler(makeReq(), buildRes() as unknown as Response);
+    // Second and third calls from the same IP must not emit another warn.
+    expect(warn.mock.calls.length).toBe(firstCount);
+
+    // A different IP still warns.
+    const otherIp = `10.9.7.${Math.floor(Math.random() * 255)}`;
+    const otherReq = {
+      method: 'POST',
+      query: { sessionToken: 'x' },
+      headers: {},
+      body: { id: 2 },
+      ip: otherIp,
+      socket: { remoteAddress: otherIp },
+    } as unknown as Request;
+    await handler(otherReq, buildRes() as unknown as Response);
+    expect(warn.mock.calls.length).toBe(firstCount + 1);
+    warn.mockRestore();
+  });
 });

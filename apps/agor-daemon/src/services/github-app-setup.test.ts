@@ -177,8 +177,17 @@ describe('POST /api/github/setup/state', () => {
     expect(body.state).toMatch(/^[a-f0-9]+$/);
   });
 
-  it('returns 200 + state for owner users', async () => {
+  it('returns 200 + state for owner users (legacy alias for superadmin)', async () => {
     const app = mockApp({ user: { user_id: 'u-owner', role: 'owner' } });
+    const handler = __testables.handleIssueState(app);
+    const res = mockRes();
+    await handler(mockReq({ headers: { authorization: 'Bearer ok' } }), res as express.Response);
+    expect(res.statusCode).toBe(200);
+    expect((res.body as { state?: string }).state).toBeTruthy();
+  });
+
+  it('returns 200 + state for superadmin users (canonical elevated role)', async () => {
+    const app = mockApp({ user: { user_id: 'u-super', role: 'superadmin' } });
     const handler = __testables.handleIssueState(app);
     const res = mockRes();
     await handler(mockReq({ headers: { authorization: 'Bearer ok' } }), res as express.Response);
@@ -277,6 +286,28 @@ describe('GET /api/github/setup/callback', () => {
     const res = mockRes();
     await handler(
       mockReq({ query: { state, installation_id: 'not-a-number' } }),
+      res as express.Response
+    );
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects negative or zero installation_id', async () => {
+    const handler = __testables.handleSetupCallback({} as never, 'http://ui');
+    for (const bad of ['-1', '0']) {
+      const state = issueInstallState('u-admin');
+      const res = mockRes();
+      await handler(mockReq({ query: { state, installation_id: bad } }), res as express.Response);
+      expect(res.statusCode).toBe(400);
+      expect(String(res.body)).toMatch(/positive integer/);
+    }
+  });
+
+  it('rejects unsafe-large installation_id (beyond Number.MAX_SAFE_INTEGER)', async () => {
+    const state = issueInstallState('u-admin');
+    const handler = __testables.handleSetupCallback({} as never, 'http://ui');
+    const res = mockRes();
+    await handler(
+      mockReq({ query: { state, installation_id: '99999999999999999999' } }),
       res as express.Response
     );
     expect(res.statusCode).toBe(400);

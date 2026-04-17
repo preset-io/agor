@@ -58,6 +58,7 @@ import { getDaemonUrl } from '@/config/daemon';
 import { copyToClipboard } from '@/utils/clipboard';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
+import { ACCESS_TOKEN_KEY } from '@/utils/tokenRefresh';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
@@ -426,8 +427,8 @@ const ChannelFormFields: React.FC<{
             <div style={{ marginBottom: 16 }}>
               <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
                 Create a GitHub App to connect Agor to your repositories. This uses GitHub&apos;s
-                App Manifest flow — you&apos;ll be redirected to GitHub to authorize the app, then
-                brought back here to complete setup.
+                URL-parameters registration flow — you&apos;ll be redirected to GitHub with the form
+                pre-filled, then brought back here to complete setup.
               </Typography.Paragraph>
 
               <Form.Item label="App Name" name="github_app_name">
@@ -458,7 +459,7 @@ const ChannelFormFields: React.FC<{
                   // This authenticates the install-initiation step and binds the
                   // post-install callback to this user_id.
                   try {
-                    const accessToken = localStorage.getItem('agor-access-token');
+                    const accessToken = localStorage.getItem(ACCESS_TOKEN_KEY);
                     if (!accessToken) {
                       antdMessage.error(
                         'You must be logged in as an admin to install the GitHub App.'
