@@ -2,13 +2,16 @@
  * Leaderboard Service
  *
  * Provides usage analytics endpoint for token and cost tracking.
- * Allows breakdown by user, worktree, and repo with flexible filtering and sorting.
+ * Allows breakdown by user, worktree, repo, model, and agentic tool, with
+ * optional time bucketing (hour/day/week/month) and flexible filtering.
  */
 
 import {
   and,
   asc,
   type Database,
+  type DateBucket,
+  dateTruncUtc,
   desc,
   eq,
   jsonExtract,
@@ -24,6 +27,14 @@ interface Params {
   query?: Record<string, unknown>;
 }
 
+/**
+ * Supported groupBy dimensions. Callers can combine these in a comma-separated string,
+ * e.g. `'user,model'` or `'tool,worktree,repo'`.
+ */
+export type LeaderboardDimension = 'user' | 'worktree' | 'repo' | 'model' | 'tool';
+
+const ALL_DIMENSIONS: LeaderboardDimension[] = ['user', 'worktree', 'repo', 'model', 'tool'];
+
 export interface LeaderboardQuery {
   // Filters
   userId?: string;
@@ -34,17 +45,16 @@ export interface LeaderboardQuery {
   startDate?: string;
   endDate?: string;
 
-  // Group by dimension (optional - defaults to all three)
-  groupBy?:
-    | 'user'
-    | 'worktree'
-    | 'repo'
-    | 'user,worktree'
-    | 'user,repo'
-    | 'worktree,repo'
-    | 'user,worktree,repo';
+  // Group by dimensions (optional, comma-separated). Default matches legacy behaviour.
+  // Supported values: 'user' | 'worktree' | 'repo' | 'model' | 'tool' (any combination).
+  groupBy?: string;
 
-  // Sorting
+  // Time bucket (optional). When set, adds a `bucket` field (ISO-8601 UTC timestamp
+  // truncated to the given granularity) to each row and to the GROUP BY.
+  bucket?: DateBucket;
+
+  // Sorting. When bucket is set, results are ordered by bucket ASC first, then by
+  // sortBy within each bucket.
   sortBy?: 'tokens' | 'cost';
   sortOrder?: 'asc' | 'desc';
 
@@ -54,6 +64,7 @@ export interface LeaderboardQuery {
 }
 
 export interface LeaderboardEntry {
+  // Dimension fields (present only when the corresponding dimension is in groupBy)
   userId?: string;
   userName?: string;
   userEmail?: string;
@@ -62,9 +73,20 @@ export interface LeaderboardEntry {
   worktreeName?: string;
   repoId?: string;
   repoName?: string;
+  model?: string;
+  tool?: string;
+
+  // Time-series field (present only when `bucket` is set)
+  bucket?: string;
+
+  // Metrics (always present)
   totalTokens: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
   totalCost: number;
   taskCount: number;
+  sessionCount: number;
+  totalDurationMs: number;
 }
 
 export interface LeaderboardResult {
@@ -72,6 +94,23 @@ export interface LeaderboardResult {
   total: number;
   limit: number;
   offset: number;
+}
+
+const VALID_BUCKETS = new Set<DateBucket>(['hour', 'day', 'week', 'month']);
+
+/**
+ * Parse the comma-separated groupBy string into a set of known dimensions.
+ * Unknown values are ignored (preserving forward compatibility).
+ */
+function parseGroupBy(groupBy: string): Set<LeaderboardDimension> {
+  const dims = new Set<LeaderboardDimension>();
+  for (const raw of groupBy.split(',')) {
+    const trimmed = raw.trim() as LeaderboardDimension;
+    if (ALL_DIMENSIONS.includes(trimmed)) {
+      dims.add(trimmed);
+    }
+  }
+  return dims;
 }
 
 /**
@@ -101,17 +140,24 @@ export class LeaderboardService {
       startDate,
       endDate,
       groupBy = 'user,worktree,repo',
+      bucket,
       sortBy = 'cost',
       sortOrder = 'desc',
       limit = 50,
       offset = 0,
     } = query;
 
+    if (bucket !== undefined && !VALID_BUCKETS.has(bucket)) {
+      throw new Error(`Invalid bucket: "${bucket}". Expected one of: hour, day, week, month.`);
+    }
+
     // Parse groupBy dimensions
-    const dimensions = groupBy.split(',').map((d) => d.trim());
-    const includeUser = dimensions.includes('user');
-    const includeWorktree = dimensions.includes('worktree');
-    const includeRepo = dimensions.includes('repo');
+    const dims = parseGroupBy(groupBy);
+    const includeUser = dims.has('user');
+    const includeWorktree = dims.has('worktree');
+    const includeRepo = dims.has('repo');
+    const includeModel = dims.has('model');
+    const includeTool = dims.has('tool');
 
     // Build WHERE conditions
     const conditions: SQL[] = [];
@@ -146,18 +192,56 @@ export class LeaderboardService {
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-    // Build dynamic SELECT clause
-    // Aggregate token usage from normalized_sdk_response.tokenUsage
-    // The executor normalizes raw SDK responses into a consistent format across all agents
+    // Build dynamic SELECT clause.
+    //
+    // Metrics are sourced from `normalized_sdk_response` (written by the executor,
+    // agent-agnostic). For duration we prefer the normalized value; if unset we fall
+    // back to the top-level `tasks.data.duration_ms`. Tasks without either field
+    // (legacy / in-flight) contribute 0 duration, which is the same behaviour as
+    // tokens/cost today.
+    const modelExpr = jsonExtract(this.db, tasks.data, 'model');
+    const inputTokensExpr = jsonExtract(
+      this.db,
+      tasks.data,
+      'normalized_sdk_response.tokenUsage.inputTokens'
+    );
+    const outputTokensExpr = jsonExtract(
+      this.db,
+      tasks.data,
+      'normalized_sdk_response.tokenUsage.outputTokens'
+    );
+    const totalTokensExpr = jsonExtract(
+      this.db,
+      tasks.data,
+      'normalized_sdk_response.tokenUsage.totalTokens'
+    );
+    const costExpr = jsonExtract(this.db, tasks.data, 'normalized_sdk_response.costUsd');
+    const normalizedDurationExpr = jsonExtract(
+      this.db,
+      tasks.data,
+      'normalized_sdk_response.durationMs'
+    );
+    const topLevelDurationExpr = jsonExtract(this.db, tasks.data, 'duration_ms');
+
     // biome-ignore lint/suspicious/noExplicitAny: Dynamic SQL fields require any
     const selectFields: Record<string, any> = {
+      totalInputTokens: sql<number>`COALESCE(SUM(
+        CAST(${inputTokensExpr} AS INTEGER)
+      ), 0)`.as('total_input_tokens'),
+      totalOutputTokens: sql<number>`COALESCE(SUM(
+        CAST(${outputTokensExpr} AS INTEGER)
+      ), 0)`.as('total_output_tokens'),
       totalTokens: sql<number>`COALESCE(SUM(
-        CAST(${jsonExtract(this.db, tasks.data, 'normalized_sdk_response.tokenUsage.totalTokens')} AS INTEGER)
+        CAST(${totalTokensExpr} AS INTEGER)
       ), 0)`.as('total_tokens'),
       totalCost: sql<number>`COALESCE(SUM(
-        CAST(${jsonExtract(this.db, tasks.data, 'normalized_sdk_response.costUsd')} AS REAL)
+        CAST(${costExpr} AS REAL)
       ), 0.0)`.as('total_cost'),
       taskCount: sql<number>`COUNT(DISTINCT ${tasks.task_id})`.as('task_count'),
+      sessionCount: sql<number>`COUNT(DISTINCT ${tasks.session_id})`.as('session_count'),
+      totalDurationMs: sql<number>`COALESCE(SUM(
+        CAST(COALESCE(${normalizedDurationExpr}, ${topLevelDurationExpr}) AS INTEGER)
+      ), 0)`.as('total_duration_ms'),
     };
 
     if (includeUser) {
@@ -172,6 +256,18 @@ export class LeaderboardService {
     }
     if (includeRepo) {
       selectFields.repoId = worktrees.repo_id;
+    }
+    if (includeModel) {
+      selectFields.model = sql<string>`${modelExpr}`.as('model');
+    }
+    if (includeTool) {
+      selectFields.tool = sessions.agentic_tool;
+    }
+
+    // Bucketing: compute a UTC-truncated ISO timestamp string.
+    const bucketExpr = bucket ? dateTruncUtc(this.db, tasks.created_at, bucket) : undefined;
+    if (bucketExpr) {
+      selectFields.bucket = sql<string>`${bucketExpr}`.as('bucket');
     }
 
     // Build dynamic GROUP BY clause
@@ -188,10 +284,15 @@ export class LeaderboardService {
       groupByFields.push(worktrees.name);
     }
     if (includeRepo) groupByFields.push(worktrees.repo_id);
+    if (includeModel) groupByFields.push(sql`${modelExpr}`);
+    if (includeTool) groupByFields.push(sessions.agentic_tool);
+    if (bucketExpr) groupByFields.push(sql`${bucketExpr}`);
 
-    // Build sorting
+    // Build sorting. When bucketing, order by bucket ASC first so the caller receives
+    // chronologically-ordered time series, then by the requested metric within each bucket.
     const sortField = sortBy === 'tokens' ? sql`total_tokens` : sql`total_cost`;
-    const orderClause = sortOrder === 'desc' ? desc(sortField) : asc(sortField);
+    const metricOrder = sortOrder === 'desc' ? desc(sortField) : asc(sortField);
+    const orderClauses = bucketExpr ? [asc(sql`bucket`), metricOrder] : [metricOrder];
 
     // Execute aggregation query
     // Join: tasks -> sessions -> worktrees, optionally LEFT JOIN users for display info
@@ -211,19 +312,34 @@ export class LeaderboardService {
     const results = await qb
       .where(whereClause)
       .groupBy(...groupByFields)
-      .orderBy(orderClause)
+      .orderBy(...orderClauses)
       .limit(limit)
       .offset(offset);
 
-    // Build distinct count for pagination
+    // Build distinct count for pagination. Each part is wrapped in COALESCE so NULLs
+    // (e.g. model on legacy rows) don't collapse the concatenation.
     const distinctParts: string[] = [];
-    if (includeUser) distinctParts.push('tasks.created_by');
-    if (includeWorktree) distinctParts.push('worktrees.worktree_id');
-    if (includeRepo) distinctParts.push('worktrees.repo_id');
-    const distinctExpr =
-      distinctParts.length > 0
-        ? sql`COUNT(DISTINCT ${sql.raw(distinctParts.join(" || '-' || "))})`
-        : sql`COUNT(*)`;
+    if (includeUser) distinctParts.push("COALESCE(tasks.created_by, '')");
+    if (includeWorktree) distinctParts.push("COALESCE(worktrees.worktree_id, '')");
+    if (includeRepo) distinctParts.push("COALESCE(worktrees.repo_id, '')");
+    if (includeTool) distinctParts.push("COALESCE(sessions.agentic_tool, '')");
+    // Model and bucket are SQL expressions, not columns; they're inlined separately below.
+
+    // biome-ignore lint/suspicious/noExplicitAny: Building dynamic SQL requires any
+    const distinctPieces: any[] = distinctParts.map((p) => sql.raw(p));
+    if (includeModel) {
+      distinctPieces.push(sql`COALESCE(${modelExpr}, '')`);
+    }
+    if (bucketExpr) {
+      distinctPieces.push(sql`COALESCE(${bucketExpr}, '')`);
+    }
+
+    let distinctExpr: SQL;
+    if (distinctPieces.length === 0) {
+      distinctExpr = sql`COUNT(*)`;
+    } else {
+      distinctExpr = sql`COUNT(DISTINCT ${sql.join(distinctPieces, sql` || '-' || `)})`;
+    }
 
     // biome-ignore lint/suspicious/noExplicitAny: Database union type prevents calling .select() with dynamic fields
     let countQb = (this.db as any)
@@ -251,9 +367,16 @@ export class LeaderboardService {
       worktreeId?: string;
       worktreeName?: string;
       repoId?: string;
+      model?: string | null;
+      tool?: string | null;
+      bucket?: string | null;
       totalTokens: number;
+      totalInputTokens: number;
+      totalOutputTokens: number;
       totalCost: number;
       taskCount: number;
+      sessionCount: number;
+      totalDurationMs: number;
     }
 
     // Transform results to match our interface
@@ -271,9 +394,16 @@ export class LeaderboardService {
           worktreeName: r.worktreeName as string,
         }),
         ...(includeRepo && { repoId: r.repoId as string }),
-        totalTokens: r.totalTokens || 0,
-        totalCost: r.totalCost || 0,
-        taskCount: r.taskCount || 0,
+        ...(includeModel && { model: r.model || undefined }),
+        ...(includeTool && { tool: r.tool || undefined }),
+        ...(bucketExpr && { bucket: r.bucket || undefined }),
+        totalTokens: Number(r.totalTokens) || 0,
+        totalInputTokens: Number(r.totalInputTokens) || 0,
+        totalOutputTokens: Number(r.totalOutputTokens) || 0,
+        totalCost: Number(r.totalCost) || 0,
+        taskCount: Number(r.taskCount) || 0,
+        sessionCount: Number(r.sessionCount) || 0,
+        totalDurationMs: Number(r.totalDurationMs) || 0,
       };
     });
 
