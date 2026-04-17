@@ -1162,3 +1162,198 @@ export function ensureCanPromptInSession(options?: { allowSuperadmin?: boolean }
 export function ensureCanView(options?: { allowSuperadmin?: boolean }) {
   return ensureWorktreePermission('view', 'view this worktree', options);
 }
+
+/**
+ * Empty paginated result helper — used to short-circuit find() for unauthenticated
+ * callers or callers whose query falls outside their accessible worktree set.
+ */
+function emptyFindResult(context: HookContext): HookContext {
+  const query = (context.params.query ?? {}) as Record<string, unknown>;
+  context.result = {
+    total: 0,
+    limit: (query.$limit as number) ?? 0,
+    skip: (query.$skip as number) ?? 0,
+    data: [],
+  };
+  return context;
+}
+
+/**
+ * Scope find() queries on worktree-scoped resources to the set of worktrees
+ * the caller can access.
+ *
+ * This is a BEFORE hook factory for services whose rows carry a `worktree_id`
+ * foreign key (e.g. artifacts, board-objects tied to a worktree, etc.).
+ *
+ * Behavior:
+ * - Internal calls (no `context.params.provider`) pass through unchanged.
+ * - Service accounts (`context.params.user._isServiceAccount`) pass through.
+ * - Unauthenticated requests short-circuit with an empty paginated result.
+ * - Superadmins (when `allowSuperadmin` is true) pass through; the default
+ *   query runs unmodified and returns all rows.
+ * - Non-superadmin authenticated users get their accessible worktree set
+ *   resolved via `findAccessibleWorktrees(userId)`. The set is then intersected
+ *   with any existing `worktree_id` filter in `context.params.query`:
+ *   - If the caller passed `worktree_id` (string) outside the accessible set,
+ *     short-circuit with an empty result.
+ *   - If the caller passed `worktree_id` within the accessible set, preserve it.
+ *   - If the caller passed `{ $in: [...] }`, intersect with accessible ids.
+ *   - Otherwise, inject `worktree_id: { $in: [...accessibleIds] }`.
+ *
+ * Only applies when `context.method === 'find'`. No-op for other methods.
+ *
+ * @param worktreeRepo - WorktreeRepository instance
+ * @param options - Optional flags (allowSuperadmin)
+ * @returns Feathers hook
+ */
+export function scopeFindToAccessibleWorktrees(
+  worktreeRepo: WorktreeRepository,
+  options?: { allowSuperadmin?: boolean }
+) {
+  return async (context: HookContext) => {
+    // Only applies to find()
+    if (context.method !== 'find') {
+      return context;
+    }
+
+    // Skip for internal calls
+    if (!context.params.provider) {
+      return context;
+    }
+
+    // Service accounts bypass RBAC
+    if (context.params.user?._isServiceAccount) {
+      return context;
+    }
+
+    const userId = context.params.user?.user_id as UUID | undefined;
+    if (!userId) {
+      return emptyFindResult(context);
+    }
+
+    // Superadmins bypass scoping
+    const userRole = context.params.user?.role as string | undefined;
+    const allowSuperadmin = options?.allowSuperadmin ?? true;
+    if (isSuperAdmin(userRole, allowSuperadmin)) {
+      return context;
+    }
+
+    // Resolve accessible worktree ids (cast to string set for query comparisons;
+    // Feathers queries carry raw strings, not branded IDs).
+    const accessible = await worktreeRepo.findAccessibleWorktrees(userId);
+    const accessibleIds = new Set<string>(accessible.map((w) => w.worktree_id as string));
+
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers query shape is dynamic
+    const query = (context.params.query ?? {}) as any;
+    const existing = query.worktree_id;
+
+    if (typeof existing === 'string') {
+      // Caller pre-scoped to a specific worktree — must be accessible
+      if (!accessibleIds.has(existing)) {
+        return emptyFindResult(context);
+      }
+      // Already scoped; no change needed.
+      return context;
+    }
+
+    if (existing && typeof existing === 'object' && Array.isArray(existing.$in)) {
+      const intersect = (existing.$in as string[]).filter((id) => accessibleIds.has(id));
+      if (intersect.length === 0) {
+        return emptyFindResult(context);
+      }
+      query.worktree_id = { $in: intersect };
+      context.params.query = query;
+      return context;
+    }
+
+    // No explicit worktree_id filter — restrict to accessible set
+    if (accessibleIds.size === 0) {
+      return emptyFindResult(context);
+    }
+    query.worktree_id = { $in: Array.from(accessibleIds) };
+    context.params.query = query;
+    return context;
+  };
+}
+
+/**
+ * Scope find() queries on session-scoped resources to the set of sessions
+ * the caller can access (via their accessible worktrees).
+ *
+ * This is a BEFORE hook factory for services whose rows carry a `session_id`
+ * foreign key (e.g. tasks, messages, session-mcp-servers).
+ *
+ * Behavior mirrors {@link scopeFindToAccessibleWorktrees} but resolves via
+ * `findAccessibleSessions(userId)` and mutates `context.params.query.session_id`:
+ * - Internal / service-account calls pass through.
+ * - Unauthenticated → empty result.
+ * - Superadmins pass through.
+ * - Regular users: if an explicit `session_id` is passed, it must be in the
+ *   accessible set; otherwise inject `session_id: { $in: [...accessibleIds] }`.
+ *
+ * Only applies when `context.method === 'find'`.
+ *
+ * @param sessionRepo - SessionRepository instance
+ * @param options - Optional flags (allowSuperadmin)
+ * @returns Feathers hook
+ */
+export function scopeFindToAccessibleSessions(
+  sessionRepo: SessionRepository,
+  options?: { allowSuperadmin?: boolean }
+) {
+  return async (context: HookContext) => {
+    if (context.method !== 'find') {
+      return context;
+    }
+
+    if (!context.params.provider) {
+      return context;
+    }
+
+    if (context.params.user?._isServiceAccount) {
+      return context;
+    }
+
+    const userId = context.params.user?.user_id as UUID | undefined;
+    if (!userId) {
+      return emptyFindResult(context);
+    }
+
+    const userRole = context.params.user?.role as string | undefined;
+    const allowSuperadmin = options?.allowSuperadmin ?? true;
+    if (isSuperAdmin(userRole, allowSuperadmin)) {
+      return context;
+    }
+
+    const accessible = await sessionRepo.findAccessibleSessions(userId);
+    const accessibleIds = new Set<string>(accessible.map((s) => s.session_id as string));
+
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers query shape is dynamic
+    const query = (context.params.query ?? {}) as any;
+    const existing = query.session_id;
+
+    if (typeof existing === 'string') {
+      if (!accessibleIds.has(existing)) {
+        return emptyFindResult(context);
+      }
+      return context;
+    }
+
+    if (existing && typeof existing === 'object' && Array.isArray(existing.$in)) {
+      const intersect = (existing.$in as string[]).filter((id) => accessibleIds.has(id));
+      if (intersect.length === 0) {
+        return emptyFindResult(context);
+      }
+      query.session_id = { $in: intersect };
+      context.params.query = query;
+      return context;
+    }
+
+    if (accessibleIds.size === 0) {
+      return emptyFindResult(context);
+    }
+    query.session_id = { $in: Array.from(accessibleIds) };
+    context.params.query = query;
+    return context;
+  };
+}
