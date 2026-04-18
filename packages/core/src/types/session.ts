@@ -471,6 +471,17 @@ export interface ScheduledRunMetadata {
   run_index: number;
 
   /**
+   * Whether this run was triggered manually via execute-now (vs. cron tick).
+   */
+  triggered_manually?: boolean;
+
+  /**
+   * User ID that manually triggered this run. Only set when
+   * `triggered_manually` is true.
+   */
+  triggered_by?: string;
+
+  /**
    * Snapshot of schedule config at execution time
    *
    * Preserves configuration even if schedule is later modified or deleted.
@@ -483,6 +494,8 @@ export interface ScheduledRunMetadata {
     timezone: string;
     /** Retention policy at run time */
     retention: number;
+    /** Concurrency policy at run time (applies to both cron and manual paths) */
+    allow_concurrent_runs?: boolean;
   };
 }
 

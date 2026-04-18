@@ -286,17 +286,11 @@ export class SchedulerService {
    * @throws ScheduleBusyError when allow_concurrent_runs is false and the
    *   worktree already has an active session.
    */
-  async executeScheduleNow(opts: {
-    worktreeId: WorktreeID;
-    triggeredBy: UUID;
-  }): Promise<Session> {
+  async executeScheduleNow(opts: { worktreeId: WorktreeID; triggeredBy: UUID }): Promise<Session> {
     const { worktreeId, triggeredBy } = opts;
     const worktree = await this.worktreeRepo.findById(worktreeId);
     if (!worktree) {
-      throw new ScheduleNotReadyError(
-        'schedule_incomplete',
-        `Worktree not found: ${worktreeId}`
-      );
+      throw new ScheduleNotReadyError('schedule_incomplete', `Worktree not found: ${worktreeId}`);
     }
 
     if (!worktree.schedule_enabled) {
