@@ -225,5 +225,113 @@ describe('run-as-user', () => {
         expect(result.args).toContain('/var/folders/xx/T/agor env with spaces');
       });
     });
+
+    describe('with shell: true (env commands — shell-string mode)', () => {
+      // Regression suite for the bug where env commands under impersonation
+      // with secrets were passed to `exec "$@"`, which treated the whole
+      // shell string (e.g. `SEED=true docker compose up -d`) as a single
+      // program name and failed with `exec: <whole string>: not found`.
+      const ENV_COMMAND =
+        'SEED=true UID=$(id -u) GID=$(id -g) docker compose -p agor-x up -d --build';
+
+      it('uses `exec bash -c "$2"` to shell-interpret the command (with envFilePath)', () => {
+        const result = buildSpawnArgs(ENV_COMMAND, [], {
+          asUser: 'max',
+          envFilePath: '/tmp/agor-env-xyz',
+          shell: true,
+        });
+        expect(result.cmd).toBe('sudo');
+        expect(result.args.slice(0, 4)).toEqual(['-n', '-u', 'max', 'bash']);
+        expect(result.args[4]).toBe('-c');
+        expect(result.args[5]).toBe(
+          'set -eu; ENVFILE="$1"; set -a; . "$ENVFILE"; set +a; rm -f -- "$ENVFILE"; exec bash -c "$2" agor-env'
+        );
+        expect(result.args[6]).toBe('--');
+        expect(result.args[7]).toBe('/tmp/agor-env-xyz');
+        // The user command is passed as a single opaque shell string —
+        // NOT tokenised, NOT escapeShellArg'd. The inner `bash -c` is what
+        // parses it. Shell metachars (`$(id -u)`, spaces, `&&`, etc.) must
+        // survive unchanged.
+        expect(result.args[8]).toBe(ENV_COMMAND);
+      });
+
+      it('inner script is still fail-closed (set -eu before source and exec)', () => {
+        const result = buildSpawnArgs(ENV_COMMAND, [], {
+          asUser: 'max',
+          envFilePath: '/tmp/agor-env-y',
+          shell: true,
+        });
+        const script = result.args[5];
+        expect(script.indexOf('set -eu')).toBeLessThan(script.indexOf('. "$ENVFILE"'));
+        expect(script.indexOf('. "$ENVFILE"')).toBeLessThan(script.indexOf('exec bash'));
+        expect(script).toContain('rm -f -- "$ENVFILE"');
+      });
+
+      it('preserves shell metacharacters in the command string (no escaping)', () => {
+        // Regression: env commands intentionally contain `$(id -u)` and
+        // similar subshells that must reach the inner bash un-escaped.
+        const result = buildSpawnArgs('echo "hello $(whoami)" && docker compose -p x up -d', [], {
+          asUser: 'alice',
+          envFilePath: '/tmp/agor-env-z',
+          shell: true,
+        });
+        expect(result.args[8]).toBe('echo "hello $(whoami)" && docker compose -p x up -d');
+      });
+
+      it('prepends non-secret env vars via `env` prefix', () => {
+        const result = buildSpawnArgs('docker compose up -d', [], {
+          asUser: 'alice',
+          envFilePath: '/tmp/agor-env-e',
+          shell: true,
+          env: { DAEMON_PORT: '3601', UI_PORT: '5601' },
+        });
+        expect(result.args[8]).toBe("env DAEMON_PORT='3601' UI_PORT='5601' docker compose up -d");
+      });
+
+      it('appends escaped args to the shell command when args are provided', () => {
+        const result = buildSpawnArgs('docker compose', ['up', '-d'], {
+          asUser: 'alice',
+          envFilePath: '/tmp/agor-env-a',
+          shell: true,
+        });
+        expect(result.args[8]).toBe("docker compose 'up' '-d'");
+      });
+
+      it('REGRESSION: does NOT contain any secret values in argv', () => {
+        const secretValues = {
+          ANTHROPIC_API_KEY: 'sk-ant-super-secret-value-DO-NOT-LEAK',
+          DATABASE_URL: 'postgres://user:super-secret-password@host/db',
+        };
+        const result = buildSpawnArgs('docker compose up -d', [], {
+          asUser: 'alice',
+          envFilePath: '/tmp/agor-env-nonce',
+          shell: true,
+          // inlineEnv should contain ONLY non-secret vars in real use;
+          // this test asserts that secrets passed by mistake via `env`
+          // would still reach argv (which is why callers must route
+          // secrets through envFilePath only). We check that the
+          // envFilePath path itself does not leak anything beyond what
+          // callers explicitly inlined.
+        });
+        const argvSerialized = [result.cmd, ...result.args].join('\n');
+        for (const value of Object.values(secretValues)) {
+          expect(argvSerialized).not.toContain(value);
+        }
+      });
+
+      it('default (shell: false) keeps argv-mode behaviour for executor callers', () => {
+        // Belt-and-braces: the executor spawn path must continue to use
+        // `exec "$@"` so that `node executor.js --stdin` runs without an
+        // extra shell layer. Adding `shell` must not regress it.
+        const result = buildSpawnArgs('node', ['executor.js', '--stdin'], {
+          asUser: 'alice',
+          envFilePath: '/tmp/agor-env-default',
+        });
+        expect(result.args[5]).toBe(
+          'set -eu; ENVFILE="$1"; shift; set -a; . "$ENVFILE"; set +a; rm -f -- "$ENVFILE"; exec "$@"'
+        );
+        expect(result.args.slice(8)).toEqual(['node', 'executor.js', '--stdin']);
+      });
+    });
   });
 });

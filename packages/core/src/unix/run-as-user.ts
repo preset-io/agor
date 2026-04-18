@@ -166,6 +166,22 @@ export interface BuildSpawnArgsOptions {
    * the env-file is only sourced inside the impersonated shell.
    */
   envFilePath?: string;
+
+  /**
+   * Treat `command` as a shell string (like `sh -c`) rather than an argv
+   * entry. Affects the impersonated + `envFilePath` code path only — where
+   * the default emits `exec "$@"` (argv mode, suitable for `buildSpawnArgs(
+   * 'node', ['executor.js'], ...)`) and shell-mode emits `exec bash -c "$CMD"`
+   * (suitable for user-authored commands like
+   * `docker compose -p $NAME up -d --build` that embed env prefixes, `$(...)`
+   * subshells, and argument globbing).
+   *
+   * Callers of env-command execution must set this to `true`; the executor
+   * and zellij paths pass pre-tokenised argv and leave this unset.
+   *
+   * Default: `false`.
+   */
+  shell?: boolean;
 }
 
 /**
@@ -208,7 +224,7 @@ export function buildSpawnArgs(
   // Handle backward compatibility: options can be a string (asUser) or object
   const opts: BuildSpawnArgsOptions =
     typeof options === 'string' ? { asUser: options } : (options ?? {});
-  const { asUser, env, envFilePath } = opts;
+  const { asUser, env, envFilePath, shell } = opts;
 
   // envFilePath only makes sense when impersonating — the env-file is sourced
   // inside the impersonated shell. Fail loudly rather than silently dropping.
@@ -253,6 +269,48 @@ export function buildSpawnArgs(
       );
     }
 
+    if (shell) {
+      // Shell-mode: `command` is a user-authored shell string (possibly with
+      // env-var prefixes, `$(...)` subshells, `&&` chaining, etc.). Any args
+      // are shell-escaped and appended so a caller can optionally pass
+      // additional argv tokens.
+      //
+      // Non-secret env vars are prepended via `env KEY='val' ...` so they
+      // reach the process without bypassing the envFilePath secret path.
+      let envPrefix = '';
+      if (env && Object.keys(env).length > 0) {
+        const envEntries = Object.entries(env)
+          .map(([key, value]) => `${key}=${escapeShellArg(value)}`)
+          .join(' ');
+        envPrefix = `env ${envEntries} `;
+      }
+      const escapedArgs = args.map(escapeShellArg).join(' ');
+      const userCommand =
+        args.length > 0 ? `${envPrefix}${command} ${escapedArgs}` : `${envPrefix}${command}`;
+
+      // Inner bash script:
+      //   $1 = env file path, $2 = shell command (opaque string)
+      //   - set -eu: if source fails, abort BEFORE rm+exec so we never
+      //     launch the real process with missing secrets
+      //   - source env into current shell (set -a auto-exports)
+      //   - unlink file before exec so it does not linger on disk
+      //   - exec bash -c "$2" — the inner bash parses the user command,
+      //     honouring env-var prefixes, `$(...)`, quoting, etc.
+      //   - trailing `agor-env` becomes $0 inside the inner shell, making
+      //     error messages read `agor-env: line N: …` instead of `--: …`.
+      const innerScript =
+        'set -eu; ENVFILE="$1"; set -a; . "$ENVFILE"; set +a; rm -f -- "$ENVFILE"; exec bash -c "$2" agor-env';
+
+      return {
+        cmd: 'sudo',
+        args: ['-n', '-u', asUser, 'bash', '-c', innerScript, '--', envFilePath, userCommand],
+      };
+    }
+
+    // Argv-mode (default): caller passed pre-tokenised [command, ...args].
+    // Used by the executor and zellij paths where the command is a known
+    // binary with a known argv shape.
+    //
     // Inner bash script:
     //   $1 = env file path, $2... = real command + args
     //   - set -eu: if source fails, abort BEFORE rm+exec so we never

@@ -100,11 +100,19 @@ export async function spawnEnvironmentCommand(
     ? prepareImpersonationEnv({ asUser, env })
     : { inlineEnv: undefined, envFilePath: undefined };
 
-  // Build spawn args with impersonation
+  // Build spawn args with impersonation.
+  //
+  // `shell: true` is critical here: env commands are user-authored shell
+  // strings (e.g. `SEED=true UID=$(id -u) docker compose up -d --build`)
+  // that need shell parsing — env-var prefixes, `$(...)` subshells, argument
+  // word-splitting, etc. Without this, the impersonated + secret-file path
+  // emits `exec "$@"` which treats the whole string as a single program
+  // name and fails with `exec: <full string>: not found`.
   const { cmd, args } = buildSpawnArgs(command, [], {
     asUser,
     env: asUser ? prepared.inlineEnv : undefined, // Non-secret env only; secrets are sourced from envFilePath
     envFilePath: prepared.envFilePath,
+    shell: true,
   });
 
   // Spawn the command
