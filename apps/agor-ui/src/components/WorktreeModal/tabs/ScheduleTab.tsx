@@ -189,7 +189,9 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
           <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
             <div>
               <Text type="secondary" style={{ fontSize: '12px' }}>
-                Configure when to create new sessions
+                Configure when to create new sessions. All cron expressions are
+                evaluated in <Text strong>UTC</Text> (your local time is{' '}
+                {new Date().toLocaleTimeString(undefined, { timeZoneName: 'short' })}).
               </Text>
             </div>
 
@@ -213,7 +215,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
 
             {/* Human-readable description */}
             <Alert
-              message={humanReadable}
+              message={`${humanReadable} (UTC)`}
               type="info"
               showIcon
               icon={<ClockCircleOutlined />}
