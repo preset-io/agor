@@ -126,6 +126,7 @@ interface SessionCanvasProps {
   onStopEnvironment?: (worktreeId: string) => void;
   onViewLogs?: (worktreeId: string) => void;
   onNukeEnvironment?: (worktreeId: string) => void;
+  onExecuteScheduleNow?: (worktreeId: string) => Promise<void>;
   onOpenCommentsPanel?: () => void;
   onCommentHover?: (commentId: string | null) => void;
   onCommentSelect?: (commentId: string | null) => void;
@@ -197,6 +198,7 @@ interface WorktreeNodeData {
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
   onViewLogs?: (worktreeId: string) => void;
+  onExecuteScheduleNow?: (worktreeId: string) => Promise<void>;
   onUnpin?: (worktreeId: string) => void;
   compact?: boolean;
   isPinned?: boolean;
@@ -239,6 +241,7 @@ const WorktreeNode = React.memo(({ data }: { data: WorktreeNodeData }) => {
         onStartEnvironment={data.onStartEnvironment}
         onStopEnvironment={data.onStopEnvironment}
         onViewLogs={data.onViewLogs}
+        onExecuteScheduleNow={data.onExecuteScheduleNow}
         onUnpin={data.onUnpin}
         isPinned={data.isPinned}
         zoneName={data.zoneName}
@@ -298,6 +301,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       onStopEnvironment,
       onViewLogs,
       onNukeEnvironment,
+      onExecuteScheduleNow,
       onOpenCommentsPanel,
       onCommentHover,
       onCommentSelect,
@@ -640,6 +644,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             onStopEnvironment,
             onViewLogs,
             onNukeEnvironment,
+            onExecuteScheduleNow,
             onUnpin: handleUnpinWorktree,
             compact: false,
             isPinned: !!zoneId,
@@ -672,6 +677,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       onStopEnvironment,
       onViewLogs,
       onNukeEnvironment,
+      onExecuteScheduleNow,
       handleUnpinWorktree,
       zoneLabels,
       userById,

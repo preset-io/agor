@@ -430,6 +430,20 @@ export interface WorktreeScheduleConfig {
   retention: number;
 
   /**
+   * Whether the schedule may spawn a new session while another session is
+   * already actively running in the same worktree.
+   *
+   * Applies to BOTH the cron tick path and the "execute now" manual trigger.
+   *
+   * Default: false (concurrent runs blocked — if a session is active, new runs are skipped).
+   *
+   * "Active" means a session with status RUNNING / STOPPING / AWAITING_PERMISSION /
+   * AWAITING_INPUT in the same worktree. IDLE / COMPLETED / FAILED / TIMED_OUT do
+   * not count as active.
+   */
+  allow_concurrent_runs?: boolean;
+
+  /**
    * Permission mode for spawned sessions
    *
    * Controls tool approval behavior.

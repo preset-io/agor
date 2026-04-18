@@ -49,6 +49,7 @@ export interface WorktreeModalProps {
   ) => void;
   onOpenSettings?: () => void; // Navigate to Settings → Repositories
   onSessionClick?: (sessionId: string) => void;
+  onExecuteScheduleNow?: (worktreeId: string) => Promise<void>;
   defaultTab?: WorktreeModalTab; // Open modal to a specific tab
 }
 
@@ -68,6 +69,7 @@ export const WorktreeModal: React.FC<WorktreeModalProps> = ({
   onArchiveOrDelete,
   onOpenSettings,
   onSessionClick,
+  onExecuteScheduleNow,
   defaultTab,
 }) => {
   const { token } = theme.useToken();
@@ -181,6 +183,7 @@ export const WorktreeModal: React.FC<WorktreeModalProps> = ({
           worktree={worktree}
           mcpServerById={mcpServerById}
           onUpdate={onUpdateWorktree}
+          onExecuteScheduleNow={onExecuteScheduleNow}
         />
       ),
     },

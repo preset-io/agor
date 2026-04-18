@@ -1,6 +1,11 @@
 import type { AgenticToolName, MCPServer, Worktree } from '@agor-live/client';
 import { getDefaultPermissionMode } from '@agor-live/client';
-import { ClockCircleOutlined, PlayCircleOutlined, StopOutlined } from '@ant-design/icons';
+import {
+  ClockCircleOutlined,
+  PlayCircleOutlined,
+  StopOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
 import {
   Alert,
   Button,
@@ -29,12 +34,14 @@ interface ScheduleTabProps {
   worktree: Worktree;
   mcpServerById?: Map<string, MCPServer>;
   onUpdate?: (worktreeId: string, updates: Partial<Worktree>) => void;
+  onExecuteScheduleNow?: (worktreeId: string) => Promise<void>;
 }
 
 export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   worktree,
   mcpServerById = new Map(),
   onUpdate,
+  onExecuteScheduleNow,
 }) => {
   const [form] = Form.useForm();
   const [isInitialized, setIsInitialized] = useState(false);
@@ -44,10 +51,14 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
     worktree.schedule?.agentic_tool || 'claude-code'
   );
   const [retention, setRetention] = useState<number>(worktree.schedule?.retention || 5);
+  const [allowConcurrentRuns, setAllowConcurrentRuns] = useState<boolean>(
+    worktree.schedule?.allow_concurrent_runs === true
+  );
   const [promptTemplate, setPromptTemplate] = useState<string>(
     worktree.schedule?.prompt_template || ''
   );
   const [humanReadable, setHumanReadable] = useState<string>('');
+  const [isExecutingNow, setIsExecutingNow] = useState(false);
 
   // Initialize local state and form on first mount
   useEffect(() => {
@@ -60,6 +71,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
       setCronExpression(worktree.schedule_cron || '0 0 * * *');
       setAgenticTool(tool);
       setRetention(scheduleConfig?.retention || 5);
+      setAllowConcurrentRuns(scheduleConfig?.allow_concurrent_runs === true);
       setPromptTemplate(
         scheduleConfig?.prompt_template ||
           'Review the current state of the worktree and provide a status update.'
@@ -109,6 +121,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
         prompt_template: promptTemplate,
         agentic_tool: agenticTool as 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot',
         retention: retention,
+        allow_concurrent_runs: allowConcurrentRuns,
         permission_mode: formValues.permissionMode,
         model_config: formValues.modelConfig,
         mcp_server_ids: formValues.mcpServerIds || [],
@@ -136,6 +149,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
     cronExpression !== (worktree.schedule_cron || '0 0 * * *') ||
     agenticTool !== (worktree.schedule?.agentic_tool || 'claude-code') ||
     retention !== (worktree.schedule?.retention || 5) ||
+    allowConcurrentRuns !== (worktree.schedule?.allow_concurrent_runs === true) ||
     promptTemplate !== (worktree.schedule?.prompt_template || '') ||
     formValues.permissionMode !==
       (worktree.schedule?.permission_mode ||
@@ -294,13 +308,63 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
           </Space>
         </Card>
 
+        {/* Concurrency Policy */}
+        <Card size="small" title="Concurrency">
+          <Space orientation="vertical" size="small" style={{ width: '100%' }}>
+            <Space>
+              <Switch
+                checked={allowConcurrentRuns}
+                onChange={setAllowConcurrentRuns}
+                checkedChildren="Allow"
+                unCheckedChildren="Block"
+              />
+              <Text strong>Allow concurrent runs</Text>
+            </Space>
+            <Text type="secondary" style={{ fontSize: '12px' }}>
+              {allowConcurrentRuns
+                ? 'New runs will always start, even if another session is still active in this worktree.'
+                : 'If a session is already active in this worktree, scheduled runs are skipped and manual "Run now" triggers return an error. This is the default.'}
+            </Text>
+          </Space>
+        </Card>
+
         <Divider style={{ margin: '12px 0' }} />
 
-        {/* Save Button */}
+        {/* Save + Run Now Buttons */}
         <Space>
           <Button type="primary" onClick={handleSave} disabled={!hasChanges}>
             Save Schedule Configuration
           </Button>
+          {onExecuteScheduleNow && (
+            <Button
+              icon={<ThunderboltOutlined />}
+              loading={isExecutingNow}
+              disabled={
+                isExecutingNow ||
+                hasChanges ||
+                !scheduleEnabled ||
+                !cronExpression ||
+                !promptTemplate
+              }
+              onClick={async () => {
+                setIsExecutingNow(true);
+                try {
+                  await onExecuteScheduleNow(worktree.worktree_id);
+                } finally {
+                  setIsExecutingNow(false);
+                }
+              }}
+              title={
+                hasChanges
+                  ? 'Save your changes before running'
+                  : !scheduleEnabled
+                    ? 'Enable the schedule before running'
+                    : 'Run this schedule immediately using the saved configuration'
+              }
+            >
+              Run now
+            </Button>
+          )}
           {hasChanges && (
             <Text type="warning" style={{ fontSize: '12px' }}>
               You have unsaved changes

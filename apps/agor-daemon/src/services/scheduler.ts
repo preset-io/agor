@@ -36,13 +36,55 @@ import type {
   Session,
   SessionID,
   User,
+  UUID,
   Worktree,
+  WorktreeID,
 } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import { getNextRunTime, getPrevRunTime } from '@agor/core/utils/cron';
 import Handlebars from 'handlebars';
 import type { Application } from '../declarations';
+
+/**
+ * Session statuses that indicate a session is actively consuming resources.
+ * Used for the schedule concurrency guard: if any session in a worktree is
+ * in one of these states, the schedule is considered "busy".
+ */
+const ACTIVE_SESSION_STATUSES: ReadonlySet<string> = new Set([
+  SessionStatus.RUNNING,
+  SessionStatus.STOPPING,
+  SessionStatus.AWAITING_PERMISSION,
+  SessionStatus.AWAITING_INPUT,
+]);
+
+/**
+ * Error thrown when execute-now is blocked because a session is already running
+ * in the worktree and allow_concurrent_runs is not enabled. Routes can catch
+ * this and surface it as a 409 Conflict.
+ */
+export class ScheduleBusyError extends Error {
+  public readonly code = 'schedule_busy';
+  constructor(worktreeName: string) {
+    super(
+      `A session is already running in worktree "${worktreeName}" and allow_concurrent_runs is disabled.`
+    );
+    this.name = 'ScheduleBusyError';
+  }
+}
+
+/**
+ * Error thrown when execute-now is called on a worktree whose schedule is not
+ * fully configured (disabled, missing cron, or missing prompt template).
+ */
+export class ScheduleNotReadyError extends Error {
+  public readonly code: 'schedule_disabled' | 'schedule_incomplete';
+  constructor(code: 'schedule_disabled' | 'schedule_incomplete', message: string) {
+    super(message);
+    this.name = 'ScheduleNotReadyError';
+    this.code = code;
+  }
+}
 
 export interface SchedulerConfig {
   /** Tick interval in milliseconds (default: 30000 = 30s) */
@@ -229,7 +271,74 @@ export class SchedulerService {
     // Schedule is due - spawn session
     console.log(`   ✅ ${worktree.name}: Schedule is due, spawning session...`);
 
-    await this.spawnScheduledSession(worktree, scheduledRunAt, now);
+    await this.spawnScheduledSession(worktree, scheduledRunAt, now, { manual: false });
+  }
+
+  /**
+   * Public: trigger a scheduled run on-demand for a worktree.
+   *
+   * Used by the `POST /worktrees/:id/execute-schedule-now` route. Reuses the
+   * exact same spawn path as the cron tick (via spawnScheduledSession) so
+   * scheduled and manual runs are indistinguishable downstream, except for a
+   * `triggered_manually: true` marker in custom_context and a different title.
+   *
+   * @throws ScheduleNotReadyError when the schedule is disabled or incomplete.
+   * @throws ScheduleBusyError when allow_concurrent_runs is false and the
+   *   worktree already has an active session.
+   */
+  async executeScheduleNow(opts: {
+    worktreeId: WorktreeID;
+    triggeredBy: UUID;
+  }): Promise<Session> {
+    const { worktreeId, triggeredBy } = opts;
+    const worktree = await this.worktreeRepo.findById(worktreeId);
+    if (!worktree) {
+      throw new ScheduleNotReadyError(
+        'schedule_incomplete',
+        `Worktree not found: ${worktreeId}`
+      );
+    }
+
+    if (!worktree.schedule_enabled) {
+      throw new ScheduleNotReadyError(
+        'schedule_disabled',
+        'Schedule is disabled for this worktree. Enable it before running manually.'
+      );
+    }
+    if (!worktree.schedule_cron) {
+      throw new ScheduleNotReadyError(
+        'schedule_incomplete',
+        'Schedule has no cron expression configured.'
+      );
+    }
+    if (!worktree.schedule?.prompt_template) {
+      throw new ScheduleNotReadyError(
+        'schedule_incomplete',
+        'Schedule has no prompt template configured.'
+      );
+    }
+
+    const now = Date.now();
+    // Minute-rounded so back-to-back manual clicks (and manual+cron collisions
+    // within the same minute) dedupe via scheduled_run_at.
+    const scheduledRunAt = Math.floor(now / 60000) * 60000;
+
+    console.log(
+      `   🖐️  ${worktree.name}: manual execute-now triggered by ${triggeredBy.substring(0, 8)}`
+    );
+
+    const session = await this.spawnScheduledSession(worktree, scheduledRunAt, now, {
+      manual: true,
+      triggeredBy,
+    });
+    // Manual path always returns a Session or throws (the `null` return is
+    // reserved for silent cron-path concurrency skips). Defensive check:
+    if (!session) {
+      throw new Error(
+        `Unexpected null result from spawnScheduledSession for manual run on worktree ${worktreeId}`
+      );
+    }
+    return session;
   }
 
   /**
@@ -283,30 +392,52 @@ export class SchedulerService {
   }
 
   /**
-   * Spawn a scheduled session for a worktree
+   * Spawn a scheduled session for a worktree.
    *
+   * Shared path for both cron-driven and manual (execute-now) runs. Callers
+   * set `options.manual` to distinguish:
+   *
+   * - `manual=false` (cron tick): concurrency violation is a silent skip
+   *   (metadata still advanced to avoid repeated checks).
+   * - `manual=true` (execute-now): concurrency violation throws
+   *   `ScheduleBusyError` so the API route can surface a 409.
+   *
+   * Steps:
    * 1. Check deduplication (no existing session with same scheduled_run_at)
-   * 2. Render prompt template with Handlebars
-   * 3. Look up creator's unix_username for execution context
-   * 4. Create session with schedule metadata
-   * 5. Update worktree schedule metadata (last_triggered_at, next_run_at)
-   * 6. Enforce retention policy
+   * 2. Enforce `allow_concurrent_runs` (skip/throw if an active session exists)
+   * 3. Render prompt template with Handlebars
+   * 4. Look up creator's unix_username for execution context
+   * 5. Create session with schedule metadata (+ triggered_manually marker)
+   * 6. Attach MCP servers and trigger prompt
+   * 7. Update worktree schedule metadata (last_triggered_at, next_run_at)
+   * 8. Enforce retention policy
    *
    * @param worktree - The worktree to spawn a session for
    * @param scheduledRunAt - The scheduled run timestamp (may be recomputed from cron)
    * @param now - Current timestamp
+   * @param options.manual - Whether this is a manual execute-now call
+   * @param options.triggeredBy - User ID that triggered the manual run
+   * @returns The newly created session on success. Returns the pre-existing
+   *   session when dedup hits. Returns `null` when a cron-path run is skipped
+   *   due to concurrency. Throws `ScheduleBusyError` when a manual run is
+   *   blocked by concurrency.
    */
   private async spawnScheduledSession(
     worktree: Worktree,
     scheduledRunAt: number,
-    now: number
-  ): Promise<void> {
+    now: number,
+    options: { manual: boolean; triggeredBy?: UUID } = { manual: false }
+  ): Promise<Session | null> {
     if (!worktree.schedule || !worktree.schedule_cron) {
       console.error(`❌ Worktree ${worktree.worktree_id} missing schedule config`);
-      return;
+      throw new ScheduleNotReadyError(
+        'schedule_incomplete',
+        `Worktree ${worktree.worktree_id} missing schedule config`
+      );
     }
 
     const schedule = worktree.schedule;
+    const { manual, triggeredBy } = options;
 
     // 1. Check deduplication using repository
     // Use repository to check for existing sessions (bypasses auth)
@@ -317,7 +448,30 @@ export class SchedulerService {
     if (existingSession) {
       // Still update next_run_at to prevent repeated checks
       await this.updateScheduleMetadata(worktree, scheduledRunAt, now);
-      return;
+      return existingSession;
+    }
+
+    // 2. Concurrency guard — applies to BOTH the cron path and manual path.
+    // Default is to block concurrent runs; opt-in via schedule.allow_concurrent_runs.
+    const allowConcurrent = schedule.allow_concurrent_runs === true;
+    if (!allowConcurrent) {
+      const active = worktreeSessions.some((s) => ACTIVE_SESSION_STATUSES.has(s.status));
+      if (active) {
+        if (manual) {
+          // Manual trigger: surface as an error the API can convert to 409.
+          console.log(
+            `   ⛔ ${worktree.name}: manual run blocked — active session present (allow_concurrent_runs=false)`
+          );
+          throw new ScheduleBusyError(worktree.name);
+        }
+        // Cron tick: silent skip. Advance metadata so we don't re-evaluate
+        // the same scheduled_run_at every tick.
+        console.log(
+          `   ⏭️  ${worktree.name}: scheduled run skipped — active session present (allow_concurrent_runs=false)`
+        );
+        await this.updateScheduleMetadata(worktree, scheduledRunAt, now);
+        return null;
+      }
     }
 
     // 2. Render prompt template
@@ -340,7 +494,9 @@ export class SchedulerService {
         unix_username: unixUsername, // Set unix_username for strict mode execution
         scheduled_run_at: scheduledRunAt,
         scheduled_from_worktree: true,
-        title: `[Scheduled run - ${new Date(scheduledRunAt).toISOString()}]`,
+        title: manual
+          ? `[Manual run - ${new Date(scheduledRunAt).toISOString()}]`
+          : `[Scheduled run - ${new Date(scheduledRunAt).toISOString()}]`,
         contextFiles: schedule.context_files ?? [],
         permission_config: schedule.permission_mode
           ? { mode: schedule.permission_mode as PermissionMode }
@@ -357,10 +513,13 @@ export class SchedulerService {
           scheduled_run: {
             rendered_prompt: renderedPrompt,
             run_index: runIndex,
+            triggered_manually: manual,
+            triggered_by: manual ? triggeredBy : undefined,
             schedule_config_snapshot: {
               cron: worktree.schedule_cron,
               timezone: schedule.timezone,
               retention: schedule.retention,
+              allow_concurrent_runs: schedule.allow_concurrent_runs === true,
             },
           },
         },
@@ -370,7 +529,10 @@ export class SchedulerService {
       // But still need to bypass auth - use the service with no params
       const sessionsService = this.app.service('sessions');
       const createdSession = await sessionsService.create(session);
-      console.log(`      ✅ Spawned scheduled session for ${worktree.name} (run #${runIndex})`);
+      console.log(
+        `      ✅ Spawned ${manual ? 'manual' : 'scheduled'} session for ${worktree.name} (run #${runIndex})` +
+          (manual && triggeredBy ? ` triggered_by=${triggeredBy.substring(0, 8)}` : '')
+      );
 
       // 6. Attach MCP servers BEFORE triggering prompt (so agent has tools from the start)
       // Precedence: schedule config (if defined) > worktree defaults
@@ -426,6 +588,8 @@ export class SchedulerService {
 
       // 8. Enforce retention policy
       await this.enforceRetentionPolicy(worktree);
+
+      return createdSession;
     } catch (error) {
       console.error(`      ❌ Failed to spawn session for ${worktree.name}:`, error);
       throw error;

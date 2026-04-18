@@ -910,6 +910,24 @@ function AppContent() {
     }
   };
 
+  // Manually trigger a scheduled run for a worktree (execute-now).
+  // Reuses the scheduler's spawn path server-side so the session is a
+  // first-class scheduled session, just with triggered_manually=true.
+  const handleExecuteScheduleNow = async (worktreeId: string) => {
+    if (!client) return;
+    try {
+      showLoading('Starting scheduled run...', { key: 'execute-now' });
+      await client.service(`worktrees/${worktreeId}/execute-schedule-now`).create({});
+      showSuccess('Scheduled run started!', { key: 'execute-now' });
+    } catch (error) {
+      // Surface 409 (schedule_busy) and 400 (schedule_disabled/incomplete)
+      // with the server-provided message — it's already user-facing.
+      const msg = error instanceof Error ? error.message : String(error);
+      showError(`Failed to start scheduled run: ${msg}`, { key: 'execute-now' });
+      throw error;
+    }
+  };
+
   // Handle MCP server CRUD
   const handleCreateMCPServer = async (data: CreateMCPServerInput) => {
     if (!client) return;
@@ -1260,6 +1278,7 @@ function AppContent() {
                   onStartEnvironment={handleStartEnvironment}
                   onStopEnvironment={handleStopEnvironment}
                   onNukeEnvironment={handleNukeEnvironment}
+                  onExecuteScheduleNow={handleExecuteScheduleNow}
                   onCreateUser={handleCreateUser}
                   onUpdateUser={handleUpdateUser}
                   onDeleteUser={handleDeleteUser}
@@ -1344,6 +1363,7 @@ function AppContent() {
                   onStartEnvironment={handleStartEnvironment}
                   onStopEnvironment={handleStopEnvironment}
                   onNukeEnvironment={handleNukeEnvironment}
+                  onExecuteScheduleNow={handleExecuteScheduleNow}
                   onCreateUser={handleCreateUser}
                   onUpdateUser={handleUpdateUser}
                   onDeleteUser={handleDeleteUser}
@@ -1428,6 +1448,7 @@ function AppContent() {
                   onStartEnvironment={handleStartEnvironment}
                   onStopEnvironment={handleStopEnvironment}
                   onNukeEnvironment={handleNukeEnvironment}
+                  onExecuteScheduleNow={handleExecuteScheduleNow}
                   onCreateUser={handleCreateUser}
                   onUpdateUser={handleUpdateUser}
                   onDeleteUser={handleDeleteUser}

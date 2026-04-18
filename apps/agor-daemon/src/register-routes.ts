@@ -23,6 +23,7 @@ import type { Application } from '@agor/core/feathers';
 import {
   AuthenticationService,
   BadRequest,
+  Conflict,
   errorHandler,
   Forbidden,
   LocalStrategy,
@@ -47,6 +48,7 @@ import type {
   Task,
   User,
   UUID,
+  WorktreeID,
 } from '@agor/core/types';
 import {
   AGENTIC_TOOL_CAPABILITIES,
@@ -67,6 +69,11 @@ import type {
   WorktreesServiceImpl,
 } from './declarations.js';
 import { killExecutorProcess } from './executor-tracking.js';
+import {
+  ScheduleBusyError,
+  ScheduleNotReadyError,
+  type SchedulerService,
+} from './services/scheduler.js';
 import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { applyTierHooks } from './setup/service-tiers.js';
@@ -2264,6 +2271,91 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
                 throw new Forbidden(
                   'You must be the worktree owner or a global admin to unarchive worktrees'
+                );
+              }
+              return context;
+            },
+      ],
+    },
+  });
+
+  // ============================================================================
+  // Execute-schedule-now: manually trigger a scheduled run for a worktree
+  // ============================================================================
+  // Reuses the scheduler's spawn code path so scheduled and manual triggers
+  // produce indistinguishable sessions (beyond a triggered_manually marker).
+  // Requires worktree-level 'all' permission (same tier as editing the schedule).
+  app.use('/worktrees/:id/execute-schedule-now', {
+    async create(_data: unknown, params: RouteParams) {
+      const id = params.route?.id;
+      if (!id) throw new BadRequest('Worktree ID required');
+
+      const scheduler = app.get('scheduler') as SchedulerService | undefined;
+      if (!scheduler) {
+        throw new NotFound('Scheduler service is not enabled on this instance.');
+      }
+
+      const triggeredBy = params.user?.user_id;
+      if (!triggeredBy) {
+        // Should already be caught by requireAuth, but guard anyway so the
+        // scheduler isn't passed an undefined userId.
+        throw new NotAuthenticated('Authentication required to trigger schedule.');
+      }
+
+      try {
+        const session = await scheduler.executeScheduleNow({
+          worktreeId: id as WorktreeID,
+          triggeredBy: triggeredBy as UUID,
+        });
+        return {
+          session_id: session.session_id,
+          worktree_id: session.worktree_id,
+          scheduled_run_at: session.scheduled_run_at,
+          triggered_manually: true,
+        };
+      } catch (err) {
+        if (err instanceof ScheduleBusyError) {
+          throw new Conflict(err.message, { code: err.code });
+        }
+        if (err instanceof ScheduleNotReadyError) {
+          throw new BadRequest(err.message, { code: err.code });
+        }
+        throw err;
+      }
+    },
+  });
+
+  app.service('/worktrees/:id/execute-schedule-now').hooks({
+    before: {
+      create: [
+        requireAuth,
+        requireMinimumRole(ROLES.MEMBER, 'execute scheduled runs'),
+        async (context: HookContext) => {
+          const id = context.params.route?.id;
+          if (!id) throw new BadRequest('Worktree ID required');
+
+          const worktree = await worktreeRepository.findById(id);
+          if (!worktree) {
+            throw new NotFound(`Worktree not found: ${id}`);
+          }
+
+          const userId = context.params.user?.user_id as UUID | undefined;
+          const isOwner = userId
+            ? await worktreeRepository.isOwner(worktree.worktree_id, userId)
+            : false;
+
+          context.params.worktree = worktree;
+          context.params.isWorktreeOwner = isOwner;
+          return context;
+        },
+        worktreeRbacEnabled
+          ? ensureWorktreePermission('all', 'execute scheduled runs', superadminOpts)
+          : (context: HookContext) => {
+              const isOwner = context.params.isWorktreeOwner;
+              const userRole = context.params.user?.role;
+              if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
+                throw new Forbidden(
+                  'You must be the worktree owner or a global admin to execute scheduled runs'
                 );
               }
               return context;

@@ -130,6 +130,7 @@ export interface AppProps {
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
   onNukeEnvironment?: (worktreeId: string) => void;
+  onExecuteScheduleNow?: (worktreeId: string) => Promise<void>;
   onCreateUser?: (data: CreateUserInput) => void;
   onUpdateUser?: (userId: string, updates: UpdateUserInput) => void;
   onDeleteUser?: (userId: string) => void;
@@ -208,6 +209,7 @@ export const App: React.FC<AppProps> = ({
   onStartEnvironment,
   onStopEnvironment,
   onNukeEnvironment,
+  onExecuteScheduleNow,
   onCreateUser,
   onUpdateUser,
   onDeleteUser,
@@ -1085,6 +1087,7 @@ export const App: React.FC<AppProps> = ({
               openSettings();
             }}
             onSessionClick={handleSessionClick}
+            onExecuteScheduleNow={onExecuteScheduleNow}
           />
           <WorktreeListDrawer
             open={listDrawerOpen}

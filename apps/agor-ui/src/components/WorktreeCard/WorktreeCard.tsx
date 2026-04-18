@@ -28,6 +28,7 @@ import {
   RobotOutlined,
   SettingOutlined,
   SubnodeOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import {
@@ -159,6 +160,7 @@ interface WorktreeCardProps {
   onStopEnvironment?: (worktreeId: string) => void;
   onViewLogs?: (worktreeId: string) => void;
   onNukeEnvironment?: (worktreeId: string) => void;
+  onExecuteScheduleNow?: (worktreeId: string) => Promise<void>;
   onUnpin?: (worktreeId: string) => void;
   isPinned?: boolean;
   zoneName?: string;
@@ -188,6 +190,7 @@ const WorktreeCardComponent = ({
   onStopEnvironment,
   onViewLogs,
   onNukeEnvironment,
+  onExecuteScheduleNow,
   onUnpin,
   isPinned = false,
   zoneName,
@@ -215,6 +218,7 @@ const WorktreeCardComponent = ({
 
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
+  const [isExecutingScheduleNow, setIsExecutingScheduleNow] = useState(false);
 
   // Tree expansion state - track which nodes are expanded
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
@@ -865,6 +869,36 @@ const WorktreeCardComponent = ({
                 title="Open terminal in worktree directory"
               />
             )}
+            {/*
+              Execute-now button: only shown when the worktree has an active,
+              fully-configured schedule. Permission enforcement is server-side
+              (requires worktree 'all' tier); a click by an unauthorized user
+              will produce a Forbidden toast from the API call.
+            */}
+            {onExecuteScheduleNow &&
+              worktree.schedule_enabled &&
+              worktree.schedule_cron &&
+              worktree.schedule?.prompt_template && (
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<ThunderboltOutlined />}
+                  loading={isExecutingScheduleNow}
+                  disabled={isExecutingScheduleNow || connectionDisabled}
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    setIsExecutingScheduleNow(true);
+                    try {
+                      await onExecuteScheduleNow(worktree.worktree_id);
+                    } catch {
+                      // error toast shown by handler; swallow here
+                    } finally {
+                      setIsExecutingScheduleNow(false);
+                    }
+                  }}
+                  title="Run scheduled session now"
+                />
+              )}
             {onOpenSettings && (
               <Button
                 type="text"
