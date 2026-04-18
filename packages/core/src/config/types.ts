@@ -373,6 +373,162 @@ export interface AgorExecutionSettings {
 }
 
 /**
+ * Security headers & CORS settings.
+ *
+ * Makes the daemon's Content-Security-Policy and CORS policy tunable from
+ * `~/.agor/config.yaml` without code changes. See `context/concepts/security.md`
+ * for the full model and the rationale behind the two-tier CSP shape.
+ */
+
+/**
+ * Per-directive CSP source lists, keyed by the standard directive names.
+ *
+ * Keys must be lowercase-hyphenated directive names (e.g. `script-src`,
+ * `frame-src`, `connect-src`). Values are arrays of CSP source expressions
+ * (`'self'`, `'unsafe-inline'`, URLs, schemes, nonces, etc.). The loader
+ * rejects unknown directive names with a friendly error.
+ */
+export type AgorCspDirectives = Record<string, string[]>;
+
+/**
+ * CSP configuration.
+ *
+ * Two-tier model:
+ *   - `extras`: append to built-in defaults (append-only, 95% case)
+ *   - `override`: fully replace a directive's source list (escape hatch)
+ *
+ * Setting a directive in `override` causes defaults AND extras for that
+ * directive to be ignored — `override` is authoritative per-directive.
+ *
+ * Examples:
+ * ```yaml
+ * security:
+ *   csp:
+ *     extras:
+ *       script-src: ["https://plausible.io"]
+ *       frame-src: ["https://my-sandbox.example.com"]
+ *     override:
+ *       img-src: ["'self'", "data:"]
+ * ```
+ */
+export interface AgorCspSettings {
+  /**
+   * Per-directive APPEND to built-in defaults. This is the 95% case.
+   * Entries are merged and de-duplicated with the built-in default sources.
+   */
+  extras?: AgorCspDirectives;
+
+  /**
+   * Full replacement of a directive's source list. Escape hatch — rarely needed.
+   * Setting a directive here ignores defaults AND extras for that directive.
+   */
+  override?: AgorCspDirectives;
+
+  /**
+   * Path (or absolute URL) that receives CSP violation reports. When set:
+   *   - emits the `report-uri` directive on the CSP header (deprecated but
+   *     still supported by all browsers)
+   *   - emits a `Report-To` header pointing at the same path (modern browsers)
+   *   - the daemon hosts a rate-limited endpoint at this path that logs
+   *     incoming reports at `warn` level.
+   * @example "/api/csp-report"
+   */
+  report_uri?: string;
+
+  /**
+   * Emit as `Content-Security-Policy-Report-Only` instead of enforcing.
+   * Useful for iterating on policy without breaking the app.
+   * Default: false.
+   */
+  report_only?: boolean;
+
+  /**
+   * Fully disable the CSP header. Dev/debug only — the daemon emits a loud
+   * startup warning when this is true. Default: false.
+   */
+  disabled?: boolean;
+}
+
+/**
+ * How CORS origins are resolved.
+ *
+ * - `list` (default): only origins in `origins` are allowed (plus built-ins:
+ *   localhost, Sandpack if enabled, GitHub Codespaces if detected).
+ * - `wildcard`: reflect ANY origin. Forces `credentials: false`. Dangerous
+ *   outside of local dev; the daemon refuses to boot in hardened deployment
+ *   modes when this is set.
+ * - `reflect`: echo the request's `Origin` header back as the allowed origin.
+ *   Less permissive than wildcard for caches (Vary: Origin), but still permits
+ *   any caller — treat it like wildcard for threat-model purposes.
+ * - `null-origin`: allow the literal `Origin: null` header (sandboxed iframes,
+ *   file:// documents). Rarely needed.
+ */
+export type AgorCorsMode = 'list' | 'wildcard' | 'reflect' | 'null-origin';
+
+/**
+ * CORS configuration.
+ *
+ * Supersedes the legacy `daemon.cors_origins` and `daemon.cors_allow_sandpack`
+ * keys. Those still work for backwards compatibility — their values are merged
+ * in when `security.cors.origins` is absent — but they emit a deprecation
+ * warning at startup. The `CORS_ORIGIN` env var continues to win over all
+ * config sources to keep existing deployments working.
+ */
+export interface AgorCorsSettings {
+  /**
+   * Origin resolution strategy. Defaults to `list`.
+   */
+  mode?: AgorCorsMode;
+
+  /**
+   * Exact origins or `/regex/` patterns to allow (used when `mode: list`).
+   * Plain strings are exact matches; wrap in `/slashes/` for regex.
+   */
+  origins?: string[];
+
+  /**
+   * Whether to emit `Access-Control-Allow-Credentials: true`. Default: true.
+   * Rejected at config load when combined with `mode: wildcard` or `reflect`
+   * (the CORS spec forbids credentialed wildcard reflection).
+   */
+  credentials?: boolean;
+
+  /**
+   * Allowed methods. Defaults to the `cors` package's default set.
+   */
+  methods?: string[];
+
+  /**
+   * Allowed request headers. When omitted, the `cors` package reflects
+   * `Access-Control-Request-Headers` (its default behaviour).
+   */
+  allowed_headers?: string[];
+
+  /**
+   * Value for the `Access-Control-Max-Age` preflight cache header, in seconds.
+   * Default: unset (leaves it to the `cors` package default, usually 5s).
+   */
+  max_age_seconds?: number;
+
+  /**
+   * Allow Sandpack/CodeSandbox bundler origins (`https://*.codesandbox.io`).
+   * Defaults to true so first-party artifacts work out of the box.
+   */
+  allow_sandpack?: boolean;
+}
+
+/**
+ * Top-level security config block.
+ */
+export interface AgorSecuritySettings {
+  /** Content-Security-Policy configuration (extras/override/report-only/disabled). */
+  csp?: AgorCspSettings;
+
+  /** CORS configuration (origins, credentials, methods, headers, max-age). */
+  cors?: AgorCorsSettings;
+}
+
+/**
  * Path configuration settings
  *
  * Allows separation of daemon operating files from git data files.
@@ -477,6 +633,9 @@ export interface AgorConfig {
   /** Execution isolation settings */
   execution?: AgorExecutionSettings;
 
+  /** Security headers & CORS (CSP extras/override, CORS mode/origins, etc.) */
+  security?: AgorSecuritySettings;
+
   /** Path configuration (data_home for repos/worktrees separation) */
   paths?: AgorPathSettings;
 
@@ -521,6 +680,7 @@ export type ConfigKey =
   | `opencode.${keyof AgorOpenCodeSettings}`
   | `codex.${keyof AgorCodexSettings}`
   | `execution.${keyof AgorExecutionSettings}`
+  | `security.${keyof AgorSecuritySettings}`
   | `paths.${keyof AgorPathSettings}`
   | `credentials.${keyof AgorCredentials}`
   | `onboarding.${keyof AgorOnboardingSettings}`

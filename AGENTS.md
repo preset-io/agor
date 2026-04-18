@@ -525,6 +525,37 @@ pnpm agor config set ui.port 5174
 - `VITE_DAEMON_URL` - Full daemon URL for UI
 - `VITE_DAEMON_PORT` - Daemon port for UI
 
+### Security Headers (CSP + CORS)
+
+Content-Security-Policy and CORS are tunable from `~/.agor/config.yaml` under
+the `security.*` block — see `context/concepts/security.md` for the full
+model and recipes. Quick examples:
+
+```yaml
+# Add an external analytics script
+security:
+  csp:
+    extras:
+      script-src: ["https://plausible.io"]
+
+# Allow a specific origin to call the daemon
+security:
+  cors:
+    origins: ["https://dashboard.internal.example.com"]
+
+# Iterate on policy without breaking the app
+security:
+  csp:
+    report_only: true
+    report_uri: "/api/csp-report"
+```
+
+The legacy `daemon.cors_origins` and `daemon.cors_allow_sandpack` keys still
+work for backwards compatibility but emit a deprecation warning — migrate
+to `security.cors.*` on your next config touch. The resolved CSP/CORS
+posture is surfaced in Settings → About for admins so you can confirm what
+the daemon booted with without reading response headers.
+
 ---
 
 ## Troubleshooting

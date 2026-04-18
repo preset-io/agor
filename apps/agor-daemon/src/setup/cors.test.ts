@@ -2,37 +2,49 @@
  * CORS hardening tests.
  *
  * Covers:
- *   - Wildcard reflection (CORS_ORIGIN=*) drops credentials.
+ *   - Wildcard reflection drops credentials.
  *   - Tightened localhost regex only matches the configured UI port range.
  *   - Sandpack origins are reachable but excluded from `isAllowedOrigin`
  *     (so they don't get credentials / private-network).
+ *   - Configured methods/headers/max_age are passed through to cors().
  */
 
+import type { AgorConfig } from '@agor/core/config';
+import { resolveSecurity } from '@agor/core/config';
 import { describe, expect, it, vi } from 'vitest';
 import { buildCorsConfig, isSandpackOrigin } from './cors';
 
+function resolve(
+  config: AgorConfig = {},
+  opts: Parameters<typeof resolveSecurity>[1] = {}
+): ReturnType<typeof resolveSecurity>['cors'] {
+  return resolveSecurity(config, { onWarning: vi.fn(), ...opts }).cors;
+}
+
 describe('buildCorsConfig', () => {
-  it('drops credentials when CORS_ORIGIN=* is set', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('drops credentials when resolved mode is wildcard', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     const result = buildCorsConfig({
       uiPort: 5173,
       isCodespaces: false,
-      corsOriginOverride: '*',
+      resolved: resolve({}, { corsOriginEnv: '*' }),
     });
     expect(result.isWildcard).toBe(true);
     expect(result.credentialsAllowed).toBe(false);
     // The cors() origin callback returns true (accept any origin), but the
     // isAllowedOrigin predicate is the gate for PNA / credentials. Even in
     // wildcard mode, only the localhost UI port range gets PNA — random
-    // origins do NOT, so a public site cannot use the daemon to reach a
-    // private/loopback target.
+    // origins do NOT.
     expect(result.isAllowedOrigin('http://localhost:5173')).toBe(true);
     expect(result.isAllowedOrigin('https://anything.example.com')).toBe(false);
-    warn.mockRestore();
   });
 
   it('only allows the configured UI port range on localhost', () => {
-    const result = buildCorsConfig({ uiPort: 5173, isCodespaces: false });
+    const result = buildCorsConfig({
+      uiPort: 5173,
+      isCodespaces: false,
+      resolved: resolve(),
+    });
     expect(result.isAllowedOrigin('http://localhost:5173')).toBe(true);
     expect(result.isAllowedOrigin('http://localhost:5176')).toBe(true);
     // Out-of-range port must be rejected (this was the bug in the old regex).
@@ -44,23 +56,63 @@ describe('buildCorsConfig', () => {
     const result = buildCorsConfig({
       uiPort: 5173,
       isCodespaces: false,
-      allowSandpack: true,
+      resolved: resolve({ security: { cors: { allow_sandpack: true } } }),
     });
     // The actual cors origin callback would still permit the request through,
-    // but the public isAllowedOrigin predicate (used to gate
-    // Access-Control-Allow-Private-Network and credentials) excludes them.
+    // but the public isAllowedOrigin predicate (used to gate PNA + credentials)
+    // excludes them.
     expect(result.isAllowedOrigin('https://2-19-8-sandpack.codesandbox.io')).toBe(false);
   });
 
-  it('honours configOrigins exact strings and regex patterns', () => {
+  it('honours security.cors.origins with exact strings and regex patterns', () => {
     const result = buildCorsConfig({
       uiPort: 5173,
       isCodespaces: false,
-      configOrigins: ['https://dash.example.com', '/\\.internal\\.example\\.com$/'],
+      resolved: resolve({
+        security: {
+          cors: {
+            origins: ['https://dash.example.com', '/\\.internal\\.example\\.com$/'],
+          },
+        },
+      }),
     });
     expect(result.isAllowedOrigin('https://dash.example.com')).toBe(true);
     expect(result.isAllowedOrigin('https://api.internal.example.com')).toBe(true);
     expect(result.isAllowedOrigin('https://other.example.com')).toBe(false);
+  });
+
+  it('passes methods/allowedHeaders/maxAge through to cors() extraOptions', () => {
+    const result = buildCorsConfig({
+      uiPort: 5173,
+      isCodespaces: false,
+      resolved: resolve({
+        security: {
+          cors: {
+            methods: ['GET', 'POST'],
+            allowed_headers: ['Authorization', 'X-MCP-Token'],
+            max_age_seconds: 600,
+          },
+        },
+      }),
+    });
+    expect(result.extraOptions.methods).toEqual(['GET', 'POST']);
+    expect(result.extraOptions.allowedHeaders).toEqual(['Authorization', 'X-MCP-Token']);
+    expect(result.extraOptions.maxAge).toBe(600);
+  });
+
+  it('mode=null-origin only accepts Origin: null', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = buildCorsConfig({
+      uiPort: 5173,
+      isCodespaces: false,
+      resolved: resolve({ security: { cors: { mode: 'null-origin' } } }),
+    });
+    const cb = vi.fn();
+    (result.origin as (o: string | undefined, cb: typeof cb) => void)('null', cb);
+    expect(cb).toHaveBeenLastCalledWith(null, true);
+    cb.mockReset();
+    (result.origin as (o: string | undefined, cb: typeof cb) => void)('https://attacker.com', cb);
+    expect(cb.mock.calls[0][0]).toBeInstanceOf(Error);
   });
 });
 

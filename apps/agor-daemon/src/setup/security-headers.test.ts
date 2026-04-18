@@ -5,6 +5,7 @@
  * response headers via a fake req/res rather than running a real listener.
  */
 
+import { resolveSecurity } from '@agor/core/config';
 import type { Request, Response } from 'express';
 import { describe, expect, it } from 'vitest';
 import { securityHeaders } from './security-headers';
@@ -27,9 +28,13 @@ function fakeRes(): Response & {
   return res;
 }
 
+function resolvedCsp(config: Parameters<typeof resolveSecurity>[0] = {}) {
+  return resolveSecurity(config, { daemonUrl: 'http://localhost:3030' }).csp;
+}
+
 describe('securityHeaders', () => {
   it('sets CSP, X-Frame-Options, nosniff, and Referrer-Policy on every response', () => {
-    const mw = securityHeaders({ daemonUrl: 'http://localhost:3030' });
+    const mw = securityHeaders({ csp: resolvedCsp() });
     const res = fakeRes();
     mw({ secure: false } as Request, res, () => {});
 
@@ -42,6 +47,9 @@ describe('securityHeaders', () => {
     expect(csp).toContain('http://localhost:3030');
     expect(csp).toContain('ws:');
     expect(csp).toContain('wss:');
+    // Sandpack defaults in — artifacts render out of the box.
+    expect(csp).toContain('https://*.codesandbox.io');
+    expect(csp).toContain('blob:');
 
     expect(res._headers['x-frame-options']).toBe('DENY');
     expect(res._headers['x-content-type-options']).toBe('nosniff');
@@ -49,17 +57,64 @@ describe('securityHeaders', () => {
   });
 
   it('omits HSTS over plain http', () => {
-    const mw = securityHeaders();
+    const mw = securityHeaders({ csp: resolvedCsp() });
     const res = fakeRes();
     mw({ secure: false } as Request, res, () => {});
     expect(res._has('strict-transport-security')).toBe(false);
   });
 
   it('emits HSTS when req.secure is true', () => {
-    const mw = securityHeaders();
+    const mw = securityHeaders({ csp: resolvedCsp() });
     const res = fakeRes();
     mw({ secure: true } as Request, res, () => {});
     expect(res._headers['strict-transport-security']).toMatch(/max-age=\d+/);
     expect(res._headers['strict-transport-security']).toContain('includeSubDomains');
+  });
+
+  it('emits Content-Security-Policy-Report-Only when report_only=true', () => {
+    const mw = securityHeaders({
+      csp: resolvedCsp({ security: { csp: { report_only: true } } }),
+    });
+    const res = fakeRes();
+    mw({ secure: false } as Request, res, () => {});
+    expect(res._has('content-security-policy-report-only')).toBe(true);
+    expect(res._has('content-security-policy')).toBe(false);
+  });
+
+  it('emits neither CSP header when disabled=true', () => {
+    const mw = securityHeaders({
+      csp: resolvedCsp({ security: { csp: { disabled: true } } }),
+    });
+    const res = fakeRes();
+    mw({ secure: false } as Request, res, () => {});
+    expect(res._has('content-security-policy')).toBe(false);
+    expect(res._has('content-security-policy-report-only')).toBe(false);
+    // Other headers are still emitted — disabling CSP should NOT drop the rest.
+    expect(res._headers['x-frame-options']).toBe('DENY');
+  });
+
+  it('emits Report-To header when report_uri is set', () => {
+    const mw = securityHeaders({
+      csp: resolvedCsp({ security: { csp: { report_uri: '/api/csp-report' } } }),
+    });
+    const res = fakeRes();
+    mw({ secure: false } as Request, res, () => {});
+    const reportTo = res._headers['report-to'];
+    expect(reportTo).toBeDefined();
+    expect(JSON.parse(reportTo)).toMatchObject({
+      group: 'agor-csp',
+      endpoints: [{ url: '/api/csp-report' }],
+    });
+  });
+
+  it('extras are reflected in the emitted header', () => {
+    const mw = securityHeaders({
+      csp: resolvedCsp({
+        security: { csp: { extras: { 'script-src': ['https://plausible.io'] } } },
+      }),
+    });
+    const res = fakeRes();
+    mw({ secure: false } as Request, res, () => {});
+    expect(res._headers['content-security-policy']).toContain('https://plausible.io');
   });
 });

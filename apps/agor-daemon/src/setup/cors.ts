@@ -1,11 +1,28 @@
 /**
  * CORS Configuration
  *
- * Builds CORS origin configuration based on deployment environment.
- * Supports local development, GitHub Codespaces, Sandpack/CodeSandbox
- * bundler origins, and configurable extra origins via config or env var.
+ * Builds CORS origin configuration based on deployment environment and the
+ * resolved `security.cors.*` config block.
+ *
+ * Inputs from the resolver (`packages/core/src/config/security-resolver.ts`):
+ *   - `mode`            — list | wildcard | reflect | null-origin
+ *   - `origins`         — exact strings or /regex/ patterns (used when mode=list)
+ *   - `credentials`     — whether to echo Access-Control-Allow-Credentials
+ *   - `methods`         — allowed methods (optional)
+ *   - `allowedHeaders`  — allowed request headers (optional; reflect when unset)
+ *   - `maxAgeSeconds`   — preflight cache TTL (optional)
+ *   - `allowSandpack`   — accept `https://*.codesandbox.io`
+ *
+ * Environment-derived inputs (not part of the config block) remain here:
+ *   - UI port (for the localhost allow-list)
+ *   - Codespaces detection (`*.github.dev`, `*.githubpreview.dev`)
+ *
+ * Backcompat: the legacy `daemon.cors_origins`, `daemon.cors_allow_sandpack`,
+ * and `CORS_ORIGIN` env var continue to work via `resolveSecurity()` — by the
+ * time values reach this module, they've already been merged and warned on.
  */
 
+import type { ResolvedCors } from '@agor/core/config';
 import type { CorsOptions } from 'cors';
 
 /** CORS origin type — derived from the cors package's own CorsOptions */
@@ -16,31 +33,25 @@ export interface CorsConfigOptions {
   uiPort: number;
   /** Whether running in GitHub Codespaces */
   isCodespaces: boolean;
-  /** Explicit CORS_ORIGIN environment variable override */
-  corsOriginOverride?: string;
-  /** Allow Sandpack/CodeSandbox bundler origins (default: true) */
-  allowSandpack?: boolean;
-  /** Additional allowed origins from config (exact strings or /regex/ patterns) */
-  configOrigins?: string[];
+  /** Resolved CORS config (from `@agor/core/config` `resolveSecurity()`). */
+  resolved: ResolvedCors;
 }
 
 export interface CorsConfigResult {
-  /** The resolved CORS origin configuration */
+  /** The resolved CORS origin configuration passed to `cors()` middleware. */
   origin: CorsOrigin;
   /** Localhost origins for local development */
   localhostOrigins: string[];
   /**
    * True when the caller should allow `credentials: true` on the global cors()
-   * middleware. False when the resolved policy is a wildcard reflector (origin
-   * `*` or any-origin reflection), in which case `credentials` MUST be off to
-   * comply with the CORS spec and avoid credentialed cross-origin requests
-   * from arbitrary sites.
+   * middleware. False when the resolved policy is a wildcard reflector, in
+   * which case `credentials` MUST be off per the CORS spec.
    */
   credentialsAllowed: boolean;
   /**
-   * True when the resolved policy reflects any origin (wildcard mode).
+   * True when the resolved policy reflects any origin (wildcard/reflect).
    * Surfaced so the daemon entrypoint can refuse to boot in hardened
-   * deployment modes (solo/team) and emit a loud warning otherwise.
+   * deployment modes and emit a loud warning otherwise.
    */
   isWildcard: boolean;
   /**
@@ -49,6 +60,8 @@ export interface CorsConfigResult {
    * trusted origins instead of echoing it for everyone.
    */
   isAllowedOrigin: (origin: string) => boolean;
+  /** Additional options (methods, allowedHeaders, maxAge) to pass to cors(). */
+  extraOptions: Pick<CorsOptions, 'methods' | 'allowedHeaders' | 'maxAge'>;
 }
 
 /** Matches hosted Sandpack bundler origins like https://2-19-8-sandpack.codesandbox.io */
@@ -80,22 +93,20 @@ function parseRegexPattern(entry: string): RegExp | null {
 }
 
 /**
- * Build CORS origin configuration based on deployment environment
+ * Build CORS origin configuration from a pre-resolved `security.cors` block.
  *
- * Priority:
- * 1. CORS_ORIGIN='*' → Allow all origins (dangerous; credentials are forced off)
- * 2. Otherwise → Callback-based handler combining:
- *    - The configured UI port on localhost (http only)
- *    - Sandpack/CodeSandbox origins (unless allowSandpack=false)
- *    - GitHub Codespaces domains (when CODESPACES=true)
- *    - Additional origins from config.yaml (cors_origins)
- *    - Additional origins from CORS_ORIGIN env var (comma-separated)
+ * The resolver (in @agor/core) has already:
+ *   - applied CORS_ORIGIN env var precedence over config
+ *   - merged legacy `daemon.cors_origins` / `daemon.cors_allow_sandpack`
+ *   - emitted deprecation warnings
+ *   - rejected credentials:true + wildcard/reflect at load time
  *
- * @param options - Configuration options
- * @returns CORS origin configuration ready for express cors middleware
+ * This function is left concerned only with turning that into the runtime
+ * `cors()` origin callback + the predicates the rest of the daemon uses for
+ * PNA, credential stripping, etc.
  */
 export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
-  const { uiPort, isCodespaces, corsOriginOverride, allowSandpack = true, configOrigins } = options;
+  const { uiPort, isCodespaces, resolved } = options;
 
   // Support UI port and 3 additional ports (for parallel dev servers)
   const localhostOrigins = [
@@ -105,25 +116,54 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
     `http://localhost:${uiPort + 3}`,
   ];
 
-  // Explicit wildcard - allow all origins (use with caution!)
-  if (corsOriginOverride?.trim() === '*') {
-    console.warn('⚠️  CORS set to allow ALL origins (CORS_ORIGIN=*) — credentials disabled');
+  const extraOptions: Pick<CorsOptions, 'methods' | 'allowedHeaders' | 'maxAge'> = {};
+  if (resolved.methods) extraOptions.methods = resolved.methods;
+  if (resolved.allowedHeaders) extraOptions.allowedHeaders = resolved.allowedHeaders;
+  if (resolved.maxAgeSeconds !== undefined) extraOptions.maxAge = resolved.maxAgeSeconds;
+
+  // --- Wildcard / reflect: accept any origin, credentials are forced off. ---
+  if (resolved.mode === 'wildcard' || resolved.mode === 'reflect') {
+    console.warn(
+      `⚠️  CORS mode=${resolved.mode} — any origin will be accepted, credentials disabled.`
+    );
     return {
+      // In both modes the cors() package accepts any origin when `origin: true`.
+      // The spec requires the response header to echo the request origin in
+      // "reflect" mode (which cors() does when origin=true AND the request has
+      // an Origin header) and `*` in "wildcard" mode. Since cors() handles
+      // both via `origin: true` + `credentials: false`, we unify them here.
       origin: true,
       localhostOrigins,
       credentialsAllowed: false,
       isWildcard: true,
-      // SECURITY: in wildcard mode we accept ANY origin for normal CORS, but
-      // we deliberately do NOT echo Access-Control-Allow-Private-Network for
-      // unknown origins. PNA is a chrome-style escape hatch that lets a
-      // public origin reach a private/loopback target — even in wildcard
-      // mode, only localhost (the configured UI dev port range) gets the
-      // PNA header. Anyone else has to be added to the explicit allow-list.
+      // SECURITY: in wildcard/reflect mode we accept ANY origin for normal CORS,
+      // but we deliberately do NOT echo Access-Control-Allow-Private-Network for
+      // unknown origins. PNA is a chrome-style escape hatch that lets a public
+      // origin reach a private/loopback target — even in wildcard mode, only
+      // localhost (the configured UI dev port range) gets the PNA header.
       isAllowedOrigin: (origin: string) => localhostOrigins.includes(origin),
+      extraOptions,
     };
   }
 
-  // Collect exact origins and regex patterns from all sources
+  // --- Null-origin: the only allowed origin is the literal string "null". ---
+  if (resolved.mode === 'null-origin') {
+    console.warn('⚠️  CORS mode=null-origin — only "Origin: null" requests are allowed.');
+    return {
+      origin: (requestOrigin, callback) => {
+        if (!requestOrigin) return callback(null, true);
+        if (requestOrigin === 'null') return callback(null, true);
+        callback(new Error('Not allowed by CORS'));
+      },
+      localhostOrigins,
+      credentialsAllowed: resolved.credentials,
+      isWildcard: false,
+      isAllowedOrigin: () => false,
+      extraOptions,
+    };
+  }
+
+  // --- List mode: localhost + codespaces + sandpack + user-provided. ------
   const exactOrigins = new Set(localhostOrigins);
   const patterns: RegExp[] = [];
 
@@ -133,8 +173,8 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
   const uiPortRange = [uiPort, uiPort + 1, uiPort + 2, uiPort + 3].join('|');
   patterns.push(new RegExp(`^https?:\\/\\/localhost:(${uiPortRange})$`));
 
-  // Sandpack/CodeSandbox bundler (on by default).
-  if (allowSandpack) {
+  // Sandpack/CodeSandbox bundler (on by default, configurable).
+  if (resolved.allowSandpack) {
     patterns.push(SANDPACK_ORIGIN_PATTERN);
   }
 
@@ -144,36 +184,21 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
     console.log('🔒 CORS configured for GitHub Codespaces (*.github.dev, *.githubpreview.dev)');
   }
 
-  // Additional origins from config.yaml (cors_origins)
-  if (configOrigins) {
-    for (const raw of configOrigins) {
-      const entry = raw.trim();
-      if (!entry) continue;
-      const regex = parseRegexPattern(entry);
-      if (regex) {
-        patterns.push(regex);
-      } else {
-        exactOrigins.add(entry);
-      }
+  // Additional origins from resolved config (security.cors.origins merged
+  // with legacy daemon.cors_origins merged with CORS_ORIGIN env var — the
+  // resolver has already done precedence resolution).
+  for (const raw of resolved.origins) {
+    const entry = raw.trim();
+    if (!entry) continue;
+    const regex = parseRegexPattern(entry);
+    if (regex) {
+      patterns.push(regex);
+    } else {
+      exactOrigins.add(entry);
     }
   }
 
-  // Additional origins from CORS_ORIGIN env var (comma-separated)
-  if (corsOriginOverride) {
-    for (const entry of corsOriginOverride
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean)) {
-      const regex = parseRegexPattern(entry);
-      if (regex) {
-        patterns.push(regex);
-      } else {
-        exactOrigins.add(entry);
-      }
-    }
-  }
-
-  if (allowSandpack) {
+  if (resolved.allowSandpack) {
     console.log('🔒 CORS allows Sandpack/CodeSandbox bundler origins (*.codesandbox.io)');
   }
 
@@ -184,8 +209,8 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
 
   // Sandpack origins are third-party multi-tenant; we never allow credentials
   // to be sent from them even though we accept the request.
-  const isSandpackOrigin = (requestOrigin: string): boolean =>
-    allowSandpack && SANDPACK_ORIGIN_PATTERN.test(requestOrigin);
+  const isSandpack = (requestOrigin: string): boolean =>
+    resolved.allowSandpack && SANDPACK_ORIGIN_PATTERN.test(requestOrigin);
 
   const origin: CorsOrigin = (requestOrigin, callback) => {
     // Allow requests with no origin (curl, Postman, mobile apps)
@@ -201,13 +226,12 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
     callback(new Error('Not allowed by CORS'));
   };
 
-  // Wrap origin so that we can attach per-request credential decisions in the
-  // calling middleware. The returned `isAllowedOrigin` is the canonical check.
   return {
     origin,
     localhostOrigins,
-    credentialsAllowed: true,
+    credentialsAllowed: resolved.credentials,
     isWildcard: false,
-    isAllowedOrigin: (o: string) => isAllowedOrigin(o) && !isSandpackOrigin(o),
+    isAllowedOrigin: (o: string) => isAllowedOrigin(o) && !isSandpack(o),
+    extraOptions,
   };
 }

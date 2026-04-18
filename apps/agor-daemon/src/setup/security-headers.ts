@@ -9,6 +9,13 @@
  *   - Referrer-Policy: strict-origin-when-cross-origin
  *   - Strict-Transport-Security      (only when the request is over TLS)
  *
+ * The CSP is resolved from `~/.agor/config.yaml` (`security.csp.*`) via
+ * `resolveSecurity()` in @agor/core, so operators can append per-directive
+ * sources (`extras`) or replace them wholesale (`override`) without touching
+ * code. Built-in defaults are chosen so every bundled Agor feature works out
+ * of the box — notably Sandpack-backed artifacts, which need `frame-src` and
+ * `worker-src` to be non-restrictive.
+ *
  * The CSP intentionally allows `style-src 'unsafe-inline'` because Ant Design
  * still injects inline styles. TODO: migrate to nonces and tighten.
  *
@@ -17,42 +24,25 @@
  * set here — `setHeader` replaces, so per-route CSPs continue to work.
  */
 
+import type { ResolvedCsp } from '@agor/core/config';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
 export interface SecurityHeadersOptions {
-  /** The daemon's own URL (e.g. `http://localhost:3030`) — added to connect-src. */
-  daemonUrl?: string;
-  /** Extra connect-src origins (UI dev server etc). Optional. */
-  extraConnectSrc?: string[];
+  /**
+   * Resolved CSP (from `resolveSecurity()`). When omitted, CSP is emitted as
+   * an empty `default-src 'self'` — safe but likely to block legitimate
+   * resources. The daemon entrypoint always passes a resolved value; this
+   * default exists for unit tests that need a no-config middleware.
+   */
+  csp?: ResolvedCsp;
 }
 
-/**
- * Build the CSP header value. `connect-src` includes `'self'`, `ws:`/`wss:`
- * (for the FeathersJS socket.io transport in dev/prod), the daemon's own URL
- * if known, and any extra origins the operator wants to allow.
- */
-function buildCsp(opts: SecurityHeadersOptions): string {
-  const connectSrc = ["'self'", 'ws:', 'wss:'];
-  if (opts.daemonUrl) connectSrc.push(opts.daemonUrl);
-  if (opts.extraConnectSrc) connectSrc.push(...opts.extraConnectSrc);
-
-  const directives: Record<string, string[]> = {
-    'default-src': ["'self'"],
-    'script-src': ["'self'"],
-    // TODO: drop 'unsafe-inline' once Ant Design supports CSP nonces.
-    'style-src': ["'self'", "'unsafe-inline'"],
-    'img-src': ["'self'", 'data:', 'blob:'],
-    'font-src': ["'self'", 'data:'],
-    'connect-src': connectSrc,
-    'frame-ancestors': ["'none'"],
-    'object-src': ["'none'"],
-    'base-uri': ["'self'"],
-  };
-
-  return Object.entries(directives)
-    .map(([k, v]) => `${k} ${v.join(' ')}`)
-    .join('; ');
-}
+const MINIMAL_FALLBACK_CSP: ResolvedCsp = {
+  directives: { 'default-src': ["'self'"] },
+  disabled: false,
+  reportOnly: false,
+  headerValue: "default-src 'self'",
+};
 
 /**
  * Returns an Express middleware that sets the standard security headers.
@@ -62,10 +52,31 @@ function buildCsp(opts: SecurityHeadersOptions): string {
  * http://localhost development.
  */
 export function securityHeaders(opts: SecurityHeadersOptions = {}): RequestHandler {
-  const csp = buildCsp(opts);
+  const csp = opts.csp ?? MINIMAL_FALLBACK_CSP;
+  const cspHeaderName = csp.reportOnly
+    ? 'Content-Security-Policy-Report-Only'
+    : 'Content-Security-Policy';
+
+  // When `report_uri` is set, emit a matching `Report-To` header so that
+  // modern browsers prefer the Reporting API over the legacy `report-uri`
+  // directive. We point it at a group name that matches the `report-to`
+  // directive value produced by the resolver (`agor-csp`).
+  const reportToHeader =
+    csp.reportUri !== undefined
+      ? JSON.stringify({
+          group: 'agor-csp',
+          max_age: 10886400, // 126 days — Chrome caps at ~1yr; this matches Mozilla's recommendation
+          endpoints: [{ url: csp.reportUri }],
+        })
+      : undefined;
 
   return (req: Request, res: Response, next: NextFunction): void => {
-    res.setHeader('Content-Security-Policy', csp);
+    if (!csp.disabled) {
+      res.setHeader(cspHeaderName, csp.headerValue);
+      if (reportToHeader) {
+        res.setHeader('Report-To', reportToHeader);
+      }
+    }
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');

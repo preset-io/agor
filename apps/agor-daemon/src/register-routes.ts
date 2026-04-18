@@ -147,6 +147,11 @@ export interface RegisterRoutesContext {
   DAEMON_PORT: number;
   DAEMON_VERSION: string;
   servicesConfig: DaemonServicesConfig;
+  /**
+   * Resolved security config (CSP/CORS after defaults+extras+override merge).
+   * Used by /health to surface the effective policy to admin users.
+   */
+  resolvedSecurity: import('@agor/core/config').ResolvedSecurity;
 
   // Service instances from registerServices()
   sessionsService: SessionsServiceImpl;
@@ -181,6 +186,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     DAEMON_PORT: _DAEMON_PORT,
     DAEMON_VERSION,
     servicesConfig,
+    resolvedSecurity,
     sessionsService,
     messagesService,
     boardsService,
@@ -2564,6 +2570,25 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           execution: {
             worktreeRbac: config.execution?.worktree_rbac === true,
             unixUserMode: config.execution?.unix_user_mode ?? 'simple',
+          },
+          // Resolved security posture — admins can confirm in Settings → About
+          // which CSP/CORS policy the daemon booted with, without tailing logs
+          // or reading response headers by hand. Keep the shape tight: the
+          // full CSP header value is the one piece operators actually need
+          // when debugging a blocked resource.
+          security: {
+            csp: {
+              enabled: !resolvedSecurity.csp.disabled,
+              reportOnly: resolvedSecurity.csp.reportOnly,
+              reportUri: resolvedSecurity.csp.reportUri,
+              header: resolvedSecurity.csp.headerValue,
+            },
+            cors: {
+              mode: resolvedSecurity.cors.mode,
+              credentials: resolvedSecurity.cors.credentials,
+              originCount: resolvedSecurity.cors.origins.length,
+              allowSandpack: resolvedSecurity.cors.allowSandpack,
+            },
           },
         };
       }

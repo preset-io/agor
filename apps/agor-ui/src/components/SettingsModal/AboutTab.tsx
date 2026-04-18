@@ -3,7 +3,7 @@
  */
 
 import type { AgorClient, UnixUserMode } from '@agor-live/client';
-import { Card, Descriptions, Space, Typography } from 'antd';
+import { Card, Descriptions, Space, Tag, Tooltip, Typography } from 'antd';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 
@@ -45,6 +45,20 @@ interface HealthInfo {
   execution?: {
     worktreeRbac: boolean;
     unixUserMode: UnixUserMode;
+  };
+  security?: {
+    csp: {
+      enabled: boolean;
+      reportOnly: boolean;
+      reportUri?: string;
+      header: string;
+    };
+    cors: {
+      mode: 'list' | 'wildcard' | 'reflect' | 'null-origin';
+      credentials: boolean;
+      originCount: number;
+      allowSandpack: boolean;
+    };
   };
 }
 
@@ -212,6 +226,92 @@ export const AboutTab: React.FC<AboutTabProps> = ({
                   )}
                 </Descriptions>
               </Card>
+
+              {/* Security Headers (CSP + CORS posture) */}
+              {healthInfo?.security && (
+                <Card
+                  title="Security Headers (Admin Only)"
+                  variant="borderless"
+                  style={{ maxWidth: 800, margin: '0 auto' }}
+                >
+                  <Descriptions column={1} bordered size="small">
+                    <Descriptions.Item label="CSP">
+                      {healthInfo.security.csp.enabled ? (
+                        healthInfo.security.csp.reportOnly ? (
+                          <Tag color="warning">Report-Only</Tag>
+                        ) : (
+                          <Tag color="success">Enforced</Tag>
+                        )
+                      ) : (
+                        <Tag color="error">Disabled</Tag>
+                      )}
+                      {healthInfo.security.csp.reportUri && (
+                        <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
+                          Reports → <code>{healthInfo.security.csp.reportUri}</code>
+                        </Typography.Text>
+                      )}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="CSP Header">
+                      <Tooltip title="Full Content-Security-Policy header the daemon is emitting. If a resource is blocked, check which directive matches.">
+                        <Typography.Paragraph
+                          copyable={{ text: healthInfo.security.csp.header }}
+                          style={{
+                            margin: 0,
+                            fontFamily: 'monospace',
+                            fontSize: 12,
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-all',
+                          }}
+                        >
+                          {healthInfo.security.csp.header}
+                        </Typography.Paragraph>
+                      </Tooltip>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="CORS Mode">
+                      <code>{healthInfo.security.cors.mode}</code>
+                      {healthInfo.security.cors.mode === 'wildcard' && (
+                        <Typography.Text type="danger" style={{ marginLeft: 8 }}>
+                          ⚠️ Any origin accepted
+                        </Typography.Text>
+                      )}
+                      {healthInfo.security.cors.mode === 'reflect' && (
+                        <Typography.Text type="warning" style={{ marginLeft: 8 }}>
+                          ⚠️ Origin header echoed
+                        </Typography.Text>
+                      )}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="CORS Credentials">
+                      {healthInfo.security.cors.credentials ? (
+                        <Tag color="success">Enabled</Tag>
+                      ) : (
+                        <Tag color="default">Disabled</Tag>
+                      )}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Allowed Origins">
+                      {healthInfo.security.cors.originCount} configured{' '}
+                      <Typography.Text type="secondary">
+                        (+ localhost dev ports
+                        {healthInfo.security.cors.allowSandpack && ', + Sandpack'})
+                      </Typography.Text>
+                    </Descriptions.Item>
+                  </Descriptions>
+                  <Typography.Paragraph
+                    type="secondary"
+                    style={{ marginTop: 12, marginBottom: 0, fontSize: 12 }}
+                  >
+                    Configure via <code>security.csp</code> and <code>security.cors</code> in{' '}
+                    <code>~/.agor/config.yaml</code>. See{' '}
+                    <a
+                      href="https://github.com/preset-io/agor/blob/main/context/concepts/security.md"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      context/concepts/security.md
+                    </a>
+                    .
+                  </Typography.Paragraph>
+                </Card>
+              )}
 
               {/* System Debug Info */}
               <Card

@@ -20,8 +20,8 @@ import { patchConsole } from '@agor/core/utils/logger';
 
 patchConsole();
 
-import type { AgorConfig } from '@agor/core/config';
-import { loadConfig, loadConfigFromFile } from '@agor/core/config';
+import type { AgorConfig, ResolvedSecurity } from '@agor/core/config';
+import { loadConfig, loadConfigFromFile, resolveSecurity } from '@agor/core/config';
 import { getDatabaseUrl } from '@agor/core/db';
 import {
   authenticate,
@@ -245,18 +245,34 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     }
   };
 
+  // Resolve the `security.*` config block once and reuse it everywhere that
+  // cares (CSP middleware, CORS middleware, /health response, CSP report
+  // endpoint). The resolver handles:
+  //   - merging defaults ⊕ extras ⊕ override for CSP
+  //   - CORS mode/origins (plus legacy daemon.cors_* backcompat)
+  //   - CORS_ORIGIN env var precedence
+  //   - credentials:true + wildcard/reflect rejection at load time
+  const resolvedSecurity: ResolvedSecurity = resolveSecurity(config, {
+    daemonUrl,
+    corsOriginEnv: process.env.CORS_ORIGIN,
+    legacyCorsOrigins: config.daemon?.cors_origins,
+    legacyAllowSandpack:
+      config.daemon?.cors_allow_sandpack !== undefined
+        ? config.daemon.cors_allow_sandpack
+        : undefined,
+  });
+
   // CORS
   const {
     origin: corsOrigin,
     credentialsAllowed,
     isWildcard,
     isAllowedOrigin,
+    extraOptions: corsExtraOptions,
   } = buildCorsConfig({
     uiPort: UI_PORT,
     isCodespaces: process.env.CODESPACES === 'true',
-    corsOriginOverride: process.env.CORS_ORIGIN,
-    allowSandpack: config.daemon?.cors_allow_sandpack !== false,
-    configOrigins: config.daemon?.cors_origins,
+    resolved: resolvedSecurity.cors,
   });
 
   // Refuse to boot when a hardened deployment is configured to reflect any
@@ -313,11 +329,44 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     next();
   });
 
-  app.use(cors({ origin: corsOrigin, credentials: credentialsAllowed }));
+  app.use(cors({ origin: corsOrigin, credentials: credentialsAllowed, ...corsExtraOptions }));
 
   // Security headers (CSP, X-Frame-Options, nosniff, Referrer-Policy, HSTS).
   // Must run after CORS so preflights still get the Access-Control-* headers.
-  app.use(securityHeaders({ daemonUrl }) as never);
+  app.use(securityHeaders({ csp: resolvedSecurity.csp }) as never);
+
+  // CSP violation reporting endpoint. Only mounted when operators opt in via
+  // `security.csp.report_uri`. Handler is deliberately minimal: accept POSTs
+  // of either shape (`application/csp-report` legacy or
+  // `application/reports+json` modern), log at warn level with pino, and
+  // respond 204. Rate-limited to protect against report floods.
+  const reportUri = resolvedSecurity.csp.reportUri;
+  if (reportUri && reportUri.startsWith('/')) {
+    const { default: rateLimit } = await import('express-rate-limit');
+    const reportLimiter = rateLimit({
+      windowMs: 60_000,
+      limit: 120, // 2 reports/sec average per IP — tight but avoids total silence
+      standardHeaders: 'draft-7',
+      legacyHeaders: false,
+      message: 'Too many CSP reports',
+    });
+    app.use(
+      reportUri,
+      express.json({
+        type: ['application/csp-report', 'application/reports+json', 'application/json'],
+        limit: '16kb',
+      }),
+      reportLimiter as never,
+      ((req: express.Request, res: express.Response) => {
+        if (req.method !== 'POST') {
+          res.status(405).end();
+          return;
+        }
+        console.warn('[csp-report]', JSON.stringify(req.body));
+        res.status(204).end();
+      }) as never
+    );
+  }
 
   // Default to a 10MB JSON body. The previous 10MB pre-hardening default was
   // unbounded enough to allow trivial memory-pressure DoS, and a 1MB ceiling
@@ -502,6 +551,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     DAEMON_PORT,
     DAEMON_VERSION,
     servicesConfig,
+    resolvedSecurity,
     sessionsService: services.sessionsService,
     messagesService: services.messagesService,
     boardsService: services.boardsService,
