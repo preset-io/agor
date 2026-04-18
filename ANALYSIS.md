@@ -1,9 +1,43 @@
 # Env-Command Security Analysis
 
-**Status:** Analysis + design doc. No code changes proposed here.
+**Status:** Analysis + design doc. Scope now locked (see below); implementation
+proceeding in this worktree. This doc will be deleted when the PR lands — git
+history preserves it.
 **Scope:** Agor "environment commands" — named shell commands per worktree
 (`start_command`, `stop_command`, `nuke_command`, `logs_command`) triggered over
 REST/MCP/CLI and executed on the daemon host.
+
+---
+
+## Final PR Scope (locked)
+
+One PR on branch `env-commands-security-analysis`, landing in this order:
+
+| # | Item | Commit shape |
+|---|---|---|
+| E | Fix strict-mode `envFilePath` exec bug (shell-string commands truncated to single-arg exec) — new `shell` option on `buildSpawnArgs` + tests | `fix(unix): shell-interpret env commands under impersonation with secrets` |
+| A | `execution.managed_envs_minimum_role` config (`none\|viewer\|member\|admin\|superadmin`, default `member`), service-level enforcement, drop route-layer `ROLES.ADMIN` hardcode | `feat(env): configurable min-role gate for env-command triggers` |
+| C | `execution.env_commands.deny_tokens` — host-root footgun blocklist at define-time + trigger-time | `feat(env): argv-token deny-list for env commands` |
+| D | Structured audit log per trigger (`worktree_id`, `user_id`, `caller`, `argv_hash`, exit status) | `feat(env): structured audit log for env-command triggers` |
+| B | New top-level `worktrees:` config section with `others_can_default` / `others_fs_access_default`, wired into `worktreeRepository.create` | `feat(config): worktrees defaults for others_can and others_fs_access` |
+| F | `{{host_ip_address}}` Handlebars template variable — auto-detect primary non-loopback IPv4 with optional `daemon.host_ip_address` override | `feat(templates): host_ip_address variable for env-command templates` |
+| G | UI: render env commands read-only for non-admins; render triggers disabled-with-tooltip when user below `managed_envs_minimum_role` | `feat(ui): role-aware env command visibility` |
+| H | Fix `.agor.yml` import/export to operate on the active worktree path, not the repo folder | `fix(config): agor.yml import/export operates on worktree path` |
+
+**Behavioral change worth flagging in PR description:** A drops the hardcoded
+route-level `ROLES.ADMIN` gate on `POST /worktrees/:id/{start,stop,restart,nuke}`.
+The new default `managed_envs_minimum_role: member` means deployments that
+relied on the previous implicit admin-only trigger will see members able to
+trigger. This matches the intended UX per product direction, and admins can
+set `admin` or `superadmin` to keep the old behavior. Flag in upgrade notes.
+
+**Dropped from scope:** auto-reingesting `.agor.yml` (local can diverge from
+repo intentionally); separate `managed_envs_minimum_worktree_permission`
+config (add in follow-up once A has bedded in).
+
+**Deferred (not this PR):** argv-prefix allow-list, rate limiting, rootless
+docker runner process, compose-hash pinning, fixing stale SQLite CHECK
+constraint drift for `others_can` (migration 0034 not applied to local DB).
 
 ---
 
