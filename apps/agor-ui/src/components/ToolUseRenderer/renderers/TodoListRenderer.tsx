@@ -8,7 +8,7 @@
  * - Compact inline display
  */
 
-import { CheckCircleFilled } from '@ant-design/icons';
+import { CheckCircleFilled, QuestionCircleOutlined, StopOutlined } from '@ant-design/icons';
 import { Spin, theme } from 'antd';
 import type React from 'react';
 
@@ -18,8 +18,23 @@ export interface TodoItem {
   status: 'pending' | 'in_progress' | 'completed';
 }
 
+/**
+ * Display-only synthetic statuses applied by the sticky renderer when the
+ * parent task is no longer running. They never appear in the raw TodoWrite
+ * tool input and are only produced by the rendering layer.
+ *
+ * - 'stopped': user explicitly halted the task (TaskStatus.STOPPED/STOPPING)
+ * - 'unknown': task ended (completed/failed/timed_out) without the agent
+ *   marking this item — we can't tell whether it actually finished
+ */
+export type RenderableTodoStatus = TodoItem['status'] | 'stopped' | 'unknown';
+
+export interface RenderableTodoItem extends Omit<TodoItem, 'status'> {
+  status: RenderableTodoStatus;
+}
+
 interface TodoWriteInput {
-  todos: TodoItem[];
+  todos: RenderableTodoItem[];
 }
 
 /**
@@ -71,7 +86,7 @@ const CircleIcon: React.FC<{ color: string }> = ({ color }) => (
 /**
  * Renders a single todo item with status indicator
  */
-const TodoItemRow: React.FC<{ todo: TodoItem; index: number }> = ({ todo, index }) => {
+const TodoItemRow: React.FC<{ todo: RenderableTodoItem; index: number }> = ({ todo, index }) => {
   const { token } = theme.useToken();
 
   // Determine icon and color based on status
@@ -92,6 +107,26 @@ const TodoItemRow: React.FC<{ todo: TodoItem; index: number }> = ({ todo, index 
             size="small"
             style={{
               color: token.colorPrimary,
+              fontSize: 14,
+            }}
+          />
+        );
+      case 'stopped':
+        return (
+          <StopOutlined
+            aria-label="Stopped task"
+            style={{
+              color: token.colorTextTertiary,
+              fontSize: 14,
+            }}
+          />
+        );
+      case 'unknown':
+        return (
+          <QuestionCircleOutlined
+            aria-label="Unknown task state"
+            style={{
+              color: token.colorTextTertiary,
               fontSize: 14,
             }}
           />
@@ -121,6 +156,13 @@ const TodoItemRow: React.FC<{ todo: TodoItem; index: number }> = ({ todo, index 
           ...baseStyle,
           color: token.colorText,
           fontWeight: 500,
+        };
+      case 'stopped':
+      case 'unknown':
+        return {
+          ...baseStyle,
+          color: token.colorTextTertiary,
+          fontStyle: 'italic',
         };
       default:
         return {

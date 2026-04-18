@@ -246,3 +246,62 @@ export const Empty: Story = {
     },
   },
 };
+
+/**
+ * Display-only `stopped` status — applied by StickyTodoRenderer when the
+ * parent task was halted by the user but items remain in_progress.
+ */
+export const StoppedItems: Story = {
+  args: {
+    toolUseId: 'tool_use_8',
+    input: {
+      todos: [
+        {
+          content: 'Run database migrations',
+          activeForm: 'Running database migrations',
+          status: 'completed',
+        },
+        {
+          content: 'Implement user registration endpoint',
+          activeForm: 'Implementing user registration endpoint',
+          status: 'stopped',
+        },
+        {
+          content: 'Add email verification',
+          activeForm: 'Adding email verification',
+          status: 'pending',
+        },
+      ],
+    },
+  },
+};
+
+/**
+ * Display-only `unknown` status — applied by StickyTodoRenderer when the
+ * parent task ended (completed/failed/timed out) without the agent updating
+ * an item that was still in_progress.
+ */
+export const UnknownItems: Story = {
+  args: {
+    toolUseId: 'tool_use_9',
+    input: {
+      todos: [
+        {
+          content: 'Run database migrations',
+          activeForm: 'Running database migrations',
+          status: 'completed',
+        },
+        {
+          content: 'Implement user registration endpoint',
+          activeForm: 'Implementing user registration endpoint',
+          status: 'unknown',
+        },
+        {
+          content: 'Add email verification',
+          activeForm: 'Adding email verification',
+          status: 'pending',
+        },
+      ],
+    },
+  },
+};

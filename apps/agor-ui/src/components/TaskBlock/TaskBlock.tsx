@@ -693,7 +693,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                   })}
 
                 {/* Keep latest TODO visible even after completion (Claude parity). */}
-                <StickyTodoRenderer messages={messages} />
+                <StickyTodoRenderer messages={messages} taskStatus={task.status} />
 
                 {/* Show typing indicator whenever task is actively running */}
                 {task.status === TaskStatus.RUNNING && (

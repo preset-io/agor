@@ -12,16 +12,52 @@
  * - Only renders when TODOs exist (returns null otherwise)
  */
 
-import type { Message } from '@agor-live/client';
+import { type Message, TaskStatus } from '@agor-live/client';
 import { theme } from 'antd';
 import { useMemo } from 'react';
-import { parseTodosInput, TodoListRenderer } from '../ToolUseRenderer/renderers/TodoListRenderer';
+import {
+  parseTodosInput,
+  type RenderableTodoItem,
+  type RenderableTodoStatus,
+  TodoListRenderer,
+} from '../ToolUseRenderer/renderers/TodoListRenderer';
 
 interface StickyTodoRendererProps {
   /**
    * Messages from the task - will be scanned in reverse to find latest TodoWrite
    */
   messages: Message[];
+
+  /**
+   * Status of the parent task. Used to decide whether items still marked
+   * `in_progress` should be displayed as `stopped` (user halted the task) or
+   * `unknown` (task ended without the agent updating this item).
+   */
+  taskStatus: TaskStatus;
+}
+
+/**
+ * If the parent task is no longer running, items still in `in_progress` cannot
+ * truly be running. Map them to a display-only status that conveys what we
+ * actually know:
+ *
+ * - User halted (STOPPED/STOPPING): we know the work didn't finish → 'stopped'
+ * - Task ended otherwise (COMPLETED/FAILED/TIMED_OUT) without the agent
+ *   updating this item: we don't know if it finished → 'unknown'
+ * - Active/waiting states (RUNNING, CREATED, AWAITING_*): leave as-is
+ */
+function inProgressOverrideFor(taskStatus: TaskStatus): RenderableTodoStatus | null {
+  switch (taskStatus) {
+    case TaskStatus.STOPPED:
+    case TaskStatus.STOPPING:
+      return 'stopped';
+    case TaskStatus.COMPLETED:
+    case TaskStatus.FAILED:
+    case TaskStatus.TIMED_OUT:
+      return 'unknown';
+    default:
+      return null;
+  }
 }
 
 /**
@@ -30,7 +66,7 @@ interface StickyTodoRendererProps {
  *
  * Performance: Uses useMemo + early exit strategy (O(1) to O(5) in practice)
  */
-export function StickyTodoRenderer({ messages }: StickyTodoRendererProps) {
+export function StickyTodoRenderer({ messages, taskStatus }: StickyTodoRendererProps) {
   const { token } = theme.useToken();
 
   // Scan messages in reverse to find latest TodoWrite
@@ -53,8 +89,20 @@ export function StickyTodoRenderer({ messages }: StickyTodoRendererProps) {
     return null;
   }, [messages]);
 
+  // Apply display-only transform: items still `in_progress` are rewritten when
+  // the parent task can no longer be making progress. Underlying message data
+  // is untouched — historical tool blocks render the original status.
+  const displayTodos = useMemo<RenderableTodoItem[] | null>(() => {
+    if (!latestTodo) return null;
+    const override = inProgressOverrideFor(taskStatus);
+    if (!override) return latestTodo;
+    return latestTodo.map((todo) =>
+      todo.status === 'in_progress' ? { ...todo, status: override } : todo,
+    );
+  }, [latestTodo, taskStatus]);
+
   // Don't render if no TODOs found
-  if (!latestTodo) return null;
+  if (!displayTodos) return null;
 
   return (
     <div
@@ -67,7 +115,7 @@ export function StickyTodoRenderer({ messages }: StickyTodoRendererProps) {
         transition: 'opacity 0.3s ease',
       }}
     >
-      <TodoListRenderer toolUseId="sticky-todo" input={{ todos: latestTodo }} />
+      <TodoListRenderer toolUseId="sticky-todo" input={{ todos: displayTodos }} />
     </div>
   );
 }
