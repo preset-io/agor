@@ -84,6 +84,7 @@
     "dotenv": "^17.3.1",
     "drizzle-orm": "^0.45.2",
     "express": "^5.2.0",
+    "express-rate-limit": "^7.4.1",
     "express-static-gzip": "^3.0.0",
     "feathers-swagger": "^3.0.0",
     "handlebars": "^4.7.8",
