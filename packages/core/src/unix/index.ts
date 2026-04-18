@@ -8,6 +8,8 @@
 
 // Command execution abstraction (for admin CLI commands)
 export * from './command-executor.js';
+// Env command deny-list (defence-in-depth)
+export * from './environment-command-deny-list.js';
 // Environment command spawn utilities
 export * from './environment-command-spawn.js';
 // Worktree group management

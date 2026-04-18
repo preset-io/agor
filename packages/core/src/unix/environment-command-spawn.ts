@@ -10,6 +10,7 @@ import { createUserProcessEnvironment } from '../config/index.js';
 import type { Database } from '../db/index.js';
 import { UsersRepository } from '../db/repositories/index.js';
 import type { Worktree } from '../types/index.js';
+import { assertEnvCommandAllowed } from './environment-command-deny-list.js';
 import { buildSpawnArgs } from './run-as-user.js';
 import { attachEnvFileCleanup, prepareImpersonationEnv } from './user-env-file.js';
 import { resolveUnixUserForImpersonation, validateResolvedUnixUser } from './user-manager.js';
@@ -30,6 +31,30 @@ export interface SpawnEnvironmentCommandOptions {
   commandType: EnvironmentCommandType;
   /** stdio configuration (default: 'inherit') */
   stdio?: SpawnOptions['stdio'];
+  /**
+   * Identity of the user who triggered the command. Used for audit logging
+   * only — authorization is enforced at the service layer.
+   */
+  triggeredBy?: { user_id?: string; email?: string };
+}
+
+/**
+ * Structured audit entry emitted (as a single JSON line) whenever an env
+ * command is spawned. Captures who/what/where so trigger history can be
+ * reconstructed from daemon logs. We do not persist these rows — the
+ * daemon's journald/docker logs are the source of truth.
+ */
+export interface EnvCommandAuditEntry {
+  event: 'agor.env_command.spawn';
+  timestamp: string;
+  worktree_id: string;
+  worktree_name: string;
+  command_type: EnvironmentCommandType;
+  command: string;
+  triggered_by_user_id: string | undefined;
+  triggered_by_email: string | undefined;
+  as_unix_user: string | undefined;
+  unix_user_mode: string;
 }
 
 /**
@@ -52,9 +77,13 @@ export interface SpawnEnvironmentCommandOptions {
 export async function spawnEnvironmentCommand(
   options: SpawnEnvironmentCommandOptions
 ): Promise<ChildProcess> {
-  const { command, worktree, db, commandType, stdio = 'inherit' } = options;
+  const { command, worktree, db, commandType, stdio = 'inherit', triggeredBy } = options;
 
   const logPrefix = `[Environment.${commandType} ${worktree.name}]`;
+
+  // Defence-in-depth: refuse obviously-dangerous commands even if an admin
+  // authored them. Runs on every spawn path (REST, MCP, WebSocket).
+  assertEnvCommandAllowed(command, commandType);
 
   // Load config for Unix impersonation settings
   const { loadConfig } = await import('../config/config-manager.js');
@@ -114,6 +143,22 @@ export async function spawnEnvironmentCommand(
     envFilePath: prepared.envFilePath,
     shell: true,
   });
+
+  // Structured audit log — one JSON line per spawn for post-hoc review
+  // (daemon logs are the source of truth; we do not persist these to the DB).
+  const auditEntry: EnvCommandAuditEntry = {
+    event: 'agor.env_command.spawn',
+    timestamp: new Date().toISOString(),
+    worktree_id: worktree.worktree_id,
+    worktree_name: worktree.name,
+    command_type: commandType,
+    command,
+    triggered_by_user_id: triggeredBy?.user_id,
+    triggered_by_email: triggeredBy?.email,
+    as_unix_user: asUser,
+    unix_user_mode: unixUserMode,
+  };
+  console.log(`AUDIT ${JSON.stringify(auditEntry)}`);
 
   // Spawn the command
   // When not impersonating (simple mode), buildSpawnArgs returns the raw command string,

@@ -130,6 +130,19 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   }
 
   /**
+   * Extract caller identity for audit logging. Internal/daemon-initiated
+   * calls (no params.provider, no user) return undefined which the audit
+   * entry records explicitly.
+   */
+  private extractTriggeredBy(
+    params: WorktreeParams | undefined
+  ): { user_id?: string; email?: string } | undefined {
+    const user = (params as AuthenticatedParams | undefined)?.user;
+    if (!user) return undefined;
+    return { user_id: user.user_id, email: user.email };
+  }
+
+  /**
    * Get board-objects service (lazy-loaded to prevent circular dependencies)
    * FIX: Cache service reference instead of calling this.app.service() repeatedly
    */
@@ -940,6 +953,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
         db: this.db,
         commandType: 'start',
         stdio: 'pipe',
+        triggeredBy: this.extractTriggeredBy(params),
       });
 
       // Collect stdout/stderr for error reporting (last ~100 lines)
@@ -1063,6 +1077,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           worktree,
           db: this.db,
           commandType: 'stop',
+          triggeredBy: this.extractTriggeredBy(params),
         });
 
         await new Promise<void>((resolve, reject) => {
@@ -1184,6 +1199,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
         worktree,
         db: this.db,
         commandType: 'nuke',
+        triggeredBy: this.extractTriggeredBy(params),
       });
 
       await new Promise<void>((resolve, reject) => {
@@ -1414,6 +1430,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
         db: this.db,
         commandType: 'logs',
         stdio: 'pipe', // Need to capture output for logs
+        triggeredBy: this.extractTriggeredBy(params),
       });
 
       const result = await new Promise<{
