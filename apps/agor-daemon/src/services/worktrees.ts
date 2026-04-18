@@ -10,7 +10,7 @@ import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { ENVIRONMENT, isWorktreeRbacEnabled, PAGINATION } from '@agor/core/config';
+import { ENVIRONMENT, isWorktreeRbacEnabled, loadConfig, PAGINATION } from '@agor/core/config';
 import { type Database, WorktreeRepository, type WorktreeWithZoneAndSessions } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
@@ -27,6 +27,7 @@ import { spawnEnvironmentCommand } from '@agor/core/unix';
 import { getNextRunTime, validateCron } from '@agor/core/utils/cron';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService } from '../adapters/drizzle';
+import { ensureCanTriggerManagedEnv } from '../utils/authorization.js';
 import { resolveGitImpersonationForWorktree } from '../utils/git-impersonation.js';
 import { generateSessionToken, getDaemonUrl, spawnExecutor } from '../utils/spawn-executor.js';
 import type { InternalEnrichmentParams } from './sessions';
@@ -113,6 +114,19 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     this.worktreeRepo = worktreeRepo;
     this.db = db;
     this.app = app;
+  }
+
+  /**
+   * Enforce `execution.managed_envs_minimum_role` on env command triggers.
+   * Canonical enforcement point — runs for REST, WebSocket, *and* MCP callers
+   * since all trigger paths reach this service class.
+   */
+  private async ensureCanTriggerEnv(
+    params: WorktreeParams | undefined,
+    action: string
+  ): Promise<void> {
+    const config = await loadConfig();
+    ensureCanTriggerManagedEnv(config.execution?.managed_envs_minimum_role, params, action);
   }
 
   /**
@@ -871,6 +885,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     id: WorktreeID,
     params?: WorktreeParams
   ): Promise<WorktreeWithZoneAndSessions> {
+    await this.ensureCanTriggerEnv(params, 'start worktree environments');
     const worktree = await this.get(id, params);
 
     // Validate static start command exists
@@ -1022,6 +1037,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     id: WorktreeID,
     params?: WorktreeParams
   ): Promise<WorktreeWithZoneAndSessions> {
+    await this.ensureCanTriggerEnv(params, 'stop worktree environments');
     const worktree = await this.get(id, params);
 
     // Set status to 'stopping'
@@ -1139,6 +1155,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     id: WorktreeID,
     params?: WorktreeParams
   ): Promise<WorktreeWithZoneAndSessions> {
+    await this.ensureCanTriggerEnv(params, 'nuke worktree environments');
     const worktree = await this.get(id, params);
 
     // Require nuke_command to be configured
@@ -1372,6 +1389,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     error?: string;
     truncated?: boolean;
   }> {
+    await this.ensureCanTriggerEnv(params, 'fetch worktree environment logs');
     const worktree = await this.get(id, params);
 
     // Check if static logs command is configured

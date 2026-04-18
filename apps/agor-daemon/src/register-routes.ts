@@ -2079,7 +2079,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       },
     },
     {
-      create: { role: ROLES.ADMIN, action: 'start worktree environments' },
+      // Role is enforced at the service layer via managed_envs_minimum_role
+      // (default: member). This route-level gate is just "authenticated".
+      create: { role: ROLES.MEMBER, action: 'start worktree environments' },
     },
     requireAuth
   );
@@ -2098,7 +2100,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       },
     },
     {
-      create: { role: ROLES.ADMIN, action: 'stop worktree environments' },
+      // Service-layer enforcement via managed_envs_minimum_role
+      create: { role: ROLES.MEMBER, action: 'stop worktree environments' },
     },
     requireAuth
   );
@@ -2117,7 +2120,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       },
     },
     {
-      create: { role: ROLES.ADMIN, action: 'restart worktree environments' },
+      // Service-layer enforcement via managed_envs_minimum_role
+      create: { role: ROLES.MEMBER, action: 'restart worktree environments' },
     },
     requireAuth
   );
@@ -2136,7 +2140,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       },
     },
     {
-      create: { role: ROLES.ADMIN, action: 'nuke worktree environments' },
+      // Service-layer enforcement via managed_envs_minimum_role
+      create: { role: ROLES.MEMBER, action: 'nuke worktree environments' },
     },
     requireAuth
   );

@@ -3,6 +3,13 @@
  */
 
 import type { DaemonResourcesConfig } from '../types/config-resources';
+import type { UserRole } from '../types/user';
+
+/**
+ * Minimum role allowed to trigger managed environment commands
+ * (start/stop/nuke/logs). `'none'` disables the feature entirely.
+ */
+export type ManagedEnvsMinimumRole = 'none' | UserRole;
 
 /**
  * Type for user-provided JSON data where structure is unknown or dynamic
@@ -370,6 +377,28 @@ export interface AgorExecutionSettings {
    * ```
    */
   required_user_env_vars?: string[];
+
+  /**
+   * Minimum role required to *trigger* managed environment commands
+   * (start/stop/nuke/logs) for a worktree.
+   *
+   * - `'none'` — disables triggers for everyone (kill switch; authoring is still allowed)
+   * - `'viewer'` — any authenticated user
+   * - `'member'` — default; members and above
+   * - `'admin'` — admins and superadmins only
+   * - `'superadmin'` — superadmins only
+   *
+   * Default: `'member'`.
+   *
+   * Note: *authoring* env commands (`start_command`, `stop_command`, …, or
+   * `environment_config` on repos) is always gated to admins via
+   * `requireAdminForEnvConfig`. This flag is orthogonal and controls who can
+   * *trigger* those admin-authored commands.
+   *
+   * Worktree-level RBAC (`others_can` on each worktree) still applies on top
+   * of this flag when `worktree_rbac: true`.
+   */
+  managed_envs_minimum_role?: ManagedEnvsMinimumRole;
 }
 
 /**

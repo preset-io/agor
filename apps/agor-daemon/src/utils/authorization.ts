@@ -2,6 +2,7 @@
  * Authorization utilities for Feathers services and custom routes.
  */
 
+import type { ManagedEnvsMinimumRole } from '@agor/core/config';
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, UserRole } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
@@ -47,6 +48,41 @@ export function requireMinimumRole(minimumRole: Role, action?: string) {
     ensureMinimumRole(context.params, minimumRole, action);
     return context;
   };
+}
+
+/**
+ * Default minimum role for triggering managed environment commands.
+ * Keep in sync with `AgorExecutionSettings.managed_envs_minimum_role`.
+ */
+const DEFAULT_MANAGED_ENVS_MINIMUM_ROLE: UserRole = ROLES.MEMBER;
+
+/**
+ * Enforce the `execution.managed_envs_minimum_role` config on managed
+ * environment triggers (start/stop/nuke/logs).
+ *
+ * - `'none'` is a kill switch: throws Forbidden regardless of caller role.
+ * - Otherwise delegates to `ensureMinimumRole`, so internal calls and service
+ *   accounts bypass (same semantics as other role gates).
+ *
+ * Canonical enforcement point — called from the service layer so that REST,
+ * WebSocket, *and* MCP tool invocations all pass through the same gate.
+ */
+export function ensureCanTriggerManagedEnv(
+  minimumRole: ManagedEnvsMinimumRole | undefined,
+  params: AuthenticatedParams | undefined,
+  action: string
+): void {
+  const value = minimumRole ?? DEFAULT_MANAGED_ENVS_MINIMUM_ROLE;
+
+  if (value === 'none') {
+    // Internal calls still bypass (daemon-initiated health loops, etc.)
+    if (!params?.provider) return;
+    throw new Forbidden(
+      `Managed environments are disabled (execution.managed_envs_minimum_role: 'none'); cannot ${action}`
+    );
+  }
+
+  ensureMinimumRole(params, value, action);
 }
 
 /**

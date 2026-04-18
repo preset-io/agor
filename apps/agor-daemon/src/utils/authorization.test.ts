@@ -9,7 +9,7 @@ import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
-import { ensureMinimumRole, requireMinimumRole } from './authorization';
+import { ensureCanTriggerManagedEnv, ensureMinimumRole, requireMinimumRole } from './authorization';
 
 /** Helper to create authenticated params for a given role and provider */
 function makeParams(role: string, provider: string | undefined = 'rest'): AuthenticatedParams {
@@ -134,6 +134,69 @@ describe('ensureMinimumRole', () => {
       } as AuthenticatedParams;
       expect(() => ensureMinimumRole(params, ROLES.ADMIN)).not.toThrow();
     });
+  });
+});
+
+describe('ensureCanTriggerManagedEnv', () => {
+  it('defaults to MEMBER when minimumRole is undefined', () => {
+    expect(() =>
+      ensureCanTriggerManagedEnv(undefined, makeParams(ROLES.MEMBER), 'start env')
+    ).not.toThrow();
+    expect(() =>
+      ensureCanTriggerManagedEnv(undefined, makeParams(ROLES.VIEWER), 'start env')
+    ).toThrow(Forbidden);
+  });
+
+  it("'none' kill-switch throws Forbidden for any external caller, even superadmin", () => {
+    expect(() =>
+      ensureCanTriggerManagedEnv('none', makeParams(ROLES.SUPERADMIN), 'start env')
+    ).toThrow(Forbidden);
+    expect(() => ensureCanTriggerManagedEnv('none', makeParams(ROLES.ADMIN), 'start env')).toThrow(
+      Forbidden
+    );
+  });
+
+  it("'none' kill-switch allows internal calls (no provider)", () => {
+    // Daemon-initiated health loops, scheduler, etc. must not be blocked.
+    const internal = {
+      user: { user_id: 'u1', email: 'a@b.c', role: ROLES.ADMIN },
+      authenticated: true,
+    } as AuthenticatedParams;
+    expect(() => ensureCanTriggerManagedEnv('none', internal, 'start env')).not.toThrow();
+    expect(() => ensureCanTriggerManagedEnv('none', undefined, 'start env')).not.toThrow();
+  });
+
+  it("'admin' blocks members but allows admins/superadmins", () => {
+    expect(() =>
+      ensureCanTriggerManagedEnv(ROLES.ADMIN, makeParams(ROLES.MEMBER), 'start env')
+    ).toThrow(Forbidden);
+    expect(() =>
+      ensureCanTriggerManagedEnv(ROLES.ADMIN, makeParams(ROLES.ADMIN), 'start env')
+    ).not.toThrow();
+    expect(() =>
+      ensureCanTriggerManagedEnv(ROLES.ADMIN, makeParams(ROLES.SUPERADMIN), 'start env')
+    ).not.toThrow();
+  });
+
+  it('enforces MCP provider parity with REST', () => {
+    // MCP tools must hit the same gate as REST routes.
+    expect(() =>
+      ensureCanTriggerManagedEnv(ROLES.ADMIN, makeParams(ROLES.MEMBER, 'mcp'), 'start env')
+    ).toThrow(Forbidden);
+  });
+
+  it('service accounts bypass the gate (same as ensureMinimumRole)', () => {
+    const svc = {
+      user: {
+        user_id: 'svc',
+        email: 'svc@internal',
+        role: ROLES.VIEWER,
+        _isServiceAccount: true,
+      },
+      authenticated: true,
+      provider: 'rest',
+    } as AuthenticatedParams;
+    expect(() => ensureCanTriggerManagedEnv(ROLES.ADMIN, svc, 'start env')).not.toThrow();
   });
 });
 
