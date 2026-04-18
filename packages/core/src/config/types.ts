@@ -4,6 +4,7 @@
 
 import type { DaemonResourcesConfig } from '../types/config-resources';
 import type { UserRole } from '../types/user';
+import type { WorktreePermissionLevel } from '../types/worktree';
 
 /**
  * Minimum role allowed to trigger managed environment commands
@@ -635,6 +636,40 @@ export interface AgorOnboardingSettings {
 }
 
 /**
+ * Worktree-level defaults.
+ *
+ * Top-level `worktrees:` section (not under `execution:`) because these
+ * settings shape *how worktrees are created*, not how sessions execute.
+ * Ignored when `execution.worktree_rbac: false` (open-access mode has no
+ * per-worktree ACL to default).
+ */
+export interface AgorWorktreesSettings {
+  /**
+   * Default value for a new worktree's `others_can` when the caller doesn't
+   * specify one. Controls what non-owners can do on the worktree.
+   *
+   * - `'none'`  — private to owners
+   * - `'view'`  — read-only access
+   * - `'session'` (default) — can create own sessions
+   * - `'prompt'` — can prompt others' sessions (inherits their OS identity)
+   * - `'all'`   — full control
+   *
+   * Default: `'session'` (matches current repository-layer default).
+   */
+  others_can_default?: WorktreePermissionLevel;
+
+  /**
+   * Default filesystem access tier for non-owners on new worktrees.
+   * Only meaningful in `unix_user_mode: insulated` or `strict`.
+   *
+   * - `'none'`  — no filesystem access
+   * - `'read'`  (default) — read-only via worktree group
+   * - `'write'` — full write access via worktree group
+   */
+  others_fs_access_default?: 'none' | 'read' | 'write';
+}
+
+/**
  * Complete Agor configuration
  */
 export interface AgorConfig {
@@ -664,6 +699,9 @@ export interface AgorConfig {
 
   /** Security headers & CORS (CSP extras/override, CORS mode/origins, etc.) */
   security?: AgorSecuritySettings;
+
+  /** Worktree-level defaults (others_can_default, others_fs_access_default) */
+  worktrees?: AgorWorktreesSettings;
 
   /** Path configuration (data_home for repos/worktrees separation) */
   paths?: AgorPathSettings;
@@ -710,6 +748,7 @@ export type ConfigKey =
   | `codex.${keyof AgorCodexSettings}`
   | `execution.${keyof AgorExecutionSettings}`
   | `security.${keyof AgorSecuritySettings}`
+  | `worktrees.${keyof AgorWorktreesSettings}`
   | `paths.${keyof AgorPathSettings}`
   | `credentials.${keyof AgorCredentials}`
   | `onboarding.${keyof AgorOnboardingSettings}`

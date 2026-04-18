@@ -217,6 +217,48 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   }
 
   /**
+   * Apply config-driven defaults before insert.
+   *
+   * Reads `worktrees.others_can_default` and `worktrees.others_fs_access_default`
+   * so admins can set org-wide defaults in config.yaml. Explicit values on the
+   * input always win; defaults fill in only when the caller omits the field.
+   */
+  private async applyWorktreeCreateDefaults(data: Partial<Worktree>): Promise<Partial<Worktree>> {
+    const config = await loadConfig();
+    const defaults = config.worktrees;
+    if (!defaults) return data;
+
+    const withDefaults: Partial<Worktree> = { ...data };
+    if (defaults.others_can_default !== undefined && withDefaults.others_can === undefined) {
+      withDefaults.others_can = defaults.others_can_default;
+    }
+    if (
+      defaults.others_fs_access_default !== undefined &&
+      withDefaults.others_fs_access === undefined
+    ) {
+      withDefaults.others_fs_access = defaults.others_fs_access_default;
+    }
+    return withDefaults;
+  }
+
+  /**
+   * Override create to inject config-driven worktree defaults.
+   */
+  async create(
+    data: Partial<Worktree> | Partial<Worktree>[],
+    params?: WorktreeParams
+  ): Promise<Worktree | Worktree[]> {
+    if (Array.isArray(data)) {
+      const withDefaults = await Promise.all(
+        data.map((item) => this.applyWorktreeCreateDefaults(item))
+      );
+      return super.create(withDefaults, params) as Promise<Worktree[]>;
+    }
+    const withDefaults = await this.applyWorktreeCreateDefaults(data);
+    return super.create(withDefaults, params) as Promise<Worktree>;
+  }
+
+  /**
    * Override patch to handle board_objects when board_id changes and schedule validation
    */
   async patch(
