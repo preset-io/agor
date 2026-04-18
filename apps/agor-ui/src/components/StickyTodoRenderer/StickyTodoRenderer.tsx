@@ -97,7 +97,7 @@ export function StickyTodoRenderer({ messages, taskStatus }: StickyTodoRendererP
     const override = inProgressOverrideFor(taskStatus);
     if (!override) return latestTodo;
     return latestTodo.map((todo) =>
-      todo.status === 'in_progress' ? { ...todo, status: override } : todo,
+      todo.status === 'in_progress' ? { ...todo, status: override } : todo
     );
   }, [latestTodo, taskStatus]);
 
