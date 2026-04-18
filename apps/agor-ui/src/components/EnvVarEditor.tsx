@@ -1,4 +1,4 @@
-import { ENV_VAR_SCOPES_V05, type EnvVarMetadata, type EnvVarScope } from '@agor/core/types';
+import { ENV_VAR_SCOPES_V05, type EnvVarMetadata, type EnvVarScope } from '@agor-live/client';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { Button, Input, Select, Space, Table, Typography } from 'antd';
 import { useState } from 'react';

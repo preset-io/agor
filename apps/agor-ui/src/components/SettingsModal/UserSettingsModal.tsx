@@ -1,6 +1,8 @@
 import type {
   AgenticToolName,
   AgorClient,
+  EnvVarMetadata,
+  EnvVarScope,
   MCPServer,
   UpdateUserInput,
   User,
@@ -88,9 +90,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const [savingApiKeys, setSavingApiKeys] = useState<Record<string, boolean>>({});
 
   // Environment variable management state (scope-aware, v0.5 env-var-access)
-  const [userEnvVars, setUserEnvVars] = useState<
-    Record<string, import('@agor/core/types').EnvVarMetadata>
-  >({});
+  const [userEnvVars, setUserEnvVars] = useState<Record<string, EnvVarMetadata>>({});
   const [savingEnvVars, setSavingEnvVars] = useState<Record<string, boolean>>({});
 
   // Saving state for agentic tool tabs
@@ -260,11 +260,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   };
 
   // Handle env var save (value + scope). v0.5 env-var-access.
-  const handleEnvVarSave = async (
-    key: string,
-    value: string,
-    scope: import('@agor/core/types').EnvVarScope
-  ) => {
+  const handleEnvVarSave = async (key: string, value: string, scope: EnvVarScope) => {
     if (!user) return;
 
     try {
@@ -286,10 +282,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   };
 
   // Handle scope change for an existing env var (no value rotation).
-  const handleEnvVarScopeChange = async (
-    key: string,
-    scope: import('@agor/core/types').EnvVarScope
-  ) => {
+  const handleEnvVarScopeChange = async (key: string, scope: EnvVarScope) => {
     if (!user) return;
     try {
       setSavingEnvVars((prev) => ({ ...prev, [key]: true }));
