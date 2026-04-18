@@ -50,11 +50,45 @@ export interface EnvCommandAuditEntry {
   worktree_id: string;
   worktree_name: string;
   command_type: EnvironmentCommandType;
+  /**
+   * Command string as spawned, after secret redaction and length truncation.
+   * Inline `KEY=value` pairs whose key matches a secret-looking name are
+   * replaced with `KEY=***`. Commands longer than AUDIT_COMMAND_MAX_LENGTH
+   * are truncated with a trailing marker.
+   */
   command: string;
   triggered_by_user_id: string | undefined;
   triggered_by_email: string | undefined;
   as_unix_user: string | undefined;
   unix_user_mode: string;
+}
+
+/**
+ * Keys whose inline assignment values should be redacted from audit logs.
+ * Matched case-insensitively as a suffix of the key (so `MY_API_KEY` and
+ * `DATABASE_PASSWORD` both redact). Agor sources real secrets via an env-file
+ * out of /proc/PID/cmdline, but users routinely paste `FOO_TOKEN=abc docker …`
+ * into templates, so this keeps those from leaking into daemon logs.
+ */
+const SECRET_KEY_PATTERN =
+  /(?:^|[\s;&|])((?:[A-Z_][A-Z0-9_]*)?(?:TOKEN|SECRET|PASSWORD|PASSWD|KEY|CRED|CREDENTIAL|AUTH|API|PRIVATE|SIGNATURE))=(\S+)/gi;
+
+/** Max length of the command string emitted in an audit entry. */
+const AUDIT_COMMAND_MAX_LENGTH = 1024;
+
+/**
+ * Produce the command string that goes into the audit log: redacts inline
+ * `KEY=value` pairs for secret-looking keys and truncates. Not a security
+ * boundary — the real secret path is the env-file — just keeps honest logs
+ * honest.
+ */
+export function redactCommandForAudit(command: string): string {
+  const redacted = command.replace(SECRET_KEY_PATTERN, (match, key) => {
+    const leader = match.startsWith(key) ? '' : match[0];
+    return `${leader}${key}=***`;
+  });
+  if (redacted.length <= AUDIT_COMMAND_MAX_LENGTH) return redacted;
+  return `${redacted.slice(0, AUDIT_COMMAND_MAX_LENGTH)}…[truncated]`;
 }
 
 /**
@@ -152,7 +186,7 @@ export async function spawnEnvironmentCommand(
     worktree_id: worktree.worktree_id,
     worktree_name: worktree.name,
     command_type: commandType,
-    command,
+    command: redactCommandForAudit(command),
     triggered_by_user_id: triggeredBy?.user_id,
     triggered_by_email: triggeredBy?.email,
     as_unix_user: asUser,

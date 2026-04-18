@@ -752,15 +752,20 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
    * automatic re-ingestion on subsequent operations — the caller explicitly
    * opts in to this scope.
    */
-  private async resolveAgorYmlPath(repo: Repo, worktreeId: string | undefined): Promise<string> {
+  private async resolveAgorYmlPath(
+    repo: Repo,
+    worktreeId: string | undefined,
+    params?: RepoParams
+  ): Promise<string> {
     if (!worktreeId) {
       return path.join(repo.local_path, '.agor.yml');
     }
-    const worktreeRepo = new WorktreeRepository(this.db);
-    const worktree = await worktreeRepo.findById(worktreeId);
-    if (!worktree) {
-      throw new Error(`Worktree not found: ${worktreeId}`);
-    }
+    // Route through the worktrees service so the RBAC hooks (loadWorktree +
+    // ensureCanView) fire against the caller's params. Calling the repository
+    // directly would bypass worktree-level permission checks and let a user
+    // with repo access read/write a worktree path they cannot see.
+    const worktreesService = this.app.service('worktrees');
+    const worktree = (await worktreesService.get(worktreeId, params)) as Worktree;
     if (worktree.repo_id !== repo.repo_id) {
       throw new Error(`Worktree ${worktreeId} does not belong to repo ${repo.repo_id}`);
     }
@@ -781,7 +786,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     params?: RepoParams
   ): Promise<Repo> {
     const repo = await this.get(id, params);
-    const agorYmlPath = await this.resolveAgorYmlPath(repo, data?.worktree_id);
+    const agorYmlPath = await this.resolveAgorYmlPath(repo, data?.worktree_id, params);
 
     // Parse .agor.yml
     const config = parseAgorYml(agorYmlPath);
@@ -811,7 +816,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       throw new Error('Repository has no environment configuration to export');
     }
 
-    const agorYmlPath = await this.resolveAgorYmlPath(repo, data?.worktree_id);
+    const agorYmlPath = await this.resolveAgorYmlPath(repo, data?.worktree_id, params);
 
     // Write .agor.yml
     writeAgorYml(agorYmlPath, repo.environment_config);

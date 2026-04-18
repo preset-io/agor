@@ -289,7 +289,9 @@ async function renderEnvironmentTemplates(
   logs_command?: string;
 }> {
   // Import dependencies dynamically
-  const { renderTemplate } = await import('@agor/core/templates/handlebars-helpers');
+  const { renderTemplate, buildWorktreeContext } = await import(
+    '@agor/core/templates/handlebars-helpers'
+  );
   const { getGidFromGroupName } = await import('@agor/core/unix');
   const { loadConfig } = await import('@agor/core/config');
   const { resolveHostIpAddress } = await import('@agor/core/utils/host-ip');
@@ -310,22 +312,17 @@ async function renderEnvironmentTemplates(
   const config = await loadConfig();
   const hostIpAddress = resolveHostIpAddress(config.daemon?.host_ip_address);
 
-  // Build template context with full information including GID (if available)
-  const templateContext = {
-    worktree: {
-      unique_id: worktree.worktree_unique_id,
-      name: worktree.name,
-      path: worktree.path,
-      gid: unixGid, // Available when Unix groups are enabled, undefined otherwise
-    },
-    repo: {
-      slug: repo.slug,
-    },
-    host: {
-      ip_address: hostIpAddress || '',
-    },
-    custom: worktree.custom_context || {},
-  };
+  // Delegate context construction to the single canonical builder so new
+  // template vars (host.*, repo.*, etc.) never drift between call sites.
+  const templateContext = buildWorktreeContext({
+    worktree_unique_id: worktree.worktree_unique_id,
+    name: worktree.name,
+    path: worktree.path,
+    repo_slug: repo.slug,
+    custom_context: worktree.custom_context,
+    unix_gid: unixGid,
+    host_ip_address: hostIpAddress,
+  });
 
   const safeRenderTemplate = (template: string, fieldName: string): string | undefined => {
     try {

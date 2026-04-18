@@ -2080,8 +2080,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     {
       // Role is enforced at the service layer via managed_envs_minimum_role
-      // (default: member). This route-level gate is just "authenticated".
-      create: { role: ROLES.MEMBER, action: 'start worktree environments' },
+      // (default: member). This route-level gate is just "authenticated", so
+      // it accepts the lowest authenticated role (viewer). The service gate
+      // is the single source of truth for whether the user can actually
+      // trigger the command.
+      create: { role: ROLES.VIEWER, action: 'start worktree environments' },
     },
     requireAuth
   );
@@ -2101,7 +2104,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     {
       // Service-layer enforcement via managed_envs_minimum_role
-      create: { role: ROLES.MEMBER, action: 'stop worktree environments' },
+      create: { role: ROLES.VIEWER, action: 'stop worktree environments' },
     },
     requireAuth
   );
@@ -2121,7 +2124,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     {
       // Service-layer enforcement via managed_envs_minimum_role
-      create: { role: ROLES.MEMBER, action: 'restart worktree environments' },
+      create: { role: ROLES.VIEWER, action: 'restart worktree environments' },
     },
     requireAuth
   );
@@ -2141,7 +2144,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     {
       // Service-layer enforcement via managed_envs_minimum_role
-      create: { role: ROLES.MEMBER, action: 'nuke worktree environments' },
+      create: { role: ROLES.VIEWER, action: 'nuke worktree environments' },
     },
     requireAuth
   );
@@ -2386,7 +2389,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
     } as any,
     {
-      find: { role: ROLES.MEMBER, action: 'view worktree logs' },
+      // Service-layer enforcement via managed_envs_minimum_role
+      find: { role: ROLES.VIEWER, action: 'view worktree logs' },
     },
     requireAuth
   );

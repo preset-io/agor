@@ -35,6 +35,14 @@ export const ENV_COMMAND_DENY_PATTERNS: readonly DenyPattern[] = [
     description: 'rm -rf on host root',
   },
   {
+    // `rm ... --no-preserve-root ...` — the flag exists specifically to allow
+    // recursive delete of `/` on systems that otherwise refuse. No legitimate
+    // env command needs it, and it catches order-swapped variants that the
+    // pattern above misses (e.g. `rm -rf --no-preserve-root /`).
+    pattern: /\brm\b[^|&;\n]*\s--no-preserve-root\b/,
+    description: 'rm with --no-preserve-root (host-root deletion bypass)',
+  },
+  {
     // Mounting host root into a container (`-v /:/...`, `--volume /:/...`).
     pattern: /(?:^|\s)(?:-v|--volume)(?:\s+|=)\/:/,
     description: 'docker volume mount of host root (/)',

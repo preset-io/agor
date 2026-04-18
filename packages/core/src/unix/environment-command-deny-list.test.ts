@@ -29,6 +29,17 @@ describe('assertEnvCommandAllowed', () => {
     });
   });
 
+  describe('rm with --no-preserve-root', () => {
+    it.each([
+      'rm -rf --no-preserve-root /',
+      'rm --no-preserve-root -rf /',
+      'sudo rm -rf --no-preserve-root /',
+      'rm -rf --no-preserve-root /some/path',
+    ])('blocks: %s', (cmd) => {
+      expect(() => assertEnvCommandAllowed(cmd, 'nuke')).toThrow(EnvCommandDeniedError);
+    });
+  });
+
   describe('docker volume mount of host root / sensitive paths', () => {
     it.each([
       'docker run -v /:/host ubuntu',
