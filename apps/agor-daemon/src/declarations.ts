@@ -139,8 +139,16 @@ export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersP
     params?: FeathersParams
   ): Promise<Worktree>;
   removeWorktree(id: string, name: string, params?: FeathersParams): Promise<Repo>;
-  importFromAgorYml(id: string, data: unknown, params?: FeathersParams): Promise<Repo>;
-  exportToAgorYml(id: string, data: unknown, params?: FeathersParams): Promise<{ path: string }>;
+  importFromAgorYml(
+    id: string,
+    data: { worktree_id?: string } | undefined,
+    params?: FeathersParams
+  ): Promise<Repo>;
+  exportToAgorYml(
+    id: string,
+    data: { worktree_id?: string } | undefined,
+    params?: FeathersParams
+  ): Promise<{ path: string }>;
 }
 
 /**

@@ -456,7 +456,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     try {
       const updated = (await client
         .service(`repos/${repo.repo_id}/import-agor-yml`)
-        .create({})) as Repo;
+        .create({ worktree_id: worktree.worktree_id })) as Repo;
 
       // Note: onUpdateRepo already shows a success toast, so we don't show another one here
       // Update local state
@@ -481,7 +481,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     if (!client) return;
 
     try {
-      await client.service(`repos/${repo.repo_id}/export-agor-yml`).create({});
+      await client
+        .service(`repos/${repo.repo_id}/export-agor-yml`)
+        .create({ worktree_id: worktree.worktree_id });
       showSuccess('Environment configuration exported to .agor.yml');
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Failed to export .agor.yml');

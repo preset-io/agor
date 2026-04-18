@@ -742,11 +742,46 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   }
 
   /**
-   * Custom method: Import environment config from .agor.yml
+   * Resolve the `.agor.yml` location for an import/export request.
+   *
+   * If `worktree_id` is provided, the file is read from / written to that
+   * worktree's working directory. Otherwise, fall back to the repo's base path.
+   *
+   * This lets admins curate per-branch environment configs (checked in on the
+   * branch) without touching the source-of-truth repo path, and without any
+   * automatic re-ingestion on subsequent operations — the caller explicitly
+   * opts in to this scope.
    */
-  async importFromAgorYml(id: string, _data: unknown, params?: RepoParams): Promise<Repo> {
+  private async resolveAgorYmlPath(repo: Repo, worktreeId: string | undefined): Promise<string> {
+    if (!worktreeId) {
+      return path.join(repo.local_path, '.agor.yml');
+    }
+    const worktreeRepo = new WorktreeRepository(this.db);
+    const worktree = await worktreeRepo.findById(worktreeId);
+    if (!worktree) {
+      throw new Error(`Worktree not found: ${worktreeId}`);
+    }
+    if (worktree.repo_id !== repo.repo_id) {
+      throw new Error(`Worktree ${worktreeId} does not belong to repo ${repo.repo_id}`);
+    }
+    return path.join(worktree.path, '.agor.yml');
+  }
+
+  /**
+   * Custom method: Import environment config from .agor.yml
+   *
+   * Accepts an optional `worktree_id` in `data` to read from the current
+   * worktree's working directory instead of the repo's base path. This is
+   * a one-shot manual import — the repo is NOT re-ingested automatically on
+   * subsequent operations.
+   */
+  async importFromAgorYml(
+    id: string,
+    data: { worktree_id?: string } | undefined,
+    params?: RepoParams
+  ): Promise<Repo> {
     const repo = await this.get(id, params);
-    const agorYmlPath = path.join(repo.local_path, '.agor.yml');
+    const agorYmlPath = await this.resolveAgorYmlPath(repo, data?.worktree_id);
 
     // Parse .agor.yml
     const config = parseAgorYml(agorYmlPath);
@@ -761,10 +796,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
   /**
    * Custom method: Export environment config to .agor.yml
+   *
+   * Accepts an optional `worktree_id` in `data` to write into the current
+   * worktree's working directory (so admins can commit the file on a branch).
    */
   async exportToAgorYml(
     id: string,
-    _data: unknown,
+    data: { worktree_id?: string } | undefined,
     params?: RepoParams
   ): Promise<{ path: string }> {
     const repo = await this.get(id, params);
@@ -773,7 +811,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       throw new Error('Repository has no environment configuration to export');
     }
 
-    const agorYmlPath = path.join(repo.local_path, '.agor.yml');
+    const agorYmlPath = await this.resolveAgorYmlPath(repo, data?.worktree_id);
 
     // Write .agor.yml
     writeAgorYml(agorYmlPath, repo.environment_config);
