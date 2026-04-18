@@ -2682,6 +2682,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // flag exists so the UI can skip rendering buttons that would fail.
           // Defaults to true when the config key is unset.
           webTerminal: config.execution?.allow_web_terminal !== false,
+          // Minimum role required to trigger managed environment commands
+          // (start / stop / nuke / logs). UI uses this to disable + tooltip
+          // the trigger buttons for users below the threshold. The server-side
+          // gate in services/worktrees.ts is the source of truth.
+          // Value: 'none' | 'viewer' | 'member' | 'admin' | 'superadmin'.
+          // Defaults to 'member' when unset.
+          managedEnvsMinimumRole: config.execution?.managed_envs_minimum_role ?? 'member',
         },
       };
 

@@ -39,6 +39,7 @@ import {
   theme,
 } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useAuthConfig } from '../../../hooks/useAuthConfig';
 import { usePermissions } from '../../../hooks/usePermissions';
 import { useCopyToClipboard } from '../../../utils/clipboard';
 import {
@@ -109,7 +110,22 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   const { token } = theme.useToken();
   const { showSuccess, showError, showWarning } = useThemedMessage();
   const { confirm } = useThemedModal();
-  const { isAdmin } = usePermissions();
+  const { isAdmin, hasRole } = usePermissions();
+  const { featuresConfig } = useAuthConfig();
+
+  // Resolve the minimum role required to trigger env commands (start/stop/nuke/
+  // logs). Defaults to 'member'; 'none' disables triggers for everyone via the
+  // server-side gate (and for the UI, we treat it as not-allowed). The source
+  // of truth is the daemon's service-level check; this only drives UI affordance.
+  const managedEnvsMinimumRole = featuresConfig?.managedEnvsMinimumRole ?? 'member';
+  const canTriggerEnv =
+    managedEnvsMinimumRole !== 'none' &&
+    hasRole(managedEnvsMinimumRole as Exclude<typeof managedEnvsMinimumRole, 'none'>);
+  const triggerDisabledTooltip = canTriggerEnv
+    ? undefined
+    : managedEnvsMinimumRole === 'none'
+      ? 'Managed environments are disabled on this instance'
+      : `Requires ${managedEnvsMinimumRole} role or higher`;
   const hasEnvironmentConfig = !!repo.environment_config;
 
   // Repository template state (editable)
@@ -625,6 +641,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   icon={isStarting ? <LoadingOutlined /> : <PlayCircleOutlined />}
                   onClick={handleStart}
                   disabled={
+                    !canTriggerEnv ||
                     envStatus === 'running' ||
                     envStatus === 'starting' ||
                     isStarting ||
@@ -632,6 +649,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                     isRestarting
                   }
                   loading={isStarting}
+                  title={triggerDisabledTooltip}
                 >
                   Start
                 </Button>
@@ -641,6 +659,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   icon={isStopping ? <LoadingOutlined /> : <PoweroffOutlined />}
                   onClick={handleStop}
                   loading={isStopping}
+                  disabled={!canTriggerEnv}
+                  title={triggerDisabledTooltip}
                   danger
                 >
                   Stop
@@ -650,8 +670,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   size="small"
                   icon={isRestarting ? <LoadingOutlined /> : <ReloadOutlined />}
                   onClick={handleRestart}
-                  disabled={isStarting || isStopping || isRestarting}
+                  disabled={!canTriggerEnv || isStarting || isStopping || isRestarting}
                   loading={isRestarting}
+                  title={triggerDisabledTooltip}
                 >
                   Restart
                 </Button>
@@ -661,10 +682,15 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                     size="small"
                     icon={isNuking ? <LoadingOutlined /> : <FireOutlined />}
                     onClick={handleNuke}
-                    disabled={isStarting || isStopping || isRestarting || isNuking}
+                    disabled={
+                      !canTriggerEnv || isStarting || isStopping || isRestarting || isNuking
+                    }
                     loading={isNuking}
                     danger
-                    title="Nuke environment (destructive - removes all data and volumes)"
+                    title={
+                      triggerDisabledTooltip ??
+                      'Nuke environment (destructive - removes all data and volumes)'
+                    }
                   >
                     Nuke
                   </Button>

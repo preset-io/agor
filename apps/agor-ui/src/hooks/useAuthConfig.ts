@@ -39,6 +39,14 @@ interface FeaturesConfig {
    * Defaults to true when the daemon config key is unset.
    */
   webTerminal?: boolean;
+  /**
+   * Minimum role required to trigger managed environment commands
+   * (start/stop/nuke/logs). Value: 'none' | 'viewer' | 'member' | 'admin' |
+   * 'superadmin'. UI uses this to disable trigger buttons with a tooltip for
+   * users below the threshold. Server-side enforcement in
+   * services/worktrees.ts is the source of truth. Defaults to 'member'.
+   */
+  managedEnvsMinimumRole?: 'none' | 'viewer' | 'member' | 'admin' | 'superadmin';
 }
 
 interface HealthResponse {
