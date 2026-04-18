@@ -1055,12 +1055,41 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
           unique_id: 42,
           name: 'my-worktree',
           path: '/path/to/worktree',
+          gid: undefined,
         },
         repo: {
           slug: 'my-repo',
         },
+        host: {
+          ip_address: '',
+        },
         custom: { foo: 'bar' },
       });
+    });
+
+    it('should expose host.ip_address when provided', () => {
+      const context = buildWorktreeContext({
+        worktree_unique_id: 1,
+        name: 'test',
+        path: '/test',
+        host_ip_address: '10.0.0.5',
+      });
+
+      expect(context.host).toEqual({ ip_address: '10.0.0.5' });
+
+      const rendered = renderTemplate('http://{{host.ip_address}}:8080/health', context);
+      expect(rendered).toBe('http://10.0.0.5:8080/health');
+    });
+
+    it('should render empty string for {{host.ip_address}} when unresolved', () => {
+      const context = buildWorktreeContext({
+        worktree_unique_id: 1,
+        name: 'test',
+        path: '/test',
+      });
+
+      const rendered = renderTemplate('host={{host.ip_address}}', context);
+      expect(rendered).toBe('host=');
     });
 
     it('should handle missing repo_slug', () => {

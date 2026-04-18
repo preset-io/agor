@@ -291,6 +291,8 @@ async function renderEnvironmentTemplates(
   // Import dependencies dynamically
   const { renderTemplate } = await import('@agor/core/templates/handlebars-helpers');
   const { getGidFromGroupName } = await import('@agor/core/unix');
+  const { loadConfig } = await import('@agor/core/config');
+  const { resolveHostIpAddress } = await import('@agor/core/utils/host-ip');
 
   // Fetch worktree and repo from database
   const worktree = await client.service('worktrees').get(worktreeId);
@@ -304,6 +306,10 @@ async function renderEnvironmentTemplates(
   // Look up GID from Unix group (only if group was created)
   const unixGid = unixGroup ? getGidFromGroupName(unixGroup) : undefined;
 
+  // Resolve host IP for {{host.ip_address}} (frozen into rendered commands).
+  const config = await loadConfig();
+  const hostIpAddress = resolveHostIpAddress(config.daemon?.host_ip_address);
+
   // Build template context with full information including GID (if available)
   const templateContext = {
     worktree: {
@@ -314,6 +320,9 @@ async function renderEnvironmentTemplates(
     },
     repo: {
       slug: repo.slug,
+    },
+    host: {
+      ip_address: hostIpAddress || '',
     },
     custom: worktree.custom_context || {},
   };

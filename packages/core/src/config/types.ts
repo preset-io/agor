@@ -56,6 +56,19 @@ export interface AgorDaemonSettings {
   host?: string;
 
   /**
+   * IP address exposed to env command templates as `{{host.ip_address}}`.
+   *
+   * Useful for health-check URLs that must reach the host from inside a
+   * container (e.g. Superset health probes that resolve to a host-bound
+   * service). When unset, the daemon auto-detects the primary non-loopback
+   * IPv4 at startup and logs the resolved value.
+   *
+   * Set this to override autodetection (e.g. on multi-NIC hosts or when
+   * the container network differs from the advertised address).
+   */
+  host_ip_address?: string;
+
+  /**
    * Public URL for executors to reach the daemon.
    *
    * In local mode, defaults to `http://localhost:{port}`.

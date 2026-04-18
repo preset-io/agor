@@ -120,6 +120,11 @@
       "import": "./dist/utils/path.js",
       "require": "./dist/utils/path.cjs"
     },
+    "./utils/host-ip": {
+      "types": "./dist/utils/host-ip.d.ts",
+      "import": "./dist/utils/host-ip.js",
+      "require": "./dist/utils/host-ip.cjs"
+    },
     "./utils/logger": {
       "types": "./dist/utils/logger.d.ts",
       "import": "./dist/utils/logger.js",

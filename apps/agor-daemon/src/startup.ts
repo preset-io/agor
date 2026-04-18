@@ -211,6 +211,17 @@ export async function startup(ctx: StartupContext): Promise<void> {
   console.log(`     - /context`);
   console.log(`     - /users`);
 
+  // Log the host IP that will be frozen into env command templates as
+  // {{host.ip_address}}. Explicit config overrides autodetection.
+  try {
+    const { resolveHostIpAddress } = await import('@agor/core/utils/host-ip');
+    const hostIp = resolveHostIpAddress(config.daemon?.host_ip_address);
+    const source = config.daemon?.host_ip_address ? 'config' : hostIp ? 'autodetected' : 'unknown';
+    console.log(`🌐 Host IP for env templates: ${hostIp ?? '(none)'} (source: ${source})`);
+  } catch (err) {
+    console.warn('⚠️  Failed to resolve host IP for env templates:', err);
+  }
+
   // Security warning: web terminal + simple unix mode = daemon-user shell access.
   // `allow_web_terminal` defaults to true, so the check treats undefined as enabled.
   if (config.execution?.allow_web_terminal !== false) {

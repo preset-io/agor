@@ -70,7 +70,8 @@ export function buildEnvironmentContext(
     path: string;
     custom_context?: Record<string, unknown>;
   },
-  repoSlug: string
+  repoSlug: string,
+  hostIpAddress?: string
 ): Record<string, unknown> {
   return buildWorktreeContext({
     worktree_unique_id: worktree.worktree_unique_id,
@@ -78,5 +79,6 @@ export function buildEnvironmentContext(
     path: worktree.path,
     repo_slug: repoSlug,
     custom_context: worktree.custom_context,
+    host_ip_address: hostIpAddress,
   });
 }

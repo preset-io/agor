@@ -225,6 +225,9 @@ export function renderTemplate(templateString: string, context: Record<string, u
  * - {{worktree.path}} - Absolute path to worktree directory
  * - {{worktree.gid}} - Unix GID of worktree's unix_group (resolved dynamically at execution time)
  * - {{repo.slug}} - Repository slug
+ * - {{host.ip_address}} - Primary non-loopback IPv4 of the daemon host
+ *   (for health checks/URLs that must reach the host from inside a container).
+ *   Frozen at worktree creation time. Empty string if not resolved.
  * - {{custom.*}} - Any custom context from worktree.custom_context
  */
 export function buildWorktreeContext(worktree: {
@@ -234,6 +237,7 @@ export function buildWorktreeContext(worktree: {
   repo_slug?: string;
   custom_context?: Record<string, unknown>;
   unix_gid?: number;
+  host_ip_address?: string;
 }): Record<string, unknown> {
   return {
     // Scoped entities (accessible as {{entity.property}})
@@ -245,6 +249,9 @@ export function buildWorktreeContext(worktree: {
     },
     repo: {
       slug: worktree.repo_slug || '',
+    },
+    host: {
+      ip_address: worktree.host_ip_address || '',
     },
     // User-defined custom context (accessible as {{custom.key}})
     custom: worktree.custom_context || {},
