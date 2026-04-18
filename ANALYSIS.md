@@ -9,12 +9,13 @@ REST/MCP/CLI and executed on the daemon host.
 
 ## ⚠️ CRITICAL FINDING — FLAG UP FRONT
 
-**Non-admin users CAN trigger env commands via MCP today, on any worktree they
-can read.** This contradicts the premise that "admin-only *defines*, any
-permitted user *triggers*": in practice, the trigger gate is weaker than either.
+**REST and MCP have inconsistent trigger gates, and MCP is effectively ungated.**
+This is a bug regardless of what the "right" role ends up being (see §4 —
+product direction is to keep member-trigger working, not tighten everything
+to admin-only).
 
-- REST routes (`POST /worktrees/:id/{start,stop,restart,nuke}`) correctly
-  require `ROLES.ADMIN` at
+- REST routes (`POST /worktrees/:id/{start,stop,restart,nuke}`) require
+  `ROLES.ADMIN` at
   `apps/agor-daemon/src/register-routes.ts:2079,2098,2117,2136`.
 - **MCP tools** (`agor_environment_start`, `_stop`, `_nuke`) call the service
   methods directly at
@@ -32,22 +33,31 @@ permitted user *triggers*": in practice, the trigger gate is weaker than either.
   `readonly`. In the default `on` tier, start/stop/nuke are fully exposed.
 
 **Impact (open-access, `worktree_rbac: false`):** any authenticated user with a
-valid MCP session token (which is minted for every agentic session) can execute
-the admin-defined `start_command` / `stop_command` / `nuke_command` of any
-worktree as the daemon user (simple mode) or as the worktree creator's unix
-user (strict mode). This is effectively arbitrary code execution scoped only
-by what admin put in those fields.
+valid MCP session token (minted for every agentic session) can execute the
+admin-defined `start_command` / `stop_command` / `nuke_command` of any worktree
+as the daemon user (simple mode) or as the worktree creator's unix user (strict
+mode). Scoped only by what admin put in those fields — which, given the
+product direction below, is exactly the gate we want to be *intentional* about,
+not accidental.
 
-**Impact (`worktree_rbac: true`):** the same thing, restricted to users with
-`view+` on the worktree. `view` is the weakest tier; `others_can: view` is a
-reasonable default for a shared team, so this is still wide.
+**Impact (`worktree_rbac: true`):** restricted to users with `view+` on the
+worktree. New worktrees default to `others_can: 'session'` at the repository
+layer (`packages/core/src/db/repositories/worktrees.ts:145`), so the typical
+team collaborator can `view` and therefore MCP-trigger today.
 
-**Recommended immediate fix:** add a `requireAdmin` (or at minimum, role- and
-RBAC-aware) check inside `startEnvironment` / `stopEnvironment` /
-`restartEnvironment` / `nukeEnvironment`, or — cleaner — route the MCP tools
-through the same authenticated REST path rather than reaching into the service
-class. The route-layer hook is not a service-layer hook in Feathers; custom
-class methods bypass it entirely.
+**Recommended fix (aligned with product direction):** pick a single source of
+truth for the trigger role — `execution.managed_envs_minimum_role` config,
+default `member` — and enforce it on *both* paths:
+
+- Inside `startEnvironment` / `stopEnvironment` / `restartEnvironment` /
+  `nukeEnvironment`, assert the caller's role meets the configured minimum.
+- Replace the hardcoded `ROLES.ADMIN` on the REST routes with the same
+  config-driven role, so REST and MCP agree.
+- A value of `none` on the config disables the feature entirely (kill-switch
+  folded into the same enum).
+
+This keeps member-trigger working (the intended UX), makes the MCP path
+explicit, and removes the REST/MCP inconsistency. Details in §3 and §4.
 
 ---
 
@@ -198,10 +208,22 @@ user, within whatever the admin-defined `start_command` does. If that's
 compose file gets interpreted by daemon's docker — which (if daemon is in the
 `docker` group) equals host root.
 
-### 2.3 Authenticated non-admin with `prompt`-tier worktree access (RBAC on)
+### 2.3 Authenticated non-admin with RBAC on
 
-Same as §2.2 but gated by `view+` on the specific worktree. With
-`others_can: prompt` default on team worktrees, this is most collaborators.
+Same as §2.2 but gated by `view+` on the specific worktree. The effective
+default for new worktrees is `others_can: 'session'` (repository-layer
+default, `packages/core/src/db/repositories/worktrees.ts:145`; the SQLite
+schema column default is `'view'` but is overridden on insert). Either way,
+`view` is the weakest tier that still reaches the MCP trigger path, and every
+team collaborator has at least that.
+
+**Important product framing (per Max):** the design intent is that
+`member`-tier users *should* be able to start/stop envs. It's admins' job to
+configure commands that are safe to trigger under that trust model —
+rootless/remote (external k8s, EC2 trigger), or locked-down compose. The
+concern is not "member triggered something" but "admin configured a command
+that shouldn't be member-triggerable". The MCP bypass matters because it
+removes the admin's ability to *choose* the gate.
 
 ### 2.4 Triggering user controls the checkout — escalation through commit
 
@@ -251,41 +273,63 @@ These are all "Consider" tier, not blocking.
 
 Ordered by value-per-effort. Sizes: S = < day, M = week-ish, L = multi-week.
 
-### 3.1 Fix the MCP bypass (S, **blocking**)
+### 3.1 Single trigger-role enum with kill-switch baked in (S, **blocking**)
 
-Add role enforcement inside the service methods, not just on the routes.
-Example: `startEnvironment` calls
-`ensureMinimumRole(params, ROLES.ADMIN, 'trigger env start')` as its first line.
-Alternative: have MCP tools call the registered custom route instead of the
-service class directly, so the route hooks fire. Routes-call approach is
-cleaner architecturally.
+One config knob covers both the kill-switch and the role gate:
 
-Location: `apps/agor-daemon/src/services/worktrees.ts:870, 1021, 1117, 1138`.
-Config: none (no opt-out — this is a pure bug-class fix).
+```
+execution.managed_envs_minimum_role: 'none' | 'member' | 'admin' | 'superadmin'
+# Default: 'member'
+```
 
-### 3.2 Feature kill-switch (S)
+Semantics:
 
-New config: `execution.env_commands.enabled: boolean`. Default `true` for
-backward compatibility (flipping default to `false` is discussed in §4).
-Checked at trigger entry — throws `Forbidden` before `spawn`. Also hides
-start/stop/nuke buttons in the UI and un-registers MCP tools.
+- `none` → feature off. REST routes return 404, MCP tools are not registered,
+  UI hides start/stop/nuke buttons, CLI subcommands fail with a clear message.
+- `member` / `admin` / `superadmin` → caller must meet this minimum role.
+  Checked uniformly on REST, MCP, and CLI entry points.
 
-Location: `packages/core/src/config/types.ts`, checked in
-`spawnEnvironmentCommand()` or the service methods.
+Implementation:
 
-### 3.3 Separate define-vs-trigger RBAC knobs (M)
+- Add a shared helper, e.g. `assertCanTriggerEnvCommand(params, config)`, used
+  at the top of `startEnvironment` / `stopEnvironment` / `restartEnvironment` /
+  `nukeEnvironment` (`apps/agor-daemon/src/services/worktrees.ts:870,1021,1117,1138`).
+- Replace the hardcoded `ROLES.ADMIN` on the four REST routes
+  (`register-routes.ts:2079,2098,2117,2136`) with a dynamic role derived from
+  the same config — or just drop the route-level role check and rely on the
+  service-level assertion (single source of truth).
+- When `none`, skip route + MCP tool registration entirely at startup, rather
+  than registering-then-refusing.
 
-Today "ADMIN" is the single answer for both. Useful split:
+This simultaneously:
+- Fixes the REST/MCP inconsistency (one gate, both paths).
+- Gives admins the knob they need to loosen (default `member`) or tighten
+  (`admin`) without code changes.
+- Provides the kill-switch (`none`).
+- Preserves the product intent that members can trigger safe env commands.
 
-- `execution.env_commands.define_role`: `ADMIN` default (unchanged).
-- `execution.env_commands.trigger_role`: `ADMIN` default — can be loosened to
-  `MEMBER` by consenting ops teams who want to let members bounce their own
-  stacks.
-- Per-worktree override: tie trigger permission to a worktree permission tier
-  (`others_can: session` and above can trigger, `view` cannot).
+### 3.2 Worktree-permission tiering (S, pairs with 3.1)
 
-Location: new hook + config. Complexity is in the UI surface for operators to
-understand what they're loosening.
+RBAC-on deployments already gate `.get()` by `others_can`. Additionally require
+at least `session` on the worktree to trigger (vs today's effective `view`),
+so "can view this worktree in the UI" does not imply "can run its env
+commands." Cheap, sensible.
+
+Config:
+```
+execution.managed_envs_minimum_worktree_permission: 'view' | 'session' | 'prompt' | 'all'
+# Default: 'session'
+```
+
+Ignored when `worktree_rbac: false`.
+
+### 3.3 Keep define-side gate as-is (no change)
+
+`requireAdminForEnvConfig` at `apps/agor-daemon/src/utils/authorization.ts:74`
+already correctly restricts command authoring to admins. Given the product
+direction ("admins curate safe commands"), this is the right default and
+should stay. Worth adding a config override only if a deployment mode justifies
+it; not blocking.
 
 ### 3.4 Argv-token deny-list (S)
 
@@ -360,52 +404,64 @@ Location: new `apps/agor-runner/` package, out-of-band IPC.
 
 ## 4. Recommendation
 
+Product intent (restated): **members should be able to fire up envs.** Admins
+curate safe commands — ideally commands that *aren't* "docker compose up" on
+a host-privileged daemon, but instead trigger remote infra (k8s apply, EC2
+start), or run under rootless docker/podman. The security boundary is the
+command string (admin-owned) + the executor's capabilities (ops-owned), not
+"which role can press the button".
+
 **Do now (this week, low risk):**
 
-1. **Fix MCP bypass** (§3.1). Add `ensureMinimumRole(params, ROLES.ADMIN)` in
-   `startEnvironment` / `stopEnvironment` / `restartEnvironment` /
-   `nukeEnvironment`. Non-negotiable — current behaviour violates the
-   documented contract ("ADMIN role to trigger").
-2. **Kill-switch** (§3.2). Ship `execution.env_commands.enabled` defaulting
-   to `true` (UX preservation). Document the recommendation to set `false`
-   on shared-team instances that don't use env commands. Flipping the
-   *default* to `false` is a later call — premature now given the
-   auto-on UI flow.
+1. **Single trigger-role enum** (§3.1). Ship
+   `execution.managed_envs_minimum_role` with values
+   `none | member | admin | superadmin`, default `member`. Enforce at the
+   *service method* level so both REST and MCP go through it. This closes
+   the MCP bypass, collapses the kill-switch into the same config, and
+   preserves the intended UX. Non-negotiable: the REST/MCP inconsistency is a
+   bug regardless of what the eventual default role is.
+2. **Worktree-permission tiering** (§3.2). Require `session+` on the worktree
+   to trigger when RBAC is on. Cheap add-on once §3.1 lands.
 3. **Minimal deny-list** (§3.4). Hard-block `--privileged`, `--network host`,
    `-v /:`, `--cap-add=ALL`, `--cap-add=SYS_ADMIN` tokens at define-time.
-   Fail loud with "this token is blocklisted; set
-   `execution.env_commands.deny_list_overrides` to loosen." Small surface,
-   catches the obvious footguns.
-4. **Audit log (minimal)** (§3.6) — at least structured logger emits with
-   worktree_id, user_id, caller, argv hash. Don't need the full DB table in
-   the first pass; the log is enough to post-mortem an incident.
+   Fail loud with a clear message pointing at the override config. Small
+   surface, catches the obvious footguns admins can commit by mistake.
+4. **Audit log (minimal)** (§3.6). Structured logger line per trigger with
+   `worktree_id`, `user_id`, `caller ∈ {rest,mcp,cli}`, `argv_hash`, exit
+   status. DB table can come in a follow-up; a log line is enough to
+   post-mortem.
 
 **Do next (next sprint, medium lift):**
 
-5. **Split define/trigger roles** (§3.3) + worktree-permission-tiered
-   triggering. Biggest UX + security payoff: lets teams say "members can
-   restart their worktree, only admins can edit the compose config."
-6. **Argv-prefix allow-list** (§3.5). Default empty (backward compat).
-   Recommended config for paranoid instances: `["docker compose ", "docker ps",
-   "docker logs "]`.
-7. **Full audit table** (§3.6) with UI surface.
+5. **Argv-prefix allow-list** (§3.5). Default empty (backward compat).
+   Recommended for paranoid instances: `["docker compose ", "kubectl ",
+   "aws ec2 ", "pnpm ", "make "]`. Complements — doesn't replace — rootless
+   execution.
+6. **Full audit table** (§3.6) with UI surface admins can scan.
+7. **Rate / quota** (§3.9). Cheap; blunts `nuke` loops.
 
 **Consider (next quarter, big lift, only if justified):**
 
-8. **Compose-hash pinning** (§3.7). Needed when the threat model includes
-   "collaborator with branch-write who is not trusted to commit compose
-   changes without review." Not urgent for current deployment modes.
-9. **Dedicated runner process** (§3.8). Biggest structural win. Worth it
-   once there is >1 concurrent production-style tenant on a single daemon.
-10. **Rootless docker** as supported option (§3.8).
+8. **Dedicated runner process** (§3.8). The real fix for docker-group-as-root.
+   A small, auditable service that owns docker access and exposes a narrow
+   API to the daemon; argv validation happens at the runner boundary. Daemon
+   loses `docker` group membership entirely. This is how you *actually* make
+   "member can trigger docker stacks" safe on a shared host. Worth scoping
+   once there's a concrete need.
+9. **Rootless docker / podman** as a supported, documented option (§3.8).
+   Much smaller lift than a runner process; fits most teams.
+10. **Compose-hash pinning** (§3.7). Only relevant when branch-write is not
+    trusted — e.g., multi-tenant. Skip until there is a concrete threat.
 
 **Not recommending:**
 
 - **Regex-based argv filtering.** Bypassed in two lines. Token-level only.
-- **Default-disable** env commands. UX cost outweighs security gain until
-  the MCP bypass is fixed — after that, default-on is fine for local/solo
-  and default-off is the right call for team, but we haven't wired
-  deployment-mode-specific defaults yet.
+- **Hardcoding trigger to `admin`.** Contradicts product intent. The whole
+  point is to make member-trigger *explicit and configurable*, not forbid it.
+- **Gating by unix mode.** Tempting to say "only allow member-trigger when
+  `unix_user_mode: strict`", but admins with docker-group executor can run
+  k8s/EC2 triggers safely under `simple`. The right axis is the command, not
+  the unix mode.
 
 **Will not fix structurally:** a compromised admin account is game-over. No
 amount of env-command config hardens against that. Audit logging is the
@@ -423,74 +479,71 @@ execution:
   executor_unix_user: null
   allow_web_terminal: true
 
-  # --- New: env-command controls ---
+  # --- New: managed env-command controls ---
+
+  # Single knob: role gate AND kill-switch.
+  #   none       = feature disabled (REST 404, MCP tools unregistered, UI hides
+  #                start/stop/nuke). Admin can still *edit* commands in DB for
+  #                later enablement.
+  #   member     = any authenticated user can trigger. Admins still curate
+  #                commands (define-side gate unchanged). Default.
+  #   admin      = admin+ only can trigger.
+  #   superadmin = superadmin only (for locked-down instances).
+  managed_envs_minimum_role: member
+
+  # Additional worktree-permission gate, applied only when worktree_rbac: true.
+  # Ignored otherwise. `session` = "can run sessions on this worktree" — a
+  # reasonable floor for "can bounce this worktree's env".
+  managed_envs_minimum_worktree_permission: session   # view | session | prompt | all
+
   env_commands:
-    # Master switch. When false, start/stop/restart/nuke/logs REST routes
-    # return 404 and the corresponding MCP tools are not registered.
-    # Editing start_command/stop_command/etc. is still allowed (admin only)
-    # so ops can prep commands while the feature is dark.
-    enabled: true
-
-    # Role required to *define* env commands (.agor.yml ingestion and
-    # worktree-level patches). Default: admin. Superadmin always allowed.
-    define_role: admin           # member | admin | superadmin
-
-    # Role required to *trigger* env commands (start/stop/restart/nuke).
-    # Default: admin. Set to `member` only on instances where you trust every
-    # authenticated user to run your configured shell commands.
-    trigger_role: admin          # member | admin | superadmin
-
-    # When worktree_rbac is true, additionally require at least this tier on
-    # the target worktree before allowing a trigger. Ignored when RBAC is off.
-    # `session` = owner/prompt/all can trigger; `view` cannot.
-    trigger_worktree_permission: session  # view | session | prompt | all
-
-    # Hard deny-list of argv tokens. Checked at define-time (command
-    # rejected) and at trigger-time (spawn aborted). These are the obvious
-    # host-root footguns.
+    # Hard deny-list of argv tokens. Checked at define-time (command rejected,
+    # admin sees a clear error) AND at trigger-time (spawn aborted). These are
+    # the obvious host-root footguns that no admin should be committing by
+    # accident.
     deny_tokens:
       - "--privileged"
       - "--network=host"
-      - "--network"              # matched only when followed by "host"
+      - "--network host"
       - "--cap-add=ALL"
       - "--cap-add=SYS_ADMIN"
       - "--user=0"
       - "--user=root"
-      # Bind-mount root filesystem
+      # Bind-mount host root
       - "-v /:"
       - "--mount=type=bind,source=/,"
 
     # Soft allow-list. Empty = allow anything (after deny-list).
-    # Command must start with one of these tokens post-tokenisation.
-    allowed_prefixes: []
-    # Recommended paranoid config:
-    # allowed_prefixes:
+    # Command must start with one of these tokens after shell tokenisation.
+    # Leave empty in typical dev/solo deployments. Worth setting on
+    # team/prod instances:
     #   - "docker compose"
-    #   - "docker ps"
-    #   - "docker logs"
+    #   - "kubectl"
+    #   - "aws"
     #   - "pnpm"
     #   - "make"
+    allowed_prefixes: []
 
-    # Rate limit triggers per user per minute. 0 = unlimited.
+    # Rate-limit triggers per user per minute. 0 = unlimited.
     rate_limit_per_minute: 0
 
-    # Audit logging. When true, every trigger writes an event to
-    # env_command_events table and emits a Feathers event.
+    # Structured audit line per trigger. Recommended: always on.
     audit: true
 
-    # When true, refuse to start if docker-compose.yml (or the pinned
-    # compose_files list) differs from the hash blessed at last admin
-    # review. Ops must re-bless after compose changes.
-    #
-    # Recommend enabling for shared-team and solo instances once stable.
-    require_compose_pin: false
-    compose_files:
+    # When true, refuse to start if the pinned files differ from the hash
+    # blessed at last admin review. Ops must re-bless after changes.
+    # Only relevant when collaborators can push commits that the env
+    # interprets (compose files, Dockerfiles, helm values, etc.). Skip for
+    # dev/solo; consider for multi-tenant/prod.
+    require_file_pin: false
+    pinned_files:
       - "docker-compose.yml"
       - "docker-compose.override.yml"
 ```
 
-Minimum set to merge in the "do now" step: `enabled`, `deny_tokens`, `audit`.
-The rest can land with §3.3–3.7.
+Minimum set to merge in the "do now" step:
+`managed_envs_minimum_role`, `env_commands.deny_tokens`, `env_commands.audit`.
+The rest land with §3.2 / §3.5 / §3.6.
 
 ---
 
