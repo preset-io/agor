@@ -995,10 +995,9 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
       expect(result).toContain('HIGH');
     });
 
-    it('should throw error for invalid template syntax', () => {
-      expect(() => {
-        renderTemplate('{{#if unclosed', {});
-      }).toThrow();
+    it('should not throw on invalid template syntax; returns empty string and logs', () => {
+      const result = renderTemplate('{{#if unclosed', {});
+      expect(result).toBe('');
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining('Handlebars template error'),
         expect.anything()
