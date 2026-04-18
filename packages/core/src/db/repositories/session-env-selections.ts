@@ -11,14 +11,14 @@ import type { SessionEnvSelection, SessionID } from '@agor/core/types';
 import { and, eq } from 'drizzle-orm';
 import type { Database } from '../client';
 import { deleteFrom, insert, select } from '../database-wrapper';
-import { sessionEnvSelections } from '../schema';
+import { type SessionEnvSelectionRow, sessionEnvSelections } from '../schema';
 import { RepositoryError } from './base';
 
 export class SessionEnvSelectionRepository {
   constructor(private db: Database) {}
 
   /** Shared SELECT for a session's rows — single source of truth for reads. */
-  private async fetchRows(sessionId: SessionID) {
+  private async fetchRows(sessionId: SessionID): Promise<SessionEnvSelectionRow[]> {
     try {
       return await select(this.db)
         .from(sessionEnvSelections)
