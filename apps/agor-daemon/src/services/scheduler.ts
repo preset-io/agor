@@ -42,7 +42,7 @@ import type {
 } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
-import { getNextRunTime, getPrevRunTime } from '@agor/core/utils/cron';
+import { getNextRunTime, getPrevRunTime, roundToMinute } from '@agor/core/utils/cron';
 import Handlebars from 'handlebars';
 import type { Application } from '../declarations';
 
@@ -51,7 +51,7 @@ import type { Application } from '../declarations';
  * Used for the schedule concurrency guard: if any session in a worktree is
  * in one of these states, the schedule is considered "busy".
  */
-const ACTIVE_SESSION_STATUSES: ReadonlySet<string> = new Set([
+const ACTIVE_SESSION_STATUSES: ReadonlySet<SessionStatus> = new Set([
   SessionStatus.RUNNING,
   SessionStatus.STOPPING,
   SessionStatus.AWAITING_PERMISSION,
@@ -271,7 +271,7 @@ export class SchedulerService {
     // Schedule is due - spawn session
     console.log(`   ✅ ${worktree.name}: Schedule is due, spawning session...`);
 
-    await this.spawnScheduledSession(worktree, scheduledRunAt, now, { manual: false });
+    await this.spawnScheduledSession(worktree, scheduledRunAt, now, { source: 'cron' });
   }
 
   /**
@@ -315,14 +315,14 @@ export class SchedulerService {
     const now = Date.now();
     // Minute-rounded so back-to-back manual clicks (and manual+cron collisions
     // within the same minute) dedupe via scheduled_run_at.
-    const scheduledRunAt = Math.floor(now / 60000) * 60000;
+    const scheduledRunAt = roundToMinute(new Date(now)).getTime();
 
     console.log(
       `   🖐️  ${worktree.name}: manual execute-now triggered by ${triggeredBy.substring(0, 8)}`
     );
 
     const session = await this.spawnScheduledSession(worktree, scheduledRunAt, now, {
-      manual: true,
+      source: 'manual',
       triggeredBy,
     });
     // Manual path always returns a Session or throws (the `null` return is
@@ -389,11 +389,11 @@ export class SchedulerService {
    * Spawn a scheduled session for a worktree.
    *
    * Shared path for both cron-driven and manual (execute-now) runs. Callers
-   * set `options.manual` to distinguish:
+   * set `options.source` to distinguish:
    *
-   * - `manual=false` (cron tick): concurrency violation is a silent skip
+   * - `source: 'cron'` (tick): concurrency violation is a silent skip
    *   (metadata still advanced to avoid repeated checks).
-   * - `manual=true` (execute-now): concurrency violation throws
+   * - `source: 'manual'` (execute-now): concurrency violation throws
    *   `ScheduleBusyError` so the API route can surface a 409.
    *
    * Steps:
@@ -409,7 +409,7 @@ export class SchedulerService {
    * @param worktree - The worktree to spawn a session for
    * @param scheduledRunAt - The scheduled run timestamp (may be recomputed from cron)
    * @param now - Current timestamp
-   * @param options.manual - Whether this is a manual execute-now call
+   * @param options.source - 'cron' for tick-driven runs, 'manual' for execute-now
    * @param options.triggeredBy - User ID that triggered the manual run
    * @returns The newly created session on success. Returns the pre-existing
    *   session when dedup hits. Returns `null` when a cron-path run is skipped
@@ -420,7 +420,7 @@ export class SchedulerService {
     worktree: Worktree,
     scheduledRunAt: number,
     now: number,
-    options: { manual: boolean; triggeredBy?: UUID } = { manual: false }
+    options: { source: 'cron' | 'manual'; triggeredBy?: UUID } = { source: 'cron' }
   ): Promise<Session | null> {
     if (!worktree.schedule || !worktree.schedule_cron) {
       console.error(`❌ Worktree ${worktree.worktree_id} missing schedule config`);
@@ -431,7 +431,8 @@ export class SchedulerService {
     }
 
     const schedule = worktree.schedule;
-    const { manual, triggeredBy } = options;
+    const { source, triggeredBy } = options;
+    const manual = source === 'manual';
 
     // 1. Check deduplication using repository
     // Use repository to check for existing sessions (bypasses auth)
