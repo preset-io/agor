@@ -59,12 +59,13 @@ export function securityHeaders(opts: SecurityHeadersOptions = {}): RequestHandl
 
   // When `report_uri` is set, emit a matching `Report-To` header so that
   // modern browsers prefer the Reporting API over the legacy `report-uri`
-  // directive. We point it at a group name that matches the `report-to`
-  // directive value produced by the resolver (`agor-csp`).
+  // directive. The group name is taken from the resolver (which derives it
+  // from the `report-to` directive — either our default `agor-csp` or the
+  // operator's override) so the header and directive can't drift.
   const reportToHeader =
-    csp.reportUri !== undefined
+    csp.reportUri !== undefined && csp.reportToGroup !== undefined
       ? JSON.stringify({
-          group: 'agor-csp',
+          group: csp.reportToGroup,
           max_age: 10886400, // 126 days — Chrome caps at ~1yr; this matches Mozilla's recommendation
           endpoints: [{ url: csp.reportUri }],
         })

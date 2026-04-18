@@ -117,6 +117,16 @@ export interface ResolvedCsp {
   reportOnly: boolean;
   /** When set, CSP violation reports are POSTed here. */
   reportUri?: string;
+  /**
+   * The reporting-group name that the `Report-To` header should advertise.
+   * Kept in the resolved object (rather than hardcoded in the middleware) so
+   * that the group in the `report-to` CSP directive and the group in the
+   * `Report-To` header can never drift. When the operator overrides the
+   * `report-to` directive with a custom group, this field reflects their
+   * choice; otherwise it's the built-in default (`agor-csp`). Undefined when
+   * reporting is not configured.
+   */
+  reportToGroup?: string;
   /** Pre-serialized header value (handy for tests and /health). */
   headerValue: string;
 }
@@ -261,8 +271,12 @@ function mergeDirectives(
  * Directives with empty source lists are emitted as `directive-name` (no
  * sources after the name) — this is the correct way to block a directive
  * entirely.
+ *
+ * Internal: the serialized value is already attached to `ResolvedCsp.headerValue`,
+ * so callers outside this module should read that field instead of calling
+ * this function directly.
  */
-export function serializeCsp(directives: AgorCspDirectives): string {
+function serializeCsp(directives: AgorCspDirectives): string {
   return Object.entries(directives)
     .map(([name, sources]) => (sources.length === 0 ? name : `${name} ${sources.join(' ')}`))
     .join('; ');
@@ -311,6 +325,7 @@ export function resolveSecurity(
 
   // Wire up reporting: when report_uri is set, add it to the directive
   // set AND surface it so the daemon can mount a handler at that path.
+  let reportToGroup: string | undefined;
   if (csp.report_uri) {
     if (typeof csp.report_uri !== 'string' || !csp.report_uri.trim()) {
       throw new Error('security.csp.report_uri must be a non-empty string.');
@@ -322,6 +337,20 @@ export function resolveSecurity(
     }
     if (!merged['report-to']) {
       merged['report-to'] = ['agor-csp'];
+      reportToGroup = 'agor-csp';
+    } else {
+      // The operator pinned their own `report-to` group via override — use it
+      // verbatim for the matching `Report-To` header so the two stay in sync.
+      // If they wrote multiple groups, take the first (the first-listed group
+      // is the one browsers try first per CSP3 §6.2.1).
+      reportToGroup = merged['report-to'][0];
+      if (!reportToGroup) {
+        throw new Error(
+          'security.csp.override.report-to must contain at least one group name ' +
+            'when security.csp.report_uri is set, otherwise the Report-To header ' +
+            'and the report-to directive will drift.'
+        );
+      }
     }
   }
 
@@ -330,6 +359,7 @@ export function resolveSecurity(
     disabled: csp.disabled === true,
     reportOnly: csp.report_only === true,
     reportUri: csp.report_uri,
+    reportToGroup,
     headerValue: serializeCsp(merged),
   };
 
@@ -357,15 +387,18 @@ export function resolveSecurity(
       mode = parsed.mode;
       origins = parsed.origins;
     }
-  } else if (
-    opts.legacyCorsOrigins &&
-    opts.legacyCorsOrigins.length > 0 &&
-    corsSettings.origins === undefined
-  ) {
-    warn(
-      'daemon.cors_origins is deprecated; migrate to security.cors.origins. ' +
-        'The legacy value is still applied for now.'
-    );
+  } else if (opts.legacyCorsOrigins && opts.legacyCorsOrigins.length > 0) {
+    if (corsSettings.origins === undefined) {
+      warn(
+        'daemon.cors_origins is deprecated; migrate to security.cors.origins. ' +
+          'The legacy value is still applied for now.'
+      );
+    } else {
+      warn(
+        'daemon.cors_origins is deprecated AND ignored because security.cors.origins ' +
+          'is set. Remove daemon.cors_origins from your config.'
+      );
+    }
   }
 
   if (opts.legacyAllowSandpack !== undefined && corsSettings.allow_sandpack === undefined) {
@@ -398,16 +431,4 @@ export function resolveSecurity(
   };
 
   return { csp: cspResult, cors: corsResult };
-}
-
-/**
- * Convenience: resolve and return only the CSP header value. Exposed for
- * the /health endpoint, which surfaces the current policy so admins can
- * diagnose blocked resources without tailing logs.
- */
-export function resolveCspHeaderValue(
-  config: AgorConfig,
-  opts: ResolveSecurityOptions = {}
-): string {
-  return resolveSecurity(config, opts).csp.headerValue;
 }

@@ -18,7 +18,6 @@ import {
   resolveSecurity,
   SANDPACK_CSP_FRAME_SRC,
   SANDPACK_CSP_WORKER_SRC,
-  serializeCsp,
 } from './security-resolver';
 import type { AgorConfig } from './types';
 
@@ -125,6 +124,36 @@ describe('resolveSecurity — CSP reporting + flags', () => {
     expect(csp.reportUri).toBe('/api/csp-report');
     expect(csp.directives['report-uri']).toEqual(['/api/csp-report']);
     expect(csp.directives['report-to']).toEqual(['agor-csp']);
+    expect(csp.reportToGroup).toBe('agor-csp');
+  });
+
+  it('report_uri + override of report-to uses the operator group (no drift)', () => {
+    // Prevents a subtle bug where the CSP directive says `report-to my-group`
+    // but the Report-To header advertises `agor-csp` — browsers would see the
+    // two as unrelated and silently drop reports.
+    const { csp } = resolveSecurity({
+      security: {
+        csp: {
+          report_uri: '/api/csp-report',
+          override: { 'report-to': ['my-group'] },
+        },
+      },
+    });
+    expect(csp.directives['report-to']).toEqual(['my-group']);
+    expect(csp.reportToGroup).toBe('my-group');
+  });
+
+  it('report_uri + override of report-to with empty array throws (would drift)', () => {
+    expect(() =>
+      resolveSecurity({
+        security: {
+          csp: {
+            report_uri: '/api/csp-report',
+            override: { 'report-to': [] },
+          },
+        },
+      })
+    ).toThrow(/must contain at least one group name/);
   });
 
   it('disabled=true emits a warning and surfaces the flag', () => {
@@ -208,6 +237,21 @@ describe('resolveSecurity — CORS', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('daemon.cors_origins is deprecated'));
   });
 
+  it('when BOTH legacy and new origins are set, the new key wins and legacy is warned as ignored', () => {
+    const warn = vi.fn();
+    const { cors } = resolveSecurity(
+      { security: { cors: { origins: ['https://new.example.com'] } } },
+      {
+        legacyCorsOrigins: ['https://legacy.example.com'],
+        onWarning: warn,
+      }
+    );
+    expect(cors.origins).toEqual(['https://new.example.com']);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('daemon.cors_origins is deprecated AND ignored')
+    );
+  });
+
   it('legacy daemon.cors_allow_sandpack=false carries through with deprecation warning', () => {
     const warn = vi.fn();
     const { cors, csp } = resolveSecurity(EMPTY, {
@@ -245,17 +289,24 @@ describe('resolveSecurity — CORS', () => {
   });
 });
 
-describe('serializeCsp', () => {
+describe('resolveSecurity — headerValue serialization', () => {
   it('joins directives with "; " and sources with spaces', () => {
-    expect(
-      serializeCsp({
-        'default-src': ["'self'"],
-        'script-src': ["'self'", 'https://x.com'],
-      })
-    ).toBe("default-src 'self'; script-src 'self' https://x.com");
+    const { csp } = resolveSecurity(
+      { security: { csp: { override: { 'script-src': ["'self'", 'https://x.com'] } } } },
+      { onWarning: vi.fn() }
+    );
+    expect(csp.headerValue).toContain("script-src 'self' https://x.com");
+    expect(csp.headerValue).toContain('; ');
   });
 
-  it('emits empty-source directives as just the name (no trailing space)', () => {
-    expect(serializeCsp({ 'script-src': [] })).toBe('script-src');
+  it('emits empty-source override directives as just the name (no trailing space)', () => {
+    const { csp } = resolveSecurity(
+      { security: { csp: { override: { 'script-src': [] } } } },
+      { onWarning: vi.fn() }
+    );
+    // The directive list is segment-joined with "; ", so each segment is either
+    // `name` or `name src1 src2`. An empty-array override yields just `script-src`.
+    const segments = csp.headerValue.split('; ');
+    expect(segments).toContain('script-src');
   });
 });

@@ -16,5 +16,15 @@ export * from './repo-list';
 export * from './repo-reference';
 export * from './resource-schemas';
 export * from './resource-sync';
-export * from './security-resolver';
+export type {
+  ResolvedCors,
+  ResolvedCsp,
+  ResolvedSecurity,
+  ResolveSecurityOptions,
+} from './security-resolver';
+export {
+  resolveSecurity,
+  SANDPACK_CSP_FRAME_SRC,
+  SANDPACK_CSP_WORKER_SRC,
+} from './security-resolver';
 export * from './types';

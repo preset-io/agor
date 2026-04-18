@@ -39,6 +39,32 @@ describe('buildCorsConfig', () => {
     expect(result.isAllowedOrigin('https://anything.example.com')).toBe(false);
   });
 
+  it('mode=wildcard emits literal "*" (not origin reflection)', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = buildCorsConfig({
+      uiPort: 5173,
+      isCodespaces: false,
+      resolved: resolve({ security: { cors: { mode: 'wildcard', credentials: false } } }),
+    });
+    // `origin: '*'` makes cors() emit Access-Control-Allow-Origin: *, which is
+    // observably different from `origin: true` (which reflects the Origin
+    // header). This test pins the distinction so wildcard doesn't regress into
+    // reflect.
+    expect(result.origin).toBe('*');
+  });
+
+  it('mode=reflect echoes the request origin (distinct from wildcard)', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = buildCorsConfig({
+      uiPort: 5173,
+      isCodespaces: false,
+      resolved: resolve({ security: { cors: { mode: 'reflect', credentials: false } } }),
+    });
+    // `origin: true` in cors() echoes the request's Origin header back — this
+    // is the reflect mode behaviour per the cors package docs.
+    expect(result.origin).toBe(true);
+  });
+
   it('only allows the configured UI port range on localhost', () => {
     const result = buildCorsConfig({
       uiPort: 5173,

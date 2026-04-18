@@ -341,7 +341,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // `application/reports+json` modern), log at warn level with pino, and
   // respond 204. Rate-limited to protect against report floods.
   const reportUri = resolvedSecurity.csp.reportUri;
-  if (reportUri && reportUri.startsWith('/')) {
+  if (reportUri?.startsWith('/')) {
     const { default: rateLimit } = await import('express-rate-limit');
     const reportLimiter = rateLimit({
       windowMs: 60_000,

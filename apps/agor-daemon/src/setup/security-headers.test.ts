@@ -107,6 +107,26 @@ describe('securityHeaders', () => {
     });
   });
 
+  it('Report-To group tracks a custom report-to override (no drift)', () => {
+    // Pins the fix for a bug where the CSP directive advertised `custom-group`
+    // but the Report-To header hardcoded `agor-csp`, causing browsers to drop
+    // reports silently.
+    const mw = securityHeaders({
+      csp: resolvedCsp({
+        security: {
+          csp: {
+            report_uri: '/api/csp-report',
+            override: { 'report-to': ['custom-group'] },
+          },
+        },
+      }),
+    });
+    const res = fakeRes();
+    mw({ secure: false } as Request, res, () => {});
+    expect(JSON.parse(res._headers['report-to'])).toMatchObject({ group: 'custom-group' });
+    expect(res._headers['content-security-policy']).toContain('report-to custom-group');
+  });
+
   it('extras are reflected in the emitted header', () => {
     const mw = securityHeaders({
       csp: resolvedCsp({

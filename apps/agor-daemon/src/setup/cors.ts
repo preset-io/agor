@@ -122,17 +122,16 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
   if (resolved.maxAgeSeconds !== undefined) extraOptions.maxAge = resolved.maxAgeSeconds;
 
   // --- Wildcard / reflect: accept any origin, credentials are forced off. ---
+  // `wildcard` emits Access-Control-Allow-Origin: *  (cors() option `origin: '*'`).
+  // `reflect`  echoes the request's Origin header back (cors() option `origin: true`).
+  // These are observably different (a `*` response cannot carry credentials even
+  // via a mistake; a reflected origin can) so we keep them distinct.
   if (resolved.mode === 'wildcard' || resolved.mode === 'reflect') {
     console.warn(
       `⚠️  CORS mode=${resolved.mode} — any origin will be accepted, credentials disabled.`
     );
     return {
-      // In both modes the cors() package accepts any origin when `origin: true`.
-      // The spec requires the response header to echo the request origin in
-      // "reflect" mode (which cors() does when origin=true AND the request has
-      // an Origin header) and `*` in "wildcard" mode. Since cors() handles
-      // both via `origin: true` + `credentials: false`, we unify them here.
-      origin: true,
+      origin: resolved.mode === 'wildcard' ? '*' : true,
       localhostOrigins,
       credentialsAllowed: false,
       isWildcard: true,
