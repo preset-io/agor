@@ -1366,3 +1366,90 @@ export function scopeFindToAccessibleBoards(
     return intersectFindQuery(context, 'board_id', decision.accessibleIds);
   };
 }
+
+/**
+ * Core check: is the caller the session's creator OR a global admin/superadmin?
+ *
+ * Pure function (no FeathersJS dependency) so it can be reused from Feathers
+ * hooks (see {@link ensureSessionOwnerOrAdmin}) AND from raw Express route
+ * handlers that load the session themselves.
+ *
+ * Behavior:
+ * - Service accounts (executor) pass through.
+ * - Admin / superadmin pass through (respecting `allowSuperadmin`).
+ * - Session creator passes through.
+ * - Everyone else → Forbidden. Worktree `all` does NOT grant access: session
+ *   env selections expose the creator's private credentials to the executor.
+ *
+ * Caller is responsible for rejecting unauthenticated requests (pass a user
+ * or throw NotAuthenticated before calling this).
+ */
+export function checkSessionOwnerOrAdmin(
+  user: { user_id?: string; role?: string; _isServiceAccount?: boolean },
+  session: Pick<Session, 'created_by'>,
+  options?: { allowSuperadmin?: boolean }
+): void {
+  // Service accounts (executor) bypass RBAC
+  if (user._isServiceAccount) return;
+
+  const allowSuperadmin = options?.allowSuperadmin ?? true;
+  const userRole = user.role;
+
+  if (userRole === ROLES.ADMIN || isSuperAdmin(userRole, allowSuperadmin)) {
+    return;
+  }
+
+  if (session.created_by && user.user_id && session.created_by === (user.user_id as UUID)) {
+    return;
+  }
+
+  throw new Forbidden(
+    "Only the session's creator or an admin can modify this session's env var selections. " +
+      "Worktree 'all' permission does NOT grant access — session env selections expose the " +
+      "creator's private credentials to the executor process."
+  );
+}
+
+/**
+ * Ensure the caller is the session's creator OR a global admin/superadmin.
+ *
+ * Intended for session-scoped configuration that should NEVER inherit from
+ * worktree-tier permissions — notably session env-var selection (v0.5
+ * env-var-access). Even a worktree `all` grantee is NOT allowed to modify
+ * another user's session env selections, because those selections decrypt and
+ * export the session creator's private env vars into the executor process.
+ *
+ * Preconditions (run AFTER): {@link resolveSessionContext} and {@link loadSession}.
+ *
+ * Behavior:
+ * - Internal calls (no provider) pass through.
+ * - Service accounts pass through.
+ * - Unauthenticated callers → NotAuthenticated.
+ * - Admin/superadmin → pass through.
+ * - Session creator → pass through.
+ * - Everyone else → Forbidden (worktree `all` does NOT grant access).
+ *
+ * @returns Feathers hook
+ */
+export function ensureSessionOwnerOrAdmin(options?: { allowSuperadmin?: boolean }) {
+  return (context: HookContext) => {
+    // Skip internal calls
+    if (!context.params.provider) {
+      return context;
+    }
+
+    if (!context.params.user) {
+      throw new NotAuthenticated('Authentication required');
+    }
+
+    const session = context.params.session;
+    if (!session) {
+      throw new Error(
+        'loadSession hook must run before ensureSessionOwnerOrAdmin'
+      );
+    }
+
+    checkSessionOwnerOrAdmin(context.params.user, session, options);
+    return context;
+  };
+}

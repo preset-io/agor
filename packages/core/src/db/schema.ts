@@ -34,6 +34,7 @@ export const cards = schema.cards;
 export const artifacts = schema.artifacts;
 export const boardObjects = schema.boardObjects;
 export const sessionMcpServers = schema.sessionMcpServers;
+export const sessionEnvSelections = schema.sessionEnvSelections;
 export const userMcpOauthTokens = schema.userMcpOauthTokens;
 export const boardComments = schema.boardComments;
 export const gatewayChannels = schema.gatewayChannels;

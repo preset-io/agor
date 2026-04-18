@@ -672,8 +672,27 @@ export const users = sqliteTable(
           GEMINI_API_KEY?: string; // Encrypted with AES-256-GCM
           COPILOT_GITHUB_TOKEN?: string; // Encrypted with AES-256-GCM
         };
-        // Encrypted environment variables (stored as hex-encoded encrypted strings)
-        env_vars?: Record<string, string>; // { "GITHUB_TOKEN": "enc:...", "NPM_TOKEN": "enc:..." }
+        // Encrypted environment variables with scope metadata.
+        //
+        // Two stored value shapes are tolerated on read:
+        //   - Legacy: `"GITHUB_TOKEN": "enc:..."` (plain encrypted string → scope='global')
+        //   - v0.5+:  `"GITHUB_TOKEN": { value_encrypted: "enc:...", scope: 'global'|'session', ... }`
+        //
+        // Writes always produce the object form. Keep scope validation in the app
+        // layer (no SQL CHECK constraint) so adding future scope values ('repo',
+        // 'mcp_server', ...) doesn't require a SQLite table rebuild.
+        //
+        // See `context/explorations/env-var-access.md`.
+        env_vars?: Record<
+          string,
+          | string // legacy
+          | {
+              value_encrypted: string;
+              scope: string; // validated in app layer: 'global' | 'session' (+ reserved values)
+              resource_id?: string | null;
+              extra_config?: Record<string, unknown> | null;
+            }
+        >;
         // Default agentic tool configuration (prepopulates session creation forms)
         default_agentic_config?: {
           'claude-code'?: {
@@ -1255,6 +1274,33 @@ export const threadSessionMap = sqliteTable(
 );
 
 /**
+ * Session Env Selections - Many-to-many between sessions and session-scope env vars.
+ *
+ * Records which of a user's scope='session' env vars are exposed to a given session
+ * at spawn time. Global-scope vars are always included; session-scope vars only
+ * appear in the session's effective env when a row in this table says so.
+ *
+ * v0.5: env vars are keyed by name inside `users.data.env_vars` (no env_vars.id yet).
+ * Rows scope implicitly to `session.created_by`.
+ *
+ * See `context/explorations/env-var-access.md`.
+ */
+export const sessionEnvSelections = sqliteTable(
+  'session_env_selections',
+  {
+    session_id: text('session_id', { length: 36 })
+      .notNull()
+      .references(() => sessions.session_id, { onDelete: 'cascade' }),
+    env_var_name: text('env_var_name').notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.session_id, table.env_var_name] }),
+    sessionIdx: index('session_env_selections_session_idx').on(table.session_id),
+  })
+);
+
+/**
  * Type exports for use with Drizzle ORM
  */
 export type SessionRow = typeof sessions.$inferSelect;
@@ -1275,6 +1321,8 @@ export type MCPServerRow = typeof mcpServers.$inferSelect;
 export type MCPServerInsert = typeof mcpServers.$inferInsert;
 export type SessionMCPServerRow = typeof sessionMcpServers.$inferSelect;
 export type SessionMCPServerInsert = typeof sessionMcpServers.$inferInsert;
+export type SessionEnvSelectionRow = typeof sessionEnvSelections.$inferSelect;
+export type SessionEnvSelectionInsert = typeof sessionEnvSelections.$inferInsert;
 export type UserMCPOAuthTokenRow = typeof userMcpOauthTokens.$inferSelect;
 export type UserMCPOAuthTokenInsert = typeof userMcpOauthTokens.$inferInsert;
 export type CardTypeRow = typeof cardTypes.$inferSelect;

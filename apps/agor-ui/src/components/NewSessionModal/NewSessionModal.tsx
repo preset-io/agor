@@ -20,6 +20,7 @@ import {
 } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import type { ModelConfig } from '../ModelSelector';
+import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 
 export interface NewSessionConfig {
   worktree_id: string; // Required - sessions are always created from a worktree
@@ -35,6 +36,11 @@ export interface NewSessionConfig {
   codexSandboxMode?: CodexSandboxMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   codexNetworkAccess?: boolean;
+  /**
+   * Session-scope env var names (belonging to the creator) to export into this
+   * session's executor process once it is created.
+   */
+  envVarNames?: string[];
 }
 
 export interface NewSessionModalProps {
@@ -65,6 +71,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   const [form] = Form.useForm();
   const [selectedAgent, setSelectedAgent] = useState<string>('claude-code');
   const [isCreating, setIsCreating] = useState(false);
+  const [envVarNames, setEnvVarNames] = useState<string[]>([]);
   const isFormValid = !!selectedAgent;
 
   // Reset form when modal opens, using user defaults if available
@@ -76,6 +83,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
 
     setSelectedAgent('claude-code');
     setIsCreating(false); // Reset creating state when modal opens
+    setEnvVarNames([]);
 
     // Get default config for the selected agent
     const agentDefaults = currentUser?.default_agentic_config?.['claude-code'];
@@ -145,6 +153,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           (values.permissionMode as PermissionMode | undefined) ??
           agentDefaults?.permissionMode ??
           getDefaultPermissionMode(selectedAgent as AgenticToolName),
+        envVarNames: envVarNames.length > 0 ? envVarNames : undefined,
       };
 
       if (selectedAgent === 'codex') {
@@ -250,6 +259,22 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
                 />
               ),
             },
+            ...(currentUser && client
+              ? [
+                  {
+                    key: 'env-vars',
+                    label: <Typography.Text strong>Environment Variables</Typography.Text>,
+                    children: (
+                      <SessionEnvVarsSelector
+                        ownerUserId={currentUser.user_id}
+                        client={client}
+                        value={envVarNames}
+                        onChange={setEnvVarNames}
+                      />
+                    ),
+                  },
+                ]
+              : []),
           ]}
           style={{ marginTop: 16 }}
         />

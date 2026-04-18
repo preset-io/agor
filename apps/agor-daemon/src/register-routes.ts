@@ -92,6 +92,7 @@ import {
   enforceTotalUploadSize,
 } from './utils/upload.js';
 import {
+  checkSessionOwnerOrAdmin,
   ensureWorktreePermission,
   PERMISSION_RANK,
   resolveWorktreePermission,
@@ -158,6 +159,9 @@ export interface RegisterRoutesContext {
   sessionMCPServersService: ReturnType<
     typeof import('./services/session-mcp-servers.js').createSessionMCPServersService
   >;
+  sessionEnvSelectionsService: ReturnType<
+    typeof import('./services/session-env-selections.js').createSessionEnvSelectionsService
+  >;
   terminalsService: TerminalsService | null;
 }
 
@@ -188,6 +192,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     usersRepository: _usersRepository,
     sessionsRepository,
     sessionMCPServersService,
+    sessionEnvSelectionsService,
     terminalsService: _terminalsService,
   } = ctx;
 
@@ -2480,6 +2485,157 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       },
       requireAuth
     );
+
+  // ============================================================================
+  // Session env selections (v0.5 env-var-access)
+  //
+  // Routes:
+  //   GET    /sessions/:id/env-selections           — list selected env var names
+  //   POST   /sessions/:id/env-selections           — add one: { envVarName }
+  //   DELETE /sessions/:id/env-selections/:name     — remove one
+  //   PATCH  /sessions/:id/env-selections           — replace all: { envVarNames: [] }
+  //
+  // RBAC: only the session's creator or a global admin/superadmin may mutate.
+  // Worktree `all` permission does NOT grant access — selections expose the
+  // creator's private credentials to the executor process.
+  // ============================================================================
+
+  // Route-side RBAC wrapper: loads the session, then delegates to the shared
+  // `checkSessionOwnerOrAdmin` helper used by the Feathers hook. Keeps the
+  // policy in a single place (see `utils/worktree-authorization.ts`) and
+  // respects the daemon's configured `allowSuperadmin` via `superadminOpts`.
+  const requireSessionOwnerOrAdmin = async (
+    sessionId: string,
+    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
+    params: any
+  ): Promise<void> => {
+    const user = params?.user;
+    if (!user) {
+      throw new NotAuthenticated('Authentication required');
+    }
+    // Fast-path for service accounts — skip the session lookup entirely.
+    if (user._isServiceAccount) return;
+
+    const session = await sessionsService.get(sessionId, { provider: undefined });
+    if (!session) {
+      throw new NotFound(`Session not found: ${sessionId}`);
+    }
+    checkSessionOwnerOrAdmin(user, session, superadminOpts);
+  };
+
+  // Validate + normalize an `envVarNames` payload: every entry must be a
+  // non-empty string, with leading/trailing whitespace trimmed and duplicates
+  // removed (first occurrence wins).
+  const normalizeEnvVarNames = (value: unknown): string[] => {
+    if (!Array.isArray(value)) {
+      throw new BadRequest('envVarNames (array of strings) required');
+    }
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const entry of value) {
+      if (typeof entry !== 'string') {
+        throw new BadRequest('envVarNames entries must be strings');
+      }
+      const trimmed = entry.trim();
+      if (!trimmed) {
+        throw new BadRequest('envVarNames entries must be non-empty');
+      }
+      if (!seen.has(trimmed)) {
+        seen.add(trimmed);
+        out.push(trimmed);
+      }
+    }
+    return out;
+  };
+
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/env-selections',
+    {
+      // GET returns the selected env var names as a plain `string[]` — both
+      // the comment above and the UI consumer expect names, not full rows.
+      async find(_data: unknown, params: RouteParams): Promise<string[]> {
+        const id = params.route?.id;
+        if (!id) throw new BadRequest('Session ID required');
+        // Read permission: session creator OR admin (no worktree tier).
+        await requireSessionOwnerOrAdmin(id, params);
+        const rows = await sessionEnvSelectionsService.list(
+          id as SessionID,
+          params
+        );
+        return rows.map((r) => r.env_var_name);
+      },
+      async create(data: { envVarName: string }, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new BadRequest('Session ID required');
+        if (!data?.envVarName || typeof data.envVarName !== 'string') {
+          throw new BadRequest('envVarName required');
+        }
+        const name = data.envVarName.trim();
+        if (!name) throw new BadRequest('envVarName must be non-empty');
+        await requireSessionOwnerOrAdmin(id, params);
+        await sessionEnvSelectionsService.add(id as SessionID, name, params);
+        const relationship = {
+          session_id: id,
+          env_var_name: name,
+        };
+        try {
+          app.service('session-env-selections').emit('created', relationship);
+        } catch {
+          // Event emission is non-fatal
+        }
+        return relationship;
+      },
+      async remove(name: string, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new BadRequest('Session ID required');
+        if (!name) throw new BadRequest('env var name required');
+        await requireSessionOwnerOrAdmin(id, params);
+        await sessionEnvSelectionsService.remove(id as SessionID, name, params);
+        const relationship = {
+          session_id: id,
+          env_var_name: name,
+        };
+        try {
+          app.service('session-env-selections').emit('removed', relationship);
+        } catch {
+          // Event emission is non-fatal
+        }
+        return relationship;
+      },
+      async patch(
+        _nullId: null,
+        data: { envVarNames: string[] },
+        params: RouteParams
+      ) {
+        const id = params.route?.id;
+        if (!id) throw new BadRequest('Session ID required');
+        const envVarNames = normalizeEnvVarNames(data?.envVarNames);
+        await requireSessionOwnerOrAdmin(id, params);
+        await sessionEnvSelectionsService.setAll(
+          id as SessionID,
+          envVarNames,
+          params
+        );
+        try {
+          app
+            .service('session-env-selections')
+            .emit('patched', { session_id: id, env_var_names: envVarNames });
+        } catch {
+          // Event emission is non-fatal
+        }
+        return { session_id: id, env_var_names: envVarNames };
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
+    } as any,
+    {
+      find: { role: ROLES.MEMBER, action: 'view session env selections' },
+      create: { role: ROLES.MEMBER, action: 'modify session env selections' },
+      remove: { role: ROLES.MEMBER, action: 'modify session env selections' },
+      patch: { role: ROLES.MEMBER, action: 'modify session env selections' },
+    },
+    requireAuth
+  );
 
   // ============================================================================
   // Health endpoint

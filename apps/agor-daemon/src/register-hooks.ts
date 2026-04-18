@@ -824,6 +824,25 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
   });
 
+  // Top-level `/session-env-selections` exists mainly to surface WebSocket
+  // events emitted by the `/sessions/:id/env-selections` route handlers. Its
+  // `find()` must still be gated — without these hooks any authenticated
+  // member could read selection metadata for sessions they can't access,
+  // bypassing the creator/admin gate on the nested route. Mirror the
+  // `/session-mcp-servers` pattern exactly so the two stay consistent.
+  safeService('session-env-selections')?.hooks({
+    before: {
+      all: [requireAuth],
+      find: [
+        requireMinimumRole(ROLES.MEMBER, 'list session env selections'),
+        // RBAC: Scope to sessions the caller can access.
+        ...(worktreeRbacEnabled
+          ? [scopeFindToAccessibleSessions(sessionsRepository, superadminOpts)]
+          : []),
+      ],
+    },
+  });
+
   // ============================================================================
   // Gateway channels hooks
   // ============================================================================

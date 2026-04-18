@@ -1,15 +1,25 @@
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
-import { Button, Input, Space, Table, Typography } from 'antd';
+import { ENV_VAR_SCOPES_V05, type EnvVarMetadata, type EnvVarScope } from '@agor/core/types';
+import { Button, Input, Select, Space, Table, Typography } from 'antd';
 import { useState } from 'react';
 import { Tag } from './Tag';
 
 const { Text } = Typography;
 
+/**
+ * Row-level metadata as shown to the editor. Accepts the canonical
+ * `EnvVarMetadata` shape (server v0.5+) but is tolerant of legacy callers that
+ * still pass a plain boolean flag (implicit `scope: 'global'`).
+ */
+export type EnvVarEntry = EnvVarMetadata | boolean;
+
 export interface EnvVarEditorProps {
-  /** Current env vars (key → isSet boolean) */
-  envVars: Record<string, boolean>;
-  /** Callback when user adds/updates a variable */
-  onSave: (key: string, value: string) => Promise<void>;
+  /** Current env vars — metadata per key (scope-aware). */
+  envVars: Record<string, EnvVarEntry>;
+  /** Callback when user adds/updates a variable (scope is included). */
+  onSave: (key: string, value: string, scope: EnvVarScope) => Promise<void>;
+  /** Callback when user changes scope for an existing variable. */
+  onScopeChange?: (key: string, scope: EnvVarScope) => Promise<void>;
   /** Callback when user deletes a variable */
   onDelete: (key: string) => Promise<void>;
   /** Loading state for operations */
@@ -18,15 +28,42 @@ export interface EnvVarEditorProps {
   disabled?: boolean;
 }
 
+function entryToMetadata(entry: EnvVarEntry): { set: boolean; scope: EnvVarScope } {
+  if (typeof entry === 'boolean') {
+    return { set: entry, scope: 'global' };
+  }
+  return { set: !!entry.set, scope: entry.scope };
+}
+
+const SCOPE_LABEL: Record<EnvVarScope, string> = {
+  global: 'Global',
+  session: 'Session',
+  repo: 'Repo',
+  mcp_server: 'MCP server',
+  artifact_feature: 'Artifact feature',
+  executor: 'Executor',
+};
+
+const SCOPE_COLOR: Record<EnvVarScope, string> = {
+  global: 'blue',
+  session: 'purple',
+  repo: 'default',
+  mcp_server: 'default',
+  artifact_feature: 'default',
+  executor: 'default',
+};
+
 export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
   envVars,
   onSave,
+  onScopeChange,
   onDelete,
   loading = {},
   disabled = false,
 }) => {
   const [newKey, setNewKey] = useState('');
   const [newValue, setNewValue] = useState('');
+  const [newScope, setNewScope] = useState<EnvVarScope>('global');
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -36,25 +73,37 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
 
     try {
       setError(null);
-      await onSave(newKey.trim(), newValue.trim());
+      await onSave(newKey.trim(), newValue.trim(), newScope);
       setNewKey('');
       setNewValue('');
+      setNewScope('global');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save environment variable';
       setError(message);
     }
   };
 
-  const handleUpdate = async (key: string) => {
+  const handleUpdate = async (key: string, scope: EnvVarScope) => {
     if (!editingValue.trim()) return;
 
     try {
       setError(null);
-      await onSave(key, editingValue.trim());
+      await onSave(key, editingValue.trim(), scope);
       setEditingKey(null);
       setEditingValue('');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to update environment variable';
+      setError(message);
+    }
+  };
+
+  const handleScopeChange = async (key: string, scope: EnvVarScope) => {
+    if (!onScopeChange) return;
+    try {
+      setError(null);
+      await onScopeChange(key, scope);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to update scope';
       setError(message);
     }
   };
@@ -69,20 +118,46 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
     }
   };
 
+  type Row = { key: string; isSet: boolean; scope: EnvVarScope };
+
   const columns = [
     {
       title: 'Variable Name',
       dataIndex: 'key',
       key: 'key',
-      width: '30%',
+      width: '25%',
       render: (key: string) => <code>{key}</code>,
+    },
+    {
+      title: 'Scope',
+      dataIndex: 'scope',
+      key: 'scope',
+      width: '20%',
+      render: (scope: EnvVarScope, record: Row) => {
+        if (onScopeChange) {
+          return (
+            <Select
+              value={scope}
+              size="small"
+              style={{ minWidth: 120 }}
+              disabled={disabled || loading[record.key]}
+              onChange={(next) => handleScopeChange(record.key, next)}
+              options={ENV_VAR_SCOPES_V05.map((s) => ({
+                value: s,
+                label: SCOPE_LABEL[s],
+              }))}
+            />
+          );
+        }
+        return <Tag color={SCOPE_COLOR[scope]}>{SCOPE_LABEL[scope]}</Tag>;
+      },
     },
     {
       title: 'Value',
       dataIndex: 'isSet',
       key: 'value',
-      width: '40%',
-      render: (isSet: boolean, record: { key: string }) => {
+      width: '30%',
+      render: (isSet: boolean, record: Row) => {
         const isEditing = editingKey === record.key;
 
         if (isEditing) {
@@ -92,13 +167,13 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
                 placeholder="Enter new value"
                 value={editingValue}
                 onChange={(e) => setEditingValue(e.target.value)}
-                onPressEnter={() => handleUpdate(record.key)}
+                onPressEnter={() => handleUpdate(record.key, record.scope)}
                 autoFocus
                 disabled={disabled}
               />
               <Button
                 type="primary"
-                onClick={() => handleUpdate(record.key)}
+                onClick={() => handleUpdate(record.key, record.scope)}
                 loading={loading[record.key]}
                 disabled={disabled || !editingValue.trim()}
               >
@@ -134,8 +209,8 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: '30%',
-      render: (_: unknown, record: { key: string }) => (
+      width: '25%',
+      render: (_: unknown, record: Row) => (
         <Button
           danger
           icon={<DeleteOutlined />}
@@ -149,17 +224,21 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
     },
   ];
 
-  const dataSource = Object.entries(envVars).map(([key, isSet]) => ({
-    key,
-    isSet,
-  }));
+  const dataSource: Row[] = Object.entries(envVars).map(([key, entry]) => {
+    const meta = entryToMetadata(entry);
+    return {
+      key,
+      isSet: meta.set,
+      scope: meta.scope,
+    };
+  });
 
   return (
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
       <Text type="secondary">
-        Environment variables are encrypted at rest and available to all agent operations
-        (subprocesses, terminal sessions, environment commands). Common variables: GITHUB_TOKEN,
-        NPM_TOKEN, AWS_ACCESS_KEY_ID, etc.
+        Environment variables are encrypted at rest. <b>Global</b> vars are exported to every
+        session you own. <b>Session</b> vars are only exported to sessions where you explicitly
+        select them (configure per-session under Session → Settings → Env vars).
       </Text>
 
       {error && (
@@ -191,6 +270,16 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
             onPressEnter={handleAdd}
             style={{ width: '30%' }}
             disabled={disabled}
+          />
+          <Select<EnvVarScope>
+            value={newScope}
+            onChange={setNewScope}
+            style={{ width: 130 }}
+            disabled={disabled}
+            options={ENV_VAR_SCOPES_V05.map((s) => ({
+              value: s,
+              label: SCOPE_LABEL[s],
+            }))}
           />
           <Input.Password
             placeholder="Value"

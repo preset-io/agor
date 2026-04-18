@@ -6,7 +6,14 @@
  */
 
 import { generateId } from '@agor/core';
-import { getEnvVarBlockReason, isEnvVarAllowed, validateEnvVar } from '@agor/core/config';
+import {
+  assertV05Scope,
+  getEnvVarBlockReason,
+  isEnvVarAllowed,
+  normalizeStoredEnvMap,
+  type StoredEnvVar,
+  validateEnvVar,
+} from '@agor/core/config';
 import {
   compare,
   type Database,
@@ -21,7 +28,15 @@ import {
   users,
 } from '@agor/core/db';
 import { isLikelyGitToken } from '@agor/core/git';
-import type { Paginated, Params, User, UserID, UserRole } from '@agor/core/types';
+import type {
+  EnvVarMetadata,
+  EnvVarScope,
+  Paginated,
+  Params,
+  User,
+  UserID,
+  UserRole,
+} from '@agor/core/types';
 import { normalizeRole, ROLES } from '@agor/core/types';
 
 /**
@@ -58,6 +73,9 @@ interface UpdateUserData {
   };
   // Environment variables for update (accepts plaintext, encrypted before storage)
   env_vars?: Record<string, string | null>; // { "GITHUB_TOKEN": "ghp_...", "NPM_TOKEN": null }
+  // Per-var scope updates (v0.5: 'global' | 'session'). Applied after env_vars
+  // changes in the same PATCH. Scope for a var that doesn't exist is a no-op.
+  env_var_scopes?: Record<string, EnvVarScope>;
   // Default agentic tool configurations
   default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
 }
@@ -186,6 +204,7 @@ export class UsersService {
       data.preferences ||
       data.api_keys ||
       data.env_vars ||
+      data.env_var_scopes ||
       data.default_agentic_config
     ) {
       const current = await this.get(id);
@@ -194,7 +213,7 @@ export class UsersService {
         avatar?: string;
         preferences?: Record<string, unknown>;
         api_keys?: Record<string, string>;
-        env_vars?: Record<string, string>;
+        env_vars?: Record<string, string | StoredEnvVar>;
         default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
       };
 
@@ -218,8 +237,14 @@ export class UsersService {
         }
       }
 
-      // Handle env vars (encrypt before storage)
-      const encryptedEnvVars = currentData?.env_vars || {};
+      // Handle env vars (encrypt before storage).
+      //
+      // Stored shape is `Record<name, StoredEnvVar>` where StoredEnvVar carries
+      // scope metadata (v0.5 env-var-access). We tolerate legacy plain-string
+      // values on read and promote them to the object shape on any write.
+      const normalizedExisting = normalizeStoredEnvMap(currentData?.env_vars);
+      const nextEnvVars: Record<string, StoredEnvVar> = { ...normalizedExisting };
+
       if (data.env_vars) {
         for (const [key, value] of Object.entries(data.env_vars)) {
           // Validate variable name
@@ -243,7 +268,7 @@ export class UsersService {
 
           if (value === null || value === undefined) {
             // Clear variable
-            delete encryptedEnvVars[key];
+            delete nextEnvVars[key];
             console.log(`🗑️  Cleared user env var: ${key}`);
           } else {
             // Validate and encrypt
@@ -254,7 +279,15 @@ export class UsersService {
             }
 
             try {
-              encryptedEnvVars[key] = encryptApiKey(value);
+              const prior = nextEnvVars[key];
+              nextEnvVars[key] = {
+                value_encrypted: encryptApiKey(value),
+                // Preserve existing scope if we're just rotating the value;
+                // default to 'global' for brand-new vars.
+                scope: prior?.scope ?? 'global',
+                resource_id: prior?.resource_id ?? null,
+                extra_config: prior?.extra_config ?? null,
+              };
               console.log(`🔐 Encrypted user env var: ${key}`);
             } catch (err) {
               console.error(`Failed to encrypt env var ${key}:`, err);
@@ -264,11 +297,28 @@ export class UsersService {
         }
       }
 
+      // Apply per-var scope updates. Scopes are validated in the app layer
+      // (no SQL CHECK constraint) so new scope values don't require a migration.
+      if (data.env_var_scopes) {
+        for (const [key, scope] of Object.entries(data.env_var_scopes)) {
+          assertV05Scope(scope);
+          const existing = nextEnvVars[key];
+          if (!existing) {
+            // Scope update for a non-existent var — ignore silently; the UI
+            // should have created the var first.
+            console.warn(`[users] Ignoring scope update for unknown env var: ${key}`);
+            continue;
+          }
+          nextEnvVars[key] = { ...existing, scope };
+          console.log(`🔧 Updated scope for env var ${key}: ${scope}`);
+        }
+      }
+
       updates.data = {
         avatar: data.avatar ?? current.avatar,
         preferences: data.preferences ?? current.preferences,
         api_keys: Object.keys(encryptedKeys).length > 0 ? encryptedKeys : undefined,
-        env_vars: Object.keys(encryptedEnvVars).length > 0 ? encryptedEnvVars : undefined,
+        env_vars: Object.keys(nextEnvVars).length > 0 ? nextEnvVars : undefined,
         default_agentic_config: data.default_agentic_config ?? current.default_agentic_config,
       };
     }
@@ -344,24 +394,24 @@ export class UsersService {
   }
 
   /**
-   * Get decrypted environment variables for a user
-   * Used by subprocess spawning, terminal sessions, etc.
+   * Get decrypted environment variables for a user (ALL scopes).
+   *
+   * Used by code paths that don't yet care about scope (legacy callers, terminal
+   * sessions in some modes). For session spawning, prefer the scope-aware
+   * `resolveUserEnvironment(userId, db, { sessionId })` in core/config.
    */
   async getEnvironmentVariables(userId: UserID): Promise<Record<string, string>> {
     const row = await select(this.db).from(users).where(eq(users.user_id, userId)).one();
 
     if (!row) return {};
 
-    const data = row.data as { env_vars?: Record<string, string> };
-    const encryptedVars = data.env_vars;
-
-    if (!encryptedVars) return {};
+    const data = row.data as { env_vars?: Record<string, string | StoredEnvVar> };
+    const stored = normalizeStoredEnvMap(data.env_vars);
 
     const decryptedVars: Record<string, string> = {};
-
-    for (const [key, encryptedValue] of Object.entries(encryptedVars)) {
+    for (const [key, entry] of Object.entries(stored)) {
       try {
-        decryptedVars[key] = decryptApiKey(encryptedValue);
+        decryptedVars[key] = decryptApiKey(entry.value_encrypted);
       } catch (err) {
         console.error(`Failed to decrypt env var ${key} for user ${userId}:`, err);
         // Skip this variable (don't crash)
@@ -385,9 +435,20 @@ export class UsersService {
       avatar?: string;
       preferences?: Record<string, unknown>;
       api_keys?: Record<string, string>; // Encrypted keys
-      env_vars?: Record<string, string>; // Encrypted env vars
+      env_vars?: Record<string, string | StoredEnvVar>; // Encrypted env vars (legacy + v0.5 shape)
       default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
     };
+
+    const normalizedEnvVars = normalizeStoredEnvMap(data.env_vars);
+    const envVarMetadata: Record<string, EnvVarMetadata> | undefined =
+      Object.keys(normalizedEnvVars).length > 0
+        ? Object.fromEntries(
+            Object.entries(normalizedEnvVars).map(([name, entry]) => [
+              name,
+              { set: true, scope: entry.scope, resource_id: entry.resource_id ?? null },
+            ])
+          )
+        : undefined;
 
     const user: User & { password?: string } = {
       user_id: row.user_id as UserID,
@@ -410,10 +471,8 @@ export class UsersService {
             GEMINI_API_KEY: !!data.api_keys.GEMINI_API_KEY,
           }
         : undefined,
-      // Return env var status (boolean), NOT actual values
-      env_vars: data.env_vars
-        ? Object.fromEntries(Object.keys(data.env_vars).map((key) => [key, true]))
-        : undefined,
+      // Return env var metadata (presence + scope), NOT actual values
+      env_vars: envVarMetadata,
       // Return default agentic config
       default_agentic_config: data.default_agentic_config,
     };
@@ -454,8 +513,19 @@ class UsersServiceWithAuth extends UsersService {
       avatar?: string;
       preferences?: Record<string, unknown>;
       api_keys?: Record<string, string>;
-      env_vars?: Record<string, string>;
+      env_vars?: Record<string, string | StoredEnvVar>;
     };
+
+    const normalizedEnvVars = normalizeStoredEnvMap(data.env_vars);
+    const envVarMetadata: Record<string, EnvVarMetadata> | undefined =
+      Object.keys(normalizedEnvVars).length > 0
+        ? Object.fromEntries(
+            Object.entries(normalizedEnvVars).map(([name, entry]) => [
+              name,
+              { set: true, scope: entry.scope, resource_id: entry.resource_id ?? null },
+            ])
+          )
+        : undefined;
 
     return {
       user_id: row.user_id as UserID,
@@ -477,9 +547,7 @@ class UsersServiceWithAuth extends UsersService {
             GEMINI_API_KEY: !!data.api_keys.GEMINI_API_KEY,
           }
         : undefined,
-      env_vars: data.env_vars
-        ? Object.fromEntries(Object.keys(data.env_vars).map((key) => [key, true]))
-        : undefined,
+      env_vars: envVarMetadata,
     };
   }
 }

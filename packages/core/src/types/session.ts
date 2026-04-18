@@ -554,4 +554,11 @@ export interface SpawnConfig {
 
   /** Task ID to link as spawn point */
   task_id?: string;
+
+  /**
+   * Session-scope env var names (from the spawner / session creator) to
+   * expose in the spawned session's executor process. Only the session's
+   * creator or an admin/superadmin can set this — otherwise it is ignored.
+   */
+  envVarNames?: string[];
 }

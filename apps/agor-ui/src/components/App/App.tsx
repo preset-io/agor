@@ -145,6 +145,7 @@ export interface AppProps {
   onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDeleteArtifact?: (artifactId: string) => void;
   onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
+  onUpdateSessionEnvSelections?: (sessionId: string, envVarNames: string[]) => void;
   onSendComment?: (boardId: string, content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
   onResolveComment?: (commentId: string) => void;
@@ -224,6 +225,7 @@ export const App: React.FC<AppProps> = ({
   onUpdateArtifact,
   onDeleteArtifact,
   onUpdateSessionMcpServers,
+  onUpdateSessionEnvSelections,
   onSendComment,
   onReplyComment,
   onResolveComment,
@@ -1063,6 +1065,9 @@ export const App: React.FC<AppProps> = ({
               }
               onUpdate={onUpdateSession}
               onUpdateSessionMcpServers={onUpdateSessionMcpServers}
+              onUpdateSessionEnvSelections={onUpdateSessionEnvSelections}
+              client={client}
+              currentUser={user}
             />
           )}
           <WorktreeModal

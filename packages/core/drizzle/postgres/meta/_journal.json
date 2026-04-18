@@ -176,6 +176,13 @@
       "when": 1776000000000,
       "tag": "0024_add_serialized_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1776500000000,
+      "tag": "0025_add_session_env_selections",
+      "breakpoints": true
     }
   ]
 }

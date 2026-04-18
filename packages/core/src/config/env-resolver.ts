@@ -2,9 +2,11 @@ import { eq } from 'drizzle-orm';
 import type { Database } from '../db/client';
 import { select } from '../db/database-wrapper';
 import { decryptApiKey } from '../db/encryption';
+import { SessionEnvSelectionRepository } from '../db/repositories/session-env-selections';
 import { users } from '../db/schema';
-import type { GatewayEnvVar, UserID } from '../types';
+import type { GatewayEnvVar, SessionID, UserID } from '../types';
 import { filterEnv } from './env-blocklist';
+import { normalizeStoredEnvMap, type StoredEnvVar } from './env-vars';
 
 /**
  * SECURITY: Allowlisted environment variable names that are safe to pass
@@ -131,37 +133,90 @@ export const AGOR_INTERNAL_ENV_VARS = new Set([
 ]);
 
 /**
+ * Options for resolving user environment variables.
+ */
+export interface ResolveUserEnvOptions {
+  /**
+   * If set, session-scope env vars are filtered through session_env_selections
+   * for this session (only names explicitly selected for the session are
+   * included). Global-scope vars are always included.
+   *
+   * If omitted, session-scope vars are EXCLUDED entirely (safe default for
+   * contexts without a session — e.g. worktree-level terminals).
+   */
+  sessionId?: SessionID;
+}
+
+/**
  * Resolve user environment variables (decrypted from database, no system env vars)
- * Includes both env_vars and api_keys from user data
+ * Includes both env_vars and api_keys from user data.
+ *
+ * Scope filtering (v0.5):
+ *   - `scope: 'global'` → always included
+ *   - `scope: 'session'` → only included if `options.sessionId` is provided
+ *     AND the var name has an entry in `session_env_selections` for that
+ *     session.
+ *   - Any other scope value (reserved for v1+) is skipped.
+ *
+ * Legacy entries (plain-string values on disk) are treated as global-scope.
  */
 export async function resolveUserEnvironment(
   userId: UserID,
-  db: Database
+  db: Database,
+  options: ResolveUserEnvOptions = {}
 ): Promise<Record<string, string>> {
   const env: Record<string, string> = {};
+  const { sessionId } = options;
 
   try {
     const row = await select(db).from(users).where(eq(users.user_id, userId)).one();
 
     if (row) {
       const data = row.data as {
-        env_vars?: Record<string, string>;
+        env_vars?: Record<string, string | StoredEnvVar>;
         api_keys?: Record<string, string>;
       };
 
-      // Decrypt and merge user environment variables (e.g., GITHUB_TOKEN)
-      // Only override if the decrypted value is non-empty
-      const encryptedVars = data.env_vars;
-      if (encryptedVars) {
-        for (const [key, encryptedValue] of Object.entries(encryptedVars)) {
-          try {
-            const decryptedValue = decryptApiKey(encryptedValue);
-            if (decryptedValue && decryptedValue.trim() !== '') {
-              env[key] = decryptedValue;
-            }
-          } catch (err) {
-            console.error(`Failed to decrypt env var ${key} for user ${userId}:`, err);
+      // Normalize legacy + v0.5 shapes into StoredEnvVar records with scopes.
+      const normalized = normalizeStoredEnvMap(data.env_vars);
+
+      // If a sessionId is provided, load the selected session-scope var names
+      // so we can filter session-scope entries.
+      let sessionSelections: Set<string> | null = null;
+      if (sessionId) {
+        try {
+          const selRepo = new SessionEnvSelectionRepository(db);
+          sessionSelections = await selRepo.asSet(sessionId);
+        } catch (err) {
+          console.error(
+            `Failed to load session env selections for session ${sessionId}:`,
+            err
+          );
+          sessionSelections = new Set();
+        }
+      }
+
+      // Decrypt and merge scoped env vars
+      for (const [key, entry] of Object.entries(normalized)) {
+        // Scope gating
+        if (entry.scope === 'global') {
+          // always include
+        } else if (entry.scope === 'session') {
+          if (!sessionSelections || !sessionSelections.has(key)) {
+            continue;
           }
+        } else {
+          // reserved-for-v1 scope values — skip until wired up
+          continue;
+        }
+
+        try {
+          const decryptedValue = decryptApiKey(entry.value_encrypted);
+          if (decryptedValue && decryptedValue.trim() !== '') {
+            env[key] = decryptedValue;
+          }
+        } catch (err) {
+          console.error(`Failed to decrypt env var ${key} for user ${userId}:`, err);
         }
       }
 
@@ -292,7 +347,12 @@ export async function createUserProcessEnvironment(
    * - Force-override vars (`forceOverride: true`) are merged AFTER user env vars — channel values win.
    * - All gateway keys are included in AGOR_USER_ENV_KEYS for MCP template resolution.
    */
-  gatewayEnv?: GatewayEnvVar[]
+  gatewayEnv?: GatewayEnvVar[],
+  /**
+   * If provided, session-scope env vars selected for this session are
+   * included in the user env. Session-scope vars are otherwise excluded.
+   */
+  sessionId?: SessionID
 ): Promise<Record<string, string>> {
   // SECURITY: Start with allowlisted env vars only — never inherit full process.env
   const env = buildAllowlistedEnv();
@@ -323,7 +383,7 @@ export async function createUserProcessEnvironment(
   // 2. Resolve and merge user environment variables (if userId provided)
   // Only override if values are non-empty — takes precedence over gateway fallback vars
   if (userId && db) {
-    const userEnv = await resolveUserEnvironment(userId, db);
+    const userEnv = await resolveUserEnvironment(userId, db, { sessionId });
     for (const [key, value] of Object.entries(userEnv)) {
       if (value && value.trim() !== '') {
         env[key] = value;

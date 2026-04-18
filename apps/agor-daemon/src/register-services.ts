@@ -19,7 +19,13 @@ import {
   WorktreeRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { AuthenticatedParams, HookContext, MessageSource, UserID } from '@agor/core/types';
+import type {
+  AuthenticatedParams,
+  HookContext,
+  MessageSource,
+  SessionID,
+  UserID,
+} from '@agor/core/types';
 import { AGENTIC_TOOL_CAPABILITIES, SessionStatus, TaskStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import type express from 'express';
@@ -58,6 +64,7 @@ import { createMCPServersService } from './services/mcp-servers.js';
 import { createMessagesService } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
 import { createReposService } from './services/repos.js';
+import { createSessionEnvSelectionsService } from './services/session-env-selections.js';
 import { createSessionMCPServersService } from './services/session-mcp-servers.js';
 import { createSessionsService } from './services/sessions.js';
 import { createTasksService } from './services/tasks.js';
@@ -104,6 +111,7 @@ export interface RegisteredServices {
   usersRepository: import('@agor/core/db').UsersRepository;
   sessionsRepository: import('@agor/core/db').SessionRepository;
   sessionMCPServersService: ReturnType<typeof createSessionMCPServersService>;
+  sessionEnvSelectionsService: ReturnType<typeof createSessionEnvSelectionsService>;
   terminalsService: TerminalsService | null;
   configService: ReturnType<typeof createConfigService>;
   boardCommentsService: unknown;
@@ -366,6 +374,27 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // ============================================================================
 
   const sessionMCPServersService = createSessionMCPServersService(db);
+  const sessionEnvSelectionsService = createSessionEnvSelectionsService(db);
+  // Top-level /session-env-selections — event channel ONLY.
+  //
+  // Unlike /session-mcp-servers, selection NAMES are a confidentiality
+  // concern (they reveal which of the session creator's private env vars
+  // are wired into a session), so we deliberately do NOT surface a
+  // queryable read here — a worktree collaborator with `view`/`prompt`
+  // must not see another user's selection names.
+  //
+  // Reads go exclusively through `/sessions/:id/env-selections`, which
+  // enforces session-creator / admin RBAC (see register-routes.ts). This
+  // service exists only so FeathersJS can emit `created` / `removed` /
+  // `patched` events to socket clients that need to refresh.
+  app.use('/session-env-selections', {
+    // Empty find() — clients can still subscribe to events, but cannot
+    // query rows via this top-level service.
+    async find() {
+      return [];
+    },
+  });
+
   if (svcEnabled('mcp_servers')) {
     app.use('/session-mcp-servers', {
       async find(params?: {
@@ -436,6 +465,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     usersRepository,
     sessionsRepository,
     sessionMCPServersService,
+    sessionEnvSelectionsService,
     terminalsService,
     configService,
     boardCommentsService: safeService('board-comments'),
@@ -618,7 +648,8 @@ function createExecuteHandler(
       db,
       undefined,
       !!executorUnixUser,
-      gatewayEnv
+      gatewayEnv,
+      sessionId as SessionID
     );
 
     // Validate required user environment variables

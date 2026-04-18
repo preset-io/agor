@@ -16,13 +16,15 @@
  */
 
 import type {
+  AgorClient,
   CodexApprovalPolicy,
   CodexSandboxMode,
   MCPServer,
   PermissionMode,
   Session,
+  User,
 } from '@agor-live/client';
-import { DownOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { DownOutlined, KeyOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { CollapseProps } from 'antd';
 import { Collapse, Divider, Form, Modal, Typography } from 'antd';
 import React from 'react';
@@ -30,6 +32,7 @@ import { AdvancedSettingsForm } from '../AdvancedSettingsForm';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { CallbackConfigForm } from '../CallbackConfigForm';
 import { CodexSettingsForm } from '../CodexSettingsForm';
+import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 import { SessionMetadataForm } from '../SessionMetadataForm';
 
 export interface SessionSettingsModalProps {
@@ -40,6 +43,16 @@ export interface SessionSettingsModalProps {
   sessionMcpServerIds: string[];
   onUpdate?: (sessionId: string, updates: Partial<Session>) => void;
   onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
+  /**
+   * Called on save with the new list of env var names the session creator has
+   * selected to export into the session's executor process. Only the session's
+   * creator or an admin can edit these.
+   */
+  onUpdateSessionEnvSelections?: (sessionId: string, envVarNames: string[]) => void;
+  /** Client for loading current env selections and the creator's env var list. */
+  client?: AgorClient | null;
+  /** The user currently viewing the modal (for RBAC gating of env selections). */
+  currentUser?: User | null;
 }
 
 interface FormValues {
@@ -152,13 +165,27 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   sessionMcpServerIds,
   onUpdate,
   onUpdateSessionMcpServers,
+  onUpdateSessionEnvSelections,
+  client,
+  currentUser,
 }) => {
   const [form] = Form.useForm();
   const [initialValues, setInitialValues] = React.useState<FormValues>(() =>
     buildInitialValues(session, sessionMcpServerIds)
   );
+  const [envSelections, setEnvSelections] = React.useState<string[]>([]);
+  const [initialEnvSelections, setInitialEnvSelections] = React.useState<string[]>([]);
   const prevOpenRef = React.useRef(false);
   const prevSessionIdRef = React.useRef(session.session_id);
+
+  // Only the session's creator or a global admin can edit env selections.
+  // Worktree `all` permission does NOT grant access.
+  const canEditEnvSelections = React.useMemo(() => {
+    if (!currentUser) return false;
+    if (currentUser.user_id === session.created_by) return true;
+    const role = currentUser.role as string | undefined;
+    return role === 'admin' || role === 'superadmin';
+  }, [currentUser, session.created_by]);
 
   // Reset form when modal opens OR when session changes while open (retargeting)
   React.useEffect(() => {
@@ -174,6 +201,35 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
     }
   }, [open, session, sessionMcpServerIds, form]);
 
+  // Load current env selections when the modal opens.
+  React.useEffect(() => {
+    if (!open || !client || !canEditEnvSelections) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        // GET /sessions/:id/env-selections returns the selected names as
+        // `string[]` (see register-routes.ts — matches the route comment
+        // "list selected env var names").
+        const names = (await client
+          .service(`sessions/${session.session_id}/env-selections`)
+          .find()) as string[];
+        if (!cancelled) {
+          setEnvSelections(names);
+          setInitialEnvSelections(names);
+        }
+      } catch {
+        // Non-fatal; leave list empty. User can still make a selection and save.
+        if (!cancelled) {
+          setEnvSelections([]);
+          setInitialEnvSelections([]);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, client, canEditEnvSelections, session.session_id]);
+
   const handleOk = () => {
     form.validateFields().then(() => {
       // Use getFieldsValue(true) to include values from collapsed panels
@@ -186,6 +242,15 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
 
       if (onUpdateSessionMcpServers) {
         onUpdateSessionMcpServers(session.session_id, values.mcpServerIds || []);
+      }
+
+      if (canEditEnvSelections && onUpdateSessionEnvSelections) {
+        const changed =
+          envSelections.length !== initialEnvSelections.length ||
+          envSelections.some((n) => !initialEnvSelections.includes(n));
+        if (changed) {
+          onUpdateSessionEnvSelections(session.session_id, envSelections);
+        }
       }
 
       onClose();
@@ -212,6 +277,26 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         </Typography.Text>
       ),
       children: <CodexSettingsForm showHelpText />,
+    });
+  }
+
+  if (canEditEnvSelections && client) {
+    secondaryItems.push({
+      key: 'env-selections',
+      label: (
+        <Typography.Text strong>
+          <KeyOutlined style={{ marginRight: 8 }} />
+          Environment Variables
+        </Typography.Text>
+      ),
+      children: (
+        <SessionEnvVarsSelector
+          ownerUserId={session.created_by as import('@agor-live/client').UserID}
+          client={client}
+          value={envSelections}
+          onChange={setEnvSelections}
+        />
+      ),
     });
   }
 

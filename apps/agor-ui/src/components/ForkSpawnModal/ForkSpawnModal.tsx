@@ -21,6 +21,7 @@ import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 
 export type ForkSpawnAction = 'fork' | 'spawn';
 
@@ -55,11 +56,13 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName>(
     session?.agentic_tool || 'claude-code'
   );
+  const [envVarNames, setEnvVarNames] = useState<string[]>([]);
 
   // Reset form and preset when modal opens
   useEffect(() => {
     if (open && session) {
       setConfigPreset('parent');
+      setEnvVarNames([]);
       const agentTool = session.agentic_tool || 'claude-code';
       form.setFieldsValue({
         prompt: initialPrompt,
@@ -117,6 +120,11 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
           spawnConfig.codexNetworkAccess = values.codexNetworkAccess;
           spawnConfig.mcpServerIds = values.mcpServerIds;
           spawnConfig.extraInstructions = values.extraInstructions;
+          // Always send envVarNames in custom preset so the user can
+          // explicitly clear inherited selections (empty array = explicit
+          // clear; `undefined` = "copy parent", which is only the
+          // `parent` preset's intent).
+          spawnConfig.envVarNames = envVarNames;
         }
 
         // Callback fields are always included when explicitly set
@@ -248,6 +256,20 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                     },
                   ]}
                 />
+
+                {/* Session-scope env var selections (only the creator / admin
+                    can actually persist these; backend silently ignores for others). */}
+                {currentUser && client && (
+                  <Form.Item label="Environment Variables" style={{ marginTop: 16 }}>
+                    <SessionEnvVarsSelector
+                      ownerUserId={currentUser.user_id}
+                      client={client}
+                      value={envVarNames}
+                      onChange={setEnvVarNames}
+                      hideEmptyMessage
+                    />
+                  </Form.Item>
+                )}
 
                 {/* Extra Instructions */}
                 <Form.Item

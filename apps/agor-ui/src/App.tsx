@@ -485,6 +485,11 @@ function AppContent() {
           }
         }
 
+        // Associate session-scope env var selections if provided.
+        if (config.envVarNames && config.envVarNames.length > 0) {
+          await handleUpdateSessionEnvSelections(session.session_id, config.envVarNames);
+        }
+
         showSuccess('Session created!');
 
         // If there's an initial prompt, send it to the agent
@@ -1030,6 +1035,21 @@ function AppContent() {
     }
   };
 
+  // Handle update session env var selections (session-scope vars to export to
+  // the executor process). Only the session's creator or an admin can edit these.
+  const handleUpdateSessionEnvSelections = async (sessionId: string, envVarNames: string[]) => {
+    if (!client) return;
+    try {
+      await client.service(`sessions/${sessionId}/env-selections`).patch(null, {
+        envVarNames,
+      });
+    } catch (error) {
+      showError(
+        `Failed to update session env var selections: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+
   // Handle update session-MCP server relationships
   const handleUpdateSessionMcpServers = async (sessionId: string, mcpServerIds: string[]) => {
     if (!client) return;
@@ -1293,6 +1313,7 @@ function AppContent() {
                   onUpdateArtifact={handleUpdateArtifact}
                   onDeleteArtifact={handleDeleteArtifact}
                   onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
+                  onUpdateSessionEnvSelections={handleUpdateSessionEnvSelections}
                   onSendComment={handleSendComment}
                   onReplyComment={handleReplyComment}
                   onResolveComment={handleResolveComment}
@@ -1378,6 +1399,7 @@ function AppContent() {
                   onUpdateArtifact={handleUpdateArtifact}
                   onDeleteArtifact={handleDeleteArtifact}
                   onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
+                  onUpdateSessionEnvSelections={handleUpdateSessionEnvSelections}
                   onSendComment={handleSendComment}
                   onReplyComment={handleReplyComment}
                   onResolveComment={handleResolveComment}
@@ -1463,6 +1485,7 @@ function AppContent() {
                   onUpdateArtifact={handleUpdateArtifact}
                   onDeleteArtifact={handleDeleteArtifact}
                   onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
+                  onUpdateSessionEnvSelections={handleUpdateSessionEnvSelections}
                   onSendComment={handleSendComment}
                   onReplyComment={handleReplyComment}
                   onResolveComment={handleResolveComment}

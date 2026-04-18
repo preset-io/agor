@@ -509,6 +509,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     usersRepository: services.usersRepository,
     sessionsRepository: services.sessionsRepository,
     sessionMCPServersService: services.sessionMCPServersService,
+    sessionEnvSelectionsService: services.sessionEnvSelectionsService,
     terminalsService: services.terminalsService,
   });
 

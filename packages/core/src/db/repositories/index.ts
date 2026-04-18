@@ -14,6 +14,7 @@ export * from './mcp-servers';
 export * from './messages';
 export * from './repos';
 export * from './serialized-sessions';
+export * from './session-env-selections';
 export * from './session-mcp-servers';
 export * from './sessions';
 export * from './tasks';

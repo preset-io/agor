@@ -184,10 +184,42 @@ export interface User extends BaseUserFields {
     GEMINI_API_KEY?: boolean;
     COPILOT_GITHUB_TOKEN?: boolean;
   };
-  // Environment variable status (boolean only, never exposes actual values)
-  env_vars?: Record<string, boolean>; // { "GITHUB_TOKEN": true, "NPM_TOKEN": false }
+  // Environment variable status with scope (never exposes actual values).
+  // Map from env var name → presence/scope metadata. For v0.5 the only validated
+  // scope values are 'global' and 'session'; other values are reserved for v1 and
+  // tolerated on read but not yet exposed by the UI.
+  env_vars?: Record<string, EnvVarMetadata>;
   // Default agentic tool configuration (prepopulates session creation forms)
   default_agentic_config?: DefaultAgenticConfig;
+}
+
+/**
+ * Env var scope values.
+ *
+ * v0.5 only validates 'global' and 'session'. Other values (repo, mcp_server,
+ * artifact_feature, executor) are *reserved* — present in the type for forward
+ * compatibility but not yet selectable in the UI or resolved by the daemon.
+ *
+ * See `context/explorations/env-var-access.md`.
+ */
+export type EnvVarScope =
+  | 'global'
+  | 'session'
+  | 'repo'
+  | 'mcp_server'
+  | 'artifact_feature'
+  | 'executor';
+
+/** Scope values that v0.5 actually validates/uses. */
+export const ENV_VAR_SCOPES_V05: readonly EnvVarScope[] = ['global', 'session'] as const;
+
+/** Public-facing env var metadata (no secret value, just presence + scope). */
+export interface EnvVarMetadata {
+  /** true once a value has been set (kept for backward compat with `Record<string, boolean>` callers). */
+  set: true;
+  scope: EnvVarScope;
+  /** Reserved for v1 scopes (repo id, mcp server id, etc.). Always null in v0.5. */
+  resource_id?: string | null;
 }
 
 /**
@@ -233,8 +265,30 @@ export interface UpdateUserInput extends Partial<BaseUserFields> {
     GEMINI_API_KEY?: string | null;
     COPILOT_GITHUB_TOKEN?: string | null;
   };
-  // Environment variables for update (accepts plaintext, encrypted before storage)
+  // Environment variables for update (accepts plaintext, encrypted before storage).
+  // `null` clears the variable. A plain `string` creates/updates the value and leaves
+  // the existing scope in place (defaults to 'global' for new vars).
   env_vars?: Record<string, string | null>; // { "GITHUB_TOKEN": "ghp_...", "NPM_TOKEN": null }
+  /**
+   * Per-var scope updates, applied on top of any `env_vars` changes in the same PATCH.
+   * Only 'global' and 'session' are accepted in v0.5; other values reject with a 400.
+   * Setting the scope for a variable that doesn't exist is a no-op.
+   */
+  env_var_scopes?: Record<string, EnvVarScope>;
   // Default agentic tool configuration
   default_agentic_config?: DefaultAgenticConfig;
+}
+
+/**
+ * Session-scope env var selection (many-to-many row).
+ *
+ * v0.5: env vars are still keyed by name inside `users.data.env_vars` (no `env_vars.id`
+ * yet — see `context/explorations/env-var-access.md`), so selections reference vars by
+ * `env_var_name` scoped implicitly via `session.created_by`. When v1 promotes env vars
+ * to their own table this becomes `env_var_id`.
+ */
+export interface SessionEnvSelection {
+  session_id: string;
+  env_var_name: string;
+  created_at: Date;
 }
