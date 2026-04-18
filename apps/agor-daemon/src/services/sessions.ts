@@ -15,6 +15,7 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
+  AuthenticatedParams,
   MCPServerID,
   Paginated,
   QueryParams,
@@ -68,6 +69,7 @@ export type SessionParams = QueryParams<{
   include_last_message?: boolean | 'true' | 'false'; // Opt-in last message enrichment
   last_message_truncation_length?: number; // Default: 500 chars, min: 50, max: 10000
 }> &
+  AuthenticatedParams &
   InternalEnrichmentParams & {
     /** Root-level include_last_message flag (bypasses Feathers query filtering, used by internal service calls) */
     _include_last_message?: boolean | 'true' | 'false';
@@ -438,15 +440,10 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     const callerUserId = params?.user?.user_id as string | undefined;
     const callerRole = params?.user?.role as string | undefined;
     const callerIsCreatorOrAdmin =
-      callerUserId === parent.created_by ||
-      callerRole === ROLES.ADMIN ||
-      isSuperAdmin(callerRole);
+      callerUserId === parent.created_by || callerRole === ROLES.ADMIN || isSuperAdmin(callerRole);
 
     if (data.envVarNames !== undefined && callerIsCreatorOrAdmin) {
-      await this.sessionEnvSelectionRepo.setAll(
-        session.session_id as SessionID,
-        data.envVarNames
-      );
+      await this.sessionEnvSelectionRepo.setAll(session.session_id as SessionID, data.envVarNames);
     } else {
       const parentNames = await this.sessionEnvSelectionRepo.listNames(
         parent.session_id as SessionID

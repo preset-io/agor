@@ -4,8 +4,9 @@
  * Type-safe CRUD operations for users with encrypted API key management.
  */
 
-import type { User, UUID } from '@agor/core/types';
+import type { EnvVarMetadata, User, UUID } from '@agor/core/types';
 import { eq, like } from 'drizzle-orm';
+import { normalizeStoredEnvMap, type RawStoredEnvVar } from '../../config/env-vars';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
@@ -51,12 +52,21 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
             COPILOT_GITHUB_TOKEN: !!row.data.api_keys.COPILOT_GITHUB_TOKEN,
           }
         : undefined,
-      // Convert encrypted env vars to boolean flags
-      env_vars: row.data.env_vars
-        ? (Object.fromEntries(
-            Object.entries(row.data.env_vars).map(([k, v]) => [k, !!v])
-          ) as Record<string, boolean>)
-        : undefined,
+      // Convert stored env vars to presence + scope metadata (never exposes secrets).
+      // Handles both legacy string form and v0.5 object form via normalizeStoredEnvMap.
+      // The schema stores `scope` as a generic string (no SQL CHECK constraint); the
+      // normalizer and app-layer validation narrow it to EnvVarScope.
+      env_vars: (() => {
+        const normalized = normalizeStoredEnvMap(
+          row.data.env_vars as Record<string, RawStoredEnvVar> | undefined
+        );
+        if (Object.keys(normalized).length === 0) return undefined;
+        const out: Record<string, EnvVarMetadata> = {};
+        for (const [name, entry] of Object.entries(normalized)) {
+          out[name] = { set: true, scope: entry.scope, resource_id: entry.resource_id ?? null };
+        }
+        return out;
+      })(),
       default_agentic_config: row.data.default_agentic_config as User['default_agentic_config'],
     };
   }

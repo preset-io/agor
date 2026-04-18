@@ -72,13 +72,10 @@ async function registerAndGetHandler(ctx: { userId: string; role?: string }): Pr
   } as unknown as McpServer;
 
   registerMessageTools(fakeServer, {
-    // biome-ignore lint/suspicious/noExplicitAny: minimal test ctx
     app: {} as any,
-    // biome-ignore lint/suspicious/noExplicitAny: minimal test ctx
     db: {} as any,
     userId: ctx.userId as import('@agor/core/types').UserID,
     sessionId: 'sess-0001' as import('@agor/core/types').SessionID,
-    // biome-ignore lint/suspicious/noExplicitAny: minimal test ctx
     authenticatedUser: { user_id: ctx.userId, role: ctx.role ?? 'member' } as any,
     baseServiceParams: {},
   });

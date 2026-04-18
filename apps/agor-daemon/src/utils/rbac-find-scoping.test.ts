@@ -58,21 +58,18 @@ function makeContext(overrides: {
       user: overrides.user,
       query: overrides.query ?? {},
     },
-    // biome-ignore lint/suspicious/noExplicitAny: minimal test context
   } as any;
 }
 
 function fakeWorktreeRepo(accessible: Worktree[]): WorktreeRepository {
   return {
     findAccessibleWorktrees: vi.fn(async () => accessible),
-    // biome-ignore lint/suspicious/noExplicitAny: partial test double
   } as any;
 }
 
 function fakeSessionRepo(accessible: Session[]): SessionRepository {
   return {
     findAccessibleSessions: vi.fn(async () => accessible),
-    // biome-ignore lint/suspicious/noExplicitAny: partial test double
   } as any;
 }
 
@@ -103,9 +100,7 @@ describe('scopeFindToAccessibleWorktrees', () => {
     const hook = scopeFindToAccessibleWorktrees(repo);
     const ctx = makeContext({ provider: 'rest', user: undefined });
     const out = await hook(ctx);
-    // biome-ignore lint/suspicious/noExplicitAny: test shape
     expect((out.result as any).data).toEqual([]);
-    // biome-ignore lint/suspicious/noExplicitAny: test shape
     expect((out.result as any).total).toBe(0);
   });
 
@@ -118,7 +113,6 @@ describe('scopeFindToAccessibleWorktrees', () => {
     });
     const out = await hook(ctx);
     expect(out.result).toBeUndefined();
-    // biome-ignore lint/suspicious/noExplicitAny: test shape
     expect((out.params.query as any).worktree_id).toBeUndefined();
   });
 
@@ -130,7 +124,6 @@ describe('scopeFindToAccessibleWorktrees', () => {
       user: { user_id: USER_ID, role: ROLES.SUPERADMIN },
     });
     await hook(ctx);
-    // biome-ignore lint/suspicious/noExplicitAny: test shape
     expect((ctx.params.query as any).worktree_id).toEqual({ $in: ['wt1'] });
   });
 
@@ -142,7 +135,6 @@ describe('scopeFindToAccessibleWorktrees', () => {
       user: { user_id: USER_ID, role: ROLES.MEMBER },
     });
     await hook(ctx);
-    // biome-ignore lint/suspicious/noExplicitAny: test shape
     const q = ctx.params.query as any;
     expect(q.worktree_id.$in.sort()).toEqual(['wt1', 'wt2']);
   });
@@ -156,7 +148,6 @@ describe('scopeFindToAccessibleWorktrees', () => {
       query: { worktree_id: 'wt1' },
     });
     await hook(ctx);
-    // biome-ignore lint/suspicious/noExplicitAny: test shape
     expect((ctx.params.query as any).worktree_id).toBe('wt1');
   });
 
@@ -169,7 +160,6 @@ describe('scopeFindToAccessibleWorktrees', () => {
       query: { worktree_id: 'wt999' },
     });
     const out = await hook(ctx);
-    // biome-ignore lint/suspicious/noExplicitAny: test shape
     expect((out.result as any).data).toEqual([]);
   });
 
@@ -182,7 +172,6 @@ describe('scopeFindToAccessibleWorktrees', () => {
       query: { worktree_id: { $in: ['wt1', 'wt999'] } },
     });
     await hook(ctx);
-    // biome-ignore lint/suspicious/noExplicitAny: test shape
     expect((ctx.params.query as any).worktree_id).toEqual({ $in: ['wt1'] });
   });
 
@@ -194,7 +183,6 @@ describe('scopeFindToAccessibleWorktrees', () => {
       user: { user_id: USER_ID, role: ROLES.MEMBER },
     });
     const out = await hook(ctx);
-    // biome-ignore lint/suspicious/noExplicitAny: test shape
     expect((out.result as any).data).toEqual([]);
   });
 
@@ -208,7 +196,6 @@ describe('scopeFindToAccessibleWorktrees', () => {
     });
     const out = await hook(ctx);
     expect(out.result).toBeUndefined();
-    // biome-ignore lint/suspicious/noExplicitAny: test shape
     expect((ctx.params.query as any).worktree_id).toBeUndefined();
     expect(repo.findAccessibleWorktrees).not.toHaveBeenCalled();
   });
@@ -241,7 +228,6 @@ describe('scopeFindToAccessibleSessions', () => {
     const hook = scopeFindToAccessibleSessions(repo);
     const ctx = makeContext({ provider: 'rest', user: undefined });
     const out = await hook(ctx);
-    // biome-ignore lint/suspicious/noExplicitAny: test shape
     expect((out.result as any).data).toEqual([]);
   });
 
@@ -254,7 +240,6 @@ describe('scopeFindToAccessibleSessions', () => {
     });
     const out = await hook(ctx);
     expect(out.result).toBeUndefined();
-    // biome-ignore lint/suspicious/noExplicitAny: test shape
     expect((ctx.params.query as any).session_id).toBeUndefined();
   });
 
@@ -266,7 +251,6 @@ describe('scopeFindToAccessibleSessions', () => {
       user: { user_id: USER_ID, role: ROLES.SUPERADMIN },
     });
     await hook(ctx);
-    // biome-ignore lint/suspicious/noExplicitAny: test shape
     expect((ctx.params.query as any).session_id).toEqual({ $in: ['s1'] });
   });
 
@@ -278,7 +262,6 @@ describe('scopeFindToAccessibleSessions', () => {
       user: { user_id: USER_ID, role: ROLES.MEMBER },
     });
     await hook(ctx);
-    // biome-ignore lint/suspicious/noExplicitAny: test shape
     const q = ctx.params.query as any;
     expect(q.session_id.$in.sort()).toEqual(['s1', 's2']);
   });
@@ -292,7 +275,6 @@ describe('scopeFindToAccessibleSessions', () => {
       query: { session_id: 's1' },
     });
     await hook(ctx);
-    // biome-ignore lint/suspicious/noExplicitAny: test shape
     expect((ctx.params.query as any).session_id).toBe('s1');
   });
 
@@ -305,7 +287,6 @@ describe('scopeFindToAccessibleSessions', () => {
       query: { session_id: 's-other' },
     });
     const out = await hook(ctx);
-    // biome-ignore lint/suspicious/noExplicitAny: test shape
     expect((out.result as any).data).toEqual([]);
   });
 
@@ -318,7 +299,6 @@ describe('scopeFindToAccessibleSessions', () => {
       query: { session_id: { $in: ['s1', 's-other'] } },
     });
     await hook(ctx);
-    // biome-ignore lint/suspicious/noExplicitAny: test shape
     expect((ctx.params.query as any).session_id).toEqual({ $in: ['s1'] });
   });
 
@@ -330,7 +310,6 @@ describe('scopeFindToAccessibleSessions', () => {
       user: { user_id: USER_ID, role: ROLES.MEMBER },
     });
     const out = await hook(ctx);
-    // biome-ignore lint/suspicious/noExplicitAny: test shape
     expect((out.result as any).data).toEqual([]);
   });
 
@@ -344,7 +323,6 @@ describe('scopeFindToAccessibleSessions', () => {
     });
     const out = await hook(ctx);
     expect(out.result).toBeUndefined();
-    // biome-ignore lint/suspicious/noExplicitAny: test shape
     expect((ctx.params.query as any).session_id).toBeUndefined();
     expect(repo.findAccessibleSessions).not.toHaveBeenCalled();
   });

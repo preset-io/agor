@@ -1444,9 +1444,7 @@ export function ensureSessionOwnerOrAdmin(options?: { allowSuperadmin?: boolean 
 
     const session = context.params.session;
     if (!session) {
-      throw new Error(
-        'loadSession hook must run before ensureSessionOwnerOrAdmin'
-      );
+      throw new Error('loadSession hook must run before ensureSessionOwnerOrAdmin');
     }
 
     checkSessionOwnerOrAdmin(context.params.user, session, options);

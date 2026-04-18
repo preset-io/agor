@@ -2559,10 +2559,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (!id) throw new BadRequest('Session ID required');
         // Read permission: session creator OR admin (no worktree tier).
         await requireSessionOwnerOrAdmin(id, params);
-        const rows = await sessionEnvSelectionsService.list(
-          id as SessionID,
-          params
-        );
+        const rows = await sessionEnvSelectionsService.list(id as SessionID, params);
         return rows.map((r) => r.env_var_name);
       },
       async create(data: { envVarName: string }, params: RouteParams) {
@@ -2603,20 +2600,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
         return relationship;
       },
-      async patch(
-        _nullId: null,
-        data: { envVarNames: string[] },
-        params: RouteParams
-      ) {
+      async patch(_nullId: null, data: { envVarNames: string[] }, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new BadRequest('Session ID required');
         const envVarNames = normalizeEnvVarNames(data?.envVarNames);
         await requireSessionOwnerOrAdmin(id, params);
-        await sessionEnvSelectionsService.setAll(
-          id as SessionID,
-          envVarNames,
-          params
-        );
+        await sessionEnvSelectionsService.setAll(id as SessionID, envVarNames, params);
         try {
           app
             .service('session-env-selections')

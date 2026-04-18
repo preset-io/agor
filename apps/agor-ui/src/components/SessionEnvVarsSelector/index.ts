@@ -1,2 +1,2 @@
-export { SessionEnvVarsSelector } from './SessionEnvVarsSelector';
 export type { SessionEnvVarsSelectorProps } from './SessionEnvVarsSelector';
+export { SessionEnvVarsSelector } from './SessionEnvVarsSelector';

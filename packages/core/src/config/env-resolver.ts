@@ -188,10 +188,7 @@ export async function resolveUserEnvironment(
           const selRepo = new SessionEnvSelectionRepository(db);
           sessionSelections = await selRepo.asSet(sessionId);
         } catch (err) {
-          console.error(
-            `Failed to load session env selections for session ${sessionId}:`,
-            err
-          );
+          console.error(`Failed to load session env selections for session ${sessionId}:`, err);
           sessionSelections = new Set();
         }
       }

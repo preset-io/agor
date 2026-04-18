@@ -23,8 +23,8 @@ import { WorktreeRepository } from '../db/repositories/worktrees';
 import { users } from '../db/schema';
 import { dbTest } from '../db/test-helpers';
 import { generateId } from '../lib/ids';
-import type { StoredEnvVar } from './env-vars';
 import { resolveUserEnvironment } from './env-resolver';
+import type { StoredEnvVar } from './env-vars';
 
 function encEntry(value: string, scope: StoredEnvVar['scope']): StoredEnvVar {
   return {
@@ -107,17 +107,14 @@ describe('resolveUserEnvironment — scope filtering (v0.5)', () => {
     expect(env.GITHUB_TOKEN).toBe('gh-secret');
   });
 
-  dbTest(
-    'session-scope vars are EXCLUDED when no sessionId is provided',
-    async ({ db }) => {
-      const userId = await createUserWithEnv(db, {
-        SESSION_ONLY: encEntry('session-secret', 'session'),
-      });
+  dbTest('session-scope vars are EXCLUDED when no sessionId is provided', async ({ db }) => {
+    const userId = await createUserWithEnv(db, {
+      SESSION_ONLY: encEntry('session-secret', 'session'),
+    });
 
-      const env = await resolveUserEnvironment(userId, db);
-      expect(env.SESSION_ONLY).toBeUndefined();
-    }
-  );
+    const env = await resolveUserEnvironment(userId, db);
+    expect(env.SESSION_ONLY).toBeUndefined();
+  });
 
   dbTest(
     'session-scope vars are EXCLUDED when sessionId has no matching selection',
@@ -132,76 +129,64 @@ describe('resolveUserEnvironment — scope filtering (v0.5)', () => {
     }
   );
 
-  dbTest(
-    'session-scope vars are INCLUDED when selected for the session',
-    async ({ db }) => {
-      const userId = await createUserWithEnv(db, {
-        SESSION_ONLY: encEntry('session-secret', 'session'),
-        OTHER_SESSION: encEntry('not-selected', 'session'),
-        GITHUB_TOKEN: encEntry('gh', 'global'),
-      });
-      const sessionId = await createSessionForUser(db, userId);
-      const selRepo = new SessionEnvSelectionRepository(db);
-      await selRepo.add(sessionId, 'SESSION_ONLY');
+  dbTest('session-scope vars are INCLUDED when selected for the session', async ({ db }) => {
+    const userId = await createUserWithEnv(db, {
+      SESSION_ONLY: encEntry('session-secret', 'session'),
+      OTHER_SESSION: encEntry('not-selected', 'session'),
+      GITHUB_TOKEN: encEntry('gh', 'global'),
+    });
+    const sessionId = await createSessionForUser(db, userId);
+    const selRepo = new SessionEnvSelectionRepository(db);
+    await selRepo.add(sessionId, 'SESSION_ONLY');
 
-      const env = await resolveUserEnvironment(userId, db, { sessionId });
-      expect(env.SESSION_ONLY).toBe('session-secret');
-      expect(env.OTHER_SESSION).toBeUndefined();
-      expect(env.GITHUB_TOKEN).toBe('gh'); // global still included
-    }
-  );
+    const env = await resolveUserEnvironment(userId, db, { sessionId });
+    expect(env.SESSION_ONLY).toBe('session-secret');
+    expect(env.OTHER_SESSION).toBeUndefined();
+    expect(env.GITHUB_TOKEN).toBe('gh'); // global still included
+  });
 
-  dbTest(
-    'reserved-for-v1 scope values are skipped',
-    async ({ db }) => {
-      const userId = await createUserWithEnv(db, {
-        REPO_SCOPED: {
-          value_encrypted: encryptApiKey('repo-secret'),
-          scope: 'repo',
-          resource_id: 'some-repo-id',
-        },
-        MCP_SCOPED: {
-          value_encrypted: encryptApiKey('mcp-secret'),
-          scope: 'mcp_server',
-          resource_id: 'some-mcp-id',
-        },
-      });
-      const sessionId = await createSessionForUser(db, userId);
+  dbTest('reserved-for-v1 scope values are skipped', async ({ db }) => {
+    const userId = await createUserWithEnv(db, {
+      REPO_SCOPED: {
+        value_encrypted: encryptApiKey('repo-secret'),
+        scope: 'repo',
+        resource_id: 'some-repo-id',
+      },
+      MCP_SCOPED: {
+        value_encrypted: encryptApiKey('mcp-secret'),
+        scope: 'mcp_server',
+        resource_id: 'some-mcp-id',
+      },
+    });
+    const sessionId = await createSessionForUser(db, userId);
 
-      const env = await resolveUserEnvironment(userId, db, { sessionId });
-      expect(env.REPO_SCOPED).toBeUndefined();
-      expect(env.MCP_SCOPED).toBeUndefined();
-    }
-  );
+    const env = await resolveUserEnvironment(userId, db, { sessionId });
+    expect(env.REPO_SCOPED).toBeUndefined();
+    expect(env.MCP_SCOPED).toBeUndefined();
+  });
 
-  dbTest(
-    'legacy plain-string entries are treated as global-scope',
-    async ({ db }) => {
-      const userId = await createUserWithEnv(db, {
-        // Legacy shape: plain encrypted string, no scope metadata
-        LEGACY_VAR: encryptApiKey('legacy-value'),
-      });
+  dbTest('legacy plain-string entries are treated as global-scope', async ({ db }) => {
+    const userId = await createUserWithEnv(db, {
+      // Legacy shape: plain encrypted string, no scope metadata
+      LEGACY_VAR: encryptApiKey('legacy-value'),
+    });
 
-      const env = await resolveUserEnvironment(userId, db);
-      expect(env.LEGACY_VAR).toBe('legacy-value');
-    }
-  );
+    const env = await resolveUserEnvironment(userId, db);
+    expect(env.LEGACY_VAR).toBe('legacy-value');
+  });
 
-  dbTest(
-    'selection for one session does not leak to another session',
-    async ({ db }) => {
-      const userId = await createUserWithEnv(db, {
-        SHARED_NAME: encEntry('secret', 'session'),
-      });
-      const sessionA = await createSessionForUser(db, userId);
-      const sessionB = await createSessionForUser(db, userId);
-      const selRepo = new SessionEnvSelectionRepository(db);
-      await selRepo.add(sessionA, 'SHARED_NAME');
+  dbTest('selection for one session does not leak to another session', async ({ db }) => {
+    const userId = await createUserWithEnv(db, {
+      SHARED_NAME: encEntry('secret', 'session'),
+    });
+    const sessionA = await createSessionForUser(db, userId);
+    const sessionB = await createSessionForUser(db, userId);
+    const selRepo = new SessionEnvSelectionRepository(db);
+    await selRepo.add(sessionA, 'SHARED_NAME');
 
-      const envA = await resolveUserEnvironment(userId, db, { sessionId: sessionA });
-      const envB = await resolveUserEnvironment(userId, db, { sessionId: sessionB });
-      expect(envA.SHARED_NAME).toBe('secret');
-      expect(envB.SHARED_NAME).toBeUndefined();
-    }
-  );
+    const envA = await resolveUserEnvironment(userId, db, { sessionId: sessionA });
+    const envB = await resolveUserEnvironment(userId, db, { sessionId: sessionB });
+    expect(envA.SHARED_NAME).toBe('secret');
+    expect(envB.SHARED_NAME).toBeUndefined();
+  });
 });
