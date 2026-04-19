@@ -1,6 +1,55 @@
+# Agor's own .agor.yml — dogfoods the v2 variant schema.
+#
+# Three variants cover the common development / testing topologies:
+#   - sqlite  (default): single-user dev, SQLite, no RBAC. Fastest to boot.
+#   - postgres:          PostgreSQL-backed dev. Closer to multi-user prod layout.
+#   - full:              production-like — PostgreSQL + worktree RBAC + strict
+#                        Unix user impersonation.
+#
+# Each variant only overrides `start`; stop / nuke / logs / health / app are
+# inherited via `extends: sqlite`. (Single-level extends only — chains are
+# rejected at parse time.)
+#
+# Ports derive from {{worktree.unique_id}} so multiple worktrees run side-by-side
+# without colliding.
+
 environment:
-  start: DAEMON_PORT={{add 3000 worktree.unique_id}} UI_PORT={{add 5000 worktree.unique_id}} docker compose -p agor-{{worktree.name}} up -d
-  stop: docker compose -p agor-{{worktree.name}} down
-  health: http://localhost:{{add 3000 worktree.unique_id}}/health
-  app: http://localhost:{{add 5000 worktree.unique_id}}
-  logs: docker compose -p agor-{{worktree.name}} logs --tail=100
+  default: sqlite
+
+  variants:
+    sqlite:
+      description: Single-user dev with SQLite. No RBAC. Fastest to boot.
+      start: >-
+        DAEMON_PORT={{add 3000 worktree.unique_id}}
+        UI_PORT={{add 5000 worktree.unique_id}}
+        docker compose -p agor-{{worktree.name}} up -d
+      stop: docker compose -p agor-{{worktree.name}} down
+      nuke: docker compose -p agor-{{worktree.name}} down -v
+      logs: docker compose -p agor-{{worktree.name}} logs --tail=100
+      health: http://localhost:{{add 3000 worktree.unique_id}}/health
+      app: http://localhost:{{add 5000 worktree.unique_id}}
+
+    postgres:
+      extends: sqlite
+      description: Dev with PostgreSQL. RBAC off. Closer to multi-user prod layout.
+      start: >-
+        DAEMON_PORT={{add 3000 worktree.unique_id}}
+        UI_PORT={{add 5000 worktree.unique_id}}
+        AGOR_DB_DIALECT=postgresql
+        COMPOSE_PROFILES=postgres
+        docker compose -p agor-{{worktree.name}} up -d
+
+    full:
+      extends: sqlite
+      description: >-
+        Production-like: PostgreSQL + worktree RBAC + strict Unix user
+        impersonation (each Agor user runs sessions as their own Unix identity).
+        Requires the sudoers config shipped under docker/sudoers/.
+      start: >-
+        DAEMON_PORT={{add 3000 worktree.unique_id}}
+        UI_PORT={{add 5000 worktree.unique_id}}
+        AGOR_DB_DIALECT=postgresql
+        COMPOSE_PROFILES=postgres
+        AGOR_RBAC_ENABLED=true
+        AGOR_UNIX_USER_MODE=strict
+        docker compose -p agor-{{worktree.name}} up -d
