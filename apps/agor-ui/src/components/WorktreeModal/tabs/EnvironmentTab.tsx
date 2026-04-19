@@ -21,6 +21,7 @@ import type {
   RepoEnvironmentVariant,
   Worktree,
 } from '@agor-live/client';
+import * as yaml from '@agor-live/client/yaml';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -38,33 +39,18 @@ import {
   UploadOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import {
-  Alert,
-  Button,
-  Card,
-  Input,
-  Select,
-  Space,
-  Spin,
-  Tag,
-  Tooltip,
-  Typography,
-  theme,
-} from 'antd';
-import * as yaml from '@agor-live/client/yaml';
+import { Alert, Button, Card, Select, Space, Spin, Tag, Tooltip, Typography, theme } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuthConfig } from '../../../hooks/useAuthConfig';
 import { usePermissions } from '../../../hooks/usePermissions';
-import { resolveVariant } from '../../../utils/environmentConfig';
 import {
   getEnvironmentState,
   getEnvironmentStateDescription,
 } from '../../../utils/environmentState';
 import { useThemedMessage } from '../../../utils/message';
 import { useThemedModal } from '../../../utils/modal';
+import { CodeEditor } from '../../CodeEditor';
 import { EnvironmentLogsModal } from '../../EnvironmentLogsModal';
-
-const { TextArea } = Input;
 
 const DOCS_URL = 'https://agor.live/guide/environment-configuration';
 
@@ -152,17 +138,12 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     ? Object.keys(repo.environment.variants)
     : [];
   const initialVariant =
-    worktree.environment_variant ??
-    repo.environment?.default ??
-    availableVariants[0] ??
-    '';
+    worktree.environment_variant ?? repo.environment?.default ?? availableVariants[0] ?? '';
   const [selectedVariant, setSelectedVariant] = useState(initialVariant);
   const [isRendering, setIsRendering] = useState(false);
 
   // ----- Runtime env state (start/stop/logs) -----
-  const [envStatus, setEnvStatus] = useState(
-    worktree.environment_instance?.status || 'stopped'
-  );
+  const [envStatus, setEnvStatus] = useState(worktree.environment_instance?.status || 'stopped');
   const [lastHealthCheck, setLastHealthCheck] = useState(
     worktree.environment_instance?.last_health_check
   );
@@ -221,8 +202,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       }
     };
     client.service('worktrees').on('patched', handleWorktreeUpdate);
-    return () =>
-      client.service('worktrees').removeListener('patched', handleWorktreeUpdate);
+    return () => client.service('worktrees').removeListener('patched', handleWorktreeUpdate);
   }, [client, worktree.worktree_id]);
 
   // ----- Runtime handlers (start/stop/restart/nuke) -----
@@ -272,9 +252,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
           <p>
             <strong>This is a destructive operation!</strong>
           </p>
-          <p>
-            This will typically remove all volumes, data, and state for this environment.
-          </p>
+          <p>This will typically remove all volumes, data, and state for this environment.</p>
           <p>Are you sure you want to proceed?</p>
         </div>
       ),
@@ -287,9 +265,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
           await client.service(`worktrees/${worktree.worktree_id}/nuke`).create({});
           showSuccess('Environment nuked successfully');
         } catch (error) {
-          showError(
-            error instanceof Error ? error.message : 'Failed to nuke environment'
-          );
+          showError(error instanceof Error ? error.message : 'Failed to nuke environment');
         } finally {
           setIsNuking(false);
         }
@@ -341,8 +317,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     if (renderDisabled) return;
     // If admin has unsaved manual snapshot edits, confirm before discarding them.
     const snapshotDirty =
-      isAdmin &&
-      snapshotYamlText.trim() !== prettyYaml(snapshotFromWorktree(worktree)).trim();
+      isAdmin && snapshotYamlText.trim() !== prettyYaml(snapshotFromWorktree(worktree)).trim();
     if (snapshotDirty) {
       confirm({
         title: 'Discard local snapshot edits?',
@@ -481,17 +456,15 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   // ----- Import / export (admin only) -----
   const handleImport = () => {
     if (!client || !onUpdateRepo) return;
-    const variantNamesToOverwrite = repo.environment
-      ? Object.keys(repo.environment.variants)
-      : [];
+    const variantNamesToOverwrite = repo.environment ? Object.keys(repo.environment.variants) : [];
     confirm({
       title: 'Import .agor.yml?',
       icon: <DownloadOutlined />,
       content: (
         <div>
           <p>
-            This will replace your repo-level variants with the contents of{' '}
-            <code>.agor.yml</code> in this worktree.
+            This will replace your repo-level variants with the contents of <code>.agor.yml</code>{' '}
+            in this worktree.
           </p>
           {variantNamesToOverwrite.length > 0 && (
             <p style={{ marginBottom: 4 }}>
@@ -504,8 +477,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
             </p>
           )}
           <p style={{ marginTop: 8 }}>
-            Your <code>template_overrides</code> and worktree-level snapshots are
-            preserved.
+            Your <code>template_overrides</code> and worktree-level snapshots are preserved.
           </p>
         </div>
       ),
@@ -522,9 +494,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
           onUpdateRepo(repo.repo_id, { environment: updated.environment });
           showSuccess('Imported .agor.yml');
         } catch (error) {
-          showError(
-            error instanceof Error ? error.message : 'Failed to import .agor.yml'
-          );
+          showError(error instanceof Error ? error.message : 'Failed to import .agor.yml');
         }
       },
     });
@@ -538,8 +508,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       content: (
         <div>
           <p>
-            This will overwrite <code>.agor.yml</code> in the repo root (this
-            worktree&apos;s working copy).
+            This will overwrite <code>.agor.yml</code> in the repo root (this worktree&apos;s
+            working copy).
           </p>
           <p>
             <code>template_overrides</code> stays local and will not be written.
@@ -555,9 +525,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
             .create({ worktree_id: worktree.worktree_id });
           showSuccess('Environment configuration exported to .agor.yml');
         } catch (error) {
-          showError(
-            error instanceof Error ? error.message : 'Failed to export .agor.yml'
-          );
+          showError(error instanceof Error ? error.message : 'Failed to export .agor.yml');
         }
       },
     });
@@ -615,13 +583,15 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     }
   }, [inferredState, token]);
 
-  const healthIcon = lastHealthCheck
-    ? lastHealthCheck.status === 'healthy'
-      ? <CheckCircleOutlined style={{ color: token.colorSuccess }} />
-      : lastHealthCheck.status === 'unhealthy'
-        ? <CloseCircleOutlined style={{ color: token.colorError }} />
-        : <WarningOutlined style={{ color: token.colorWarning }} />
-    : null;
+  const healthIcon = lastHealthCheck ? (
+    lastHealthCheck.status === 'healthy' ? (
+      <CheckCircleOutlined style={{ color: token.colorSuccess }} />
+    ) : lastHealthCheck.status === 'unhealthy' ? (
+      <CloseCircleOutlined style={{ color: token.colorError }} />
+    ) : (
+      <WarningOutlined style={{ color: token.colorWarning }} />
+    )
+  ) : null;
 
   const variantSelectOptions = availableVariants.map((name) => {
     const variant = repo.environment?.variants[name];
@@ -638,10 +608,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
             </Tag>
           )}
           {description && (
-            <Typography.Text
-              type="secondary"
-              style={{ marginLeft: 8, fontSize: 11 }}
-            >
+            <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 11 }}>
               {description}
             </Typography.Text>
           )}
@@ -707,9 +674,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   size="small"
                   icon={isNuking ? <LoadingOutlined /> : <FireOutlined />}
                   onClick={handleNuke}
-                  disabled={
-                    !canTriggerEnv || isStarting || isStopping || isRestarting || isNuking
-                  }
+                  disabled={!canTriggerEnv || isStarting || isStopping || isRestarting || isNuking}
                   loading={isNuking}
                   danger
                   title={
@@ -777,11 +742,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 </p>
                 {isAdmin && (
                   <Space>
-                    <Button
-                      size="small"
-                      icon={<DownloadOutlined />}
-                      onClick={handleImport}
-                    >
+                    <Button size="small" icon={<DownloadOutlined />} onClick={handleImport}>
                       Import from .agor.yml
                     </Button>
                   </Space>
@@ -872,16 +833,17 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         >
           <Space orientation="vertical" size="small" style={{ width: '100%' }}>
             <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-              YAML representation of <code>repo.environment</code>. Includes{' '}
-              <code>version</code>, <code>default</code>, <code>variants</code>, and
-              optional <code>template_overrides</code>. {repoDocsLink}
+              YAML representation of <code>repo.environment</code>. Includes <code>version</code>,{' '}
+              <code>default</code>, <code>variants</code>, and optional{' '}
+              <code>template_overrides</code>. {repoDocsLink}
             </Typography.Text>
-            <TextArea
+            <CodeEditor
               value={repoYamlText}
-              onChange={(e) => {
-                setRepoYamlText(e.target.value);
+              onChange={(v) => {
+                setRepoYamlText(v);
                 if (repoYamlError) setRepoYamlError(null);
               }}
+              language="yaml"
               placeholder={
                 noVariantsConfigured && isAdmin
                   ? 'version: 2\ndefault: lean\nvariants:\n  lean:\n    start: docker compose up -d\n    stop: docker compose down\n'
@@ -889,18 +851,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
               }
               readOnly={!isEditingRepo}
               rows={14}
-              style={{
-                fontFamily: 'monospace',
-                fontSize: 12,
-                background: isEditingRepo ? undefined : token.colorFillAlter,
-              }}
             />
             {repoYamlError && (
-              <Alert
-                type="error"
-                showIcon
-                message={`Invalid repo environment: ${repoYamlError}`}
-              />
+              <Alert type="error" showIcon message={`Invalid repo environment: ${repoYamlError}`} />
             )}
             {isEditingRepo && (
               <Space>
@@ -934,9 +887,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
               options={variantSelectOptions}
               disabled={!hasEnvironmentConfig}
               placeholder={
-                noVariantsConfigured
-                  ? 'No variants configured — ask an admin'
-                  : 'Select a variant'
+                noVariantsConfigured ? 'No variants configured — ask an admin' : 'Select a variant'
               }
             />
             {variantChanged && (
@@ -1000,31 +951,22 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         >
           <Space orientation="vertical" size="small" style={{ width: '100%' }}>
             <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-              Rendered snapshot persisted on this worktree (fields:{' '}
-              <code>start</code>, <code>stop</code>, <code>nuke</code>,{' '}
-              <code>logs</code>, <code>health</code>, <code>app</code>). Click
-              Render above to regenerate from the variant.
+              Rendered snapshot persisted on this worktree (fields: <code>start</code>,{' '}
+              <code>stop</code>, <code>nuke</code>, <code>logs</code>, <code>health</code>,{' '}
+              <code>app</code>). Click Render above to regenerate from the variant.
             </Typography.Text>
-            <TextArea
+            <CodeEditor
               value={snapshotYamlText}
-              onChange={(e) => {
-                setSnapshotYamlText(e.target.value);
+              onChange={(v) => {
+                setSnapshotYamlText(v);
                 if (snapshotYamlError) setSnapshotYamlError(null);
               }}
+              language="yaml"
               readOnly={!isEditingSnapshot}
               rows={10}
-              style={{
-                fontFamily: 'monospace',
-                fontSize: 12,
-                background: isEditingSnapshot ? undefined : token.colorFillAlter,
-              }}
             />
             {snapshotYamlError && (
-              <Alert
-                type="error"
-                showIcon
-                message={`Invalid snapshot: ${snapshotYamlError}`}
-              />
+              <Alert type="error" showIcon message={`Invalid snapshot: ${snapshotYamlError}`} />
             )}
             {isEditingSnapshot && (
               <Space>

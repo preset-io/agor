@@ -1,5 +1,5 @@
-import { Input } from 'antd';
 import type React from 'react';
+import { CodeEditor } from '../CodeEditor';
 
 export interface JSONEditorProps {
   value?: string;
@@ -11,25 +11,27 @@ export interface JSONEditorProps {
 /**
  * JSON Editor Component
  *
- * A text area for editing JSON with monospace font and validation support.
- * Meant to be used with Ant Design Form.Item validator.
+ * Backed by CodeMirror 6 (lazy-loaded — CM6 only ships when an editor is
+ * actually rendered). Preserves the original textarea-era API so existing
+ * call sites (CardsTable, BoardsTable, GatewayChannelsTable,
+ * AdvancedSettingsForm, ThemeEditorModal) keep working unchanged.
+ *
+ * Pair with `validateJSON` as an Ant Design Form.Item validator.
  */
 export const JSONEditor: React.FC<JSONEditorProps> = ({
   value,
   onChange,
   placeholder = '{"key": "value"}',
   rows = 4,
-}) => {
-  return (
-    <Input.TextArea
-      value={value}
-      onChange={(e) => onChange?.(e.target.value)}
-      placeholder={placeholder}
-      rows={rows}
-      style={{ fontFamily: 'monospace' }}
-    />
-  );
-};
+}) => (
+  <CodeEditor
+    value={value ?? ''}
+    onChange={onChange}
+    language="json"
+    placeholder={placeholder}
+    rows={rows}
+  />
+);
 
 /**
  * JSON Validator for Ant Design Form
