@@ -6,9 +6,11 @@
 #   - full:              production-like — PostgreSQL + worktree RBAC + strict
 #                        Unix user impersonation.
 #
-# Each variant only overrides `start`; stop / nuke / logs / health / app are
-# inherited via `extends: sqlite`. (Single-level extends only — chains are
-# rejected at parse time.)
+# postgres/full override start/stop/nuke so every docker compose call loads
+# docker-compose.override.postgres.yml (otherwise docker auto-loads only
+# docker-compose.override.yml, which has no postgres config). logs / health /
+# app are inherited via `extends: sqlite`. Single-level extends only — chains
+# are rejected at parse time.
 #
 # Ports derive from {{worktree.unique_id}} so multiple worktrees run side-by-side
 # without colliding.
@@ -32,12 +34,32 @@ environment:
     postgres:
       extends: sqlite
       description: Dev with PostgreSQL. RBAC off. Closer to multi-user prod layout.
+      # Explicit -f flags: without them, docker compose auto-loads
+      # docker-compose.override.yml (UID/GID only) and skips the postgres
+      # override. Listing both files explicitly replaces that default.
       start: >-
         DAEMON_PORT={{add 3000 worktree.unique_id}}
         UI_PORT={{add 5000 worktree.unique_id}}
-        AGOR_DB_DIALECT=postgresql
-        COMPOSE_PROFILES=postgres
-        docker compose -p agor-{{worktree.name}} up -d
+        docker compose
+        -f docker-compose.yml
+        -f docker-compose.override.postgres.yml
+        -p agor-{{worktree.name}}
+        --profile postgres
+        up -d
+      stop: >-
+        docker compose
+        -f docker-compose.yml
+        -f docker-compose.override.postgres.yml
+        -p agor-{{worktree.name}}
+        --profile postgres
+        down
+      nuke: >-
+        docker compose
+        -f docker-compose.yml
+        -f docker-compose.override.postgres.yml
+        -p agor-{{worktree.name}}
+        --profile postgres
+        down -v
 
     full:
       extends: sqlite
@@ -48,8 +70,25 @@ environment:
       start: >-
         DAEMON_PORT={{add 3000 worktree.unique_id}}
         UI_PORT={{add 5000 worktree.unique_id}}
-        AGOR_DB_DIALECT=postgresql
-        COMPOSE_PROFILES=postgres
         AGOR_RBAC_ENABLED=true
         AGOR_UNIX_USER_MODE=strict
-        docker compose -p agor-{{worktree.name}} up -d
+        docker compose
+        -f docker-compose.yml
+        -f docker-compose.override.postgres.yml
+        -p agor-{{worktree.name}}
+        --profile postgres
+        up -d
+      stop: >-
+        docker compose
+        -f docker-compose.yml
+        -f docker-compose.override.postgres.yml
+        -p agor-{{worktree.name}}
+        --profile postgres
+        down
+      nuke: >-
+        docker compose
+        -f docker-compose.yml
+        -f docker-compose.override.postgres.yml
+        -p agor-{{worktree.name}}
+        --profile postgres
+        down -v
