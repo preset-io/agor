@@ -29,7 +29,6 @@ import {
 } from './group-manager.js';
 import { getWorktreeSymlinkPath, SymlinkCommands } from './symlink-manager.js';
 import {
-  AGOR_DEFAULT_SHELL,
   AGOR_HOME_BASE,
   generateUnixUsername,
   getUserHomeDir,
@@ -845,10 +844,11 @@ export class UnixIntegrationService {
 
     if (!exists) {
       console.log(`[UnixIntegration] Creating Unix user: ${unixUsername}`);
-      // Pass homeBase to ensure home directory is created in the configured location
-      await this.executor.exec(
-        UnixUserCommands.createUser(unixUsername, AGOR_DEFAULT_SHELL, this.config.homeBase)
-      );
+      // The wrapper uses the system default HOME base (/home on Debian);
+      // config.homeBase is no longer threaded here because no production
+      // caller diverges from it and the wrapper intentionally does not
+      // expose a custom-home-base knob (see docker/sudoers/agor-user-admin).
+      await this.executor.exec(UnixUserCommands.createUser(unixUsername));
 
       // Setup ~/agor/worktrees directory
       await this.executor.execAll(
@@ -916,7 +916,7 @@ export class UnixIntegrationService {
 
     try {
       // SECURITY: Use execWithInput to pass password via stdin, not command line
-      const cmd = UnixUserCommands.setPasswordCommand();
+      const cmd = UnixUserCommands.setPasswordCommand(user.unix_username);
       const input = UnixUserCommands.formatPasswordInput(user.unix_username, plaintextPassword);
       await this.executor.execWithInput(cmd, { input });
       console.log(`[UnixIntegration] Synced password for ${user.unix_username}`);

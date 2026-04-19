@@ -86,7 +86,10 @@ export default class EnsureUser extends Command {
     // Create the user
     try {
       this.log(`Creating Unix user: ${username}`);
-      await executor.exec(UnixUserCommands.createUser(username, '/bin/bash', homeBase));
+      // homeBase is preserved for setupWorktreesDir below but not passed to
+      // createUser: the wrapper uses the system default HOME base (see
+      // docker/sudoers/agor-user-admin).
+      await executor.exec(UnixUserCommands.createUser(username));
       this.log(`✅ Created Unix user: ${username}`);
 
       // Setup ~/agor/worktrees directory

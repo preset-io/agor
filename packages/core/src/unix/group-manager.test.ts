@@ -153,33 +153,33 @@ describe('group-manager', () => {
 
   describe('UnixGroupCommands', () => {
     describe('createGroup', () => {
-      it('generates groupadd command', () => {
+      it('routes through agor-user-admin wrapper', () => {
         expect(UnixGroupCommands.createGroup('agor_wt_01234567')).toBe(
-          'sudo -n groupadd agor_wt_01234567'
+          "sudo -n /usr/local/sbin/agor-user-admin add-group 'agor_wt_01234567'"
         );
       });
     });
 
     describe('deleteGroup', () => {
-      it('generates groupdel command', () => {
+      it('routes through agor-user-admin wrapper', () => {
         expect(UnixGroupCommands.deleteGroup('agor_wt_01234567')).toBe(
-          'sudo -n groupdel agor_wt_01234567'
+          "sudo -n /usr/local/sbin/agor-user-admin delete-group 'agor_wt_01234567'"
         );
       });
     });
 
     describe('addUserToGroup', () => {
-      it('generates usermod -aG command', () => {
+      it('routes through agor-user-admin wrapper', () => {
         expect(UnixGroupCommands.addUserToGroup('alice', 'developers')).toBe(
-          'sudo -n usermod -aG developers alice'
+          "sudo -n /usr/local/sbin/agor-user-admin add-to-group 'alice' 'developers'"
         );
       });
     });
 
     describe('removeUserFromGroup', () => {
-      it('generates gpasswd -d command', () => {
+      it('routes through agor-user-admin wrapper', () => {
         expect(UnixGroupCommands.removeUserFromGroup('alice', 'developers')).toBe(
-          'sudo -n gpasswd -d alice developers'
+          "sudo -n /usr/local/sbin/agor-user-admin remove-from-group 'alice' 'developers'"
         );
       });
     });
@@ -235,7 +235,7 @@ describe('group-manager', () => {
           'sudo -n setfacl -R -m o::rX "/data/project"',
           'sudo -n setfacl -R -m m::rwX "/data/project"',
           'sudo -n setfacl -R -d -m u::rwX,g:developers:rwX,o::rX,m::rwX "/data/project"',
-          'sudo -n find "/data/project" -type d -exec chmod g+s {} +',
+          "sudo -n /usr/local/sbin/agor-user-admin setgid-tree '/data/project'",
         ]);
       });
 
@@ -248,7 +248,7 @@ describe('group-manager', () => {
           'sudo -n setfacl -R -m o::--- "/data/secret"',
           'sudo -n setfacl -R -m m::rwX "/data/secret"',
           'sudo -n setfacl -R -d -m u::rwX,g:admins:rwX,o::---,m::rwX "/data/secret"',
-          'sudo -n find "/data/secret" -type d -exec chmod g+s {} +',
+          "sudo -n /usr/local/sbin/agor-user-admin setgid-tree '/data/secret'",
         ]);
       });
 
@@ -261,7 +261,7 @@ describe('group-manager', () => {
           'sudo -n setfacl -R -m o::rwX "/data/public"',
           'sudo -n setfacl -R -m m::rwX "/data/public"',
           'sudo -n setfacl -R -d -m u::rwX,g:everyone:rwX,o::rwX,m::rwX "/data/public"',
-          'sudo -n find "/data/public" -type d -exec chmod g+s {} +',
+          "sudo -n /usr/local/sbin/agor-user-admin setgid-tree '/data/public'",
         ]);
       });
     });

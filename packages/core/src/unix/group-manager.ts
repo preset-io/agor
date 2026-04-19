@@ -14,6 +14,16 @@
 import { toShortId } from '../lib/ids.js';
 import type { RepoID, UUID, WorktreeID } from '../types/index.js';
 import { UNIX_NAME_SHORT_ID_LENGTH } from './short-id-naming.js';
+import { AGOR_USER_ADMIN } from './user-manager.js';
+
+/**
+ * Single-quote a shell argument for safe inclusion in a shell command string.
+ * Matches the helper in user-manager.ts; kept local to avoid a circular or
+ * surprising re-export via the barrel.
+ */
+function shq(arg: string): string {
+  return `'${arg.replace(/'/g, `'\\''`)}'`;
+}
 
 /**
  * Generate Unix group name for a worktree
@@ -114,40 +124,44 @@ export const AGOR_USERS_GROUP = 'agor_users';
  */
 export const UnixGroupCommands = {
   /**
-   * Create a new Unix group
+   * Create a new Unix group (via agor-user-admin wrapper)
    *
    * @param groupName - Name of the group to create
    * @returns Command string with sudo
    */
-  createGroup: (groupName: string) => `sudo -n groupadd ${groupName}`,
+  createGroup: (groupName: string) => `sudo -n ${AGOR_USER_ADMIN} add-group ${shq(groupName)}`,
 
   /**
-   * Delete a Unix group
+   * Delete a Unix group (via agor-user-admin wrapper)
    *
    * @param groupName - Name of the group to delete
    * @returns Command string with sudo
    */
-  deleteGroup: (groupName: string) => `sudo -n groupdel ${groupName}`,
+  deleteGroup: (groupName: string) => `sudo -n ${AGOR_USER_ADMIN} delete-group ${shq(groupName)}`,
 
   /**
-   * Add user to a Unix group
+   * Add user to a Unix group (via agor-user-admin wrapper).
+   *
+   * Underlying shape: `usermod -aG <group> -- <user>`.
    *
    * @param username - Unix username to add
    * @param groupName - Group to add user to
    * @returns Command string with sudo
    */
   addUserToGroup: (username: string, groupName: string) =>
-    `sudo -n usermod -aG ${groupName} ${username}`,
+    `sudo -n ${AGOR_USER_ADMIN} add-to-group ${shq(username)} ${shq(groupName)}`,
 
   /**
-   * Remove user from a Unix group
+   * Remove user from a Unix group (via agor-user-admin wrapper).
+   *
+   * Underlying shape: `gpasswd -d -- <user> <group>`.
    *
    * @param username - Unix username to remove
    * @param groupName - Group to remove user from
    * @returns Command string with sudo
    */
   removeUserFromGroup: (username: string, groupName: string) =>
-    `sudo -n gpasswd -d ${username} ${groupName}`,
+    `sudo -n ${AGOR_USER_ADMIN} remove-from-group ${shq(username)} ${shq(groupName)}`,
 
   /**
    * Check if a group exists (read-only, no sudo needed)
@@ -232,9 +246,13 @@ export const UnixGroupCommands = {
       // DEFAULT ACLs for new files/dirs (inherit these permissions)
       // IMPORTANT: Include m::rwX to ensure mask allows group access on new files
       `sudo -n setfacl -R -d -m u::rwX,g:${groupName}:rwX,${othersAcl},m::rwX "${path}"`,
-      // Set setgid bit on directories only (new files inherit group ownership)
-      // Uses sudo for find traversal since chgrp can invalidate ACL cache
-      `sudo -n find "${path}" -type d -exec chmod g+s {} +`,
+      // Set setgid bit on directories only (new files inherit group ownership).
+      // Routed through the agor-user-admin wrapper — the sudoers policy no
+      // longer grants a wildcard `find *` entry, which was a root-shell
+      // path (find -exec runs arbitrary commands). The wrapper validates
+      // the path against the Agor-managed tree allowlist and pins the
+      // -type d -exec chmod g+s {} + argv.
+      `sudo -n ${AGOR_USER_ADMIN} setgid-tree ${shq(path)}`,
     ];
   },
 

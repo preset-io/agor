@@ -26,11 +26,13 @@ create_unix_user() {
 
   echo "👤 Creating Unix user: $username"
 
-  # Create user with home directory
-  sudo -n useradd -m -s /bin/bash "$username"
+  # Create user with home directory. Routed through agor-user-admin so the
+  # entrypoint exercises the same path as production hardened installs —
+  # flag-smuggling regressions are caught in dev, not in prod.
+  sudo -n /usr/local/sbin/agor-user-admin add-user "$username"
 
-  # Set password to 'admin'
-  echo "$username:admin" | sudo -n chpasswd
+  # Set password to 'admin' (stdin to wrapper; wrapper runs chpasswd internally)
+  printf 'admin' | sudo -n /usr/local/sbin/agor-user-admin set-password "$username"
 
   # Create .agor directory
   sudo -n mkdir -p "/home/$username/.agor"

@@ -22,6 +22,7 @@ import { promisify } from 'node:util';
 import { shortId } from '@agor/core/db';
 import type { RepoID, WorktreeID } from '@agor/core/types';
 import {
+  AGOR_USER_ADMIN,
   AGOR_USERS_GROUP,
   assertChpasswdInputSafe,
   generateRepoGroupName,
@@ -742,17 +743,21 @@ export async function handleUnixSyncUser(
       }
       assertChpasswdInputSafe(unixUsername, password);
 
-      // Use chpasswd with stdin for security (password not in process list)
+      // Route through the agor-user-admin wrapper rather than hitting
+      // /usr/sbin/chpasswd directly. The wrapper takes the username as an
+      // argv verb-arg and the password via stdin (no username:password
+      // record on the wire) — the sudoers policy only grants NOPASSWD on
+      // the wrapper path, not on chpasswd itself.
       const { spawn } = await import('node:child_process');
       await new Promise<void>((resolve, reject) => {
-        const proc = spawn('sudo', ['-n', '/usr/sbin/chpasswd'], {
+        const proc = spawn('sudo', ['-n', AGOR_USER_ADMIN, 'set-password', unixUsername], {
           stdio: ['pipe', 'pipe', 'pipe'],
         });
-        proc.stdin.write(`${unixUsername}:${password}\n`);
+        proc.stdin.write(password);
         proc.stdin.end();
         proc.on('close', (code) => {
           if (code === 0) resolve();
-          else reject(new Error(`chpasswd exited with code ${code}`));
+          else reject(new Error(`agor-user-admin set-password exited with code ${code}`));
         });
         proc.on('error', reject);
       });

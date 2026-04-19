@@ -113,12 +113,24 @@ storage:
 
 ### 3. Sudoers Configuration
 
-The daemon requires sudo access for Unix user/group management. Agor provides a comprehensive, production-ready sudoers file with extensive documentation and security scoping.
+The daemon requires sudo access for Unix user/group management. Instead of granting wildcard sudo rules for `useradd`, `usermod`, `chpasswd`, `groupadd`, `gpasswd`, and `find` — each a well-known root-shell path — Agor funnels all privileged operations through a single validated wrapper script: **`agor-user-admin`**.
+
+The wrapper:
+
+- Accepts a fixed set of verbs (`add-user`, `delete-user`, `add-group`, `set-password`, `setgid-tree`, `list-symlinks`, …) with strict argument validation
+- Re-validates usernames, groupnames, and filesystem paths before calling any tool (regex check, system-account deny-list, `readlink -f` + allowlist)
+- Canonicalizes paths so symlinks cannot escape `/home/*/agor/*`, `/home/*/.agor/*`, or `/var/agor/*`
+- Rejects chpasswd stdin containing NUL/CR/LF/`:` or non-printable bytes
+- Audits every invocation to syslog (`logger -t agor-user-admin`)
 
 **Installation:**
 
 ```bash
-# Download the sudoers file
+# 1) Install the wrapper (owned by root, mode 0755)
+curl -O https://raw.githubusercontent.com/preset-io/agor/main/docker/sudoers/agor-user-admin
+sudo install -o root -g root -m 0755 ./agor-user-admin /usr/local/sbin/agor-user-admin
+
+# 2) Install the sudoers rule (single NOPASSWD line, no wildcards)
 curl -O https://raw.githubusercontent.com/preset-io/agor/main/docker/sudoers/agor-daemon.sudoers
 
 # CRITICAL: Always validate syntax before installing
@@ -127,11 +139,12 @@ sudo visudo -c -f ./agor-daemon.sudoers
 # Install with correct permissions
 sudo install -m 0440 ./agor-daemon.sudoers /etc/sudoers.d/agor
 
-# Verify configuration
+# 3) Verify
 sudo -l -U agor
+sudo -n /usr/local/sbin/agor-user-admin   # should exit 64 "usage: …"
 ```
 
-**View the complete file:** [`docker/sudoers/agor-daemon.sudoers`](https://github.com/preset-io/agor/blob/main/docker/sudoers/agor-daemon.sudoers)
+**View the files:** [`docker/sudoers/agor-user-admin`](https://github.com/preset-io/agor/blob/main/docker/sudoers/agor-user-admin) · [`docker/sudoers/agor-daemon.sudoers`](https://github.com/preset-io/agor/blob/main/docker/sudoers/agor-daemon.sudoers)
 
 <details>
 <summary>**What the sudoers file enables**</summary>
@@ -144,23 +157,15 @@ sudo -l -U agor
 agor ALL=(%agor_users) NOPASSWD: ALL
 ```
 
-**User Management:**
+**User / group management and password sync — routed through the wrapper:**
 
 ```bash
-# Create/manage Unix users for Agor users
-agor ALL=(ALL) NOPASSWD: /usr/sbin/useradd *
-agor ALL=(ALL) NOPASSWD: /usr/sbin/userdel *
-agor ALL=(ALL) NOPASSWD: /usr/sbin/usermod *
-agor ALL=(ALL) NOPASSWD: /usr/sbin/chpasswd
-```
-
-**Group Management (Worktree Isolation):**
-
-```bash
-# Create Unix groups per worktree (agor_wt_<id>)
-agor ALL=(ALL) NOPASSWD: /usr/sbin/groupadd *
-agor ALL=(ALL) NOPASSWD: /usr/sbin/groupdel *
-agor ALL=(ALL) NOPASSWD: /usr/sbin/gpasswd *
+# ONE NOPASSWD line covers add/delete/lock/unlock users, add/delete groups,
+# add/remove user-from-group, set-password, setgid-tree, and symlink prune.
+# The wrapper re-validates every argument and only shells out to the
+# matching real tool (useradd, usermod, chpasswd, groupadd, groupdel,
+# gpasswd, find) with pinned, safe argv.
+agor ALL=(root) NOPASSWD: /usr/local/sbin/agor-user-admin
 ```
 
 **Filesystem Operations (SCOPED TO AGOR PATHS ONLY):**

@@ -7,7 +7,12 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import { AGOR_HOME_BASE, AGOR_WORKTREES_DIR } from './user-manager.js';
+import { AGOR_HOME_BASE, AGOR_USER_ADMIN, AGOR_WORKTREES_DIR } from './user-manager.js';
+
+/** Single-quote a shell argument (matches the helper in user-manager.ts). */
+function shq(arg: string): string {
+  return `'${arg.replace(/'/g, `'\\''`)}'`;
+}
 
 /**
  * Get the symlink path for a worktree in a user's home
@@ -83,12 +88,17 @@ export const SymlinkCommands = {
   readSymlink: (linkPath: string) => `readlink "${linkPath}"`,
 
   /**
-   * List all symlinks in a directory
+   * List all symlinks in a directory (via agor-user-admin wrapper).
+   *
+   * Routes through the wrapper because the caller often runs as the Agor
+   * daemon, which no longer has a direct `sudo find *` grant. The wrapper
+   * validates that dirPath is inside the Agor-managed tree and runs
+   * `find <dir> -maxdepth 1 -type l -printf '%f\n'` as root.
    *
    * @param dirPath - Directory to list
    * @returns Command string (outputs symlink names, one per line)
    */
-  listSymlinks: (dirPath: string) => `find "${dirPath}" -maxdepth 1 -type l -printf '%f\\n'`,
+  listSymlinks: (dirPath: string) => `${AGOR_USER_ADMIN} list-symlinks ${shq(dirPath)}`,
 
   /**
    * Create symlink with proper ownership
@@ -116,21 +126,21 @@ export const SymlinkCommands = {
   },
 
   /**
-   * Remove all symlinks in a directory
+   * Remove all symlinks in a directory (via agor-user-admin wrapper).
    *
    * @param dirPath - Directory to clean
    * @returns Command string
    */
-  removeAllSymlinks: (dirPath: string) => `find "${dirPath}" -maxdepth 1 -type l -delete`,
+  removeAllSymlinks: (dirPath: string) => `${AGOR_USER_ADMIN} prune-all-symlinks ${shq(dirPath)}`,
 
   /**
-   * Remove broken symlinks in a directory
+   * Remove broken symlinks in a directory (via agor-user-admin wrapper).
    *
    * @param dirPath - Directory to clean
    * @returns Command string
    */
   removeBrokenSymlinks: (dirPath: string) =>
-    `find "${dirPath}" -maxdepth 1 -type l ! -exec test -e {} \\; -delete`,
+    `${AGOR_USER_ADMIN} prune-broken-symlinks ${shq(dirPath)}`,
 } as const;
 
 /**

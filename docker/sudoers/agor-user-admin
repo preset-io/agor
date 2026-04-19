@@ -1,0 +1,328 @@
+#!/bin/bash
+# agor-user-admin — privileged-operations wrapper for the Agor daemon
+# ===================================================================
+#
+# This single entry point replaces the wildcard sudoers rules that previously
+# exposed /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/usermod,
+# /usr/sbin/gpasswd, /usr/sbin/groupadd, /usr/sbin/groupdel, /usr/sbin/chpasswd,
+# and /usr/bin/find directly to the daemon. Each of those binaries is a
+# well-known root-shell path under sudo wildcards; consolidating behind a
+# validated verb interface closes the flag-smuggling and path-escape avenues
+# while keeping the legitimate functionality the daemon needs.
+#
+# INVOCATION
+#   /usr/local/sbin/agor-user-admin <verb> [args...]      # (via sudo)
+#
+# SUDOERS
+#   agor ALL=(root) NOPASSWD: /usr/local/sbin/agor-user-admin
+#
+# INSTALL
+#   install -o root -g root -m 0755 agor-user-admin /usr/local/sbin/
+#
+# EXIT CODES
+#   0   success
+#   1   underlying tool failure (useradd/chpasswd/... returned non-zero)
+#   64  unknown or invalid verb
+#   65  invalid argument (bad username, bad path, etc.)
+#   66  stdin rejected (password contains NUL/CR/LF/":" or is empty/too long)
+#
+# AUDIT
+#   Every invocation is logged to syslog via `logger` with tag
+#   "agor-user-admin" including the verb and sanitized args (no passwords).
+#   Operators can grep /var/log/auth.log or journalctl for this tag.
+#
+# NOTE
+#   The Node-side validators in packages/core/src/unix/user-manager.ts
+#   (isValidUnixUsername, assertChpasswdInputSafe) remain as defense-in-depth.
+#   This wrapper treats its caller as untrusted and re-validates everything.
+
+set -euo pipefail
+umask 0022
+
+# Pin a minimal PATH so we are not vulnerable to $PATH lookups.
+# All invocations of external tools below use absolute paths regardless.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+unset IFS
+IFS=$' \t\n'
+
+# Absolute tool paths — we refuse to run if any is missing.
+readonly USERADD=/usr/sbin/useradd
+readonly USERDEL=/usr/sbin/userdel
+readonly USERMOD=/usr/sbin/usermod
+readonly GPASSWD=/usr/sbin/gpasswd
+readonly GROUPADD=/usr/sbin/groupadd
+readonly GROUPDEL=/usr/sbin/groupdel
+readonly CHPASSWD=/usr/sbin/chpasswd
+readonly FIND=/usr/bin/find
+readonly LOGGER=/usr/bin/logger
+readonly READLINK=/usr/bin/readlink
+
+# System accounts the wrapper refuses to touch. Overlaps with canonical
+# Debian base users/groups plus the Agor daemon identity itself.
+readonly SYSTEM_USERS_DENY=" root daemon bin sys sync games man lp mail news uucp proxy www-data backup list irc gnats nobody _apt systemd-network systemd-resolve systemd-timesync messagebus sshd postgres agor agor_executor "
+readonly SYSTEM_GROUPS_DENY=" root daemon bin sys adm tty disk lp mail news uucp man proxy kmem dialout fax voice cdrom floppy tape sudo audio dip www-data backup operator list irc src gnats shadow utmp video sasl plugdev staff crontab ssh wheel agor "
+
+# Path allowlist for filesystem verbs (setgid-tree, list/prune-symlinks).
+# These mirror the existing scoped-chown rules in agor-daemon.sudoers so the
+# wrapper does not widen the filesystem surface the daemon can reach.
+path_allowed() {
+  local canon=$1
+  case "$canon" in
+    /home/*/agor|/home/*/agor/*) return 0 ;;
+    /home/*/.agor|/home/*/.agor/*) return 0 ;;
+    /var/agor|/var/agor/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# ---- audit ------------------------------------------------------------------
+
+audit() {
+  # Never log passwords. Callers must sanitize stdin themselves.
+  local verb=$1; shift
+  # Arguments are logged as-is; usernames/groups/paths have already been
+  # validated to a printable character class at this point.
+  if [[ -x $LOGGER ]]; then
+    "$LOGGER" -t agor-user-admin -p auth.info -- "verb=$verb args=$*" || true
+  fi
+}
+
+die() {
+  local code=$1; shift
+  printf 'agor-user-admin: %s\n' "$*" >&2
+  exit "$code"
+}
+
+# ---- validators -------------------------------------------------------------
+
+# Unix username: same rule as isValidUnixUsername() in core/unix/user-manager.ts.
+# Start with [a-z_], then [a-z0-9_-]{0,31}. This also rejects "--foo" which
+# would otherwise be interpretable as a flag if `--` end-of-options is missed.
+validate_username() {
+  local user=$1
+  [[ -n $user ]] || die 65 "empty username"
+  [[ ${#user} -le 32 ]] || die 65 "username too long (>32): ${user}"
+  if ! [[ $user =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+    die 65 "invalid username shape: ${user}"
+  fi
+  case "$SYSTEM_USERS_DENY" in
+    *" $user "*) die 65 "refusing to touch system user: ${user}" ;;
+  esac
+}
+
+# Unix groupname: same shape as username. We intentionally share the regex so
+# that any future tightening of one also tightens the other.
+validate_groupname() {
+  local group=$1
+  [[ -n $group ]] || die 65 "empty groupname"
+  [[ ${#group} -le 32 ]] || die 65 "groupname too long (>32): ${group}"
+  if ! [[ $group =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+    die 65 "invalid groupname shape: ${group}"
+  fi
+  case "$SYSTEM_GROUPS_DENY" in
+    *" $group "*) die 65 "refusing to touch system group: ${group}" ;;
+  esac
+}
+
+# Canonicalize + allowlist. Symlinks are resolved by readlink -f, so a symlink
+# pointing out of the allowed tree canonicalizes to the *real* path and fails
+# the prefix check.
+validate_path() {
+  local raw=$1
+  [[ -n $raw ]] || die 65 "empty path"
+  [[ $raw == /* ]] || die 65 "path must be absolute: ${raw}"
+  case "$raw" in
+    *$'\n'*|*$'\r'*|*$'\0'*) die 65 "path contains control chars" ;;
+  esac
+  local canon
+  canon=$("$READLINK" -f -- "$raw") || die 65 "cannot canonicalize path: ${raw}"
+  [[ -e $canon ]] || die 65 "path does not exist: ${canon}"
+  if ! path_allowed "$canon"; then
+    die 65 "path not in Agor-managed tree (/home/*/agor, /home/*/.agor, /var/agor): ${canon}"
+  fi
+  printf '%s' "$canon"
+}
+
+# Password safety for chpasswd stdin. Mirrors assertChpasswdInputSafe() plus
+# bounds the length to avoid unbounded reads from a hostile caller.
+assert_safe_password() {
+  local pw=$1
+  [[ -n $pw ]] || die 66 "empty password"
+  [[ ${#pw} -le 256 ]] || die 66 "password too long (>256 bytes)"
+  case "$pw" in
+    *$'\n'*|*$'\r'*|*$'\0'*) die 66 "password contains NUL/CR/LF" ;;
+    *:*) die 66 "password contains ':' (chpasswd field separator)" ;;
+  esac
+  # Require printable ASCII 0x20..0x7E. Bash parameter expansion uses the
+  # current LC_CTYPE for character classes, so pin it to C before stripping.
+  local old_lc_all=${LC_ALL-}
+  LC_ALL=C
+  local stripped=${pw//[[:print:]]/}
+  LC_ALL=${old_lc_all}
+  if [[ -n $stripped ]]; then
+    die 66 "password contains non-printable bytes"
+  fi
+}
+
+# ---- verbs ------------------------------------------------------------------
+
+cmd_add_user() {
+  [[ $# -eq 1 ]] || die 64 "usage: add-user <username>"
+  validate_username "$1"
+  audit add-user "$1"
+  # Fixed argv: -m create home, -s /bin/bash. No -d so useradd uses the
+  # system default HOME base (/home on Debian). `--` prevents any future
+  # username that looks flag-shaped from being parsed as a flag.
+  "$USERADD" -m -s /bin/bash -- "$1"
+}
+
+cmd_delete_user() {
+  # Optional --remove-home flag. Order: verb [--remove-home] <user>
+  local remove_home=0
+  if [[ ${1:-} == --remove-home ]]; then
+    remove_home=1
+    shift || true
+  fi
+  [[ $# -eq 1 ]] || die 64 "usage: delete-user [--remove-home] <username>"
+  validate_username "$1"
+  audit delete-user "remove_home=${remove_home}" "$1"
+  if [[ $remove_home -eq 1 ]]; then
+    "$USERDEL" -r -- "$1"
+  else
+    "$USERDEL" -- "$1"
+  fi
+}
+
+cmd_lock_user() {
+  [[ $# -eq 1 ]] || die 64 "usage: lock-user <username>"
+  validate_username "$1"
+  audit lock-user "$1"
+  "$USERMOD" -L -- "$1"
+}
+
+cmd_unlock_user() {
+  [[ $# -eq 1 ]] || die 64 "usage: unlock-user <username>"
+  validate_username "$1"
+  audit unlock-user "$1"
+  "$USERMOD" -U -- "$1"
+}
+
+cmd_add_group() {
+  [[ $# -eq 1 ]] || die 64 "usage: add-group <groupname>"
+  validate_groupname "$1"
+  audit add-group "$1"
+  "$GROUPADD" -- "$1"
+}
+
+cmd_delete_group() {
+  [[ $# -eq 1 ]] || die 64 "usage: delete-group <groupname>"
+  validate_groupname "$1"
+  audit delete-group "$1"
+  "$GROUPDEL" -- "$1"
+}
+
+cmd_add_to_group() {
+  [[ $# -eq 2 ]] || die 64 "usage: add-to-group <username> <groupname>"
+  validate_username "$1"
+  validate_groupname "$2"
+  audit add-to-group "$1" "$2"
+  # usermod -aG append-group semantics. -- prevents flag-smuggling in user.
+  "$USERMOD" -aG "$2" -- "$1"
+}
+
+cmd_remove_from_group() {
+  [[ $# -eq 2 ]] || die 64 "usage: remove-from-group <username> <groupname>"
+  validate_username "$1"
+  validate_groupname "$2"
+  audit remove-from-group "$1" "$2"
+  "$GPASSWD" -d -- "$1" "$2"
+}
+
+cmd_set_password() {
+  [[ $# -eq 1 ]] || die 64 "usage: set-password <username> (password on stdin)"
+  validate_username "$1"
+  local user=$1
+  # Read at most 257 bytes; anything longer fails validation. This caps the
+  # amount we are willing to buffer from a possibly-hostile caller.
+  local pw
+  if ! IFS= read -r -n 257 pw; then
+    # Fall through only if read failed AND we got nothing. A non-zero read
+    # return with content present (EOF without newline) is fine.
+    [[ -n ${pw:-} ]] || die 66 "could not read password from stdin"
+  fi
+  assert_safe_password "$pw"
+  audit set-password "$user"
+  # Feed chpasswd via stdin, not argv — password never appears on a command line.
+  printf '%s:%s\n' "$user" "$pw" | "$CHPASSWD"
+}
+
+cmd_setgid_tree() {
+  [[ $# -eq 1 ]] || die 64 "usage: setgid-tree <path>"
+  local canon
+  canon=$(validate_path "$1")
+  [[ -d $canon ]] || die 65 "setgid-tree requires a directory: ${canon}"
+  audit setgid-tree "$canon"
+  "$FIND" "$canon" -type d -exec chmod g+s {} +
+}
+
+cmd_list_symlinks() {
+  [[ $# -eq 1 ]] || die 64 "usage: list-symlinks <dir>"
+  local canon
+  canon=$(validate_path "$1")
+  [[ -d $canon ]] || die 65 "list-symlinks requires a directory: ${canon}"
+  audit list-symlinks "$canon"
+  "$FIND" "$canon" -maxdepth 1 -type l -printf '%f\n'
+}
+
+cmd_prune_all_symlinks() {
+  [[ $# -eq 1 ]] || die 64 "usage: prune-all-symlinks <dir>"
+  local canon
+  canon=$(validate_path "$1")
+  [[ -d $canon ]] || die 65 "prune-all-symlinks requires a directory: ${canon}"
+  audit prune-all-symlinks "$canon"
+  "$FIND" "$canon" -maxdepth 1 -type l -delete
+}
+
+cmd_prune_broken_symlinks() {
+  [[ $# -eq 1 ]] || die 64 "usage: prune-broken-symlinks <dir>"
+  local canon
+  canon=$(validate_path "$1")
+  [[ -d $canon ]] || die 65 "prune-broken-symlinks requires a directory: ${canon}"
+  audit prune-broken-symlinks "$canon"
+  # Within the wrapper we deliberately use `-exec /usr/bin/test` with an
+  # absolute path so that even if somehow PATH were subverted, the semantics
+  # are pinned.
+  "$FIND" "$canon" -maxdepth 1 -type l ! -exec /usr/bin/test -e {} \; -delete
+}
+
+# ---- dispatch ---------------------------------------------------------------
+
+# Defensive: if for any reason we are invoked without being root (e.g. the
+# sudoers rule was misconfigured), fail loud instead of producing mysterious
+# tool errors later.
+if [[ $(id -u) -ne 0 ]]; then
+  die 65 "must be invoked as root (via sudo)"
+fi
+
+if [[ $# -lt 1 ]]; then
+  die 64 "usage: agor-user-admin <verb> [args...]"
+fi
+
+verb=$1; shift
+
+case "$verb" in
+  add-user)              cmd_add_user "$@" ;;
+  delete-user)           cmd_delete_user "$@" ;;
+  lock-user)             cmd_lock_user "$@" ;;
+  unlock-user)           cmd_unlock_user "$@" ;;
+  add-group)             cmd_add_group "$@" ;;
+  delete-group)          cmd_delete_group "$@" ;;
+  add-to-group)          cmd_add_to_group "$@" ;;
+  remove-from-group)     cmd_remove_from_group "$@" ;;
+  set-password)          cmd_set_password "$@" ;;
+  setgid-tree)           cmd_setgid_tree "$@" ;;
+  list-symlinks)         cmd_list_symlinks "$@" ;;
+  prune-all-symlinks)    cmd_prune_all_symlinks "$@" ;;
+  prune-broken-symlinks) cmd_prune_broken_symlinks "$@" ;;
+  *)                     die 64 "unknown verb: ${verb}" ;;
+esac

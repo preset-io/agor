@@ -53,26 +53,33 @@ Defaults:agor env_keep += "GIT_CONFIG_PARAMETERS"
 agor ALL=(%agor_users) NOPASSWD: ALL
 
 # ============================================================================
-# USER MANAGEMENT - Create/Delete Agor Users
+# USER + GROUP MANAGEMENT - via agor-user-admin wrapper
 # ============================================================================
-# These commands are used when users sign up or are onboarded.
-# The daemon creates a corresponding Unix user for each Agor user.
+# The daemon's user/group/password operations all route through a single
+# root-owned wrapper script that validates verbs and arguments internally.
+#
+# This replaces five previous wildcard NOPASSWD rules that were each a
+# root-shell path under sudo (any of them would have let a compromised
+# daemon smuggle flags into useradd/usermod/gpasswd/chpasswd/find):
+#
+#   # Superseded by /usr/local/sbin/agor-user-admin — see
+#   # docker/sudoers/agor-user-admin for the validated verb interface.
+#   agor ALL=(ALL) NOPASSWD: /usr/sbin/useradd *
+#   agor ALL=(ALL) NOPASSWD: /usr/sbin/userdel *
+#   agor ALL=(ALL) NOPASSWD: /usr/sbin/usermod *
+#   agor ALL=(ALL) NOPASSWD: /usr/sbin/chpasswd
+#   agor ALL=(ALL) NOPASSWD: /usr/sbin/groupadd *
+#   agor ALL=(ALL) NOPASSWD: /usr/sbin/groupdel *
+#   agor ALL=(ALL) NOPASSWD: /usr/sbin/gpasswd *
+#   agor ALL=(ALL) NOPASSWD: /usr/bin/find *   (see below — also collapsed)
+#
+# Verbs supported by the wrapper (see script for validators + audit log):
+#   add-user / delete-user [--remove-home] / lock-user / unlock-user
+#   add-group / delete-group / add-to-group / remove-from-group
+#   set-password (password on stdin)
+#   setgid-tree / list-symlinks / prune-all-symlinks / prune-broken-symlinks
 
-agor ALL=(ALL) NOPASSWD: /usr/sbin/useradd *
-agor ALL=(ALL) NOPASSWD: /usr/sbin/userdel *
-agor ALL=(ALL) NOPASSWD: /usr/sbin/usermod *
-agor ALL=(ALL) NOPASSWD: /usr/sbin/chpasswd
-
-# ============================================================================
-# GROUP MANAGEMENT - Worktree Isolation
-# ============================================================================
-# Each worktree gets a Unix group (agor_wt_<short-id>).
-# Users with 'all' permission are added to the group.
-# Filesystem permissions on the worktree directory enforce access.
-
-agor ALL=(ALL) NOPASSWD: /usr/sbin/groupadd *
-agor ALL=(ALL) NOPASSWD: /usr/sbin/groupdel *
-agor ALL=(ALL) NOPASSWD: /usr/sbin/gpasswd *
+agor ALL=(root) NOPASSWD: /usr/local/sbin/agor-user-admin
 
 # ============================================================================
 # FILESYSTEM OPERATIONS - Worktree Permissions (SCOPED TO AGOR PATHS)
@@ -124,14 +131,13 @@ agor ALL=(ALL) NOPASSWD: /usr/bin/tee /var/agor/*
 # QUERY AND TRAVERSAL COMMANDS
 # ============================================================================
 # id, getent, readlink, test: read-only state checks, no security risk.
-# find: used with -exec chmod g+s for setgid propagation. Note that
-# find with -exec can run arbitrary commands as root — command construction
-# is controlled in our codebase (group-manager.ts), not from user input.
+# `find` is NOT granted here — all legitimate find uses (setgid propagation
+# and symlink cleanup) now route through agor-user-admin's setgid-tree /
+# list-symlinks / prune-all-symlinks / prune-broken-symlinks verbs.
 
 agor ALL=(ALL) NOPASSWD: /usr/bin/id *
 agor ALL=(ALL) NOPASSWD: /usr/bin/getent *
 agor ALL=(ALL) NOPASSWD: /usr/bin/readlink *
-agor ALL=(ALL) NOPASSWD: /usr/bin/find *
 agor ALL=(ALL) NOPASSWD: /usr/bin/test *
 
 

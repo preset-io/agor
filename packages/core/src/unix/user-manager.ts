@@ -29,6 +29,31 @@ export const AGOR_DEFAULT_SHELL = '/bin/bash';
 export const AGOR_WORKTREES_DIR = 'agor/worktrees';
 
 /**
+ * Absolute path to the root-owned wrapper script that mediates every
+ * user/group/password/find operation the daemon performs via sudo.
+ *
+ * On hardened installations the sudoers file grants NOPASSWD on exactly
+ * this one path — individual useradd/userdel/usermod/gpasswd/groupadd/
+ * groupdel/chpasswd/find wildcards are no longer in the sudoers policy.
+ *
+ * @see docker/sudoers/agor-user-admin
+ * @see docker/sudoers/agor-daemon.sudoers
+ */
+export const AGOR_USER_ADMIN = '/usr/local/sbin/agor-user-admin';
+
+/**
+ * Single-quote a shell argument.
+ *
+ * All usernames/groupnames reaching these builders have already passed
+ * {@link isValidUnixUsername} (no shell metacharacters), but we quote anyway
+ * so the wrapper invocations remain robust if a future caller passes a less
+ * constrained value. The wrapper itself re-validates every argument.
+ */
+function shq(arg: string): string {
+  return `'${arg.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
  * Generate a default Unix username for an Agor user
  *
  * Format: agor_<short-id>
@@ -130,9 +155,13 @@ export function getUserWorktreesDir(username: string, homeBase: string = AGOR_HO
 }
 
 /**
- * Unix user management commands (to be executed via sudo)
+ * Unix user management commands (to be executed via sudo).
  *
- * These are shell command strings for privileged user operations.
+ * These are shell command strings. Every privileged operation routes through
+ * the root-owned {@link AGOR_USER_ADMIN} wrapper, which validates verbs and
+ * arguments before invoking the underlying tool. The sudoers file grants
+ * NOPASSWD on that single wrapper path — not on useradd/usermod/gpasswd/
+ * chpasswd/find directly. See docker/sudoers/agor-user-admin.
  */
 export const UnixUserCommands = {
   /**
@@ -144,39 +173,17 @@ export const UnixUserCommands = {
   userExists: (username: string) => `id "${username}" > /dev/null 2>&1`,
 
   /**
-   * Create a new Unix user with home directory
+   * Create a new Unix user with home directory.
+   *
+   * Fixed shape: `useradd -m -s /bin/bash -- <user>`. The system default
+   * HOME base (/home on Debian) is used; a custom home base is intentionally
+   * not exposed here because no production caller needs one and widening the
+   * wrapper's attack surface is not worth it.
    *
    * @param username - Unix username to create
-   * @param shell - Login shell (default: /bin/bash)
-   * @param homeBase - Base directory for home (default: /home)
    * @returns Command string
    */
-  createUser: (
-    username: string,
-    shell: string = AGOR_DEFAULT_SHELL,
-    homeBase: string = AGOR_HOME_BASE
-  ) => `sudo -n useradd -m -d "${homeBase}/${username}" -s "${shell}" "${username}"`,
-
-  /**
-   * Create user with specific UID/GID
-   *
-   * @param username - Unix username
-   * @param uid - User ID
-   * @param gid - Group ID (optional, defaults to uid)
-   * @param shell - Login shell
-   * @param homeBase - Home directory base
-   * @returns Command string
-   */
-  createUserWithId: (
-    username: string,
-    uid: number,
-    gid?: number,
-    shell: string = AGOR_DEFAULT_SHELL,
-    homeBase: string = AGOR_HOME_BASE
-  ) => {
-    const gidArg = gid !== undefined ? `-g ${gid}` : '';
-    return `sudo -n useradd -m -d "${homeBase}/${username}" -s "${shell}" -u ${uid} ${gidArg} "${username}"`;
-  },
+  createUser: (username: string) => `sudo -n ${AGOR_USER_ADMIN} add-user ${shq(username)}`,
 
   /**
    * Delete a Unix user (keeps home directory)
@@ -184,45 +191,54 @@ export const UnixUserCommands = {
    * @param username - Unix username to delete
    * @returns Command string
    */
-  deleteUser: (username: string) => `sudo -n userdel "${username}"`,
+  deleteUser: (username: string) => `sudo -n ${AGOR_USER_ADMIN} delete-user ${shq(username)}`,
 
   /**
-   * Get command array for setting Unix user password via chpasswd
+   * Get command array for setting a Unix user's password via the wrapper.
    *
-   * SECURITY: This returns a command array to be used with execWithInput().
-   * The password MUST be passed via stdin (not command-line arguments) to avoid:
-   * 1. Command injection vulnerabilities (shell metacharacters in password)
-   * 2. Password exposure in process listings (ps aux)
-   * 3. Password exposure in shell history
+   * SECURITY: Used with execWithInput(). The password MUST be passed via
+   * stdin (not argv) to avoid:
+   *  1. Command injection (shell metacharacters in password)
+   *  2. Exposure in process listings (ps aux)
+   *  3. Exposure in shell history
    *
-   * Format for stdin: "username:password\n"
+   * The wrapper reads the password from stdin (no newline required), runs
+   * `chpasswd` internally as `<username>:<password>`, and only supports
+   * usernames that pass its own validator.
    *
-   * @returns Command array for execWithInput: ['chpasswd']
+   * @param username - Unix username whose password to set
+   * @returns Command array for execWithInput
    *
    * @example
    * ```ts
-   * const cmd = UnixUserCommands.setPasswordCommand();
-   * await executor.execWithInput(cmd, { input: `${username}:${password}\n` });
+   * const cmd = UnixUserCommands.setPasswordCommand(user.unix_username);
+   * const input = UnixUserCommands.formatPasswordInput(user.unix_username, password);
+   * await executor.execWithInput(cmd, { input });
    * ```
    */
-  setPasswordCommand: (): string[] => {
-    return ['sudo', '-n', '/usr/sbin/chpasswd'];
-  },
+  setPasswordCommand: (username: string): string[] => [
+    'sudo',
+    '-n',
+    AGOR_USER_ADMIN,
+    'set-password',
+    username,
+  ],
 
   /**
-   * Format stdin input for chpasswd command
+   * Format stdin input for the set-password verb.
    *
-   * Validates inputs via {@link assertChpasswdInputSafe} to prevent a caller
-   * from injecting extra `username:password` records into chpasswd's stdin.
+   * Validates inputs via {@link assertChpasswdInputSafe} for defense-in-depth;
+   * the wrapper re-validates too.
    *
    * @param username - Unix username
    * @param password - Plaintext password to set
-   * @returns Formatted stdin input: "username:password\n"
+   * @returns The raw password (no username prefix, no trailing newline).
+   *          The wrapper composes the `user:password` record internally.
    * @throws Error if username or password contain chpasswd-unsafe characters
    */
   formatPasswordInput: (username: string, password: string): string => {
     assertChpasswdInputSafe(username, password);
-    return `${username}:${password}\n`;
+    return password;
   },
 
   /**
@@ -231,7 +247,8 @@ export const UnixUserCommands = {
    * @param username - Unix username to delete
    * @returns Command string
    */
-  deleteUserWithHome: (username: string) => `sudo -n userdel -r "${username}"`,
+  deleteUserWithHome: (username: string) =>
+    `sudo -n ${AGOR_USER_ADMIN} delete-user --remove-home ${shq(username)}`,
 
   /**
    * Lock a Unix user account (disable login)
@@ -239,7 +256,7 @@ export const UnixUserCommands = {
    * @param username - Unix username
    * @returns Command string
    */
-  lockUser: (username: string) => `sudo -n usermod -L "${username}"`,
+  lockUser: (username: string) => `sudo -n ${AGOR_USER_ADMIN} lock-user ${shq(username)}`,
 
   /**
    * Unlock a Unix user account
@@ -247,7 +264,7 @@ export const UnixUserCommands = {
    * @param username - Unix username
    * @returns Command string
    */
-  unlockUser: (username: string) => `sudo -n usermod -U "${username}"`,
+  unlockUser: (username: string) => `sudo -n ${AGOR_USER_ADMIN} unlock-user ${shq(username)}`,
 
   /**
    * Get user's UID

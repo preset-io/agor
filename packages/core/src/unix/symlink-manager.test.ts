@@ -114,9 +114,9 @@ describe('symlink-manager', () => {
     });
 
     describe('listSymlinks', () => {
-      it('generates find command for symlinks', () => {
+      it('routes through agor-user-admin wrapper', () => {
         expect(SymlinkCommands.listSymlinks('/home/alice/agor/worktrees')).toBe(
-          `find "/home/alice/agor/worktrees" -maxdepth 1 -type l -printf '%f\\n'`
+          "/usr/local/sbin/agor-user-admin list-symlinks '/home/alice/agor/worktrees'"
         );
       });
     });
@@ -151,18 +151,18 @@ describe('symlink-manager', () => {
     });
 
     describe('removeAllSymlinks', () => {
-      it('generates find -delete command', () => {
+      it('routes through agor-user-admin wrapper', () => {
         expect(SymlinkCommands.removeAllSymlinks('/home/alice/agor/worktrees')).toBe(
-          'find "/home/alice/agor/worktrees" -maxdepth 1 -type l -delete'
+          "/usr/local/sbin/agor-user-admin prune-all-symlinks '/home/alice/agor/worktrees'"
         );
       });
     });
 
     describe('removeBrokenSymlinks', () => {
-      it('generates find command for broken symlinks', () => {
+      it('routes through agor-user-admin wrapper', () => {
         const cmd = SymlinkCommands.removeBrokenSymlinks('/home/alice/agor/worktrees');
         expect(cmd).toBe(
-          `find "/home/alice/agor/worktrees" -maxdepth 1 -type l ! -exec test -e {} \\; -delete`
+          "/usr/local/sbin/agor-user-admin prune-broken-symlinks '/home/alice/agor/worktrees'"
         );
       });
     });

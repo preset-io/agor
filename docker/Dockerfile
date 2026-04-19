@@ -88,6 +88,15 @@ RUN useradd -m -s /bin/bash agor_executor && \
     mkdir -p /home/agor_executor/.agor && \
     chown -R agor_executor:agor_executor /home/agor_executor
 
+# Install the agor-user-admin wrapper. This is the single sudoers entry point
+# for user/group/password/find operations on installations that opt into the
+# hardened sudoers file (docker/sudoers/agor-daemon.sudoers). It is installed
+# in every image so the restrictive sudoers config can be enabled at any time
+# without rebuilding.
+COPY docker/sudoers/agor-user-admin /usr/local/sbin/agor-user-admin
+RUN chown root:root /usr/local/sbin/agor-user-admin && \
+    chmod 0755 /usr/local/sbin/agor-user-admin
+
 # Copy Zellij config for both users
 COPY docker/zellij-config.kdl /tmp/zellij-config.kdl
 RUN mkdir -p /home/agor/.config/zellij && \

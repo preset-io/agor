@@ -211,50 +211,66 @@ describe('user-manager', () => {
     });
 
     describe('createUser', () => {
-      it('generates useradd command with defaults', () => {
-        const cmd = UnixUserCommands.createUser('alice');
-        expect(cmd).toBe('sudo -n useradd -m -d "/home/alice" -s "/bin/bash" "alice"');
-      });
-
-      it('uses custom shell and home base', () => {
-        const cmd = UnixUserCommands.createUser('alice', '/bin/zsh', '/users');
-        expect(cmd).toBe('sudo -n useradd -m -d "/users/alice" -s "/bin/zsh" "alice"');
-      });
-    });
-
-    describe('createUserWithId', () => {
-      it('generates useradd with UID', () => {
-        const cmd = UnixUserCommands.createUserWithId('alice', 1001);
-        expect(cmd).toBe('sudo -n useradd -m -d "/home/alice" -s "/bin/bash" -u 1001  "alice"');
-      });
-
-      it('includes GID when provided', () => {
-        const cmd = UnixUserCommands.createUserWithId('alice', 1001, 1001);
-        expect(cmd).toBe(
-          'sudo -n useradd -m -d "/home/alice" -s "/bin/bash" -u 1001 -g 1001 "alice"'
+      it('routes through agor-user-admin add-user', () => {
+        // Every privileged user op goes through /usr/local/sbin/agor-user-admin
+        // under the hardened sudoers. Custom shell/home-base args are no
+        // longer exposed: they were unused in production and widened the
+        // wrapper's attack surface.
+        expect(UnixUserCommands.createUser('alice')).toBe(
+          "sudo -n /usr/local/sbin/agor-user-admin add-user 'alice'"
         );
       });
     });
 
     describe('deleteUser', () => {
-      it('generates userdel command (keep home)', () => {
-        expect(UnixUserCommands.deleteUser('alice')).toBe('sudo -n userdel "alice"');
+      it('routes through agor-user-admin delete-user', () => {
+        expect(UnixUserCommands.deleteUser('alice')).toBe(
+          "sudo -n /usr/local/sbin/agor-user-admin delete-user 'alice'"
+        );
       });
     });
 
     describe('deleteUserWithHome', () => {
-      it('generates userdel -r command', () => {
-        expect(UnixUserCommands.deleteUserWithHome('alice')).toBe('sudo -n userdel -r "alice"');
+      it('routes through agor-user-admin delete-user --remove-home', () => {
+        expect(UnixUserCommands.deleteUserWithHome('alice')).toBe(
+          "sudo -n /usr/local/sbin/agor-user-admin delete-user --remove-home 'alice'"
+        );
       });
     });
 
     describe('lockUser / unlockUser', () => {
-      it('generates lock command', () => {
-        expect(UnixUserCommands.lockUser('alice')).toBe('sudo -n usermod -L "alice"');
+      it('routes lock through agor-user-admin lock-user', () => {
+        expect(UnixUserCommands.lockUser('alice')).toBe(
+          "sudo -n /usr/local/sbin/agor-user-admin lock-user 'alice'"
+        );
       });
 
-      it('generates unlock command', () => {
-        expect(UnixUserCommands.unlockUser('alice')).toBe('sudo -n usermod -U "alice"');
+      it('routes unlock through agor-user-admin unlock-user', () => {
+        expect(UnixUserCommands.unlockUser('alice')).toBe(
+          "sudo -n /usr/local/sbin/agor-user-admin unlock-user 'alice'"
+        );
+      });
+    });
+
+    describe('setPasswordCommand / formatPasswordInput', () => {
+      it('returns wrapper argv with username and stdin-only password', () => {
+        expect(UnixUserCommands.setPasswordCommand('alice')).toEqual([
+          'sudo',
+          '-n',
+          '/usr/local/sbin/agor-user-admin',
+          'set-password',
+          'alice',
+        ]);
+        // The wrapper composes the `user:password` record itself; callers
+        // pipe only the raw password.
+        expect(UnixUserCommands.formatPasswordInput('alice', 'hunter2')).toBe('hunter2');
+      });
+
+      it('rejects chpasswd-unsafe password via formatPasswordInput', () => {
+        expect(() => UnixUserCommands.formatPasswordInput('alice', 'has\nnewline')).toThrow(
+          /newline/
+        );
+        expect(() => UnixUserCommands.formatPasswordInput('al:ice', 'ok')).toThrow(/":"/);
       });
     });
 
