@@ -1,6 +1,6 @@
 // src/types/repo.ts
 import type { SessionID, UUID } from './id';
-import type { RepoEnvironmentConfig } from './worktree';
+import type { RepoEnvironment, RepoEnvironmentConfigV1 } from './worktree';
 
 /**
  * URL-friendly identifier for repositories and worktrees
@@ -91,12 +91,30 @@ export interface Repo {
   default_branch?: string;
 
   /**
-   * Environment configuration template (optional)
+   * Environment configuration (v2) — named variants.
    *
    * Defines how to run environments for all worktrees in this repo.
-   * Each worktree creates an instance with specific variable values.
+   * Contains a default variant name and a map of named variants; worktrees
+   * render one variant into their own command fields at creation time and
+   * can re-render against a different variant via the admin-only flow.
+   *
+   * Null when the repo has no environment config. Legacy v1 configs are
+   * wrapped as `variants.default` on read.
+   *
+   * This is the source of truth for backend logic. `environment_config`
+   * (below) is a legacy view kept in sync for UI back-compat.
    */
-  environment_config?: RepoEnvironmentConfig;
+  environment?: RepoEnvironment;
+
+  /**
+   * Legacy (v1) environment configuration view.
+   *
+   * @deprecated Backend code should read/write {@link environment} (v2).
+   * This field is kept populated from `environment.variants[default]` for
+   * existing UI that reads `environment_config.up_command` etc. New UI
+   * should migrate to reading variants directly.
+   */
+  environment_config?: RepoEnvironmentConfigV1;
 
   /**
    * Unix group for .git/ directory access

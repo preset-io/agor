@@ -183,6 +183,13 @@
       "when": 1776500000000,
       "tag": "0025_add_session_env_selections",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1776600000000,
+      "tag": "0026_env_command_variants",
+      "breakpoints": true
     }
   ]
 }

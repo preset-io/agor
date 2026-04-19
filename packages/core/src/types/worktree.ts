@@ -54,6 +54,19 @@ export interface Worktree {
   /** Logs command - initialized from repo template, then user-editable (e.g., "docker logs agor-daemon") */
   logs_command?: string;
 
+  /**
+   * Name of the environment variant this worktree is currently rendered from.
+   *
+   * References a key under `repo.environment.variants` at the time the
+   * worktree's command fields were last rendered. Used by the UI to show
+   * which variant is "active" and by the admin-only re-render flow to know
+   * the last-rendered variant.
+   *
+   * null/undefined means "no variant tracked" (pre-v2 / legacy worktrees)
+   * or that the repo has no environment config.
+   */
+  environment_variant?: string;
+
   /** Timestamps */
   created_at: string;
   updated_at: string;
@@ -574,10 +587,11 @@ export interface WorktreeEnvironmentInstance {
 }
 
 /**
- * Repository environment configuration template
+ * Legacy (v1) repository environment configuration — single flat command set.
  *
- * Defines how to run environments for all worktrees in a repo.
- * Uses Handlebars templating with scoped entity references.
+ * @deprecated Use {@link RepoEnvironment} (v2) with named variants. Retained
+ * for migration code that wraps v1 configs as `variants.default` inside
+ * {@link RepoEnvironment}.
  *
  * Template context (always available):
  * - {{worktree.unique_id}} - Auto-assigned unique number (1, 2, 3, ...)
@@ -587,7 +601,7 @@ export interface WorktreeEnvironmentInstance {
  * - {{custom.*}} - Any custom context from worktree.custom_context
  * - {{add a b}}, {{sub a b}}, {{mul a b}} - Math helpers
  */
-export interface RepoEnvironmentConfig {
+export interface RepoEnvironmentConfigV1 {
   /**
    * Command to start environment (Handlebars template)
    *
@@ -655,6 +669,117 @@ export interface RepoEnvironmentConfig {
    */
   logs_command?: string;
 }
+
+/**
+ * A single named environment variant.
+ *
+ * Variants describe one way of running a repository's environment
+ * (e.g. "dev" vs "e2e" vs "db-only"). Every variant must define
+ * `start` and `stop`; other fields are optional.
+ *
+ * Variants may declare a single-level `extends` referring to another variant
+ * in the same {@link RepoEnvironment}. The parser rejects multi-level chains,
+ * missing targets, and self-extends.
+ */
+export interface RepoEnvironmentVariant {
+  /**
+   * Optional human-readable description shown in UI pickers.
+   */
+  description?: string;
+
+  /**
+   * Name of another variant in the same repo environment whose fields are
+   * inherited, then overridden field-by-field by this variant.
+   *
+   * Single-level only: the target variant MUST NOT itself declare `extends`.
+   */
+  extends?: string;
+
+  /**
+   * Command to start the environment (Handlebars template).
+   *
+   * Required on a resolved variant, but may be omitted on the raw variant
+   * declaration when `extends` supplies it. The parser validates that the
+   * resolved variant has both `start` and `stop`.
+   */
+  start?: string;
+
+  /**
+   * Command to stop the environment (Handlebars template).
+   *
+   * Required on a resolved variant, but may be omitted on the raw variant
+   * declaration when `extends` supplies it. See {@link start}.
+   */
+  stop?: string;
+
+  /**
+   * Destructive reset command (Handlebars template).
+   * Requires user confirmation before execution.
+   */
+  nuke?: string;
+
+  /**
+   * Command to fetch recent logs (Handlebars template).
+   * Should return quickly — output is truncated for safety.
+   */
+  logs?: string;
+
+  /**
+   * HTTP health check URL template (Handlebars template).
+   */
+  health?: string;
+
+  /**
+   * App URL template (Handlebars template).
+   */
+  app?: string;
+}
+
+/**
+ * Repository environment configuration (v2).
+ *
+ * Replaces the flat v1 {@link RepoEnvironmentConfigV1} with a set of
+ * named variants. `default` points at the variant used when a worktree
+ * is created or when no variant is explicitly chosen.
+ *
+ * `template_overrides` is a deployment-local, DB-only deep tree that is
+ * merged into the Handlebars render context after built-in defaults but
+ * before `custom.*`. It is intentionally NEVER round-tripped through
+ * `.agor.yml` import/export (stripped on export, rejected on import).
+ */
+export interface RepoEnvironment {
+  /** Schema version discriminator. Always 2. */
+  version: 2;
+
+  /**
+   * Name of the default variant (must be a key in {@link variants}).
+   */
+  default: string;
+
+  /**
+   * Named variants keyed by variant name.
+   *
+   * Must include the {@link default} key.
+   */
+  variants: Record<string, RepoEnvironmentVariant>;
+
+  /**
+   * Deployment-local deep overrides merged into the template render
+   * context after built-in defaults but before `custom.*`.
+   *
+   * DB-only — never exported to `.agor.yml`. Rejected on import.
+   */
+  template_overrides?: Record<string, unknown>;
+}
+
+/**
+ * Back-compat alias: older code may still import `RepoEnvironmentConfig`.
+ * New code should use {@link RepoEnvironment} (v2) directly.
+ *
+ * @deprecated Use {@link RepoEnvironment} or {@link RepoEnvironmentConfigV1}
+ * explicitly depending on whether you need v2 or the legacy flat shape.
+ */
+export type RepoEnvironmentConfig = RepoEnvironmentConfigV1;
 
 // ===== Assistants =====
 

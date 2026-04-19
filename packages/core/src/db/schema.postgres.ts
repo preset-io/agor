@@ -433,13 +433,42 @@ export const repos = pgTable(
         remote_url?: string;
         local_path: string; // Absolute path to base repository
         default_branch?: string;
+        // v2 environment config — source of truth. Named variants + optional
+        // deployment-local template_overrides. See RepoEnvironment in
+        // packages/core/src/types/worktree.ts.
+        environment?: {
+          version: 2;
+          default: string;
+          variants: Record<
+            string,
+            {
+              description?: string;
+              extends?: string;
+              // start/stop are optional on the raw variant (may be inherited
+              // via `extends`); the parser validates that the resolved
+              // variant has both.
+              start?: string;
+              stop?: string;
+              nuke?: string;
+              logs?: string;
+              health?: string;
+              app?: string;
+            }
+          >;
+          template_overrides?: Record<string, unknown>;
+        };
+        // Legacy v1 view kept in sync for UI back-compat.
+        // Derived from environment.variants[default] on write.
         environment_config?: {
-          up_command: string; // Handlebars template
-          down_command: string; // Handlebars template
+          up_command: string;
+          down_command: string;
+          nuke_command?: string;
           health_check?: {
             type: 'http' | 'tcp' | 'process';
-            url_template?: string; // Handlebars template
+            url_template?: string;
           };
+          app_url_template?: string;
+          logs_command?: string;
         };
       }>()
       .notNull(),
@@ -483,6 +512,9 @@ export const worktrees = pgTable(
     health_check_url: text('health_check_url'), // Health check URL (initialized from repo's health_check.url_template)
     app_url: text('app_url'), // Application URL (initialized from repo's app_url_template)
     logs_command: text('logs_command'), // Logs command (initialized from repo's logs_command template)
+    // Name of the environment variant currently rendered into the command fields above.
+    // References a key under repo.environment.variants. Null for pre-v2 worktrees.
+    environment_variant: text('environment_variant'),
 
     // Board relationship (nullable - worktrees can exist without boards)
     board_id: varchar('board_id', { length: 36 }).references(() => boards.board_id, {
