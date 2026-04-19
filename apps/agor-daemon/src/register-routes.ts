@@ -2888,43 +2888,54 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     | undefined;
 
   if (mcpTokensServiceInstance) {
-    app.use('/mcp-tokens/:jti/revoke', {
-      async create(data: unknown, params: RouteParams & { route?: { jti?: string } }) {
-        const jti = params.route?.jti;
-        if (!jti || typeof jti !== 'string') {
-          throw new BadRequest('Revocation requires a jti path parameter');
-        }
-        const body = (data ?? {}) as {
-          reason?: import('./mcp/tokens.js').MCPTokenRevocationReason;
-          sessionId?: SessionID;
-        };
-        const user = params.user as User | undefined;
-        const revokedBy = user?.user_id;
-        return mcpTokensServiceInstance.revoke(jti, {
-          reason: body.reason ?? 'manual',
-          sessionId: body.sessionId,
-          revokedBy,
-        });
-      },
-    });
+    const { isMCPTokenRevocationReason } = await import('./mcp/tokens.js');
 
-    app.service('/mcp-tokens/:jti/revoke').hooks({
-      before: {
-        create: [requireAuth, requireMinimumRole(ROLES.ADMIN, 'revoke MCP tokens')],
+    registerAuthenticatedRoute(
+      app,
+      '/mcp-tokens/:jti/revoke',
+      {
+        async create(data: unknown, params: RouteParams & { route?: { jti?: string } }) {
+          const jti = params.route?.jti;
+          if (!jti || typeof jti !== 'string') {
+            throw new BadRequest('Revocation requires a jti path parameter');
+          }
+          const body = (data ?? {}) as {
+            reason?: unknown;
+            sessionId?: SessionID;
+          };
+          let reason: import('./mcp/tokens.js').MCPTokenRevocationReason = 'manual';
+          if (body.reason !== undefined) {
+            if (!isMCPTokenRevocationReason(body.reason)) {
+              throw new BadRequest(
+                `Invalid reason: must be one of manual, rotation, session_archived, session_completed, user_request`
+              );
+            }
+            reason = body.reason;
+          }
+          const user = params.user as User | undefined;
+          const revokedBy = user?.user_id;
+          return mcpTokensServiceInstance.revoke(jti, {
+            reason,
+            sessionId: body.sessionId,
+            revokedBy,
+          });
+        },
       },
-    });
+      { create: { role: ROLES.ADMIN, action: 'revoke MCP tokens' } },
+      requireAuth
+    );
 
-    app.use('/mcp-tokens', {
-      async find() {
-        return mcpTokensServiceInstance.list();
+    registerAuthenticatedRoute(
+      app,
+      '/mcp-tokens',
+      {
+        async find() {
+          return mcpTokensServiceInstance.list();
+        },
       },
-    });
-
-    app.service('/mcp-tokens').hooks({
-      before: {
-        find: [requireAuth, requireMinimumRole(ROLES.ADMIN, 'list MCP token revocations')],
-      },
-    });
+      { find: { role: ROLES.ADMIN, action: 'list MCP token revocations' } },
+      requireAuth
+    );
   }
 
   // ============================================================================

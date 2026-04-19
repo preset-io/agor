@@ -165,6 +165,14 @@ describe('generateSessionToken', () => {
     expect(d2.jti).toBeDefined();
     expect(d1.jti).not.toBe(d2.jti);
   });
+
+  dbTest('throws when the session does not exist', async ({ db }) => {
+    await initMcpTokens({ db });
+    const missingSessionId = generateId() as SessionID;
+    await expect(generateSessionToken(makeApp(), missingSessionId, 'u1' as UserID)).rejects.toThrow(
+      /not found/
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -256,6 +264,30 @@ describe('validateSessionToken', () => {
     const result = await validateSessionToken(makeApp(), token);
     expect(result).toBeNull();
   });
+
+  dbTest('rejects a post-rollout token with the wrong issuer', async ({ db }) => {
+    await initMcpTokens({ db });
+    const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
+
+    // Hand-mint a token that has every other claim right but a bogus `iss`.
+    const nowSec = Math.floor(Date.now() / 1000);
+    const forged = jwt.sign(
+      {
+        sub: sessionId,
+        uid: 'u1',
+        aud: MCP_TOKEN_AUDIENCE,
+        iss: 'not-agor',
+        iat: nowSec,
+        exp: nowSec + 60,
+        jti: generateId(),
+        gen: 0,
+      },
+      JWT_SECRET,
+      { algorithm: 'HS256' }
+    );
+
+    expect(await validateSessionToken(makeApp(), forged)).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -281,7 +313,7 @@ describe('legacy token grace window', () => {
   }
 
   dbTest('accepts a legacy token during the grace window', async ({ db }) => {
-    let nowMs = 1_700_000_000_000;
+    const nowMs = 1_700_000_000_000;
     await initMcpTokens({
       db,
       acceptLegacyGraceMs: 60_000,
@@ -319,6 +351,36 @@ describe('legacy token grace window', () => {
 
     const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
     const legacy = mintLegacyToken(sessionId, 'u1' as UserID);
+
+    expect(await validateSessionToken(makeApp(), legacy)).toBeNull();
+  });
+
+  dbTest(
+    'rejects a legacy token after revokeAllForSession bumps gen, even during grace',
+    async ({ db }) => {
+      // Regression: the legacy-token path used to early-return during grace
+      // without checking session existence or gen. That meant a legacy token
+      // survived a session-wide revoke. Now it must be rejected.
+      await initMcpTokens({ db, acceptLegacyGraceMs: 60 * 60 * 1000 });
+      const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
+      const legacy = mintLegacyToken(sessionId, 'u1' as UserID);
+
+      // Sanity: accepted while gen is still 0.
+      expect(await validateSessionToken(makeApp(), legacy)).not.toBeNull();
+
+      await revokeAllForSession(db, sessionId, 'session_archived', 'admin-1');
+
+      // Same legacy token must now be rejected because the session's gen > 0.
+      expect(await validateSessionToken(makeApp(), legacy)).toBeNull();
+    }
+  );
+
+  dbTest('rejects a legacy token for a deleted session, even during grace', async ({ db }) => {
+    await initMcpTokens({ db, acceptLegacyGraceMs: 60 * 60 * 1000 });
+    const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
+    const legacy = mintLegacyToken(sessionId, 'u1' as UserID);
+
+    await deleteFrom(db, sessions).where(eq(sessions.session_id, sessionId)).run();
 
     expect(await validateSessionToken(makeApp(), legacy)).toBeNull();
   });

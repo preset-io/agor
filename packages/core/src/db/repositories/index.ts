@@ -11,6 +11,7 @@ export * from './card-types';
 export * from './cards';
 export * from './gateway-channels';
 export * from './mcp-servers';
+export * from './mcp-token-revocations';
 export * from './messages';
 export * from './repos';
 export * from './serialized-sessions';

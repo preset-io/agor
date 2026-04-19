@@ -350,6 +350,9 @@ function wrapQuery(query: DrizzleQuery, db: Database): any {
     innerJoin: (...args: unknown[]) => wrapQuery((query as any).innerJoin(...args), db),
     // biome-ignore lint/suspicious/noExplicitAny: These methods accept varying argument types from Drizzle
     leftJoin: (...args: unknown[]) => wrapQuery((query as any).leftJoin(...args), db),
+    onConflictDoNothing: (...args: unknown[]) =>
+      // biome-ignore lint/suspicious/noExplicitAny: Drizzle exposes onConflictDoNothing on both dialects after .values()
+      wrapQuery((query as any).onConflictDoNothing(...args), db),
   };
 }
 

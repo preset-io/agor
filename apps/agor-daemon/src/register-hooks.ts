@@ -1594,9 +1594,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             userId as import('@agor/core/types').UserID
           );
 
-          console.log(
-            `🔄 Regenerated MCP token for session ${session.session_id.substring(0, 8)}: ${mcpToken.substring(0, 16)}...`
-          );
+          console.log(`🔄 Regenerated MCP token for session ${session.session_id.substring(0, 8)}`);
 
           // Add token to result (not stored in DB, regenerated on-demand with
           // a fresh `jti` and `exp`)
@@ -1630,9 +1628,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             userId as import('@agor/core/types').UserID
           );
 
-          console.log(
-            `🎫 MCP token for session ${session.session_id.substring(0, 8)}: ${mcpToken.substring(0, 16)}...`
-          );
+          console.log(`🎫 MCP token issued for session ${session.session_id.substring(0, 8)}`);
 
           // Note: We no longer auto-attach global MCP servers to sessions.
           // Instead, getMcpServersForSession() will automatically provide ALL

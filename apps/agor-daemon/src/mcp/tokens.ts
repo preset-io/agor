@@ -32,34 +32,33 @@
 
 import {
   type Database,
-  deleteFrom,
-  eq,
   generateId,
-  isSQLiteDatabase,
-  lte,
-  mcpTokenRevocations,
-  select,
-  sessions,
-  sql,
-  update,
+  McpTokenRevocationRepository,
+  SessionRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { SessionID, UserID } from '@agor/core/types';
+import {
+  MCP_TOKEN_AUDIENCE,
+  MCP_TOKEN_ISSUER,
+  type MCPTokenRevocationReason,
+  type SessionID,
+  type UserID,
+} from '@agor/core/types';
 import jwt from 'jsonwebtoken';
+
+// Re-export the core constants + guard so daemon callers keep importing from
+// `./mcp/tokens.js` without reaching into `@agor/core/types` directly.
+export {
+  isMCPTokenRevocationReason,
+  MCP_TOKEN_AUDIENCE,
+  MCP_TOKEN_ISSUER,
+  MCP_TOKEN_REVOCATION_REASONS,
+  type MCPTokenRevocationReason,
+} from '@agor/core/types';
 
 // ============================================================================
 // Types
 // ============================================================================
-
-export const MCP_TOKEN_AUDIENCE = 'agor:mcp:internal';
-export const MCP_TOKEN_ISSUER = 'agor';
-
-export type MCPTokenRevocationReason =
-  | 'manual'
-  | 'rotation'
-  | 'session_archived'
-  | 'session_completed'
-  | 'user_request';
 
 interface McpTokenPayload {
   sub: SessionID;
@@ -104,6 +103,8 @@ export interface McpTokenInitOptions {
 
 interface ModuleState {
   db: Database;
+  sessionRepo: SessionRepository;
+  revocationRepo: McpTokenRevocationRepository;
   expirationMs: number;
   acceptLegacyGraceMs: number;
   legacyGraceUntilMs: number;
@@ -141,16 +142,13 @@ export async function initMcpTokens(options: McpTokenInitOptions): Promise<void>
   const startupMs = now();
   const legacyGraceUntilMs = acceptLegacyGraceMs > 0 ? startupMs + acceptLegacyGraceMs : 0;
 
-  // Seed revocation cache with non-expired rows. We read all rows and filter in
-  // JS to keep the query dialect-neutral; the ledger is small by design.
-  const rows = (await select(options.db).from(mcpTokenRevocations).all()) as Array<{
-    jti: string;
-    expires_at: number;
-  }>;
-  const revokedJtis = new Set<string>();
-  for (const r of rows) {
-    if (r.expires_at > startupMs) revokedJtis.add(r.jti);
-  }
+  const sessionRepo = new SessionRepository(options.db);
+  const revocationRepo = new McpTokenRevocationRepository(options.db);
+
+  // Seed revocation cache with non-expired rows — SQL-filtered via the
+  // `expires_at` index so we never materialize expired rows we're about to drop.
+  const jtis = await revocationRepo.listActiveJtis(startupMs);
+  const revokedJtis = new Set<string>(jtis);
 
   if (_state?.cleanupInterval) {
     clearInterval(_state.cleanupInterval);
@@ -158,6 +156,8 @@ export async function initMcpTokens(options: McpTokenInitOptions): Promise<void>
 
   _state = {
     db: options.db,
+    sessionRepo,
+    revocationRepo,
     expirationMs,
     acceptLegacyGraceMs,
     legacyGraceUntilMs,
@@ -221,14 +221,16 @@ export async function generateSessionToken(
     throw new Error('MCP token generation failed: JWT secret not configured in app settings');
   }
 
-  // Fetch current generation for this session. If the session vanished (race
-  // with delete), fall back to gen=0 — the token is useless either way.
-  const row = (await select(s.db)
-    .from(sessions)
-    .where(eq(sessions.session_id, sessionId))
-    .one()) as { mcp_token_generation?: number } | null;
+  // Fetch current generation for this session. We fail hard if the session
+  // doesn't exist: minting a token for a non-existent session contradicts the
+  // contract and would produce a token that can never pass `validateSessionToken`.
+  const gen = await s.sessionRepo.getMcpTokenGeneration(sessionId);
+  if (gen === null) {
+    throw new Error(
+      `MCP token generation failed: session ${sessionId} not found — cannot mint token for a non-existent session`
+    );
+  }
 
-  const gen = row?.mcp_token_generation ?? 0;
   const nowSec = Math.floor(s.now() / 1000);
   const expSec = nowSec + Math.floor(s.expirationMs / 1000);
   const jti = generateId();
@@ -286,10 +288,15 @@ export async function validateSessionToken(
   }
 
   let payload: McpTokenPayload;
+  const isLegacyToken = !hasJtiAndExp(token);
   try {
+    // Legacy tokens (pre-rollout) have no `exp` claim, so we skip `jwt.verify`'s
+    // expiration + issuer checks for them; everything else (signature, audience,
+    // algorithm, session, gen) still applies via the code below.
     payload = jwt.verify(token, jwtSecret, {
       audience: MCP_TOKEN_AUDIENCE,
       algorithms: ['HS256'],
+      ...(isLegacyToken ? {} : { issuer: MCP_TOKEN_ISSUER }),
     }) as McpTokenPayload;
   } catch (err) {
     if (err instanceof jwt.TokenExpiredError) {
@@ -309,39 +316,51 @@ export async function validateSessionToken(
     return null;
   }
 
-  // Legacy token: no jti + no exp. Accept only during grace window, with WARN.
-  if (payload.jti === undefined || payload.exp === undefined) {
+  const isLegacy = payload.jti === undefined || payload.exp === undefined;
+
+  // Legacy token: accept only during grace window. Fall through to the
+  // session/gen checks below so legacy tokens ALSO get rejected when the
+  // session was archived/deleted or its generation was bumped.
+  if (isLegacy) {
     const nowMs = s.now();
-    if (s.legacyGraceUntilMs > 0 && nowMs <= s.legacyGraceUntilMs) {
+    if (!(s.legacyGraceUntilMs > 0 && nowMs <= s.legacyGraceUntilMs)) {
       console.warn(
-        `[mcp-tokens] LEGACY token accepted (grace window active, ${Math.ceil((s.legacyGraceUntilMs - nowMs) / 1000)}s remaining): session=${sessionId.substring(0, 8)} uid=${userId.substring(0, 8)} — reissue by restarting the session`
+        `[mcp-tokens] LEGACY token rejected (grace window expired): session=${sessionId.substring(0, 8)} uid=${userId.substring(0, 8)}`
       );
-      return { sessionId, userId, legacy: true };
+      return null;
     }
     console.warn(
-      `[mcp-tokens] LEGACY token rejected (grace window expired): session=${sessionId.substring(0, 8)} uid=${userId.substring(0, 8)}`
+      `[mcp-tokens] LEGACY token accepted (grace window active, ${Math.ceil((s.legacyGraceUntilMs - nowMs) / 1000)}s remaining): session=${sessionId.substring(0, 8)} uid=${userId.substring(0, 8)} — reissue by restarting the session`
     );
-    return null;
+  } else {
+    // Fast path: jti in revocation cache. Only applicable to post-rollout tokens.
+    if (payload.jti && s.revokedJtis.has(payload.jti)) {
+      console.warn(`[mcp-tokens] token rejected: jti ${payload.jti.substring(0, 8)} revoked`);
+      return null;
+    }
   }
 
-  // Fast path: jti in revocation cache.
-  if (s.revokedJtis.has(payload.jti)) {
-    console.warn(`[mcp-tokens] token rejected: jti ${payload.jti.substring(0, 8)} revoked`);
-    return null;
-  }
-
-  // Generation check — a bumped gen invalidates every outstanding token.
-  const row = (await select(s.db)
-    .from(sessions)
-    .where(eq(sessions.session_id, sessionId))
-    .one()) as { mcp_token_generation?: number } | null;
-
-  if (!row) {
+  // Session + generation check — applies to BOTH legacy and post-rollout tokens
+  // so a deleted/archived session or bumped gen invalidates legacy tokens too.
+  const currentGen = await s.sessionRepo.getMcpTokenGeneration(sessionId);
+  if (currentGen === null) {
     console.warn(`[mcp-tokens] token rejected: session ${sessionId.substring(0, 8)} not found`);
     return null;
   }
 
-  const currentGen = row.mcp_token_generation ?? 0;
+  if (isLegacy) {
+    // Legacy tokens carry no gen claim; any post-rollout revoke-all (gen > 0)
+    // invalidates them. Fresh sessions at gen=0 still accept their legacy
+    // tokens during grace, which matches rollout expectations.
+    if (currentGen > 0) {
+      console.warn(
+        `[mcp-tokens] LEGACY token rejected: session ${sessionId.substring(0, 8)} has been revoked (gen=${currentGen})`
+      );
+      return null;
+    }
+    return { sessionId, userId, legacy: true };
+  }
+
   const tokenGen = payload.gen ?? 0;
   if (tokenGen !== currentGen) {
     console.warn(
@@ -351,6 +370,17 @@ export async function validateSessionToken(
   }
 
   return { sessionId, userId, jti: payload.jti, gen: tokenGen };
+}
+
+/**
+ * Cheap peek at a JWT to detect the legacy-token shape (missing `jti`/`exp`)
+ * WITHOUT verifying the signature. The subsequent `jwt.verify` is what
+ * establishes trust — this is just used to decide which `verify` options to
+ * pass (legacy tokens lack `exp`, so we skip `issuer` too for backward compat).
+ */
+function hasJtiAndExp(token: string): boolean {
+  const decoded = jwt.decode(token) as McpTokenPayload | null;
+  return decoded?.jti !== undefined && decoded?.exp !== undefined;
 }
 
 // ============================================================================
@@ -371,8 +401,10 @@ export interface RevokeByJtiOptions {
 }
 
 /**
- * Revoke a single token by its `jti`. Idempotent: replaying the same jti
- * updates metadata but does not error. Updates the in-memory cache.
+ * Revoke a single token by its `jti`. Idempotent: replaying the same jti is a
+ * no-op (the existing row wins via `onConflictDoNothing`). Updates the
+ * in-memory cache on every call so cache state is consistent even when the DB
+ * write is a no-op.
  */
 export async function revokeByJti(options: RevokeByJtiOptions): Promise<void> {
   const s = requireState();
@@ -380,22 +412,14 @@ export async function revokeByJti(options: RevokeByJtiOptions): Promise<void> {
   const expiresAtMs =
     options.tokenExpSec !== undefined ? options.tokenExpSec * 1000 : nowMs + s.expirationMs;
 
-  // Upsert-ish semantics: idempotent insert. onConflictDoNothing is supported
-  // by both dialects of Drizzle.
-  const values = {
+  await s.revocationRepo.insertIgnore({
     jti: options.jti,
     session_id: options.sessionId ?? null,
     revoked_at: nowMs,
     revoked_by: options.revokedBy ?? null,
     reason: options.reason,
     expires_at: expiresAtMs,
-  };
-  if (isSQLiteDatabase(s.db)) {
-    await s.db.insert(mcpTokenRevocations).values(values).onConflictDoNothing().run();
-  } else {
-    // biome-ignore lint/suspicious/noExplicitAny: cross-dialect insert
-    await (s.db as any).insert(mcpTokenRevocations).values(values).onConflictDoNothing();
-  }
+  });
 
   s.revokedJtis.add(options.jti);
 
@@ -415,23 +439,18 @@ export async function revokeByJti(options: RevokeByJtiOptions): Promise<void> {
 export async function revokeAllForSession(
   db: Database,
   sessionId: SessionID,
-  _reason: MCPTokenRevocationReason,
-  _revokedBy?: string
+  reason: MCPTokenRevocationReason,
+  revokedBy?: string
 ): Promise<number> {
-  // Increment atomically. `sql` works for both dialects.
-  await update(db, sessions)
-    .set({ mcp_token_generation: sql`${sessions.mcp_token_generation} + 1` })
-    .where(eq(sessions.session_id, sessionId))
-    .run();
-
-  // Read back to report the new gen.
-  const row = (await select(db).from(sessions).where(eq(sessions.session_id, sessionId)).one()) as {
-    mcp_token_generation?: number;
-  } | null;
-
-  const newGen = row?.mcp_token_generation ?? 0;
+  // Prefer the module's repository (wired at init), but fall back to a
+  // fresh one against the passed-in `db` so this can be called from contexts
+  // that haven't initialized the module (migration scripts, one-off tasks).
+  const repo = _state?.sessionRepo ?? new SessionRepository(db);
+  const newGen = (await repo.bumpMcpTokenGeneration(sessionId)) ?? 0;
+  // `reason` + `revokedBy` are logged (not persisted to the ledger — this path
+  // is the bulk-revoke mechanism via gen bump, not individual-jti revocation).
   console.log(
-    `[mcp-tokens] revoke-all for session=${sessionId.substring(0, 8)} reason=${_reason} revoked_by=${_revokedBy ?? 'system'} new_gen=${newGen}`
+    `[mcp-tokens] revoke-all for session=${sessionId.substring(0, 8)} reason=${reason} revoked_by=${revokedBy ?? 'system'} new_gen=${newGen}`
   );
   return newGen;
 }
@@ -450,19 +469,13 @@ export async function cleanupExpiredTokens(): Promise<number> {
   const s = requireState();
   const nowMs = s.now();
 
-  const res = await deleteFrom(s.db, mcpTokenRevocations)
-    .where(lte(mcpTokenRevocations.expires_at, nowMs))
-    .run();
+  const rowsAffected = await s.revocationRepo.deleteExpired(nowMs);
 
-  const rowsAffected = res?.rowsAffected ?? 0;
-
-  // Rebuild the cache from scratch from the surviving rows. This also handles
-  // the (rare) case where the DB was mutated out from under us.
-  const rows = (await select(s.db).from(mcpTokenRevocations).all()) as Array<{
-    jti: string;
-    expires_at: number;
-  }>;
-  s.revokedJtis = new Set(rows.filter((r) => r.expires_at > nowMs).map((r) => r.jti));
+  // Rebuild the cache from scratch from the surviving rows (SQL-filtered via
+  // the `expires_at` index). This also handles the rare case where the DB was
+  // mutated out from under us.
+  const jtis = await s.revocationRepo.listActiveJtis(nowMs);
+  s.revokedJtis = new Set(jtis);
 
   if (rowsAffected > 0) {
     console.log(
@@ -483,7 +496,11 @@ export async function cleanupExpiredTokens(): Promise<number> {
  * per-jti revocation logic stays in this module.
  */
 export class MCPTokensService {
-  constructor(private readonly db: Database) {}
+  private readonly revocationRepo: McpTokenRevocationRepository;
+
+  constructor(db: Database) {
+    this.revocationRepo = new McpTokenRevocationRepository(db);
+  }
 
   /**
    * Admin-only: revoke a single token by jti. See `register-routes.ts` for
@@ -517,15 +534,6 @@ export class MCPTokensService {
       expires_at: number;
     }>
   > {
-    const rows = (await select(this.db).from(mcpTokenRevocations).all()) as Array<{
-      jti: string;
-      session_id: string | null;
-      revoked_at: number;
-      revoked_by: string | null;
-      reason: string;
-      expires_at: number;
-    }>;
-    const now = Date.now();
-    return rows.filter((r) => r.expires_at > now);
+    return await this.revocationRepo.listActive(Date.now());
   }
 }

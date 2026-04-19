@@ -7,6 +7,7 @@ export {
   asc,
   desc,
   eq,
+  gt,
   gte,
   inArray,
   like,
