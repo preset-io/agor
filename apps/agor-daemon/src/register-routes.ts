@@ -2047,7 +2047,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           const id = params.route?.id;
           if (!id) throw new Error('Comment ID required');
           if (!data.content) throw new Error('content required');
-          if (!data.created_by) throw new Error('created_by required');
+          // Always attribute the reply to the authenticated caller — never trust
+          // a client-supplied `created_by`. `requireAuth` upstream guarantees
+          // `params.user.user_id`.
+          const callerId = (params as { user?: { user_id?: string } }).user?.user_id;
+          if (!callerId) throw new Error('Authentication required');
+          data.created_by = callerId as import('@agor/core/types').UserID;
           const reply = await boardCommentsService.createReply(id, data, params);
           app.service('board-comments').emit('created', reply);
           return reply;

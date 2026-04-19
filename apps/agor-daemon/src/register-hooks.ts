@@ -56,6 +56,7 @@ import {
   requireAdminForEnvConfig,
   requireMinimumRole,
 } from './utils/authorization.js';
+import { injectCreatedBy } from './utils/inject-created-by.js';
 import {
   createServiceToken,
   getDaemonUrl,
@@ -403,7 +404,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   safeService('cards')?.hooks({
     before: {
       all: [...getReadAuthHooks()],
-      create: [requireMinimumRole(ROLES.MEMBER, 'create cards')],
+      create: [requireMinimumRole(ROLES.MEMBER, 'create cards'), injectCreatedBy()],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update cards')],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete cards')],
     },
@@ -422,7 +423,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           ? [scopeFindToAccessibleWorktrees(worktreeRepository, superadminOpts)]
           : []),
       ],
-      create: [requireMinimumRole(ROLES.MEMBER, 'create artifacts')],
+      create: [requireMinimumRole(ROLES.MEMBER, 'create artifacts'), injectCreatedBy()],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update artifacts')],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete artifacts')],
     },
@@ -498,7 +499,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   safeService('board-comments')?.hooks({
     before: {
       all: [typedValidateQuery(boardCommentQueryValidator), ...getReadAuthHooks()],
-      create: [requireMinimumRole(ROLES.MEMBER, 'create board comments')],
+      create: [requireMinimumRole(ROLES.MEMBER, 'create board comments'), injectCreatedBy()],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update board comments')],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete board comments')],
     },
@@ -537,7 +538,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ]
           : []),
       ],
-      create: [requireMinimumRole(ROLES.MEMBER, 'create worktrees'), requireAdminForEnvConfig()],
+      create: [
+        requireMinimumRole(ROLES.MEMBER, 'create worktrees'),
+        requireAdminForEnvConfig(),
+        injectCreatedBy(),
+      ],
       update: [requireMinimumRole(ROLES.MEMBER, 'update worktrees'), requireAdminForEnvConfig()],
       patch: [
         requireAdminForEnvConfig(),
@@ -1426,27 +1431,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureCanCreateSession(superadminOpts), // Require 'all' permission to create sessions
             ]
           : []),
+        injectCreatedBy(),
         async (context) => {
-          // Inject user_id if authenticated, otherwise use 'anonymous'
-          const user = (context.params as { user?: { user_id: string; email: string } }).user;
-          const userId = user?.user_id || 'anonymous';
-
-          // DEBUG: Log authentication state
-          console.log(
-            '🔍 Session create hook - user:',
-            user ? `${user.user_id} (${user.email})` : 'none',
-            '→ userId:',
-            userId
-          );
-
-          if (Array.isArray(context.data)) {
-            context.data.forEach((item: Record<string, unknown>) => {
-              if (!item.created_by) item.created_by = userId;
-            });
-          } else if (context.data && !(context.data as Record<string, unknown>).created_by) {
-            (context.data as Record<string, unknown>).created_by = userId;
-          }
-
           // Populate repo field and auto-populate git_state from worktree_id
           if (!Array.isArray(context.data) && context.data?.worktree_id) {
             try {
@@ -1809,28 +1795,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
             ]
           : []),
-        async (context) => {
-          // Inject user_id if authenticated, otherwise use 'anonymous'
-          const user = (context.params as { user?: { user_id: string; email: string } }).user;
-          const userId = user?.user_id || 'anonymous';
-
-          // DEBUG: Log authentication state
-          console.log(
-            '🔍 Task create hook - user:',
-            user ? `${user.user_id} (${user.email})` : 'none',
-            '→ userId:',
-            userId
-          );
-
-          if (Array.isArray(context.data)) {
-            context.data.forEach((item) => {
-              if (!item.created_by) (item as Record<string, unknown>).created_by = userId;
-            });
-          } else if (context.data && !context.data.created_by) {
-            (context.data as Record<string, unknown>).created_by = userId;
-          }
-          return context;
-        },
+        injectCreatedBy(),
       ],
       patch: [
         ...(worktreeRbacEnabled
@@ -1878,24 +1843,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           ? [scopeFindToAccessibleBoards(boardRepository, superadminOpts)]
           : []),
       ],
-      create: [
-        requireMinimumRole(ROLES.MEMBER, 'create boards'),
-        async (context: HookContext<Board>) => {
-          // Inject user_id if authenticated, otherwise use 'anonymous'
-          const userId =
-            (context.params as { user?: { user_id: string; email: string } }).user?.user_id ||
-            'anonymous';
-
-          if (Array.isArray(context.data)) {
-            context.data.forEach((item) => {
-              if (!item.created_by) (item as Record<string, unknown>).created_by = userId;
-            });
-          } else if (context.data && !context.data.created_by) {
-            (context.data as Record<string, unknown>).created_by = userId;
-          }
-          return context;
-        },
-      ],
+      create: [requireMinimumRole(ROLES.MEMBER, 'create boards'), injectCreatedBy()],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update boards'),
         async (context: HookContext<Board>) => {
