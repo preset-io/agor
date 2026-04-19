@@ -16,25 +16,22 @@ Env commands flow through three storage layers that render and cascade into one 
 
 3. **`.agor.yml`** — optional file at the repo root that mirrors `RepoEnvironmentConfig` in flat form. Two admin-gated actions: `POST /repos/:id/import-agor-yml` overwrites `repo.environment_config` wholesale (`repos.ts:783`); `POST /repos/:id/export-agor-yml` writes the current in-DB config to the file. Parser in `packages/core/src/config/agor-yml.ts`.
 
-A narrow escape-hatch for deployment-local values already exists: `config.daemon.host_ip_address` (set in `~/.agor/config.yaml`) flows into `host.ip_address` in the template context. Preset uses this to inject a hard-coded host IP without leaking it into the shared `.agor.yml`. This is the seed of the "deployment-local overrides" layer this doc formalizes.
+A narrow escape-hatch for deployment-local values already exists: `config.daemon.host_ip_address` (set in `~/.agor/config.yaml`) flows into `host.ip_address` in the template context.
 
-**Known pain points** (from the task brief and code):
-
-- One template set per repo — no `lean` vs `postgres` variants. Superset has two compose files today with nothing to model that in Agor.
-- Import silently wipes local edits to `repo.environment_config`. No diff, no confirm, no undo.
-- Worktree-level direct edits drift silently from the repo template — "Regenerate" exists but is all-or-nothing.
-- "Deployment-local" logic is a single named var (`host.ip_address`). Any other local-only value (Preset's IP-bearing commands, custom registry URLs, internal Slack tokens) has no home except per-worktree edits that bypass the shared template.
+**Known pain points:** one template set per repo (no `lean` vs `postgres`); import silently wipes local edits; worktree-level direct edits drift silently from the repo template; deployment-local values have nowhere to live except global config or per-worktree edits.
 
 ---
 
-## 2. Proposed `.agor.yml` schema — named variants
+## 2. Proposed data model
+
+### 2a. `.agor.yml` v2 — shared, committed to git
 
 ```yaml
-# .agor.yml — repository-shared, committed to git
-version: 2                         # bump from implicit v1 (single-set)
+# .agor.yml — repo-shared; exported/imported verbatim
+version: 2
 
 environment:
-  default: lean                    # variant picked when worktree is created
+  default: lean                    # which variant new worktrees get by default
   variants:
     lean:
       description: "SQLite-backed, single-container, fast iteration"
@@ -47,38 +44,57 @@ environment:
 
     postgres:
       description: "Postgres + Redis + Celery — closer to prod"
-      extends: lean                # inherit fields, then override
       start: "docker compose -p agor-{{worktree.name}} up -d --build"
       stop:  "docker compose -p agor-{{worktree.name}} down"
       nuke:  "docker compose -p agor-{{worktree.name}} down -v"
       logs:  "docker compose -p agor-{{worktree.name}} logs --tail=100"
+      health: "http://{{host.ip_address}}:{{add 9000 worktree.unique_id}}/health"
+      app:    "http://{{host.ip_address}}:{{add 5000 worktree.unique_id}}"
 
     full:
       description: "Postgres + Redis + Celery + worker + beat"
-      extends: postgres
       start: "COMPOSE_PROFILES=full docker compose -p agor-{{worktree.name}} up -d --build"
+      stop:  "docker compose -p agor-{{worktree.name}} down"
+      nuke:  "docker compose -p agor-{{worktree.name}} down -v"
+      logs:  "docker compose -p agor-{{worktree.name}} logs --tail=100"
+      health: "http://{{host.ip_address}}:{{add 9000 worktree.unique_id}}/health"
+      app:    "http://{{host.ip_address}}:{{add 5000 worktree.unique_id}}"
 ```
 
-**Worktree records its variant** in a new column:
+**Deliberately no `extends` inheritance.** Each variant is self-contained. Verbosity is a feature here — you read one variant top-to-bottom and know exactly what runs. Parser rejects a variant that references another variant.
+
+### 2b. Repo-level `template_overrides` — DB-only, never exported
+
+Stored in DB alongside the variants, **not** written to `.agor.yml`, **not** in the export payload. This is where deployment-local template-var values live (the generalization of today's `daemon.host_ip_address`):
+
+```yaml
+# Represented in DB as repo.environment.template_overrides (JSON);
+# shown/edited in the admin UI but stripped from import/export.
+template_overrides:
+  host:
+    ip_address: "10.0.1.42"       # overrides daemon config / autodetect
+  custom:
+    internal_registry: "registry.preset.io"
+    aws_profile: "preset-dev"
+```
+
+At render time, `template_overrides` is **deep-merged into the Handlebars context** after the defaults (daemon config, autodetect) but before `custom.*` values from the worktree. So Preset can import Superset's clean upstream `.agor.yml` and set their host IP / registry values per-repo without a global config file, and without risk of leaking values back to the shared file.
+
+### 2c. Worktree — pure rendered snapshot
 
 ```ts
 // packages/core/src/types/worktree.ts
 export interface Worktree {
   // ...existing fields...
-  environment_variant?: string;       // e.g. "lean" | "postgres" | "full"
-  environment_overrides?: Partial<{   // per-worktree tweaks; merged on render
-    start: string; stop: string; nuke: string;
-    health: string; app: string; logs: string;
-  }>;
+  environment_variant?: string;   // e.g. "lean" | "postgres" | "full"
+
+  // Existing rendered-command fields stay as they are — they ARE the snapshot:
+  // start_command, stop_command, nuke_command,
+  // health_check_url, app_url, logs_command
 }
 ```
 
-Design notes:
-
-- **`extends`** keeps the YAML tight — Superset's `postgres` and `full` only list the fields that actually diverge from `lean`.
-- `default` is the variant a new worktree gets; can be overridden in the create-worktree UI.
-- Health/app URL templates live inside each variant (they usually differ per-variant — different ports, different health endpoints).
-- The existing v1 flat schema (`environment: { start, stop, ... }`) remains valid and is auto-migrated to `version: 2` with a single `default: "default"` variant.
+The worktree stores the **fully rendered** commands as flat strings. No templating, no sparse overrides, no layering at read time. Edits to the worktree commands are manual string edits; "Render" is the button that regenerates from variant + template_overrides, discarding manual edits (with a confirm when dirty). Worktrees are typically short-lived, so ossified snapshots are fine.
 
 ---
 
@@ -87,170 +103,129 @@ Design notes:
 Three layers, precedence **low → high**:
 
 ```
-  repo variant (.agor.yml or repo.environment_config)
-        └─► deployment-local config (~/.agor/config.yaml)
-                  └─► per-worktree override (worktree.environment_overrides)
+  repo variant (.agor.yml or repo.environment.variants[name])
+        └─► repo template_overrides (DB-only, per-repo)
+                  └─► worktree rendered snapshot (user-edited strings)
 ```
 
-### 3a. Repo variant — shared source of truth
-- Authored by repo maintainers. Committed in `.agor.yml`.
-- Stored in DB as `repo.environment_variants: Record<string, RepoEnvironmentVariant>` (rename `environment_config` → `environment_variants` with a migration; existing config becomes `variants.default`).
+**Layer 1 — repo variant:** authored by repo maintainers. Committed in `.agor.yml`. Exportable.
 
-### 3b. Deployment-local config — not committed, per-Agor-install
-- Lives in `~/.agor/config.yaml` under a new `environment` key:
+**Layer 2 — repo `template_overrides`:** per-Agor-deployment, per-repo. Lives in DB. Admin-only in the UI. Never in `.agor.yml`. Provides concrete values for template vars (`host.*`, `custom.*`) so the shared variants can reference them without hard-coding. Replaces the need for most `~/.agor/config.yaml` entries; the global config remains as a fallback (so autodetected `host.ip_address` still works for repos without overrides).
 
-```yaml
-# ~/.agor/config.yaml
-daemon:
-  host_ip_address: 10.0.1.42        # already exists — keep
+**Layer 3 — worktree snapshot:** created by rendering `variant + template_overrides` at worktree-create time (or on explicit "Render"). User edits the rendered YAML directly. No link to the template after that — re-render to refresh.
 
-environment:
-  # Scoped by repo slug, then variant. Variant "*" applies to all.
-  overrides:
-    preset-io/superset:
-      "*":
-        # add template vars available as {{local.*}}
-        vars:
-          internal_registry: "registry.preset.io"
-          aws_profile: "preset-dev"
-      postgres:
-        # per-field string override (wins over repo variant, loses to worktree)
-        start: "AWS_PROFILE={{local.aws_profile}} docker compose -p agor-{{worktree.name}} up -d"
-```
-
-- Exposed in the template context as `{{local.*}}` (new namespace, parallel to `{{host.*}}`).
-- **Never** written to `.agor.yml`. Never sent to the UI for non-admins. Admin UI surfaces it read-only with a "local override" badge.
-
-### 3c. Per-worktree override — escape hatch
-- Today's worktree fields (`worktree.start_command`, etc.) already serve this purpose, but they're **rendered snapshots** — editing them severs the link to the repo template forever.
-- Replace with `worktree.environment_overrides: { start?, stop?, nuke?, health?, app?, logs? }` — a sparse map of fields the user explicitly wants to override. Fields not in the map render from variant + local every time.
-- Migration: existing `worktree.{start_command,...}` values are compared against `render(repo_variant + local)`; any field that differs is moved into `environment_overrides`, the rest are discarded (so "Regenerate" is the default behavior from now on).
-
-### Conflict resolution
-Rendering a worktree's effective command for field `F`:
+### Rendering algorithm
+Computing the snapshot for a worktree:
 
 ```
-1. resolved = variants[worktree.environment_variant ?? default][F]
-   (resolved through `extends` chain)
-2. if local.environment.overrides[repo.slug][worktree.environment_variant]?.[F]: use that
-   else if local.environment.overrides[repo.slug]["*"]?.[F]: use that
-3. if worktree.environment_overrides?.[F]: use that
-4. Handlebars-render the winning string with { worktree, repo, host, local, custom }
+1. variant = repo.environment.variants[worktree.environment_variant ?? default]
+2. context = {
+     ...daemonDefaults,                 // host.ip_address autodetect, etc.
+     ...deepMerge(repo.template_overrides),  // repo DB-only overrides win
+     worktree: { unique_id, name, path, gid },
+     repo:     { slug },
+     custom:   worktree.custom_context,
+   }
+3. For each of the 6 commands in variant: Handlebars-render with context.
+4. Write results to worktree.start_command, stop_command, ...
 ```
 
-No merging inside a single field — last writer wins per-field. This keeps the mental model simple (three boxes, one winner per command) and mirrors how CSS cascades.
+After step 4, the snapshot is independent — editing `repo.template_overrides` or the variant does nothing until the user hits Render again.
 
 ---
 
-## 4. UI proposal (wireframe-level)
+## 4. UI proposal — two YAML editors, read/edit exclusivity
 
-### 4a. Worktree create modal — variant picker
-```
-┌─ Create worktree: feat/new-filter ─────────────────────┐
-│ Repo:     preset-io/superset                           │
-│ Branch:   feat/new-filter                              │
-│                                                        │
-│ Environment variant:                                   │
-│   ( ) lean      — SQLite, single container, fastest   │
-│   (•) postgres  — Postgres + Redis + Celery           │
-│   ( ) full      — + worker + beat                     │
-│   ( ) none      — I'll set up commands myself         │
-│                                                        │
-│ [ Preview resolved commands ▾ ]                        │
-│                                                        │
-│              [ Cancel ]  [ Create worktree ]           │
-└────────────────────────────────────────────────────────┘
-```
+Replace the current form-based Environment tab with two stacked YAML editors. Only one is editable at a time.
 
-### 4b. Worktree Environment tab — layered view
+### Layout
+
 ```
-┌─ Environment — feat/new-filter (variant: postgres) ───────────┐
+┌─ Environment — feat/new-filter ───────────────────────────────┐
 │  [ Start ] [ Stop ] [ Restart ] [ Nuke ] [ Logs ]              │
 │                                                                │
-│  Variant: postgres ▾     [ Change variant... ]                 │
+│  ┌─ Repository environment (shared) ──────────────── [Edit] ─┐│
+│  │ version: 2                                                ││
+│  │ environment:                                              ││
+│  │   default: lean                                           ││
+│  │   variants:                                               ││
+│  │     lean: { start: "...", stop: "...", ... }              ││
+│  │     postgres: { ... }                                     ││
+│  │ template_overrides:        # 🏠 deployment-local         ││
+│  │   host: { ip_address: "10.0.1.42" }                       ││
+│  │                                                           ││
+│  │ [Import .agor.yml] [Export .agor.yml]  📖 Docs            ││
+│  └───────────────────────────────────────────────────────────┘│
 │                                                                │
-│  Start Command                                     [Edit]      │
-│    Repo:   docker compose -p agor-{{worktree.name}} up …       │
-│    Local:  AWS_PROFILE=preset-dev docker compose -p …  🏠      │
-│    This:   (using local)                                       │
-│    ────────────────────────────────────────────                │
-│    Rendered: AWS_PROFILE=preset-dev docker compose             │
-│              -p agor-feat-new-filter up -d --build             │
+│  Variant: [ postgres ▾ ]  [ Render ▸ ]                         │
 │                                                                │
-│  Stop Command                                      [Override]  │
-│    Repo:   docker compose -p agor-{{worktree.name}} down       │
-│    This:   (using repo)                                        │
-│                                                                │
-│  Health URL                                        [Edit]      │
-│    Repo:   http://{{host.ip_address}}:…                        │
-│    This:   http://localhost:9001/health            ⚠ overridden│
+│  ┌─ Worktree environment (this worktree) ──────────── [Edit] ┐│
+│  │ # Rendered from variant: postgres                         ││
+│  │ start: "docker compose -p agor-feat-new-filter up -d …"   ││
+│  │ stop:  "docker compose -p agor-feat-new-filter down"      ││
+│  │ nuke:  "docker compose -p agor-feat-new-filter down -v"   ││
+│  │ logs:  "docker compose -p agor-feat-new-filter logs …"    ││
+│  │ health: "http://10.0.1.42:9003/health"                    ││
+│  │ app:   "http://10.0.1.42:5003"                            ││
+│  └───────────────────────────────────────────────────────────┘│
 └────────────────────────────────────────────────────────────────┘
 ```
 
-Key UI ideas:
+### Interaction rules
 
-- Three stacked rows per command: **Repo** (grey, read-only template), **Local** (🏠 badge, admin-only, read-only), **This** (worktree override, user-editable with Revert).
-- The row wins that has a value + highest precedence; others are dimmed.
-- "Rendered" line at the bottom — the actual string that will run, with all vars substituted.
-- "⚠ overridden" pill next to any field with a `worktree.environment_overrides[F]` set. Clicking reverts to the layer below.
-- Dirty-state: if `.agor.yml` on disk differs from `repo.environment_variants`, show a yellow banner: *"`.agor.yml` on disk has changed — [View diff] [Import]"*.
+- **Read/edit exclusivity:** starting edit on one editor disables the `[Edit]` button on the other until the user saves or cancels. Prevents cross-level confusion and avoids a second modal.
+- **Top editor (repo):** admin-only. YAML of `version`, `environment.variants`, `environment.default`, and `template_overrides`. On save: parse, validate, persist to `repo.environment`. `template_overrides` is stripped before any `.agor.yml` export.
+- **Bottom editor (worktree):** any user with `others_can: session+`. Flat YAML of the 6 rendered commands. On save: persist to `worktree.start_command` / `stop_command` / etc. No Handlebars, no variant references — pure strings.
+- **Variant picker + Render button:** changing the variant dropdown doesn't take effect until Render is clicked. Render re-evaluates with the current repo variant + `template_overrides`, overwrites the bottom editor contents. If the bottom editor has unsaved manual edits, Render prompts a confirm (`"Rendering will discard your local edits. Continue?"`).
+- **Docs link** inline in each editor's edit mode — points to `https://agor.live/guide/environment-configuration`. Section anchors for `#variants`, `#template-overrides`, `#template-vars`.
 
-### 4c. Import safety
-The import button always shows a **three-column diff** before applying:
+### Validation on save
 
-```
-┌─ Import .agor.yml ─ preset-io/superset ────────────────────────┐
-│                                                                │
-│  Variant       Field       Current (DB)        File (.agor.yml)│
-│  ─────────────────────────────────────────────────────────────│
-│  postgres      start       docker compose…     docker compose…│
-│                                                                │
-│  full          start       (new)                COMPOSE_PROF…  │
-│                nuke        (new)                docker compose…│
-│                                                                │
-│  lean          app         http://localh…       http://{{host…│
-│                                                                │
-│  ☐ Also overwrite worktree-level overrides (not recommended)   │
-│  ☑ Preserve worktree.environment_overrides (default)           │
-│                                                                │
-│                        [ Cancel ]  [ Import 4 changes ]        │
-└────────────────────────────────────────────────────────────────┘
-```
+Minimal. Matches the "just valid YAML" bar:
 
-- Default: imports repo-level variants only; worktree overrides are untouched.
-- Import is recorded as an event (`repo.environment_config_imported`) with a snapshot of the previous state, enabling an **"Undo last import"** button for 24h.
+- **Both editors:** parse as YAML; reject on syntax error with line number.
+- **Repo editor:** `environment.variants` is a map of variant-name → object; each variant has `start` and `stop` (at minimum); `environment.default` references a variant that exists; no variant references another variant (no `extends`-style keys). Unknown top-level keys warn but don't block (forward-compat).
+- **Worktree editor:** 6 known keys (`start`, `stop`, `nuke`, `health`, `app`, `logs`); `start` + `stop` required; values are strings.
+- **Not validated pre-save:** Handlebars template correctness. Broken templates show their errors at render time — fast enough feedback loop.
+- **Security:** deny-list check (PR #1034) runs on the final rendered string at execute time, not at save time. Keeps the editors free of false-positive noise while preserving the execution-time guard.
 
 ---
 
-## 5. Import/export behavior (recommendation)
+## 5. Import / export behavior
 
-| Situation | Default behavior | User override |
-|---|---|---|
-| `.agor.yml` present, no repo config in DB | Auto-import on first worktree create for that repo (quiet) | `--no-auto-import` flag in repo settings |
-| Import, DB config matches file | No-op, toast "already in sync" | — |
-| Import, DB has additional variants not in file | Keep DB-only variants; merge from file | Checkbox: "Replace (delete local-only variants)" |
-| Import, file has fields that conflict with DB | Show diff modal (see 4c), user confirms | — |
-| Export, file has fields not in DB | Warn: *"file has variants `xyz` not in current config; export will drop them"* | Checkbox: "Proceed" / "Cancel" |
-| Export, commits not staged | Offer "create branch + commit .agor.yml" option | — |
+Two admin actions on the repo editor header; both short-circuit through a confirm dialog.
 
-Export never writes the `local` layer (already true for `host.ip_address`). The parser in `agor-yml.ts` should refuse any `local:` or `overrides:` keys at the top level to prevent accidental secrets in repo-shared files.
+**Import `.agor.yml`** — reads from disk, parses, and replaces `environment.variants` + `environment.default` in the repo editor.
+
+> *"Import `.agor.yml`? This will replace your repo-level variants with the file contents. Your `template_overrides` and worktree-level configurations are preserved. Continue?"*
+> `[ Cancel ]` `[ Import ]`
+
+**Export `.agor.yml`** — writes `environment.variants` + `environment.default` to the file. `template_overrides` is stripped.
+
+> *"Export to `.agor.yml`? This will overwrite the file in the repo root. `template_overrides` stays local and will not be written. Continue?"*
+> `[ Cancel ]` `[ Export ]`
+
+Semantics worth pinning:
+
+- Import is **replace, not merge** for variants. A variant that exists in DB but not in the file is dropped. (Simpler than partial merge; the repo file is treated as authoritative by design.)
+- Import **never** touches `template_overrides` or any worktree's rendered commands.
+- Export **never** writes `template_overrides`. Parser also refuses any `template_overrides:` key seen in an imported `.agor.yml` (defense in depth against accidental commits).
+- No undo button in v1 — the repo editor has its own Edit → Cancel flow, and users can re-edit manually. `.agor.yml` itself is in git.
 
 ---
 
 ## 6. Migration path
 
-Backward compatibility is the main constraint since existing repos already have a single-template config.
-
 | Step | What happens | When |
 |---|---|---|
-| 1 | Schema migration: rename `repos.environment_config` → `repos.environment_variants` (JSON column); wrap existing value as `{ default: <old value> }`. | On daemon upgrade |
-| 2 | Add `worktrees.environment_variant` (default `"default"`), `worktrees.environment_overrides` (JSON, nullable). | Same migration |
-| 3 | Render-time migration for existing worktrees: diff current `worktree.start_command` etc. against render of `variants.default`; write the diff to `environment_overrides`. Clear the rendered fields. | Lazy, on first worktree read |
-| 4 | `.agor.yml` v1 parser keeps working — emits `{ version: 1, variants: { default: {...} } }` internally. Export writes v2 format by default; flag `--legacy` to emit v1. | Immediate |
-| 5 | UI variant picker shows only `default` for v1 repos, with a "Add variant" CTA that auto-upgrades the file on next export. | Feature flag `env_variants: true` for 1 release cycle, then GA |
-| 6 | Deprecate direct reads of `worktree.start_command` etc. in services — route everything through a `resolveEnvironmentCommands(worktree)` helper that applies the layering. | Done before removing the columns |
+| 1 | Schema migration: rename `repos.environment_config` → `repos.environment` (JSON). Wrap existing value as `{ version: 2, default: "default", variants: { default: <old-value> }, template_overrides: {} }`. | On daemon upgrade |
+| 2 | Add `worktrees.environment_variant` (default `"default"`). | Same migration |
+| 3 | Existing `worktree.start_command` / `stop_command` / etc. kept as-is — they're already the rendered snapshot this design formalizes. | No action needed |
+| 4 | `.agor.yml` v1 parser keeps working — treats the flat `environment: { start, stop, … }` block as `variants.default`. Export writes v2 by default. | Immediate |
+| 5 | Preset's existing `daemon.host_ip_address` in `~/.agor/config.yaml` keeps working. Docs recommend migrating it into per-repo `template_overrides` for new setups. | No forced migration |
+| 6 | Deprecate direct reads of the six rendered fields in favor of a `getWorktreeEnvCommands(worktree)` helper (future-proofing if we change storage later). | Before any further schema change |
 
-No forced user action. Existing repos keep working as the `default` variant. Preset's current host-IP workflow keeps working because `host.ip_address` continues to be populated the same way.
+Zero forced user action. Existing repos keep working as a single `default` variant. Preset's current workflow continues; `template_overrides` becomes the recommended home for new local template values.
 
 ---
 
@@ -258,26 +233,27 @@ No forced user action. Existing repos keep working as the `default` variant. Pre
 
 | Alternative | Why rejected |
 |---|---|
-| **Multiple `.agor-<variant>.yml` files** (`.agor-lean.yml`, `.agor-postgres.yml`) | Loses the `extends` ergonomics; clutters repo root; makes "default" selection implicit; three times the import UX surface. |
-| **Embed local overrides inside `.agor.yml`** with a `local:` block the user edits but `.gitignore`s | User has to `.gitignore` a file that also has committed content — error-prone. Merge conflicts on every pull. |
-| **No variants — just let users fork repo.environment_config into N copies via UI** | Accumulator-of-sets problem stated in the brief. No shared source of truth across deployments. |
-| **Variants as separate DB rows on a `repo_environment_variants` table** instead of JSON column | Premature normalization — variants are small (~6 fields × a few variants), always loaded together with the repo, never queried by field. JSON column is simpler and matches the YAML shape 1:1. |
-| **Allow loading `.agor.yml` from arbitrary paths / uploads** | Adds a third source of truth (not-in-repo, not-in-DB) that has to be version-tracked separately. The config-file `overrides:` block already covers the "local file, not committed" case. Can be added later if needed for air-gapped / review workflows. |
-| **Per-field merge on import (CRDT-style)** instead of diff-and-confirm | Confusing when a field is a shell command — partial merges produce nonsense. Diff modal is simpler and more honest. |
-| **Git-versioned history of `repo.environment_variants` in DB** | Heavy for what this is. The "undo last import" 24h window covers the realistic accident case; `.agor.yml` itself is in git for long-term history. |
+| **Multiple `.agor-<variant>.yml` files** | Clutters repo root; implicit default; triples import UX surface. |
+| **`extends` inheritance between variants** | Considered for DRY. Rejected: readers shouldn't have to trace an inheritance chain to understand what a variant runs. Per-variant duplication is cheap (6 lines). |
+| **Embed local overrides inside `.agor.yml` with a `local:` block + `.gitignore`** | User has to `.gitignore` a partially-committed file. Merge conflicts on every pull. `template_overrides` in DB removes the file entirely. |
+| **Form-based UI per field (like today)** | Hides YAML structure; creates divergence between "form state" and "stored state"; harder to paste/diff/comment on. YAML editors are honest and copy-paste-friendly. |
+| **Sparse-overrides map on the worktree (`environment_overrides: { start?: ... }`)** | Preserves template link but adds read-time layering that's hard to explain. Rendered snapshot + "re-render" button covers the realistic case (short-lived worktrees). |
+| **Diff-modal on import** | Over-engineered vs. a clear confirm dialog. `.agor.yml` lives in git for diffs users actually want. |
+| **Arbitrary-path `.agor.yml` upload** | Adds a third source of truth not tracked in git or DB. `template_overrides` handles the "not in git" case cleanly. |
+| **CRDT / per-field merge on import** | Shell commands merge badly piece-wise. Replace-semantics is simpler and more honest. |
+| **Validating Handlebars syntax pre-save** | Fast feedback already exists at render time. Pre-save validation adds noise for little benefit. |
 
 ---
 
 ## 8. Open questions
 
-1. **Who picks the variant — worktree creator or repo admin?** Current proposal: creator picks at worktree-create time; default from `.agor.yml`. Admins can change it later. Alternative: admin-only, to prevent members running surprise configurations.
-2. **Should `worktree.environment_variant` be changeable at runtime?** If I change from `lean` → `postgres` on a running worktree, do we auto-nuke + restart, or just update the commands for next start?
-3. **Namespace for deployment-local vars: `{{local.*}}` vs `{{deployment.*}}` vs nest under `{{host.*}}`.** `local` is short but overloaded (local vs. remote); `deployment` is precise but verbose. Leaning `local`.
-4. **Do we need variant visibility scoping** (e.g. "this variant is admin-only, hide from members")? Relevant if orgs want a `production-like` variant that shouldn't be spawnable by everyone. Could piggy-back on `managed_envs_minimum_role` or become a per-variant field.
-5. **`.agor.yml` in non-default branches.** If worktree `feat/x` has a different `.agor.yml` than `main`, which wins on import? Current code uses the worktree's `.agor.yml` if `worktree_id` is passed (`repos.ts:789`). Is that right, or should `main` always win for repo-level config?
-6. **Deny-list interaction** (ref PR #1034). Does the deny-list apply to the rendered command (post-layering) or to each layer separately? Post-layering is simpler but can be surprised by a local override that injects a denied pattern. Recommend: check the final rendered string.
-7. **Sandboxing the variant name.** `worktree.environment_variant` becomes a user-controlled string that the daemon looks up in a map. Path-traversal-style concerns are low (no filesystem lookup), but we should normalize (lowercase, `[a-z0-9-]+`, length cap) and reject unknown variants at write time.
+1. **Who picks the variant — worktree creator or admin?** Current proposal: creator picks at create-time; default comes from `.agor.yml`; admins can change it later. Alternative: admin-only variant selection (tighter control; loses flexibility for members).
+2. **Runtime variant switching.** Changing `environment_variant` on a worktree whose environment is running — do we auto-nuke + restart, prompt the user, or just re-render and let the user trigger restart manually? Leaning toward "re-render only; user hits Stop/Start."
+3. **`.agor.yml` from non-default branches.** If worktree `feat/x` has a different `.agor.yml` than `main`, which wins on import? Today, `worktree_id` in the import call picks the worktree's checkout (`repos.ts:789`). Keep that behavior, or always read from `main`?
+4. **`template_overrides` scoping.** Do we ever need per-variant overrides (`template_overrides.variants.postgres.host.ip_address`)? The Preset host-IP use case is "one value for the whole repo." Proposal: start with flat per-repo only; add per-variant if a concrete need shows up.
+5. **Variant-level access control.** Orgs may want a `production-like` variant restricted to admins. Could piggy-back on the existing `managed_envs_minimum_role` config, or become a per-variant field. Deferring until someone asks.
+6. **Docs location.** `apps/agor-docs/pages/guide/environment-configuration.mdx` is the canonical landing page. Sections needed: overview, template vars (`worktree.*`, `repo.*`, `host.*`, `custom.*`), variant schema, `template_overrides` semantics, import/export flow, deny-list awareness. Tracked as a follow-up to the implementation PR.
 
 ---
 
-*Feedback welcome — happy to split this into multiple PRs (schema first, UI after) or adjust scope based on review.*
+*Feedback welcome — happy to split implementation into a schema PR, a UI PR, and a docs PR.*
