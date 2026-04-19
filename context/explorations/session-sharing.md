@@ -66,17 +66,38 @@ interface Worktree {
 | Service account (executor etc.) | `created_by = parent_owner`   | `created_by = parent_owner`     |
 
 When the legacy path triggers (cross-user spawn, flag ON), the daemon emits a
-loud `console.warn('[SECURITY] cross-user session spawn/fork allowed by …')`
-log line for audit trails.
+structured `console.warn('[SECURITY] legacy_session_sharing', { event,
+caller_id, parent_owner_id, worktree_id })` log line for audit trails.
 
 The new child session's `unix_username` is left to the existing
 `setSessionUnixUsername` hook, which stamps it with the *caller's* current
 Unix username. With the safe default this means the execution context now
-matches the attribution. Under the legacy flag the hook still writes the
-caller's username — operators relying on flag-ON behavior must be aware that
-the child runs under `parent.created_by`'s app identity but the caller's Unix
-account; if you need full Unix-level identity borrowing, switch to
-`unix_user_mode: simple` (where there is no per-user Unix identity to borrow).
+matches the attribution.
+
+**Important caveat — flag scope is app-identity only:**
+
+The flag restores legacy attribution at the *application* layer
+(`session.created_by`) but does **not** propagate the parent's
+`unix_username` to the child. The downstream effect depends on
+`unix_user_mode`:
+
+- **`simple`** — no per-user Unix identity exists, so flag-ON behaves as
+  intended: the child is attributed to the parent owner and runs under the
+  daemon user.
+- **`insulated`** — sessions execute as a shared executor user. Same as
+  `simple` from an OS-identity perspective; flag-ON works.
+- **`strict`** — sessions execute as the *creator's* Unix user, and
+  `validateSessionUnixUsername` (in `worktree-authorization.ts`) compares the
+  session's stamped `unix_username` against the *current* `created_by`
+  user's `unix_username`. Because flag-ON sets `created_by = parent_owner`
+  but `unix_username = caller`, this check **fails** and the child session
+  refuses to execute.
+
+In other words, flag-ON is effectively a no-op in `strict` mode (sessions
+are created but cannot be prompted). This is intentional — strict mode is
+the security guarantee we don't want a worktree-level toggle to undermine.
+Operators who genuinely need cross-user identity borrowing should use
+`simple` or `insulated` mode.
 
 ### UI
 

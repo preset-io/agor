@@ -13,7 +13,7 @@ import {
   SessionRepository,
   type SessionWithLastMessage,
 } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
+import { type Application, Forbidden } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   MCPServerID,
@@ -198,18 +198,27 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
    * `dangerously_allow_session_sharing` flag (and the caller is not an admin
    * acting on someone else's session).
    *
-   * Internal calls (no `params.user`) preserve parent attribution — they're
-   * service-to-service or scheduler-driven and have no human caller to attribute.
+   * Internal calls (`params.provider == null`) preserve parent attribution —
+   * they're service-to-service or scheduler-driven and have no human caller
+   * to attribute. External calls (REST/socketio/MCP) must always be routed
+   * through `determineSpawnIdentity`, which fails closed if the caller has
+   * no `user_id`.
    */
   private async resolveChildIdentity(
     parent: Session,
     params?: SessionParams
   ): Promise<{ created_by: Session['created_by'] }> {
-    // No authenticated user on params → internal call (scheduler, callbacks,
-    // service-to-service). Preserve parent attribution.
-    const caller = params?.user;
-    if (!caller || !caller.user_id) {
+    // Internal call (no transport provider) → service-to-service or scheduler.
+    // Preserve parent attribution; helper-level identity checks don't apply.
+    if (!params?.provider) {
       return { created_by: parent.created_by };
+    }
+
+    const caller = params.user;
+    if (!caller) {
+      // External call without an authenticated user should never reach here
+      // (auth hooks run first), but fail closed defensively.
+      throw new Forbidden('Cannot spawn/fork session without an authenticated caller identity.');
     }
 
     // Look up the parent's worktree to read the opt-in flag.

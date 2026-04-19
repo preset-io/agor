@@ -1514,13 +1514,13 @@ export function determineSpawnIdentity(
   // else's session.
   if (worktree?.dangerously_allow_session_sharing === true) {
     // Opt-in legacy behavior: preserve identity borrowing. Log loudly.
-    console.warn(
-      '[SECURITY] cross-user session spawn/fork allowed by ' +
-        'dangerously_allow_session_sharing=true: ' +
-        `caller=${callerId ?? 'unknown'} ` +
-        `parent_owner=${parent.created_by} ` +
-        `worktree=${worktree.worktree_id}`
-    );
+    // Structured key/value form so it can be queried by log shippers.
+    console.warn('[SECURITY] legacy_session_sharing', {
+      event: 'legacy_session_sharing',
+      caller_id: callerId ?? null,
+      parent_owner_id: parent.created_by,
+      worktree_id: worktree.worktree_id,
+    });
     return { created_by: parent.created_by, usedLegacySharing: true };
   }
 

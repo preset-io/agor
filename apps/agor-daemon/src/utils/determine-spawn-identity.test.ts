@@ -76,12 +76,14 @@ describe('determineSpawnIdentity', () => {
       expect(result.created_by).toBe(BOB); // child runs under parent owner's identity
       expect(result.usedLegacySharing).toBe(true);
       expect(warnSpy).toHaveBeenCalledTimes(1);
-      const msg = String(warnSpy.mock.calls[0][0]);
-      expect(msg).toContain('[SECURITY]');
-      expect(msg).toContain('dangerously_allow_session_sharing');
-      expect(msg).toContain(ALICE); // caller
-      expect(msg).toContain(BOB); // parent owner
-      expect(msg).toContain('wt-on'); // worktree id
+      const [tag, fields] = warnSpy.mock.calls[0];
+      expect(String(tag)).toContain('[SECURITY]');
+      expect(fields).toMatchObject({
+        event: 'legacy_session_sharing',
+        caller_id: ALICE,
+        parent_owner_id: BOB,
+        worktree_id: 'wt-on',
+      });
     } finally {
       warnSpy.mockRestore();
     }
