@@ -111,6 +111,11 @@ export const sessions = pgTable(
       enum: ['worktree_archived', 'manual', 'btw_completed'],
     }),
 
+    // MCP token generation counter. Every issued MCP token embeds the current
+    // value as the `gen` claim; bumping this column invalidates every token
+    // previously minted for this session (used for "revoke all").
+    mcp_token_generation: integer('mcp_token_generation').notNull().default(0),
+
     // JSON blob for everything else (cross-DB via json() type)
     data: t
       .json<unknown>('data')
@@ -1292,6 +1297,27 @@ export const sessionEnvSelections = pgTable(
 );
 
 /**
+ * MCP Token Revocations - Ledger of individually revoked MCP token `jti`s.
+ *
+ * See the matching sqlite definition for full docs.
+ */
+export const mcpTokenRevocations = pgTable(
+  'mcp_token_revocations',
+  {
+    jti: text('jti').primaryKey(),
+    session_id: varchar('session_id', { length: 36 }),
+    revoked_at: bigint('revoked_at', { mode: 'number' }).notNull(),
+    revoked_by: text('revoked_by'),
+    reason: text('reason').notNull(),
+    expires_at: bigint('expires_at', { mode: 'number' }).notNull(),
+  },
+  (table) => ({
+    sessionIdx: index('mcp_token_revocations_session_idx').on(table.session_id),
+    expiresIdx: index('mcp_token_revocations_expires_idx').on(table.expires_at),
+  })
+);
+
+/**
  * Type exports for use with Drizzle ORM
  */
 export type SessionRow = typeof sessions.$inferSelect;
@@ -1314,6 +1340,8 @@ export type SessionMCPServerRow = typeof sessionMcpServers.$inferSelect;
 export type SessionMCPServerInsert = typeof sessionMcpServers.$inferInsert;
 export type SessionEnvSelectionRow = typeof sessionEnvSelections.$inferSelect;
 export type SessionEnvSelectionInsert = typeof sessionEnvSelections.$inferInsert;
+export type MCPTokenRevocationRow = typeof mcpTokenRevocations.$inferSelect;
+export type MCPTokenRevocationInsert = typeof mcpTokenRevocations.$inferInsert;
 export type UserMCPOAuthTokenRow = typeof userMcpOauthTokens.$inferSelect;
 export type UserMCPOAuthTokenInsert = typeof userMcpOauthTokens.$inferInsert;
 export type CardTypeRow = typeof cardTypes.$inferSelect;

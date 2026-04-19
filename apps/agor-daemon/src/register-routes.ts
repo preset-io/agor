@@ -2872,6 +2872,62 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   };
 
   // ============================================================================
+  // MCP token revocation (admin-only)
+  //
+  // POST /mcp-tokens/:jti/revoke — revoke a single token by jti
+  // GET  /mcp-tokens              — list active (non-expired) revocations
+  //
+  // Bulk "revoke all for a session" is triggered automatically by the sessions
+  // patch hook when a session is archived or terminal (see register-hooks.ts)
+  // and does not need its own endpoint — operators bump the session's
+  // `mcp_token_generation` counter simply by archiving or patching the session.
+  // ============================================================================
+
+  const mcpTokensServiceInstance = appRecord.mcpTokensService as
+    | import('./mcp/tokens.js').MCPTokensService
+    | undefined;
+
+  if (mcpTokensServiceInstance) {
+    app.use('/mcp-tokens/:jti/revoke', {
+      async create(data: unknown, params: RouteParams & { route?: { jti?: string } }) {
+        const jti = params.route?.jti;
+        if (!jti || typeof jti !== 'string') {
+          throw new BadRequest('Revocation requires a jti path parameter');
+        }
+        const body = (data ?? {}) as {
+          reason?: import('./mcp/tokens.js').MCPTokenRevocationReason;
+          sessionId?: SessionID;
+        };
+        const user = params.user as User | undefined;
+        const revokedBy = user?.user_id;
+        return mcpTokensServiceInstance.revoke(jti, {
+          reason: body.reason ?? 'manual',
+          sessionId: body.sessionId,
+          revokedBy,
+        });
+      },
+    });
+
+    app.service('/mcp-tokens/:jti/revoke').hooks({
+      before: {
+        create: [requireAuth, requireMinimumRole(ROLES.ADMIN, 'revoke MCP tokens')],
+      },
+    });
+
+    app.use('/mcp-tokens', {
+      async find() {
+        return mcpTokensServiceInstance.list();
+      },
+    });
+
+    app.service('/mcp-tokens').hooks({
+      before: {
+        find: [requireAuth, requireMinimumRole(ROLES.ADMIN, 'list MCP token revocations')],
+      },
+    });
+  }
+
+  // ============================================================================
   // Apply service tier hooks
   // ============================================================================
 

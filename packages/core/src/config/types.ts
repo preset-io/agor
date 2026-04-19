@@ -310,6 +310,42 @@ export interface AgorExecutionSettings {
   /** Maximum session token uses (default: 1 = single-use, -1 = unlimited) */
   session_token_max_uses?: number;
 
+  /**
+   * MCP session token expiration in ms (default: 86400000 = 24 hours).
+   *
+   * Applies to the internal MCP tokens minted for each Agor session
+   * (aud: `agor:mcp:internal`). Every issued token now carries an `exp`
+   * claim; this value controls the lifetime.
+   *
+   * Does NOT affect the (separate) executor-side `session_token_*` settings,
+   * which gate the short-lived JWT issued to spawned subprocesses.
+   */
+  mcp_token_expiration_ms?: number;
+
+  /**
+   * Automatically revoke all outstanding MCP tokens for a session when it
+   * reaches a terminal state (`completed` or `failed`). Default: false.
+   *
+   * Revocation is implemented by bumping the session's `mcp_token_generation`,
+   * which invalidates every outstanding token in a single write.
+   *
+   * Operators with a tight security posture can opt in. Keeping the default
+   * off preserves existing behaviour where a dormant session's token stays
+   * valid until its JWT `exp` passes.
+   */
+  auto_revoke_on_session_complete?: boolean;
+
+  /**
+   * Grace window (ms) for accepting legacy MCP tokens minted before this
+   * release. Legacy tokens have no `jti`/`exp` claims; they are accepted
+   * for this long after daemon startup, with a WARN log on every use so
+   * operators can track which sessions still need to re-issue.
+   *
+   * Default: 604800000 (7 days). Set to 0 to reject all legacy tokens
+   * immediately (hard cut).
+   */
+  mcp_token_accept_legacy_grace_ms?: number;
+
   /** Sync web passwords to Unix user passwords (default: true). When enabled, passwords are synced on user creation/update. */
   sync_unix_passwords?: boolean;
 

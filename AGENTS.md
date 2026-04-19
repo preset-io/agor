@@ -371,6 +371,11 @@ execution:
   session_token_expiration_ms: number # default: 86400000 (24h)
   session_token_max_uses: number # default: 1, -1 = unlimited
 
+  # MCP session tokens (daemon ↔ MCP server channel)
+  mcp_token_expiration_ms: number            # default: 86400000 (24h)
+  auto_revoke_on_session_complete: boolean   # default: false — revoke-all on terminal state
+  mcp_token_accept_legacy_grace_ms: number   # default: 604800000 (7d) — 0 to reject immediately
+
   # Password sync (strict mode)
   sync_unix_passwords: boolean # default: true
 

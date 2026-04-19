@@ -85,6 +85,84 @@ This makes Agor a control plane for other AI systems, enabling remote triage bot
 - **Log agent activity.** Sessions capture every MCP action they trigger, making reviews and audits straightforward.
 - **Reuse concept files.** Agents can load `context/` docs via MCP, ensuring automations stay aligned with team conventions.
 
+## Operator Runbook: Revoking MCP Tokens
+
+MCP session tokens are short-lived JWTs that embed a `jti` (issuance ID), an
+`exp`, and a `gen` claim tied to the session's `mcp_token_generation`
+counter. You can invalidate them through three paths, in order of
+increasing blast radius:
+
+### 1. Revoke a single leaked token (admin)
+
+If you have the token string (or its `jti`) and only want that one rejected:
+
+```bash
+# Decode the jti from the token (first base64 segment → JSON)
+JTI=$(echo "<token>" | cut -d. -f2 | base64 -d 2>/dev/null | jq -r .jti)
+
+curl -X POST "http://<daemon>/mcp-tokens/$JTI/revoke" \
+  -H "Authorization: Bearer <admin-jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{"reason":"manual","sessionId":"<session-id>"}'
+```
+
+The `jti` is added to the revocation ledger (`mcp_token_revocations` table)
+and the in-memory cache immediately — no daemon restart required. Other
+outstanding tokens for the same session keep working.
+
+### 2. Revoke every outstanding token for a session
+
+Archive the session, or patch it to a terminal state with
+`execution.auto_revoke_on_session_complete=true`:
+
+```bash
+curl -X PATCH "http://<daemon>/sessions/<session-id>" \
+  -H "Authorization: Bearer <jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{"archived":true}'
+```
+
+This bumps `sessions.mcp_token_generation`. Every token previously minted
+for this session carries the old `gen` and is rejected on next validation.
+New tokens (from `GET /sessions/:id` or a new prompt) pick up the new gen.
+
+### 3. Audit active revocations
+
+```bash
+curl "http://<daemon>/mcp-tokens" -H "Authorization: Bearer <admin-jwt>"
+```
+
+Returns only non-expired ledger rows. Rows whose `expires_at` is in the past
+are pruned hourly by `cleanupExpiredTokens` (the token's own `exp` already
+rejects it, so there's no point keeping the ledger entry around).
+
+### Config knobs
+
+```yaml
+execution:
+  # Token lifetime — keep short to cap the damage from a leak.
+  mcp_token_expiration_ms: 86400000            # 24h (default)
+
+  # Bump session gen when a session enters `completed`/`failed`.
+  # Archive always revokes, regardless of this flag.
+  auto_revoke_on_session_complete: false       # default
+
+  # Grace window for pre-rollout tokens that have no jti/exp.
+  # Each use during the grace window emits a WARN log naming the session + user.
+  # Set to 0 to reject legacy tokens immediately.
+  mcp_token_accept_legacy_grace_ms: 604800000  # 7d (default)
+```
+
+### Troubleshooting
+
+| Symptom                                            | Likely cause                                               | Fix                                           |
+|----------------------------------------------------|------------------------------------------------------------|-----------------------------------------------|
+| `token rejected: expired`                          | Token past its `exp`                                       | Session will re-mint on next `GET /sessions`  |
+| `token rejected: gen mismatch`                     | `revokeAllForSession` ran (session archived/completed)     | Re-mint token (next GET or new prompt)        |
+| `token rejected: jti … revoked`                    | Operator revoked this jti                                  | Expected — have caller re-mint                |
+| `LEGACY token accepted (grace window active …)`    | Pre-rollout token still in use                             | Re-prompt / restart the session to re-mint    |
+| `LEGACY token rejected (grace window expired)`     | Legacy token after `mcp_token_accept_legacy_grace_ms`      | Session owner must restart the session        |
+
 ## Related Reading
 
 - [Architecture Guide: Agor as an MCP Server](./architecture#agor-as-an-mcp-server)

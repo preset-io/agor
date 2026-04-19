@@ -41,6 +41,7 @@ export const gatewayChannels = schema.gatewayChannels;
 export const threadSessionMap = schema.threadSessionMap;
 export const userApiKeys = schema.userApiKeys;
 export const serializedSessions = schema.serializedSessions;
+export const mcpTokenRevocations = schema.mcpTokenRevocations;
 
 // Re-export all types
 export type * from './schema.sqlite';
