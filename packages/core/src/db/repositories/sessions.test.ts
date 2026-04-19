@@ -164,7 +164,9 @@ describe('SessionRepository.create', () => {
     const worktree = await createTestWorktree(db);
     const task1 = generateId();
     const task2 = generateId();
-    const parentId = generateId();
+    // parent_session_id has a real FK to sessions — insert a parent row first.
+    const parent = await repo.create(createSessionData({ worktree_id: worktree.worktree_id }));
+    const parentId = parent.session_id;
     const spawnTaskId = generateId();
 
     const data = createSessionData({
@@ -221,7 +223,9 @@ describe('SessionRepository.create', () => {
   dbTest('should preserve genealogy with forked_from_session_id', async ({ db }) => {
     const repo = new SessionRepository(db);
     const worktree = await createTestWorktree(db);
-    const forkedFromId = generateId();
+    // forked_from_session_id has a real FK to sessions — insert a parent row first.
+    const forkedFrom = await repo.create(createSessionData({ worktree_id: worktree.worktree_id }));
+    const forkedFromId = forkedFrom.session_id;
     const data = createSessionData({
       worktree_id: worktree.worktree_id,
       genealogy: {
@@ -541,17 +545,17 @@ describe('SessionRepository.findByStatus', () => {
 // ============================================================================
 
 describe('SessionRepository.findByBoard', () => {
-  dbTest('should return all sessions (board filtering done at service layer)', async ({ db }) => {
+  dbTest('should return empty when no sessions match the board', async ({ db }) => {
     const repo = new SessionRepository(db);
     const worktree = await createTestWorktree(db);
 
     await repo.create(createSessionData({ worktree_id: worktree.worktree_id }));
     await repo.create(createSessionData({ worktree_id: worktree.worktree_id }));
 
+    // board_id on sessions is materialized (NULL by default in sessionToInsert);
+    // filtering by an arbitrary board returns no matches.
     const sessions = await repo.findByBoard('board-123');
-
-    // Currently returns all sessions (TODO: Add board_id as materialized column)
-    expect(sessions).toHaveLength(2);
+    expect(sessions).toHaveLength(0);
   });
 });
 

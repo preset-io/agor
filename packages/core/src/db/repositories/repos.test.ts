@@ -691,13 +691,12 @@ describe('RepoRepository slug uniqueness', () => {
 // ============================================================================
 
 describe('RepoRepository edge cases', () => {
-  dbTest('should handle empty local_path', async ({ db }) => {
+  dbTest('should reject empty local_path', async ({ db }) => {
     const repo = new RepoRepository(db);
     const data = createRepoData({ local_path: '' });
 
-    const created = await repo.create(data);
-
-    expect(created.local_path).toBe('');
+    // local_path is required — the repository rejects falsy values.
+    await expect(repo.create(data)).rejects.toThrow(/local_path/);
   });
 
   dbTest('should handle undefined default_branch', async ({ db }) => {

@@ -213,46 +213,48 @@ describe('user-manager', () => {
     describe('createUser', () => {
       it('generates useradd command with defaults', () => {
         const cmd = UnixUserCommands.createUser('alice');
-        expect(cmd).toBe('useradd -m -d "/home/alice" -s "/bin/bash" "alice"');
+        expect(cmd).toBe('sudo -n useradd -m -d "/home/alice" -s "/bin/bash" "alice"');
       });
 
       it('uses custom shell and home base', () => {
         const cmd = UnixUserCommands.createUser('alice', '/bin/zsh', '/users');
-        expect(cmd).toBe('useradd -m -d "/users/alice" -s "/bin/zsh" "alice"');
+        expect(cmd).toBe('sudo -n useradd -m -d "/users/alice" -s "/bin/zsh" "alice"');
       });
     });
 
     describe('createUserWithId', () => {
       it('generates useradd with UID', () => {
         const cmd = UnixUserCommands.createUserWithId('alice', 1001);
-        expect(cmd).toBe('useradd -m -d "/home/alice" -s "/bin/bash" -u 1001  "alice"');
+        expect(cmd).toBe('sudo -n useradd -m -d "/home/alice" -s "/bin/bash" -u 1001  "alice"');
       });
 
       it('includes GID when provided', () => {
         const cmd = UnixUserCommands.createUserWithId('alice', 1001, 1001);
-        expect(cmd).toBe('useradd -m -d "/home/alice" -s "/bin/bash" -u 1001 -g 1001 "alice"');
+        expect(cmd).toBe(
+          'sudo -n useradd -m -d "/home/alice" -s "/bin/bash" -u 1001 -g 1001 "alice"'
+        );
       });
     });
 
     describe('deleteUser', () => {
       it('generates userdel command (keep home)', () => {
-        expect(UnixUserCommands.deleteUser('alice')).toBe('userdel "alice"');
+        expect(UnixUserCommands.deleteUser('alice')).toBe('sudo -n userdel "alice"');
       });
     });
 
     describe('deleteUserWithHome', () => {
       it('generates userdel -r command', () => {
-        expect(UnixUserCommands.deleteUserWithHome('alice')).toBe('userdel -r "alice"');
+        expect(UnixUserCommands.deleteUserWithHome('alice')).toBe('sudo -n userdel -r "alice"');
       });
     });
 
     describe('lockUser / unlockUser', () => {
       it('generates lock command', () => {
-        expect(UnixUserCommands.lockUser('alice')).toBe('usermod -L "alice"');
+        expect(UnixUserCommands.lockUser('alice')).toBe('sudo -n usermod -L "alice"');
       });
 
       it('generates unlock command', () => {
-        expect(UnixUserCommands.unlockUser('alice')).toBe('usermod -U "alice"');
+        expect(UnixUserCommands.unlockUser('alice')).toBe('sudo -n usermod -U "alice"');
       });
     });
 
@@ -270,9 +272,9 @@ describe('user-manager', () => {
       it('returns array of mkdir + chown + chmod commands', () => {
         const cmds = UnixUserCommands.createOwnedDirectory('/data/project', 'alice');
         expect(cmds).toEqual([
-          'mkdir -p "/data/project"',
-          'chown "alice:alice" "/data/project"',
-          'chmod 755 "/data/project"',
+          'sudo -n mkdir -p "/data/project"',
+          'sudo -n chown "alice:alice" "/data/project"',
+          'sudo -n chmod 755 "/data/project"',
         ]);
       });
 
@@ -284,9 +286,9 @@ describe('user-manager', () => {
           '775'
         );
         expect(cmds).toEqual([
-          'mkdir -p "/data/shared"',
-          'chown "alice:developers" "/data/shared"',
-          'chmod 775 "/data/shared"',
+          'sudo -n mkdir -p "/data/shared"',
+          'sudo -n chown "alice:developers" "/data/shared"',
+          'sudo -n chmod 775 "/data/shared"',
         ]);
       });
     });
@@ -295,8 +297,8 @@ describe('user-manager', () => {
       it('returns array of directory setup commands', () => {
         const cmds = UnixUserCommands.setupWorktreesDir('alice');
         expect(cmds).toEqual([
-          'mkdir -p "/home/alice/agor/worktrees"',
-          'chown -R "alice:alice" "/home/alice/agor"',
+          'sudo -n mkdir -p "/home/alice/agor/worktrees"',
+          'sudo -n chown -R "alice:alice" "/home/alice/agor"',
         ]);
       });
     });

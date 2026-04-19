@@ -39,8 +39,10 @@ async function createTestRepo(dirPath: string): Promise<void> {
   await fs.mkdir(dirPath, { recursive: true });
   const git = simpleGit(dirPath);
 
-  // Initialize repo
-  await git.init();
+  // Initialize repo with explicit "main" default branch so tests are
+  // agnostic to the host's init.defaultBranch config (older systems still
+  // default to "master").
+  await git.init(['--initial-branch=main']);
   await git.addConfig('user.name', 'Test User');
   await git.addConfig('user.email', 'test@example.com');
 
@@ -73,7 +75,7 @@ async function createTestRepoWithBranches(dirPath: string): Promise<void> {
 async function createBareRepo(dirPath: string): Promise<void> {
   await fs.mkdir(dirPath, { recursive: true });
   const git = simpleGit(dirPath);
-  await git.init(['--bare']);
+  await git.init(['--bare', '--initial-branch=main']);
 }
 
 /**
@@ -190,10 +192,11 @@ describe('isValidGitRepo', () => {
 
   it('should return true for bare repository', async () => {
     await createBareRepo(tempDir);
-    // Note: isGitRepo uses 'git status' which fails on bare repos
-    // This is acceptable behavior - bare repos are edge case
-    expect(await isValidGitRepo(tempDir)).toBe(false);
-    expect(await isGitRepo(tempDir)).toBe(false);
+    // isValidGitRepo uses `git rev-parse --git-dir`, which succeeds on bare
+    // repos (they have git metadata at the top level). Treat bare repos as
+    // valid — they are legitimate remotes used elsewhere in the codebase.
+    expect(await isValidGitRepo(tempDir)).toBe(true);
+    expect(await isGitRepo(tempDir)).toBe(true);
   });
 });
 

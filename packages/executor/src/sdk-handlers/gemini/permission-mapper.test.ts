@@ -57,16 +57,14 @@ describe('mapPermissionMode', () => {
       expect(mapPermissionMode('bypassPermissions')).toBe(expectedDefault);
     });
 
-    it('should fallback to centralized default for legacy "ask" mode', () => {
-      // Legacy Codex mode should fallback to Gemini default
-      const expectedDefault = mapPermissionMode(GEMINI_DEFAULT_PERMISSION_MODE);
-      expect(mapPermissionMode('ask')).toBe(expectedDefault);
+    it('should map legacy "ask" mode to DEFAULT (cross-agent compat)', () => {
+      // Codex-style 'ask' maps to Gemini DEFAULT (prompt per tool use).
+      expect(mapPermissionMode('ask')).toBe(Gemini.ApprovalMode.DEFAULT);
     });
 
-    it('should fallback to centralized default for legacy "allow-all" mode', () => {
-      // Legacy Codex mode should fallback to Gemini default
-      const expectedDefault = mapPermissionMode(GEMINI_DEFAULT_PERMISSION_MODE);
-      expect(mapPermissionMode('allow-all')).toBe(expectedDefault);
+    it('should map legacy "allow-all" mode to YOLO (cross-agent compat)', () => {
+      // Codex-style 'allow-all' maps to Gemini YOLO (auto-approve all).
+      expect(mapPermissionMode('allow-all')).toBe(Gemini.ApprovalMode.YOLO);
     });
   });
 

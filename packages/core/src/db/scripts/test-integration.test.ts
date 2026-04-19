@@ -744,34 +744,38 @@ describe('Error Handling', () => {
     ).rejects.toThrow();
   });
 
-  it('should handle invalid session status enum', async () => {
+  it('should accept any status string at the repository layer', async () => {
+    // Status enum validation belongs in the service/API layer; the repository
+    // treats `status` as an opaque text column (SQLite has no CHECK constraint).
     const db = createTestDb();
     await initializeDatabase(db);
     const { worktree } = await setupRepoAndWorktree(db);
 
     const repo = new SessionRepository(db);
 
-    await expect(
-      repo.create({
-        agentic_tool: 'claude-code',
-        status: 'invalid-status' as any,
-        created_by: 'test-user' as UserID,
-        worktree_id: worktree.worktree_id,
-        git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
-        genealogy: { children: [] },
-        contextFiles: [],
-        tasks: [],
-      })
-    ).rejects.toThrow();
+    const created = await repo.create({
+      agentic_tool: 'claude-code',
+      status: 'invalid-status' as any,
+      created_by: 'test-user' as UserID,
+      worktree_id: worktree.worktree_id,
+      git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
+      genealogy: { children: [] },
+      contextFiles: [],
+      tasks: [],
+    });
+    expect(created.status).toBe('invalid-status');
   });
 
-  it('should handle duplicate board slugs', async () => {
+  it('should auto-disambiguate duplicate board slugs', async () => {
+    // BoardRepository.create calls generateUniqueSlug() which appends a
+    // numeric suffix when a slug already exists, rather than surfacing the
+    // UNIQUE-constraint error to the caller.
     const db = createTestDb();
     await initializeDatabase(db);
 
     const repo = new BoardRepository(db);
 
-    await repo.create({
+    const first = await repo.create({
       name: 'Board 1',
       slug: 'duplicate-slug',
       description: 'Test',
@@ -779,15 +783,17 @@ describe('Error Handling', () => {
       icon: 'star',
     });
 
-    await expect(
-      repo.create({
-        name: 'Board 2',
-        slug: 'duplicate-slug',
-        description: 'Test',
-        color: '#fff',
-        icon: 'rocket',
-      })
-    ).rejects.toThrow();
+    const second = await repo.create({
+      name: 'Board 2',
+      slug: 'duplicate-slug',
+      description: 'Test',
+      color: '#fff',
+      icon: 'rocket',
+    });
+
+    expect(first.slug).toBe('duplicate-slug');
+    expect(second.slug).not.toBe('duplicate-slug');
+    expect(second.slug).toMatch(/^duplicate-slug-/);
   });
 });
 

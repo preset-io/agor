@@ -5,6 +5,7 @@
  * Does NOT test LibSQL/Drizzle internals - only our wrapper logic.
  */
 
+import { homedir } from 'node:os';
 import { createClient } from '@libsql/client';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -23,6 +24,18 @@ vi.mock('@libsql/client', () => ({
     close: vi.fn(),
   })),
 }));
+
+// Mock node:os so we can control what `homedir()` returns in path-expansion
+// tests. `homedir()` doesn't just read $HOME — it falls back to the user
+// database when env vars are missing, which made the previous tests coupled
+// to the developer's actual home directory.
+vi.mock('node:os', async () => {
+  const actual = await vi.importActual<typeof import('node:os')>('node:os');
+  return {
+    ...actual,
+    homedir: vi.fn(actual.homedir),
+  };
+});
 
 // Mock drizzle to avoid requiring real schema
 vi.mock('drizzle-orm/libsql', () => ({
@@ -148,26 +161,10 @@ describe('createDatabase', () => {
 });
 
 describe('path expansion', () => {
-  const originalHome = process.env.HOME;
-  const originalUserProfile = process.env.USERPROFILE;
-
-  // Helper to restore environment after each test
-  function restoreEnv() {
-    if (originalHome !== undefined) {
-      process.env.HOME = originalHome;
-    } else {
-      delete process.env.HOME;
-    }
-    if (originalUserProfile !== undefined) {
-      process.env.USERPROFILE = originalUserProfile;
-    } else {
-      delete process.env.USERPROFILE;
-    }
-  }
+  const mockedHomedir = vi.mocked(homedir);
 
   it('should expand ~ in file paths using HOME', () => {
-    process.env.HOME = '/home/testuser';
-    delete process.env.USERPROFILE;
+    mockedHomedir.mockReturnValueOnce('/home/testuser');
 
     createDatabase({ url: 'file:~/.agor/test.db' });
 
@@ -176,43 +173,35 @@ describe('path expansion', () => {
         url: 'file:/home/testuser/.agor/test.db',
       })
     );
-
-    restoreEnv();
   });
 
   it('should expand ~ using USERPROFILE when HOME not set', () => {
-    delete process.env.HOME;
-    process.env.USERPROFILE = 'C:\\Users\\testuser';
+    // On Windows, os.homedir() returns USERPROFILE's value.
+    mockedHomedir.mockReturnValueOnce('C:\\Users\\testuser');
 
     createDatabase({ url: 'file:~/.agor/test.db' });
 
     expect(createClient).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: 'file:C:\\Users\\testuser/.agor/test.db',
+        url: expect.stringContaining('C:\\Users\\testuser'),
       })
     );
-
-    restoreEnv();
   });
 
   it('should handle empty home directory gracefully', () => {
-    delete process.env.HOME;
-    delete process.env.USERPROFILE;
+    // When homedir() returns empty string, path.join yields a relative path.
+    mockedHomedir.mockReturnValueOnce('');
 
     createDatabase({ url: 'file:~/.agor/test.db' });
 
     expect(createClient).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: 'file:/.agor/test.db',
+        url: 'file:.agor/test.db',
       })
     );
-
-    restoreEnv();
   });
 
   it('should not expand ~ in non-file URLs', () => {
-    process.env.HOME = '/home/testuser';
-
     createDatabase({ url: 'libsql://~/database.turso.io' });
 
     expect(createClient).toHaveBeenCalledWith(
@@ -220,13 +209,9 @@ describe('path expansion', () => {
         url: 'libsql://~/database.turso.io',
       })
     );
-
-    restoreEnv();
   });
 
   it('should not expand ~ in memory URLs', () => {
-    process.env.HOME = '/home/testuser';
-
     createDatabase({ url: ':memory:' });
 
     expect(createClient).toHaveBeenCalledWith(
@@ -234,13 +219,9 @@ describe('path expansion', () => {
         url: ':memory:',
       })
     );
-
-    restoreEnv();
   });
 
   it('should preserve absolute paths without expansion', () => {
-    process.env.HOME = '/home/testuser';
-
     createDatabase({ url: 'file:/absolute/path/db.sqlite' });
 
     expect(createClient).toHaveBeenCalledWith(
@@ -248,13 +229,9 @@ describe('path expansion', () => {
         url: 'file:/absolute/path/db.sqlite',
       })
     );
-
-    restoreEnv();
   });
 
   it('should only expand ~ at start of path', () => {
-    process.env.HOME = '/home/testuser';
-
     createDatabase({ url: 'file:/path/~/db.sqlite' });
 
     expect(createClient).toHaveBeenCalledWith(
@@ -262,8 +239,6 @@ describe('path expansion', () => {
         url: 'file:/path/~/db.sqlite',
       })
     );
-
-    restoreEnv();
   });
 });
 

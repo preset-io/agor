@@ -12,6 +12,9 @@
  * Don't add single-use utilities here - keep this file lean.
  */
 
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'vitest';
 import { createDatabase, type Database } from './client';
 import { initializeDatabase } from './migrate';
@@ -37,15 +40,29 @@ import { initializeDatabase } from './migrate';
 export const dbTest = test.extend<{ db: Database }>({
   // biome-ignore lint/correctness/noEmptyPattern: Playwright test fixture pattern requires empty destructure
   db: async ({}, use) => {
-    // Create fresh in-memory SQLite database
-    const db = createDatabase({ url: ':memory:' });
+    // Use a per-test temp file instead of :memory:.
+    // Rationale: the libsql client opens a fresh connection for each
+    // transaction, and `:memory:` databases are isolated per-connection,
+    // which breaks any code under test that starts a transaction after
+    // creating schema on the initial connection. A unique file path per
+    // test gives us identical isolation with a single shared DB.
+    const dir = mkdtempSync(join(tmpdir(), 'agor-core-test-'));
+    const dbPath = join(dir, 'test.db');
+    const db = createDatabase({ url: `file:${dbPath}` });
 
     // Initialize schema (creates all tables, indexes, etc.)
     await initializeDatabase(db);
 
-    // Provide database to test
-    await use(db);
-
-    // Cleanup happens automatically when test completes
+    try {
+      // Provide database to test
+      await use(db);
+    } finally {
+      // Best-effort cleanup of the temp dir (ignore errors on Windows)
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // noop
+      }
+    }
   },
 });

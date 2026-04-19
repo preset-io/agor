@@ -606,6 +606,15 @@ describe('getDaemonUrl', () => {
 
     // Save original env
     originalEnv = { ...process.env };
+
+    // Clear env vars that getDaemonUrl() consults so tests are isolated
+    // from the developer's actual dev environment (e.g. when running tests
+    // while the daemon is up on a non-default port).
+    delete process.env.DAEMON_URL;
+    delete process.env.PORT;
+    delete process.env.AGOR_DAEMON_URL;
+    delete process.env.AGOR_DAEMON_HOST;
+    delete process.env.AGOR_DAEMON_PORT;
   });
 
   afterEach(async () => {

@@ -547,13 +547,18 @@ describe('WorktreeRepository.update', () => {
     });
     await wtRepo.create(data);
 
+    // deepMerge treats `undefined` as "leave unchanged" and `null` as
+    // "clear" — pass null explicitly to clear optional fields.
     const updated = await wtRepo.update(data.worktree_id, {
-      board_id: undefined,
-      notes: undefined,
+      board_id: null as unknown as UUID,
+      notes: null as unknown as string,
     });
 
+    // board_id is a nullable column; rowToWorktree maps null → undefined.
     expect(updated.board_id).toBeUndefined();
-    expect(updated.notes).toBeUndefined();
+    // notes lives inside the JSON `data` blob; a cleared field comes back
+    // as null (json serialisation) rather than omitted.
+    expect(updated.notes ?? undefined).toBeUndefined();
   });
 
   dbTest('should throw EntityNotFoundError for non-existent ID', async ({ db }) => {
