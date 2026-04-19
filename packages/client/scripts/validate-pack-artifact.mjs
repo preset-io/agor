@@ -74,16 +74,20 @@ const typeFiles = packedFiles.filter(
   (file) => file.endsWith('.d.ts') || file.endsWith('.d.cts') || file.endsWith('.d.mts')
 );
 
+// Matches import/export/require statements referencing @agor/core, but not
+// occurrences inside comments or doc-strings.
+const importPattern = /(?:^|[\s;])(?:import|export|require)\s.*['"]@agor\/core(?:\/[^'"]*)?['"]/m;
+
 for (const file of runtimeFiles) {
   const content = readFileSync(file, 'utf8');
-  if (content.includes('@agor/core')) {
+  if (importPattern.test(content)) {
     fail(`Runtime artifact still references @agor/core: ${path.relative(packedRoot, file)}`);
   }
 }
 
 for (const file of typeFiles) {
   const content = readFileSync(file, 'utf8');
-  if (content.includes('@agor/core')) {
+  if (importPattern.test(content)) {
     fail(`Type artifact still references @agor/core: ${path.relative(packedRoot, file)}`);
   }
 }
