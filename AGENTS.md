@@ -373,7 +373,6 @@ execution:
 
   # MCP session tokens (daemon ↔ MCP server channel)
   mcp_token_expiration_ms: number            # default: 86400000 (24h)
-  mcp_token_accept_legacy_grace_ms: number   # default: 604800000 (7d) — 0 to reject immediately
 
   # Password sync (strict mode)
   sync_unix_passwords: boolean # default: true

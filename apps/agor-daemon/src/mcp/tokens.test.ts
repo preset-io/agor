@@ -10,8 +10,7 @@
  *   - expired token → rejected
  *   - deleted session → token rejected (even before `exp`)
  *   - bogus issuer → rejected
- *   - legacy tokens (no jti/exp) accepted during grace window, rejected after
- *   - legacy tokens rejected after session deletion (even in grace)
+ *   - pre-rollout tokens (no jti/exp) → rejected
  */
 
 import {
@@ -30,7 +29,6 @@ import { afterEach, describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import {
   generateSessionToken,
-  getLegacyGraceUntilMs,
   initMcpTokens,
   MCP_TOKEN_AUDIENCE,
   MCP_TOKEN_ISSUER,
@@ -107,7 +105,7 @@ afterEach(() => {
 
 describe('generateSessionToken', () => {
   dbTest('issues a token with jti, exp, iat, aud, iss claims', async ({ db }) => {
-    initMcpTokens({ db, expirationMs: 60_000, acceptLegacyGraceMs: 0 });
+    initMcpTokens({ db, expirationMs: 60_000 });
     const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
     const app = makeApp();
 
@@ -165,7 +163,6 @@ describe('validateSessionToken', () => {
     expect(ctx).not.toBeNull();
     expect(ctx?.sessionId).toBe(sessionId);
     expect(ctx?.userId).toBe('u1');
-    expect(ctx?.legacy).toBeUndefined();
     expect(typeof ctx?.jti).toBe('string');
   });
 
@@ -177,7 +174,7 @@ describe('validateSessionToken', () => {
     const baseMs = Date.now();
     vi.useFakeTimers({ now: baseMs, shouldAdvanceTime: false });
     try {
-      initMcpTokens({ db, expirationMs: 60_000, acceptLegacyGraceMs: 0 });
+      initMcpTokens({ db, expirationMs: 60_000 });
       const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
       const token = await generateSessionToken(makeApp(), sessionId, 'u1' as UserID);
 
@@ -227,78 +224,21 @@ describe('validateSessionToken', () => {
 
     expect(await validateSessionToken(makeApp(), forged)).toBeNull();
   });
-});
 
-// ---------------------------------------------------------------------------
-// Legacy-token grace window
-// ---------------------------------------------------------------------------
+  dbTest('rejects a pre-rollout token missing jti/exp', async ({ db }) => {
+    initMcpTokens({ db });
+    const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
 
-describe('legacy token grace window', () => {
-  /**
-   * Pre-rollout tokens were minted without `jti` or `exp`. The module accepts
-   * them for a grace window after startup so existing sessions don't lose
-   * access mid-flight during a rolling deploy.
-   */
-  function mintLegacyToken(sessionId: SessionID, userId: UserID): string {
-    return jwt.sign(
+    // Pre-rollout tokens were minted without `jti` or `exp` (and no `iss`).
+    const legacy = jwt.sign(
       {
         sub: sessionId,
-        uid: userId,
+        uid: 'u1',
         aud: MCP_TOKEN_AUDIENCE,
       },
       JWT_SECRET,
       { algorithm: 'HS256', noTimestamp: true }
     );
-  }
-
-  dbTest('accepts a legacy token during the grace window', async ({ db }) => {
-    const nowMs = 1_700_000_000_000;
-    initMcpTokens({
-      db,
-      acceptLegacyGraceMs: 60_000,
-      now: () => nowMs,
-    });
-    expect(getLegacyGraceUntilMs()).toBe(nowMs + 60_000);
-
-    const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
-    const legacy = mintLegacyToken(sessionId, 'u1' as UserID);
-
-    const ctx = await validateSessionToken(makeApp(), legacy);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.legacy).toBe(true);
-    expect(ctx?.jti).toBeUndefined();
-  });
-
-  dbTest('rejects a legacy token after the grace window closes', async ({ db }) => {
-    let nowMs = 1_700_000_000_000;
-    initMcpTokens({
-      db,
-      acceptLegacyGraceMs: 60_000,
-      now: () => nowMs,
-    });
-    const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
-    const legacy = mintLegacyToken(sessionId, 'u1' as UserID);
-
-    nowMs += 120_000; // past the 60s grace
-    expect(await validateSessionToken(makeApp(), legacy)).toBeNull();
-  });
-
-  dbTest('rejects legacy tokens immediately when acceptLegacyGraceMs is 0', async ({ db }) => {
-    initMcpTokens({ db, acceptLegacyGraceMs: 0 });
-    expect(getLegacyGraceUntilMs()).toBe(0);
-
-    const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
-    const legacy = mintLegacyToken(sessionId, 'u1' as UserID);
-
-    expect(await validateSessionToken(makeApp(), legacy)).toBeNull();
-  });
-
-  dbTest('rejects a legacy token for a deleted session, even during grace', async ({ db }) => {
-    initMcpTokens({ db, acceptLegacyGraceMs: 60 * 60 * 1000 });
-    const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
-    const legacy = mintLegacyToken(sessionId, 'u1' as UserID);
-
-    await deleteFrom(db, sessions).where(eq(sessions.session_id, sessionId)).run();
 
     expect(await validateSessionToken(makeApp(), legacy)).toBeNull();
   });

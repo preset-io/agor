@@ -20,12 +20,6 @@
  *
  * A session-existence check is still performed during validation so tokens
  * for deleted sessions are rejected even if they haven't yet hit their `exp`.
- *
- * Legacy tokens: tokens minted before this change have no `jti`/`exp` claims.
- * They are accepted for a grace window after daemon startup (default: 7 days)
- * with a WARN log per use so operators can see which sessions still need to
- * reissue. Set `execution.mcp_token_accept_legacy_grace_ms = 0` to reject
- * immediately.
  */
 
 import { type Database, generateId, SessionRepository } from '@agor/core/db';
@@ -58,21 +52,13 @@ interface McpTokenPayload {
 export interface McpTokenContext {
   sessionId: SessionID;
   userId: UserID;
-  /** Present for post-rollout tokens; undefined for legacy tokens during grace. */
-  jti?: string;
-  /** True when the token had no `jti`/`exp` claims and was accepted during grace. */
-  legacy?: boolean;
+  jti: string;
 }
 
 export interface McpTokenInitOptions {
   db: Database;
   /** Token lifetime in ms (default: 24h). */
   expirationMs?: number;
-  /**
-   * How long after startup legacy (pre-rollout) tokens remain valid.
-   * Default: 7 days. Set to 0 for a hard cut.
-   */
-  acceptLegacyGraceMs?: number;
   /** Override `Date.now()` for tests. */
   now?: () => number;
 }
@@ -84,8 +70,6 @@ export interface McpTokenInitOptions {
 interface ModuleState {
   sessionRepo: SessionRepository;
   expirationMs: number;
-  acceptLegacyGraceMs: number;
-  legacyGraceUntilMs: number;
   now: () => number;
 }
 
@@ -110,22 +94,15 @@ function requireState(): ModuleState {
  */
 export function initMcpTokens(options: McpTokenInitOptions): void {
   const expirationMs = options.expirationMs ?? 24 * 60 * 60 * 1000;
-  const acceptLegacyGraceMs = options.acceptLegacyGraceMs ?? 7 * 24 * 60 * 60 * 1000;
   const now = options.now ?? (() => Date.now());
-
-  const legacyGraceUntilMs = acceptLegacyGraceMs > 0 ? now() + acceptLegacyGraceMs : 0;
 
   _state = {
     sessionRepo: new SessionRepository(options.db),
     expirationMs,
-    acceptLegacyGraceMs,
-    legacyGraceUntilMs,
     now,
   };
 
-  console.log(
-    `[mcp-tokens] initialized: exp=${expirationMs}ms, legacy_grace=${acceptLegacyGraceMs}ms`
-  );
+  console.log(`[mcp-tokens] initialized: exp=${expirationMs}ms`);
 }
 
 /**
@@ -133,14 +110,6 @@ export function initMcpTokens(options: McpTokenInitOptions): void {
  */
 export function shutdownMcpTokens(): void {
   _state = null;
-}
-
-/**
- * Current legacy grace expiry (ms since epoch). Exposed for observability and
- * test assertions; returns 0 when legacy tokens are rejected outright.
- */
-export function getLegacyGraceUntilMs(): number {
-  return _state?.legacyGraceUntilMs ?? 0;
 }
 
 // ============================================================================
@@ -206,11 +175,10 @@ export const getTokenForSession = generateSessionToken;
  *
  * Rejection reasons:
  *  - bad signature / wrong audience / wrong issuer / expired (`jsonwebtoken.verify`)
- *  - legacy token (no `jti`) arriving after the grace window
+ *  - missing `jti`/`exp` claims (pre-rollout tokens are rejected outright)
  *  - session no longer exists
  *
- * Returns `null` on any failure; returns a context object (including
- * `legacy: true`) for accepted legacy tokens during the grace window.
+ * Returns `null` on any failure.
  */
 export async function validateSessionToken(
   app: Application,
@@ -224,15 +192,11 @@ export async function validateSessionToken(
   }
 
   let payload: McpTokenPayload;
-  const isLegacyToken = !hasJtiAndExp(token);
   try {
-    // Legacy tokens (pre-rollout) have no `exp` claim, so we skip `jwt.verify`'s
-    // expiration + issuer checks for them; everything else (signature, audience,
-    // algorithm, session) still applies via the code below.
     payload = jwt.verify(token, jwtSecret, {
       audience: MCP_TOKEN_AUDIENCE,
+      issuer: MCP_TOKEN_ISSUER,
       algorithms: ['HS256'],
-      ...(isLegacyToken ? {} : { issuer: MCP_TOKEN_ISSUER }),
     }) as McpTokenPayload;
   } catch (err) {
     if (err instanceof jwt.TokenExpiredError) {
@@ -252,19 +216,9 @@ export async function validateSessionToken(
     return null;
   }
 
-  const isLegacy = payload.jti === undefined || payload.exp === undefined;
-
-  if (isLegacy) {
-    const nowMs = s.now();
-    if (!(s.legacyGraceUntilMs > 0 && nowMs <= s.legacyGraceUntilMs)) {
-      console.warn(
-        `[mcp-tokens] LEGACY token rejected (grace window expired): session=${sessionId.substring(0, 8)} uid=${userId.substring(0, 8)}`
-      );
-      return null;
-    }
-    console.warn(
-      `[mcp-tokens] LEGACY token accepted (grace window active, ${Math.ceil((s.legacyGraceUntilMs - nowMs) / 1000)}s remaining): session=${sessionId.substring(0, 8)} uid=${userId.substring(0, 8)} — reissue by restarting the session`
-    );
+  if (!payload.jti) {
+    console.warn('[mcp-tokens] token rejected: missing jti');
+    return null;
   }
 
   // Reject tokens whose session has been deleted — protects against stale
@@ -275,20 +229,5 @@ export async function validateSessionToken(
     return null;
   }
 
-  if (isLegacy) {
-    return { sessionId, userId, legacy: true };
-  }
-
   return { sessionId, userId, jti: payload.jti };
-}
-
-/**
- * Cheap peek at a JWT to detect the legacy-token shape (missing `jti`/`exp`)
- * WITHOUT verifying the signature. The subsequent `jwt.verify` is what
- * establishes trust — this is just used to decide which `verify` options to
- * pass (legacy tokens lack `exp`, so we skip `issuer` too for backward compat).
- */
-function hasJtiAndExp(token: string): boolean {
-  const decoded = jwt.decode(token) as McpTokenPayload | null;
-  return decoded?.jti !== undefined && decoded?.exp !== undefined;
 }

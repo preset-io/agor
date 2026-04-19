@@ -111,11 +111,6 @@ liability we avoid by default.
 execution:
   # Token lifetime — keep short to cap the damage from a leak.
   mcp_token_expiration_ms: 86400000            # 24h (default)
-
-  # Grace window for pre-rollout tokens that have no jti/exp.
-  # Each use during the grace window emits a WARN log naming the session + user.
-  # Set to 0 to reject legacy tokens immediately.
-  mcp_token_accept_legacy_grace_ms: 604800000  # 7d (default)
 ```
 
 ### Troubleshooting
@@ -124,8 +119,7 @@ execution:
 |----------------------------------------------------|------------------------------------------------------------|-----------------------------------------------|
 | `token rejected: expired`                          | Token past its `exp`                                       | Session will re-mint on next `GET /sessions`  |
 | `token rejected: session … not found`              | Token's session was deleted                                | Expected — token can no longer be used        |
-| `LEGACY token accepted (grace window active …)`    | Pre-rollout token still in use                             | Re-prompt / restart the session to re-mint    |
-| `LEGACY token rejected (grace window expired)`     | Legacy token after `mcp_token_accept_legacy_grace_ms`      | Session owner must restart the session        |
+| `token rejected: missing jti`                      | Pre-rollout token (no `jti`/`exp`)                         | Re-prompt / restart the session to re-mint    |
 
 ## Related Reading
 

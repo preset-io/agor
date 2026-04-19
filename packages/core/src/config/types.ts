@@ -322,17 +322,6 @@ export interface AgorExecutionSettings {
    */
   mcp_token_expiration_ms?: number;
 
-  /**
-   * Grace window (ms) for accepting legacy MCP tokens minted before this
-   * release. Legacy tokens have no `jti`/`exp` claims; they are accepted
-   * for this long after daemon startup, with a WARN log on every use so
-   * operators can track which sessions still need to re-issue.
-   *
-   * Default: 604800000 (7 days). Set to 0 to reject all legacy tokens
-   * immediately (hard cut).
-   */
-  mcp_token_accept_legacy_grace_ms?: number;
-
   /** Sync web passwords to Unix user passwords (default: true). When enabled, passwords are synced on user creation/update. */
   sync_unix_passwords?: boolean;
 

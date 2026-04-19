@@ -529,14 +529,13 @@ cannot prompt sessions via REST, so MCP would be useless for them anyway, and
 omitting `mcp_token` from viewer-facing responses prevents accidental token
 leakage through the session read path.
 
-### Legacy token grace window
+### Pre-rollout tokens
 
-Tokens minted before this rollout carry no `jti`/`exp`. They are accepted for
-a window after daemon startup
-(`execution.mcp_token_accept_legacy_grace_ms`, default 7 days) with a `WARN`
-log per use listing the session and user so operators can see which sessions
-still need to be re-minted. Set the value to `0` to reject legacy tokens
-immediately.
+Tokens minted before this rollout carry no `jti`/`exp` and are rejected
+outright. In practice this only matters during a daemon restart — restarting
+the daemon kills all in-flight prompts, and the next prompt invocation
+re-mints a fresh token on the way out, so there is no disruption worth
+papering over.
 
 ### Related files
 
