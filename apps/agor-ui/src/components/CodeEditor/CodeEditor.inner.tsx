@@ -30,10 +30,15 @@ export interface CodeEditorInnerProps {
   maxHeight?: string;
 }
 
-const LANGUAGE_EXTENSIONS = {
+// Factory shape shared by CM6 `@codemirror/lang-*` packages: each exports a
+// zero-arg constructor returning an Extension. Inferring the type from `json`
+// avoids taking a direct dep on `@codemirror/state` (which is transitive).
+type LanguageExtensionFactory = typeof json;
+
+const LANGUAGE_EXTENSIONS: Record<CodeEditorLanguage, LanguageExtensionFactory> = {
   json,
   yaml,
-} satisfies Record<CodeEditorLanguage, () => unknown>;
+};
 
 const CodeEditorInner: React.FC<CodeEditorInnerProps> = ({
   value,
@@ -45,16 +50,9 @@ const CodeEditorInner: React.FC<CodeEditorInnerProps> = ({
   minHeight,
   maxHeight,
 }) => {
-  const { themeMode, customTheme } = useTheme();
-  const isDark =
-    themeMode === 'dark' ||
-    (themeMode === 'custom' &&
-      // `customTheme.algorithm` can be a function ref or array — presence of
-      // any darkAlgorithm is treated as dark. Safe fallback: default to dark
-      // since Agor's default theme is dark.
-      (Array.isArray(customTheme?.algorithm)
-        ? customTheme?.algorithm?.some((a) => a?.name?.includes?.('dark'))
-        : customTheme?.algorithm?.name?.includes?.('dark')));
+  // `isDark` is the canonical dark/light signal from ThemeContext — already
+  // accounts for `themeMode === 'custom'` rendering dark.
+  const { isDark } = useTheme();
 
   const extensions = useMemo(() => [LANGUAGE_EXTENSIONS[language]()], [language]);
 

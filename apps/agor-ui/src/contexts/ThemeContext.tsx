@@ -13,6 +13,13 @@ export interface ThemeContextValue {
   customTheme: ThemeConfig | null;
   setCustomTheme: (theme: ThemeConfig | null) => void;
   getCurrentThemeConfig: () => ThemeConfig;
+  /**
+   * Whether the current theme resolves to a dark palette. Canonical source
+   * for components that need to pick dark/light variants of a non-antd asset
+   * (e.g. CodeMirror's `oneDark`). Derived from the rendered `algorithm`, so
+   * consumers don't have to repeat the `themeMode === 'custom'` logic.
+   */
+  isDark: boolean;
 }
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
@@ -100,11 +107,13 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, [themeMode, customTheme]);
 
+  // Custom themes always render with darkAlgorithm (see `getCurrentThemeConfig`),
+  // so `custom` implies dark. Anything non-`light` is considered dark.
+  const isDark = themeMode !== 'light';
+
   // Update document background color and theme class when theme changes
   useEffect(() => {
     const _config = getCurrentThemeConfig();
-    const isDark =
-      themeMode === 'dark' || (themeMode === 'custom' && customTheme?.algorithm === darkAlgorithm);
 
     // Set background color on document body
     document.body.style.backgroundColor = isDark ? '#141414' : '#f0f2f5';
@@ -115,7 +124,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     } else {
       document.documentElement.classList.remove('dark');
     }
-  }, [themeMode, customTheme, getCurrentThemeConfig]);
+  }, [isDark, getCurrentThemeConfig]);
 
   return (
     <ThemeContext.Provider
@@ -125,6 +134,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         customTheme,
         setCustomTheme,
         getCurrentThemeConfig,
+        isDark,
       }}
     >
       {children}

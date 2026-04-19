@@ -14,7 +14,7 @@
  * See docs/designs/env-command-variants.md.
  */
 
-import { resolveVariant } from '../config/agor-yml';
+import { resolveVariantOrThrow } from '../config/agor-yml';
 import { buildWorktreeContext, renderTemplate } from '../templates/handlebars-helpers';
 import type { RepoEnvironment } from '../types/worktree';
 
@@ -115,8 +115,11 @@ export function renderWorktreeSnapshot(
     throw new Error(`Unknown environment variant "${chosen}" for repo "${repo.slug ?? ''}"`);
   }
 
-  // Resolve single-level extends to a fully-materialized variant.
-  const resolved = resolveVariant(env, chosen);
+  // Resolve single-level extends to a fully-materialized variant. Uses the
+  // throwing variant because `env.variants[chosen]` is already guaranteed to
+  // exist above; any remaining miss is a hard schema error, not a recoverable
+  // fallback.
+  const resolved = resolveVariantOrThrow(env, chosen);
   if (!resolved.start || !resolved.stop) {
     throw new Error(
       `Variant "${chosen}" must define both "start" and "stop" (directly or via extends)`

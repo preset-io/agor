@@ -5,9 +5,13 @@
  * Callers should prefer {@link getEffectiveEnv} instead of hand-dereferencing
  * `repo.environment_config.*` so that the UI works whether the backend has
  * populated v2 yet or not.
+ *
+ * Variant resolution is delegated to `@agor-live/client` (re-exported from
+ * `@agor/core/config/browser`) — the same module the daemon / repository
+ * layer uses, so there's a single source of truth for `extends` semantics.
  */
 
-import type { Repo, RepoEnvironment, RepoEnvironmentVariant } from '@agor-live/client';
+import { type Repo, resolveVariant } from '@agor-live/client';
 
 /**
  * Normalized view of the *default* environment commands for a repo — the ones
@@ -24,38 +28,7 @@ export interface EffectiveEnv {
   hasConfig: boolean;
 }
 
-/**
- * Resolve a variant by name, merging a single-level `extends` parent under it.
- *
- * Field-by-field: child wins where defined, parent fills gaps. `extends` is
- * stripped from the result. Mirrors `resolveVariant` in
- * `packages/core/src/config/agor-yml.ts` — intentionally inlined here to stay
- * browser-safe (that module imports `node:fs`).
- */
-export function resolveVariant(
-  env: RepoEnvironment,
-  variantName: string
-): RepoEnvironmentVariant | null {
-  const variant = env.variants[variantName];
-  if (!variant) return null;
-  if (!variant.extends) {
-    const { extends: _drop, ...rest } = variant;
-    return rest;
-  }
-  const parent = env.variants[variant.extends];
-  if (!parent) return null;
-  const merged: RepoEnvironmentVariant = {
-    start: variant.start ?? parent.start,
-    stop: variant.stop ?? parent.stop,
-  };
-  if (variant.description ?? parent.description)
-    merged.description = variant.description ?? parent.description;
-  if (variant.nuke ?? parent.nuke) merged.nuke = variant.nuke ?? parent.nuke;
-  if (variant.logs ?? parent.logs) merged.logs = variant.logs ?? parent.logs;
-  if (variant.health ?? parent.health) merged.health = variant.health ?? parent.health;
-  if (variant.app ?? parent.app) merged.app = variant.app ?? parent.app;
-  return merged;
-}
+export { resolveVariant };
 
 /**
  * Return the "default" effective environment for a repo — v2 default variant

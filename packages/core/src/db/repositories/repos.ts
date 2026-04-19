@@ -4,14 +4,9 @@
  * Type-safe CRUD operations for git repositories with short ID support.
  */
 
-import type {
-  Repo,
-  RepoEnvironment,
-  RepoEnvironmentConfigV1,
-  RepoEnvironmentVariant,
-  UUID,
-} from '@agor/core/types';
+import type { Repo, RepoEnvironment, RepoEnvironmentConfigV1, UUID } from '@agor/core/types';
 import { eq, like, sql } from 'drizzle-orm';
+import { resolveVariant, wrapV1AsV2 } from '../../config/variant-resolver.js';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
@@ -33,18 +28,11 @@ import { deepMerge } from './merge-utils';
  */
 function deriveV1FromV2(env: RepoEnvironment | undefined): RepoEnvironmentConfigV1 | undefined {
   if (!env) return undefined;
-  const variant = env.variants?.[env.default];
-  if (!variant) return undefined;
-  // Resolve single-level extends for the v1 projection as well, so UI readers
-  // see a fully-materialized command set.
-  const base: RepoEnvironmentVariant | undefined = variant.extends
-    ? env.variants?.[variant.extends]
-    : undefined;
-  const resolved: RepoEnvironmentVariant = {
-    ...(base ?? { start: '', stop: '' }),
-    ...variant,
-    extends: undefined,
-  };
+  // Canonical resolution lives in `variant-resolver.ts` — share it so the v1
+  // projection reflects exactly the same `extends` semantics as the parser,
+  // runtime commands, and UI.
+  const resolved = resolveVariant(env, env.default);
+  if (!resolved) return undefined;
   // Resolved variant must have start/stop (parser validates). Fall back to
   // empty string defensively so downstream consumers never see `undefined`.
   const v1: RepoEnvironmentConfigV1 = {
@@ -56,27 +44,6 @@ function deriveV1FromV2(env: RepoEnvironment | undefined): RepoEnvironmentConfig
   if (resolved.app) v1.app_url_template = resolved.app;
   if (resolved.health) v1.health_check = { type: 'http', url_template: resolved.health };
   return v1;
-}
-
-/**
- * Wrap a legacy v1 environment_config as a v2 environment with a single
- * `default` variant. Used when callers still write the v1 shape.
- */
-function wrapV1AsV2(v1: RepoEnvironmentConfigV1 | undefined): RepoEnvironment | undefined {
-  if (!v1) return undefined;
-  const variant: RepoEnvironmentVariant = {
-    start: v1.up_command,
-    stop: v1.down_command,
-  };
-  if (v1.nuke_command) variant.nuke = v1.nuke_command;
-  if (v1.logs_command) variant.logs = v1.logs_command;
-  if (v1.app_url_template) variant.app = v1.app_url_template;
-  if (v1.health_check?.url_template) variant.health = v1.health_check.url_template;
-  return {
-    version: 2,
-    default: 'default',
-    variants: { default: variant },
-  };
 }
 
 /**

@@ -1949,7 +1949,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       },
     },
     {
-      create: { role: ROLES.MEMBER, action: 'export .agor.yml' },
+      // Admin-only, matching Import and repo.environment edit. Export writes a
+      // file to the worktree working tree, so even though the content is
+      // derivable, the side effect warrants the same permission bar as import.
+      create: { role: ROLES.ADMIN, action: 'export .agor.yml' },
     },
     requireAuth
   );

@@ -14,12 +14,12 @@
  * YAML dep centralized in core rather than pulling it directly into the UI.
  */
 
-import type {
-  AgorClient,
-  Repo,
-  RepoEnvironment,
-  RepoEnvironmentVariant,
-  Worktree,
+import {
+  type AgorClient,
+  type Repo,
+  type RepoEnvironment,
+  validateRepoEnvironment,
+  type Worktree,
 } from '@agor-live/client';
 import * as yaml from '@agor-live/client/yaml';
 import {
@@ -334,6 +334,10 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   };
 
   // ----- Repo editor save/cancel -----
+  // Validation goes through the shared core validator so UI / daemon / import
+  // all enforce the same schema invariants (required start/stop, extends
+  // single-level, default-in-variants, etc.). See
+  // `packages/core/src/config/variant-resolver.ts`.
   const validateRepoYaml = (text: string): RepoEnvironment | null => {
     if (!text.trim()) {
       setRepoYamlError('Empty — paste or write a RepoEnvironment YAML document');
@@ -346,46 +350,14 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       setRepoYamlError(err instanceof Error ? err.message : 'Invalid YAML');
       return null;
     }
-    if (typeof parsed !== 'object' || parsed === null) {
-      setRepoYamlError('Expected a YAML mapping (object)');
+    try {
+      const validated = validateRepoEnvironment(parsed);
+      setRepoYamlError(null);
+      return validated;
+    } catch (err) {
+      setRepoYamlError(err instanceof Error ? err.message : 'Invalid RepoEnvironment');
       return null;
     }
-    const obj = parsed as Partial<RepoEnvironment>;
-    if (obj.version !== 2) {
-      setRepoYamlError('`version` must be 2');
-      return null;
-    }
-    if (!obj.default || typeof obj.default !== 'string') {
-      setRepoYamlError('`default` must be a variant name string');
-      return null;
-    }
-    if (!obj.variants || typeof obj.variants !== 'object') {
-      setRepoYamlError('`variants` must be a map of variant-name → object');
-      return null;
-    }
-    if (!(obj.default in obj.variants)) {
-      setRepoYamlError(`\`default\` "${obj.default}" is not defined in \`variants\``);
-      return null;
-    }
-    // Single-level extends check — mirrors server-side validateExtends.
-    for (const [name, v] of Object.entries(obj.variants)) {
-      const variant = v as RepoEnvironmentVariant;
-      if (variant.extends) {
-        const parent = obj.variants[variant.extends];
-        if (!parent) {
-          setRepoYamlError(`variant "${name}" extends unknown "${variant.extends}"`);
-          return null;
-        }
-        if ((parent as RepoEnvironmentVariant).extends) {
-          setRepoYamlError(
-            `variant "${name}" extends "${variant.extends}" which itself extends — only single-level extends is allowed`
-          );
-          return null;
-        }
-      }
-    }
-    setRepoYamlError(null);
-    return obj as RepoEnvironment;
   };
 
   const handleSaveRepo = () => {
