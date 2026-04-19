@@ -7,6 +7,7 @@
 export * from './api/index.js';
 export * from './config/index.js';
 export * from './db/index.js';
+export * from './environment/render-snapshot.js';
 export * from './git/index.js';
 export * from './lib/validation.js';
 export * from './mcp/index.js';

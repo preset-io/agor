@@ -85,6 +85,11 @@
       "import": "./dist/environment/variable-resolver.js",
       "require": "./dist/environment/variable-resolver.cjs"
     },
+    "./environment/render-snapshot": {
+      "types": "./dist/environment/render-snapshot.d.ts",
+      "import": "./dist/environment/render-snapshot.js",
+      "require": "./dist/environment/render-snapshot.cjs"
+    },
     "./utils/errors": {
       "types": "./dist/utils/errors.d.ts",
       "import": "./dist/utils/errors.js",
