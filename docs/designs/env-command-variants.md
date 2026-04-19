@@ -44,24 +44,23 @@ environment:
 
     postgres:
       description: "Postgres + Redis + Celery — closer to prod"
+      extends: lean              # single-level only; see rules below
+      # Only the fields that differ from lean:
       start: "docker compose -p agor-{{worktree.name}} up -d --build"
       stop:  "docker compose -p agor-{{worktree.name}} down"
       nuke:  "docker compose -p agor-{{worktree.name}} down -v"
       logs:  "docker compose -p agor-{{worktree.name}} logs --tail=100"
-      health: "http://{{host.ip_address}}:{{add 9000 worktree.unique_id}}/health"
-      app:    "http://{{host.ip_address}}:{{add 5000 worktree.unique_id}}"
 
     full:
       description: "Postgres + Redis + Celery + worker + beat"
+      extends: lean              # NOT `extends: postgres` — see rules
       start: "COMPOSE_PROFILES=full docker compose -p agor-{{worktree.name}} up -d --build"
       stop:  "docker compose -p agor-{{worktree.name}} down"
       nuke:  "docker compose -p agor-{{worktree.name}} down -v"
       logs:  "docker compose -p agor-{{worktree.name}} logs --tail=100"
-      health: "http://{{host.ip_address}}:{{add 9000 worktree.unique_id}}/health"
-      app:    "http://{{host.ip_address}}:{{add 5000 worktree.unique_id}}"
 ```
 
-**Deliberately no `extends` inheritance.** Each variant is self-contained. Verbosity is a feature here — you read one variant top-to-bottom and know exactly what runs. Parser rejects a variant that references another variant.
+**`extends` is single-level only.** A variant may extend a **base** variant (one that has no `extends` key of its own). A variant that itself extends something else cannot be extended. This rules out chains like `full → postgres → lean` while keeping the common case — "same as `lean` but with a different `start`" — ergonomic. Parser rejects chains deeper than one level at save time with a clear error (`"variant 'full' extends 'postgres', which itself extends 'lean' — chains deeper than one level are not allowed"`). Resolution is a simple per-field merge: child fields override base fields; fields the child omits are inherited.
 
 ### 2b. Repo-level `template_overrides` — DB-only, never exported
 
@@ -174,17 +173,29 @@ Replace the current form-based Environment tab with two stacked YAML editors. On
 ### Interaction rules
 
 - **Read/edit exclusivity:** starting edit on one editor disables the `[Edit]` button on the other until the user saves or cancels. Prevents cross-level confusion and avoids a second modal.
-- **Top editor (repo):** admin-only. YAML of `version`, `environment.variants`, `environment.default`, and `template_overrides`. On save: parse, validate, persist to `repo.environment`. `template_overrides` is stripped before any `.agor.yml` export.
-- **Bottom editor (worktree):** any user with `others_can: session+`. Flat YAML of the 6 rendered commands. On save: persist to `worktree.start_command` / `stop_command` / etc. No Handlebars, no variant references — pure strings.
-- **Variant picker + Render button:** changing the variant dropdown doesn't take effect until Render is clicked. Render re-evaluates with the current repo variant + `template_overrides`, overwrites the bottom editor contents. If the bottom editor has unsaved manual edits, Render prompts a confirm (`"Rendering will discard your local edits. Continue?"`).
+- **Top editor (repo):** **admin-only to edit; readable by everyone** with repo access. YAML of `version`, `environment.variants`, `environment.default`, and `template_overrides`. On save: parse, validate, persist to `repo.environment`. `template_overrides` is stripped before any `.agor.yml` export.
+- **Bottom editor (worktree):** **admin-only.** Direct YAML editing of the 6 rendered commands is restricted to admins. Members do not see the `[Edit]` button on the bottom editor — only the Variant picker + Render button. Rationale: admins curate the set of commands that can run; members pick from that curated list and apply. This makes the admin's variant library the effective allowlist (complements the deny-list guard from PR #1034).
+- **Variant picker + Render button:** available to **members and up**. Changing the dropdown doesn't take effect until Render is clicked. Render re-evaluates with the current repo variant + `template_overrides`, overwrites the bottom editor contents. If the snapshot has unsaved manual edits (admin only), Render prompts a confirm (`"Rendering will discard your local edits. Continue?"`). For members, Render always applies cleanly (no manual edits possible).
+- **Start/Stop/Nuke/Logs buttons:** gated by `managed_envs_minimum_role` as today — orthogonal to the edit permissions above.
 - **Docs link** inline in each editor's edit mode — points to `https://agor.live/guide/environment-configuration`. Section anchors for `#variants`, `#template-overrides`, `#template-vars`.
+
+### Permission summary
+
+| Action | Member | Admin |
+|---|---|---|
+| View repo config (top editor) | ✅ read-only | ✅ |
+| Edit repo variants / `template_overrides` | ❌ | ✅ |
+| Import / export `.agor.yml` | ❌ | ✅ |
+| Pick variant + Render to worktree | ✅ | ✅ |
+| Edit worktree rendered commands directly | ❌ | ✅ |
+| Start / Stop / Nuke / Logs | per `managed_envs_minimum_role` | per `managed_envs_minimum_role` |
 
 ### Validation on save
 
 Minimal. Matches the "just valid YAML" bar:
 
 - **Both editors:** parse as YAML; reject on syntax error with line number.
-- **Repo editor:** `environment.variants` is a map of variant-name → object; each variant has `start` and `stop` (at minimum); `environment.default` references a variant that exists; no variant references another variant (no `extends`-style keys). Unknown top-level keys warn but don't block (forward-compat).
+- **Repo editor:** `environment.variants` is a map of variant-name → object; each variant has `start` and `stop` **after `extends` resolution** (at minimum); `environment.default` references a variant that exists; `extends` is single-level (reject if `variants[X].extends = Y` and `variants[Y].extends` is set); `extends` target must exist. Unknown top-level keys warn but don't block (forward-compat).
 - **Worktree editor:** 6 known keys (`start`, `stop`, `nuke`, `health`, `app`, `logs`); `start` + `stop` required; values are strings.
 - **Not validated pre-save:** Handlebars template correctness. Broken templates show their errors at render time — fast enough feedback loop.
 - **Security:** deny-list check (PR #1034) runs on the final rendered string at execute time, not at save time. Keeps the editors free of false-positive noise while preserving the execution-time guard.
@@ -234,7 +245,8 @@ Zero forced user action. Existing repos keep working as a single `default` varia
 | Alternative | Why rejected |
 |---|---|
 | **Multiple `.agor-<variant>.yml` files** | Clutters repo root; implicit default; triples import UX surface. |
-| **`extends` inheritance between variants** | Considered for DRY. Rejected: readers shouldn't have to trace an inheritance chain to understand what a variant runs. Per-variant duplication is cheap (6 lines). |
+| **Multi-level `extends` inheritance** (`full → postgres → lean`) | Rejected: readers have to trace chains to understand what runs. Single-level is the sweet spot — common case is "same as X with one field changed," which single-level covers; anything deeper is usually a sign you want a new base variant anyway. |
+| **Letting members hand-edit worktree rendered commands** | Rejected: would bypass the admin-curated allowlist. Members pick from variants the admin signed off on; manual string edits remain admin-only. |
 | **Embed local overrides inside `.agor.yml` with a `local:` block + `.gitignore`** | User has to `.gitignore` a partially-committed file. Merge conflicts on every pull. `template_overrides` in DB removes the file entirely. |
 | **Form-based UI per field (like today)** | Hides YAML structure; creates divergence between "form state" and "stored state"; harder to paste/diff/comment on. YAML editors are honest and copy-paste-friendly. |
 | **Sparse-overrides map on the worktree (`environment_overrides: { start?: ... }`)** | Preserves template link but adds read-time layering that's hard to explain. Rendered snapshot + "re-render" button covers the realistic case (short-lived worktrees). |
@@ -247,12 +259,13 @@ Zero forced user action. Existing repos keep working as a single `default` varia
 
 ## 8. Open questions
 
-1. **Who picks the variant — worktree creator or admin?** Current proposal: creator picks at create-time; default comes from `.agor.yml`; admins can change it later. Alternative: admin-only variant selection (tighter control; loses flexibility for members).
-2. **Runtime variant switching.** Changing `environment_variant` on a worktree whose environment is running — do we auto-nuke + restart, prompt the user, or just re-render and let the user trigger restart manually? Leaning toward "re-render only; user hits Stop/Start."
-3. **`.agor.yml` from non-default branches.** If worktree `feat/x` has a different `.agor.yml` than `main`, which wins on import? Today, `worktree_id` in the import call picks the worktree's checkout (`repos.ts:789`). Keep that behavior, or always read from `main`?
-4. **`template_overrides` scoping.** Do we ever need per-variant overrides (`template_overrides.variants.postgres.host.ip_address`)? The Preset host-IP use case is "one value for the whole repo." Proposal: start with flat per-repo only; add per-variant if a concrete need shows up.
-5. **Variant-level access control.** Orgs may want a `production-like` variant restricted to admins. Could piggy-back on the existing `managed_envs_minimum_role` config, or become a per-variant field. Deferring until someone asks.
-6. **Docs location.** `apps/agor-docs/pages/guide/environment-configuration.mdx` is the canonical landing page. Sections needed: overview, template vars (`worktree.*`, `repo.*`, `host.*`, `custom.*`), variant schema, `template_overrides` semantics, import/export flow, deny-list awareness. Tracked as a follow-up to the implementation PR.
+1. **Runtime variant switching.** Changing `environment_variant` on a worktree whose environment is running — auto-nuke + restart, prompt the user, or just re-render and let the user trigger restart manually? Leaning toward "re-render only; user hits Stop/Start."
+2. **`.agor.yml` from non-default branches.** If worktree `feat/x` has a different `.agor.yml` than `main`, which wins on import? Today, `worktree_id` in the import call picks the worktree's checkout (`repos.ts:789`). Keep that behavior, or always read from `main`?
+3. **`template_overrides` scoping.** Do we ever need per-variant overrides (`template_overrides.variants.postgres.host.ip_address`)? The Preset host-IP use case is "one value for the whole repo." Proposal: start with flat per-repo only; add per-variant if a concrete need shows up.
+4. **Variant-level access control.** With members restricted to admin-curated variants, this may be moot for v1. If an org wants a `production-like` variant hidden from members entirely, we'd add a per-variant `admin_only: true` field. Deferring until someone asks.
+5. **`extends` resolution across `.agor.yml` v1 import.** Flat v1 files have no variants → becomes `variants.default` with no `extends`. Safe. Worth noting in the migration docs.
+
+_Resolved by review:_ who picks the variant (members pick from admin-curated list, render-only); docs location (`apps/agor-docs/pages/guide/environment-configuration.mdx`, linked from the edit-mode toolbar)._
 
 ---
 
