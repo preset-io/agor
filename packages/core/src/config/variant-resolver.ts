@@ -290,8 +290,15 @@ export function validateAgorYmlSchema(parsed: unknown): RepoEnvironment | null {
 
 /**
  * Validate an already-shaped {@link RepoEnvironment} (e.g. one constructed
- * by the UI editor). Mirrors the `version`/`default`/`variants` checks done
- * on file import and runs {@link validateExtends}. Throws on violation.
+ * by the UI editor or read from the DB row) and return a normalized copy.
+ *
+ * Mirrors the `version`/`default`/`variants` checks done on file import and
+ * runs {@link validateExtends}. Unlike {@link validateAgorYmlSchema} this is
+ * the DB-side validator: `template_overrides` is **preserved** (not
+ * rejected) because it is a deployment-local field that lives only in the
+ * database row and is allowed on the in-memory `repo.environment` object.
+ *
+ * Throws on violation.
  */
 export function validateRepoEnvironment(obj: unknown): RepoEnvironment {
   if (typeof obj !== 'object' || obj === null) {
@@ -324,6 +331,15 @@ export function validateRepoEnvironment(obj: unknown): RepoEnvironment {
     default: env.default,
     variants: normalized,
   };
+  // Preserve `template_overrides` if present — it's DB-only but legitimately
+  // lives on `repo.environment` and would silently disappear on save if we
+  // rebuilt the object without it. Shape-guard: must be a plain object map.
+  if (env.template_overrides !== undefined) {
+    if (typeof env.template_overrides !== 'object' || env.template_overrides === null) {
+      throw new Error('`template_overrides` must be a mapping (object)');
+    }
+    result.template_overrides = env.template_overrides as Record<string, unknown>;
+  }
   validateExtends(result);
   return result;
 }
