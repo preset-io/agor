@@ -44,9 +44,16 @@ When you launch a session in Agor, the SDK config includes the internal MCP serv
 ```json
 {
   "type": "http",
-  "url": "http://localhost:3030/mcp?sessionToken=…"
+  "url": "http://localhost:3030/mcp",
+  "headers": {
+    "Authorization": "Bearer <mcp_token>"
+  }
 }
 ```
+
+The daemon requires the token in the `Authorization: Bearer` header. Query-
+string tokens are rejected — don't put secrets in URLs, where they'd leak
+into access logs and browser history.
 
 From there agents can:
 

@@ -9,7 +9,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import yaml from 'js-yaml';
-import { DAEMON } from './constants';
+import { DAEMON, MCP_TOKEN } from './constants';
 import type { AgorConfig, UnknownJson } from './types';
 
 /**
@@ -142,6 +142,7 @@ export function getDefaultConfig(): AgorConfig {
     execution: {
       session_token_expiration_ms: 86400000, // 24 hours
       session_token_max_uses: 1, // Single-use tokens
+      mcp_token_expiration_ms: MCP_TOKEN.DEFAULT_EXPIRATION_MS,
       sync_unix_passwords: true, // Default: sync passwords to Unix
     },
   };

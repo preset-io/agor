@@ -242,4 +242,50 @@ describe('validateSessionToken', () => {
 
     expect(await validateSessionToken(makeApp(), legacy)).toBeNull();
   });
+
+  dbTest('rejects a signature-valid token that has a jti but is missing exp', async ({ db }) => {
+    // Belt-and-suspenders guard: `jsonwebtoken.verify` only enforces `exp`
+    // when the claim is present. A forged-but-signature-valid token without
+    // `exp` would otherwise pass verify and be replayable forever. Confirm
+    // the explicit `payload.exp === undefined` check rejects it.
+    initMcpTokens({ db });
+    const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
+
+    const forged = jwt.sign(
+      {
+        sub: sessionId,
+        uid: 'u1',
+        aud: MCP_TOKEN_AUDIENCE,
+        iss: MCP_TOKEN_ISSUER,
+        jti: generateId(),
+        // no `exp` — deliberate
+      },
+      JWT_SECRET,
+      { algorithm: 'HS256', noTimestamp: true }
+    );
+
+    expect(await validateSessionToken(makeApp(), forged)).toBeNull();
+  });
+
+  dbTest('rejects a signature-valid token that has an exp but is missing jti', async ({ db }) => {
+    initMcpTokens({ db });
+    const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const forged = jwt.sign(
+      {
+        sub: sessionId,
+        uid: 'u1',
+        aud: MCP_TOKEN_AUDIENCE,
+        iss: MCP_TOKEN_ISSUER,
+        iat: nowSec,
+        exp: nowSec + 60,
+        // no `jti` — deliberate
+      },
+      JWT_SECRET,
+      { algorithm: 'HS256' }
+    );
+
+    expect(await validateSessionToken(makeApp(), forged)).toBeNull();
+  });
 });

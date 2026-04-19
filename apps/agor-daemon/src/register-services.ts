@@ -157,7 +157,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const { initMcpTokens } = await import('./mcp/tokens.js');
   initMcpTokens({
     db,
-    expirationMs: config.execution?.mcp_token_expiration_ms ?? 24 * 60 * 60 * 1000,
+    expirationMs: config.execution?.mcp_token_expiration_ms,
   });
 
   // ============================================================================

@@ -22,6 +22,7 @@
  * for deleted sessions are rejected even if they haven't yet hit their `exp`.
  */
 
+import { MCP_TOKEN } from '@agor/core/config';
 import { type Database, generateId, SessionRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import {
@@ -57,7 +58,7 @@ export interface McpTokenContext {
 
 export interface McpTokenInitOptions {
   db: Database;
-  /** Token lifetime in ms (default: 24h). */
+  /** Token lifetime in ms. Falls back to `MCP_TOKEN.DEFAULT_EXPIRATION_MS` (24h). */
   expirationMs?: number;
   /** Override `Date.now()` for tests. */
   now?: () => number;
@@ -93,7 +94,7 @@ function requireState(): ModuleState {
  * state (tests rely on this).
  */
 export function initMcpTokens(options: McpTokenInitOptions): void {
-  const expirationMs = options.expirationMs ?? 24 * 60 * 60 * 1000;
+  const expirationMs = options.expirationMs ?? MCP_TOKEN.DEFAULT_EXPIRATION_MS;
   const now = options.now ?? (() => Date.now());
 
   _state = {
@@ -216,8 +217,12 @@ export async function validateSessionToken(
     return null;
   }
 
-  if (!payload.jti) {
-    console.warn('[mcp-tokens] token rejected: missing jti');
+  // `jwt.verify` only enforces `exp` when the claim is present; a token with
+  // no `exp` would otherwise pass verify and be valid forever. Enforce both
+  // `jti` and `exp` explicitly so a forged but signature-valid token without
+  // `exp` cannot be minted and replayed indefinitely.
+  if (!payload.jti || payload.exp === undefined) {
+    console.warn('[mcp-tokens] token rejected: missing jti or exp');
     return null;
   }
 

@@ -19,7 +19,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { isPromptFlowPatchOnly, PROMPT_FLOW_PATCH_FIELDS } from './register-hooks';
+import {
+  canReceiveMcpTokenForSession,
+  isPromptFlowPatchOnly,
+  PROMPT_FLOW_PATCH_FIELDS,
+} from './register-hooks';
 
 describe('isPromptFlowPatchOnly', () => {
   describe('accepts whitelisted-only patches', () => {
@@ -95,5 +99,113 @@ describe('isPromptFlowPatchOnly', () => {
       expect(isPromptFlowPatchOnly(42)).toBe(false);
       expect(isPromptFlowPatchOnly(true)).toBe(false);
     });
+  });
+});
+
+/**
+ * Guards the fix for CVE-class issue: `after: get` on /sessions was minting
+ * an MCP token (with `uid = session.created_by`) for any `member+` caller
+ * with `view` permission on the worktree, letting them impersonate the
+ * creator on the MCP channel. Only the creator, a superadmin, or the
+ * executor's service identity may receive the token.
+ */
+describe('canReceiveMcpTokenForSession', () => {
+  const CREATOR = 'user-creator';
+  const OTHER = 'user-other';
+
+  it('allows the session creator (matching user_id)', () => {
+    expect(
+      canReceiveMcpTokenForSession({
+        callerUserId: CREATOR,
+        callerRole: 'member',
+        sessionCreatedBy: CREATOR,
+      })
+    ).toBe(true);
+  });
+
+  it('allows a superadmin even if not the creator', () => {
+    expect(
+      canReceiveMcpTokenForSession({
+        callerUserId: OTHER,
+        callerRole: 'superadmin',
+        sessionCreatedBy: CREATOR,
+      })
+    ).toBe(true);
+  });
+
+  it('allows the executor service identity (role=service)', () => {
+    // role 'service' is not in ROLE_RANK, so hasMinimumRole returns false for
+    // it — the predicate must match it explicitly.
+    expect(
+      canReceiveMcpTokenForSession({
+        callerUserId: 'executor-service',
+        callerRole: 'service',
+        sessionCreatedBy: CREATOR,
+      })
+    ).toBe(true);
+  });
+
+  it('denies a member+ viewer who is NOT the creator (the bypass we fixed)', () => {
+    expect(
+      canReceiveMcpTokenForSession({
+        callerUserId: OTHER,
+        callerRole: 'member',
+        sessionCreatedBy: CREATOR,
+      })
+    ).toBe(false);
+  });
+
+  it('denies a plain admin who is NOT the creator (only superadmin gets through)', () => {
+    expect(
+      canReceiveMcpTokenForSession({
+        callerUserId: OTHER,
+        callerRole: 'admin',
+        sessionCreatedBy: CREATOR,
+      })
+    ).toBe(false);
+  });
+
+  it('denies a creator who has been demoted to viewer', () => {
+    // Viewers never receive MCP tokens per docs — the creator match alone
+    // isn't enough, they must also be at least a member.
+    expect(
+      canReceiveMcpTokenForSession({
+        callerUserId: CREATOR,
+        callerRole: 'viewer',
+        sessionCreatedBy: CREATOR,
+      })
+    ).toBe(false);
+  });
+
+  it('denies anonymous callers (no user_id, no role)', () => {
+    expect(
+      canReceiveMcpTokenForSession({
+        callerUserId: undefined,
+        callerRole: undefined,
+        sessionCreatedBy: CREATOR,
+      })
+    ).toBe(false);
+  });
+
+  it('denies when session has no created_by and caller is not privileged', () => {
+    expect(
+      canReceiveMcpTokenForSession({
+        callerUserId: OTHER,
+        callerRole: 'member',
+        sessionCreatedBy: null,
+      })
+    ).toBe(false);
+  });
+
+  it('does NOT match empty-string caller user_id against empty-string created_by', () => {
+    // Empty-string coincidence must not count as "creator match" — this is
+    // why the predicate guards with `!!callerUserId` before comparing.
+    expect(
+      canReceiveMcpTokenForSession({
+        callerUserId: '',
+        callerRole: 'member',
+        sessionCreatedBy: '',
+      })
+    ).toBe(false);
   });
 });
