@@ -11,7 +11,7 @@
 import type { AgorClient, User, Worktree, WorktreePermissionLevel } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { UserOutlined, WarningOutlined } from '@ant-design/icons';
-import { Alert, Button, Form, Select, Space, Typography } from 'antd';
+import { Alert, Button, Form, Select, Space, Switch, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
 import { Tag } from '../../Tag';
@@ -35,6 +35,9 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
   );
   const [othersFsAccessValue, setOthersFsAccessValue] = useState<'none' | 'read' | 'write'>(
     worktree.others_fs_access || 'read'
+  );
+  const [allowSessionSharing, setAllowSessionSharing] = useState<boolean>(
+    Boolean(worktree.dangerously_allow_session_sharing)
   );
 
   // Check if current user can edit owners
@@ -106,6 +109,7 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
     setSelectedOwnerIds(currentOwnerIds);
     setOthersCanValue(worktree.others_can || 'session');
     setOthersFsAccessValue(worktree.others_fs_access || 'read');
+    setAllowSessionSharing(Boolean(worktree.dangerously_allow_session_sharing));
     setSelectKey((prev) => prev + 1); // Force Select to remount
   };
 
@@ -137,6 +141,7 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
       await client.service('worktrees').patch(worktree.worktree_id, {
         others_can: othersCanValue,
         others_fs_access: othersFsAccessValue,
+        dangerously_allow_session_sharing: allowSessionSharing,
       });
 
       // Reload owners to get fresh data
@@ -174,7 +179,9 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
     selectedOwnerIds.length !== currentOwnerIds.length ||
     selectedOwnerIds.some((id) => !currentOwnerIds.includes(id));
   const permissionsChanged =
-    othersCanValue !== worktree.others_can || othersFsAccessValue !== worktree.others_fs_access;
+    othersCanValue !== worktree.others_can ||
+    othersFsAccessValue !== worktree.others_fs_access ||
+    allowSessionSharing !== Boolean(worktree.dangerously_allow_session_sharing);
   const hasUnsavedChanges = ownersChanged || permissionsChanged;
 
   const permissionLevelDescriptions: Record<WorktreePermissionLevel, string> = {
@@ -312,6 +319,37 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
             ]}
           />
         </Form.Item>
+
+        {/*
+         * TODO(product): finalize copy for "Allow legacy session sharing" — the
+         * label/help/warning text below is provisional. Coordinate wording with
+         * docs + UI.
+         */}
+        <Form.Item
+          label="Allow legacy session sharing"
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          help="When OFF (default), spawning or forking another user's session attributes the new session to YOU. When ON, the new session keeps the original creator's identity, credentials, and Unix user — restoring legacy behavior."
+          style={{ marginBottom: 12 }}
+        >
+          <Switch
+            checked={allowSessionSharing}
+            onChange={setAllowSessionSharing}
+            disabled={!canEdit}
+          />
+        </Form.Item>
+
+        {allowSessionSharing && (
+          <Form.Item wrapperCol={{ offset: 8, span: 16 }} style={{ marginBottom: 12 }}>
+            <Alert
+              type="error"
+              showIcon
+              icon={<WarningOutlined />}
+              message="Dangerous: identity borrowing on spawn/fork"
+              description="With this enabled, sessions spawned or forked by other users in this worktree run under the original creator's OS identity, credentials, and environment variables. A collaborator can effectively execute code as you. Only enable for fully trusted collaborators or legacy automation that depends on the old behavior."
+            />
+          </Form.Item>
+        )}
 
         {hasUnsavedChanges && (
           <Form.Item wrapperCol={{ offset: 8, span: 16 }}>

@@ -567,6 +567,12 @@ export const worktrees = pgTable(
         // Default MCP servers for new sessions in this worktree
         mcp_server_ids?: string[];
 
+        // DANGEROUS: opt-in to legacy session-spawn identity borrowing.
+        // When true, agor_sessions_spawn / agor_sessions_prompt(mode:"fork"|"subsession")
+        // attribute the new child session to the parent owner instead of the
+        // MCP-authenticated caller. See packages/core/src/types/worktree.ts.
+        dangerously_allow_session_sharing?: boolean;
+
         // Schedule configuration (full config in JSON blob)
         schedule?: {
           timezone: string; // IANA timezone (default: 'UTC')

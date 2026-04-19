@@ -160,6 +160,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
         last_used: worktree.last_used ?? new Date(now).toISOString(),
         custom_context: worktree.custom_context,
         mcp_server_ids: worktree.mcp_server_ids,
+        dangerously_allow_session_sharing: worktree.dangerously_allow_session_sharing,
         schedule: worktree.schedule,
       },
     };

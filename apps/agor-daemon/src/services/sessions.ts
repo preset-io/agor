@@ -25,7 +25,7 @@ import type {
 } from '@agor/core/types';
 import { ROLES, SessionStatus } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
-import { isSuperAdmin } from '../utils/worktree-authorization.js';
+import { determineSpawnIdentity, isSuperAdmin } from '../utils/worktree-authorization.js';
 
 /**
  * Session runtime configuration that should be inherited across forks, spawns, and btw.
@@ -190,6 +190,45 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   }
 
   /**
+   * Resolve the `created_by` identity for a child session being created via
+   * spawn / fork / btw. See {@link determineSpawnIdentity} for the rules.
+   *
+   * Defaults the child to the MCP-authenticated caller; only inherits the
+   * parent's identity when the worktree explicitly opts in via the
+   * `dangerously_allow_session_sharing` flag (and the caller is not an admin
+   * acting on someone else's session).
+   *
+   * Internal calls (no `params.user`) preserve parent attribution — they're
+   * service-to-service or scheduler-driven and have no human caller to attribute.
+   */
+  private async resolveChildIdentity(
+    parent: Session,
+    params?: SessionParams
+  ): Promise<{ created_by: Session['created_by'] }> {
+    // No authenticated user on params → internal call (scheduler, callbacks,
+    // service-to-service). Preserve parent attribution.
+    const caller = params?.user;
+    if (!caller || !caller.user_id) {
+      return { created_by: parent.created_by };
+    }
+
+    // Look up the parent's worktree to read the opt-in flag.
+    let worktree: { worktree_id: string; dangerously_allow_session_sharing?: boolean } | undefined;
+    try {
+      const wt = await this.app
+        .service('worktrees')
+        .get(parent.worktree_id, { provider: undefined });
+      worktree = wt as typeof worktree;
+    } catch {
+      // If we can't load the worktree, default to the safe (caller-as-owner) path.
+      worktree = undefined;
+    }
+
+    const result = determineSpawnIdentity(parent, caller, worktree);
+    return { created_by: result.created_by as Session['created_by'] };
+  }
+
+  /**
    * Custom method: Fork a session
    *
    * Creates a new session branching from the current session at a decision point.
@@ -201,6 +240,11 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   ): Promise<Session> {
     const parent = await this.get(id, params);
 
+    // Default: attribute the child to the MCP-authenticated caller, not the
+    // parent owner. Legacy parent-inheriting "identity borrowing" is preserved
+    // only when the worktree opts in via dangerously_allow_session_sharing.
+    const { created_by } = await this.resolveChildIdentity(parent, params);
+
     const forkedSession = await this.create(
       {
         agentic_tool: parent.agentic_tool,
@@ -208,8 +252,10 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         title: data.prompt.substring(0, 100), // First 100 chars as title
         description: data.prompt,
         worktree_id: parent.worktree_id,
-        created_by: parent.created_by, // Inherit parent's creator for proper attribution
-        unix_username: parent.unix_username, // Inherit parent's unix_username for consistent execution context
+        created_by, // See resolveChildIdentity — defaults to caller, not parent owner
+        // unix_username intentionally omitted: setSessionUnixUsername hook
+        // stamps the child with the *caller's* current unix_username so that
+        // the execution context matches the attributed `created_by`.
         git_state: { ...parent.git_state },
         genealogy: {
           forked_from_session_id: parent.session_id,
@@ -235,8 +281,11 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       'fork'
     );
 
-    // Copy session env var selections from parent to forked session
-    // (same creator, same selection context).
+    // Copy parent's env var *names* to forked session.
+    // Names resolve at execution time against the child session's owner's
+    // env vars (see env-var-access.md), so when a cross-user fork happens
+    // these names are looked up under the caller's namespace, not the parent
+    // owner's — no leakage of parent credentials into a fork the caller owns.
     const parentEnvSelections = await this.sessionEnvSelectionRepo.listNames(
       parent.session_id as SessionID
     );
@@ -391,6 +440,11 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       finalPrompt = `${data.prompt}\n\n${data.extraInstructions}`;
     }
 
+    // Default: attribute the child to the MCP-authenticated caller, not the
+    // parent owner. Legacy parent-inheriting "identity borrowing" is preserved
+    // only when the worktree opts in via dangerously_allow_session_sharing.
+    const { created_by } = await this.resolveChildIdentity(parent, params);
+
     const spawnedSession = await this.create(
       {
         agentic_tool: targetTool,
@@ -398,8 +452,10 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         title: data.title || data.prompt.substring(0, 100), // Use provided title or first 100 chars
         description: finalPrompt, // Use final prompt with extra instructions if provided
         worktree_id: parent.worktree_id,
-        created_by: parent.created_by, // Inherit parent's creator for proper attribution
-        unix_username: parent.unix_username, // Inherit parent's unix_username for consistent execution context
+        created_by, // See resolveChildIdentity — defaults to caller, not parent owner
+        // unix_username intentionally omitted: setSessionUnixUsername hook
+        // stamps the child with the *caller's* current unix_username so that
+        // the execution context matches the attributed `created_by`.
         git_state: { ...parent.git_state },
         genealogy: {
           parent_session_id: parent.session_id,

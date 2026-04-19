@@ -559,6 +559,12 @@ export const worktrees = sqliteTable(
         // Default MCP servers for new sessions in this worktree
         mcp_server_ids?: string[];
 
+        // DANGEROUS: opt-in to legacy session-spawn identity borrowing.
+        // When true, agor_sessions_spawn / agor_sessions_prompt(mode:"fork"|"subsession")
+        // attribute the new child session to the parent owner instead of the
+        // MCP-authenticated caller. See packages/core/src/types/worktree.ts.
+        dangerously_allow_session_sharing?: boolean;
+
         // Unix integration
         // Note: unix_gid was previously stored here but is now resolved dynamically
         // via getGidFromGroupName(unix_group) at execution time. See id-lookups.ts.

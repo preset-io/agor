@@ -1451,3 +1451,86 @@ export function ensureSessionOwnerOrAdmin(options?: { allowSuperadmin?: boolean 
     return context;
   };
 }
+
+/**
+ * Decide the `created_by` identity for a child session created via spawn or
+ * fork (sessions service: spawn() / fork(), or MCP tools agor_sessions_spawn /
+ * agor_sessions_prompt(mode:"fork"|"subsession")).
+ *
+ * Default behavior — and the behavior whenever the caller is the parent owner,
+ * an admin, or a superadmin — attributes the child to the **caller** so it
+ * runs under the caller's Unix identity, credentials, and env vars.
+ *
+ * Legacy "identity borrowing" (child inherits parent.created_by, so it runs
+ * under the *parent owner's* identity even when spawned by a different user)
+ * is preserved only when the worktree opts in via
+ * `dangerously_allow_session_sharing: true`. When that legacy path triggers
+ * for a cross-user spawn, the daemon emits a loud warning so it appears in
+ * audit logs.
+ *
+ * Pure function — no DB, no FeathersJS context — so it can be unit tested
+ * directly and invoked from both service methods and MCP tool handlers.
+ *
+ * @param parent  - Parent session (must include created_by)
+ * @param caller  - Authenticated caller (MCP-authenticated user / Feathers user)
+ * @param worktree - Parent's worktree (used for the opt-in flag)
+ * @param options - allowSuperadmin (defaults to true)
+ * @returns The created_by UUID to stamp on the child session
+ */
+export function determineSpawnIdentity(
+  parent: Pick<Session, 'created_by'>,
+  caller: { user_id?: string; role?: string; _isServiceAccount?: boolean },
+  worktree: Pick<Worktree, 'worktree_id' | 'dangerously_allow_session_sharing'> | undefined,
+  options?: { allowSuperadmin?: boolean }
+): { created_by: UUID; usedLegacySharing: boolean } {
+  const allowSuperadmin = options?.allowSuperadmin ?? true;
+  const callerId = caller.user_id as UUID | undefined;
+  const role = caller.role;
+
+  // Service accounts (executor, internal jobs) preserve parent attribution.
+  // They have no human user_id to attribute to, and their callers (the
+  // scheduler, callbacks) already ran their own RBAC checks.
+  if (caller._isServiceAccount) {
+    return { created_by: parent.created_by, usedLegacySharing: false };
+  }
+
+  // Admin / superadmin → always attributed to themselves so the audit trail
+  // points at the human who pressed the button. Never inherit parent identity.
+  if (role === ROLES.ADMIN || isSuperAdmin(role, allowSuperadmin)) {
+    if (!callerId) {
+      // Should not happen — admins always have an id — but fall back safely.
+      return { created_by: parent.created_by, usedLegacySharing: false };
+    }
+    return { created_by: callerId, usedLegacySharing: false };
+  }
+
+  // Same user spawning their own session → attribute to caller (same value
+  // as parent.created_by, but explicit).
+  if (callerId && parent.created_by === callerId) {
+    return { created_by: callerId, usedLegacySharing: false };
+  }
+
+  // Cross-user spawn: a non-admin caller is spawning/forking from someone
+  // else's session.
+  if (worktree?.dangerously_allow_session_sharing === true) {
+    // Opt-in legacy behavior: preserve identity borrowing. Log loudly.
+    console.warn(
+      '[SECURITY] cross-user session spawn/fork allowed by ' +
+        'dangerously_allow_session_sharing=true: ' +
+        `caller=${callerId ?? 'unknown'} ` +
+        `parent_owner=${parent.created_by} ` +
+        `worktree=${worktree.worktree_id}`
+    );
+    return { created_by: parent.created_by, usedLegacySharing: true };
+  }
+
+  // Default: attribute child to caller (no identity borrowing).
+  // If we don't have a caller id at this point we cannot safely proceed —
+  // refuse rather than silently fall back to parent ownership.
+  if (!callerId) {
+    throw new Forbidden(
+      'Cannot spawn/fork session without an authenticated caller identity.'
+    );
+  }
+  return { created_by: callerId, usedLegacySharing: false };
+}

@@ -409,6 +409,17 @@ The `session` tier is the safe default — it lets collaborators work independen
 
 ---
 
+### Worktree-Level Flags
+
+Beyond `others_can`/`others_fs_access`, individual worktrees expose opt-in
+security toggles stored alongside permissions:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `dangerously_allow_session_sharing` | `false` | When OFF (safe default), `agor_sessions_spawn` and `agor_sessions_prompt(mode:"fork"\|"subsession")` attribute the new child session to the **calling** user — it runs under the caller's Unix identity, env vars, and credentials. When ON, legacy behavior is restored: the child inherits `parent.created_by`, so a collaborator can effectively spawn agents that execute as the original session owner. Admins are always attributed to themselves regardless of this flag. Cross-user spawns under the legacy path emit `[SECURITY]` warning logs. See `context/explorations/session-sharing.md`. |
+
+---
+
 ### Implementation Notes
 
 **Database Schema:**
