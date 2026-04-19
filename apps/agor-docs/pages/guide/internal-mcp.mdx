@@ -106,11 +106,20 @@ keys) rather than extending this.
 
 ### Access gating
 
-MCP tokens are only issued to callers whose role is `member` or above.
-Viewers never receive an `mcp_token` on `GET /sessions/:id` or
-`POST /sessions` — they cannot prompt via REST either, so MCP would be
-useless for them regardless, and leaking a token in the response is a
-liability we avoid by default.
+Because an MCP token binds `uid = session.created_by` and lets the bearer
+act AS the creator on the MCP channel, it's only issued to callers who are
+already allowed to act as that creator:
+
+- **`GET /sessions/:id`** — the creator themselves (provided they are still
+  `member+`), a superadmin, or the executor's service identity
+  (`role: 'service'`, used when spawning the child process). A plain
+  `member+` with `view` permission on the worktree does **not** receive a
+  token — handing one out would let them impersonate the creator, sidestepping
+  the `session`-tier "own sessions only" rule enforced elsewhere.
+- **`POST /sessions`** — the caller is the creator by construction, so
+  `member+` is the only gate here.
+- **Viewers** never receive an `mcp_token` on either path — they cannot
+  prompt via REST either, so MCP would be useless for them regardless.
 
 ### Config knobs
 

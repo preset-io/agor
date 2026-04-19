@@ -13,7 +13,7 @@
 
 1. **No resource isolation** - Any authenticated user can access, modify, or delete any other user's sessions, tasks, worktrees, and boards. User attribution is tracked but not enforced.
 
-2. **Shared API keys** - API keys configured at the daemon level are visible to all authenticated users. MCP tokens are stored unencrypted in the database.
+2. **Shared API keys** - API keys configured at the daemon level are visible to all authenticated users. (MCP tokens are *not* stored — they are re-minted on demand and bounded by a short `exp`; see the "MCP Session Tokens" section below.)
 
 3. **No rate limiting or quotas** - Users can spawn unlimited sessions, make unlimited API calls, and potentially exhaust API credits or system resources.
 
@@ -524,10 +524,21 @@ If/when MCP is opened externally, auth will be redesigned from scratch
 
 ### Access gating
 
-MCP tokens are only issued to callers with role `member` or above. Viewers
-cannot prompt sessions via REST, so MCP would be useless for them anyway, and
-omitting `mcp_token` from viewer-facing responses prevents accidental token
-leakage through the session read path.
+An MCP token binds `uid = session.created_by` and lets the bearer act AS the
+creator on the MCP channel. It is therefore only issued to callers who are
+already allowed to act as that creator:
+
+- **`GET /sessions/:id`** — the creator themselves (provided they are still
+  `member+`), a superadmin, or the executor's service identity
+  (`role: 'service'`). A `member+` with only `view` permission on the
+  worktree does **not** receive a token — handing one out would let them
+  impersonate the creator on the MCP channel, sidestepping the
+  `session`-tier "own sessions only" rule enforced elsewhere. This predicate
+  is extracted as `canReceiveMcpTokenForSession` in `register-hooks.ts` and
+  unit-tested.
+- **`POST /sessions`** — the caller is the creator by construction, gated
+  at `member+`.
+- **Viewers** never receive an `mcp_token` on either path.
 
 ### Pre-rollout tokens
 
@@ -541,7 +552,7 @@ papering over.
 
 - `apps/agor-daemon/src/mcp/tokens.ts` — module implementation
 - `apps/agor-daemon/src/mcp/tokens.test.ts` — unit tests
-- `apps/agor-daemon/src/register-hooks.ts` — issuance gate (role ≥ member)
+- `apps/agor-daemon/src/register-hooks.ts` — issuance gate (`canReceiveMcpTokenForSession`: creator/superadmin/service)
 
 ---
 
