@@ -208,7 +208,8 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
     const matches = await select(this.db)
       .from(worktrees)
       .where(like(worktrees.worktree_id, `${prefix}%`))
-      .limit(2); // Fetch 2 to detect ambiguity
+      .limit(2) // Fetch 2 to detect ambiguity
+      .all();
 
     if (matches.length === 0) return null;
     if (matches.length > 1) {

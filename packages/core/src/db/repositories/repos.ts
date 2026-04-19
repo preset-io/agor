@@ -231,10 +231,12 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         const insertData = this.repoToInsert(merged);
 
         // STEP 3: Write merged repo (within same transaction)
+        // Always refresh updated_at to current time so callers see the new timestamp.
+        const newUpdatedAt = new Date();
         await update(txAsDb(tx), repos)
           .set({
             slug: insertData.slug,
-            updated_at: new Date(),
+            updated_at: newUpdatedAt,
             repo_type: insertData.repo_type,
             unix_group: merged.unix_group ?? null,
             data: insertData.data,
@@ -242,7 +244,8 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
           .where(eq(repos.repo_id, fullId))
           .run();
 
-        // Return merged repo (no need to re-fetch, we have it in memory)
+        // Return merged repo with refreshed timestamp (no need to re-fetch)
+        merged.last_updated = newUpdatedAt.toISOString();
         return merged;
       });
     } catch (error) {

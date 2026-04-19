@@ -1,13 +1,8 @@
 /**
  * ID Management Utilities
  *
- * Agor uses UUIDv4 (random) for all entity identifiers.
- * This module provides generation, validation, and resolution utilities.
- *
- * Why UUIDv4 instead of UUIDv7?
- * - UUIDv7 has timestamp prefix → first 8 chars identical for ~65 seconds
- * - UUIDv4 is fully random → 8-char short IDs work perfectly (like Git)
- * - Database performance difference is negligible at our scale
+ * Agor uses UUIDv7 (time-ordered) for all entity identifiers, per
+ * context/concepts/id-management.md.
  *
  * Key concepts:
  * - Full UUIDs stored in database (36 chars)
@@ -17,7 +12,7 @@
  * @see context/concepts/id-management.md
  */
 
-import { v4 as uuidv4 } from 'uuid';
+import { v7 as uuidv7 } from 'uuid';
 import { toShortId } from '../types/id';
 
 // ============================================================================
@@ -25,12 +20,12 @@ import { toShortId } from '../types/id';
 // ============================================================================
 
 /**
- * UUIDv4 identifier (36 characters including hyphens)
+ * UUIDv7 identifier (36 characters including hyphens)
  *
- * Format: 550e8400-e29b-41d4-a716-446655440000
- * - Fully random (122 bits of randomness)
- * - Version 4 (random) in version field
- * - Excellent for 8-char short IDs (like Git commit hashes)
+ * Format: 01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f
+ * - First 48 bits = Unix timestamp (ms precision)
+ * - Time-ordered (sortable by creation time)
+ * - Version 7 (time-ordered random) in version field
  */
 export type UUID = string & { readonly __brand: 'UUID' };
 
@@ -52,21 +47,21 @@ export type IDPrefix = string;
 // ============================================================================
 
 /**
- * Generate a new UUIDv4 identifier.
+ * Generate a new UUIDv7 identifier.
  *
- * UUIDv4 provides:
- * - Global uniqueness (2^122 possible values)
- * - Fully random (no timestamp clustering)
- * - Perfect for Git-style 8-char short IDs
+ * UUIDv7 provides:
+ * - Global uniqueness (74 bits of randomness)
+ * - Time-ordered (first 48 bits = Unix timestamp in ms)
+ * - Chronologically sortable without a separate timestamp column
  *
- * @returns A new UUIDv4 string
+ * @returns A new UUIDv7 string
  *
  * @example
  * const sessionId = generateId();
- * // => "550e8400-e29b-41d4-a716-446655440000"
+ * // => "01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f"
  */
 export function generateId(): UUID {
-  return uuidv4() as UUID;
+  return uuidv7() as UUID;
 }
 
 // ============================================================================
@@ -74,32 +69,26 @@ export function generateId(): UUID {
 // ============================================================================
 
 /**
- * Check if a string is a valid UUID (v4 or v7).
- *
- * Accepts both versions for backward compatibility:
- * - UUIDv4 (new): Fully random
- * - UUIDv7 (legacy): Timestamp-based
+ * Check if a string is a valid UUIDv7.
  *
  * Validates:
  * - Length (36 chars)
  * - Format (8-4-4-4-12 with hyphens)
- * - Version (4 or 7 in the version field)
+ * - Version (7 in the version field)
  * - Variant (RFC 4122 compliant)
  *
  * @param value - String to validate
- * @returns True if valid UUID
+ * @returns True if valid UUIDv7
  *
  * @example
- * isValidUUID("550e8400-e29b-41d4-a716-446655440000") // => true (v4)
- * isValidUUID("01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f") // => true (v7, legacy)
+ * isValidUUID("01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f") // => true
+ * isValidUUID("550e8400-e29b-41d4-a716-446655440000") // => false (v4)
  * isValidUUID("not-a-uuid") // => false
  * isValidUUID("01933e4a") // => false (too short)
  */
 export function isValidUUID(value: string): value is UUID {
-  // Accept both v4 and v7 for backward compatibility
-  // UUIDv4: xxxxxxxx-xxxx-4xxx-[89ab]xxx-xxxxxxxxxxxx
   // UUIDv7: xxxxxxxx-xxxx-7xxx-[89ab]xxx-xxxxxxxxxxxx
-  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   return uuidPattern.test(value);
 }
 
