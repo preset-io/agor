@@ -1,5 +1,5 @@
 /**
- * MCP Session Tokens (jti + exp + gen)
+ * MCP Session Tokens (jti + exp)
  *
  * MCP tokens authenticate internal daemon ↔ MCP-server communication (aud:
  * `agor:mcp:internal`). Each issued token carries:
@@ -11,16 +11,15 @@
  * - `iat`  — unix seconds, standard JWT "issued at"
  * - `exp`  — unix seconds, enforced by `jsonwebtoken.verify`
  * - `jti`  — per-issuance UUID (useful for log correlation)
- * - `gen`  — the session's `mcp_token_generation` at mint time; a mismatch
- *            against the current DB value invalidates the token in one write
- *            (used for "revoke all outstanding tokens for this session", e.g.
- *            on session archive/complete)
  *
- * No per-jti revocation ledger: MCP is internal-only (loopback), tokens are
- * minted fresh on every `session.get`/`session.create`, and the gen bump is
- * the single "kill this session's tokens" primitive. If/when MCP goes
- * external, we design auth from scratch (OAuth / API keys) rather than
- * extending this.
+ * No revocation mechanics. Tokens are re-minted fresh on every `session.get` /
+ * `session.create` and carry a short `exp` (default 24h); any suspected
+ * compromise is addressed by rotating the JWT signing secret or letting the
+ * token expire. MCP is internal-only (loopback) — if/when it goes external
+ * we'd design auth from scratch (OAuth / API keys) rather than extending this.
+ *
+ * A session-existence check is still performed during validation so tokens
+ * for deleted sessions are rejected even if they haven't yet hit their `exp`.
  *
  * Legacy tokens: tokens minted before this change have no `jti`/`exp` claims.
  * They are accepted for a grace window after daemon startup (default: 7 days)
@@ -54,7 +53,6 @@ interface McpTokenPayload {
   iat?: number;
   exp?: number;
   jti?: string;
-  gen?: number;
 }
 
 export interface McpTokenContext {
@@ -62,8 +60,6 @@ export interface McpTokenContext {
   userId: UserID;
   /** Present for post-rollout tokens; undefined for legacy tokens during grace. */
   jti?: string;
-  /** Present for post-rollout tokens; undefined for legacy tokens during grace. */
-  gen?: number;
   /** True when the token had no `jti`/`exp` claims and was accepted during grace. */
   legacy?: boolean;
 }
@@ -152,8 +148,7 @@ export function getLegacyGraceUntilMs(): number {
 // ============================================================================
 
 /**
- * Mint a fresh MCP token for a session. Looks up the session's current
- * `mcp_token_generation` and embeds it as the `gen` claim.
+ * Mint a fresh MCP token for a session.
  *
  * @throws if the module isn't initialized, the session doesn't exist, or the
  *   app lacks a JWT secret.
@@ -169,8 +164,8 @@ export async function generateSessionToken(
     throw new Error('MCP token generation failed: JWT secret not configured in app settings');
   }
 
-  const gen = await s.sessionRepo.getMcpTokenGeneration(sessionId);
-  if (gen === null) {
+  const sessionExists = await s.sessionRepo.exists(sessionId);
+  if (!sessionExists) {
     throw new Error(
       `MCP token generation failed: session ${sessionId} not found — cannot mint token for a non-existent session`
     );
@@ -188,13 +183,12 @@ export async function generateSessionToken(
     iat: nowSec,
     exp: expSec,
     jti,
-    gen,
   };
 
   const token = jwt.sign(payload, jwtSecret, { algorithm: 'HS256' });
 
   console.log(
-    `🎫 MCP token issued: session=${sessionId.substring(0, 8)} jti=${jti.substring(0, 8)} gen=${gen} exp=+${Math.floor(s.expirationMs / 1000)}s`
+    `🎫 MCP token issued: session=${sessionId.substring(0, 8)} jti=${jti.substring(0, 8)} exp=+${Math.floor(s.expirationMs / 1000)}s`
   );
 
   return token;
@@ -208,11 +202,10 @@ export const getTokenForSession = generateSessionToken;
 // ============================================================================
 
 /**
- * Validate an MCP token and extract `{ sessionId, userId, jti, gen }`.
+ * Validate an MCP token and extract `{ sessionId, userId, jti }`.
  *
  * Rejection reasons:
  *  - bad signature / wrong audience / wrong issuer / expired (`jsonwebtoken.verify`)
- *  - `gen` mismatch against session's current `mcp_token_generation`
  *  - legacy token (no `jti`) arriving after the grace window
  *  - session no longer exists
  *
@@ -235,7 +228,7 @@ export async function validateSessionToken(
   try {
     // Legacy tokens (pre-rollout) have no `exp` claim, so we skip `jwt.verify`'s
     // expiration + issuer checks for them; everything else (signature, audience,
-    // algorithm, session, gen) still applies via the code below.
+    // algorithm, session) still applies via the code below.
     payload = jwt.verify(token, jwtSecret, {
       audience: MCP_TOKEN_AUDIENCE,
       algorithms: ['HS256'],
@@ -274,35 +267,19 @@ export async function validateSessionToken(
     );
   }
 
-  // Session + generation check — applies to BOTH legacy and post-rollout tokens
-  // so a deleted/archived session or bumped gen invalidates legacy tokens too.
-  const currentGen = await s.sessionRepo.getMcpTokenGeneration(sessionId);
-  if (currentGen === null) {
+  // Reject tokens whose session has been deleted — protects against stale
+  // tokens outliving their session until `exp`.
+  const sessionExists = await s.sessionRepo.exists(sessionId);
+  if (!sessionExists) {
     console.warn(`[mcp-tokens] token rejected: session ${sessionId.substring(0, 8)} not found`);
     return null;
   }
 
   if (isLegacy) {
-    // Legacy tokens carry no gen claim; any post-rollout revoke-all (gen > 0)
-    // invalidates them.
-    if (currentGen > 0) {
-      console.warn(
-        `[mcp-tokens] LEGACY token rejected: session ${sessionId.substring(0, 8)} has been revoked (gen=${currentGen})`
-      );
-      return null;
-    }
     return { sessionId, userId, legacy: true };
   }
 
-  const tokenGen = payload.gen ?? 0;
-  if (tokenGen !== currentGen) {
-    console.warn(
-      `[mcp-tokens] token rejected: gen mismatch (token=${tokenGen} current=${currentGen}) session=${sessionId.substring(0, 8)}`
-    );
-    return null;
-  }
-
-  return { sessionId, userId, jti: payload.jti, gen: tokenGen };
+  return { sessionId, userId, jti: payload.jti };
 }
 
 /**
@@ -314,32 +291,4 @@ export async function validateSessionToken(
 function hasJtiAndExp(token: string): boolean {
   const decoded = jwt.decode(token) as McpTokenPayload | null;
   return decoded?.jti !== undefined && decoded?.exp !== undefined;
-}
-
-// ============================================================================
-// Bulk revocation via generation bump
-// ============================================================================
-
-/**
- * Revoke every outstanding MCP token for a session by bumping its
- * `mcp_token_generation` counter. Cheap, O(1) write. Returns the new gen.
- *
- * Typical callers: session archive, session complete, "rotate my session's
- * tokens" admin action.
- */
-export async function revokeAllForSession(
-  db: Database,
-  sessionId: SessionID,
-  reason: string,
-  revokedBy?: string
-): Promise<number> {
-  // Prefer the module's repository (wired at init), but fall back to a
-  // fresh one against the passed-in `db` so this can be called from contexts
-  // that haven't initialized the module (migration scripts, one-off tasks).
-  const repo = _state?.sessionRepo ?? new SessionRepository(db);
-  const newGen = (await repo.bumpMcpTokenGeneration(sessionId)) ?? 0;
-  console.log(
-    `[mcp-tokens] revoke-all for session=${sessionId.substring(0, 8)} reason=${reason} revoked_by=${revokedBy ?? 'system'} new_gen=${newGen}`
-  );
-  return newGen;
 }

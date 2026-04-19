@@ -323,19 +323,6 @@ export interface AgorExecutionSettings {
   mcp_token_expiration_ms?: number;
 
   /**
-   * Automatically revoke all outstanding MCP tokens for a session when it
-   * reaches a terminal state (`completed` or `failed`). Default: false.
-   *
-   * Revocation is implemented by bumping the session's `mcp_token_generation`,
-   * which invalidates every outstanding token in a single write.
-   *
-   * Operators with a tight security posture can opt in. Keeping the default
-   * off preserves existing behaviour where a dormant session's token stays
-   * valid until its JWT `exp` passes.
-   */
-  auto_revoke_on_session_complete?: boolean;
-
-  /**
    * Grace window (ms) for accepting legacy MCP tokens minted before this
    * release. Legacy tokens have no `jti`/`exp` claims; they are accepted
    * for this long after daemon startup, with a WARN log on every use so

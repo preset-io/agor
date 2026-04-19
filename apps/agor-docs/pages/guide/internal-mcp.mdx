@@ -85,34 +85,17 @@ This makes Agor a control plane for other AI systems, enabling remote triage bot
 - **Log agent activity.** Sessions capture every MCP action they trigger, making reviews and audits straightforward.
 - **Reuse concept files.** Agents can load `context/` docs via MCP, ensuring automations stay aligned with team conventions.
 
-## Operator Runbook: Revoking MCP Tokens
+## MCP Tokens
 
-MCP session tokens are short-lived JWTs that embed a `jti` (issuance ID), an
-`exp`, and a `gen` claim tied to the session's `mcp_token_generation`
-counter. Tokens are re-minted fresh on every `GET /sessions/:id` and on
-session creation, so the only operator primitive you need is bulk revoke
-per session — a one-write increment of the session's gen counter.
+MCP session tokens are short-lived JWTs (aud `agor:mcp:internal`) embedding
+a `jti` (per-issuance ID) and an `exp`. Tokens are re-minted fresh on every
+`GET /sessions/:id` and `POST /sessions`.
 
-Per-jti revocation is intentionally not supported: MCP is internal-only
-(loopback), tokens are cheap to rotate, and gating is enforced by the
-`gen` check plus token `exp`. If/when MCP is opened externally we expect
-to design auth from scratch (OAuth / API keys) rather than extending this.
-
-### Revoke every outstanding token for a session
-
-Archive the session, or patch it to a terminal state with
-`execution.auto_revoke_on_session_complete=true`:
-
-```bash
-curl -X PATCH "http://<daemon>/sessions/<session-id>" \
-  -H "Authorization: Bearer <jwt>" \
-  -H "Content-Type: application/json" \
-  -d '{"archived":true}'
-```
-
-This bumps `sessions.mcp_token_generation`. Every token previously minted
-for this session carries the old `gen` and is rejected on next validation.
-New tokens (from `GET /sessions/:id` or a new prompt) pick up the new gen.
+There is no revocation mechanics — no per-jti ledger, no session-generation
+counter. The authorised blast radius of a leak is bounded by `exp` (default
+24h). Validation additionally rejects tokens whose session has been deleted.
+If/when MCP is opened externally we'd design auth from scratch (OAuth / API
+keys) rather than extending this.
 
 ### Access gating
 
@@ -129,10 +112,6 @@ execution:
   # Token lifetime — keep short to cap the damage from a leak.
   mcp_token_expiration_ms: 86400000            # 24h (default)
 
-  # Bump session gen when a session enters `completed`/`failed`.
-  # Archive always revokes, regardless of this flag.
-  auto_revoke_on_session_complete: false       # default
-
   # Grace window for pre-rollout tokens that have no jti/exp.
   # Each use during the grace window emits a WARN log naming the session + user.
   # Set to 0 to reject legacy tokens immediately.
@@ -144,7 +123,7 @@ execution:
 | Symptom                                            | Likely cause                                               | Fix                                           |
 |----------------------------------------------------|------------------------------------------------------------|-----------------------------------------------|
 | `token rejected: expired`                          | Token past its `exp`                                       | Session will re-mint on next `GET /sessions`  |
-| `token rejected: gen mismatch`                     | `revokeAllForSession` ran (session archived/completed)     | Re-mint token (next GET or new prompt)        |
+| `token rejected: session … not found`              | Token's session was deleted                                | Expected — token can no longer be used        |
 | `LEGACY token accepted (grace window active …)`    | Pre-rollout token still in use                             | Re-prompt / restart the session to re-mint    |
 | `LEGACY token rejected (grace window expired)`     | Legacy token after `mcp_token_accept_legacy_grace_ms`      | Session owner must restart the session        |
 

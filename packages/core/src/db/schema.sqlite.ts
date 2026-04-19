@@ -99,11 +99,6 @@ export const sessions = sqliteTable(
       enum: ['worktree_archived', 'manual', 'btw_completed'],
     }),
 
-    // MCP token generation counter. Every issued MCP token embeds the current
-    // value as the `gen` claim; bumping this column invalidates every token
-    // previously minted for this session (used for "revoke all").
-    mcp_token_generation: integer('mcp_token_generation').notNull().default(0),
-
     // JSON blob for everything else (cross-DB via json() type)
     data: t
       .json<unknown>('data')

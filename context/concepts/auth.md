@@ -496,8 +496,7 @@ daemon carries a token issued to one session.
   "iss": "agor",
   "iat": 1736553600,               // issued-at (unix seconds)
   "exp": 1736640000,               // expiry (unix seconds) — enforced by jwt.verify
-  "jti": "<uuidv7>",               // per-issuance id, used for individual revocation
-  "gen": 0                          // session's mcp_token_generation at mint time
+  "jti": "<uuidv7>"                // per-issuance id, for log correlation
 }
 ```
 
@@ -506,23 +505,22 @@ daemon carries a token issued to one session.
 Tokens are minted on demand — there is no long-lived token stored in the DB.
 `GET /sessions/:id` and `POST /sessions` both re-mint fresh tokens via
 `generateSessionToken(app, sessionId, userId)`; each call produces a new
-`jti`/`iat`/`exp` but keeps the same `gen`.
+`jti`/`iat`/`exp`.
 
 Default lifetime: **24 hours** (`execution.mcp_token_expiration_ms`).
 
-### Revocation
+### No revocation mechanics
 
-A single mechanism: the **generation counter** (`revokeAllForSession`) bumps
-`sessions.mcp_token_generation`. The next validation call reads the current
-value and rejects any token whose `gen` claim is behind. O(1) write,
-invalidates every outstanding token for the session in one stroke.
+There is intentionally **no revocation**: no per-`jti` ledger, no
+session-generation counter. Tokens are short-lived, re-minted fresh on every
+`GET /sessions/:id` / `POST /sessions`, and MCP is internal-only (loopback) —
+so the authorised blast radius of a leak is already bounded by `exp`. The
+validation path still rejects tokens whose session has been **deleted**
+(by looking up `sessions.session_id`), which covers the one case where a
+token can outlive its subject before `exp`.
 
-There is intentionally no per-`jti` revocation ledger. Tokens are short-lived,
-re-minted fresh on every `GET /sessions/:id` / `POST /sessions`, and MCP is
-internal-only (loopback) — a leaked jti self-expires via `exp` and any
-suspected compromise is addressed by bumping the session's gen. If/when MCP
-is opened externally, auth will be redesigned from scratch (OAuth / API keys)
-rather than extending this.
+If/when MCP is opened externally, auth will be redesigned from scratch
+(OAuth / API keys) rather than extending this.
 
 ### Access gating
 
@@ -530,13 +528,6 @@ MCP tokens are only issued to callers with role `member` or above. Viewers
 cannot prompt sessions via REST, so MCP would be useless for them anyway, and
 omitting `mcp_token` from viewer-facing responses prevents accidental token
 leakage through the session read path.
-
-### Auto-revoke triggers
-
-| Event                                  | Gate                                             | Behaviour                       |
-|----------------------------------------|--------------------------------------------------|---------------------------------|
-| session patched with `archived: true`  | always on                                        | `revokeAllForSession` (gen bump)|
-| session reaches `completed` / `failed` | `execution.auto_revoke_on_session_complete=true` | `revokeAllForSession` (gen bump)|
 
 ### Legacy token grace window
 
@@ -551,8 +542,7 @@ immediately.
 
 - `apps/agor-daemon/src/mcp/tokens.ts` — module implementation
 - `apps/agor-daemon/src/mcp/tokens.test.ts` — unit tests
-- `apps/agor-daemon/src/register-hooks.ts` — issuance gate + session-state auto-revoke hook
-- `packages/core/src/db/schema.sqlite.ts` — `sessions.mcp_token_generation`
+- `apps/agor-daemon/src/register-hooks.ts` — issuance gate (role ≥ member)
 
 ---
 

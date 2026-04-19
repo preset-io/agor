@@ -1724,48 +1724,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       patch: [
         async (context) => {
-          // Auto-revoke MCP tokens when a session reaches a terminal state.
-          //
-          //   archived: always — archiving is a definitive "done with this
-          //     session" signal; leaving live tokens around is strictly a
-          //     security risk.
-          //   status=completed/failed: gated by
-          //     `execution.auto_revoke_on_session_complete` (default false) —
-          //     some workflows re-prompt archived-but-completed sessions, so
-          //     this is opt-in.
-          //
-          // Revocation is a one-write gen bump (see `revokeAllForSession`), so
-          // it's cheap enough to inline here without a setImmediate hop.
-          try {
-            const incoming = (context.data ?? {}) as {
-              archived?: boolean;
-              status?: string;
-            };
-            const result = Array.isArray(context.result) ? context.result[0] : context.result;
-            const sessionId = (result as Session | undefined)?.session_id;
-
-            if (sessionId) {
-              const archivedNow = incoming.archived === true;
-              const terminalNow = incoming.status === 'completed' || incoming.status === 'failed';
-              const autoRevokeTerminal = config.execution?.auto_revoke_on_session_complete === true;
-
-              if (archivedNow || (terminalNow && autoRevokeTerminal)) {
-                const { revokeAllForSession } = await import('./mcp/tokens.js');
-                const reason: 'session_archived' | 'session_completed' = archivedNow
-                  ? 'session_archived'
-                  : 'session_completed';
-                const revokedBy =
-                  (context.params as { user?: { user_id?: string } }).user?.user_id ?? 'system';
-                await revokeAllForSession(db, sessionId, reason, revokedBy);
-              }
-            }
-          } catch (err) {
-            // Never fail the patch because of a revocation error — the token
-            // will still expire via its `exp` claim and the next gen-bump will
-            // catch any stragglers.
-            console.warn('[mcp-tokens] auto-revoke on session patch failed:', err);
-          }
-
           // Automatically process queued messages when session becomes IDLE
           // This ensures queued messages are processed regardless of how the session became IDLE
           const session = Array.isArray(context.result) ? context.result[0] : context.result;

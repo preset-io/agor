@@ -373,7 +373,6 @@ execution:
 
   # MCP session tokens (daemon ↔ MCP server channel)
   mcp_token_expiration_ms: number            # default: 86400000 (24h)
-  auto_revoke_on_session_complete: boolean   # default: false — revoke-all on terminal state
   mcp_token_accept_legacy_grace_ms: number   # default: 604800000 (7d) — 0 to reject immediately
 
   # Password sync (strict mode)

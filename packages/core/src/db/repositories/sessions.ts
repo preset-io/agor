@@ -768,43 +768,19 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   }
 
   /**
-   * Return the session's current `mcp_token_generation`, or null if no such
-   * session exists. Used by the MCP-token issuance + validation paths to embed
-   * / compare the `gen` claim.
+   * Check whether a session with the given id exists. Used by the MCP-token
+   * validation path to reject tokens whose session has been deleted.
    */
-  async getMcpTokenGeneration(sessionId: string): Promise<number | null> {
+  async exists(sessionId: string): Promise<boolean> {
     try {
       const row = (await select(this.db)
         .from(sessions)
         .where(eq(sessions.session_id, sessionId))
-        .one()) as { mcp_token_generation?: number } | null;
-      if (!row) return null;
-      return row.mcp_token_generation ?? 0;
+        .one()) as { session_id?: string } | null | undefined;
+      return row != null;
     } catch (error) {
       throw new RepositoryError(
-        `Failed to read mcp_token_generation: ${error instanceof Error ? error.message : String(error)}`,
-        error
-      );
-    }
-  }
-
-  /**
-   * Atomically increment `mcp_token_generation` for a session (the "revoke
-   * all outstanding MCP tokens" primitive — single O(1) write invalidates
-   * every previously minted token for this session via the `gen` claim check
-   * in `validateSessionToken`). Returns the new generation, or null if the
-   * session no longer exists after the update.
-   */
-  async bumpMcpTokenGeneration(sessionId: string): Promise<number | null> {
-    try {
-      await update(this.db, sessions)
-        .set({ mcp_token_generation: sql`${sessions.mcp_token_generation} + 1` })
-        .where(eq(sessions.session_id, sessionId))
-        .run();
-      return await this.getMcpTokenGeneration(sessionId);
-    } catch (error) {
-      throw new RepositoryError(
-        `Failed to bump mcp_token_generation: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to check session existence: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
