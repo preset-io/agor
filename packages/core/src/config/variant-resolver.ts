@@ -335,7 +335,11 @@ export function validateRepoEnvironment(obj: unknown): RepoEnvironment {
   // lives on `repo.environment` and would silently disappear on save if we
   // rebuilt the object without it. Shape-guard: must be a plain object map.
   if (env.template_overrides !== undefined) {
-    if (typeof env.template_overrides !== 'object' || env.template_overrides === null) {
+    if (
+      typeof env.template_overrides !== 'object' ||
+      env.template_overrides === null ||
+      Array.isArray(env.template_overrides)
+    ) {
       throw new Error('`template_overrides` must be a mapping (object)');
     }
     result.template_overrides = env.template_overrides as Record<string, unknown>;

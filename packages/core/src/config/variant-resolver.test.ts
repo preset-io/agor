@@ -49,6 +49,17 @@ describe('validateRepoEnvironment', () => {
     ).toThrow(/template_overrides.*mapping/);
   });
 
+  it('rejects array template_overrides (must be plain-object map)', () => {
+    expect(() =>
+      validateRepoEnvironment({
+        version: 2,
+        default: 'dev',
+        variants: { dev: { start: 'x', stop: 'y' } },
+        template_overrides: [{ region: 'us-west-2' }],
+      })
+    ).toThrow(/template_overrides.*mapping/);
+  });
+
   it('enforces required start/stop on non-extends variants', () => {
     expect(() =>
       validateRepoEnvironment({
