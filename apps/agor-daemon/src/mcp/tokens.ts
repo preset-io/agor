@@ -1,5 +1,5 @@
 /**
- * MCP Session Tokens (jti + exp + gen + revocation ledger)
+ * MCP Session Tokens (jti + exp + gen)
  *
  * MCP tokens authenticate internal daemon ↔ MCP-server communication (aud:
  * `agor:mcp:internal`). Each issued token carries:
@@ -10,18 +10,17 @@
  * - `iss`  — `agor`
  * - `iat`  — unix seconds, standard JWT "issued at"
  * - `exp`  — unix seconds, enforced by `jsonwebtoken.verify`
- * - `jti`  — per-issuance UUID, lets operators revoke a single token
+ * - `jti`  — per-issuance UUID (useful for log correlation)
  * - `gen`  — the session's `mcp_token_generation` at mint time; a mismatch
  *            against the current DB value invalidates the token in one write
- *            (used for "revoke all outstanding tokens for this session")
+ *            (used for "revoke all outstanding tokens for this session", e.g.
+ *            on session archive/complete)
  *
- * Revocation strategies:
- *   1. `revokeByJti(jti)`              — insert row into `mcp_token_revocations`
- *   2. `revokeAllForSession(sessionId)`— bump `sessions.mcp_token_generation`
- *
- * Cache: active revocations are kept in an in-process `Set<string>` seeded at
- * init and refreshed on each write, so `validateSessionToken` does not hit the
- * DB per request for the ledger check.
+ * No per-jti revocation ledger: MCP is internal-only (loopback), tokens are
+ * minted fresh on every `session.get`/`session.create`, and the gen bump is
+ * the single "kill this session's tokens" primitive. If/when MCP goes
+ * external, we design auth from scratch (OAuth / API keys) rather than
+ * extending this.
  *
  * Legacy tokens: tokens minted before this change have no `jti`/`exp` claims.
  * They are accepted for a grace window after daemon startup (default: 7 days)
@@ -30,31 +29,18 @@
  * immediately.
  */
 
-import {
-  type Database,
-  generateId,
-  McpTokenRevocationRepository,
-  SessionRepository,
-} from '@agor/core/db';
+import { type Database, generateId, SessionRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import {
   MCP_TOKEN_AUDIENCE,
   MCP_TOKEN_ISSUER,
-  type MCPTokenRevocationReason,
   type SessionID,
   type UserID,
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 
-// Re-export the core constants + guard so daemon callers keep importing from
-// `./mcp/tokens.js` without reaching into `@agor/core/types` directly.
-export {
-  isMCPTokenRevocationReason,
-  MCP_TOKEN_AUDIENCE,
-  MCP_TOKEN_ISSUER,
-  MCP_TOKEN_REVOCATION_REASONS,
-  type MCPTokenRevocationReason,
-} from '@agor/core/types';
+// Re-exported so daemon callers don't have to reach into @agor/core/types.
+export { MCP_TOKEN_AUDIENCE, MCP_TOKEN_ISSUER } from '@agor/core/types';
 
 // ============================================================================
 // Types
@@ -91,8 +77,6 @@ export interface McpTokenInitOptions {
    * Default: 7 days. Set to 0 for a hard cut.
    */
   acceptLegacyGraceMs?: number;
-  /** Expired-row pruning interval in ms (default: 1h). Set to 0 to disable. */
-  cleanupIntervalMs?: number;
   /** Override `Date.now()` for tests. */
   now?: () => number;
 }
@@ -102,14 +86,10 @@ export interface McpTokenInitOptions {
 // ============================================================================
 
 interface ModuleState {
-  db: Database;
   sessionRepo: SessionRepository;
-  revocationRepo: McpTokenRevocationRepository;
   expirationMs: number;
   acceptLegacyGraceMs: number;
   legacyGraceUntilMs: number;
-  revokedJtis: Set<string>;
-  cleanupInterval: NodeJS.Timeout | null;
   now: () => number;
 }
 
@@ -129,55 +109,26 @@ function requireState(): ModuleState {
 // ============================================================================
 
 /**
- * Initialize the module. Loads the active revocation ledger into an in-memory
- * cache and schedules periodic pruning. Idempotent — calling again replaces
- * the previous state (tests rely on this).
+ * Initialize the module. Idempotent — calling again replaces the previous
+ * state (tests rely on this).
  */
-export async function initMcpTokens(options: McpTokenInitOptions): Promise<void> {
+export function initMcpTokens(options: McpTokenInitOptions): void {
   const expirationMs = options.expirationMs ?? 24 * 60 * 60 * 1000;
   const acceptLegacyGraceMs = options.acceptLegacyGraceMs ?? 7 * 24 * 60 * 60 * 1000;
-  const cleanupIntervalMs = options.cleanupIntervalMs ?? 60 * 60 * 1000;
   const now = options.now ?? (() => Date.now());
 
-  const startupMs = now();
-  const legacyGraceUntilMs = acceptLegacyGraceMs > 0 ? startupMs + acceptLegacyGraceMs : 0;
-
-  const sessionRepo = new SessionRepository(options.db);
-  const revocationRepo = new McpTokenRevocationRepository(options.db);
-
-  // Seed revocation cache with non-expired rows — SQL-filtered via the
-  // `expires_at` index so we never materialize expired rows we're about to drop.
-  const jtis = await revocationRepo.listActiveJtis(startupMs);
-  const revokedJtis = new Set<string>(jtis);
-
-  if (_state?.cleanupInterval) {
-    clearInterval(_state.cleanupInterval);
-  }
+  const legacyGraceUntilMs = acceptLegacyGraceMs > 0 ? now() + acceptLegacyGraceMs : 0;
 
   _state = {
-    db: options.db,
-    sessionRepo,
-    revocationRepo,
+    sessionRepo: new SessionRepository(options.db),
     expirationMs,
     acceptLegacyGraceMs,
     legacyGraceUntilMs,
-    revokedJtis,
-    cleanupInterval: null,
     now,
   };
 
-  if (cleanupIntervalMs > 0) {
-    _state.cleanupInterval = setInterval(() => {
-      void cleanupExpiredTokens().catch((err) => {
-        console.error('[mcp-tokens] cleanup failed:', err);
-      });
-    }, cleanupIntervalMs);
-    // Don't keep the event loop alive just for token GC.
-    _state.cleanupInterval.unref?.();
-  }
-
   console.log(
-    `[mcp-tokens] initialized: exp=${expirationMs}ms, legacy_grace=${acceptLegacyGraceMs}ms, active_revocations=${revokedJtis.size}`
+    `[mcp-tokens] initialized: exp=${expirationMs}ms, legacy_grace=${acceptLegacyGraceMs}ms`
   );
 }
 
@@ -185,9 +136,6 @@ export async function initMcpTokens(options: McpTokenInitOptions): Promise<void>
  * Tear down the module. Tests only; production uses process exit.
  */
 export function shutdownMcpTokens(): void {
-  if (_state?.cleanupInterval) {
-    clearInterval(_state.cleanupInterval);
-  }
   _state = null;
 }
 
@@ -221,9 +169,6 @@ export async function generateSessionToken(
     throw new Error('MCP token generation failed: JWT secret not configured in app settings');
   }
 
-  // Fetch current generation for this session. We fail hard if the session
-  // doesn't exist: minting a token for a non-existent session contradicts the
-  // contract and would produce a token that can never pass `validateSessionToken`.
   const gen = await s.sessionRepo.getMcpTokenGeneration(sessionId);
   if (gen === null) {
     throw new Error(
@@ -255,9 +200,7 @@ export async function generateSessionToken(
   return token;
 }
 
-/**
- * Convenience alias kept for callers that already used this name.
- */
+/** Convenience alias kept for callers that already used this name. */
 export const getTokenForSession = generateSessionToken;
 
 // ============================================================================
@@ -268,10 +211,10 @@ export const getTokenForSession = generateSessionToken;
  * Validate an MCP token and extract `{ sessionId, userId, jti, gen }`.
  *
  * Rejection reasons:
- *  - bad signature / wrong audience / expired (`jsonwebtoken.verify`)
+ *  - bad signature / wrong audience / wrong issuer / expired (`jsonwebtoken.verify`)
  *  - `gen` mismatch against session's current `mcp_token_generation`
- *  - `jti` present in the revocation cache
  *  - legacy token (no `jti`) arriving after the grace window
+ *  - session no longer exists
  *
  * Returns `null` on any failure; returns a context object (including
  * `legacy: true`) for accepted legacy tokens during the grace window.
@@ -318,9 +261,6 @@ export async function validateSessionToken(
 
   const isLegacy = payload.jti === undefined || payload.exp === undefined;
 
-  // Legacy token: accept only during grace window. Fall through to the
-  // session/gen checks below so legacy tokens ALSO get rejected when the
-  // session was archived/deleted or its generation was bumped.
   if (isLegacy) {
     const nowMs = s.now();
     if (!(s.legacyGraceUntilMs > 0 && nowMs <= s.legacyGraceUntilMs)) {
@@ -332,12 +272,6 @@ export async function validateSessionToken(
     console.warn(
       `[mcp-tokens] LEGACY token accepted (grace window active, ${Math.ceil((s.legacyGraceUntilMs - nowMs) / 1000)}s remaining): session=${sessionId.substring(0, 8)} uid=${userId.substring(0, 8)} — reissue by restarting the session`
     );
-  } else {
-    // Fast path: jti in revocation cache. Only applicable to post-rollout tokens.
-    if (payload.jti && s.revokedJtis.has(payload.jti)) {
-      console.warn(`[mcp-tokens] token rejected: jti ${payload.jti.substring(0, 8)} revoked`);
-      return null;
-    }
   }
 
   // Session + generation check — applies to BOTH legacy and post-rollout tokens
@@ -350,8 +284,7 @@ export async function validateSessionToken(
 
   if (isLegacy) {
     // Legacy tokens carry no gen claim; any post-rollout revoke-all (gen > 0)
-    // invalidates them. Fresh sessions at gen=0 still accept their legacy
-    // tokens during grace, which matches rollout expectations.
+    // invalidates them.
     if (currentGen > 0) {
       console.warn(
         `[mcp-tokens] LEGACY token rejected: session ${sessionId.substring(0, 8)} has been revoked (gen=${currentGen})`
@@ -384,62 +317,20 @@ function hasJtiAndExp(token: string): boolean {
 }
 
 // ============================================================================
-// Revocation
+// Bulk revocation via generation bump
 // ============================================================================
-
-export interface RevokeByJtiOptions {
-  jti: string;
-  sessionId?: SessionID;
-  reason: MCPTokenRevocationReason;
-  revokedBy?: string;
-  /**
-   * JWT `exp` (unix seconds) of the revoked token. The row can be pruned past
-   * this, because the token's own `exp` already rejects it. If omitted we
-   * default to `now + expirationMs`.
-   */
-  tokenExpSec?: number;
-}
-
-/**
- * Revoke a single token by its `jti`. Idempotent: replaying the same jti is a
- * no-op (the existing row wins via `onConflictDoNothing`). Updates the
- * in-memory cache on every call so cache state is consistent even when the DB
- * write is a no-op.
- */
-export async function revokeByJti(options: RevokeByJtiOptions): Promise<void> {
-  const s = requireState();
-  const nowMs = s.now();
-  const expiresAtMs =
-    options.tokenExpSec !== undefined ? options.tokenExpSec * 1000 : nowMs + s.expirationMs;
-
-  await s.revocationRepo.insertIgnore({
-    jti: options.jti,
-    session_id: options.sessionId ?? null,
-    revoked_at: nowMs,
-    revoked_by: options.revokedBy ?? null,
-    reason: options.reason,
-    expires_at: expiresAtMs,
-  });
-
-  s.revokedJtis.add(options.jti);
-
-  console.log(
-    `[mcp-tokens] revoked jti=${options.jti.substring(0, 8)} reason=${options.reason} revoked_by=${options.revokedBy ?? 'system'}`
-  );
-}
 
 /**
  * Revoke every outstanding MCP token for a session by bumping its
  * `mcp_token_generation` counter. Cheap, O(1) write. Returns the new gen.
  *
- * The revocation ledger is NOT touched here — this is the "revoke all" path.
- * Individual-jti revocation is for leaked-token cases where the session is
- * still in use.
+ * Typical callers: session archive, session complete, "rotate my session's
+ * tokens" admin action.
  */
 export async function revokeAllForSession(
   db: Database,
   sessionId: SessionID,
-  reason: MCPTokenRevocationReason,
+  reason: string,
   revokedBy?: string
 ): Promise<number> {
   // Prefer the module's repository (wired at init), but fall back to a
@@ -447,93 +338,8 @@ export async function revokeAllForSession(
   // that haven't initialized the module (migration scripts, one-off tasks).
   const repo = _state?.sessionRepo ?? new SessionRepository(db);
   const newGen = (await repo.bumpMcpTokenGeneration(sessionId)) ?? 0;
-  // `reason` + `revokedBy` are logged (not persisted to the ledger — this path
-  // is the bulk-revoke mechanism via gen bump, not individual-jti revocation).
   console.log(
     `[mcp-tokens] revoke-all for session=${sessionId.substring(0, 8)} reason=${reason} revoked_by=${revokedBy ?? 'system'} new_gen=${newGen}`
   );
   return newGen;
-}
-
-// ============================================================================
-// Cleanup
-// ============================================================================
-
-/**
- * Delete revocation rows whose `expires_at` has passed — the token's own `exp`
- * already rejects them, so we no longer need to check the ledger.
- *
- * Returns the number of rows deleted.
- */
-export async function cleanupExpiredTokens(): Promise<number> {
-  const s = requireState();
-  const nowMs = s.now();
-
-  const rowsAffected = await s.revocationRepo.deleteExpired(nowMs);
-
-  // Rebuild the cache from scratch from the surviving rows (SQL-filtered via
-  // the `expires_at` index). This also handles the rare case where the DB was
-  // mutated out from under us.
-  const jtis = await s.revocationRepo.listActiveJtis(nowMs);
-  s.revokedJtis = new Set(jtis);
-
-  if (rowsAffected > 0) {
-    console.log(
-      `[mcp-tokens] pruned ${rowsAffected} expired revocation(s); ${s.revokedJtis.size} active remaining`
-    );
-  }
-
-  return rowsAffected;
-}
-
-// ============================================================================
-// Revocation service (REST-facing)
-// ============================================================================
-
-/**
- * Thin service class exposed via `/mcp-tokens`. Wraps the module functions so
- * Feathers can register it as a service and apply auth hooks. The actual
- * per-jti revocation logic stays in this module.
- */
-export class MCPTokensService {
-  private readonly revocationRepo: McpTokenRevocationRepository;
-
-  constructor(db: Database) {
-    this.revocationRepo = new McpTokenRevocationRepository(db);
-  }
-
-  /**
-   * Admin-only: revoke a single token by jti. See `register-routes.ts` for
-   * the hook that enforces admin role.
-   */
-  async revoke(
-    jti: string,
-    options: { reason?: MCPTokenRevocationReason; revokedBy?: string; sessionId?: SessionID } = {}
-  ): Promise<{ jti: string; revoked_at: number; reason: MCPTokenRevocationReason }> {
-    const reason = options.reason ?? 'manual';
-    const nowMs = Date.now();
-    await revokeByJti({
-      jti,
-      sessionId: options.sessionId,
-      reason,
-      revokedBy: options.revokedBy,
-    });
-    return { jti, revoked_at: nowMs, reason };
-  }
-
-  /**
-   * List active (non-expired) revocations. Useful for audit UIs.
-   */
-  async list(): Promise<
-    Array<{
-      jti: string;
-      session_id: string | null;
-      revoked_at: number;
-      revoked_by: string | null;
-      reason: string;
-      expires_at: number;
-    }>
-  > {
-    return await this.revocationRepo.listActive(Date.now());
-  }
 }

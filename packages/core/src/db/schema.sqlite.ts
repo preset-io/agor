@@ -1306,36 +1306,6 @@ export const sessionEnvSelections = sqliteTable(
 );
 
 /**
- * MCP Token Revocations - Ledger of individually revoked MCP token `jti`s.
- *
- * Complements the `sessions.mcp_token_generation` counter (which revokes all
- * outstanding tokens for a session in one write): operators can also invalidate
- * a single leaked `jti` without bumping gen, by inserting a row here.
- *
- * Verification rejects any token whose `jti` appears in this table, even when
- * the signature and `exp` are still valid. Rows may be pruned once `expires_at`
- * passes (the token's own `exp` already rejects it).
- *
- * No CHECK constraint on `reason`; enum is validated at the application layer
- * per `context/concepts/database-migrations.md` guidance.
- */
-export const mcpTokenRevocations = sqliteTable(
-  'mcp_token_revocations',
-  {
-    jti: text('jti').primaryKey(),
-    session_id: text('session_id', { length: 36 }),
-    revoked_at: integer('revoked_at').notNull(),
-    revoked_by: text('revoked_by'),
-    reason: text('reason').notNull(),
-    expires_at: integer('expires_at').notNull(),
-  },
-  (table) => ({
-    sessionIdx: index('mcp_token_revocations_session_idx').on(table.session_id),
-    expiresIdx: index('mcp_token_revocations_expires_idx').on(table.expires_at),
-  })
-);
-
-/**
  * Type exports for use with Drizzle ORM
  */
 export type SessionRow = typeof sessions.$inferSelect;
@@ -1358,8 +1328,6 @@ export type SessionMCPServerRow = typeof sessionMcpServers.$inferSelect;
 export type SessionMCPServerInsert = typeof sessionMcpServers.$inferInsert;
 export type SessionEnvSelectionRow = typeof sessionEnvSelections.$inferSelect;
 export type SessionEnvSelectionInsert = typeof sessionEnvSelections.$inferInsert;
-export type MCPTokenRevocationRow = typeof mcpTokenRevocations.$inferSelect;
-export type MCPTokenRevocationInsert = typeof mcpTokenRevocations.$inferInsert;
 export type UserMCPOAuthTokenRow = typeof userMcpOauthTokens.$inferSelect;
 export type UserMCPOAuthTokenInsert = typeof userMcpOauthTokens.$inferInsert;
 export type CardTypeRow = typeof cardTypes.$inferSelect;

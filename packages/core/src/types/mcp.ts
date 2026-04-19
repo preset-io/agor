@@ -279,25 +279,3 @@ export const MCP_TOKEN_AUDIENCE = 'agor:mcp:internal';
  * JWT `iss` claim for MCP session tokens (post-rollout tokens only).
  */
 export const MCP_TOKEN_ISSUER = 'agor';
-
-/**
- * Allowed values for the `reason` column on `mcp_token_revocations`.
- * Persisted to the DB, so treat as a stable on-disk contract.
- */
-export const MCP_TOKEN_REVOCATION_REASONS = [
-  'manual',
-  'rotation',
-  'session_archived',
-  'session_completed',
-  'user_request',
-] as const;
-
-export type MCPTokenRevocationReason = (typeof MCP_TOKEN_REVOCATION_REASONS)[number];
-
-/**
- * Runtime type guard used by the REST handler to validate untrusted `reason`
- * values from API payloads before they reach the revocation path.
- */
-export function isMCPTokenRevocationReason(v: unknown): v is MCPTokenRevocationReason {
-  return typeof v === 'string' && (MCP_TOKEN_REVOCATION_REASONS as readonly string[]).includes(v);
-}

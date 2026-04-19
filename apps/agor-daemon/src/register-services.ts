@@ -153,16 +153,14 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const appRecord = app as unknown as Record<string, unknown>;
   appRecord.sessionTokenService = sessionTokenService;
 
-  // Initialize MCP token module: loads revocation ledger into in-memory cache,
-  // sets legacy-token grace window, schedules periodic pruning.
-  const { initMcpTokens, MCPTokensService } = await import('./mcp/tokens.js');
-  await initMcpTokens({
+  // Initialize MCP token module: sets legacy-token grace window.
+  const { initMcpTokens } = await import('./mcp/tokens.js');
+  initMcpTokens({
     db,
     expirationMs: config.execution?.mcp_token_expiration_ms ?? 24 * 60 * 60 * 1000,
     acceptLegacyGraceMs:
       config.execution?.mcp_token_accept_legacy_grace_ms ?? 7 * 24 * 60 * 60 * 1000,
   });
-  appRecord.mcpTokensService = new MCPTokensService(db);
 
   // ============================================================================
   // Core services: sessions, tasks, messages

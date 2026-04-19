@@ -89,28 +89,16 @@ This makes Agor a control plane for other AI systems, enabling remote triage bot
 
 MCP session tokens are short-lived JWTs that embed a `jti` (issuance ID), an
 `exp`, and a `gen` claim tied to the session's `mcp_token_generation`
-counter. You can invalidate them through three paths, in order of
-increasing blast radius:
+counter. Tokens are re-minted fresh on every `GET /sessions/:id` and on
+session creation, so the only operator primitive you need is bulk revoke
+per session — a one-write increment of the session's gen counter.
 
-### 1. Revoke a single leaked token (admin)
+Per-jti revocation is intentionally not supported: MCP is internal-only
+(loopback), tokens are cheap to rotate, and gating is enforced by the
+`gen` check plus token `exp`. If/when MCP is opened externally we expect
+to design auth from scratch (OAuth / API keys) rather than extending this.
 
-If you have the token string (or its `jti`) and only want that one rejected:
-
-```bash
-# Decode the jti from the token (first base64 segment → JSON)
-JTI=$(echo "<token>" | cut -d. -f2 | base64 -d 2>/dev/null | jq -r .jti)
-
-curl -X POST "http://<daemon>/mcp-tokens/$JTI/revoke" \
-  -H "Authorization: Bearer <admin-jwt>" \
-  -H "Content-Type: application/json" \
-  -d '{"reason":"manual","sessionId":"<session-id>"}'
-```
-
-The `jti` is added to the revocation ledger (`mcp_token_revocations` table)
-and the in-memory cache immediately — no daemon restart required. Other
-outstanding tokens for the same session keep working.
-
-### 2. Revoke every outstanding token for a session
+### Revoke every outstanding token for a session
 
 Archive the session, or patch it to a terminal state with
 `execution.auto_revoke_on_session_complete=true`:
@@ -126,15 +114,13 @@ This bumps `sessions.mcp_token_generation`. Every token previously minted
 for this session carries the old `gen` and is rejected on next validation.
 New tokens (from `GET /sessions/:id` or a new prompt) pick up the new gen.
 
-### 3. Audit active revocations
+### Access gating
 
-```bash
-curl "http://<daemon>/mcp-tokens" -H "Authorization: Bearer <admin-jwt>"
-```
-
-Returns only non-expired ledger rows. Rows whose `expires_at` is in the past
-are pruned hourly by `cleanupExpiredTokens` (the token's own `exp` already
-rejects it, so there's no point keeping the ledger entry around).
+MCP tokens are only issued to callers whose role is `member` or above.
+Viewers never receive an `mcp_token` on `GET /sessions/:id` or
+`POST /sessions` — they cannot prompt via REST either, so MCP would be
+useless for them regardless, and leaking a token in the response is a
+liability we avoid by default.
 
 ### Config knobs
 
@@ -159,7 +145,6 @@ execution:
 |----------------------------------------------------|------------------------------------------------------------|-----------------------------------------------|
 | `token rejected: expired`                          | Token past its `exp`                                       | Session will re-mint on next `GET /sessions`  |
 | `token rejected: gen mismatch`                     | `revokeAllForSession` ran (session archived/completed)     | Re-mint token (next GET or new prompt)        |
-| `token rejected: jti … revoked`                    | Operator revoked this jti                                  | Expected — have caller re-mint                |
 | `LEGACY token accepted (grace window active …)`    | Pre-rollout token still in use                             | Re-prompt / restart the session to re-mint    |
 | `LEGACY token rejected (grace window expired)`     | Legacy token after `mcp_token_accept_legacy_grace_ms`      | Session owner must restart the session        |
 

@@ -1,19 +1,16 @@
 /**
  * MCP token module tests.
  *
- * Exercises the full issue → verify → revoke → cleanup cycle against an
- * in-memory SQLite database. A minimal repo/worktree/session fixture is
- * seeded so the `mcp_token_generation` lookup in validate/revoke has
- * something to read.
+ * Exercises the issue → verify → bulk-revoke cycle against an in-memory SQLite
+ * database. A minimal repo/worktree/session fixture is seeded so the
+ * `mcp_token_generation` lookup in validate/revoke has something to read.
  *
  * Coverage:
- *   - minted tokens carry `jti` + `exp` (+ `iat`, `gen`)
+ *   - minted tokens carry `jti` + `exp` (+ `iat`, `gen`, `iss`, `aud`) claims
  *   - expired token → rejected
- *   - revoked jti → rejected (even before `exp` passes)
  *   - revokeAllForSession bumps `gen` and invalidates every outstanding token
  *   - legacy tokens (no jti/exp) accepted during grace window, rejected after
- *   - cleanupExpiredTokens prunes ledger rows past their `expires_at`
- *   - list() returns only active (non-expired) revocations
+ *   - legacy tokens rejected after gen bump / session deletion (even in grace)
  */
 
 import {
@@ -22,7 +19,6 @@ import {
   eq,
   generateId,
   insert,
-  mcpTokenRevocations,
   RepoRepository,
   sessions,
   worktrees,
@@ -32,15 +28,12 @@ import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import {
-  cleanupExpiredTokens,
   generateSessionToken,
   getLegacyGraceUntilMs,
   initMcpTokens,
   MCP_TOKEN_AUDIENCE,
   MCP_TOKEN_ISSUER,
-  MCPTokensService,
   revokeAllForSession,
-  revokeByJti,
   shutdownMcpTokens,
   validateSessionToken,
 } from './tokens.js';
@@ -115,7 +108,7 @@ afterEach(() => {
 
 describe('generateSessionToken', () => {
   dbTest('issues a token with jti, exp, iat, aud, iss, gen claims', async ({ db }) => {
-    await initMcpTokens({ db, expirationMs: 60_000, acceptLegacyGraceMs: 0 });
+    initMcpTokens({ db, expirationMs: 60_000, acceptLegacyGraceMs: 0 });
     const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
     const app = makeApp();
 
@@ -138,7 +131,7 @@ describe('generateSessionToken', () => {
   });
 
   dbTest('embeds current mcp_token_generation into the gen claim', async ({ db }) => {
-    await initMcpTokens({ db });
+    initMcpTokens({ db });
     const sessionId = await seedSession(db, {
       sessionId: generateId() as SessionID,
       initialGen: 7,
@@ -153,7 +146,7 @@ describe('generateSessionToken', () => {
   });
 
   dbTest('each issuance produces a different jti', async ({ db }) => {
-    await initMcpTokens({ db });
+    initMcpTokens({ db });
     const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
 
     const t1 = await generateSessionToken(makeApp(), sessionId, 'u' as UserID);
@@ -167,7 +160,7 @@ describe('generateSessionToken', () => {
   });
 
   dbTest('throws when the session does not exist', async ({ db }) => {
-    await initMcpTokens({ db });
+    initMcpTokens({ db });
     const missingSessionId = generateId() as SessionID;
     await expect(generateSessionToken(makeApp(), missingSessionId, 'u1' as UserID)).rejects.toThrow(
       /not found/
@@ -176,12 +169,12 @@ describe('generateSessionToken', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Validation — happy path, expiry, revocation, gen mismatch
+// Validation — happy path, expiry, gen mismatch
 // ---------------------------------------------------------------------------
 
 describe('validateSessionToken', () => {
   dbTest('accepts a freshly minted token', async ({ db }) => {
-    await initMcpTokens({ db });
+    initMcpTokens({ db });
     const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
     const token = await generateSessionToken(makeApp(), sessionId, 'u1' as UserID);
 
@@ -202,7 +195,7 @@ describe('validateSessionToken', () => {
     const baseMs = Date.now();
     vi.useFakeTimers({ now: baseMs, shouldAdvanceTime: false });
     try {
-      await initMcpTokens({ db, expirationMs: 60_000, acceptLegacyGraceMs: 0 });
+      initMcpTokens({ db, expirationMs: 60_000, acceptLegacyGraceMs: 0 });
       const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
       const token = await generateSessionToken(makeApp(), sessionId, 'u1' as UserID);
 
@@ -218,20 +211,8 @@ describe('validateSessionToken', () => {
     }
   });
 
-  dbTest('rejects a token whose jti is in the revocation ledger', async ({ db }) => {
-    await initMcpTokens({ db });
-    const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
-    const token = await generateSessionToken(makeApp(), sessionId, 'u1' as UserID);
-    const { jti } = jwt.decode(token) as { jti: string };
-
-    await revokeByJti({ jti, sessionId, reason: 'manual', revokedBy: 'admin-1' });
-
-    const result = await validateSessionToken(makeApp(), token);
-    expect(result).toBeNull();
-  });
-
   dbTest('rejects tokens with a stale gen after revokeAllForSession', async ({ db }) => {
-    await initMcpTokens({ db });
+    initMcpTokens({ db });
     const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
     const t1 = await generateSessionToken(makeApp(), sessionId, 'u1' as UserID);
     const t2 = await generateSessionToken(makeApp(), sessionId, 'u1' as UserID);
@@ -254,7 +235,7 @@ describe('validateSessionToken', () => {
   });
 
   dbTest('rejects tokens for sessions that have been deleted', async ({ db }) => {
-    await initMcpTokens({ db });
+    initMcpTokens({ db });
     const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
     const token = await generateSessionToken(makeApp(), sessionId, 'u1' as UserID);
 
@@ -266,7 +247,7 @@ describe('validateSessionToken', () => {
   });
 
   dbTest('rejects a post-rollout token with the wrong issuer', async ({ db }) => {
-    await initMcpTokens({ db });
+    initMcpTokens({ db });
     const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
 
     // Hand-mint a token that has every other claim right but a bogus `iss`.
@@ -314,7 +295,7 @@ describe('legacy token grace window', () => {
 
   dbTest('accepts a legacy token during the grace window', async ({ db }) => {
     const nowMs = 1_700_000_000_000;
-    await initMcpTokens({
+    initMcpTokens({
       db,
       acceptLegacyGraceMs: 60_000,
       now: () => nowMs,
@@ -333,7 +314,7 @@ describe('legacy token grace window', () => {
 
   dbTest('rejects a legacy token after the grace window closes', async ({ db }) => {
     let nowMs = 1_700_000_000_000;
-    await initMcpTokens({
+    initMcpTokens({
       db,
       acceptLegacyGraceMs: 60_000,
       now: () => nowMs,
@@ -346,7 +327,7 @@ describe('legacy token grace window', () => {
   });
 
   dbTest('rejects legacy tokens immediately when acceptLegacyGraceMs is 0', async ({ db }) => {
-    await initMcpTokens({ db, acceptLegacyGraceMs: 0 });
+    initMcpTokens({ db, acceptLegacyGraceMs: 0 });
     expect(getLegacyGraceUntilMs()).toBe(0);
 
     const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
@@ -361,7 +342,7 @@ describe('legacy token grace window', () => {
       // Regression: the legacy-token path used to early-return during grace
       // without checking session existence or gen. That meant a legacy token
       // survived a session-wide revoke. Now it must be rejected.
-      await initMcpTokens({ db, acceptLegacyGraceMs: 60 * 60 * 1000 });
+      initMcpTokens({ db, acceptLegacyGraceMs: 60 * 60 * 1000 });
       const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
       const legacy = mintLegacyToken(sessionId, 'u1' as UserID);
 
@@ -376,93 +357,12 @@ describe('legacy token grace window', () => {
   );
 
   dbTest('rejects a legacy token for a deleted session, even during grace', async ({ db }) => {
-    await initMcpTokens({ db, acceptLegacyGraceMs: 60 * 60 * 1000 });
+    initMcpTokens({ db, acceptLegacyGraceMs: 60 * 60 * 1000 });
     const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
     const legacy = mintLegacyToken(sessionId, 'u1' as UserID);
 
     await deleteFrom(db, sessions).where(eq(sessions.session_id, sessionId)).run();
 
     expect(await validateSessionToken(makeApp(), legacy)).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Revocation ledger + cleanup
-// ---------------------------------------------------------------------------
-
-describe('revocation ledger', () => {
-  dbTest('revokeByJti is idempotent and seeds the in-memory cache', async ({ db }) => {
-    await initMcpTokens({ db });
-    const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
-    const jti = generateId();
-
-    await revokeByJti({ jti, sessionId, reason: 'manual', revokedBy: 'a' });
-    // Second call must not throw (idempotency).
-    await revokeByJti({ jti, sessionId, reason: 'manual', revokedBy: 'a' });
-
-    const svc = new MCPTokensService(db);
-    const active = await svc.list();
-    expect(active).toHaveLength(1);
-    expect(active[0].jti).toBe(jti);
-  });
-
-  dbTest('cleanupExpiredTokens prunes ledger rows past their expires_at', async ({ db }) => {
-    // Use real timestamps because MCPTokensService.list() reads Date.now()
-    // directly (no clock injection). Mixing a frozen module clock with a
-    // real-time list() filter would drop both rows.
-    const nowMs = Date.now();
-    await initMcpTokens({ db, cleanupIntervalMs: 0 });
-
-    const expiredJti = generateId();
-    const activeJti = generateId();
-    await insert(db, mcpTokenRevocations)
-      .values({
-        jti: expiredJti,
-        session_id: null,
-        revoked_at: nowMs - 10_000,
-        revoked_by: 'a',
-        reason: 'manual',
-        expires_at: nowMs - 1_000, // already past
-      })
-      .run();
-    await insert(db, mcpTokenRevocations)
-      .values({
-        jti: activeJti,
-        session_id: null,
-        revoked_at: nowMs,
-        revoked_by: 'a',
-        reason: 'manual',
-        expires_at: nowMs + 10 * 60_000, // well in the future
-      })
-      .run();
-
-    const removed = await cleanupExpiredTokens();
-    expect(removed).toBeGreaterThanOrEqual(1);
-
-    const svc = new MCPTokensService(db);
-    const active = await svc.list();
-    expect(active.map((r) => r.jti)).toEqual([activeJti]);
-  });
-
-  dbTest('MCPTokensService.revoke records the revocation metadata', async ({ db }) => {
-    await initMcpTokens({ db });
-    const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
-    const svc = new MCPTokensService(db);
-    const jti = generateId();
-
-    const result = await svc.revoke(jti, {
-      reason: 'user_request',
-      sessionId,
-      revokedBy: 'admin-42',
-    });
-
-    expect(result.jti).toBe(jti);
-    expect(result.reason).toBe('user_request');
-
-    const active = await svc.list();
-    expect(active).toHaveLength(1);
-    expect(active[0].reason).toBe('user_request');
-    expect(active[0].revoked_by).toBe('admin-42');
-    expect(active[0].session_id).toBe(sessionId);
   });
 });

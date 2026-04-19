@@ -512,21 +512,24 @@ Default lifetime: **24 hours** (`execution.mcp_token_expiration_ms`).
 
 ### Revocation
 
-Two complementary mechanisms:
+A single mechanism: the **generation counter** (`revokeAllForSession`) bumps
+`sessions.mcp_token_generation`. The next validation call reads the current
+value and rejects any token whose `gen` claim is behind. O(1) write,
+invalidates every outstanding token for the session in one stroke.
 
-1. **Generation counter** (`revokeAllForSession`) — bumps
-   `sessions.mcp_token_generation`. The next validation call reads the current
-   value and rejects any token whose `gen` claim is behind. O(1) write,
-   invalidates every outstanding token for the session in one stroke.
+There is intentionally no per-`jti` revocation ledger. Tokens are short-lived,
+re-minted fresh on every `GET /sessions/:id` / `POST /sessions`, and MCP is
+internal-only (loopback) — a leaked jti self-expires via `exp` and any
+suspected compromise is addressed by bumping the session's gen. If/when MCP
+is opened externally, auth will be redesigned from scratch (OAuth / API keys)
+rather than extending this.
 
-2. **Revocation ledger** (`revokeByJti`) — inserts a row into
-   `mcp_token_revocations (jti PK, session_id, revoked_at, revoked_by, reason,
-   expires_at)` and adds the `jti` to an in-memory cache. Use this for leaked
-   individual tokens when the session is still active.
+### Access gating
 
-Active ledger entries are loaded into memory at daemon startup and updated on
-each write, so validation does **not** hit the DB for the ledger check.
-Expired rows (`expires_at` past) are pruned hourly by `cleanupExpiredTokens`.
+MCP tokens are only issued to callers with role `member` or above. Viewers
+cannot prompt sessions via REST, so MCP would be useless for them anyway, and
+omitting `mcp_token` from viewer-facing responses prevents accidental token
+leakage through the session read path.
 
 ### Auto-revoke triggers
 
@@ -534,7 +537,6 @@ Expired rows (`expires_at` past) are pruned hourly by `cleanupExpiredTokens`.
 |----------------------------------------|--------------------------------------------------|---------------------------------|
 | session patched with `archived: true`  | always on                                        | `revokeAllForSession` (gen bump)|
 | session reaches `completed` / `failed` | `execution.auto_revoke_on_session_complete=true` | `revokeAllForSession` (gen bump)|
-| operator action                        | `POST /mcp-tokens/:jti/revoke` (admin)           | `revokeByJti` (ledger insert)   |
 
 ### Legacy token grace window
 
@@ -545,24 +547,12 @@ log per use listing the session and user so operators can see which sessions
 still need to be re-minted. Set the value to `0` to reject legacy tokens
 immediately.
 
-### REST endpoints
-
-- `POST /mcp-tokens/:jti/revoke` — admin-only. Body: `{ reason?, sessionId? }`.
-  Returns the ledger row.
-- `GET /mcp-tokens` — admin-only. Lists active (non-expired) revocations.
-
-Bulk "revoke all for a session" does not have its own endpoint — archive the
-session (or patch it to a terminal state with auto-revoke enabled) and the
-patch hook bumps the generation counter.
-
 ### Related files
 
 - `apps/agor-daemon/src/mcp/tokens.ts` — module implementation
 - `apps/agor-daemon/src/mcp/tokens.test.ts` — unit tests
-- `apps/agor-daemon/src/register-routes.ts` — admin endpoints
-- `apps/agor-daemon/src/register-hooks.ts` — session-state auto-revoke hook
-- `packages/core/src/db/schema.sqlite.ts` — `mcp_token_revocations` +
-  `sessions.mcp_token_generation`
+- `apps/agor-daemon/src/register-hooks.ts` — issuance gate + session-state auto-revoke hook
+- `packages/core/src/db/schema.sqlite.ts` — `sessions.mcp_token_generation`
 
 ---
 

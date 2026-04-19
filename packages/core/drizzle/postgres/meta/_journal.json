@@ -188,7 +188,7 @@
       "idx": 26,
       "version": "7",
       "when": 1777000000000,
-      "tag": "0026_add_mcp_token_revocations",
+      "tag": "0026_add_mcp_token_generation",
       "breakpoints": true
     }
   ]

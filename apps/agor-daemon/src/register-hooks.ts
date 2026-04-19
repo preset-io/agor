@@ -1578,6 +1578,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             return context;
           }
 
+          // Gate MCP token issuance on member+ role. Viewers cannot prompt
+          // sessions via REST, so there's no reason for them to receive an
+          // MCP token (which could otherwise be exfiltrated from session.get
+          // responses).
+          const callerRole = (context.params as AuthenticatedParams).user?.role;
+          if (!hasMinimumRole(callerRole, ROLES.MEMBER)) {
+            return context;
+          }
+
           const { generateSessionToken } = await import('./mcp/tokens.js');
           const session = context.result as Session;
           const userId = session.created_by || 'anonymous';
@@ -1607,6 +1616,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         async (context) => {
           // Skip MCP setup if MCP server is disabled
           if (config.daemon?.mcpEnabled === false) {
+            return context;
+          }
+
+          // Gate MCP token issuance on member+ role (see `after: get` note).
+          const callerRole = (context.params as AuthenticatedParams).user?.role;
+          if (!hasMinimumRole(callerRole, ROLES.MEMBER)) {
             return context;
           }
 
