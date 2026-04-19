@@ -1478,13 +1478,13 @@ export function ensureSessionOwnerOrAdmin(options?: { allowSuperadmin?: boolean 
  * @returns The created_by UUID to stamp on the child session
  */
 export function determineSpawnIdentity(
-  parent: Pick<Session, 'created_by'>,
+  parent: { created_by: string },
   caller: { user_id?: string; role?: string; _isServiceAccount?: boolean },
-  worktree: Pick<Worktree, 'worktree_id' | 'dangerously_allow_session_sharing'> | undefined,
+  worktree: { worktree_id: string; dangerously_allow_session_sharing?: boolean } | undefined,
   options?: { allowSuperadmin?: boolean }
-): { created_by: UUID; usedLegacySharing: boolean } {
+): { created_by: string; usedLegacySharing: boolean } {
   const allowSuperadmin = options?.allowSuperadmin ?? true;
-  const callerId = caller.user_id as UUID | undefined;
+  const callerId = caller.user_id;
   const role = caller.role;
 
   // Service accounts (executor, internal jobs) preserve parent attribution.
@@ -1528,9 +1528,7 @@ export function determineSpawnIdentity(
   // If we don't have a caller id at this point we cannot safely proceed —
   // refuse rather than silently fall back to parent ownership.
   if (!callerId) {
-    throw new Forbidden(
-      'Cannot spawn/fork session without an authenticated caller identity.'
-    );
+    throw new Forbidden('Cannot spawn/fork session without an authenticated caller identity.');
   }
   return { created_by: callerId, usedLegacySharing: false };
 }
