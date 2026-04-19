@@ -3,6 +3,15 @@
  *
  * Configures WebSocket server with authentication middleware,
  * cursor presence tracking, and connection management.
+ *
+ * SECURITY (terminal:* events):
+ * Browser-emitted terminal events (terminal:input, terminal:resize, join)
+ * are gated by per-event authentication checks. Without these checks any
+ * anonymous socket that knew a target user_id could inject keystrokes into
+ * that user's web terminal channel — which under unix_user_mode=strict is
+ * full impersonation of the victim's OS identity, and under simple mode is a
+ * shell as the daemon user (with read access to ~/.agor/config.yaml,
+ * agor.db, and the JWT secret). See `terminal:*` handlers below.
  */
 
 import type { Application } from '@agor/core/feathers';
@@ -12,7 +21,17 @@ import type { Server, Socket } from 'socket.io';
 import type { CorsOrigin } from './cors.js';
 
 /**
- * FeathersJS extends Socket.io socket with authentication context
+ * FeathersJS extends Socket.io socket with authentication context.
+ *
+ * `feathers` is populated either:
+ *   - synchronously by the io.use() handshake middleware below (handshake
+ *     token path: user, service, or empty for anonymous-allowed), OR
+ *   - asynchronously by FeathersJS itself when the client calls
+ *     `client.authenticate()` after connect (login event).
+ *
+ * Service-token sockets are additionally tagged with `socket.data.isService`
+ * so we can distinguish them from anonymous sockets that later authenticate
+ * as a user (where `feathers.user` would be set).
  */
 interface FeathersSocket extends Socket {
   feathers?: {
@@ -34,6 +53,97 @@ export interface SocketIOOptions {
    * creates spec-noncompliant credentialed cross-origin behavior.
    */
   credentialsAllowed: boolean;
+  /**
+   * Whether the web terminal feature is enabled (mirrors
+   * `execution.allow_web_terminal`). When false, ALL `terminal:*` events
+   * (and joins to `user/*\/terminal` channels) are rejected at the socket
+   * layer. This matches the HTTP terminals service gate in register-hooks.ts
+   * and keeps the kill-switch effective for both transports. Defaults to
+   * true if omitted.
+   */
+  webTerminalEnabled?: boolean;
+}
+
+/**
+ * Auth state derived from a socket. Returned by {@link getSocketAuthState}.
+ *
+ * - `userId` is the authenticated user's id, or null for anonymous/service.
+ * - `isService` is true for executor service tokens (no user, but trusted).
+ * - `isAuthenticated` is true if either a user OR a service token validated.
+ */
+export interface SocketAuthState {
+  userId: string | null;
+  isService: boolean;
+  isAuthenticated: boolean;
+}
+
+/**
+ * Extract the authenticated identity from a socket.
+ *
+ * Three valid states:
+ *   1. User-authenticated:    feathers.user set with a user_id
+ *   2. Service-authenticated: socket.data.isService === true (no user)
+ *   3. Anonymous:             neither
+ *
+ * Exported for unit tests and for handler authorization checks.
+ */
+export function getSocketAuthState(socket: Socket): SocketAuthState {
+  const f = (socket as FeathersSocket).feathers;
+  const user = f?.user;
+  if (user?.user_id) {
+    return { userId: user.user_id, isService: false, isAuthenticated: true };
+  }
+  // biome-ignore lint/suspicious/noExplicitAny: socket.data shape is open
+  if ((socket.data as any)?.isService === true) {
+    return { userId: null, isService: true, isAuthenticated: true };
+  }
+  return { userId: null, isService: false, isAuthenticated: false };
+}
+
+/**
+ * Token-bucket rate limiter for per-socket terminal:input flooding.
+ *
+ * Generous defaults (500 events/sec, burst 1000) — even fast typists +
+ * paste-bomb rarely exceed this. The cap exists to prevent a hijacked
+ * (or buggy) client from saturating the executor's PTY input loop or
+ * filling logs. Returns a function: call() → boolean (true = allowed).
+ *
+ * Exported for unit tests.
+ */
+export function createTokenBucket(
+  capacity: number,
+  refillPerSec: number,
+  now: () => number = Date.now
+): () => boolean {
+  let tokens = capacity;
+  let last = now();
+  return () => {
+    const t = now();
+    const elapsed = (t - last) / 1000;
+    last = t;
+    tokens = Math.min(capacity, tokens + elapsed * refillPerSec);
+    if (tokens >= 1) {
+      tokens -= 1;
+      return true;
+    }
+    return false;
+  };
+}
+
+/**
+ * Validate a terminal channel name and extract its target user_id.
+ *
+ * Channel format: `user/<uuid>/terminal`. Returns null on bad shape.
+ * Exported for tests.
+ */
+export function parseTerminalChannel(channel: string): string | null {
+  if (typeof channel !== 'string') return null;
+  if (!channel.startsWith('user/') || !channel.endsWith('/terminal')) return null;
+  const inner = channel.slice('user/'.length, channel.length - '/terminal'.length);
+  // Reject empty / nested-slash channels — `user//terminal` or
+  // `user/foo/bar/terminal` must not parse as a valid terminal channel.
+  if (!inner || inner.includes('/')) return null;
+  return inner;
 }
 
 export interface SocketIOResult {
@@ -66,6 +176,8 @@ export function createSocketIOConfig(
   getSocketServer: () => Server | null;
 } {
   const { corsOrigin, jwtSecret, allowAnonymous, credentialsAllowed } = options;
+  // Default ON to mirror the daemon-wide default (see register-hooks.ts).
+  const webTerminalEnabled = options.webTerminalEnabled !== false;
 
   let socketServer: Server | null = null;
 
@@ -134,11 +246,16 @@ export function createSocketIOConfig(
 
         // Handle service tokens (used by executor for terminal streaming, git operations, etc.)
         if (tokenType === 'service') {
-          // Service tokens don't have a user - they authenticate the executor process
-          // Mark as service connection for potential authorization checks
+          // Service tokens don't have a user - they authenticate the executor process.
+          // Mark as service connection for terminal:* authorization checks below.
+          // We tag socket.data.isService so getSocketAuthState() can distinguish
+          // a service socket (trusted, no user) from an anonymous socket that
+          // simply hasn't authenticated yet (untrusted, no user).
           (socket as FeathersSocket).feathers = {
             // No user - this is a service connection
           };
+          // biome-ignore lint/suspicious/noExplicitAny: socket.data shape is open
+          (socket.data as any).isService = true;
           console.log(
             `🔐 WebSocket authenticated (service): ${socket.id} (role: ${decoded.role || 'unknown'})`
           );
@@ -223,62 +340,235 @@ export function createSocketIOConfig(
 
       // =========================================================================
       // TERMINAL CHANNEL SUPPORT
-      // Executors and browsers can join user-specific terminal channels
-      // for streaming PTY I/O.
+      //
+      // Executors and browsers join `user/<userId>/terminal` channels and
+      // exchange PTY I/O over them. Auth model:
+      //
+      //   Browser → daemon (relayed to executor):
+      //     - terminal:input    requires user auth + payload.userId === self
+      //     - terminal:resize   requires user auth + payload.userId === self
+      //
+      //   Executor → daemon (relayed to browser):
+      //     - terminal:output   requires service auth
+      //     - terminal:exit     requires service auth
+      //     - terminal:tab      requires service auth
+      //                         (the daemon ALSO emits terminal:tab via
+      //                          io.to(...) directly from terminals.ts after
+      //                          enforcing worktree RBAC at the HTTP layer;
+      //                          server-side emits never hit this handler.)
+      //
+      //   join / leave:
+      //     - require user auth
+      //     - channel MUST be `user/<self>/terminal` (or any user/*/terminal
+      //       for service sockets). This stops a member from joining another
+      //       user's terminal channel and harvesting their PTY output.
+      //
+      //   Worktree RBAC for opening a terminal against a specific worktree
+      //   is enforced at the HTTP `terminals.create({ worktreeId })` entry
+      //   point (see services/terminals.ts ~L194). Browsers cannot bypass
+      //   that gate from the WS side, because creating a Zellij tab in an
+      //   arbitrary worktree requires terminal:tab — and only service-token
+      //   sockets are allowed to emit terminal:tab here.
+      //
+      //   `webTerminalEnabled === false` short-circuits ALL of the above —
+      //   the kill-switch must work for both transports, not just HTTP.
       // =========================================================================
+
+      // Per-socket rate limiter for terminal:input. Generous cap (500/s,
+      // burst 1000) — enough for bracketed paste of large blocks, low enough
+      // to defang a hijacked or malfunctioning client trying to flood the
+      // executor PTY or the daemon log.
+      const inputRateLimit = createTokenBucket(1000, 500);
+
+      const rejectTerminal = (event: string, reason: string) => {
+        console.warn(
+          `🚫 ${event} rejected on socket ${socket.id}: ${reason} ` +
+            `(authState=${JSON.stringify(getSocketAuthState(socket))})`
+        );
+      };
+
+      // Common preflight for browser-emitted terminal events. Returns the
+      // authenticated user's id when the event should proceed, or null when
+      // the event was rejected (and the caller must return).
+      const requireUserForOwnUserId = (
+        event: 'terminal:input' | 'terminal:resize',
+        payloadUserId: unknown
+      ): string | null => {
+        if (!webTerminalEnabled) {
+          rejectTerminal(event, 'web terminal disabled (allow_web_terminal=false)');
+          return null;
+        }
+        const auth = getSocketAuthState(socket);
+        if (!auth.isAuthenticated || !auth.userId) {
+          rejectTerminal(event, 'no authenticated user');
+          return null;
+        }
+        if (typeof payloadUserId !== 'string' || payloadUserId !== auth.userId) {
+          // Critical: do NOT trust client-supplied userId. Mismatch = either
+          // a forged payload (hijack attempt) or a buggy client. Either way,
+          // refuse to relay.
+          rejectTerminal(
+            event,
+            `payload userId (${String(payloadUserId).slice(0, 8)}…) does not match ` +
+              `authed userId (${auth.userId.slice(0, 8)}…)`
+          );
+          return null;
+        }
+        return auth.userId;
+      };
 
       // Handle explicit channel joins (for terminal channels)
       socket.on('join', (channel: string) => {
-        // Validate channel format: user/${userId}/terminal
-        if (channel.startsWith('user/') && channel.endsWith('/terminal')) {
-          console.log(`🖥️  Socket ${socket.id} joining terminal channel: ${channel}`);
-          socket.join(channel);
-        } else {
-          console.warn(`⚠️  Socket ${socket.id} tried to join invalid channel: ${channel}`);
+        if (!webTerminalEnabled) {
+          rejectTerminal('join', 'web terminal disabled (allow_web_terminal=false)');
+          return;
         }
+        const target = parseTerminalChannel(channel);
+        if (!target) {
+          console.warn(`⚠️  Socket ${socket.id} tried to join invalid channel: ${channel}`);
+          return;
+        }
+        const auth = getSocketAuthState(socket);
+        if (!auth.isAuthenticated) {
+          rejectTerminal('join', `unauthenticated socket cannot join ${channel}`);
+          return;
+        }
+        // Service sockets (executor) are allowed to join any user's terminal
+        // channel — that's how they relay PTY I/O for the user they're
+        // proxying. User sockets may only join their OWN channel.
+        if (!auth.isService && auth.userId !== target) {
+          rejectTerminal(
+            'join',
+            `user ${auth.userId?.slice(0, 8)}… tried to join ${target.slice(0, 8)}…'s channel`
+          );
+          return;
+        }
+        console.log(`🖥️  Socket ${socket.id} joining terminal channel: ${channel}`);
+        socket.join(channel);
       });
 
-      // Handle explicit channel leaves
+      // Handle explicit channel leaves. Same auth model as join: service
+      // sockets can leave any channel, users can only leave their own. We
+      // also reject for unauthenticated sockets to prevent noise / probing.
       socket.on('leave', (channel: string) => {
+        const target = parseTerminalChannel(channel);
+        if (target) {
+          const auth = getSocketAuthState(socket);
+          if (!auth.isAuthenticated) {
+            rejectTerminal('leave', `unauthenticated socket cannot leave ${channel}`);
+            return;
+          }
+          if (!auth.isService && auth.userId !== target) {
+            rejectTerminal(
+              'leave',
+              `user ${auth.userId?.slice(0, 8)}… tried to leave ${target.slice(0, 8)}…'s channel`
+            );
+            return;
+          }
+        }
         console.log(`🖥️  Socket ${socket.id} leaving channel: ${channel}`);
         socket.leave(channel);
       });
 
-      // Route terminal output from executor to browser
-      // Executor emits: terminal:output { userId, data }
-      // Browser receives: terminal:output { userId, data }
+      // Route terminal output from executor to browser.
+      // Executor emits: terminal:output { userId, data } → broadcast to channel
+      // ONLY service sockets may emit this — otherwise a member could spoof
+      // arbitrary output (e.g. fake "permission granted" prompts) into
+      // another user's terminal.
       socket.on('terminal:output', (data: { userId: string; data: string }) => {
+        if (!webTerminalEnabled) {
+          rejectTerminal('terminal:output', 'web terminal disabled');
+          return;
+        }
+        const auth = getSocketAuthState(socket);
+        if (!auth.isService) {
+          rejectTerminal('terminal:output', 'only service tokens may emit terminal:output');
+          return;
+        }
+        if (typeof data?.userId !== 'string' || !data.userId) {
+          rejectTerminal('terminal:output', 'missing userId');
+          return;
+        }
         const channel = `user/${data.userId}/terminal`;
-        // Broadcast to channel (including sender for echo)
         io.to(channel).emit('terminal:output', data);
       });
 
-      // Route terminal input from browser to executor
-      // Browser emits: terminal:input { userId, input }
-      // Executor receives: terminal:input { userId, input }
+      // Route terminal input from browser to executor.
+      // Browser emits: terminal:input { userId, input } → broadcast to channel
+      // Auth: must be the authenticated user, and payload.userId MUST match.
       socket.on('terminal:input', (data: { userId: string; input: string }) => {
-        const channel = `user/${data.userId}/terminal`;
-        // Broadcast to channel (executor will filter by userId)
-        io.to(channel).emit('terminal:input', data);
+        const userId = requireUserForOwnUserId('terminal:input', data?.userId);
+        if (!userId) return;
+        if (!inputRateLimit()) {
+          rejectTerminal('terminal:input', 'rate limit exceeded (>500/s)');
+          return;
+        }
+        // Re-derive the channel and userId from the AUTHENTICATED identity.
+        // Even though we already validated payload.userId matches authed
+        // userId above, we send the trusted value downstream so executors
+        // never see attacker-controlled strings even if the check above is
+        // ever weakened.
+        const channel = `user/${userId}/terminal`;
+        io.to(channel).emit('terminal:input', { userId, input: data.input });
       });
 
-      // Route terminal resize events
+      // Route terminal resize events. Same auth model as terminal:input —
+      // browser-emitted, must match authed user. Resize events aren't a
+      // direct shell-injection vector but a hijacker could use them to
+      // disrupt the victim's session, so we lock them down anyway.
       socket.on('terminal:resize', (data: { userId: string; cols: number; rows: number }) => {
-        const channel = `user/${data.userId}/terminal`;
-        io.to(channel).emit('terminal:resize', data);
+        const userId = requireUserForOwnUserId('terminal:resize', data?.userId);
+        if (!userId) return;
+        const channel = `user/${userId}/terminal`;
+        io.to(channel).emit('terminal:resize', { userId, cols: data.cols, rows: data.rows });
       });
 
-      // Route terminal tab commands
+      // Route terminal tab commands. The daemon emits this server-side via
+      // io.to() (terminals.ts) AFTER enforcing worktree RBAC on the HTTP
+      // create() path. We must NOT let browsers emit it directly — doing so
+      // would let a user with 'view'-only on a worktree open a Zellij tab
+      // (and a shell) inside that worktree, bypassing the HTTP RBAC gate.
       socket.on(
         'terminal:tab',
         (data: { userId: string; action: string; tabName: string; cwd?: string }) => {
+          if (!webTerminalEnabled) {
+            rejectTerminal('terminal:tab', 'web terminal disabled');
+            return;
+          }
+          const auth = getSocketAuthState(socket);
+          if (!auth.isService) {
+            rejectTerminal(
+              'terminal:tab',
+              'only service tokens may emit terminal:tab (browsers must use HTTP terminals.create)'
+            );
+            return;
+          }
+          if (typeof data?.userId !== 'string' || !data.userId) {
+            rejectTerminal('terminal:tab', 'missing userId');
+            return;
+          }
           const channel = `user/${data.userId}/terminal`;
           io.to(channel).emit('terminal:tab', data);
         }
       );
 
-      // Handle terminal exit notification from executor
+      // Handle terminal exit notification from executor.
+      // Executor-only — a forged exit would let a member terminate or
+      // confuse another user's terminal session.
       socket.on('terminal:exit', (data: { userId: string; exitCode: number; signal?: number }) => {
+        if (!webTerminalEnabled) {
+          rejectTerminal('terminal:exit', 'web terminal disabled');
+          return;
+        }
+        const auth = getSocketAuthState(socket);
+        if (!auth.isService) {
+          rejectTerminal('terminal:exit', 'only service tokens may emit terminal:exit');
+          return;
+        }
+        if (typeof data?.userId !== 'string' || !data.userId) {
+          rejectTerminal('terminal:exit', 'missing userId');
+          return;
+        }
         const channel = `user/${data.userId}/terminal`;
         io.to(channel).emit('terminal:exit', data);
         console.log(`🖥️  Terminal exited for user ${data.userId}: code=${data.exitCode}`);

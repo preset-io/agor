@@ -478,6 +478,11 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     jwtSecret,
     allowAnonymous,
     credentialsAllowed,
+    // Mirror the HTTP terminals service gate (register-hooks.ts) so the
+    // `allow_web_terminal: false` kill-switch is enforced on the WebSocket
+    // transport too. Without this the terminal:* relay events would still
+    // accept traffic when the HTTP modal is disabled.
+    webTerminalEnabled: config.execution?.allow_web_terminal !== false,
   });
   app.configure(socketio(socketIOConfig.serverOptions, socketIOConfig.callback));
   configureChannels(app);
