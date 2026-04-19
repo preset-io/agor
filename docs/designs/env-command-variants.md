@@ -79,6 +79,8 @@ template_overrides:
 
 At render time, `template_overrides` is **deep-merged into the Handlebars context** after the defaults (daemon config, autodetect) but before `custom.*` values from the worktree. So Preset can import Superset's clean upstream `.agor.yml` and set their host IP / registry values per-repo without a global config file, and without risk of leaking values back to the shared file.
 
+> **⚠ Not for secrets.** `template_overrides` is visible to all users with repo access (admins can edit; members can read). Use it for infra identifiers — IPs, registries, profile names — not for API keys or tokens. Secrets belong in the session env-var system (per-session scope selection from PR #1032), never in template values that end up baked into shell strings.
+
 ### 2c. Worktree — pure rendered snapshot
 
 ```ts
@@ -177,6 +179,8 @@ Replace the current form-based Environment tab with two stacked YAML editors. On
 - **Bottom editor (worktree):** **admin-only.** Direct YAML editing of the 6 rendered commands is restricted to admins. Members do not see the `[Edit]` button on the bottom editor — only the Variant picker + Render button. Rationale: admins curate the set of commands that can run; members pick from that curated list and apply. This makes the admin's variant library the effective allowlist (complements the deny-list guard from PR #1034).
 - **Variant picker + Render button:** available to **members and up**. Changing the dropdown doesn't take effect until Render is clicked. Render re-evaluates with the current repo variant + `template_overrides`, overwrites the bottom editor contents. If the snapshot has unsaved manual edits (admin only), Render prompts a confirm (`"Rendering will discard your local edits. Continue?"`). For members, Render always applies cleanly (no manual edits possible).
 - **Start/Stop/Nuke/Logs buttons:** gated by `managed_envs_minimum_role` as today — orthogonal to the edit permissions above.
+- **Empty-variants state.** When a repo has no variants configured, the bottom section shows a disabled picker and a one-liner: *"No environment variants configured. Ask an admin to set up commands in the repo editor above."* No weird unlabeled empty dropdown.
+- **No stale-snapshot tracking.** If an admin edits a variant after a worktree has already rendered, the worktree snapshot is silently outdated — no banner, no dirty flag. Users decide if/when to re-render; worktrees are short-lived enough that this isn't worth instrumenting.
 - **Docs link** inline in each editor's edit mode — points to `https://agor.live/guide/environment-configuration`. Section anchors for `#variants`, `#template-overrides`, `#template-vars`.
 
 ### Permission summary
@@ -203,6 +207,8 @@ Minimal. Matches the "just valid YAML" bar:
 ---
 
 ## 5. Import / export behavior
+
+Both actions target **`$WORKTREE_PATH/.agor.yml`** — the `.agor.yml` in the currently open worktree's working directory, not the repo's default branch. This is the existing behavior (`repos.ts:789`) and it's the right one: admins iterate on `.agor.yml` in a branch, commit, PR it up, and it rolls out like any other repo change. Most of the time the file is identical across branches; when it isn't, the worktree you're editing from wins.
 
 Two admin actions on the repo editor header; both short-circuit through a confirm dialog.
 
@@ -257,15 +263,22 @@ Zero forced user action. Existing repos keep working as a single `default` varia
 
 ---
 
-## 8. Open questions
+## 8. Decisions (resolved in review)
 
-1. **Runtime variant switching.** Changing `environment_variant` on a worktree whose environment is running — auto-nuke + restart, prompt the user, or just re-render and let the user trigger restart manually? Leaning toward "re-render only; user hits Stop/Start."
-2. **`.agor.yml` from non-default branches.** If worktree `feat/x` has a different `.agor.yml` than `main`, which wins on import? Today, `worktree_id` in the import call picks the worktree's checkout (`repos.ts:789`). Keep that behavior, or always read from `main`?
-3. **`template_overrides` scoping.** Do we ever need per-variant overrides (`template_overrides.variants.postgres.host.ip_address`)? The Preset host-IP use case is "one value for the whole repo." Proposal: start with flat per-repo only; add per-variant if a concrete need shows up.
-4. **Variant-level access control.** With members restricted to admin-curated variants, this may be moot for v1. If an org wants a `production-like` variant hidden from members entirely, we'd add a per-variant `admin_only: true` field. Deferring until someone asks.
-5. **`extends` resolution across `.agor.yml` v1 import.** Flat v1 files have no variants → becomes `variants.default` with no `extends`. Safe. Worth noting in the migration docs.
+| Question | Decision |
+|---|---|
+| Who picks the variant? | Members pick from the admin-curated list and Render. Admins can additionally hand-edit the rendered snapshot. |
+| Runtime variant switching on a running env? | No special handling. Worktree state is the user's responsibility; dropdown doesn't affect running containers until they Stop/Start. |
+| `template_overrides` visibility for members? | Team-visible (read-only). Admins can edit. Safety note in §2b: not for secrets — use the session env-var system for those. |
+| `.agor.yml` path for import/export? | Always `$WORKTREE_PATH/.agor.yml`. Iterate on a branch, PR the change up, rollout is the same as any other repo file. |
+| `template_overrides` scoping? | Root-level, applies to all variants. No per-variant overrides. |
+| Stale-snapshot tracking when a variant changes? | None. Users understand that changing the template requires a re-render to take effect; no banner or dirty-state tracking. |
+| Empty-variants state? | Disabled picker + "ask an admin to configure environments" one-liner. |
+| Per-variant RBAC (hide some variants from members)? | Dropped. Admin-curated list is already the member allowlist; hiding a subset inside it adds complexity without a real use case. |
+| Docs location? | `apps/agor-docs/pages/guide/environment-configuration.mdx` at `https://agor.live/guide/environment-configuration`. Linked from each editor's edit-mode toolbar. Follow-up PR to the implementation. |
+| `extends` across `.agor.yml` v1 import? | v1 files have no variants → wrapped as `variants.default` with no `extends`. Safe; flag in migration docs. |
 
-_Resolved by review:_ who picks the variant (members pick from admin-curated list, render-only); docs location (`apps/agor-docs/pages/guide/environment-configuration.mdx`, linked from the edit-mode toolbar)._
+No open questions remaining at the design level. Implementation may surface smaller decisions (exact UI copy, error message wording, etc.) — those will be handled in review of the schema / UI PRs.
 
 ---
 
