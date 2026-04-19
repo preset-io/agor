@@ -294,9 +294,7 @@ export function EnvironmentPill({
             {onViewLogs && (
               <Tooltip
                 title={
-                  !effectiveEnv.logs
-                    ? 'Configure logs command to enable'
-                    : 'View environment logs'
+                  !effectiveEnv.logs ? 'Configure logs command to enable' : 'View environment logs'
                 }
               >
                 <Button

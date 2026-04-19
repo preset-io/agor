@@ -315,7 +315,7 @@ async function renderEnvironmentTemplates(
 
   // Honor an explicit variant override if the worktree already picked one;
   // otherwise fall through to `environment.default` inside renderWorktreeSnapshot.
-  let snapshot;
+  let snapshot: ReturnType<typeof renderWorktreeSnapshot>;
   try {
     snapshot = renderWorktreeSnapshot(
       { slug: repo.slug, environment: repo.environment },

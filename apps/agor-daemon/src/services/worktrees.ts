@@ -12,6 +12,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { ENVIRONMENT, isWorktreeRbacEnabled, loadConfig, PAGINATION } from '@agor/core/config';
 import { type Database, WorktreeRepository, type WorktreeWithZoneAndSessions } from '@agor/core/db';
+import { renderWorktreeSnapshot } from '@agor/core/environment/render-snapshot';
 import type { Application } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
@@ -25,7 +26,6 @@ import type {
 } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { getGidFromGroupName, spawnEnvironmentCommand } from '@agor/core/unix';
-import { renderWorktreeSnapshot } from '@agor/core/environment/render-snapshot';
 import { getNextRunTime, validateCron } from '@agor/core/utils/cron';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
@@ -1608,9 +1608,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     // Resolve host IP + unix GID (matches executor's renderEnvironmentTemplates).
     const config = await loadConfig();
     const hostIpAddress = resolveHostIpAddress(config.daemon?.host_ip_address);
-    const unixGid = worktree.unix_group
-      ? getGidFromGroupName(worktree.unix_group)
-      : undefined;
+    const unixGid = worktree.unix_group ? getGidFromGroupName(worktree.unix_group) : undefined;
 
     const snapshot = renderWorktreeSnapshot(
       { slug: repo.slug, environment: env },

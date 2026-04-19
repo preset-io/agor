@@ -14,9 +14,9 @@
  * See docs/designs/env-command-variants.md.
  */
 
-import type { RepoEnvironment } from '../types/worktree';
-import { buildWorktreeContext, renderTemplate } from '../templates/handlebars-helpers';
 import { resolveVariant } from '../config/agor-yml';
+import { buildWorktreeContext, renderTemplate } from '../templates/handlebars-helpers';
+import type { RepoEnvironment } from '../types/worktree';
 
 /**
  * Rendered snapshot — the concrete command strings a worktree should hold.
@@ -75,10 +75,7 @@ function deepMergeContext(
   for (const [k, v] of Object.entries(overrides)) {
     const existing = out[k];
     if (isPlainObject(existing) && isPlainObject(v)) {
-      out[k] = deepMergeContext(
-        existing as Record<string, unknown>,
-        v as Record<string, unknown>
-      );
+      out[k] = deepMergeContext(existing as Record<string, unknown>, v as Record<string, unknown>);
     } else {
       out[k] = v;
     }

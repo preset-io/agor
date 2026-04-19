@@ -106,9 +106,7 @@ function validateExtends(env: RepoEnvironment): void {
     }
     const parent = env.variants[target];
     if (!parent) {
-      throw new Error(
-        `.agor.yml: variant "${name}" extends unknown variant "${target}"`
-      );
+      throw new Error(`.agor.yml: variant "${name}" extends unknown variant "${target}"`);
     }
     if (parent.extends) {
       throw new Error(
@@ -136,10 +134,7 @@ function validateExtends(env: RepoEnvironment): void {
  *
  * Does NOT validate — call {@link validateExtends} before resolving.
  */
-export function resolveVariant(
-  env: RepoEnvironment,
-  variantName: string
-): RepoEnvironmentVariant {
+export function resolveVariant(env: RepoEnvironment, variantName: string): RepoEnvironmentVariant {
   const variant = env.variants[variantName];
   if (!variant) {
     throw new Error(`Unknown variant "${variantName}"`);
@@ -151,9 +146,7 @@ export function resolveVariant(
   }
   const parent = env.variants[variant.extends];
   if (!parent) {
-    throw new Error(
-      `Variant "${variantName}" extends unknown variant "${variant.extends}"`
-    );
+    throw new Error(`Variant "${variantName}" extends unknown variant "${variant.extends}"`);
   }
   // Field-by-field override: child wins where defined.
   const merged: RepoEnvironmentVariant = {
@@ -243,9 +236,7 @@ export function parseAgorYml(filePath: string): RepoEnvironment | null {
       variants[name] = toVariant(name, raw as YamlVariant);
     }
     if (!variants[defaultName]) {
-      throw new Error(
-        `.agor.yml: default variant "${defaultName}" is not defined in variants`
-      );
+      throw new Error(`.agor.yml: default variant "${defaultName}" is not defined in variants`);
     }
   } else {
     // v1 legacy flat form — wrap as variants.default.

@@ -3,8 +3,8 @@
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import type { RepoEnvironment } from '../types/worktree';
 import { registerHandlebarsHelpers } from '../templates/handlebars-helpers';
+import type { RepoEnvironment } from '../types/worktree';
 import { renderWorktreeSnapshot } from './render-snapshot';
 
 const worktree = {
@@ -78,9 +78,9 @@ describe('renderWorktreeSnapshot', () => {
       default: 'dev',
       variants: { dev: { start: 'x', stop: 'y' } },
     };
-    expect(() => renderWorktreeSnapshot({ slug: 'r', environment: env }, worktree, 'ghost')).toThrow(
-      /Unknown environment variant/
-    );
+    expect(() =>
+      renderWorktreeSnapshot({ slug: 'r', environment: env }, worktree, 'ghost')
+    ).toThrow(/Unknown environment variant/);
   });
 
   it('resolves single-level extends before templating', () => {
