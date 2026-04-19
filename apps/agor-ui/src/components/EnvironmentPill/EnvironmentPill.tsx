@@ -11,6 +11,7 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import { Button, Space, Spin, Tooltip, theme } from 'antd';
+import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
 import { Tag } from '../Tag';
 
@@ -36,7 +37,8 @@ export function EnvironmentPill({
   connectionDisabled = false,
 }: EnvironmentPillProps) {
   const { token } = theme.useToken();
-  const hasConfig = !!repo.environment_config;
+  const effectiveEnv = getEffectiveEnv(repo);
+  const hasConfig = effectiveEnv.hasConfig;
   const env = worktree.environment_instance;
 
   // Get static app_url (user-editable, initialized from template)
@@ -292,7 +294,7 @@ export function EnvironmentPill({
             {onViewLogs && (
               <Tooltip
                 title={
-                  !repo.environment_config?.logs_command
+                  !effectiveEnv.logs
                     ? 'Configure logs command to enable'
                     : 'View environment logs'
                 }
@@ -303,11 +305,11 @@ export function EnvironmentPill({
                   icon={<FileTextOutlined />}
                   onClick={(event) => {
                     event.stopPropagation();
-                    if (repo.environment_config?.logs_command) {
+                    if (effectiveEnv.logs) {
                       onViewLogs(worktree.worktree_id);
                     }
                   }}
-                  disabled={!repo.environment_config?.logs_command}
+                  disabled={!effectiveEnv.logs}
                   style={{
                     height: 22,
                     width: 22,

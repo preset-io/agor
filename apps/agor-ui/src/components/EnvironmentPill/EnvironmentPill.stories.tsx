@@ -27,9 +27,21 @@ const baseRepo: Repo = {
   last_updated: '2025-01-20T10:00:00Z',
 };
 
-// Repo with environment config
+// Repo with environment config (v2 variants + legacy v1 view for rollout safety)
 const repoWithConfig: Repo = {
   ...baseRepo,
+  environment: {
+    version: 2,
+    default: 'default',
+    variants: {
+      default: {
+        start: 'docker compose up -d',
+        stop: 'docker compose down',
+        health: 'http://localhost:{{add 9000 worktree.unique_id}}/health',
+        app: 'http://localhost:{{add 9000 worktree.unique_id}}',
+      },
+    },
+  },
   environment_config: {
     up_command: 'docker compose up -d',
     down_command: 'docker compose down',

@@ -17,6 +17,7 @@ import {
 } from '@ant-design/icons';
 import type { GlobalToken } from 'antd';
 import { Badge, Button, Space, Tooltip } from 'antd';
+import { getEffectiveEnv } from '../../utils/environmentConfig';
 
 /** Render environment status icon for a worktree */
 export function renderEnvStatusIcon(worktree: Worktree, token: GlobalToken) {
@@ -88,7 +89,8 @@ export function renderEnvCell(
 ) {
   const status = worktree.environment_instance?.status;
   const healthStatus = worktree.environment_instance?.last_health_check?.status;
-  const hasEnvConfig = !!repo?.environment_config;
+  const effectiveEnv = repo ? getEffectiveEnv(repo) : undefined;
+  const hasEnvConfig = !!effectiveEnv?.hasConfig;
 
   const isRunningOrHealthy =
     status === 'running' || status === 'starting' || healthStatus === 'healthy';
@@ -119,7 +121,7 @@ export function renderEnvCell(
             }}
             style={{ padding: '0 4px' }}
           />
-          {repo.environment_config?.health_check?.url_template && (
+          {effectiveEnv?.health && (
             <Button
               type="text"
               size="small"
@@ -134,10 +136,7 @@ export function renderEnvCell(
                   },
                   repo: { slug: repo.slug },
                 };
-                const url = renderTemplate(
-                  repo.environment_config?.health_check?.url_template || '',
-                  templateContext
-                );
+                const url = renderTemplate(effectiveEnv.health ?? '', templateContext);
                 if (url) {
                   window.open(url, '_blank');
                 }

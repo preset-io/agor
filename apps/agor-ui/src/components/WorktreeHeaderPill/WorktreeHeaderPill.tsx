@@ -16,6 +16,7 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import { Button, Spin, Tooltip, theme } from 'antd';
+import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
 import { Tag } from '../Tag';
 import type { WorktreeModalTab } from '../WorktreeModal/WorktreeModal';
@@ -53,7 +54,8 @@ export function WorktreeHeaderPill({
   connectionDisabled = false,
 }: WorktreeHeaderPillProps) {
   const { token } = theme.useToken();
-  const hasConfig = !!repo.environment_config;
+  const effectiveEnv = getEffectiveEnv(repo);
+  const hasConfig = effectiveEnv.hasConfig;
   const env = worktree.environment_instance;
   const inferredState = getEnvironmentState(env);
   const environmentUrl = worktree.app_url;
@@ -288,7 +290,7 @@ export function WorktreeHeaderPill({
             )}
 
             {/* Logs button */}
-            {onViewLogs && repo.environment_config?.logs_command && (
+            {onViewLogs && effectiveEnv.logs && (
               <Tooltip title="View logs">
                 <Button
                   type="text"
