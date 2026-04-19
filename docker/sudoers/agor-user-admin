@@ -143,6 +143,36 @@ validate_path() {
   printf '%s' "$canon"
 }
 
+# Home directory validator for add-user.
+# The home directory does NOT exist yet at create time, so readlink -f
+# cannot canonicalize it. We instead require an exact lexical shape:
+#   /home/<username>     (no extra components, no '..', no '//')
+#   /var/agor/<username>
+# The trailing username segment must satisfy the same regex as
+# validate_username and must equal the username we are about to create
+# (enforced by callers via the same value).
+validate_home_dir() {
+  local dir=$1
+  [[ -n $dir ]] || die 65 "empty home dir"
+  [[ ${#dir} -le 256 ]] || die 65 "home dir too long (>256)"
+  case "$dir" in
+    *$'\n'*|*$'\r'*|*$'\0'*) die 65 "home dir contains control chars" ;;
+    *//*|*/./*|*/../*|*/.|*/..) die 65 "home dir contains '.', '..' or '//': ${dir}" ;;
+  esac
+  local prefix tail
+  case "$dir" in
+    /home/*)     prefix=/home; tail=${dir#/home/} ;;
+    /var/agor/*) prefix=/var/agor; tail=${dir#/var/agor/} ;;
+    *) die 65 "home dir not in /home or /var/agor: ${dir}" ;;
+  esac
+  # Tail must be a single username component (no slashes).
+  [[ $tail == */* ]] && die 65 "home dir must be exactly ${prefix}/<username>: ${dir}"
+  # Reuse the username shape rule on the trailing component.
+  if ! [[ $tail =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+    die 65 "home dir trailing component is not a valid username: ${dir}"
+  fi
+}
+
 # Password safety for chpasswd stdin. Mirrors assertChpasswdInputSafe() plus
 # bounds the length to avoid unbounded reads from a hostile caller.
 assert_safe_password() {
@@ -167,13 +197,29 @@ assert_safe_password() {
 # ---- verbs ------------------------------------------------------------------
 
 cmd_add_user() {
-  [[ $# -eq 1 ]] || die 64 "usage: add-user <username>"
+  # Optional --home <dir> flag preserves UnixIntegrationService's homeBase
+  # configurability without giving useradd a wildcard -d. Order:
+  #   add-user [--home <dir>] <username>
+  local home_dir=""
+  if [[ ${1:-} == --home ]]; then
+    [[ $# -ge 3 ]] || die 64 "usage: add-user [--home <dir>] <username>"
+    home_dir=$2
+    shift 2
+    validate_home_dir "$home_dir"
+  fi
+  [[ $# -eq 1 ]] || die 64 "usage: add-user [--home <dir>] <username>"
   validate_username "$1"
-  audit add-user "$1"
-  # Fixed argv: -m create home, -s /bin/bash. No -d so useradd uses the
-  # system default HOME base (/home on Debian). `--` prevents any future
-  # username that looks flag-shaped from being parsed as a flag.
-  "$USERADD" -m -s /bin/bash -- "$1"
+  audit add-user "home=${home_dir:-<default>}" "$1"
+  # Fixed argv: -m create home, -s /bin/bash. `--` prevents any future
+  # username that looks flag-shaped from being parsed as a flag. When
+  # --home was given, the validator confirmed it matches /home/<user> or
+  # /var/agor/<user> exactly (no traversal, no symlinks since the dir
+  # does not yet exist), so it is safe to pass to -d.
+  if [[ -n $home_dir ]]; then
+    "$USERADD" -m -d "$home_dir" -s /bin/bash -- "$1"
+  else
+    "$USERADD" -m -s /bin/bash -- "$1"
+  fi
 }
 
 cmd_delete_user() {

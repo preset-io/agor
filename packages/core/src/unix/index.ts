@@ -30,3 +30,5 @@ export * from './unix-integration-service.js';
 export * from './user-env-file.js';
 // Unix user management
 export * from './user-manager.js';
+// Shared constants for the privileged-operations wrapper
+export * from './wrapper-constants.js';

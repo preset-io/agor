@@ -11,7 +11,13 @@ import { execSync } from 'node:child_process';
 import type { UnixUserMode } from '../config/types.js';
 import { toShortId } from '../lib/ids.js';
 import type { UserID, UUID } from '../types/index.js';
+import { escapeShellArg } from './run-as-user.js';
 import { UNIX_NAME_SHORT_ID_LENGTH } from './short-id-naming.js';
+import { AGOR_USER_ADMIN } from './wrapper-constants.js';
+
+// Re-export so call-sites can `import { AGOR_USER_ADMIN } from './user-manager.js'`
+// during the transition. New code should import from './wrapper-constants.js' directly.
+export { AGOR_USER_ADMIN };
 
 /**
  * Default home directory base for Agor users
@@ -27,31 +33,6 @@ export const AGOR_DEFAULT_SHELL = '/bin/bash';
  * Agor worktrees directory name within user home
  */
 export const AGOR_WORKTREES_DIR = 'agor/worktrees';
-
-/**
- * Absolute path to the root-owned wrapper script that mediates every
- * user/group/password/find operation the daemon performs via sudo.
- *
- * On hardened installations the sudoers file grants NOPASSWD on exactly
- * this one path — individual useradd/userdel/usermod/gpasswd/groupadd/
- * groupdel/chpasswd/find wildcards are no longer in the sudoers policy.
- *
- * @see docker/sudoers/agor-user-admin
- * @see docker/sudoers/agor-daemon.sudoers
- */
-export const AGOR_USER_ADMIN = '/usr/local/sbin/agor-user-admin';
-
-/**
- * Single-quote a shell argument.
- *
- * All usernames/groupnames reaching these builders have already passed
- * {@link isValidUnixUsername} (no shell metacharacters), but we quote anyway
- * so the wrapper invocations remain robust if a future caller passes a less
- * constrained value. The wrapper itself re-validates every argument.
- */
-function shq(arg: string): string {
-  return `'${arg.replace(/'/g, `'\\''`)}'`;
-}
 
 /**
  * Generate a default Unix username for an Agor user
@@ -127,8 +108,23 @@ export function assertChpasswdInputSafe(username: string, password: string): voi
   if (typeof password !== 'string' || password.length === 0) {
     throw new Error('Refusing to sync password: password is empty');
   }
+  // Mirror docker/sudoers/agor-user-admin's assert_safe_password so we fail
+  // fast in Node rather than letting the wrapper reject with a less helpful
+  // error. The two checks must stay in sync — relaxing one without the other
+  // creates a silent gap.
   if (/[\r\n\0]/.test(password)) {
     throw new Error('Refusing to sync password: password contains newline or NUL byte');
+  }
+  if (password.includes(':')) {
+    throw new Error('Refusing to sync password: password contains ":" (chpasswd field separator)');
+  }
+  if (Buffer.byteLength(password, 'utf8') > 256) {
+    throw new Error('Refusing to sync password: password exceeds 256 bytes');
+  }
+  // Printable ASCII 0x20..0x7E only — matches wrapper's [[:print:]] check
+  // under LC_ALL=C.
+  if (/[^\x20-\x7e]/.test(password)) {
+    throw new Error('Refusing to sync password: password contains non-printable bytes');
   }
 }
 
@@ -175,15 +171,24 @@ export const UnixUserCommands = {
   /**
    * Create a new Unix user with home directory.
    *
-   * Fixed shape: `useradd -m -s /bin/bash -- <user>`. The system default
-   * HOME base (/home on Debian) is used; a custom home base is intentionally
-   * not exposed here because no production caller needs one and widening the
-   * wrapper's attack surface is not worth it.
+   * Fixed shape: `useradd -m [-d <home>] -s /bin/bash -- <user>`.
+   *
+   * The wrapper's `--home` flag preserves UnixIntegrationService's
+   * `homeBase` configurability without giving useradd a wildcard `-d`:
+   * the wrapper validates that the supplied home dir matches exactly
+   * `/home/<user>` or `/var/agor/<user>` (no traversal, no extra path
+   * components). When `homeDir` is omitted, useradd falls back to the
+   * system default HOME base (typically `/home`).
    *
    * @param username - Unix username to create
+   * @param homeDir - Optional explicit home directory. Must equal
+   *                  `${homeBase}/${username}` for the wrapper to accept it.
    * @returns Command string
    */
-  createUser: (username: string) => `sudo -n ${AGOR_USER_ADMIN} add-user ${shq(username)}`,
+  createUser: (username: string, homeDir?: string) => {
+    const homePart = homeDir ? `--home ${escapeShellArg(homeDir)} ` : '';
+    return `sudo -n ${AGOR_USER_ADMIN} add-user ${homePart}${escapeShellArg(username)}`;
+  },
 
   /**
    * Delete a Unix user (keeps home directory)
@@ -191,7 +196,8 @@ export const UnixUserCommands = {
    * @param username - Unix username to delete
    * @returns Command string
    */
-  deleteUser: (username: string) => `sudo -n ${AGOR_USER_ADMIN} delete-user ${shq(username)}`,
+  deleteUser: (username: string) =>
+    `sudo -n ${AGOR_USER_ADMIN} delete-user ${escapeShellArg(username)}`,
 
   /**
    * Get command array for setting a Unix user's password via the wrapper.
@@ -248,7 +254,7 @@ export const UnixUserCommands = {
    * @returns Command string
    */
   deleteUserWithHome: (username: string) =>
-    `sudo -n ${AGOR_USER_ADMIN} delete-user --remove-home ${shq(username)}`,
+    `sudo -n ${AGOR_USER_ADMIN} delete-user --remove-home ${escapeShellArg(username)}`,
 
   /**
    * Lock a Unix user account (disable login)
@@ -256,7 +262,8 @@ export const UnixUserCommands = {
    * @param username - Unix username
    * @returns Command string
    */
-  lockUser: (username: string) => `sudo -n ${AGOR_USER_ADMIN} lock-user ${shq(username)}`,
+  lockUser: (username: string) =>
+    `sudo -n ${AGOR_USER_ADMIN} lock-user ${escapeShellArg(username)}`,
 
   /**
    * Unlock a Unix user account
@@ -264,7 +271,8 @@ export const UnixUserCommands = {
    * @param username - Unix username
    * @returns Command string
    */
-  unlockUser: (username: string) => `sudo -n ${AGOR_USER_ADMIN} unlock-user ${shq(username)}`,
+  unlockUser: (username: string) =>
+    `sudo -n ${AGOR_USER_ADMIN} unlock-user ${escapeShellArg(username)}`,
 
   /**
    * Get user's UID

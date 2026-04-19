@@ -844,11 +844,18 @@ export class UnixIntegrationService {
 
     if (!exists) {
       console.log(`[UnixIntegration] Creating Unix user: ${unixUsername}`);
-      // The wrapper uses the system default HOME base (/home on Debian);
-      // config.homeBase is no longer threaded here because no production
-      // caller diverges from it and the wrapper intentionally does not
-      // expose a custom-home-base knob (see docker/sudoers/agor-user-admin).
-      await this.executor.exec(UnixUserCommands.createUser(unixUsername));
+      // Only pass an explicit --home to the wrapper when config.homeBase
+      // diverges from the wrapper's default (AGOR_HOME_BASE === '/home').
+      // For the default case we let useradd pick up the system default,
+      // which is what we want on Debian/Alpine/etc. The wrapper validates
+      // that the supplied path matches exactly `${homeBase}/${username}`
+      // inside /home or /var/agor.
+      const configuredHomeBase = this.config.homeBase;
+      const homeDir =
+        configuredHomeBase && configuredHomeBase !== AGOR_HOME_BASE
+          ? getUserHomeDir(unixUsername, configuredHomeBase)
+          : undefined;
+      await this.executor.exec(UnixUserCommands.createUser(unixUsername, homeDir));
 
       // Setup ~/agor/worktrees directory
       await this.executor.execAll(

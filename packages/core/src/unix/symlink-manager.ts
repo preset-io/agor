@@ -7,12 +7,9 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import { AGOR_HOME_BASE, AGOR_USER_ADMIN, AGOR_WORKTREES_DIR } from './user-manager.js';
-
-/** Single-quote a shell argument (matches the helper in user-manager.ts). */
-function shq(arg: string): string {
-  return `'${arg.replace(/'/g, `'\\''`)}'`;
-}
+import { escapeShellArg } from './run-as-user.js';
+import { AGOR_HOME_BASE, AGOR_WORKTREES_DIR } from './user-manager.js';
+import { AGOR_USER_ADMIN } from './wrapper-constants.js';
 
 /**
  * Get the symlink path for a worktree in a user's home
@@ -98,7 +95,7 @@ export const SymlinkCommands = {
    * @param dirPath - Directory to list
    * @returns Command string (outputs symlink names, one per line)
    */
-  listSymlinks: (dirPath: string) => `${AGOR_USER_ADMIN} list-symlinks ${shq(dirPath)}`,
+  listSymlinks: (dirPath: string) => `${AGOR_USER_ADMIN} list-symlinks ${escapeShellArg(dirPath)}`,
 
   /**
    * Create symlink with proper ownership
@@ -131,7 +128,8 @@ export const SymlinkCommands = {
    * @param dirPath - Directory to clean
    * @returns Command string
    */
-  removeAllSymlinks: (dirPath: string) => `${AGOR_USER_ADMIN} prune-all-symlinks ${shq(dirPath)}`,
+  removeAllSymlinks: (dirPath: string) =>
+    `${AGOR_USER_ADMIN} prune-all-symlinks ${escapeShellArg(dirPath)}`,
 
   /**
    * Remove broken symlinks in a directory (via agor-user-admin wrapper).
@@ -140,7 +138,7 @@ export const SymlinkCommands = {
    * @returns Command string
    */
   removeBrokenSymlinks: (dirPath: string) =>
-    `${AGOR_USER_ADMIN} prune-broken-symlinks ${shq(dirPath)}`,
+    `${AGOR_USER_ADMIN} prune-broken-symlinks ${escapeShellArg(dirPath)}`,
 } as const;
 
 /**

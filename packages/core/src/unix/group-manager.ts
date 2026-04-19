@@ -13,17 +13,9 @@
 
 import { toShortId } from '../lib/ids.js';
 import type { RepoID, UUID, WorktreeID } from '../types/index.js';
+import { escapeShellArg } from './run-as-user.js';
 import { UNIX_NAME_SHORT_ID_LENGTH } from './short-id-naming.js';
-import { AGOR_USER_ADMIN } from './user-manager.js';
-
-/**
- * Single-quote a shell argument for safe inclusion in a shell command string.
- * Matches the helper in user-manager.ts; kept local to avoid a circular or
- * surprising re-export via the barrel.
- */
-function shq(arg: string): string {
-  return `'${arg.replace(/'/g, `'\\''`)}'`;
-}
+import { AGOR_USER_ADMIN } from './wrapper-constants.js';
 
 /**
  * Generate Unix group name for a worktree
@@ -129,7 +121,8 @@ export const UnixGroupCommands = {
    * @param groupName - Name of the group to create
    * @returns Command string with sudo
    */
-  createGroup: (groupName: string) => `sudo -n ${AGOR_USER_ADMIN} add-group ${shq(groupName)}`,
+  createGroup: (groupName: string) =>
+    `sudo -n ${AGOR_USER_ADMIN} add-group ${escapeShellArg(groupName)}`,
 
   /**
    * Delete a Unix group (via agor-user-admin wrapper)
@@ -137,7 +130,8 @@ export const UnixGroupCommands = {
    * @param groupName - Name of the group to delete
    * @returns Command string with sudo
    */
-  deleteGroup: (groupName: string) => `sudo -n ${AGOR_USER_ADMIN} delete-group ${shq(groupName)}`,
+  deleteGroup: (groupName: string) =>
+    `sudo -n ${AGOR_USER_ADMIN} delete-group ${escapeShellArg(groupName)}`,
 
   /**
    * Add user to a Unix group (via agor-user-admin wrapper).
@@ -149,7 +143,7 @@ export const UnixGroupCommands = {
    * @returns Command string with sudo
    */
   addUserToGroup: (username: string, groupName: string) =>
-    `sudo -n ${AGOR_USER_ADMIN} add-to-group ${shq(username)} ${shq(groupName)}`,
+    `sudo -n ${AGOR_USER_ADMIN} add-to-group ${escapeShellArg(username)} ${escapeShellArg(groupName)}`,
 
   /**
    * Remove user from a Unix group (via agor-user-admin wrapper).
@@ -161,7 +155,7 @@ export const UnixGroupCommands = {
    * @returns Command string with sudo
    */
   removeUserFromGroup: (username: string, groupName: string) =>
-    `sudo -n ${AGOR_USER_ADMIN} remove-from-group ${shq(username)} ${shq(groupName)}`,
+    `sudo -n ${AGOR_USER_ADMIN} remove-from-group ${escapeShellArg(username)} ${escapeShellArg(groupName)}`,
 
   /**
    * Check if a group exists (read-only, no sudo needed)
@@ -252,7 +246,7 @@ export const UnixGroupCommands = {
       // path (find -exec runs arbitrary commands). The wrapper validates
       // the path against the Agor-managed tree allowlist and pins the
       // -type d -exec chmod g+s {} + argv.
-      `sudo -n ${AGOR_USER_ADMIN} setgid-tree ${shq(path)}`,
+      `sudo -n ${AGOR_USER_ADMIN} setgid-tree ${escapeShellArg(path)}`,
     ];
   },
 

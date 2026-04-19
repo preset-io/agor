@@ -243,6 +243,91 @@ assert_exit 65 "remove-from-group: flag-shaped group rejected" \
   bash "$WRAPPER" remove-from-group alice --foo
 
 # ----------------------------------------------------------------------------
+# Unicode / homoglyph usernames and groupnames
+# The shape regex is strictly [a-z_][a-z0-9_-]{0,31}, so every non-ASCII byte
+# (Cyrillic lookalikes, full-width digits, combining marks, right-to-left
+# overrides, zero-width joiners, etc.) must be rejected at 65. These are not
+# hypothetical: NSS/useradd accept many Unicode strings depending on locale,
+# and homoglyph attacks on admin UIs have a long history.
+# ----------------------------------------------------------------------------
+echo "-- unicode / homoglyph rejection --"
+# Cyrillic 'а' (U+0430) looks like ASCII 'a' but is two UTF-8 bytes.
+assert_exit 65 "reject Cyrillic homoglyph username (аlice)" \
+  bash "$WRAPPER" add-user $'\xd0\xb0lice'
+assert_exit 65 "reject Cyrillic homoglyph groupname (аdmins)" \
+  bash "$WRAPPER" add-group $'\xd0\xb0dmins'
+# Full-width Latin 'ａ' (U+FF41) — three UTF-8 bytes.
+assert_exit 65 "reject full-width username (ａlice)" \
+  bash "$WRAPPER" add-user $'\xef\xbd\x81lice'
+# Zero-width joiner inside otherwise-ASCII string (U+200D).
+assert_exit 65 "reject zero-width-joiner inside username" \
+  bash "$WRAPPER" add-user $'al\xe2\x80\x8dice'
+# Right-to-left override (U+202E) — classic filename-spoofing byte.
+assert_exit 65 "reject RTL-override in username" \
+  bash "$WRAPPER" add-user $'a\xe2\x80\xaelice'
+# BOM prefix (U+FEFF) — invisible but illegal under the ASCII regex.
+assert_exit 65 "reject BOM-prefixed username" \
+  bash "$WRAPPER" add-user $'\xef\xbb\xbfalice'
+# Combining acute accent after 'a' (U+0301).
+assert_exit 65 "reject combining-mark username" \
+  bash "$WRAPPER" add-user $'a\xcc\x81lice'
+# NBSP inside a group name (U+00A0) — looks like a space.
+assert_exit 65 "reject NBSP in groupname" \
+  bash "$WRAPPER" add-group $'dev\xc2\xa0ops'
+# Same classes in add-to-group for both user and group slots.
+assert_exit 65 "add-to-group: Cyrillic user rejected" \
+  bash "$WRAPPER" add-to-group $'\xd0\xb0lice' developers
+assert_exit 65 "add-to-group: Cyrillic group rejected" \
+  bash "$WRAPPER" add-to-group alice $'\xd0\xb4evelopers'
+
+# Non-ASCII in home-dir argument — must also be rejected.
+assert_exit 65 "add-user --home rejects Cyrillic path component" \
+  bash "$WRAPPER" add-user --home $'/home/\xd0\xb0lice' alice
+assert_exit 65 "add-user --home rejects home dir outside allowlist" \
+  bash "$WRAPPER" add-user --home /root/alice alice
+assert_exit 65 "add-user --home rejects traversal (..)" \
+  bash "$WRAPPER" add-user --home /home/alice/../bob alice
+
+# ----------------------------------------------------------------------------
+# Argv newline / CR / NUL smuggling
+# A literal newline in argv has historically bypassed naive regex checks that
+# use ^...$ without /s or that rely on line-oriented grep. Bash's [[ =~ ]] with
+# our anchors will NOT match across a newline, so these must land at 65.
+# ----------------------------------------------------------------------------
+echo "-- argv control-char smuggling --"
+assert_exit 65 "reject newline inside username" \
+  bash "$WRAPPER" add-user $'alice\nroot'
+assert_exit 65 "reject CR inside username" \
+  bash "$WRAPPER" add-user $'alice\rroot'
+assert_exit 65 "reject tab inside username" \
+  bash "$WRAPPER" add-user $'ali\tce'
+assert_exit 65 "reject newline inside groupname" \
+  bash "$WRAPPER" add-group $'devs\nroot'
+# Leading/trailing whitespace — also outside the shape.
+assert_exit 65 "reject leading newline in username" \
+  bash "$WRAPPER" add-user $'\nalice'
+assert_exit 65 "reject trailing newline in username" \
+  bash "$WRAPPER" add-user $'alice\n'
+# Newline in the --home argument is separately rejected by validate_home_dir.
+assert_exit 65 "add-user --home rejects newline in path" \
+  bash "$WRAPPER" add-user --home $'/home/alice\nroot' alice
+# Newline in a filesystem-verb path (validate_path has an explicit control-char
+# branch that beats readlink -f).
+assert_exit 65 "setgid-tree rejects newline in path" \
+  bash "$WRAPPER" setgid-tree $'/var/agor/wt\nroot'
+assert_exit 65 "list-symlinks rejects CR in path" \
+  bash "$WRAPPER" list-symlinks $'/var/agor/wt\rroot'
+
+# Direct NUL in argv: bash generally truncates argv at NUL when using $'\x00',
+# because execve's argv is NUL-terminated. We still assert the wrapper does not
+# crash/accept when given a name with embedded NUL via printf — if bash strips
+# the NUL and everything after, the remaining prefix still must fail the regex
+# because it will equal the short prefix only. We test the observable outcome:
+# exit 65 regardless of how bash chose to represent the argv slot.
+assert_exit 65 "reject NUL-bearing username (observably truncated)" \
+  bash "$WRAPPER" add-user $'alice\x00root'
+
+# ----------------------------------------------------------------------------
 # Audit: every rejection should be silent at auth.info level (we don't log
 # failed-validation events — only successful dispatches write to syslog).
 # We can't easily assert on syslog from here without a logger; just make sure

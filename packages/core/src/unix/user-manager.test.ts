@@ -213,11 +213,26 @@ describe('user-manager', () => {
     describe('createUser', () => {
       it('routes through agor-user-admin add-user', () => {
         // Every privileged user op goes through /usr/local/sbin/agor-user-admin
-        // under the hardened sudoers. Custom shell/home-base args are no
-        // longer exposed: they were unused in production and widened the
-        // wrapper's attack surface.
+        // under the hardened sudoers. Custom shell is no longer exposed; it
+        // was unused in production and widened the wrapper's attack surface.
         expect(UnixUserCommands.createUser('alice')).toBe(
           "sudo -n /usr/local/sbin/agor-user-admin add-user 'alice'"
+        );
+      });
+
+      it('passes --home when a non-default home directory is requested', () => {
+        // homeBase configurability is preserved via the wrapper's --home flag,
+        // which re-validates the path shape server-side.
+        expect(UnixUserCommands.createUser('alice', '/var/agor/alice')).toBe(
+          "sudo -n /usr/local/sbin/agor-user-admin add-user --home '/var/agor/alice' 'alice'"
+        );
+      });
+
+      it('single-quotes home dirs with embedded single quotes', () => {
+        // Not a legal path in production, but the escape helper must still
+        // produce a shell-safe argv even for pathological callers.
+        expect(UnixUserCommands.createUser('alice', "/var/agor/a'lice")).toBe(
+          "sudo -n /usr/local/sbin/agor-user-admin add-user --home '/var/agor/a'\\''lice' 'alice'"
         );
       });
     });
