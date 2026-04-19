@@ -1924,9 +1924,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app,
     '/repos/:id/import-agor-yml',
     {
-      async create(data: { worktree_id?: string } | undefined, params: RouteParams) {
+      async create(data: { worktree_id: string }, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Repo ID required');
+        if (!data?.worktree_id) throw new Error('worktree_id is required');
         return reposService.importFromAgorYml(id, data, params);
       },
     },
@@ -1940,9 +1941,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app,
     '/repos/:id/export-agor-yml',
     {
-      async create(data: { worktree_id?: string } | undefined, params: RouteParams) {
+      async create(data: { worktree_id: string }, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Repo ID required');
+        if (!data?.worktree_id) throw new Error('worktree_id is required');
         return reposService.exportToAgorYml(id, data, params);
       },
     },
