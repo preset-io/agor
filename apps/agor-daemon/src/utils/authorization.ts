@@ -87,11 +87,17 @@ export function ensureCanTriggerManagedEnv(
 
 /**
  * Fields that contain executable commands or environment configuration.
- * Repos store templates in `environment_config`; worktrees store resolved values
- * as top-level fields. Both execute as the system user and require admin access.
+ *
+ * Repos store templates in `environment` (v2 source of truth) or the legacy
+ * `environment_config` view; worktrees store resolved values as top-level
+ * fields plus the currently-rendered `environment_variant` name. All of these
+ * execute as (or select) commands that run as the system user, so only admins
+ * may write them.
  */
 const ENV_COMMAND_FIELDS = [
-  'environment_config', // Repo-level: template object
+  'environment', // Repo-level: v2 named variants (source of truth)
+  'environment_config', // Repo-level: legacy v1 view (still guarded)
+  'environment_variant', // Worktree-level: selected variant name
   'start_command', // Worktree-level: resolved commands
   'stop_command',
   'nuke_command',

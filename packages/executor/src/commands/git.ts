@@ -168,14 +168,15 @@ export async function handleGitClone(
     let unixGroup: string | undefined;
 
     if (createDbRecord) {
-      // Parse .agor.yml for environment config (if present)
+      // Parse .agor.yml for environment config (if present). Returns v2
+      // RepoEnvironment; legacy v1 files are wrapped as variants.default.
       const agorYmlPath = join(cloneResult.path, '.agor.yml');
-      let environmentConfig: import('@agor/core/types').RepoEnvironmentConfig | null = null;
+      let environment: import('@agor/core/types').RepoEnvironment | null = null;
 
       try {
         const parsed = parseAgorYml(agorYmlPath);
         if (parsed) {
-          environmentConfig = parsed;
+          environment = parsed;
           console.log(`[git.clone] Loaded environment config from .agor.yml`);
         }
       } catch (error) {
@@ -196,7 +197,7 @@ export async function handleGitClone(
         remote_url: payload.params.url,
         local_path: cloneResult.path,
         default_branch: cloneResult.defaultBranch,
-        ...(environmentConfig ? { environment_config: environmentConfig } : {}),
+        ...(environment ? { environment } : {}),
       });
 
       repoId = repoRecord.repo_id;
@@ -287,11 +288,10 @@ async function renderEnvironmentTemplates(
   health_check_url?: string;
   app_url?: string;
   logs_command?: string;
+  environment_variant?: string;
 }> {
   // Import dependencies dynamically
-  const { renderTemplate, buildWorktreeContext } = await import(
-    '@agor/core/templates/handlebars-helpers'
-  );
+  const { renderWorktreeSnapshot } = await import('@agor/core/environment/render-snapshot');
   const { getGidFromGroupName } = await import('@agor/core/unix');
   const { loadConfig } = await import('@agor/core/config');
   const { resolveHostIpAddress } = await import('@agor/core/utils/host-ip');
@@ -300,8 +300,9 @@ async function renderEnvironmentTemplates(
   const worktree = await client.service('worktrees').get(worktreeId);
   const repo = await client.service('repos').get(repoId);
 
-  // Check if repo has environment config
-  if (!repo.environment_config) {
+  // v2 environment is the source of truth; `environment_config` is a derived
+  // legacy view. If neither is present, nothing to render.
+  if (!repo.environment) {
     return {};
   }
 
@@ -312,49 +313,39 @@ async function renderEnvironmentTemplates(
   const config = await loadConfig();
   const hostIpAddress = resolveHostIpAddress(config.daemon?.host_ip_address);
 
-  // Delegate context construction to the single canonical builder so new
-  // template vars (host.*, repo.*, etc.) never drift between call sites.
-  const templateContext = buildWorktreeContext({
-    worktree_unique_id: worktree.worktree_unique_id,
-    name: worktree.name,
-    path: worktree.path,
-    repo_slug: repo.slug,
-    custom_context: worktree.custom_context,
-    unix_gid: unixGid,
-    host_ip_address: hostIpAddress,
-  });
-
-  const safeRenderTemplate = (template: string, fieldName: string): string | undefined => {
-    try {
-      return renderTemplate(template, templateContext);
-    } catch (err) {
-      console.warn(
-        `[renderEnvironmentTemplates] Failed to render ${fieldName} for ${worktree.name}:`,
-        err
-      );
-      return undefined;
-    }
-  };
+  // Honor an explicit variant override if the worktree already picked one;
+  // otherwise fall through to `environment.default` inside renderWorktreeSnapshot.
+  let snapshot;
+  try {
+    snapshot = renderWorktreeSnapshot(
+      { slug: repo.slug, environment: repo.environment },
+      {
+        worktree_unique_id: worktree.worktree_unique_id,
+        name: worktree.name,
+        path: worktree.path,
+        custom_context: worktree.custom_context,
+        unix_gid: unixGid,
+        host_ip_address: hostIpAddress,
+      },
+      worktree.environment_variant
+    );
+  } catch (err) {
+    console.warn(
+      `[renderEnvironmentTemplates] Failed to render environment for ${worktree.name}:`,
+      err
+    );
+    return {};
+  }
+  if (!snapshot) return {};
 
   return {
-    start_command: repo.environment_config.up_command
-      ? safeRenderTemplate(repo.environment_config.up_command, 'start_command')
-      : undefined,
-    stop_command: repo.environment_config.down_command
-      ? safeRenderTemplate(repo.environment_config.down_command, 'stop_command')
-      : undefined,
-    nuke_command: repo.environment_config.nuke_command
-      ? safeRenderTemplate(repo.environment_config.nuke_command, 'nuke_command')
-      : undefined,
-    health_check_url: repo.environment_config.health_check?.url_template
-      ? safeRenderTemplate(repo.environment_config.health_check.url_template, 'health_check_url')
-      : undefined,
-    app_url: repo.environment_config.app_url_template
-      ? safeRenderTemplate(repo.environment_config.app_url_template, 'app_url')
-      : undefined,
-    logs_command: repo.environment_config.logs_command
-      ? safeRenderTemplate(repo.environment_config.logs_command, 'logs_command')
-      : undefined,
+    start_command: snapshot.start || undefined,
+    stop_command: snapshot.stop || undefined,
+    nuke_command: snapshot.nuke,
+    health_check_url: snapshot.health,
+    app_url: snapshot.app,
+    logs_command: snapshot.logs,
+    environment_variant: snapshot.variant,
   };
 }
 

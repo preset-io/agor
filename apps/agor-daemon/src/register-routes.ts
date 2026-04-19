@@ -2156,6 +2156,28 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   registerAuthenticatedRoute(
     app,
+    '/worktrees/:id/render-environment',
+    {
+      async create(data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Worktree ID required');
+        return worktreesService.renderEnvironment(
+          id as import('@agor/core/types').WorktreeID,
+          data as { variant?: string } | undefined,
+          params
+        );
+      },
+    },
+    {
+      // Baseline trigger gate via managed_envs_minimum_role; variant changes
+      // are additionally admin-gated inside the service method.
+      create: { role: ROLES.VIEWER, action: 'render worktree environment' },
+    },
+    requireAuth
+  );
+
+  registerAuthenticatedRoute(
+    app,
     '/worktrees/:id/health',
     {
       async find(_data: unknown, params: RouteParams) {

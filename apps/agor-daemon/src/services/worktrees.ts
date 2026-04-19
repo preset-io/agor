@@ -23,11 +23,14 @@ import type {
   Worktree,
   WorktreeID,
 } from '@agor/core/types';
-import { spawnEnvironmentCommand } from '@agor/core/unix';
+import { ROLES } from '@agor/core/types';
+import { getGidFromGroupName, spawnEnvironmentCommand } from '@agor/core/unix';
+import { renderWorktreeSnapshot } from '@agor/core/environment/render-snapshot';
 import { getNextRunTime, validateCron } from '@agor/core/utils/cron';
+import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService } from '../adapters/drizzle';
-import { ensureCanTriggerManagedEnv } from '../utils/authorization.js';
+import { ensureCanTriggerManagedEnv, ensureMinimumRole } from '../utils/authorization.js';
 import { resolveGitImpersonationForWorktree } from '../utils/git-impersonation.js';
 import { generateSessionToken, getDaemonUrl, spawnExecutor } from '../utils/spawn-executor.js';
 import type { InternalEnrichmentParams } from './sessions';
@@ -1557,6 +1560,90 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
         error: error instanceof Error ? error.message : 'Unknown error',
       };
     }
+  }
+
+  /**
+   * Custom method: Re-render environment commands from the repo's v2
+   * `environment` config and persist the result onto the worktree.
+   *
+   * When no `variant` is supplied, the repo's default variant is used.
+   * Re-rendering with the currently-selected variant is allowed for any
+   * trigger-capable role (see `execution.managed_envs_minimum_role`); changing
+   * the variant requires admin since it replaces executable command strings
+   * that run as the system user (same rationale as `requireAdminForEnvConfig`
+   * in authorization.ts).
+   *
+   * Returns the updated worktree (with new `environment_variant`, `start_command`,
+   * `stop_command`, etc).
+   */
+  async renderEnvironment(
+    id: WorktreeID,
+    data: { variant?: string } | undefined,
+    params?: WorktreeParams
+  ): Promise<WorktreeWithZoneAndSessions> {
+    await this.ensureCanTriggerEnv(params, 'render worktree environment');
+
+    const worktree = await this.get(id, params);
+    const reposService = this.app.service('repos');
+    const repo = (await reposService.get(worktree.repo_id, params)) as Repo;
+
+    const env = repo.environment;
+    if (!env) {
+      throw new Error('Repo has no v2 environment config; nothing to render');
+    }
+
+    const requestedVariant = data?.variant ?? env.default;
+    const currentVariant = worktree.environment_variant;
+
+    // Variant change (including first-time assignment against an existing
+    // worktree) replaces executable commands → require admin.
+    if (requestedVariant !== currentVariant) {
+      ensureMinimumRole(
+        params,
+        ROLES.ADMIN,
+        `change worktree environment variant to "${requestedVariant}"`
+      );
+    }
+
+    // Resolve host IP + unix GID (matches executor's renderEnvironmentTemplates).
+    const config = await loadConfig();
+    const hostIpAddress = resolveHostIpAddress(config.daemon?.host_ip_address);
+    const unixGid = worktree.unix_group
+      ? getGidFromGroupName(worktree.unix_group)
+      : undefined;
+
+    const snapshot = renderWorktreeSnapshot(
+      { slug: repo.slug, environment: env },
+      {
+        worktree_unique_id: worktree.worktree_unique_id,
+        name: worktree.name,
+        path: worktree.path,
+        custom_context: worktree.custom_context,
+        unix_gid: unixGid,
+        host_ip_address: hostIpAddress,
+      },
+      requestedVariant
+    );
+    if (!snapshot) {
+      // Should be unreachable: env is non-null and renderWorktreeSnapshot only
+      // returns null when env is absent. Defensive throw keeps types honest.
+      throw new Error('Failed to render environment snapshot');
+    }
+
+    return await this.patch(
+      id,
+      {
+        environment_variant: snapshot.variant,
+        start_command: snapshot.start || undefined,
+        stop_command: snapshot.stop || undefined,
+        nuke_command: snapshot.nuke,
+        logs_command: snapshot.logs,
+        health_check_url: snapshot.health,
+        app_url: snapshot.app,
+        updated_at: new Date().toISOString(),
+      },
+      params
+    );
   }
 }
 

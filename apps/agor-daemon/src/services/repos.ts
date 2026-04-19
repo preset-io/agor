@@ -37,7 +37,7 @@ import type {
   AuthenticatedParams,
   QueryParams,
   Repo,
-  RepoEnvironmentConfig,
+  RepoEnvironment,
   RepoSlug,
   UserID,
   UUID,
@@ -285,12 +285,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const defaultBranch = await getDefaultBranch(repoPath);
 
     const agorYmlPath = path.join(repoPath, '.agor.yml');
-    let environmentConfig: RepoEnvironmentConfig | undefined;
+    let environment: RepoEnvironment | undefined;
 
     try {
       const parsed = parseAgorYml(agorYmlPath);
       if (parsed) {
-        environmentConfig = parsed;
+        environment = parsed;
         console.log(`✅ Loaded environment config from .agor.yml for ${slug}`);
       }
     } catch (error) {
@@ -311,7 +311,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         remote_url: remoteUrl,
         local_path: repoPath,
         default_branch: defaultBranch,
-        environment_config: environmentConfig,
+        environment,
       },
       params
     )) as Repo;
@@ -788,15 +788,25 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const repo = await this.get(id, params);
     const agorYmlPath = await this.resolveAgorYmlPath(repo, data?.worktree_id, params);
 
-    // Parse .agor.yml
-    const config = parseAgorYml(agorYmlPath);
+    // Parse .agor.yml (returns v2 RepoEnvironment; v1 is wrapped automatically).
+    // `template_overrides:` at any level throws — it is DB-only.
+    const environment = parseAgorYml(agorYmlPath);
 
-    if (!config) {
+    if (!environment) {
       throw new Error('.agor.yml not found or has no environment configuration');
     }
 
-    // Update repo with imported config
-    return this.patch(id, { environment_config: config }, params) as Promise<Repo>;
+    // Preserve any existing DB-only template_overrides across import — the
+    // file never contains them, so a naive patch would otherwise wipe them.
+    const patch: Partial<Repo> = { environment };
+    if (repo.environment?.template_overrides) {
+      patch.environment = {
+        ...environment,
+        template_overrides: repo.environment.template_overrides,
+      };
+    }
+
+    return this.patch(id, patch, params) as Promise<Repo>;
   }
 
   /**
@@ -804,6 +814,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
    *
    * Accepts an optional `worktree_id` in `data` to write into the current
    * worktree's working directory (so admins can commit the file on a branch).
+   *
+   * `template_overrides` are DB-only and are stripped by `writeAgorYml` — the
+   * file always reflects the shared, committable variant definitions only.
    */
   async exportToAgorYml(
     id: string,
@@ -812,14 +825,16 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   ): Promise<{ path: string }> {
     const repo = await this.get(id, params);
 
-    if (!repo.environment_config) {
+    const envToWrite = repo.environment ?? undefined;
+    if (!envToWrite && !repo.environment_config) {
       throw new Error('Repository has no environment configuration to export');
     }
 
     const agorYmlPath = await this.resolveAgorYmlPath(repo, data?.worktree_id, params);
 
-    // Write .agor.yml
-    writeAgorYml(agorYmlPath, repo.environment_config);
+    // Prefer v2 source of truth; fall back to legacy v1 view if somehow the
+    // v2 wrapper wasn't materialized (writeAgorYml handles both).
+    writeAgorYml(agorYmlPath, envToWrite ?? repo.environment_config!);
 
     return { path: agorYmlPath };
   }
