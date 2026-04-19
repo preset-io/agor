@@ -4,7 +4,13 @@
  * Type-safe CRUD operations for git repositories with short ID support.
  */
 
-import type { Repo, UUID } from '@agor/core/types';
+import type {
+  Repo,
+  RepoEnvironment,
+  RepoEnvironmentConfigV1,
+  RepoEnvironmentVariant,
+  UUID,
+} from '@agor/core/types';
 import { eq, like, sql } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -19,6 +25,61 @@ import {
 import { deepMerge } from './merge-utils';
 
 /**
+ * Derive legacy v1 environment_config view from v2 environment.
+ *
+ * Returns undefined if the repo has no environment config or the default
+ * variant is missing. The v1 view reflects ONLY the default variant; UI
+ * callers that want variant-awareness should read `environment.variants`.
+ */
+function deriveV1FromV2(env: RepoEnvironment | undefined): RepoEnvironmentConfigV1 | undefined {
+  if (!env) return undefined;
+  const variant = env.variants?.[env.default];
+  if (!variant) return undefined;
+  // Resolve single-level extends for the v1 projection as well, so UI readers
+  // see a fully-materialized command set.
+  const base: RepoEnvironmentVariant | undefined = variant.extends
+    ? env.variants?.[variant.extends]
+    : undefined;
+  const resolved: RepoEnvironmentVariant = {
+    ...(base ?? { start: '', stop: '' }),
+    ...variant,
+    extends: undefined,
+  };
+  // Resolved variant must have start/stop (parser validates). Fall back to
+  // empty string defensively so downstream consumers never see `undefined`.
+  const v1: RepoEnvironmentConfigV1 = {
+    up_command: resolved.start ?? '',
+    down_command: resolved.stop ?? '',
+  };
+  if (resolved.nuke) v1.nuke_command = resolved.nuke;
+  if (resolved.logs) v1.logs_command = resolved.logs;
+  if (resolved.app) v1.app_url_template = resolved.app;
+  if (resolved.health) v1.health_check = { type: 'http', url_template: resolved.health };
+  return v1;
+}
+
+/**
+ * Wrap a legacy v1 environment_config as a v2 environment with a single
+ * `default` variant. Used when callers still write the v1 shape.
+ */
+function wrapV1AsV2(v1: RepoEnvironmentConfigV1 | undefined): RepoEnvironment | undefined {
+  if (!v1) return undefined;
+  const variant: RepoEnvironmentVariant = {
+    start: v1.up_command,
+    stop: v1.down_command,
+  };
+  if (v1.nuke_command) variant.nuke = v1.nuke_command;
+  if (v1.logs_command) variant.logs = v1.logs_command;
+  if (v1.app_url_template) variant.app = v1.app_url_template;
+  if (v1.health_check?.url_template) variant.health = v1.health_check.url_template;
+  return {
+    version: 2,
+    default: 'default',
+    variants: { default: variant },
+  };
+}
+
+/**
  * Repo repository implementation
  */
 export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
@@ -26,8 +87,20 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
 
   /**
    * Convert database row to Repo type
+   *
+   * Normalizes environment config shape: v2 `environment` is source of truth;
+   * if only legacy `environment_config` is present (rows created before
+   * migration 0037/0026 ran, or written by legacy code paths), wrap it as v2
+   * in-memory. A v1 view is also kept on the returned object so existing UI
+   * code can keep reading `repo.environment_config.up_command` etc.
    */
   private rowToRepo(row: RepoRow): Repo {
+    const data = row.data as typeof row.data & {
+      environment?: RepoEnvironment;
+      environment_config?: RepoEnvironmentConfigV1;
+    };
+    const environment = data.environment ?? wrapV1AsV2(data.environment_config);
+    const environment_config = data.environment_config ?? deriveV1FromV2(environment);
     return {
       repo_id: row.repo_id as UUID,
       slug: row.slug,
@@ -37,7 +110,9 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       last_updated: row.updated_at
         ? new Date(row.updated_at).toISOString()
         : new Date(row.created_at).toISOString(),
-      ...row.data,
+      ...data,
+      environment,
+      environment_config,
     };
   }
 
@@ -64,6 +139,14 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       throw new RepositoryError('Remote repos must have a remote_url');
     }
 
+    // v2 environment is the source of truth. If a caller passes a legacy
+    // v1 `environment_config` without a v2 `environment`, wrap it. If the
+    // caller passes both, prefer `environment` (v2).
+    const environment = repo.environment ?? wrapV1AsV2(repo.environment_config);
+    // Always derive the v1 projection from v2 so the UI-facing shape stays
+    // in sync with the source of truth on every write.
+    const environment_config = deriveV1FromV2(environment) ?? repo.environment_config;
+
     return {
       repo_id: repoId,
       slug: repo.slug,
@@ -76,7 +159,8 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         remote_url: repo.remote_url || undefined,
         local_path: repo.local_path,
         default_branch: repo.default_branch,
-        environment_config: repo.environment_config,
+        environment,
+        environment_config,
       },
     };
   }

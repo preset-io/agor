@@ -88,6 +88,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       health_check_url: row.health_check_url ?? undefined,
       app_url: row.app_url ?? undefined,
       logs_command: row.logs_command ?? undefined,
+      environment_variant: row.environment_variant ?? undefined,
       board_id: (row.board_id as UUID | null) ?? undefined, // Top-level column
       schedule_enabled: Boolean(row.schedule_enabled), // Convert SQLite integer (0/1) to boolean
       schedule_cron: row.schedule_cron ?? undefined,
@@ -130,6 +131,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       health_check_url: worktree.health_check_url ?? null,
       app_url: worktree.app_url ?? null,
       logs_command: worktree.logs_command ?? null,
+      environment_variant: worktree.environment_variant ?? null,
       // Explicitly convert undefined to null for Drizzle (undefined values are ignored in set())
       board_id: worktree.board_id === undefined ? null : worktree.board_id || null,
       schedule_enabled: worktree.schedule_enabled ?? false,
