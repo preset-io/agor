@@ -144,9 +144,28 @@ const BOB = '22222222-bbbb-bbbb-bbbb-222222222222';
 function asUser(socket: FakeSocket, userId: string) {
   socket.feathers = { user: { user_id: userId } };
 }
-function asService(socket: FakeSocket) {
-  socket.feathers = {};
+/**
+ * Simulate a socket that presented a service token in the initial handshake.
+ * The handshake middleware sets socket.data.isService AND attaches a synthetic
+ * service user to feathers.user — we mirror both markers here.
+ */
+function asServiceHandshake(socket: FakeSocket) {
+  socket.feathers = {
+    user: { user_id: 'executor-service', _isServiceAccount: true },
+  };
   socket.data.isService = true;
+}
+/**
+ * Simulate an executor that connected anonymously and then authenticated
+ * post-connect via `client.authenticate({ strategy: 'jwt', ... })`. The
+ * Feathers login flow attaches the synthetic user with `_isServiceAccount:
+ * true` but does NOT set socket.data.isService. This path is what
+ * packages/executor/src/services/feathers-client.ts actually does.
+ */
+function asServicePostConnect(socket: FakeSocket) {
+  socket.feathers = {
+    user: { user_id: 'executor-service', _isServiceAccount: true },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -172,34 +191,45 @@ describe('getSocketAuthState', () => {
   it('reports user auth when feathers.user.user_id is present', () => {
     const s = makeSocket();
     asUser(s, ALICE);
-    expect(getSocketAuthState(s as any)).toEqual({
-      userId: ALICE,
-      isService: false,
-      isAuthenticated: true,
-    });
+    expect(getSocketAuthState(s as any)).toEqual({ userId: ALICE, isService: false });
   });
-  it('reports service auth when socket.data.isService is set', () => {
+  it('reports service auth for handshake-tagged sockets (socket.data.isService)', () => {
     const s = makeSocket();
-    asService(s);
-    expect(getSocketAuthState(s as any)).toEqual({
-      userId: null,
-      isService: true,
-      isAuthenticated: true,
-    });
+    asServiceHandshake(s);
+    expect(getSocketAuthState(s as any)).toEqual({ userId: null, isService: true });
   });
-  it('reports unauthenticated when neither marker is present', () => {
+  it('reports service auth for post-connect authed sockets (_isServiceAccount only)', () => {
+    // This is the path the executor actually takes:
+    //   client.io.connect()  → anonymous, no socket.data.isService
+    //   client.authenticate({ strategy: 'jwt', ... })
+    //     → ServiceJWTStrategy.getEntity attaches _isServiceAccount: true
+    // The previous implementation rejected these sockets for terminal:output /
+    // exit / tab because it only checked socket.data.isService.
     const s = makeSocket();
-    expect(getSocketAuthState(s as any)).toEqual({
-      userId: null,
-      isService: false,
-      isAuthenticated: false,
-    });
+    asServicePostConnect(s);
+    expect(getSocketAuthState(s as any)).toEqual({ userId: null, isService: true });
+  });
+  it('service account wins over user_id: synthetic executor user is not treated as a real user', () => {
+    // The synthetic service user carries user_id='executor-service'. If we
+    // checked user_id first, we'd treat that as a real user and allow
+    // terminal:input/resize (which are disallowed for service sockets).
+    const s = makeSocket();
+    asServicePostConnect(s);
+    const auth = getSocketAuthState(s as any);
+    expect(auth.userId).toBeNull();
+    expect(auth.isService).toBe(true);
+  });
+  it('reports unauthenticated when no markers are present', () => {
+    const s = makeSocket();
+    expect(getSocketAuthState(s as any)).toEqual({ userId: null, isService: false });
   });
   it('treats an empty feathers object without isService as anonymous', () => {
     // Defends against confusing service ↔ "feathers attached but no user yet".
     const s = makeSocket();
     s.feathers = {};
-    expect(getSocketAuthState(s as any).isAuthenticated).toBe(false);
+    const auth = getSocketAuthState(s as any);
+    expect(auth.userId).toBeNull();
+    expect(auth.isService).toBe(false);
   });
 });
 
@@ -358,10 +388,13 @@ describe('terminal:* handler authorization', () => {
       expect(io.emitted).toEqual([]);
     });
 
-    it('terminal:output accepts service sockets and relays to the channel', () => {
+    it('terminal:output accepts post-connect authed service sockets and relays to channel', () => {
+      // Regression for executor flow: connect anonymously, then
+      // client.authenticate() attaches `_isServiceAccount: true` to feathers.user
+      // without ever setting socket.data.isService. Previous impl rejected this.
       const { io } = buildHarness();
       const s = makeSocket('exec-sock');
-      asService(s);
+      asServicePostConnect(s);
       connect(io, s);
       s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'hello' });
       expect(io.emitted).toEqual([
@@ -373,10 +406,26 @@ describe('terminal:* handler authorization', () => {
       ]);
     });
 
+    it('terminal:output also accepts handshake-token service sockets (socket.data.isService path)', () => {
+      // Separately covers the fast-path: service token presented at handshake.
+      const { io } = buildHarness();
+      const s = makeSocket('exec-sock');
+      asServiceHandshake(s);
+      connect(io, s);
+      s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'hi' });
+      expect(io.emitted).toEqual([
+        {
+          channel: `user/${ALICE}/terminal`,
+          event: 'terminal:output',
+          data: { userId: ALICE, data: 'hi' },
+        },
+      ]);
+    });
+
     it('all three reject when allow_web_terminal is false even for service sockets', () => {
       const { io } = buildHarness({ webTerminalEnabled: false });
       const s = makeSocket('exec-sock');
-      asService(s);
+      asServicePostConnect(s);
       connect(io, s);
       s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'x' });
       s.handlers.get('terminal:exit')?.({ userId: ALICE, exitCode: 0 });
@@ -419,7 +468,7 @@ describe('terminal:* handler authorization', () => {
     it('allows a service socket to join any user terminal channel', () => {
       const { io } = buildHarness();
       const s = makeSocket('exec-sock');
-      asService(s);
+      asServicePostConnect(s);
       connect(io, s);
       s.handlers.get('join')?.(`user/${ALICE}/terminal`);
       s.handlers.get('join')?.(`user/${BOB}/terminal`);

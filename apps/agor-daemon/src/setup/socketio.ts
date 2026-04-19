@@ -15,7 +15,12 @@
  */
 
 import type { Application } from '@agor/core/feathers';
-import type { CursorLeaveEvent, CursorMovedEvent, CursorMoveEvent, User } from '@agor/core/types';
+import type {
+  AuthenticatedUser,
+  CursorLeaveEvent,
+  CursorMovedEvent,
+  CursorMoveEvent,
+} from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import type { Server, Socket } from 'socket.io';
 import type { CorsOrigin } from './cors.js';
@@ -23,19 +28,32 @@ import type { CorsOrigin } from './cors.js';
 /**
  * FeathersJS extends Socket.io socket with authentication context.
  *
- * `feathers` is populated either:
+ * `feathers.user` is populated either:
  *   - synchronously by the io.use() handshake middleware below (handshake
  *     token path: user, service, or empty for anonymous-allowed), OR
  *   - asynchronously by FeathersJS itself when the client calls
  *     `client.authenticate()` after connect (login event).
  *
- * Service-token sockets are additionally tagged with `socket.data.isService`
- * so we can distinguish them from anonymous sockets that later authenticate
- * as a user (where `feathers.user` would be set).
+ * Service accounts (the executor) are identified via `user._isServiceAccount`,
+ * which is the canonical marker set by ServiceJWTStrategy and consumed by
+ * every other daemon authz path (worktree-authorization.ts, register-hooks.ts,
+ * utils/authorization.ts). We extend FeathersJS's `User` type locally to
+ * include it — see `AuthenticatedUser` in `@agor/core/types/feathers.ts`.
+ *
+ * `socket.data.isService` is ALSO set in the handshake path as a fast-path
+ * marker for sockets whose service token was presented at connect time (and
+ * therefore have no feathers.user). Post-connect `client.authenticate()`
+ * flows don't trip the handshake middleware, so `_isServiceAccount` on the
+ * feathers user is the only reliable signal for those sockets.
  */
 interface FeathersSocket extends Socket {
   feathers?: {
-    user?: User;
+    // `AuthenticatedUser` is the shape Feathers JWT strategies attach to
+    // params/connections — it already carries `_isServiceAccount?: boolean`.
+    user?: AuthenticatedUser;
+  };
+  data: {
+    isService?: boolean;
   };
 }
 
@@ -68,36 +86,60 @@ export interface SocketIOOptions {
  * Auth state derived from a socket. Returned by {@link getSocketAuthState}.
  *
  * - `userId` is the authenticated user's id, or null for anonymous/service.
- * - `isService` is true for executor service tokens (no user, but trusted).
- * - `isAuthenticated` is true if either a user OR a service token validated.
+ * - `isService` is true for executor service tokens (no backing real user,
+ *   but trusted).
+ *
+ * `isAuthenticated` is intentionally not a field — it's `!!(userId ||
+ * isService)` and would only create drift between the two representations.
+ * Callers that need it should compute `auth.userId !== null || auth.isService`.
  */
 export interface SocketAuthState {
   userId: string | null;
   isService: boolean;
-  isAuthenticated: boolean;
 }
 
 /**
  * Extract the authenticated identity from a socket.
  *
- * Three valid states:
- *   1. User-authenticated:    feathers.user set with a user_id
- *   2. Service-authenticated: socket.data.isService === true (no user)
- *   3. Anonymous:             neither
+ * Recognized states (checked in this order):
+ *   1. Service (post-connect auth, canonical):
+ *        feathers.user?._isServiceAccount === true
+ *        — executor's client.authenticate({strategy:'jwt',...}) path.
+ *        ServiceJWTStrategy attaches a synthetic user with this flag.
+ *   2. Service (handshake fast-path):
+ *        socket.data.isService === true
+ *        — socket presented a service token on connect; middleware tagged it.
+ *   3. User-authenticated:
+ *        feathers.user?.user_id set and NOT a service account.
+ *   4. Anonymous: none of the above.
+ *
+ * The service-account check is deliberately BEFORE the user-id check: the
+ * synthetic service user carries `user_id: 'executor-service'`, but we do not
+ * want to treat that as a real user for `terminal:input`/`resize` gating.
  *
  * Exported for unit tests and for handler authorization checks.
  */
 export function getSocketAuthState(socket: Socket): SocketAuthState {
-  const f = (socket as FeathersSocket).feathers;
-  const user = f?.user;
+  const s = socket as FeathersSocket;
+  const user = s.feathers?.user;
+  if (user?._isServiceAccount === true) {
+    return { userId: null, isService: true };
+  }
+  if (s.data?.isService === true) {
+    return { userId: null, isService: true };
+  }
   if (user?.user_id) {
-    return { userId: user.user_id, isService: false, isAuthenticated: true };
+    return { userId: user.user_id, isService: false };
   }
-  // biome-ignore lint/suspicious/noExplicitAny: socket.data shape is open
-  if ((socket.data as any)?.isService === true) {
-    return { userId: null, isService: true, isAuthenticated: true };
-  }
-  return { userId: null, isService: false, isAuthenticated: false };
+  return { userId: null, isService: false };
+}
+
+/**
+ * Convenience predicate — prefer this over duplicating the
+ * `userId || isService` pattern at call sites.
+ */
+function isAuthenticated(auth: SocketAuthState): boolean {
+  return auth.userId !== null || auth.isService;
 }
 
 /**
@@ -251,11 +293,22 @@ export function createSocketIOConfig(
           // We tag socket.data.isService so getSocketAuthState() can distinguish
           // a service socket (trusted, no user) from an anonymous socket that
           // simply hasn't authenticated yet (untrusted, no user).
-          (socket as FeathersSocket).feathers = {
-            // No user - this is a service connection
+          const fs = socket as FeathersSocket;
+          // Attach synthetic service user so getSocketAuthState returns
+          // isService=true via the canonical `_isServiceAccount` path. This
+          // mirrors what ServiceJWTStrategy.getEntity does on the Feathers
+          // side for sockets that authenticate post-connect.
+          fs.feathers = {
+            user: {
+              user_id: 'executor-service',
+              email: 'executor@agor.internal',
+              role: 'service',
+              _isServiceAccount: true,
+            },
           };
-          // biome-ignore lint/suspicious/noExplicitAny: socket.data shape is open
-          (socket.data as any).isService = true;
+          // Keep the handshake fast-path marker too — older code and any
+          // future callers that only look at socket.data still see it.
+          fs.data.isService = true;
           console.log(
             `🔐 WebSocket authenticated (service): ${socket.id} (role: ${decoded.role || 'unknown'})`
           );
@@ -399,7 +452,7 @@ export function createSocketIOConfig(
           return null;
         }
         const auth = getSocketAuthState(socket);
-        if (!auth.isAuthenticated || !auth.userId) {
+        if (!auth.userId) {
           rejectTerminal(event, 'no authenticated user');
           return null;
         }
@@ -429,7 +482,7 @@ export function createSocketIOConfig(
           return;
         }
         const auth = getSocketAuthState(socket);
-        if (!auth.isAuthenticated) {
+        if (!isAuthenticated(auth)) {
           rejectTerminal('join', `unauthenticated socket cannot join ${channel}`);
           return;
         }
@@ -454,7 +507,7 @@ export function createSocketIOConfig(
         const target = parseTerminalChannel(channel);
         if (target) {
           const auth = getSocketAuthState(socket);
-          if (!auth.isAuthenticated) {
+          if (!isAuthenticated(auth)) {
             rejectTerminal('leave', `unauthenticated socket cannot leave ${channel}`);
             return;
           }
