@@ -41,6 +41,7 @@ export default defineConfig({
     'unix/index': 'src/unix/index.ts', // Unix group management utilities for worktree isolation
     'mcp/index': 'src/mcp/index.ts', // MCP template resolution utilities
     'gateway/index': 'src/gateway/index.ts', // Gateway platform connectors (Slack, etc.)
+    'yaml/index': 'src/yaml/index.ts', // Browser-safe js-yaml re-export
   },
   format: ['cjs', 'esm'],
   dts: true,

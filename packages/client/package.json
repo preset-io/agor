@@ -15,6 +15,11 @@
       "types": "./dist/config.d.ts",
       "import": "./dist/config.js",
       "require": "./dist/config.cjs"
+    },
+    "./yaml": {
+      "types": "./dist/yaml.d.ts",
+      "import": "./dist/yaml.js",
+      "require": "./dist/yaml.cjs"
     }
   },
   "files": [

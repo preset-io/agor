@@ -9,10 +9,9 @@
  *
  * Read/edit exclusivity: only one editor is "active" at a time.
  *
- * NOTE: The design calls for YAML editors. `js-yaml` is not a direct dep of
- * agor-ui, so this implementation uses JSON representation in monospace
- * TextAreas instead. JSON is a strict subset of YAML and round-trips cleanly;
- * `.agor.yml` import/export still renders YAML server-side. See callback notes.
+ * YAML is parsed/emitted via `@agor-live/client/yaml`, which re-exports
+ * `@agor/core/yaml` (a browser-safe thin wrapper over `js-yaml`). Keeps the
+ * YAML dep centralized in core rather than pulling it directly into the UI.
  */
 
 import type {
@@ -52,6 +51,7 @@ import {
   Typography,
   theme,
 } from 'antd';
+import * as yaml from '@agor-live/client/yaml';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuthConfig } from '../../../hooks/useAuthConfig';
 import { usePermissions } from '../../../hooks/usePermissions';
@@ -101,9 +101,9 @@ function snapshotFromWorktree(wt: Worktree): WorktreeRenderedSnapshot {
   };
 }
 
-function prettyJson(value: unknown): string {
+function prettyYaml(value: unknown): string {
   try {
-    return JSON.stringify(value, null, 2);
+    return yaml.dump(value, { indent: 2, lineWidth: 100, noRefs: true });
   } catch {
     return '';
   }
@@ -133,19 +133,19 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       ? 'Managed environments are disabled on this instance'
       : `Requires ${managedEnvsMinimumRole} role or higher`;
 
-  // ----- Repo-level editor state (JSON representation of repo.environment) -----
+  // ----- Repo-level editor state (YAML representation of repo.environment) -----
   const [isEditingRepo, setIsEditingRepo] = useState(false);
-  const [repoJsonText, setRepoJsonText] = useState(() =>
-    repo.environment ? prettyJson(repo.environment) : ''
+  const [repoYamlText, setRepoYamlText] = useState(() =>
+    repo.environment ? prettyYaml(repo.environment) : ''
   );
-  const [repoJsonError, setRepoJsonError] = useState<string | null>(null);
+  const [repoYamlError, setRepoYamlError] = useState<string | null>(null);
 
   // ----- Worktree snapshot editor state -----
   const [isEditingSnapshot, setIsEditingSnapshot] = useState(false);
-  const [snapshotJsonText, setSnapshotJsonText] = useState(() =>
-    prettyJson(snapshotFromWorktree(worktree))
+  const [snapshotYamlText, setSnapshotYamlText] = useState(() =>
+    prettyYaml(snapshotFromWorktree(worktree))
   );
-  const [snapshotJsonError, setSnapshotJsonError] = useState<string | null>(null);
+  const [snapshotYamlError, setSnapshotYamlError] = useState<string | null>(null);
 
   // ----- Variant picker -----
   const availableVariants: string[] = repo.environment
@@ -187,8 +187,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     prevWorktreeRef.current = worktree;
 
     if (worktreeChanged && !isEditingSnapshot) {
-      setSnapshotJsonText(prettyJson(snapshotFromWorktree(worktree)));
-      setSnapshotJsonError(null);
+      setSnapshotYamlText(prettyYaml(snapshotFromWorktree(worktree)));
+      setSnapshotYamlError(null);
     }
     if (worktreeChanged) {
       // Keep picker aligned with what's actually rendered on the worktree
@@ -204,8 +204,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     const repoChanged = prevRepoRef.current !== repo;
     prevRepoRef.current = repo;
     if (repoChanged && !isEditingRepo) {
-      setRepoJsonText(repo.environment ? prettyJson(repo.environment) : '');
-      setRepoJsonError(null);
+      setRepoYamlText(repo.environment ? prettyYaml(repo.environment) : '');
+      setRepoYamlError(null);
     }
   }, [repo, isEditingRepo]);
 
@@ -327,8 +327,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       );
       // Let parent update, but also refresh local editor immediately so users
       // see the new snapshot without waiting for a WS push.
-      setSnapshotJsonText(prettyJson(snapshotFromWorktree(updated)));
-      setSnapshotJsonError(null);
+      setSnapshotYamlText(prettyYaml(snapshotFromWorktree(updated)));
+      setSnapshotYamlError(null);
       if (updated.environment_variant) setSelectedVariant(updated.environment_variant);
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Failed to render environment');
@@ -342,7 +342,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     // If admin has unsaved manual snapshot edits, confirm before discarding them.
     const snapshotDirty =
       isAdmin &&
-      snapshotJsonText.trim() !== prettyJson(snapshotFromWorktree(worktree)).trim();
+      snapshotYamlText.trim() !== prettyYaml(snapshotFromWorktree(worktree)).trim();
     if (snapshotDirty) {
       confirm({
         title: 'Discard local snapshot edits?',
@@ -359,37 +359,37 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   };
 
   // ----- Repo editor save/cancel -----
-  const validateRepoJson = (text: string): RepoEnvironment | null => {
+  const validateRepoYaml = (text: string): RepoEnvironment | null => {
     if (!text.trim()) {
-      setRepoJsonError('Empty — paste or write a RepoEnvironment JSON object');
+      setRepoYamlError('Empty — paste or write a RepoEnvironment YAML document');
       return null;
     }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(text);
+      parsed = yaml.load(text);
     } catch (err) {
-      setRepoJsonError(err instanceof Error ? err.message : 'Invalid JSON');
+      setRepoYamlError(err instanceof Error ? err.message : 'Invalid YAML');
       return null;
     }
     if (typeof parsed !== 'object' || parsed === null) {
-      setRepoJsonError('Expected a JSON object');
+      setRepoYamlError('Expected a YAML mapping (object)');
       return null;
     }
     const obj = parsed as Partial<RepoEnvironment>;
     if (obj.version !== 2) {
-      setRepoJsonError('`version` must be 2');
+      setRepoYamlError('`version` must be 2');
       return null;
     }
     if (!obj.default || typeof obj.default !== 'string') {
-      setRepoJsonError('`default` must be a variant name string');
+      setRepoYamlError('`default` must be a variant name string');
       return null;
     }
     if (!obj.variants || typeof obj.variants !== 'object') {
-      setRepoJsonError('`variants` must be a map of variant-name → object');
+      setRepoYamlError('`variants` must be a map of variant-name → object');
       return null;
     }
     if (!(obj.default in obj.variants)) {
-      setRepoJsonError(`\`default\` "${obj.default}" is not defined in \`variants\``);
+      setRepoYamlError(`\`default\` "${obj.default}" is not defined in \`variants\``);
       return null;
     }
     // Single-level extends check — mirrors server-side validateExtends.
@@ -398,68 +398,68 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       if (variant.extends) {
         const parent = obj.variants[variant.extends];
         if (!parent) {
-          setRepoJsonError(`variant "${name}" extends unknown "${variant.extends}"`);
+          setRepoYamlError(`variant "${name}" extends unknown "${variant.extends}"`);
           return null;
         }
         if ((parent as RepoEnvironmentVariant).extends) {
-          setRepoJsonError(
+          setRepoYamlError(
             `variant "${name}" extends "${variant.extends}" which itself extends — only single-level extends is allowed`
           );
           return null;
         }
       }
     }
-    setRepoJsonError(null);
+    setRepoYamlError(null);
     return obj as RepoEnvironment;
   };
 
   const handleSaveRepo = () => {
     if (!onUpdateRepo) return;
-    const parsed = validateRepoJson(repoJsonText);
+    const parsed = validateRepoYaml(repoYamlText);
     if (!parsed) return;
     onUpdateRepo(repo.repo_id, { environment: parsed });
     setIsEditingRepo(false);
   };
 
   const handleCancelRepo = () => {
-    setRepoJsonText(repo.environment ? prettyJson(repo.environment) : '');
-    setRepoJsonError(null);
+    setRepoYamlText(repo.environment ? prettyYaml(repo.environment) : '');
+    setRepoYamlError(null);
     setIsEditingRepo(false);
   };
 
   // ----- Snapshot editor save/cancel -----
-  const validateSnapshotJson = (text: string): WorktreeRenderedSnapshot | null => {
+  const validateSnapshotYaml = (text: string): WorktreeRenderedSnapshot | null => {
     if (!text.trim()) {
-      setSnapshotJsonError('Empty — provide at least `start` and `stop`');
+      setSnapshotYamlError('Empty — provide at least `start` and `stop`');
       return null;
     }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(text);
+      parsed = yaml.load(text);
     } catch (err) {
-      setSnapshotJsonError(err instanceof Error ? err.message : 'Invalid JSON');
+      setSnapshotYamlError(err instanceof Error ? err.message : 'Invalid YAML');
       return null;
     }
     if (typeof parsed !== 'object' || parsed === null) {
-      setSnapshotJsonError('Expected a JSON object');
+      setSnapshotYamlError('Expected a YAML mapping (object)');
       return null;
     }
     const obj = parsed as WorktreeRenderedSnapshot;
     if (!obj.start || typeof obj.start !== 'string') {
-      setSnapshotJsonError('`start` is required and must be a string');
+      setSnapshotYamlError('`start` is required and must be a string');
       return null;
     }
     if (!obj.stop || typeof obj.stop !== 'string') {
-      setSnapshotJsonError('`stop` is required and must be a string');
+      setSnapshotYamlError('`stop` is required and must be a string');
       return null;
     }
-    setSnapshotJsonError(null);
+    setSnapshotYamlError(null);
     return obj;
   };
 
   const handleSaveSnapshot = () => {
     if (!onUpdateWorktree) return;
-    const parsed = validateSnapshotJson(snapshotJsonText);
+    const parsed = validateSnapshotYaml(snapshotYamlText);
     if (!parsed) return;
     onUpdateWorktree(worktree.worktree_id, {
       start_command: parsed.start || undefined,
@@ -473,8 +473,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   };
 
   const handleCancelSnapshot = () => {
-    setSnapshotJsonText(prettyJson(snapshotFromWorktree(worktree)));
-    setSnapshotJsonError(null);
+    setSnapshotYamlText(prettyYaml(snapshotFromWorktree(worktree)));
+    setSnapshotYamlError(null);
     setIsEditingSnapshot(false);
   };
 
@@ -517,7 +517,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
             .service(`repos/${repo.repo_id}/import-agor-yml`)
             .create({ worktree_id: worktree.worktree_id })) as Repo;
           if (updated.environment) {
-            setRepoJsonText(prettyJson(updated.environment));
+            setRepoYamlText(prettyYaml(updated.environment));
           }
           onUpdateRepo(repo.repo_id, { environment: updated.environment });
           showSuccess('Imported .agor.yml');
@@ -872,20 +872,19 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         >
           <Space orientation="vertical" size="small" style={{ width: '100%' }}>
             <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-              JSON representation of <code>repo.environment</code> (valid YAML
-              subset). Includes <code>version</code>, <code>default</code>,{' '}
-              <code>variants</code>, and optional <code>template_overrides</code>.{' '}
-              {repoDocsLink}
+              YAML representation of <code>repo.environment</code>. Includes{' '}
+              <code>version</code>, <code>default</code>, <code>variants</code>, and
+              optional <code>template_overrides</code>. {repoDocsLink}
             </Typography.Text>
             <TextArea
-              value={repoJsonText}
+              value={repoYamlText}
               onChange={(e) => {
-                setRepoJsonText(e.target.value);
-                if (repoJsonError) setRepoJsonError(null);
+                setRepoYamlText(e.target.value);
+                if (repoYamlError) setRepoYamlError(null);
               }}
               placeholder={
                 noVariantsConfigured && isAdmin
-                  ? '{\n  "version": 2,\n  "default": "lean",\n  "variants": {\n    "lean": {\n      "start": "docker compose up -d",\n      "stop":  "docker compose down"\n    }\n  }\n}'
+                  ? 'version: 2\ndefault: lean\nvariants:\n  lean:\n    start: docker compose up -d\n    stop: docker compose down\n'
                   : ''
               }
               readOnly={!isEditingRepo}
@@ -896,11 +895,11 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 background: isEditingRepo ? undefined : token.colorFillAlter,
               }}
             />
-            {repoJsonError && (
+            {repoYamlError && (
               <Alert
                 type="error"
                 showIcon
-                message={`Invalid repo environment: ${repoJsonError}`}
+                message={`Invalid repo environment: ${repoYamlError}`}
               />
             )}
             {isEditingRepo && (
@@ -1007,10 +1006,10 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
               Render above to regenerate from the variant.
             </Typography.Text>
             <TextArea
-              value={snapshotJsonText}
+              value={snapshotYamlText}
               onChange={(e) => {
-                setSnapshotJsonText(e.target.value);
-                if (snapshotJsonError) setSnapshotJsonError(null);
+                setSnapshotYamlText(e.target.value);
+                if (snapshotYamlError) setSnapshotYamlError(null);
               }}
               readOnly={!isEditingSnapshot}
               rows={10}
@@ -1020,11 +1019,11 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 background: isEditingSnapshot ? undefined : token.colorFillAlter,
               }}
             />
-            {snapshotJsonError && (
+            {snapshotYamlError && (
               <Alert
                 type="error"
                 showIcon
-                message={`Invalid snapshot: ${snapshotJsonError}`}
+                message={`Invalid snapshot: ${snapshotYamlError}`}
               />
             )}
             {isEditingSnapshot && (

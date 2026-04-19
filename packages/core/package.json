@@ -95,6 +95,11 @@
       "import": "./dist/utils/errors.js",
       "require": "./dist/utils/errors.cjs"
     },
+    "./yaml": {
+      "types": "./dist/yaml/index.d.ts",
+      "import": "./dist/yaml/index.js",
+      "require": "./dist/yaml/index.cjs"
+    },
     "./utils/url": {
       "types": "./dist/utils/url.d.ts",
       "import": "./dist/utils/url.js",
