@@ -39,6 +39,8 @@ export * from './encryption';
 
 // Migrations
 export * from './migrate';
+// Pending-migrations presentation (shared by CLI and daemon)
+export * from './pending-migrations';
 // Repositories
 export * from './repositories';
 export * from './schema';

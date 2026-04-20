@@ -109,10 +109,13 @@ export default class DaemonStart extends Command {
       // Don't swallow the failure silently — the old behavior (pre-regression)
       // was to warn and continue, but that is what led to the daemon dying in
       // the background with no terminal-visible error. If we can't even read
-      // migration status, refuse to start and surface why.
-      this.log(chalk.red('✗ Failed to check database migration status'));
-      this.log(chalk.red(`  ${error instanceof Error ? error.message : String(error)}`));
-      this.exit(1);
+      // migration status, refuse to start and surface why. Route through
+      // this.error() so the message hits stderr and the process exits 1.
+      this.error(
+        chalk.red(
+          `✗ Failed to check database migration status\n  ${error instanceof Error ? error.message : String(error)}`
+        )
+      );
     }
 
     if (info === null) return;

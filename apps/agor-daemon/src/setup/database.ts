@@ -7,7 +7,12 @@
 
 import { constants } from 'node:fs';
 import { access, mkdir } from 'node:fs/promises';
-import { checkMigrationStatus, createDatabaseAsync, seedInitialData } from '@agor/core/db';
+import {
+  checkMigrationStatus,
+  createDatabaseAsync,
+  formatPendingMigrationsMessage,
+  seedInitialData,
+} from '@agor/core/db';
 import { extractDbFilePath } from '@agor/core/utils/path';
 
 export interface DatabaseInitResult {
@@ -52,28 +57,25 @@ async function ensureDatabaseDirectory(dbPath: string): Promise<void> {
  * Check migrations and exit if pending migrations require manual intervention
  *
  * @param db - Database instance
+ * @param dbUrl - Database connection URL (used to render backup hint path)
  */
 async function checkAndReportMigrations(
-  db: Awaited<ReturnType<typeof createDatabaseAsync>>
+  db: Awaited<ReturnType<typeof createDatabaseAsync>>,
+  dbUrl: string
 ): Promise<void> {
   console.log('🔍 Checking database migration status...');
   const migrationStatus = await checkMigrationStatus(db);
 
   if (migrationStatus.hasPending) {
-    console.error('');
-    console.error('❌ Database migrations required!');
-    console.error('');
-    console.error(`   Found ${migrationStatus.pending.length} pending migration(s):`);
-    migrationStatus.pending.forEach((tag) => {
-      console.error(`     - ${tag}`);
-    });
-    console.error('');
-    console.error('⚠️  For safety, please backup your database before running migrations:');
-    console.error(`   cp ~/.agor/agor.db ~/.agor/agor.db.backup-$(date +%s)`);
-    console.error('');
-    console.error('Then run migrations with:');
-    console.error('   agor db migrate');
-    console.error('');
+    // Use the shared formatter from @agor/core/db so this message stays
+    // in lockstep with the CLI pre-flight check (agor daemon start).
+    process.stderr.write(
+      formatPendingMigrationsMessage({
+        dbUrl,
+        dbPath: extractDbFilePath(dbUrl),
+        pending: migrationStatus.pending,
+      })
+    );
     console.error('After migrations complete successfully, restart the daemon.');
     console.error('');
     process.exit(1);
@@ -104,7 +106,7 @@ export async function initializeDatabase(dbPath: string): Promise<DatabaseInitRe
   const db = await createDatabaseAsync({ url: dbPath });
 
   // Check migrations (exits if pending)
-  await checkAndReportMigrations(db);
+  await checkAndReportMigrations(db, dbPath);
 
   // Seed initial data (idempotent - only creates if missing)
   console.log('🌱 Seeding initial data...');
