@@ -548,14 +548,30 @@ async function exchangeCodeForToken(
 }
 
 /**
- * Perform MCP OAuth 2.1 Authorization Code flow with PKCE
+ * Perform MCP OAuth 2.1 Authorization Code flow with PKCE.
  *
- * Uses token caching to avoid repeated browser-based authentication flows.
- * Tokens are cached per resource metadata URL with automatic expiry handling.
+ * ⚠️  CLI-ONLY — DO NOT CALL FROM THE DAEMON.
+ *
+ * This helper spins up a local HTTP listener on `127.0.0.1:<random>` and uses
+ * that as the OAuth `redirect_uri`. That works for the local CLI (where the
+ * user's browser and the listener share `localhost`) but BREAKS for any
+ * deployed daemon: the upstream OAuth provider (Notion, Linear, etc.) sends
+ * the redirect to the END USER'S BROWSER, which generally cannot reach the
+ * daemon's `127.0.0.1`. Symptom: per-user "Notion login redirected me to
+ * localhost" bug for any user not running on the daemon host.
+ *
+ * Daemon-side OAuth MUST go through the two-phase flow instead:
+ *   1. `startMCPOAuthFlow(...)` with a public `redirect_uri` pointing at
+ *      `<daemon base_url>/mcp-servers/oauth-callback`.
+ *   2. The browser completes the redirect, the daemon's callback handler
+ *      exchanges the code via `completeMCPOAuthFlow(...)`, and the result
+ *      is broadcast back to the originating socket.
+ *
+ * See `apps/agor-daemon/src/register-services.ts > startTwoPhaseMCPOAuthFlow`.
  *
  * @param wwwAuthenticateHeader - The WWW-Authenticate header from 401 response
  * @param clientId - OAuth client ID (optional, generated if not provided)
- * @param onBrowserOpen - Callback when browser is opened (for UI notification)
+ * @param browserOpener - Callback when browser is opened (for UI notification)
  * @returns Access token to use for authenticated requests
  */
 export async function performMCPOAuthFlow(

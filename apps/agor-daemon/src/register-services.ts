@@ -48,7 +48,6 @@ import {
   getOAuth21TokenFromDBByUrl,
   oauth21TokenCache,
   persistOAuthToken,
-  saveOAuth21TokenToDB,
 } from './oauth-cache.js';
 import type { ArtifactsService } from './services/artifacts.js';
 import { createArtifactsService } from './services/artifacts.js';
@@ -946,27 +945,41 @@ async function registerMCPServices(
 <body><div class="card"><div class="icon">${icon}</div><p>${safeMessage}</p></div></body></html>`;
   }
 
+  type OAuthTokenResponse = {
+    access_token: string;
+    token_type?: string;
+    expires_in?: number;
+    refresh_token?: string;
+  };
+
+  type PendingOAuthFlow = {
+    context: {
+      metadataUrl: string;
+      tokenEndpoint: string;
+      redirectUri: string;
+      pkceVerifier: string;
+      clientId: string;
+      clientSecret?: string;
+      state: string;
+      authorizationUrl: string;
+    };
+    mcpServerId?: string;
+    userId?: string;
+    oauthMode?: 'per_user' | 'shared';
+    socketId?: string;
+    createdAt: number;
+    /**
+     * Optional resolver wired up by {@link startTwoPhaseMCPOAuthFlow} when the
+     * caller wants to block on token acquisition (discover / test-oauth flows).
+     * The daemon-side `oauthCallbackHandler` calls these after the token has
+     * been exchanged + persisted so the original HTTP request can complete.
+     */
+    tokenResolve?: (tokenResponse: OAuthTokenResponse) => void;
+    tokenReject?: (err: Error) => void;
+  };
+
   // Store pending OAuth flow contexts
-  const pendingOAuthFlows = new Map<
-    string,
-    {
-      context: {
-        metadataUrl: string;
-        tokenEndpoint: string;
-        redirectUri: string;
-        pkceVerifier: string;
-        clientId: string;
-        clientSecret?: string;
-        state: string;
-        authorizationUrl: string;
-      };
-      mcpServerId?: string;
-      userId?: string;
-      oauthMode?: 'per_user' | 'shared';
-      socketId?: string;
-      createdAt: number;
-    }
-  >();
+  const pendingOAuthFlows = new Map<string, PendingOAuthFlow>();
 
   // Clean up expired flows (older than 10 minutes)
   setInterval(() => {
@@ -975,10 +988,106 @@ async function registerMCPServices(
     for (const [state, flow] of pendingOAuthFlows.entries()) {
       if (now - flow.createdAt > tenMinutes) {
         pendingOAuthFlows.delete(state);
+        flow.tokenReject?.(new Error('OAuth flow expired before callback was received'));
         console.log('[OAuth] Cleaned up expired flow:', state);
       }
     }
   }, 60_000);
+
+  /**
+   * Shared helper for starting the daemon's two-phase MCP OAuth flow.
+   *
+   * All daemon-side OAuth paths (Settings "Start OAuth Flow", discover probe,
+   * test-oauth `start_browser_flow`) MUST go through this helper so that:
+   *   1. The `redirect_uri` is always the daemon's PUBLIC base URL, not
+   *      `127.0.0.1:<random>` — the browser completing the flow may be on a
+   *      different machine than the daemon (e.g. any remotely-deployed Agor).
+   *   2. The `oauth:open_browser` socket event is emitted consistently to the
+   *      user who initiated the flow.
+   *   3. Callers that need to block until token acquisition (discover,
+   *      test-oauth) can opt in via `awaitToken: true` and receive a Promise
+   *      that resolves when `oauthCallbackHandler` finishes exchanging the
+   *      authorization code for a token.
+   */
+  type StartTwoPhaseOAuthOptions = {
+    mcpUrl: string;
+    wwwAuthenticate: string;
+    resourceMetadataUrl: string;
+    mcpServerId?: string;
+    userId?: string;
+    oauthMode?: 'per_user' | 'shared';
+    clientId?: string;
+    clientSecret?: string;
+    authorizationUrlOverride?: string;
+    tokenUrlOverride?: string;
+    scope?: string;
+    socketId?: string;
+    /** When true, the returned object exposes an `awaitToken()` promise. */
+    awaitToken?: boolean;
+  };
+
+  type StartTwoPhaseOAuthResult = {
+    state: string;
+    authorizationUrl: string;
+    redirectUri: string;
+    /** Present only when `awaitToken: true` was passed. */
+    awaitToken?: () => Promise<OAuthTokenResponse>;
+  };
+
+  async function startTwoPhaseMCPOAuthFlow(
+    opts: StartTwoPhaseOAuthOptions
+  ): Promise<StartTwoPhaseOAuthResult> {
+    const { startMCPOAuthFlow } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
+
+    // Strict public base URL — see oauth-start endpoint for the rationale.
+    const baseUrl = await requirePublicBaseUrl();
+    const redirectUri = new URL('/mcp-servers/oauth-callback', baseUrl).toString();
+
+    const context = await startMCPOAuthFlow(opts.wwwAuthenticate, opts.clientId, redirectUri, {
+      authorizationUrlOverride: opts.authorizationUrlOverride,
+      tokenUrlOverride: opts.tokenUrlOverride,
+      clientSecret: opts.clientSecret,
+      scope: opts.scope,
+      resourceMetadataUrl: opts.resourceMetadataUrl,
+    });
+
+    let tokenPromise: Promise<OAuthTokenResponse> | undefined;
+    let tokenResolve: ((t: OAuthTokenResponse) => void) | undefined;
+    let tokenReject: ((err: Error) => void) | undefined;
+    if (opts.awaitToken) {
+      tokenPromise = new Promise<OAuthTokenResponse>((resolve, reject) => {
+        tokenResolve = resolve;
+        tokenReject = reject;
+      });
+    }
+
+    pendingOAuthFlows.set(context.state, {
+      context,
+      mcpServerId: opts.mcpServerId,
+      userId: opts.userId,
+      oauthMode: opts.oauthMode,
+      socketId: opts.socketId,
+      createdAt: Date.now(),
+      tokenResolve,
+      tokenReject,
+    });
+
+    if (app.io) {
+      const payload = { authUrl: context.authorizationUrl };
+      if (opts.socketId) {
+        app.io.to(opts.socketId).emit('oauth:open_browser', payload);
+      } else {
+        app.io.emit('oauth:open_browser', payload);
+      }
+    }
+
+    return {
+      state: context.state,
+      authorizationUrl: context.authorizationUrl,
+      redirectUri,
+      awaitToken: tokenPromise ? () => tokenPromise! : undefined,
+    };
+  }
 
   // Set the OAuth callback handler
   const oauthCallbackHandler = async (req: express.Request, res: express.Response) => {
@@ -994,6 +1103,13 @@ async function registerMCPServices(
       if (error) {
         const errorDescription = (req.query.error_description as string) || error;
         console.error('[OAuth Callback] Authorization error:', errorDescription);
+        // Reject any awaitToken() promise from the originating flow so the
+        // caller (discover / test-oauth) can surface the failure.
+        if (state) {
+          const pending = pendingOAuthFlows.get(state);
+          pending?.tokenReject?.(new Error(`Authorization failed: ${errorDescription}`));
+          pendingOAuthFlows.delete(state);
+        }
         res.status(400).send(oauthResultPage(false, `Authorization failed: ${errorDescription}`));
         return;
       }
@@ -1021,34 +1137,49 @@ async function registerMCPServices(
         return;
       }
 
-      const { completeMCPOAuthFlow } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
-      const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state);
-      pendingOAuthFlows.delete(state);
+      try {
+        const { completeMCPOAuthFlow } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
+        const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state);
+        pendingOAuthFlows.delete(state);
 
-      await persistOAuthToken(
-        db,
-        tokenResponse,
-        pendingFlow.context.metadataUrl,
-        pendingFlow,
-        'OAuth Callback'
-      );
+        await persistOAuthToken(
+          db,
+          tokenResponse,
+          pendingFlow.context.metadataUrl,
+          pendingFlow,
+          'OAuth Callback'
+        );
 
-      if (app.io) {
-        const oauthEvent = {
-          state,
-          success: true,
-          mcp_server_id: pendingFlow.mcpServerId,
-          oauth_mode: pendingFlow.oauthMode || 'per_user',
-        };
-        if (pendingFlow.socketId) {
-          app.io.to(pendingFlow.socketId).emit('oauth:completed', oauthEvent);
-        } else {
-          app.io.emit('oauth:completed', oauthEvent);
+        if (app.io) {
+          const oauthEvent = {
+            state,
+            success: true,
+            mcp_server_id: pendingFlow.mcpServerId,
+            oauth_mode: pendingFlow.oauthMode || 'per_user',
+          };
+          if (pendingFlow.socketId) {
+            app.io.to(pendingFlow.socketId).emit('oauth:completed', oauthEvent);
+          } else {
+            app.io.emit('oauth:completed', oauthEvent);
+          }
         }
-      }
 
-      console.log('[OAuth Callback] Flow completed successfully');
-      res.send(oauthResultPage(true, 'OAuth authentication successful! You can close this tab.'));
+        // Notify any awaitToken() callers (discover / test-oauth) that the
+        // token has been exchanged + persisted so their HTTP request can
+        // complete with a real result instead of timing out.
+        pendingFlow.tokenResolve?.(tokenResponse);
+
+        console.log('[OAuth Callback] Flow completed successfully');
+        res.send(oauthResultPage(true, 'OAuth authentication successful! You can close this tab.'));
+      } catch (innerErr) {
+        // Drop the pending entry and reject any awaitToken() promise so the
+        // originating service call returns an error rather than hanging.
+        pendingOAuthFlows.delete(state);
+        pendingFlow.tokenReject?.(
+          innerErr instanceof Error ? innerErr : new Error(String(innerErr))
+        );
+        throw innerErr;
+      }
     } catch (err) {
       console.error('[OAuth Callback] Error:', err);
       res
@@ -1115,7 +1246,6 @@ async function registerMCPServices(
       },
       params?: { connection?: { id?: string } }
     ) {
-      const mcpServerRepo = new MCPServerRepository(db);
       try {
         console.log('[OAuth Test] Probing MCP URL:', data.mcp_url);
 
@@ -1162,41 +1292,39 @@ async function registerMCPServices(
 
           if (data.start_browser_flow) {
             console.log('[OAuth Test] Starting browser-based OAuth 2.1 flow...');
-            const { performMCPOAuthFlow } = await import(
-              '@agor/core/tools/mcp/oauth-mcp-transport'
-            );
 
             try {
-              const browserOpener = async (authUrl: string) => {
-                const connection = (params as AuthenticatedParams)?.connection as
-                  | { id?: string }
-                  | undefined;
-                const socketId = connection?.id;
-                if (socketId && app.io) {
-                  app.io.to(socketId).emit('oauth:open_browser', { authUrl });
-                } else if (app.io) {
-                  app.io.emit('oauth:open_browser', { authUrl });
+              const connection = (params as AuthenticatedParams)?.connection as
+                | { id?: string }
+                | undefined;
+
+              // Route through the daemon's two-phase flow so the redirect_uri
+              // is the daemon's public base URL (browser-reachable for any
+              // user) rather than a 127.0.0.1 callback server bound to the
+              // daemon process.
+              let started: StartTwoPhaseOAuthResult;
+              try {
+                started = await startTwoPhaseMCPOAuthFlow({
+                  mcpUrl: data.mcp_url,
+                  wwwAuthenticate: wwwAuthenticate || '',
+                  resourceMetadataUrl: metadataUrl,
+                  mcpServerId: data.mcp_server_id,
+                  userId: (params as AuthenticatedParams)?.user?.user_id,
+                  // Test endpoint mirrors the previous saveOAuth21TokenToDB
+                  // call (writes to the shared MCP server row, not per-user).
+                  oauthMode: 'shared',
+                  clientId: data.client_id,
+                  socketId: connection?.id,
+                  awaitToken: true,
+                });
+              } catch (err) {
+                if (err instanceof PublicBaseUrlNotConfiguredError) {
+                  return { success: false, error: err.message, oauthType: 'oauth2.1' };
                 }
-              };
-
-              const tokenResponse = await performMCPOAuthFlow(
-                wwwAuthenticate || '',
-                data.client_id,
-                browserOpener,
-                metadataUrl
-              );
-              const testExpiresIn = tokenResponse.expires_in ?? 3600;
-              cacheOAuth21Token(data.mcp_url, tokenResponse.access_token, testExpiresIn);
-
-              if (data.mcp_server_id) {
-                await saveOAuth21TokenToDB(
-                  mcpServerRepo,
-                  data.mcp_server_id,
-                  tokenResponse.access_token,
-                  testExpiresIn,
-                  tokenResponse.refresh_token
-                );
+                throw err;
               }
+
+              const tokenResponse = await started.awaitToken!();
 
               const testResponse = await fetch(data.mcp_url, {
                 method: 'POST',
@@ -1451,7 +1579,7 @@ async function registerMCPServices(
         }
 
         const wwwAuthenticate = probeResponse.headers.get('www-authenticate') || '';
-        const { resolveResourceMetadataUrl, startMCPOAuthFlow } = await import(
+        const { resolveResourceMetadataUrl } = await import(
           '@agor/core/tools/mcp/oauth-mcp-transport'
         );
         const resolved = await resolveResourceMetadataUrl(wwwAuthenticate, data.mcp_url);
@@ -1463,14 +1591,25 @@ async function registerMCPServices(
           };
         }
 
-        // Use the strict public base URL — the redirect_uri is sent to the upstream
-        // OAuth provider (Notion, etc.) and then loaded by the END USER'S BROWSER.
-        // Falling back to http://localhost:PORT silently breaks for any user whose
-        // browser is not running on the daemon machine (e.g. anyone accessing a
-        // deployed Agor instance remotely).
-        let baseUrl: string;
+        const connection = params?.connection as { id?: string } | undefined;
+        const socketId = connection?.id;
+
+        let result: StartTwoPhaseOAuthResult;
         try {
-          baseUrl = await requirePublicBaseUrl();
+          result = await startTwoPhaseMCPOAuthFlow({
+            mcpUrl: data.mcp_url,
+            wwwAuthenticate,
+            resourceMetadataUrl: resolved.metadataUrl,
+            mcpServerId: data.mcp_server_id,
+            userId,
+            oauthMode,
+            clientId: data.client_id || clientIdFromConfig,
+            clientSecret: clientSecretOverride,
+            authorizationUrlOverride,
+            tokenUrlOverride,
+            scope: scopeOverride,
+            socketId,
+          });
         } catch (err) {
           if (err instanceof PublicBaseUrlNotConfiguredError) {
             console.error('[OAuth Start]', err.message);
@@ -1478,38 +1617,11 @@ async function registerMCPServices(
           }
           throw err;
         }
-        const redirectUri = new URL('/mcp-servers/oauth-callback', baseUrl).toString();
-        const effectiveClientId = data.client_id || clientIdFromConfig;
-        const context = await startMCPOAuthFlow(wwwAuthenticate, effectiveClientId, redirectUri, {
-          authorizationUrlOverride,
-          tokenUrlOverride,
-          clientSecret: clientSecretOverride,
-          scope: scopeOverride,
-          resourceMetadataUrl: resolved.metadataUrl,
-        });
-
-        const connection = params?.connection as { id?: string } | undefined;
-        const socketId = connection?.id;
-
-        pendingOAuthFlows.set(context.state, {
-          context,
-          mcpServerId: data.mcp_server_id,
-          userId,
-          oauthMode,
-          socketId,
-          createdAt: Date.now(),
-        });
-
-        if (socketId && app.io) {
-          app.io.to(socketId).emit('oauth:open_browser', { authUrl: context.authorizationUrl });
-        } else if (app.io) {
-          app.io.emit('oauth:open_browser', { authUrl: context.authorizationUrl });
-        }
 
         return {
           success: true,
-          authorizationUrl: context.authorizationUrl,
-          state: context.state,
+          authorizationUrl: result.authorizationUrl,
+          state: result.state,
           message:
             'Browser opened for authentication. After signing in, copy the callback URL and paste it below.',
         };
@@ -1735,16 +1847,6 @@ async function registerMCPServices(
 
         let authHeaders = await resolveMCPAuthHeaders(serverConfig.auth, serverConfig.url);
 
-        const openOAuthBrowser = async (authUrl: string) => {
-          const connection = params?.connection as { id?: string } | undefined;
-          const socketId = connection?.id;
-          if (socketId && app.io) {
-            app.io.to(socketId).emit('oauth:open_browser', { authUrl });
-          } else if (app.io) {
-            app.io.emit('oauth:open_browser', { authUrl });
-          }
-        };
-
         const probeAndAcquireOAuthToken = async (mcpUrl: string): Promise<string | undefined> => {
           try {
             const probeResponse = await fetch(mcpUrl, {
@@ -1752,33 +1854,46 @@ async function registerMCPServices(
               headers: { Accept: 'application/json' },
             });
             const wwwAuthenticate = probeResponse.headers.get('www-authenticate');
-            if (probeResponse.status === 401) {
-              const { resolveResourceMetadataUrl, performMCPOAuthFlow } = await import(
-                '@agor/core/tools/mcp/oauth-mcp-transport'
-              );
-              const resolved = await resolveResourceMetadataUrl(wwwAuthenticate, mcpUrl);
-              if (resolved) {
-                const tokenResponse = await performMCPOAuthFlow(
-                  wwwAuthenticate || '',
-                  undefined,
-                  openOAuthBrowser,
-                  resolved.metadataUrl
-                );
-                const discoveryExpiresIn = tokenResponse.expires_in ?? 3600;
-                cacheOAuth21Token(mcpUrl, tokenResponse.access_token, discoveryExpiresIn);
-                if (serverId) {
-                  await saveOAuth21TokenToDB(
-                    mcpServerRepo,
-                    serverId,
-                    tokenResponse.access_token,
-                    discoveryExpiresIn,
-                    tokenResponse.refresh_token
-                  );
-                }
-                return tokenResponse.access_token;
+            if (probeResponse.status !== 401) return undefined;
+            const { resolveResourceMetadataUrl } = await import(
+              '@agor/core/tools/mcp/oauth-mcp-transport'
+            );
+            const resolved = await resolveResourceMetadataUrl(wwwAuthenticate, mcpUrl);
+            if (!resolved) return undefined;
+
+            // Route through the daemon's two-phase flow (callback → daemon's
+            // public URL) instead of the legacy 127.0.0.1 callback server, so
+            // remote browsers can complete the redirect on a deployed Agor.
+            const connection = params?.connection as { id?: string } | undefined;
+            let started: StartTwoPhaseOAuthResult;
+            try {
+              started = await startTwoPhaseMCPOAuthFlow({
+                mcpUrl,
+                wwwAuthenticate: wwwAuthenticate || '',
+                resourceMetadataUrl: resolved.metadataUrl,
+                mcpServerId: serverId,
+                userId: params?.user?.user_id,
+                // Discover writes the token via the shared MCP server row when
+                // a serverId is known (matches the previous saveOAuth21TokenToDB
+                // call). Without a serverId nothing is persisted to the DB; the
+                // daemon-level cache below carries the token for this request.
+                oauthMode: 'shared',
+                socketId: connection?.id,
+                awaitToken: true,
+              });
+            } catch (err) {
+              if (err instanceof PublicBaseUrlNotConfiguredError) {
+                console.error('[MCP Discovery]', err.message);
+                return undefined;
               }
+              throw err;
             }
-            return undefined;
+
+            const tokenResponse = await started.awaitToken!();
+            // persistOAuthToken (run inside oauthCallbackHandler) already
+            // populated the daemon cache + the MCP server row, so we just
+            // return the access token to the caller.
+            return tokenResponse.access_token;
           } catch (error) {
             console.error('[MCP Discovery] OAuth token acquisition failed:', error);
             return undefined;
