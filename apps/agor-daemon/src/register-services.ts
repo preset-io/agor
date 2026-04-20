@@ -5,7 +5,12 @@
  * Extracted from index.ts for maintainability.
  */
 
-import { type AgorConfig, getBaseUrl } from '@agor/core/config';
+import {
+  type AgorConfig,
+  getBaseUrl,
+  PublicBaseUrlNotConfiguredError,
+  requirePublicBaseUrl,
+} from '@agor/core/config';
 import {
   and,
   type Database,
@@ -1458,7 +1463,21 @@ async function registerMCPServices(
           };
         }
 
-        const baseUrl = await getBaseUrl();
+        // Use the strict public base URL — the redirect_uri is sent to the upstream
+        // OAuth provider (Notion, etc.) and then loaded by the END USER'S BROWSER.
+        // Falling back to http://localhost:PORT silently breaks for any user whose
+        // browser is not running on the daemon machine (e.g. anyone accessing a
+        // deployed Agor instance remotely).
+        let baseUrl: string;
+        try {
+          baseUrl = await requirePublicBaseUrl();
+        } catch (err) {
+          if (err instanceof PublicBaseUrlNotConfiguredError) {
+            console.error('[OAuth Start]', err.message);
+            return { success: false, error: err.message };
+          }
+          throw err;
+        }
         const redirectUri = new URL('/mcp-servers/oauth-callback', baseUrl).toString();
         const effectiveClientId = data.client_id || clientIdFromConfig;
         const context = await startMCPOAuthFlow(wwwAuthenticate, effectiveClientId, redirectUri, {

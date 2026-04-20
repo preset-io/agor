@@ -21,6 +21,8 @@ import {
   getWorktreesDir,
   initConfig,
   loadConfig,
+  PublicBaseUrlNotConfiguredError,
+  requirePublicBaseUrl,
   resolveCodexHome,
   saveConfig,
   setConfigValue,
@@ -186,6 +188,75 @@ describe('loadConfig', () => {
     expect(loaded.daemon?.port).toBe(4040);
     expect(loaded.defaults).toBeUndefined();
     expect(loaded.display).toBeUndefined();
+  });
+});
+
+describe('requirePublicBaseUrl', () => {
+  let tempDir: string;
+  let originalBaseUrl: string | undefined;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-base-url-'));
+    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
+    originalBaseUrl = process.env.AGOR_BASE_URL;
+    delete process.env.AGOR_BASE_URL;
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+    if (originalBaseUrl === undefined) {
+      delete process.env.AGOR_BASE_URL;
+    } else {
+      process.env.AGOR_BASE_URL = originalBaseUrl;
+    }
+  });
+
+  it('returns AGOR_BASE_URL env when set', async () => {
+    process.env.AGOR_BASE_URL = 'https://agor.example.com';
+    await expect(requirePublicBaseUrl()).resolves.toBe('https://agor.example.com');
+  });
+
+  it('returns daemon.base_url from config when env is unset', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({ daemon: { base_url: 'https://agor.sandbox.example.com' } }),
+      'utf-8'
+    );
+
+    await expect(requirePublicBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
+  });
+
+  it('throws PublicBaseUrlNotConfiguredError when neither env nor config is set', async () => {
+    await expect(requirePublicBaseUrl()).rejects.toBeInstanceOf(PublicBaseUrlNotConfiguredError);
+  });
+
+  it('never silently falls back to localhost (regression: OAuth callback URL bug)', async () => {
+    // Even with daemon.host / daemon.port configured, requirePublicBaseUrl must NOT
+    // construct an http://{host}:{port} URL — that fallback is what caused remote
+    // users to receive an unreachable localhost OAuth callback URL from upstream
+    // providers like Notion.
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({ daemon: { host: 'localhost', port: 3030 } }),
+      'utf-8'
+    );
+
+    await expect(requirePublicBaseUrl()).rejects.toBeInstanceOf(PublicBaseUrlNotConfiguredError);
+  });
+
+  it('strips a trailing slash from the configured base URL', async () => {
+    process.env.AGOR_BASE_URL = 'https://agor.example.com/';
+    await expect(requirePublicBaseUrl()).resolves.toBe('https://agor.example.com');
+  });
+
+  it('rejects a base URL without an http(s) scheme', async () => {
+    process.env.AGOR_BASE_URL = 'agor.example.com';
+    await expect(requirePublicBaseUrl()).rejects.toThrow(/must start with http/i);
   });
 });
 
