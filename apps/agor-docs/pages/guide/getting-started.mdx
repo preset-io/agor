@@ -170,6 +170,16 @@ claude login
 
 This stores your credentials in `~/.claude/` and Agor automatically detects them.
 
+#### Option 1c: Codex ChatGPT Login
+
+If you use a ChatGPT Codex subscription instead of an `OPENAI_API_KEY`, connect it directly in Agor:
+
+1. Open **Settings** → **Agentic Tools** → **Codex**
+2. Click **Connect Codex**
+3. Complete the browser login flow with your ChatGPT account
+
+Agor stores that Codex login per user and reuses it for Codex sessions when no `OPENAI_API_KEY` overrides it.
+
 #### Option 2: Per-User API Keys (Recommended for Teams)
 
 Store encrypted API keys in Agor, scoped to your user account:
@@ -179,7 +189,7 @@ Store encrypted API keys in Agor, scoped to your user account:
 1. Open **Settings** → **Agentic Tools** tab
 2. Enter your API keys:
    - **Anthropic API Key** for Claude Code
-   - **OpenAI API Key** for Codex
+   - **OpenAI API Key** for Codex (or use **Connect Codex** for ChatGPT subscription access)
    - **Google AI API Key** for Gemini
 3. Click **Save**
 
@@ -220,10 +230,11 @@ When you start a session, Agor checks for credentials in this order:
 
 1. **Per-user API keys** (if set in Settings → Agentic Tools)
 2. **`CLAUDE_CODE_OAUTH_TOKEN`** (if set via `claude setup-token` in User Settings → Env vars)
-3. **`claude login` credentials** (if you ran `claude login` on the server)
-4. **Environment variables** (global fallback)
+3. **Per-user Codex login** (if you connected Codex in Settings → Agentic Tools → Codex)
+4. **`claude login` credentials** (if you ran `claude login` on the server)
+5. **Environment variables** (global fallback)
 
-This lets you mix approaches — use `claude setup-token` with your Max Pro plan while teammates use per-user API keys.
+This lets you mix approaches — use `claude setup-token` with your Max Pro plan, connect Codex through ChatGPT login, while teammates use per-user API keys.
 
 ---
 
