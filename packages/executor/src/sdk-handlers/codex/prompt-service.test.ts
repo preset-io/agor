@@ -223,7 +223,6 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
         { kind: 'native' },
         undefined,
         undefined,
-        undefined,
         stableCodexHome
       );
 
