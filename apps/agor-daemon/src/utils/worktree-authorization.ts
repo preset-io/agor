@@ -835,6 +835,66 @@ export function ensureSessionImmutability() {
 }
 
 /**
+ * Decide which `unix_username` to stamp on a child session created via
+ * fork() or spawn(). Pure function — no DB, no context — so it can be unit
+ * tested directly and kept aligned with {@link determineSpawnIdentity}.
+ *
+ * Rules:
+ * - Legacy sharing (worktree opt-in `dangerously_allow_session_sharing` triggered) →
+ *   inherit `parent.unix_username`. Identity borrowing is the whole point of this flag.
+ * - Otherwise (including the common same-user path) → use the caller's CURRENT
+ *   `unix_username`. We must NOT fall back to `parent.unix_username` just because
+ *   caller and parent owner share an id: the user's unix_username may have drifted
+ *   since the parent was created, and `validateSessionUnixUsername` would then
+ *   reject every prompt on the child.
+ *
+ * @param parentUnixUsername  - `parent.unix_username` from the parent session (may be null)
+ * @param callerUnixUsername  - Caller's CURRENT unix_username (loaded fresh via
+ *                              {@link loadUnixUsernameForUser}); may be null
+ * @param usedLegacySharing   - Whether {@link determineSpawnIdentity} fell into
+ *                              the legacy identity-borrowing branch
+ * @returns The unix_username to stamp on the child (string or null)
+ */
+export function resolveChildUnixUsername(
+  parentUnixUsername: string | null | undefined,
+  callerUnixUsername: string | null,
+  usedLegacySharing: boolean
+): string | null {
+  if (usedLegacySharing) {
+    return parentUnixUsername ?? null;
+  }
+  return callerUnixUsername;
+}
+
+/**
+ * Load a user's current `unix_username` by user id.
+ *
+ * Single source of truth used by both the `setSessionUnixUsername` hook
+ * (external session create) and `SessionsService.fork()` / `spawn()`
+ * (internal create that bypasses the hook pipeline). Keeps the two paths
+ * from drifting on loader choice, error type, or null-handling.
+ *
+ * Throws `NotAuthenticated` when the user record can't be loaded — callers
+ * should let this bubble up rather than swallowing it, because a session
+ * stamped with the wrong unix_username is a latent security/UX bug.
+ *
+ * @param userRepo - UsersRepository instance
+ * @param userId   - User id to resolve
+ * @returns The user's current `unix_username`, or `null` if they don't have one set
+ */
+export async function loadUnixUsernameForUser(
+  // biome-ignore lint/suspicious/noExplicitAny: UsersRepository type lives in @agor/core/db but both callers pass compatible instances
+  userRepo: any,
+  userId: string
+): Promise<string | null> {
+  const user = await userRepo.findById(userId);
+  if (!user) {
+    throw new NotAuthenticated(`User ${userId} not found`);
+  }
+  return user.unix_username ?? null;
+}
+
+/**
  * Set session unix_username from creator's current unix_username
  *
  * When a session is created, stamp it with the creator's current unix_username.
@@ -844,6 +904,11 @@ export function ensureSessionImmutability() {
  *
  * IMPORTANT: Run this hook BEFORE any permission checks that might need the unix_username.
  *
+ * NOTE: This hook only fires for external calls (`params.provider != null`).
+ * Internal callers that bypass the hook pipeline (e.g. `SessionsService.fork()` /
+ * `spawn()` calling `this.create(...)`) must stamp `unix_username` themselves via
+ * {@link loadUnixUsernameForUser} to keep the two paths in sync.
+ *
  * @param userRepo - UserRepository instance
  */
 export function setSessionUnixUsername(
@@ -851,21 +916,13 @@ export function setSessionUnixUsername(
   userRepo: any
 ) {
   return async (context: HookContext) => {
-    console.log('[setSessionUnixUsername] Hook entry', {
-      method: context.method,
-      path: context.path,
-      hasProvider: !!context.params.provider,
-    });
-
     // Only for session creation
     if (context.method !== 'create' || context.path !== 'sessions') {
-      console.log('[setSessionUnixUsername] Skipping - not session creation');
       return context;
     }
 
     // Skip for internal calls
     if (!context.params.provider) {
-      console.log('[setSessionUnixUsername] Skipping - no provider (internal call)');
       return context;
     }
 
@@ -873,33 +930,13 @@ export function setSessionUnixUsername(
     const data = context.data as any;
     const userId = context.params.user?.user_id;
 
-    console.log('[setSessionUnixUsername] Hook called for session creation', {
-      userId,
-      hasProvider: !!context.params.provider,
-    });
-
     if (!userId) {
       throw new NotAuthenticated('Authentication required to create session');
     }
 
-    // Load user to get current unix_username
-    const user = await userRepo.findById(userId);
-
-    console.log('[setSessionUnixUsername] Loaded user:', {
-      userId,
-      email: user?.email,
-      unix_username: user?.unix_username,
-    });
-
-    if (!user) {
-      throw new NotAuthenticated('User not found');
-    }
-
-    // Stamp session with creator's current unix_username
-    // This is IMMUTABLE - even if user's unix_username changes later, session keeps this value
-    data.unix_username = user.unix_username || null;
-
-    console.log('[setSessionUnixUsername] Stamped session with unix_username:', data.unix_username);
+    // Stamp session with creator's current unix_username.
+    // IMMUTABLE - even if user's unix_username changes later, session keeps this value.
+    data.unix_username = await loadUnixUsernameForUser(userRepo, userId);
 
     return context;
   };

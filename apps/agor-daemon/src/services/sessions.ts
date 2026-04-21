@@ -12,6 +12,7 @@ import {
   SessionMCPServerRepository,
   SessionRepository,
   type SessionWithLastMessage,
+  UsersRepository,
 } from '@agor/core/db';
 import { type Application, Forbidden } from '@agor/core/feathers';
 import type {
@@ -25,7 +26,12 @@ import type {
 } from '@agor/core/types';
 import { ROLES, SessionStatus } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
-import { determineSpawnIdentity, isSuperAdmin } from '../utils/worktree-authorization.js';
+import {
+  determineSpawnIdentity,
+  isSuperAdmin,
+  loadUnixUsernameForUser,
+  resolveChildUnixUsername,
+} from '../utils/worktree-authorization.js';
 
 /**
  * Session runtime configuration that should be inherited across forks, spawns, and btw.
@@ -120,6 +126,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   private app: Application;
   private sessionMCPRepo: SessionMCPServerRepository;
   private sessionEnvSelectionRepo: SessionEnvSelectionRepository;
+  private usersRepo: UsersRepository;
 
   constructor(db: Database, app: Application) {
     const sessionRepo = new SessionRepository(db);
@@ -137,6 +144,10 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     this.app = app;
     this.sessionMCPRepo = new SessionMCPServerRepository(db);
     this.sessionEnvSelectionRepo = new SessionEnvSelectionRepository(db);
+    // Used by resolveChildIdentity to stamp unix_username on fork/spawn children
+    // without going through app.service('users') — matches the convention used
+    // by scheduler.ts / gateway.ts / terminals.ts.
+    this.usersRepo = new UsersRepository(db);
   }
 
   /**
@@ -211,11 +222,17 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
    * fires for these paths. Omitting unix_username silently breaks strict-mode
    * deployments where the executor refuses to launch without one.
    *
-   * - When the child inherits parent identity (internal call / legacy
-   *   sharing) → inherit the parent's unix_username too, so execution stays
-   *   consistent with attribution.
-   * - When the child is attributed to the caller → load the caller's current
-   *   `unix_username` so the executor runs as the attributed user.
+   * Resolution rules (kept aligned with the hook's behavior on normal creates):
+   * - Internal call (no provider) → inherit parent.unix_username. The scheduler /
+   *   service-to-service callers have no human caller to attribute to, and the
+   *   parent's stamped value is the closest thing to ground truth.
+   * - Legacy sharing (`dangerously_allow_session_sharing` triggers) → inherit
+   *   parent's unix_username by design — this is the point of identity borrowing.
+   * - Otherwise (including the common same-user path) → load the attributed
+   *   caller's CURRENT unix_username via {@link loadUnixUsernameForUser}. We
+   *   do NOT inherit parent.unix_username on same-user forks, because the user's
+   *   unix_username may have changed since the parent was created, and
+   *   `validateSessionUnixUsername` would then reject every prompt on the child.
    */
   private async resolveChildIdentity(
     parent: Session,
@@ -249,18 +266,16 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     const result = determineSpawnIdentity(parent, caller, worktree);
     const createdBy = result.created_by as Session['created_by'];
 
-    // Stamp unix_username based on attribution outcome:
-    // - Legacy sharing (child inherits parent.created_by) → inherit parent's unix_username
-    // - Otherwise (caller-attributed) → load caller's current unix_username
-    let unixUsername: Session['unix_username'] = null;
-    if (result.usedLegacySharing || createdBy === parent.created_by) {
-      unixUsername = parent.unix_username ?? null;
-    } else {
+    // Legacy sharing → inherit parent's unix_username (identity borrowing by design).
+    // Otherwise (including same-user) → resolve the attributed user's CURRENT
+    // unix_username. Same-user forks must NOT inherit stale parent.unix_username,
+    // because validateSessionUnixUsername would later reject prompts when the
+    // user's unix_username drifts. The decision is delegated to the pure helper
+    // `resolveChildUnixUsername` so it can be unit tested without DB mocks.
+    let callerUnixUsername: string | null = null;
+    if (!result.usedLegacySharing) {
       try {
-        const callerUser = (await this.app
-          .service('users')
-          .get(createdBy as string, { provider: undefined })) as { unix_username?: string | null };
-        unixUsername = callerUser?.unix_username ?? null;
+        callerUnixUsername = await loadUnixUsernameForUser(this.usersRepo, createdBy as string);
       } catch (err) {
         // If we can't load the caller user, fail closed rather than silently
         // creating a session with no unix_username (which would hang forever
@@ -270,6 +285,12 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         );
       }
     }
+
+    const unixUsername = resolveChildUnixUsername(
+      parent.unix_username,
+      callerUnixUsername,
+      result.usedLegacySharing
+    ) as Session['unix_username'];
 
     return { created_by: createdBy, unix_username: unixUsername };
   }

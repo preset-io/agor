@@ -545,14 +545,12 @@ function AppContent() {
   const handleForkSession = async (sessionId: string, prompt: string) => {
     try {
       const session = await forkSession(sessionId as SessionID, prompt);
-      if (session) {
-        showSuccess('Session forked successfully!');
-        // Seed a per-session draft on the new fork so the prompt is recoverable
-        // even if the background executor fails after the REST call returned.
-        handleUpdateDraft(session.session_id, prompt);
-        // Clear the parent's draft after a successful fork
-        handleClearDraft(sessionId);
-      }
+      showSuccess('Session forked successfully!');
+      // Seed a per-session draft on the new fork so the prompt is recoverable
+      // even if the background executor fails after the REST call returned.
+      handleUpdateDraft(session.session_id, prompt);
+      // Clear the parent's draft after a successful fork
+      handleClearDraft(sessionId);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to fork session';
       showError(`Failed to fork session: ${message}`);
@@ -564,11 +562,9 @@ function AppContent() {
   const handleBtwForkSession = async (sessionId: string, prompt: string) => {
     try {
       const session = await btwForkSession(sessionId as SessionID, prompt);
-      if (session) {
-        showSuccess('Side question sent via btw fork');
-        handleUpdateDraft(session.session_id, prompt);
-        handleClearDraft(sessionId);
-      }
+      showSuccess('Side question sent via btw fork');
+      handleUpdateDraft(session.session_id, prompt);
+      handleClearDraft(sessionId);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to create btw fork';
       showError(`Failed to create btw fork: ${message}`);
@@ -582,14 +578,12 @@ function AppContent() {
     const spawnConfig = typeof config === 'string' ? { prompt: config } : config;
     try {
       const session = await spawnSession(sessionId as SessionID, spawnConfig);
-      if (session) {
-        showSuccess('Subsession session spawned successfully!');
-        if (spawnConfig.prompt?.trim()) {
-          handleUpdateDraft(session.session_id, spawnConfig.prompt);
-        }
-        // Clear the draft after spawning subsession
-        handleClearDraft(sessionId);
+      showSuccess('Subsession session spawned successfully!');
+      if (spawnConfig.prompt?.trim()) {
+        handleUpdateDraft(session.session_id, spawnConfig.prompt);
       }
+      // Clear the draft after spawning subsession
+      handleClearDraft(sessionId);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to spawn session';
       showError(`Failed to spawn session: ${message}`);
