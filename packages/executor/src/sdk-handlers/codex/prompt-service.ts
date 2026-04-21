@@ -11,8 +11,8 @@
  */
 
 import * as fs from 'node:fs/promises';
-import * as os from 'node:os';
 import * as path from 'node:path';
+import { resolveCodexHome } from '@agor/core/config';
 import type { Thread, ThreadItem } from '@agor/core/sdk';
 import { Codex } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
@@ -30,8 +30,14 @@ import type {
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID } from '../../types.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
-import { buildCodexClientOptions, type CodexAuthStrategy } from './auth-strategy.js';
+import {
+  buildCodexClientOptions,
+  type CodexAuthStrategy,
+  getCodexAuthFailureGuidance,
+  getCodexAuthStrategyCacheKey,
+} from './auth-strategy.js';
 import { DEFAULT_CODEX_MODEL } from './models.js';
+import { cleanupCodexSessionHome, materializeCodexSessionHome } from './session-home.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
 
 export interface CodexPromptResult {
@@ -128,6 +134,8 @@ export class CodexPromptService {
   private stopRequested = new Map<SessionID, boolean>();
   private apiKey: string | undefined;
   private lastCodexHome: string | null = null;
+  private authStrategy: CodexAuthStrategy;
+  private lastAuthStrategyKey: string | null = null;
 
   constructor(
     _messagesRepo: MessagesRepository,
@@ -147,11 +155,14 @@ export class CodexPromptService {
           }
         : apiKeyOrAuthStrategy;
 
+    this.authStrategy = authStrategy ?? { kind: 'native' };
+    this.lastAuthStrategyKey = getCodexAuthStrategyCacheKey(this.authStrategy);
+
     // Store API key from base-executor (already resolved with proper precedence)
-    this.apiKey = authStrategy?.kind === 'api_key' ? authStrategy.apiKey : '';
+    this.apiKey = this.authStrategy.kind === 'api_key' ? this.authStrategy.apiKey : '';
     this.lastApiKey = this.apiKey;
 
-    if (!this.apiKey) {
+    if (this.authStrategy.kind === 'api_key' && !this.apiKey) {
       console.warn(
         '⚠️  [Codex] No OPENAI_API_KEY provided — Codex SDK requests will fail with 401. ' +
           'Please configure your API key in Settings > API Keys.'
@@ -159,9 +170,7 @@ export class CodexPromptService {
     }
 
     // Initialize Codex SDK with resolved API key
-    this.codex = new Codex.Codex(
-      authStrategy ? buildCodexClientOptions(authStrategy) : { apiKey: this.apiKey }
-    );
+    this.codex = new Codex.Codex(buildCodexClientOptions(this.authStrategy));
   }
 
   /**
@@ -173,10 +182,8 @@ export class CodexPromptService {
    */
   private reinitializeCodex(): void {
     console.log('🔄 [Codex] Reinitializing SDK to pick up config changes...');
-    // Use the resolved API key from base-executor (no fallback to env needed)
-    this.codex = new Codex.Codex({
-      apiKey: this.apiKey,
-    });
+    this.codex = new Codex.Codex(buildCodexClientOptions(this.authStrategy));
+    this.lastAuthStrategyKey = getCodexAuthStrategyCacheKey(this.authStrategy);
     this.lastApiKey = this.apiKey || null;
     console.log('✅ [Codex] SDK reinitialized');
   }
@@ -189,13 +196,24 @@ export class CodexPromptService {
    * This prevents memory leak from spawning multiple Codex CLI processes
    */
   private refreshClient(currentApiKey: string): void {
-    // Only recreate if API key changed (prevents memory leak - issue #133)
-    if (this.lastApiKey !== currentApiKey) {
+    const currentAuthStrategy: CodexAuthStrategy = currentApiKey
+      ? {
+          kind: 'api_key',
+          apiKey: currentApiKey,
+        }
+      : {
+          kind: 'native',
+        };
+    const currentAuthStrategyKey = getCodexAuthStrategyCacheKey(currentAuthStrategy);
+
+    // Only recreate if auth strategy changed (prevents memory leak - issue #133)
+    if (this.lastApiKey !== currentApiKey || this.lastAuthStrategyKey !== currentAuthStrategyKey) {
       console.log('🔄 [Codex] API key changed, reinitializing SDK...');
-      this.codex = new Codex.Codex({
-        apiKey: currentApiKey,
-      });
+      this.authStrategy = currentAuthStrategy;
+      this.apiKey = currentApiKey;
+      this.codex = new Codex.Codex(buildCodexClientOptions(this.authStrategy));
       this.lastApiKey = currentApiKey;
+      this.lastAuthStrategyKey = currentAuthStrategyKey;
       console.log('✅ [Codex] SDK reinitialized with new API key');
     }
   }
@@ -211,7 +229,9 @@ export class CodexPromptService {
    *
    * Returns the per-session CODEX_HOME path.
    */
-  private async ensureCodexSessionContext(sessionId: SessionID): Promise<string> {
+  private async ensureCodexSessionContext(
+    sessionId: SessionID
+  ): Promise<{ sessionCodexHome: string; stableCodexHome: string }> {
     const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
       sessions: this.sessionsRepo,
       worktrees: this.worktreesRepo,
@@ -219,35 +239,12 @@ export class CodexPromptService {
       users: this.usersRepo,
     });
 
-    // Create per-session CODEX_HOME (no race conditions!)
-    // Use mode 0o700 (rwx------) to prevent other users from reading session metadata
-    //
-    // NOTE: We try os.tmpdir() first, but fall back to ~/.agor/tmp if /tmp is unavailable
-    // (e.g., in sandboxed executor environments or containers without /tmp mounted)
-    const tmpBase = os.tmpdir();
-    const sessionDirName = `agor-codex-${sessionId}`;
-    let sessionCodexHome = path.join(tmpBase, sessionDirName);
-
-    try {
-      await fs.mkdir(sessionCodexHome, { recursive: true, mode: 0o700 });
-    } catch (mkdirError) {
-      const fallbackBase = path.join(os.homedir(), '.agor', 'tmp');
-      console.warn(
-        `⚠️  [Codex] Failed to create CODEX_HOME in ${tmpBase} (${(mkdirError as Error).message}), falling back to ${fallbackBase}`
-      );
-      sessionCodexHome = path.join(fallbackBase, sessionDirName);
-      await fs.mkdir(sessionCodexHome, { recursive: true, mode: 0o700 });
-    }
-
-    // Write session context to AGENTS.md
-    // Use mode 0o600 (rw-------) to restrict file access
-    const agentsMdPath = path.join(sessionCodexHome, 'AGENTS.md');
-    await fs.writeFile(agentsMdPath, agorSystemPrompt, { encoding: 'utf-8', mode: 0o600 });
-
-    console.log(`✅ [Codex] Created per-session CODEX_HOME at ${sessionCodexHome}`);
-    console.log(`   Session context will be auto-loaded with any project AGENTS.md files`);
-
-    return sessionCodexHome;
+    const stableCodexHome = await resolveCodexHome();
+    return materializeCodexSessionHome({
+      sessionId,
+      agorSystemPrompt,
+      stableCodexHome,
+    });
   }
 
   /**
@@ -276,6 +273,7 @@ export class CodexPromptService {
     networkAccess: boolean,
     sessionId: SessionID,
     codexHome: string,
+    stableCodexHome: string,
     mcpToken?: string
   ): Promise<number> {
     // Fetch MCP servers for this session using shared scoping utility
@@ -311,7 +309,30 @@ export class CodexPromptService {
           `${s.mcp_server_id}:${s.transport}:${s.url || ''}:${s.command || ''}:${JSON.stringify(s.args || [])}:${s.auth?.token || ''}`
       )
       .sort();
-    const configHash = `${approvalPolicy}:${networkAccess}:${mcpToken || ''}:${JSON.stringify(serverFingerprints)}`;
+    const configPath = path.join(codexHome, 'config.toml');
+    const stableConfigPath = path.join(stableCodexHome, 'config.toml');
+    const metadataPath = path.join(codexHome, '.agor-managed.json');
+
+    let stableConfigFingerprint = '';
+
+    let existingConfig: JsonMap | undefined;
+    let preservedHeader = '';
+
+    try {
+      const raw = await fs.readFile(stableConfigPath, 'utf-8');
+      stableConfigFingerprint = raw;
+      const headerMatch = raw.match(/^(?:\s*#.*\n)*/);
+      preservedHeader = headerMatch?.[0] ?? '';
+      existingConfig = parseToml(raw) as JsonMap;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.warn(
+          `⚠️  [Codex MCP] Failed to read stable config.toml from ${stableConfigPath}: ${String(error)}`
+        );
+      }
+    }
+
+    const configHash = `${approvalPolicy}:${networkAccess}:${mcpToken || ''}:${stableConfigFingerprint}:${JSON.stringify(serverFingerprints)}`;
 
     // Skip if config and target directory haven't changed (avoid unnecessary file I/O)
     if (this.lastMCPServersHash === configHash && this.lastCodexHome === codexHome) {
@@ -319,28 +340,11 @@ export class CodexPromptService {
       return stdioServers.length + httpServers.length + (mcpToken ? 1 : 0);
     }
 
-    const configPath = path.join(codexHome, 'config.toml');
-    const metadataPath = path.join(codexHome, '.agor-managed.json');
-
     console.log(`📁 [Codex MCP] Using CODEX_HOME: ${codexHome}`);
     console.log(`📄 [Codex MCP] Updating config at: ${configPath}`);
 
     const isPlainObject = (value: unknown): value is Record<string, unknown> =>
       typeof value === 'object' && value !== null && !Array.isArray(value);
-
-    let existingConfig: JsonMap | undefined;
-    let preservedHeader = '';
-
-    try {
-      const raw = await fs.readFile(configPath, 'utf-8');
-      const headerMatch = raw.match(/^(?:\s*#.*\n)*/);
-      preservedHeader = headerMatch?.[0] ?? '';
-      existingConfig = parseToml(raw) as JsonMap;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn(`⚠️  [Codex MCP] Failed to read existing config.toml: ${String(error)}`);
-      }
-    }
 
     let previousManagedServers: string[] = [];
     try {
@@ -369,6 +373,7 @@ export class CodexPromptService {
       ? (configData.mcp_servers as JsonMap)
       : undefined;
     const mcpServersConfig: JsonMap = existingMcpServersRaw ? { ...existingMcpServersRaw } : {};
+    delete mcpServersConfig.agor;
 
     const managedServerNames = new Set<string>();
 
@@ -694,7 +699,7 @@ export class CodexPromptService {
 
     // Create per-session CODEX_HOME with Agor context (avoids race conditions!)
     // Returns temp directory path like /tmp/agor-codex-{sessionId}
-    const sessionCodexHome = await this.ensureCodexSessionContext(sessionId);
+    const { sessionCodexHome, stableCodexHome } = await this.ensureCodexSessionContext(sessionId);
 
     // Set CODEX_HOME for this session (Codex SDK will use it)
     process.env.CODEX_HOME = sessionCodexHome;
@@ -713,6 +718,7 @@ export class CodexPromptService {
       networkAccess,
       sessionId,
       sessionCodexHome, // Pass per-session CODEX_HOME
+      stableCodexHome,
       mcpToken // Pass MCP token for built-in Agor MCP server
     );
 
@@ -1065,10 +1071,7 @@ export class CodexPromptService {
 
             // Detect 401/auth errors and provide actionable guidance
             if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
-              const isEmptyKey = errorMessage.includes('Missing bearer');
-              const guidance = isEmptyKey
-                ? 'No OPENAI_API_KEY is configured. Please add your API key in Settings > API Keys.'
-                : 'Your OPENAI_API_KEY may be invalid or expired. Please check Settings > API Keys.';
+              const guidance = getCodexAuthFailureGuidance(this.authStrategy, errorMessage);
               console.error(
                 `❌ [Codex] Authentication failed for session ${sessionId.substring(0, 8)}: ${guidance}`
               );
@@ -1205,22 +1208,7 @@ export class CodexPromptService {
    * Removes per-session CODEX_HOME directory with AGENTS.md and config.toml
    */
   async closeSession(sessionId: SessionID): Promise<void> {
-    // Clean up per-session CODEX_HOME directory from both possible locations
-    const sessionDirName = `agor-codex-${sessionId}`;
-    const possiblePaths = [
-      path.join(os.tmpdir(), sessionDirName),
-      path.join(os.homedir(), '.agor', 'tmp', sessionDirName),
-    ];
-
-    for (const sessionCodexHome of possiblePaths) {
-      try {
-        await fs.rm(sessionCodexHome, { recursive: true, force: true });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-          console.warn(`⚠️  Failed to remove CODEX_HOME at ${sessionCodexHome}:`, error);
-        }
-      }
-    }
+    await cleanupCodexSessionHome(sessionId);
 
     // Clean up session-scoped MCP bearer token env vars
     const envPrefix = `AGOR_MCP_${sessionId.substring(0, 8)}_`;

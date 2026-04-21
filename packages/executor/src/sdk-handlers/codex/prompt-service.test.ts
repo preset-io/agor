@@ -4,12 +4,16 @@
  * Focused test: Verify SDK instance caching to prevent memory leak (issue #133)
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodexPromptService } from './prompt-service.js';
 
 // Track how many Codex instances were created (module-level state)
 let mockInstanceCount = 0;
 let mockStreamEvents: Array<Record<string, unknown>> = [];
+let mockConstructorOptions: Array<{ apiKey?: string }> = [];
 
 async function* streamMockEvents() {
   for (const event of mockStreamEvents) {
@@ -24,6 +28,7 @@ vi.mock('@agor/core/sdk', () => {
     instanceId: number;
 
     constructor(options: { apiKey?: string }) {
+      mockConstructorOptions.push({ ...options });
       this.apiKey = options.apiKey || '';
       this.instanceId = ++mockInstanceCount;
     }
@@ -69,6 +74,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
   beforeEach(() => {
     mockInstanceCount = 0;
     mockStreamEvents = [];
+    mockConstructorOptions = [];
     vi.clearAllMocks();
   });
 
@@ -161,6 +167,95 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
     serviceWithPrivate.refreshClient('new-key');
     expect(mockInstanceCount).toBe(countAfterInit + 1);
   });
+
+  it('constructs Codex without apiKey options for native strategy', () => {
+    new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockWorktreesRepo,
+      undefined,
+      { kind: 'native' },
+      mockDb
+    );
+
+    expect(mockConstructorOptions[0]).toEqual({});
+  });
+
+  it('reinitializes Codex without apiKey options for native strategy', () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockWorktreesRepo,
+      undefined,
+      { kind: 'native' },
+      mockDb
+    );
+
+    const serviceWithPrivate = service as any;
+    serviceWithPrivate.reinitializeCodex();
+
+    expect(mockConstructorOptions).toEqual([{}, {}]);
+  });
+});
+
+describe('CodexPromptService - session config overlay', () => {
+  let tempDir: string;
+  let stableCodexHome: string;
+  let sessionCodexHome: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-prompt-service-'));
+    stableCodexHome = path.join(tempDir, 'stable');
+    sessionCodexHome = path.join(tempDir, 'session');
+
+    await fs.mkdir(stableCodexHome, { recursive: true });
+    await fs.mkdir(sessionCodexHome, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('merges stable config into the session overlay while overwriting Agor-managed keys', async () => {
+    await fs.writeFile(
+      path.join(stableCodexHome, 'config.toml'),
+      [
+        'approval_policy = "never"',
+        '',
+        '[sandbox_workspace_write]',
+        'network_access = false',
+        '',
+        '[mcp_servers.external]',
+        'url = "https://example.com/mcp"',
+        '',
+        '[mcp_servers.agor]',
+        'url = "https://stale.example.com/mcp"',
+        '',
+      ].join('\n'),
+      'utf-8'
+    );
+
+    const service = new CodexPromptService(mockMessagesRepo, mockSessionsRepo);
+
+    const configuredCount = await (service as any).ensureCodexConfig(
+      'on-request',
+      true,
+      'session-789',
+      sessionCodexHome,
+      stableCodexHome,
+      undefined
+    );
+
+    const writtenConfig = await fs.readFile(path.join(sessionCodexHome, 'config.toml'), 'utf-8');
+
+    expect(configuredCount).toBe(0);
+    expect(writtenConfig).toContain('approval_policy = "on-request"');
+    expect(writtenConfig).toContain('network_access = true');
+    expect(writtenConfig).toContain('[mcp_servers.external]');
+    expect(writtenConfig).not.toContain('https://stale.example.com/mcp');
+  });
 });
 
 describe('CodexPromptService - Todo normalization', () => {
@@ -249,7 +344,10 @@ describe('CodexPromptService - Todo normalization', () => {
 
     // Avoid filesystem/config setup noise in this focused stream test
     const serviceWithPrivates = service as any;
-    serviceWithPrivates.ensureCodexSessionContext = vi.fn().mockResolvedValue('/tmp');
+    serviceWithPrivates.ensureCodexSessionContext = vi.fn().mockResolvedValue({
+      sessionCodexHome: '/tmp',
+      stableCodexHome: '/stable',
+    });
     serviceWithPrivates.ensureCodexConfig = vi.fn().mockResolvedValue(0);
     serviceWithPrivates.refreshClient = vi.fn();
 
@@ -320,7 +418,10 @@ describe('CodexPromptService - tool payload mapping', () => {
     );
 
     const serviceWithPrivates = service as any;
-    serviceWithPrivates.ensureCodexSessionContext = vi.fn().mockResolvedValue('/tmp');
+    serviceWithPrivates.ensureCodexSessionContext = vi.fn().mockResolvedValue({
+      sessionCodexHome: '/tmp',
+      stableCodexHome: '/stable',
+    });
     serviceWithPrivates.ensureCodexConfig = vi.fn().mockResolvedValue(0);
     serviceWithPrivates.refreshClient = vi.fn();
 
@@ -526,7 +627,10 @@ describe('CodexPromptService - tool payload mapping', () => {
     );
 
     const serviceWithPrivates = service as any;
-    serviceWithPrivates.ensureCodexSessionContext = vi.fn().mockResolvedValue('/tmp');
+    serviceWithPrivates.ensureCodexSessionContext = vi.fn().mockResolvedValue({
+      sessionCodexHome: '/tmp',
+      stableCodexHome: '/stable',
+    });
     serviceWithPrivates.ensureCodexConfig = vi.fn().mockResolvedValue(0);
     serviceWithPrivates.refreshClient = vi.fn();
 
@@ -553,5 +657,49 @@ describe('CodexPromptService - tool payload mapping', () => {
         }
       })()
     ).rejects.toThrow('Codex stream error: stream exploded');
+  });
+
+  it('surfaces native-auth guidance for 401 failures', async () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockWorktreesRepo,
+      undefined,
+      { kind: 'native' },
+      mockDb
+    );
+
+    const serviceWithPrivates = service as any;
+    serviceWithPrivates.ensureCodexSessionContext = vi.fn().mockResolvedValue({
+      sessionCodexHome: '/tmp',
+      stableCodexHome: '/stable',
+    });
+    serviceWithPrivates.ensureCodexConfig = vi.fn().mockResolvedValue(0);
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    mockSessionsRepo.findById.mockResolvedValue({
+      session_id: 'session-1',
+      worktree_id: 'worktree-1',
+      created_at: new Date().toISOString(),
+      sdk_session_id: null,
+      permission_config: { codex: {} },
+      model_config: {},
+      mcp_token: 'test-token',
+    });
+    mockWorktreesRepo.findById.mockResolvedValue({
+      worktree_id: 'worktree-1',
+      path: process.cwd(),
+    });
+
+    mockStreamEvents = [{ type: 'turn.failed', error: '401 Unauthorized' }];
+
+    await expect(
+      (async () => {
+        for await (const _event of service.promptSessionStreaming('session-1' as any, 'review')) {
+          // no-op
+        }
+      })()
+    ).rejects.toThrow(/codex login/i);
   });
 });
