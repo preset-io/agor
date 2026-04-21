@@ -76,18 +76,6 @@ describe('executeToolTask native auth context', () => {
 
   it('passes the daemon-resolved per-user Codex home into native Codex runs', async () => {
     const services = {
-      'config/resolve-api-key': {
-        create: vi.fn().mockResolvedValue({
-          apiKey: undefined,
-          source: 'none',
-          useNativeAuth: true,
-        }),
-      },
-      'codex-auth-status': {
-        get: vi.fn().mockResolvedValue({
-          codexHome: '/tmp/.agor/codex/users/user-a',
-        }),
-      },
       sessions: {
         get: vi.fn().mockResolvedValue({}),
       },
@@ -147,19 +135,7 @@ describe('executeToolTask native auth context', () => {
       }),
     });
 
-    const makeServices = (stableCodexHome: string) => ({
-      'config/resolve-api-key': {
-        create: vi.fn().mockResolvedValue({
-          apiKey: undefined,
-          source: 'none',
-          useNativeAuth: true,
-        }),
-      },
-      'codex-auth-status': {
-        get: vi.fn().mockResolvedValue({
-          codexHome: stableCodexHome,
-        }),
-      },
+    const makeServices = () => ({
       sessions: {
         get: vi.fn().mockResolvedValue({}),
       },
@@ -176,7 +152,7 @@ describe('executeToolTask native auth context', () => {
     });
 
     await executeToolTask({
-      client: createClient(makeServices('/tmp/.agor/codex/users/user-a')),
+      client: createClient(makeServices()),
       sessionId: 'session-a' as never,
       taskId: 'task-a' as never,
       prompt: 'hi',
@@ -196,7 +172,7 @@ describe('executeToolTask native auth context', () => {
     });
 
     await executeToolTask({
-      client: createClient(makeServices('/tmp/.agor/codex/users/user-b')),
+      client: createClient(makeServices()),
       sessionId: 'session-b' as never,
       taskId: 'task-b' as never,
       prompt: 'hi',
