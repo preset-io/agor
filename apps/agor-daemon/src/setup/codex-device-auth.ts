@@ -128,7 +128,7 @@ export function buildDeviceAuthSpawnOptions(
 ): {
   cmd: string;
   args: string[];
-  env: NodeJS.ProcessEnv | undefined;
+  env: NodeJS.ProcessEnv;
 } {
   const scrubbedEnv = buildDeviceAuthSpawnEnv(env);
   const { cmd, args } = buildSpawnArgs('sh', ['-lc', buildDeviceAuthCommand(context.codexHome)], {
@@ -139,7 +139,7 @@ export function buildDeviceAuthSpawnOptions(
   return {
     cmd,
     args,
-    env: context.executionUnixUser ? undefined : scrubbedEnv,
+    env: scrubbedEnv,
   };
 }
 

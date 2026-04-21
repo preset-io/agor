@@ -57,7 +57,9 @@ describe('buildDeviceAuthSpawnEnv', () => {
     expect(spawnOptions.cmd).toBe('sudo');
     expect(spawnOptions.args.join(' ')).toContain("PATH='/usr/bin'");
     expect(spawnOptions.args.join(' ')).not.toContain('OPENAI_API_KEY');
-    expect(spawnOptions.env).toBeUndefined();
+    expect(spawnOptions.env).toEqual({
+      PATH: '/usr/bin',
+    });
   });
 });
 
