@@ -9,6 +9,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import yaml from 'js-yaml';
+import type { UserID } from '../types/id';
 import { DAEMON, MCP_TOKEN } from './constants';
 import type { AgorConfig, UnknownJson } from './types';
 
@@ -20,10 +21,33 @@ export function getAgorHome(): string {
 }
 
 /**
+ * Get Agor-managed Codex users root (~/.agor/codex/users)
+ */
+export function getCodexUsersRoot(): string {
+  return path.join(getAgorHome(), 'codex', 'users');
+}
+
+/**
  * Get config file path (~/.agor/config.yaml)
  */
 export function getConfigPath(): string {
   return path.join(getAgorHome(), 'config.yaml');
+}
+
+/**
+ * Resolve the per-user Codex home under Agor-managed storage.
+ */
+export function resolveCodexHomeForUser(userId: UserID): string {
+  return path.join(getCodexUsersRoot(), userId);
+}
+
+/**
+ * Ensure the per-user Codex home exists and return its absolute path.
+ */
+export async function ensureCodexHomeForUser(userId: UserID): Promise<string> {
+  const home = resolveCodexHomeForUser(userId);
+  await fs.mkdir(home, { recursive: true, mode: 0o700 });
+  return home;
 }
 
 /**

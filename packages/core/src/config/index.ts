@@ -1,7 +1,8 @@
 /**
  * Agor Configuration Module
  *
- * Exports configuration management, repo reference parsing utilities.
+ * Exports configuration management, including Codex home resolution helpers,
+ * and repo reference parsing utilities.
  */
 
 export * from './agor-yml';

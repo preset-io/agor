@@ -246,7 +246,13 @@ export interface AgorDatabaseSettings {
  * Codex-specific configuration
  */
 export interface AgorCodexSettings {
-  /** Stable Codex home override. When unset, prefer ~/.codex if Codex CLI artifacts exist, otherwise ~/.agor/codex. */
+  /**
+   * Legacy single-user Codex home override.
+   *
+   * When unset, the runtime prefers ~/.codex if Codex CLI artifacts exist,
+   * otherwise ~/.agor/codex. Multi-user native-auth homes are resolved outside
+   * this setting.
+   */
   home?: string;
 }
 

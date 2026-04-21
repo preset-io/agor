@@ -7,8 +7,10 @@ import os from 'node:os';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { UserID } from '../types/id';
 import {
   ensureCodexHome,
+  ensureCodexHomeForUser,
   expandHomePath,
   getAgorHome,
   getConfigPath,
@@ -22,6 +24,7 @@ import {
   initConfig,
   loadConfig,
   resolveCodexHome,
+  resolveCodexHomeForUser,
   saveConfig,
   setConfigValue,
   unsetConfigValue,
@@ -301,6 +304,45 @@ describe('resolveCodexHome & ensureCodexHome', () => {
     const value = await getConfigValue('codex.home');
 
     expect(value).toBe(path.join(tempDir, '.custom-codex'));
+  });
+});
+
+describe('per-user Codex home resolution', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-config-users-'));
+    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('returns the Agor-managed per-user Codex home under ~/.agor/codex/users/<userId>', async () => {
+    vi.spyOn(os, 'homedir').mockReturnValue('/tmp/agor-home');
+
+    expect(resolveCodexHomeForUser('user-123' as UserID)).toBe(
+      '/tmp/agor-home/.agor/codex/users/user-123'
+    );
+  });
+
+  it('ensures the per-user Codex home exists with a stable directory path', async () => {
+    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
+
+    const home = await ensureCodexHomeForUser('user-123' as UserID);
+
+    expect(home).toBe(path.join(tempDir, '.agor', 'codex', 'users', 'user-123'));
+    await expect(fs.stat(home)).resolves.toMatchObject({ isDirectory: expect.any(Function) });
+  });
+
+  it('keeps resolveCodexHome() behavior for legacy single-user fallback', async () => {
+    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
+    await fs.mkdir(path.join(tempDir, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(tempDir, '.codex', 'auth.json'), '{}');
+
+    await expect(resolveCodexHome()).resolves.toBe(path.join(tempDir, '.codex'));
   });
 });
 
