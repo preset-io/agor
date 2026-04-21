@@ -5,7 +5,11 @@ import { users } from '../db/schema';
 import type { UserID } from '../types';
 import { getCredential } from './config-manager';
 
-export type ApiKeyName = 'ANTHROPIC_API_KEY' | 'OPENAI_API_KEY' | 'GEMINI_API_KEY';
+export type ApiKeyName =
+  | 'ANTHROPIC_API_KEY'
+  | 'OPENAI_API_KEY'
+  | 'GEMINI_API_KEY'
+  | 'COPILOT_GITHUB_TOKEN';
 
 export interface KeyResolutionContext {
   /** User ID for per-user key lookup */

@@ -19,6 +19,7 @@ import type {
 } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
+import type { PromptAuthContext } from '../../payload-types.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { computeCodexContextWindowFromPreviousTask } from '../../sdk-handlers/codex/context-window-fallback.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
@@ -276,32 +277,44 @@ async function captureGitStateAtTaskEnd(
  */
 async function resolveApiKeyForTask(
   keyName: ApiKeyName,
-  client: AgorClient,
-  taskId: TaskID
+  authContext?: PromptAuthContext
 ): Promise<import('@agor/core/config').KeyResolutionResult> {
-  // Call daemon service to resolve API key (no direct database access from executor!)
-  // This allows executors to run as different Unix users without needing database access
-  try {
-    const result = (await client.service('config/resolve-api-key').create({
-      taskId,
-      keyName,
-    })) as import('@agor/core/config').KeyResolutionResult;
-    console.log(`[API Key Resolution] Resolved ${keyName} via daemon (source: ${result.source})`);
-    return result;
-  } catch (err) {
-    console.warn('[API Key Resolution] Failed to resolve via daemon service:', err);
-    // Fall back to sync resolution (config + env only, no per-user keys)
-    return resolveApiKey(keyName, {});
+  if (authContext && authContext.apiKeyEnvVar === keyName) {
+    console.log(
+      `[API Key Resolution] Using daemon-provided auth context (source: ${authContext.source})`
+    );
+    return buildKeyResolutionResult(authContext);
   }
+
+  console.warn(
+    `[API Key Resolution] Missing daemon auth context for ${keyName}, falling back to local sync resolution`
+  );
+  return resolveApiKey(keyName, {});
+}
+
+function buildKeyResolutionResult(
+  authContext: PromptAuthContext
+): import('@agor/core/config').KeyResolutionResult {
+  return {
+    apiKey: authContext.apiKey,
+    source: authContext.source,
+    useNativeAuth: authContext.useNativeAuth,
+    ...(authContext.decryptionFailed && { decryptionFailed: true }),
+  };
 }
 
 async function resolveNativeAuthContext(
   toolName: string,
   client: AgorClient,
-  useNativeAuth: boolean
+  useNativeAuth: boolean,
+  authContext?: PromptAuthContext
 ): Promise<NativeAuthContext | undefined> {
   if (toolName !== 'codex' || !useNativeAuth) {
     return undefined;
+  }
+
+  if (authContext?.nativeAuthContext?.stableCodexHome) {
+    return authContext.nativeAuthContext;
   }
 
   try {
@@ -334,6 +347,7 @@ export async function executeToolTask(params: {
   apiKeyEnvVar: string;
   toolName: string;
   messageSource?: 'gateway' | 'agor';
+  authContext?: PromptAuthContext;
   createTool: (
     repos: ReturnType<typeof createFeathersBackedRepositories>,
     apiKey: string,
@@ -341,13 +355,22 @@ export async function executeToolTask(params: {
     nativeAuthContext?: NativeAuthContext
   ) => BaseTool;
 }): Promise<void> {
-  const { client, sessionId, taskId, prompt, permissionMode, apiKeyEnvVar, toolName, createTool } =
-    params;
+  const {
+    client,
+    sessionId,
+    taskId,
+    prompt,
+    permissionMode,
+    apiKeyEnvVar,
+    toolName,
+    authContext,
+    createTool,
+  } = params;
 
   console.log(`[${toolName}] Executing task ${taskId.substring(0, 8)}...`);
 
   // Resolve API key with proper precedence (user → config → env → native auth)
-  const resolution = await resolveApiKeyForTask(apiKeyEnvVar as ApiKeyName, client, taskId);
+  const resolution = await resolveApiKeyForTask(apiKeyEnvVar as ApiKeyName, authContext);
 
   // Fail fast if stored key can't be decrypted (e.g. master secret changed)
   if (resolution.decryptionFailed) {
@@ -372,7 +395,8 @@ export async function executeToolTask(params: {
   const nativeAuthContext = await resolveNativeAuthContext(
     toolName,
     client,
-    resolution.useNativeAuth
+    resolution.useNativeAuth,
+    authContext
   );
 
   // Create tool instance using factory function

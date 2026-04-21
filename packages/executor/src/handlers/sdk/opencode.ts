@@ -14,6 +14,7 @@ import { loadConfig } from '@agor/core/config';
 import type { MessageID, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
+import type { PromptAuthContext } from '../../payload-types.js';
 import { OpenCodeTool } from '../../sdk-handlers/opencode/index.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import { createStreamingCallbacks } from './base-executor.js';
@@ -30,6 +31,7 @@ export async function executeOpenCodeTask(params: {
   prompt: string;
   permissionMode?: PermissionMode;
   abortController: AbortController;
+  authContext?: PromptAuthContext;
 }): Promise<void> {
   const { client, sessionId, taskId, prompt } = params;
 

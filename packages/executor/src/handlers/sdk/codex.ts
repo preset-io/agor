@@ -5,6 +5,7 @@
  */
 
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import type { PromptAuthContext } from '../../payload-types.js';
 import { CodexTool, createCodexAuthStrategy } from '../../sdk-handlers/codex/index.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import type { NativeAuthContext } from './base-executor.js';
@@ -22,6 +23,7 @@ export async function executeCodexTask(params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;
+  authContext?: PromptAuthContext;
 }): Promise<void> {
   // Import base executor helper
   const { executeToolTask } = await import('./base-executor.js');
@@ -31,6 +33,7 @@ export async function executeCodexTask(params: {
     ...params,
     apiKeyEnvVar: 'OPENAI_API_KEY',
     toolName: 'codex',
+    authContext: params.authContext,
     createTool: (repos, apiKey, useNativeAuth, nativeAuthContext?: NativeAuthContext) =>
       new CodexTool(
         repos.messages,

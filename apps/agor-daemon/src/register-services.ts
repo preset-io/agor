@@ -55,7 +55,6 @@ import { createCardsService } from './services/cards.js';
 import { createCodexAuthStatusService } from './services/codex-auth-status.js';
 import { createCodexDeviceAuthService } from './services/codex-device-auth.js';
 import { createConfigService } from './services/config.js';
-import { ConfigResolveApiKeyService } from './services/config-resolve-api-key.js';
 import { createContextService } from './services/context.js';
 import { createFileService } from './services/file.js';
 import { createFilesService } from './services/files.js';
@@ -76,6 +75,7 @@ import { createThreadSessionMapService } from './services/thread-session-map.js'
 import { createUsersService } from './services/users.js';
 import { setupWorktreeOwnersService } from './services/worktree-owners.js';
 import { createWorktreesService } from './services/worktrees.js';
+import { type PromptToolType, resolvePromptAuthContext } from './setup/prompt-auth-context.js';
 import { escapeHtml } from './utils/html.js';
 import {
   computeFileHash,
@@ -354,7 +354,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use('/config', configService);
   app.use('/codex-auth-status', createCodexAuthStatusService(db, config));
   app.use('/codex-device-auth', createCodexDeviceAuthService(config));
-  app.use('/config/resolve-api-key', new ConfigResolveApiKeyService(db, app.service('tasks')));
 
   const worktreeRepository = new WorktreeRepository(db);
   const { UsersRepository, SessionRepository } = await import('@agor/core/db');
@@ -695,6 +694,10 @@ function createExecuteHandler(
     }
 
     executorEnv.DAEMON_URL = daemonUrl;
+    const authContext = await resolvePromptAuthContext(db, {
+      userId,
+      tool: session.agentic_tool as PromptToolType,
+    });
 
     // Build executor payload
     const executorPayload = {
@@ -702,6 +705,7 @@ function createExecuteHandler(
       sessionToken,
       daemonUrl,
       env: executorEnv,
+      ...(authContext && { authContext }),
       params: {
         sessionId,
         taskId,

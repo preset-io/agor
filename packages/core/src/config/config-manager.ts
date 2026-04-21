@@ -505,6 +505,7 @@ export function getCredential(
     | 'ANTHROPIC_BASE_URL'
     | 'OPENAI_API_KEY'
     | 'GEMINI_API_KEY'
+    | 'COPILOT_GITHUB_TOKEN'
 ): string | undefined {
   try {
     const config = loadConfigSync();

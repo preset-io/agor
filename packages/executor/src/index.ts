@@ -16,6 +16,7 @@ import type {
   TaskID,
 } from '@agor/core/types';
 import { globalInputRequestManager } from './input-requests/input-request-manager.js';
+import type { PromptAuthContext } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
 
@@ -28,6 +29,7 @@ export interface ExecutorConfig {
   permissionMode?: PermissionMode;
   daemonUrl: string;
   messageSource?: MessageSource;
+  authContext?: PromptAuthContext;
 }
 
 export class AgorExecutor {
@@ -179,6 +181,7 @@ export class AgorExecutor {
       permissionMode: this.config.permissionMode,
       abortController: this.abortController,
       messageSource: this.config.messageSource,
+      authContext: this.config.authContext,
     });
 
     this.isRunning = false;

@@ -21,6 +21,59 @@ function createClient(services: Record<string, FakeService>) {
 }
 
 describe('executeToolTask native auth context', () => {
+  it('uses daemon-provided auth context without calling secret-resolution services', async () => {
+    const services = {
+      sessions: {
+        get: vi.fn().mockResolvedValue({}),
+      },
+      messages: {
+        find: vi.fn(),
+        create: vi.fn(),
+      },
+      tasks: {
+        patch: vi.fn().mockResolvedValue({}),
+      },
+      '/tasks/streaming': {
+        create: vi.fn(),
+      },
+    };
+    const createTool = vi.fn().mockReturnValue({
+      executePromptWithStreaming: vi.fn().mockResolvedValue({
+        userMessageId: 'msg-user',
+        assistantMessageIds: ['msg-assistant'],
+      }),
+    });
+
+    await executeToolTask({
+      client: createClient(services),
+      sessionId: 'session-a' as never,
+      taskId: 'task-a' as never,
+      prompt: 'hi',
+      abortController: new AbortController(),
+      apiKeyEnvVar: 'OPENAI_API_KEY',
+      toolName: 'codex',
+      authContext: {
+        apiKeyEnvVar: 'OPENAI_API_KEY',
+        apiKey: undefined,
+        source: 'none',
+        useNativeAuth: true,
+        nativeAuthContext: {
+          stableCodexHome: '/tmp/.agor/codex/users/user-a',
+        },
+      },
+      createTool,
+    });
+
+    expect(createTool).toHaveBeenCalledWith(
+      expect.anything(),
+      '',
+      true,
+      expect.objectContaining({
+        stableCodexHome: '/tmp/.agor/codex/users/user-a',
+      })
+    );
+  });
+
   it('passes the daemon-resolved per-user Codex home into native Codex runs', async () => {
     const services = {
       'config/resolve-api-key': {
@@ -64,10 +117,18 @@ describe('executeToolTask native auth context', () => {
       abortController: new AbortController(),
       apiKeyEnvVar: 'OPENAI_API_KEY',
       toolName: 'codex',
+      authContext: {
+        apiKeyEnvVar: 'OPENAI_API_KEY',
+        apiKey: undefined,
+        source: 'none',
+        useNativeAuth: true,
+        nativeAuthContext: {
+          stableCodexHome: '/tmp/.agor/codex/users/user-a',
+        },
+      },
       createTool,
     });
 
-    expect(services['codex-auth-status'].get).toHaveBeenCalledWith('current');
     expect(createTool).toHaveBeenCalledWith(
       expect.anything(),
       '',
@@ -122,6 +183,15 @@ describe('executeToolTask native auth context', () => {
       abortController: new AbortController(),
       apiKeyEnvVar: 'OPENAI_API_KEY',
       toolName: 'codex',
+      authContext: {
+        apiKeyEnvVar: 'OPENAI_API_KEY',
+        apiKey: undefined,
+        source: 'none',
+        useNativeAuth: true,
+        nativeAuthContext: {
+          stableCodexHome: '/tmp/.agor/codex/users/user-a',
+        },
+      },
       createTool,
     });
 
@@ -133,6 +203,15 @@ describe('executeToolTask native auth context', () => {
       abortController: new AbortController(),
       apiKeyEnvVar: 'OPENAI_API_KEY',
       toolName: 'codex',
+      authContext: {
+        apiKeyEnvVar: 'OPENAI_API_KEY',
+        apiKey: undefined,
+        source: 'none',
+        useNativeAuth: true,
+        nativeAuthContext: {
+          stableCodexHome: '/tmp/.agor/codex/users/user-b',
+        },
+      },
       createTool,
     });
 

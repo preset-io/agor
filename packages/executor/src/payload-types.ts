@@ -133,6 +133,26 @@ export const PromptPayloadSchema = BasePayloadSchema.extend({
   /** JWT for Feathers authentication */
   sessionToken: z.string(),
 
+  authContext: z
+    .object({
+      apiKeyEnvVar: z.enum([
+        'ANTHROPIC_API_KEY',
+        'OPENAI_API_KEY',
+        'GEMINI_API_KEY',
+        'COPILOT_GITHUB_TOKEN',
+      ]),
+      apiKey: z.string().optional(),
+      source: z.enum(['user', 'config', 'env', 'none']),
+      useNativeAuth: z.boolean(),
+      decryptionFailed: z.boolean().optional(),
+      nativeAuthContext: z
+        .object({
+          stableCodexHome: z.string().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+
   params: z.object({
     sessionId: z.string().uuid(),
     taskId: z.string().uuid(),
@@ -145,6 +165,7 @@ export const PromptPayloadSchema = BasePayloadSchema.extend({
 });
 
 export type PromptPayload = z.infer<typeof PromptPayloadSchema>;
+export type PromptAuthContext = NonNullable<PromptPayload['authContext']>;
 
 // ═══════════════════════════════════════════════════════════
 // Git Clone Payload

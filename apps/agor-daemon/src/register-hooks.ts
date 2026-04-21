@@ -1096,12 +1096,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
   });
 
-  safeService('config/resolve-api-key')?.hooks({
-    before: {
-      all: [requireAuth],
-    },
-  });
-
   safeService('context')?.hooks({
     before: {
       all: [requireAuth],

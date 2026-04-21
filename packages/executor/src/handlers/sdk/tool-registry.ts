@@ -6,6 +6,7 @@
  */
 
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import type { PromptAuthContext } from '../../payload-types.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 
 /**
@@ -24,6 +25,7 @@ export type ToolRunner = (params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;
+  authContext?: PromptAuthContext;
 }) => Promise<void>;
 
 /**
@@ -99,6 +101,7 @@ export class ToolRegistry {
       permissionMode?: PermissionMode;
       abortController: AbortController;
       messageSource?: MessageSource;
+      authContext?: PromptAuthContext;
     }
   ): Promise<void> {
     const config = ToolRegistry.get(tool);

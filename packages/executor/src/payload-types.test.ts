@@ -55,6 +55,12 @@ describe('PromptPayloadSchema', () => {
         permissionMode: 'auto',
         cwd: '/home/user/project',
       },
+      authContext: {
+        apiKeyEnvVar: 'GEMINI_API_KEY',
+        apiKey: 'g-key',
+        source: 'user',
+        useNativeAuth: false,
+      },
     };
 
     const result = PromptPayloadSchema.parse(payload);
@@ -62,6 +68,7 @@ describe('PromptPayloadSchema', () => {
     expect(result.env?.ANTHROPIC_API_KEY).toBe('key');
     expect(result.dataHome).toBe('/data/agor');
     expect(result.params.permissionMode).toBe('auto');
+    expect(result.authContext?.apiKeyEnvVar).toBe('GEMINI_API_KEY');
   });
 
   it('should reject invalid tool type', () => {

@@ -7,6 +7,7 @@
 
 import { loadConfig } from '@agor/core/config';
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import type { PromptAuthContext } from '../../payload-types.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { PermissionService } from '../../permissions/permission-service.js';
 import { CopilotTool } from '../../sdk-handlers/copilot/index.js';
@@ -25,6 +26,7 @@ export async function executeCopilotTask(params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;
+  authContext?: PromptAuthContext;
 }): Promise<void> {
   const { client, sessionId } = params;
 
@@ -50,6 +52,7 @@ export async function executeCopilotTask(params: {
       ...params,
       apiKeyEnvVar: 'COPILOT_GITHUB_TOKEN',
       toolName: 'copilot',
+      authContext: params.authContext,
       createTool: (repos, apiKey, useNativeAuth) =>
         new CopilotTool(
           repos.messages,

@@ -8,6 +8,7 @@ import { loadConfig } from '@agor/core/config';
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import { globalInputRequestManager } from '../../input-requests/input-request-manager.js';
 import { InputRequestService } from '../../input-requests/input-request-service.js';
+import type { PromptAuthContext } from '../../payload-types.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { PermissionService } from '../../permissions/permission-service.js';
 import { ClaudeTool } from '../../sdk-handlers/claude/claude-tool.js';
@@ -26,6 +27,7 @@ export async function executeClaudeCodeTask(params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;
+  authContext?: PromptAuthContext;
 }): Promise<void> {
   const { client, sessionId } = params;
 
@@ -57,6 +59,7 @@ export async function executeClaudeCodeTask(params: {
       ...params,
       apiKeyEnvVar: 'ANTHROPIC_API_KEY',
       toolName: 'claude-code',
+      authContext: params.authContext,
       createTool: (repos, apiKey, useNativeAuth) =>
         new ClaudeTool(
           repos.messages,
