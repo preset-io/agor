@@ -179,7 +179,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   );
 
   app.use('/tasks', createTasksService(db, app), {
-    events: ['tool:start', 'tool:complete', 'thinking:chunk'],
+    // 'failed' is emitted by the prompt route when executor spawn throws so
+    // clients can surface the error instead of silently seeing an idle
+    // session with a ghost task.
+    events: ['tool:start', 'tool:complete', 'thinking:chunk', 'failed'],
   });
   if (svcEnabled('leaderboard')) {
     app.use('/leaderboard', createLeaderboardService(db));

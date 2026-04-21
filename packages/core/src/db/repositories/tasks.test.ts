@@ -684,6 +684,31 @@ describe('TaskRepository.update', () => {
       EntityNotFoundError
     );
   });
+
+  // Regression: forked sessions used to go FAILED silently with no trace of
+  // why. The prompt route now stamps `error_message` on the task so the
+  // reason is preserved in the DB and visible to UI + logs.
+  dbTest('should round-trip error_message on failed task update', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const data = createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING });
+    await taskRepo.create(data);
+
+    const errorMessage =
+      'Unix user agor_123 not found. Ensure the Unix user is created before attempting to execute sessions.';
+    const updated = await taskRepo.update(data.task_id!, {
+      status: TaskStatus.FAILED,
+      completed_at: new Date().toISOString(),
+      error_message: errorMessage,
+    });
+
+    expect(updated.status).toBe(TaskStatus.FAILED);
+    expect(updated.error_message).toBe(errorMessage);
+
+    // Fetching fresh from the repo must still surface the error.
+    const refetched = await taskRepo.findById(data.task_id!);
+    expect(refetched?.error_message).toBe(errorMessage);
+  });
 });
 
 // ============================================================================

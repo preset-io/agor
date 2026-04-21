@@ -1017,18 +1017,38 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               `✅ [Daemon] Executor spawned for session ${id.substring(0, 8)}, waiting for task completion`
             );
           } catch (error) {
-            console.error(`❌ [Daemon] Executor spawn failed:`, error);
+            // Structured error with full context so silent fork/prompt failures
+            // are traceable in logs. Previously these failures left the task
+            // marked FAILED with no error_message and the session sitting idle
+            // — the user saw no feedback at all.
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error(
+              `❌ [Daemon] Executor spawn failed for session=${id.substring(0, 8)} task=${task.task_id.substring(0, 8)} agent=${session.agentic_tool} unix_username=${session.unix_username ?? 'null'}: ${errorMessage}`,
+              error
+            );
             await safePatch(
               'tasks',
               task.task_id,
               {
                 status: TaskStatus.FAILED,
                 completed_at: new Date().toISOString(),
+                error_message: errorMessage,
               },
               'Task',
               params
             );
-            console.log(`❌ [Daemon] Executor spawn failed for session ${id.substring(0, 8)}`);
+            // Surface the failure to subscribed clients so the UI can show
+            // a toast / inline error instead of letting the session sit idle
+            // with a ghost task.
+            try {
+              app.service('tasks').emit('failed', {
+                task_id: task.task_id,
+                session_id: id,
+                error_message: errorMessage,
+              });
+            } catch (emitErr) {
+              console.warn('[Daemon] Failed to emit tasks:failed event:', emitErr);
+            }
           }
         });
 

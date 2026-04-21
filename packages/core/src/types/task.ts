@@ -57,6 +57,13 @@ export interface Task {
   duration_ms?: number; // Total execution time from SDK
   agent_session_id?: string; // SDK's internal session ID for debugging
 
+  /**
+   * Human-readable error message populated when the task transitions to the
+   * `failed` state. Captures the reason so UI and logs can surface a clear
+   * cause instead of silently leaving the session idle with a ghost task.
+   */
+  error_message?: string;
+
   // Model (resolved model ID used for this task, e.g., "claude-sonnet-4-5-20250929")
   model?: string;
 

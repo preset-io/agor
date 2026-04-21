@@ -229,6 +229,10 @@ export const tasks = sqliteTable(
         duration_ms?: number;
         agent_session_id?: string;
 
+        // Populated when a task transitions to `failed` so the cause is
+        // preserved instead of the session silently sitting idle.
+        error_message?: string;
+
         // Raw SDK response - single source of truth for token accounting
         raw_sdk_response?: Task['raw_sdk_response'];
 

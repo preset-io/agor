@@ -79,6 +79,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         tool_use_count: task.tool_use_count ?? 0,
         duration_ms: task.duration_ms, // Task execution duration
         agent_session_id: task.agent_session_id, // SDK session ID
+        error_message: task.error_message, // Human-readable failure reason when status='failed'
         raw_sdk_response: task.raw_sdk_response, // Raw SDK response - single source of truth for token accounting
         normalized_sdk_response: task.normalized_sdk_response, // Normalized for UI consumption
         computed_context_window: task.computed_context_window, // Cumulative context window (computed by tool.computeContextWindow())
