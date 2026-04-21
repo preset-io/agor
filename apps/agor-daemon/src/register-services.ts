@@ -52,6 +52,8 @@ import { createBoardObjectsService } from './services/board-objects.js';
 import { createBoardsService } from './services/boards.js';
 import { createCardTypesService } from './services/card-types.js';
 import { createCardsService } from './services/cards.js';
+import { createCodexAuthStatusService } from './services/codex-auth-status.js';
+import { createCodexDeviceAuthService } from './services/codex-device-auth.js';
 import { createConfigService } from './services/config.js';
 import { createContextService } from './services/context.js';
 import { createFileService } from './services/file.js';
@@ -350,6 +352,8 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const configService = createConfigService(db);
   configService.app = app;
   app.use('/config', configService);
+  app.use('/codex-auth-status', createCodexAuthStatusService(db, config));
+  app.use('/codex-device-auth', createCodexDeviceAuthService(config));
 
   app.use('/config/resolve-api-key', {
     // biome-ignore lint/suspicious/noExplicitAny: taskId is branded UUID at runtime

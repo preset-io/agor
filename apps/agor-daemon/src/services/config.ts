@@ -93,24 +93,26 @@ export class ConfigService {
    *
    * Called via: client.service('config').resolveApiKey({ taskId, keyName })
    */
-  async resolveApiKey(data: { taskId: TaskID; keyName: string }): Promise<{
+  async resolveApiKey(data: { taskId?: TaskID; userId?: UserID; keyName: string }): Promise<{
     apiKey: string | null;
     source: 'user' | 'config' | 'env' | 'native';
     useNativeAuth: boolean;
     decryptionFailed?: boolean;
   }> {
-    const { taskId, keyName } = data;
+    const { taskId, userId: explicitUserId, keyName } = data;
 
     // Fetch task to get creator user ID
-    let userId: UserID | undefined;
-    try {
-      const tasksService = this.app?.service('tasks');
-      if (tasksService) {
-        const task = await tasksService.get(taskId, { provider: undefined });
-        userId = task?.created_by;
+    let userId: UserID | undefined = explicitUserId;
+    if (!userId && taskId) {
+      try {
+        const tasksService = this.app?.service('tasks');
+        if (tasksService) {
+          const task = await tasksService.get(taskId, { provider: undefined });
+          userId = task?.created_by;
+        }
+      } catch (err) {
+        console.warn(`[Config.resolveApiKey] Failed to fetch task ${taskId}:`, err);
       }
-    } catch (err) {
-      console.warn(`[Config.resolveApiKey] Failed to fetch task ${taskId}:`, err);
     }
 
     // Use core resolveApiKey with database access
