@@ -55,6 +55,7 @@ import { createCardsService } from './services/cards.js';
 import { createCodexAuthStatusService } from './services/codex-auth-status.js';
 import { createCodexDeviceAuthService } from './services/codex-device-auth.js';
 import { createConfigService } from './services/config.js';
+import { ConfigResolveApiKeyService } from './services/config-resolve-api-key.js';
 import { createContextService } from './services/context.js';
 import { createFileService } from './services/file.js';
 import { createFilesService } from './services/files.js';
@@ -349,18 +350,11 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Config, context, file, files, terminals
   // ============================================================================
 
-  const configService = createConfigService(db);
-  configService.app = app;
+  const configService = createConfigService();
   app.use('/config', configService);
   app.use('/codex-auth-status', createCodexAuthStatusService(db, config));
   app.use('/codex-device-auth', createCodexDeviceAuthService(config));
-
-  app.use('/config/resolve-api-key', {
-    // biome-ignore lint/suspicious/noExplicitAny: taskId is branded UUID at runtime
-    async create(data: any) {
-      return await configService.resolveApiKey(data);
-    },
-  });
+  app.use('/config/resolve-api-key', new ConfigResolveApiKeyService(db, app.service('tasks')));
 
   const worktreeRepository = new WorktreeRepository(db);
   const { UsersRepository, SessionRepository } = await import('@agor/core/db');

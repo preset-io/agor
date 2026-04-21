@@ -55,6 +55,7 @@ describe('spawn-executor log hygiene (source-level)', () => {
     // Uses `prepareImpersonationEnv` (DRY: splits + writes env-file in one call)
     // rather than open-coding the secret/inline split per call site.
     expect(source).toMatch(/prepareImpersonationEnv\s*\(/);
+    expect(source).toMatch(/buildExecutorEnvForPayload\s*\(/);
     // Still uses isSecretEnvKey for the safe log-summary filter.
     expect(source).toMatch(/isSecretEnvKey\s*\(/);
   });

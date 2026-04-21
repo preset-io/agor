@@ -1,5 +1,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { type AgorConfig, ensureCodexHomeForUser } from '@agor/core/config';
 import type { UserID } from '@agor/core/types';
 import { buildSpawnArgs, escapeShellArg } from '@agor/core/unix';
@@ -156,12 +158,35 @@ export function resolveCodexDeviceAuthSpawnContext(
   };
 }
 
+export async function ensureCodexFileCredentialStore(codexHome: string): Promise<void> {
+  const configPath = path.join(codexHome, 'config.toml');
+  let configToml = '';
+
+  try {
+    configToml = await fs.readFile(configPath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  const fileStoreLine = 'cli_auth_credentials_store = "file"';
+  const nextConfigToml = configToml.match(/^\s*cli_auth_credentials_store\s*=\s*"[^"]*"\s*$/m)
+    ? configToml.replace(/^\s*cli_auth_credentials_store\s*=\s*"[^"]*"\s*$/m, fileStoreLine)
+    : configToml.trim().length > 0
+      ? `${configToml.replace(/\s*$/, '\n')}${fileStoreLine}\n`
+      : `${fileStoreLine}\n`;
+
+  await fs.writeFile(configPath, nextConfigToml, { mode: 0o600 });
+}
+
 export async function spawnCodexDeviceAuthProcess(
   config: AgorConfig,
   options: SpawnCodexDeviceAuthProcessOptions,
   resolvedContext: CodexDeviceAuthSpawnContext = resolveCodexDeviceAuthSpawnContext(config, options)
 ): Promise<CodexDeviceAuthSpawnResult> {
   const codexHome = await ensureCodexHomeForUser(options.agorUserId);
+  await ensureCodexFileCredentialStore(codexHome);
   const context = {
     ...resolvedContext,
     codexHome,

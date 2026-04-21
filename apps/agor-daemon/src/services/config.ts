@@ -5,16 +5,8 @@
  * Wraps @agor/core/config functions for UI access.
  */
 
-import {
-  type AgorConfig,
-  type ApiKeyName,
-  loadConfig,
-  resolveApiKey,
-  saveConfig,
-} from '@agor/core/config';
-import type { Database } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
-import type { Params, TaskID, UserID } from '@agor/core/types';
+import { type AgorConfig, loadConfig, saveConfig } from '@agor/core/config';
+import type { Params } from '@agor/core/types';
 
 /**
  * Mask API keys for secure display
@@ -47,14 +39,6 @@ function maskCredentials(config: AgorConfig): AgorConfig {
  * Config service class
  */
 export class ConfigService {
-  private db: Database;
-  /** App reference injected after registration for cross-service calls */
-  app?: Application;
-
-  constructor(db: Database) {
-    this.db = db;
-  }
-
   /**
    * Get full config (masked)
    */
@@ -83,51 +67,6 @@ export class ConfigService {
     }
 
     return value;
-  }
-
-  /**
-   * Custom method: Resolve API key for a task
-   *
-   * This allows executors to request API key resolution without direct database access.
-   * The service handles the precedence: user-level > config > env > native auth.
-   *
-   * Called via: client.service('config').resolveApiKey({ taskId, keyName })
-   */
-  async resolveApiKey(data: { taskId?: TaskID; userId?: UserID; keyName: string }): Promise<{
-    apiKey: string | null;
-    source: 'user' | 'config' | 'env' | 'native';
-    useNativeAuth: boolean;
-    decryptionFailed?: boolean;
-  }> {
-    const { taskId, userId: explicitUserId, keyName } = data;
-
-    // Fetch task to get creator user ID
-    let userId: UserID | undefined = explicitUserId;
-    if (!userId && taskId) {
-      try {
-        const tasksService = this.app?.service('tasks');
-        if (tasksService) {
-          const task = await tasksService.get(taskId, { provider: undefined });
-          userId = task?.created_by;
-        }
-      } catch (err) {
-        console.warn(`[Config.resolveApiKey] Failed to fetch task ${taskId}:`, err);
-      }
-    }
-
-    // Use core resolveApiKey with database access
-    const result = await resolveApiKey(keyName as ApiKeyName, {
-      userId,
-      db: this.db,
-    });
-
-    // Map KeyResolutionResult to service response type
-    return {
-      apiKey: result.apiKey ?? null,
-      source: result.source === 'none' ? 'native' : result.source,
-      useNativeAuth: result.useNativeAuth,
-      ...(result.decryptionFailed && { decryptionFailed: true }),
-    };
   }
 
   /**
@@ -240,6 +179,6 @@ export class ConfigService {
 /**
  * Service factory function
  */
-export function createConfigService(db: Database): ConfigService {
-  return new ConfigService(db);
+export function createConfigService(): ConfigService {
+  return new ConfigService();
 }

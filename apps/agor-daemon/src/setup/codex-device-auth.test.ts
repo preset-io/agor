@@ -1,12 +1,16 @@
 import { EventEmitter } from 'node:events';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AgorConfig } from '@agor/core/config';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   buildDeviceAuthSpawnEnv,
   buildDeviceAuthSpawnOptions,
   CodexDeviceAuthManager,
   type CodexDeviceAuthProcess,
+  ensureCodexFileCredentialStore,
   parseDeviceAuthOutput,
   resolveCodexDeviceAuthSpawnContext,
 } from './codex-device-auth.js';
@@ -20,6 +24,16 @@ class FakeCodexDeviceAuthProcess extends EventEmitter implements CodexDeviceAuth
     return true;
   }
 }
+
+let tempDir: string;
+
+beforeEach(async () => {
+  tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-device-auth-'));
+});
+
+afterEach(async () => {
+  await fs.rm(tempDir, { recursive: true, force: true });
+});
 
 describe('parseDeviceAuthOutput', () => {
   it('parses verification URI and user code from codex login --device-auth output', () => {
@@ -60,6 +74,37 @@ describe('buildDeviceAuthSpawnEnv', () => {
     expect(spawnOptions.env).toEqual({
       PATH: '/usr/bin',
     });
+  });
+});
+
+describe('ensureCodexFileCredentialStore', () => {
+  it('creates a file-backed credential-store config when missing', async () => {
+    await ensureCodexFileCredentialStore(tempDir);
+
+    await expect(fs.readFile(path.join(tempDir, 'config.toml'), 'utf8')).resolves.toBe(
+      'cli_auth_credentials_store = "file"\n'
+    );
+  });
+
+  it('preserves unrelated config while forcing file-backed credentials', async () => {
+    const configPath = path.join(tempDir, 'config.toml');
+    await fs.writeFile(
+      configPath,
+      [
+        'model = "gpt-5"',
+        'approval_policy = "on-failure"',
+        'cli_auth_credentials_store = "keyring"',
+      ].join('\n'),
+      'utf8'
+    );
+
+    await ensureCodexFileCredentialStore(tempDir);
+    const nextConfig = await fs.readFile(configPath, 'utf8');
+
+    expect(nextConfig).toContain('model = "gpt-5"');
+    expect(nextConfig).toContain('approval_policy = "on-failure"');
+    expect(nextConfig).toContain('cli_auth_credentials_store = "file"');
+    expect(nextConfig).not.toContain('cli_auth_credentials_store = "keyring"');
   });
 });
 

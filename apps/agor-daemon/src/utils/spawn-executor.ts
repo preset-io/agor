@@ -243,6 +243,49 @@ export function spawnExecutor(
   }
 }
 
+export function isCodexPromptPayload(payload: Record<string, unknown>): boolean {
+  return (
+    payload.command === 'prompt' &&
+    typeof payload.params === 'object' &&
+    payload.params !== null &&
+    'tool' in payload.params &&
+    payload.params.tool === 'codex'
+  );
+}
+
+export function buildExecutorEnvForPayload(
+  payload: Record<string, unknown>,
+  env: Record<string, string>,
+  options: {
+    daemonUrl?: string;
+    asUser?: string;
+  } = {}
+): Record<string, string> {
+  const baseEnv = options.asUser
+    ? Object.fromEntries(
+        Object.entries({
+          DAEMON_URL: options.daemonUrl,
+          PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
+          NODE_ENV: env.NODE_ENV,
+          ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
+          ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
+          ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
+          OPENAI_API_KEY: env.OPENAI_API_KEY,
+          GEMINI_API_KEY: env.GEMINI_API_KEY,
+          GOOGLE_API_KEY: env.GOOGLE_API_KEY,
+        }).filter((entry): entry is [string, string] => entry[1] !== undefined)
+      )
+    : options.daemonUrl
+      ? { ...env, DAEMON_URL: options.daemonUrl }
+      : { ...env };
+
+  if (isCodexPromptPayload(payload)) {
+    delete baseEnv.OPENAI_API_KEY;
+  }
+
+  return baseEnv;
+}
+
 /**
  * Spawn executor as a local subprocess.
  * stdout/stderr are inherited so logs appear in daemon output.
@@ -265,37 +308,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   // Add DAEMON_URL to env so executor doesn't try to read config.yaml
   // When impersonated, executor can't access /home/agorpg/.agor/config.yaml
   const daemonUrl = getDaemonUrl();
-
-  // When impersonating, pass minimal env vars and let sudo set HOME correctly
-  const essentialEnv: Record<string, string> = asUser
-    ? Object.fromEntries(
-        Object.entries({
-          DAEMON_URL: daemonUrl,
-          PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
-          NODE_ENV: env.NODE_ENV,
-          // HOME: not set - sudo will set it to the target user's home directory
-          ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
-          ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
-          ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
-          OPENAI_API_KEY: env.OPENAI_API_KEY,
-          GEMINI_API_KEY: env.GEMINI_API_KEY,
-          GOOGLE_API_KEY: env.GOOGLE_API_KEY,
-        }).filter(([_, v]) => v !== undefined)
-      )
-    : { ...env, DAEMON_URL: daemonUrl };
-
-  const envWithDaemonUrl = essentialEnv;
-
-  const isCodexPrompt =
-    payload.command === 'prompt' &&
-    typeof payload.params === 'object' &&
-    payload.params !== null &&
-    'tool' in payload.params &&
-    payload.params.tool === 'codex';
-
-  if (isCodexPrompt) {
-    delete envWithDaemonUrl.OPENAI_API_KEY;
-  }
+  const envWithDaemonUrl = buildExecutorEnvForPayload(payload, env, { daemonUrl, asUser });
 
   // Route secret-looking env vars through an on-disk env file owned by the
   // target user (mode 0600). This keeps API keys/tokens out of argv and out
@@ -377,10 +390,16 @@ function spawnExecutorWithTemplate(
     templateVariables: ExecutorTemplateVariables;
   }
 ): void {
-  const { executorCommandTemplate, templateVariables, logPrefix = '[Executor]' } = options;
+  const {
+    executorCommandTemplate,
+    templateVariables,
+    logPrefix = '[Executor]',
+    env = process.env as Record<string, string>,
+  } = options;
 
   // Substitute template variables
   const command = substituteTemplateVariables(executorCommandTemplate, templateVariables);
+  const executorEnv = buildExecutorEnvForPayload(payload, env);
 
   console.log(`${logPrefix} Templated execution mode`);
   console.log(`${logPrefix} Task ID: ${templateVariables.task_id}`);
@@ -390,6 +409,7 @@ function spawnExecutorWithTemplate(
   // Execute the template command via sh -c
   // Use pipe for stdout/stderr so we can capture kubectl output and log it
   const executorProcess = spawn('sh', ['-c', command], {
+    env: executorEnv,
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
