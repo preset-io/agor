@@ -1066,8 +1066,9 @@ export function OnboardingWizard({
               message="Using a ChatGPT Codex subscription?"
               description={
                 <span>
-                  You can connect Codex through <Text strong>Settings → Agentic tools → Codex</Text>{' '}
-                  and use that login without saving an <Text code>OPENAI_API_KEY</Text> here.
+                  You can connect Codex later in{' '}
+                  <Text strong>Settings → Agentic tools → Codex</Text> and use that login instead of
+                  saving an <Text code>OPENAI_API_KEY</Text> here.
                 </span>
               }
             />

@@ -128,7 +128,7 @@ Agor supports multiple AI coding agents (Claude Code, Codex, Gemini, OpenCode). 
 
 ### Authentication Options
 
-Agor offers **three ways** to configure AI credentials, in order of priority:
+Agor supports both subscription-based auth and API-key auth, depending on the tool you want to use:
 
 <a id="claude-max-pro" />
 
@@ -178,7 +178,7 @@ If you use a ChatGPT Codex subscription instead of an `OPENAI_API_KEY`, connect 
 2. Click **Connect Codex**
 3. Complete the browser login flow with your ChatGPT account
 
-Agor stores that Codex login per user and reuses it for Codex sessions when no `OPENAI_API_KEY` overrides it.
+Agor stores that Codex login per user and uses it for Codex sessions unless an `OPENAI_API_KEY` is configured first.
 
 #### Option 2: Per-User API Keys (Recommended for Teams)
 
@@ -226,7 +226,7 @@ export GOOGLE_AI_API_KEY="..."
 
 ### How Authentication Priority Works
 
-When you start a session, Agor checks for credentials in this order:
+When you start a session, Agor uses the first credential source that applies to that tool:
 
 1. **Per-user API keys** (if set in Settings → Agentic Tools)
 2. **`CLAUDE_CODE_OAUTH_TOKEN`** (if set via `claude setup-token` in User Settings → Env vars)
@@ -234,7 +234,7 @@ When you start a session, Agor checks for credentials in this order:
 4. **`claude login` credentials** (if you ran `claude login` on the server)
 5. **Environment variables** (global fallback)
 
-This lets you mix approaches — use `claude setup-token` with your Max Pro plan, connect Codex through ChatGPT login, while teammates use per-user API keys.
+Different tools can use different auth methods at the same time. For example, one user can use `claude setup-token` for Claude, connect Codex through ChatGPT login, and still keep API keys configured for other tools when needed.
 
 ---
 
