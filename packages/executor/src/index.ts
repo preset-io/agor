@@ -78,6 +78,7 @@ export class AgorExecutor {
           await this.client.service('tasks').patch(this.config.taskId, {
             status: 'failed',
             completed_at: new Date().toISOString(),
+            error_message: error instanceof Error ? error.message : String(error),
           });
         } catch (patchError) {
           console.error('[executor] Failed to update task status:', patchError);
@@ -223,6 +224,7 @@ export class AgorExecutor {
           await this.client.service('tasks').patch(this.config.taskId, {
             status: 'failed',
             completed_at: new Date().toISOString(),
+            error_message: `uncaughtException: ${error instanceof Error ? error.message : String(error)}`,
           });
         } catch (patchError) {
           console.error('[executor] Failed to update task status:', patchError);
@@ -241,6 +243,7 @@ export class AgorExecutor {
           await this.client.service('tasks').patch(this.config.taskId, {
             status: 'failed',
             completed_at: new Date().toISOString(),
+            error_message: `unhandledRejection: ${reason instanceof Error ? reason.message : String(reason)}`,
           });
         } catch (patchError) {
           console.error('[executor] Failed to update task status:', patchError);

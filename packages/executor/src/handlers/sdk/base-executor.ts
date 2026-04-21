@@ -514,6 +514,9 @@ export async function executeToolTask(params: {
     const patchData: Partial<Task> = {
       status: 'failed',
       completed_at: new Date().toISOString(),
+      // Surface the actual failure reason so the UI / DB show what went wrong,
+      // instead of the task silently flipping to FAILED with no context.
+      error_message: err.message || String(err),
     };
 
     // Add git_state if we captured a SHA
