@@ -963,14 +963,23 @@ async function registerMCPServices(
       state: string;
       authorizationUrl: string;
     };
+    /**
+     * Origin-stable key used by {@link persistOAuthToken} to populate the
+     * daemon-level token cache (`oauth21TokenCache`). MUST be the MCP server
+     * URL — NOT `context.metadataUrl` — because subsequent lookups via
+     * {@link getOAuth21Token} are keyed by MCP URL origin. RFC 9728 metadata
+     * URLs *should* sit on the resource-server origin, but nothing enforces
+     * that, and a drift would silently bust the cache.
+     */
+    mcpUrl: string;
     mcpServerId?: string;
     userId?: string;
     oauthMode?: 'per_user' | 'shared';
     socketId?: string;
     createdAt: number;
     /**
-     * Optional resolver wired up by {@link startTwoPhaseMCPOAuthFlow} when the
-     * caller wants to block on token acquisition (discover / test-oauth flows).
+     * Resolver wired up by `startTwoPhaseMCPOAuthFlowAndAwaitToken` when the
+     * caller wants to block on token acquisition (discover / test-oauth).
      * The daemon-side `oauthCallbackHandler` calls these after the token has
      * been exchanged + persisted so the original HTTP request can complete.
      */
@@ -980,6 +989,15 @@ async function registerMCPServices(
 
   // Store pending OAuth flow contexts
   const pendingOAuthFlows = new Map<string, PendingOAuthFlow>();
+
+  /**
+   * Hard ceiling on how long an inbound HTTP request will block waiting for
+   * the user to complete the browser-side OAuth flow. The 10-minute sweeper
+   * below is the *cleanup* upper bound; this is the *request* upper bound.
+   * Most reverse proxies time out long before 10 minutes, so we surface a
+   * clear error sooner than that and free the pending entry.
+   */
+  const AWAIT_TOKEN_TIMEOUT_MS = 5 * 60 * 1000;
 
   // Clean up expired flows (older than 10 minutes)
   setInterval(() => {
@@ -998,16 +1016,25 @@ async function registerMCPServices(
    * Shared helper for starting the daemon's two-phase MCP OAuth flow.
    *
    * All daemon-side OAuth paths (Settings "Start OAuth Flow", discover probe,
-   * test-oauth `start_browser_flow`) MUST go through this helper so that:
+   * test-oauth `start_browser_flow`) MUST go through one of these two helpers
+   * so that:
    *   1. The `redirect_uri` is always the daemon's PUBLIC base URL, not
    *      `127.0.0.1:<random>` — the browser completing the flow may be on a
    *      different machine than the daemon (e.g. any remotely-deployed Agor).
    *   2. The `oauth:open_browser` socket event is emitted consistently to the
    *      user who initiated the flow.
-   *   3. Callers that need to block until token acquisition (discover,
-   *      test-oauth) can opt in via `awaitToken: true` and receive a Promise
-   *      that resolves when `oauthCallbackHandler` finishes exchanging the
-   *      authorization code for a token.
+   *   3. The pending-flow entry carries `mcpUrl` so the post-callback cache
+   *      key matches the MCP server origin used by all subsequent lookups.
+   *
+   * Two flavors:
+   *   - {@link startTwoPhaseMCPOAuthFlow} — fire-and-forget. Used by
+   *     `oauth-start`, where the UI completes the flow asynchronously and the
+   *     daemon broadcasts `oauth:completed` over the socket.
+   *   - {@link startTwoPhaseMCPOAuthFlowAndAwaitToken} — blocks on a Promise
+   *     that resolves once `oauthCallbackHandler` finishes exchanging + persisting
+   *     the token. Used by `discover` and `test-oauth start_browser_flow`,
+   *     which need to return the token-validation result in the same HTTP
+   *     response. Bounded by {@link AWAIT_TOKEN_TIMEOUT_MS}.
    */
   type StartTwoPhaseOAuthOptions = {
     mcpUrl: string;
@@ -1022,21 +1049,37 @@ async function registerMCPServices(
     tokenUrlOverride?: string;
     scope?: string;
     socketId?: string;
-    /** When true, the returned object exposes an `awaitToken()` promise. */
-    awaitToken?: boolean;
   };
 
   type StartTwoPhaseOAuthResult = {
     state: string;
     authorizationUrl: string;
     redirectUri: string;
-    /** Present only when `awaitToken: true` was passed. */
-    awaitToken?: () => Promise<OAuthTokenResponse>;
+  };
+
+  type StartTwoPhaseOAuthAndAwaitResult = StartTwoPhaseOAuthResult & {
+    awaitToken: () => Promise<OAuthTokenResponse>;
   };
 
   async function startTwoPhaseMCPOAuthFlow(
     opts: StartTwoPhaseOAuthOptions
   ): Promise<StartTwoPhaseOAuthResult> {
+    return startTwoPhaseMCPOAuthFlowInternal(opts, false);
+  }
+
+  async function startTwoPhaseMCPOAuthFlowAndAwaitToken(
+    opts: StartTwoPhaseOAuthOptions
+  ): Promise<StartTwoPhaseOAuthAndAwaitResult> {
+    return (await startTwoPhaseMCPOAuthFlowInternal(
+      opts,
+      true
+    )) as StartTwoPhaseOAuthAndAwaitResult;
+  }
+
+  async function startTwoPhaseMCPOAuthFlowInternal(
+    opts: StartTwoPhaseOAuthOptions,
+    awaitToken: boolean
+  ): Promise<StartTwoPhaseOAuthResult | StartTwoPhaseOAuthAndAwaitResult> {
     const { startMCPOAuthFlow } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
 
     // Strict public base URL — see oauth-start endpoint for the rationale.
@@ -1054,15 +1097,39 @@ async function registerMCPServices(
     let tokenPromise: Promise<OAuthTokenResponse> | undefined;
     let tokenResolve: ((t: OAuthTokenResponse) => void) | undefined;
     let tokenReject: ((err: Error) => void) | undefined;
-    if (opts.awaitToken) {
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    if (awaitToken) {
       tokenPromise = new Promise<OAuthTokenResponse>((resolve, reject) => {
-        tokenResolve = resolve;
-        tokenReject = reject;
+        // Wrap resolve/reject to also clear the per-request timeout so it
+        // can't fire after a fast success/error path.
+        tokenResolve = (t) => {
+          if (timeoutHandle) clearTimeout(timeoutHandle);
+          resolve(t);
+        };
+        tokenReject = (err) => {
+          if (timeoutHandle) clearTimeout(timeoutHandle);
+          reject(err);
+        };
+        timeoutHandle = setTimeout(() => {
+          // Drop the pending entry so the eventual callback (if any) sees
+          // "expired or not found" instead of double-resolving.
+          const pending = pendingOAuthFlows.get(context.state);
+          if (pending) {
+            pendingOAuthFlows.delete(context.state);
+          }
+          reject(
+            new Error(
+              `Timed out after ${Math.round(AWAIT_TOKEN_TIMEOUT_MS / 1000)}s waiting for OAuth callback. ` +
+                'The user may not have completed the browser sign-in.'
+            )
+          );
+        }, AWAIT_TOKEN_TIMEOUT_MS);
       });
     }
 
     pendingOAuthFlows.set(context.state, {
       context,
+      mcpUrl: opts.mcpUrl,
       mcpServerId: opts.mcpServerId,
       userId: opts.userId,
       oauthMode: opts.oauthMode,
@@ -1081,12 +1148,15 @@ async function registerMCPServices(
       }
     }
 
-    return {
+    const base: StartTwoPhaseOAuthResult = {
       state: context.state,
       authorizationUrl: context.authorizationUrl,
       redirectUri,
-      awaitToken: tokenPromise ? () => tokenPromise! : undefined,
     };
+    if (tokenPromise) {
+      return { ...base, awaitToken: () => tokenPromise! };
+    }
+    return base;
   }
 
   // Set the OAuth callback handler
@@ -1145,7 +1215,7 @@ async function registerMCPServices(
         await persistOAuthToken(
           db,
           tokenResponse,
-          pendingFlow.context.metadataUrl,
+          pendingFlow.mcpUrl,
           pendingFlow,
           'OAuth Callback'
         );
@@ -1302,9 +1372,9 @@ async function registerMCPServices(
               // is the daemon's public base URL (browser-reachable for any
               // user) rather than a 127.0.0.1 callback server bound to the
               // daemon process.
-              let started: StartTwoPhaseOAuthResult;
+              let started: StartTwoPhaseOAuthAndAwaitResult;
               try {
-                started = await startTwoPhaseMCPOAuthFlow({
+                started = await startTwoPhaseMCPOAuthFlowAndAwaitToken({
                   mcpUrl: data.mcp_url,
                   wwwAuthenticate: wwwAuthenticate || '',
                   resourceMetadataUrl: metadataUrl,
@@ -1315,7 +1385,6 @@ async function registerMCPServices(
                   oauthMode: 'shared',
                   clientId: data.client_id,
                   socketId: connection?.id,
-                  awaitToken: true,
                 });
               } catch (err) {
                 if (err instanceof PublicBaseUrlNotConfiguredError) {
@@ -1324,7 +1393,7 @@ async function registerMCPServices(
                 throw err;
               }
 
-              const tokenResponse = await started.awaitToken!();
+              const tokenResponse = await started.awaitToken();
 
               const testResponse = await fetch(data.mcp_url, {
                 method: 'POST',
@@ -1665,7 +1734,7 @@ async function registerMCPServices(
         await persistOAuthToken(
           db,
           tokenResponse,
-          pendingFlow.context.metadataUrl,
+          pendingFlow.mcpUrl,
           pendingFlow,
           'OAuth Complete'
         );
@@ -1865,36 +1934,31 @@ async function registerMCPServices(
             // public URL) instead of the legacy 127.0.0.1 callback server, so
             // remote browsers can complete the redirect on a deployed Agor.
             const connection = params?.connection as { id?: string } | undefined;
-            let started: StartTwoPhaseOAuthResult;
-            try {
-              started = await startTwoPhaseMCPOAuthFlow({
-                mcpUrl,
-                wwwAuthenticate: wwwAuthenticate || '',
-                resourceMetadataUrl: resolved.metadataUrl,
-                mcpServerId: serverId,
-                userId: params?.user?.user_id,
-                // Discover writes the token via the shared MCP server row when
-                // a serverId is known (matches the previous saveOAuth21TokenToDB
-                // call). Without a serverId nothing is persisted to the DB; the
-                // daemon-level cache below carries the token for this request.
-                oauthMode: 'shared',
-                socketId: connection?.id,
-                awaitToken: true,
-              });
-            } catch (err) {
-              if (err instanceof PublicBaseUrlNotConfiguredError) {
-                console.error('[MCP Discovery]', err.message);
-                return undefined;
-              }
-              throw err;
-            }
+            const started = await startTwoPhaseMCPOAuthFlowAndAwaitToken({
+              mcpUrl,
+              wwwAuthenticate: wwwAuthenticate || '',
+              resourceMetadataUrl: resolved.metadataUrl,
+              mcpServerId: serverId,
+              userId: params?.user?.user_id,
+              // Discover writes the token via the shared MCP server row when
+              // a serverId is known (matches the previous saveOAuth21TokenToDB
+              // call). Without a serverId nothing is persisted to the DB; the
+              // daemon-level cache below carries the token for this request.
+              oauthMode: 'shared',
+              socketId: connection?.id,
+            });
 
-            const tokenResponse = await started.awaitToken!();
+            const tokenResponse = await started.awaitToken();
             // persistOAuthToken (run inside oauthCallbackHandler) already
             // populated the daemon cache + the MCP server row, so we just
             // return the access token to the caller.
             return tokenResponse.access_token;
           } catch (error) {
+            // Misconfigured public base URL is a daemon-level problem, not a
+            // missing-token signal — re-throw so the discover endpoint can
+            // surface it to the caller instead of silently falling through to
+            // an unauthenticated MCP probe.
+            if (error instanceof PublicBaseUrlNotConfiguredError) throw error;
             console.error('[MCP Discovery] OAuth token acquisition failed:', error);
             return undefined;
           }
@@ -2080,6 +2144,10 @@ async function registerMCPServices(
           }
         }
       } catch (error) {
+        if (error instanceof PublicBaseUrlNotConfiguredError) {
+          console.error('[MCP Discovery]', error.message);
+          return { success: false, error: error.message };
+        }
         console.error('MCP discovery error:', error);
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }
