@@ -13,10 +13,13 @@ import {
   LoadingOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Form, Input, Space, Spin, Switch, Tabs, Tooltip, theme } from 'antd';
+import { Alert, Button, Form, Space, Spin, Switch, Tabs, Tooltip, theme } from 'antd';
 import { useEffect, useState } from 'react';
+import { useCodexAuthStatus } from '../../hooks/useCodexAuthStatus';
+import { useCodexDeviceAuth } from '../../hooks/useCodexDeviceAuth';
 import { useThemedMessage } from '../../utils/message';
 import { ApiKeyFields, type ApiKeyStatus } from '../ApiKeyFields';
+import { CodexAuthStatusCard } from '../CodexAuthStatusCard';
 
 export interface AgenticToolsSectionProps {
   client: AgorClient | null;
@@ -99,11 +102,23 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
   const [opencodeConnected, setOpencodeConnected] = useState<boolean | null>(null);
   const [opencodeTesting, setOpencodeTesting] = useState(false);
   const [loadingOpencode, setLoadingOpencode] = useState(true);
-  const defaultCodexHome = '~/.agor/codex';
-  const [codexHome, setCodexHome] = useState(defaultCodexHome);
-  const [initialCodexHome, setInitialCodexHome] = useState(defaultCodexHome);
-  const [loadingCodexConfig, setLoadingCodexConfig] = useState(true);
-  const [savingCodexHome, setSavingCodexHome] = useState(false);
+  const {
+    status: codexAuthStatus,
+    loading: codexAuthLoading,
+    error: codexAuthError,
+    refresh: refreshCodexAuthStatus,
+    clearError: clearCodexAuthError,
+  } = useCodexAuthStatus(client);
+  const {
+    flow: codexAuthFlow,
+    submitting: codexAuthSubmitting,
+    error: codexDeviceAuthError,
+    start: startCodexDeviceAuth,
+    cancel: cancelCodexDeviceAuth,
+    clearError: clearCodexDeviceAuthError,
+  } = useCodexDeviceAuth(client, {
+    onCompleted: refreshCodexAuthStatus,
+  });
 
   // Load API keys configuration
   useEffect(() => {
@@ -162,29 +177,6 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
     loadOpenCode();
   }, [client]);
 
-  // Load Codex configuration
-  useEffect(() => {
-    if (!client) return;
-
-    const loadCodex = async () => {
-      try {
-        setLoadingCodexConfig(true);
-        const config = (await client.service('config').get('codex')) as { home?: string } | null;
-        const home = config?.home || defaultCodexHome;
-        setCodexHome(home);
-        setInitialCodexHome(home);
-      } catch (err) {
-        console.error('Failed to load Codex config:', err);
-        setCodexHome(defaultCodexHome);
-        setInitialCodexHome(defaultCodexHome);
-      } finally {
-        setLoadingCodexConfig(false);
-      }
-    };
-
-    loadCodex();
-  }, [client]);
-
   // Save API key
   const handleSaveKey = async (field: keyof ApiKeyStatus, value: string) => {
     if (!client) return;
@@ -200,6 +192,9 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
       });
 
       setKeyStatus((prev) => ({ ...prev, [field]: true }));
+      if (field === 'OPENAI_API_KEY') {
+        await refreshCodexAuthStatus();
+      }
     } catch (err) {
       console.error(`Failed to save ${field}:`, err);
       setKeysError(err instanceof Error ? err.message : `Failed to save ${field}`);
@@ -224,38 +219,15 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
       });
 
       setKeyStatus((prev) => ({ ...prev, [field]: false }));
+      if (field === 'OPENAI_API_KEY') {
+        await refreshCodexAuthStatus();
+      }
     } catch (err) {
       console.error(`Failed to clear ${field}:`, err);
       setKeysError(err instanceof Error ? err.message : `Failed to clear ${field}`);
       throw err;
     } finally {
       setSavingKeys((prev) => ({ ...prev, [field]: false }));
-    }
-  };
-
-  const handleSaveCodexHome = async () => {
-    if (!client) return;
-
-    const trimmed = codexHome.trim();
-    if (!trimmed) {
-      showError('Codex home directory cannot be empty');
-      return;
-    }
-
-    try {
-      setSavingCodexHome(true);
-      await client.service('config').patch(null, {
-        codex: {
-          home: trimmed,
-        },
-      });
-      setInitialCodexHome(trimmed);
-      showSuccess('Codex home updated');
-    } catch (err) {
-      console.error('Failed to save Codex home:', err);
-      showError(err instanceof Error ? err.message : 'Failed to save Codex home');
-    } finally {
-      setSavingCodexHome(false);
     }
   };
 
@@ -298,8 +270,19 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
     }
   };
 
-  const codexHomeChanged = codexHome !== initialCodexHome;
-  const loading = loadingKeys || loadingOpencode || loadingCodexConfig;
+  const handleConnectCodex = async () => {
+    const flow = await startCodexDeviceAuth();
+    if (flow?.status === 'pending') {
+      showSuccess('Complete the Codex login in your browser to finish connecting.');
+    }
+  };
+
+  const handleClearCodexError = () => {
+    clearCodexAuthError();
+    clearCodexDeviceAuthError();
+  };
+
+  const loading = loadingKeys || loadingOpencode;
 
   if (loading) {
     return (
@@ -352,34 +335,17 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
                   onClearError={() => setKeysError(null)}
                 />
 
-                <Form layout="vertical">
-                  <Form.Item
-                    label="Codex home directory"
-                    extra="Agor sets CODEX_HOME before launching Codex. Point this at another directory to reuse an existing Codex configuration."
-                  >
-                    <Input
-                      value={codexHome}
-                      onChange={(event) => setCodexHome(event.target.value)}
-                      placeholder={defaultCodexHome}
-                    />
-                  </Form.Item>
-                  <Space>
-                    <Button
-                      type="primary"
-                      onClick={handleSaveCodexHome}
-                      disabled={!codexHomeChanged}
-                      loading={savingCodexHome}
-                    >
-                      Save Codex home
-                    </Button>
-                    <Button
-                      onClick={() => setCodexHome(defaultCodexHome)}
-                      disabled={codexHome === defaultCodexHome}
-                    >
-                      Reset to default
-                    </Button>
-                  </Space>
-                </Form>
+                <CodexAuthStatusCard
+                  status={codexAuthStatus}
+                  flow={codexAuthFlow}
+                  loading={codexAuthLoading}
+                  submitting={codexAuthSubmitting}
+                  error={codexDeviceAuthError ?? codexAuthError}
+                  onConnect={handleConnectCodex}
+                  onReconnect={handleConnectCodex}
+                  onCancel={cancelCodexDeviceAuth}
+                  onClearError={handleClearCodexError}
+                />
               </div>
             ),
           },

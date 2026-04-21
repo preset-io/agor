@@ -1058,6 +1058,21 @@ export function OnboardingWizard({
             />
           )}
 
+          {selectedAgent === 'codex' && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16, textAlign: 'left' }}
+              message="Using a ChatGPT Codex subscription?"
+              description={
+                <span>
+                  You can connect Codex through <Text strong>Settings → Agentic tools → Codex</Text>{' '}
+                  and use that login without saving an <Text code>OPENAI_API_KEY</Text> here.
+                </span>
+              }
+            />
+          )}
+
           {AGENT_KEY_CONSOLES[selectedAgent] && (
             <Paragraph type="secondary">
               You need an API key for {AGENT_LABELS[selectedAgent]}. Get one at{' '}
