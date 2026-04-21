@@ -92,18 +92,26 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
   }, [open, session, configPreset, form, currentUser]);
 
   const handleOk = async () => {
+    // Validate fields first. If validation fails, bail out WITHOUT clearing
+    // the form — the user's prompt text must be preserved.
     try {
       await form.validateFields();
-      // Use getFieldsValue(true) to include values from collapsed panels
-      const values = form.getFieldsValue(true);
-      const prompt = values.prompt?.trim();
+    } catch (error) {
+      console.error('Form validation failed:', error);
+      return;
+    }
 
-      if (!prompt) {
-        return;
-      }
+    // Use getFieldsValue(true) to include values from collapsed panels
+    const values = form.getFieldsValue(true);
+    const prompt = values.prompt?.trim();
 
-      setLoading(true);
+    if (!prompt) {
+      return;
+    }
 
+    setLoading(true);
+
+    try {
       if (action === 'fork') {
         await onConfirm(prompt);
       } else {
@@ -141,10 +149,15 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
         await onConfirm(spawnConfig);
       }
 
+      // Only reset + close on success. If onConfirm rejects, the modal stays
+      // open so the user's typed prompt is not lost.
       form.resetFields();
       onCancel();
     } catch (error) {
-      console.error('Form validation failed:', error);
+      console.error(
+        `Failed to ${action} session — keeping modal open so prompt is preserved:`,
+        error
+      );
     } finally {
       setLoading(false);
     }

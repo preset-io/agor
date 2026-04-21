@@ -103,7 +103,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
   const forkSession = async (sessionId: SessionID, prompt: string): Promise<Session | null> => {
     if (!client) {
       setError('Client not connected');
-      return null;
+      throw new Error('Client not connected');
     }
 
     try {
@@ -128,7 +128,9 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       const message = err instanceof Error ? err.message : 'Failed to fork session';
       setError(message);
       console.error('Failed to fork session:', err);
-      return null;
+      // Re-throw so callers (and modals) can distinguish failure from success
+      // and keep the user's typed prompt from being silently discarded.
+      throw err instanceof Error ? err : new Error(message);
     } finally {
       setCreating(false);
     }
@@ -137,7 +139,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
   const btwForkSession = async (sessionId: SessionID, prompt: string): Promise<Session | null> => {
     if (!client) {
       setError('Client not connected');
-      return null;
+      throw new Error('Client not connected');
     }
 
     try {
@@ -166,7 +168,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       const message = err instanceof Error ? err.message : 'Failed to create btw fork';
       setError(message);
       console.error('Failed to create btw fork:', err);
-      return null;
+      throw err instanceof Error ? err : new Error(message);
     } finally {
       setCreating(false);
     }
@@ -178,7 +180,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
   ): Promise<Session | null> => {
     if (!client) {
       setError('Client not connected');
-      return null;
+      throw new Error('Client not connected');
     }
 
     try {
@@ -202,7 +204,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       const message = err instanceof Error ? err.message : 'Failed to spawn session';
       setError(message);
       console.error('Failed to spawn session:', err);
-      return null;
+      throw err instanceof Error ? err : new Error(message);
     } finally {
       setCreating(false);
     }

@@ -534,25 +534,45 @@ function AppContent() {
   };
 
   // Handle fork session
+  //
+  // On failure we RETHROW the error so upstream modals (ForkSpawnModal) can
+  // stay open and preserve the user's typed prompt. The error toast is still
+  // surfaced here so the user gets immediate feedback either way. We also
+  // mirror the prompt onto the forked session's per-session draft so that if
+  // the async executor spawn fails later (the fork REST call can succeed
+  // while the background executor errors out silently), the user can still
+  // find their prompt in the new session's compose box.
   const handleForkSession = async (sessionId: string, prompt: string) => {
-    const session = await forkSession(sessionId as SessionID, prompt);
-    if (session) {
-      showSuccess('Session forked successfully!');
-      // Clear the draft after forking
-      handleClearDraft(sessionId);
-    } else {
-      showError('Failed to fork session');
+    try {
+      const session = await forkSession(sessionId as SessionID, prompt);
+      if (session) {
+        showSuccess('Session forked successfully!');
+        // Seed a per-session draft on the new fork so the prompt is recoverable
+        // even if the background executor fails after the REST call returned.
+        handleUpdateDraft(session.session_id, prompt);
+        // Clear the parent's draft after a successful fork
+        handleClearDraft(sessionId);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to fork session';
+      showError(`Failed to fork session: ${message}`);
+      throw err;
     }
   };
 
   // Handle btw fork session (ephemeral fork for side questions)
   const handleBtwForkSession = async (sessionId: string, prompt: string) => {
-    const session = await btwForkSession(sessionId as SessionID, prompt);
-    if (session) {
-      showSuccess('Side question sent via btw fork');
-      handleClearDraft(sessionId);
-    } else {
-      showError('Failed to create btw fork');
+    try {
+      const session = await btwForkSession(sessionId as SessionID, prompt);
+      if (session) {
+        showSuccess('Side question sent via btw fork');
+        handleUpdateDraft(session.session_id, prompt);
+        handleClearDraft(sessionId);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to create btw fork';
+      showError(`Failed to create btw fork: ${message}`);
+      throw err;
     }
   };
 
@@ -560,13 +580,20 @@ function AppContent() {
   const handleSpawnSession = async (sessionId: string, config: string | Partial<SpawnConfig>) => {
     // Handle both string prompt and full SpawnConfig
     const spawnConfig = typeof config === 'string' ? { prompt: config } : config;
-    const session = await spawnSession(sessionId as SessionID, spawnConfig);
-    if (session) {
-      showSuccess('Subsession session spawned successfully!');
-      // Clear the draft after spawning subsession
-      handleClearDraft(sessionId);
-    } else {
-      showError('Failed to spawn session');
+    try {
+      const session = await spawnSession(sessionId as SessionID, spawnConfig);
+      if (session) {
+        showSuccess('Subsession session spawned successfully!');
+        if (spawnConfig.prompt?.trim()) {
+          handleUpdateDraft(session.session_id, spawnConfig.prompt);
+        }
+        // Clear the draft after spawning subsession
+        handleClearDraft(sessionId);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to spawn session';
+      showError(`Failed to spawn session: ${message}`);
+      throw err;
     }
   };
 
