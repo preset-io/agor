@@ -37,8 +37,29 @@ export function getConfigPath(): string {
 /**
  * Resolve the per-user Codex home under Agor-managed storage.
  */
+function sanitizeCodexUserId(userId: UserID): string {
+  const canonical = userId.trim().replaceAll('\\', '/');
+  const normalized = path.posix.normalize(canonical);
+
+  if (
+    !canonical ||
+    path.posix.isAbsolute(canonical) ||
+    canonical !== normalized ||
+    normalized === '.' ||
+    normalized === '..' ||
+    normalized.includes('/')
+  ) {
+    throw new Error('Invalid Codex user ID for per-user home');
+  }
+
+  return normalized;
+}
+
+/**
+ * Resolve the per-user Codex home under Agor-managed storage.
+ */
 export function resolveCodexHomeForUser(userId: UserID): string {
-  return path.join(getCodexUsersRoot(), userId);
+  return path.join(getCodexUsersRoot(), sanitizeCodexUserId(userId));
 }
 
 /**

@@ -334,7 +334,14 @@ describe('per-user Codex home resolution', () => {
     const home = await ensureCodexHomeForUser('user-123' as UserID);
 
     expect(home).toBe(path.join(tempDir, '.agor', 'codex', 'users', 'user-123'));
-    await expect(fs.stat(home)).resolves.toMatchObject({ isDirectory: expect.any(Function) });
+    const stats = await fs.stat(home);
+    expect(stats.isDirectory()).toBe(true);
+  });
+
+  it('rejects path traversal inputs for per-user Codex homes', () => {
+    expect(() => resolveCodexHomeForUser('../../tmp' as UserID)).toThrow(
+      'Invalid Codex user ID for per-user home'
+    );
   });
 
   it('keeps resolveCodexHome() behavior for legacy single-user fallback', async () => {
