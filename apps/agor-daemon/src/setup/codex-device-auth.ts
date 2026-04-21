@@ -110,6 +110,12 @@ function buildDeviceAuthCommand(codexHome: string): string {
   return `CODEX_HOME=${escapeShellArg(codexHome)} codex login --device-auth`;
 }
 
+export function buildDeviceAuthSpawnEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const nextEnv = { ...env };
+  delete nextEnv.OPENAI_API_KEY;
+  return nextEnv;
+}
+
 export function resolveCodexDeviceAuthSpawnContext(
   config: AgorConfig,
   options: SpawnCodexDeviceAuthProcessOptions
@@ -139,7 +145,7 @@ export async function spawnCodexDeviceAuthProcess(
   });
 
   const child = spawn(cmd, args, {
-    env: context.executionUnixUser ? undefined : process.env,
+    env: context.executionUnixUser ? undefined : buildDeviceAuthSpawnEnv(),
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: false,
   }) as ChildProcess;

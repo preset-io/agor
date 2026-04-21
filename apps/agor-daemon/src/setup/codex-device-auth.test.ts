@@ -3,6 +3,7 @@ import { PassThrough } from 'node:stream';
 import type { AgorConfig } from '@agor/core/config';
 import { describe, expect, it } from 'vitest';
 import {
+  buildDeviceAuthSpawnEnv,
   CodexDeviceAuthManager,
   type CodexDeviceAuthProcess,
   parseDeviceAuthOutput,
@@ -24,6 +25,19 @@ describe('parseDeviceAuthOutput', () => {
     expect(parseDeviceAuthOutput('Open https://chatgpt.com/device and enter ABCD-EFGHI')).toEqual({
       verificationUri: 'https://chatgpt.com/device',
       userCode: 'ABCD-EFGHI',
+    });
+  });
+});
+
+describe('buildDeviceAuthSpawnEnv', () => {
+  it('scrubs OPENAI_API_KEY before launching device auth on the current-user path', () => {
+    expect(
+      buildDeviceAuthSpawnEnv({
+        OPENAI_API_KEY: 'sk-test',
+        PATH: '/usr/bin',
+      })
+    ).toEqual({
+      PATH: '/usr/bin',
     });
   });
 });
