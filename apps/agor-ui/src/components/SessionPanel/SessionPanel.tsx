@@ -578,19 +578,31 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
-  const handleFork = () => {
+  const handleFork = async () => {
     if (!session) return;
     const value = promptRef.current?.getValue() ?? '';
-    onFork?.(session.session_id, value.trim());
-    promptRef.current?.clear();
+    const promptToSend = value.trim();
+    if (!promptToSend) return;
+    try {
+      await onFork?.(session.session_id, promptToSend);
+      // Only clear the compose box + draft on success, so a failed fork
+      // leaves the typed prompt intact for the user to retry.
+      promptRef.current?.clear();
+    } catch (error) {
+      console.error('Fork failed — keeping prompt in compose box:', error);
+    }
   };
 
   const handleBtwSend = async () => {
     const value = promptRef.current?.getValue() ?? '';
     if (!value.trim() || connectionDisabled) return;
     const promptToSend = value.trim();
-    promptRef.current?.clear();
-    await onBtwFork?.(session.session_id, promptToSend);
+    try {
+      await onBtwFork?.(session.session_id, promptToSend);
+      promptRef.current?.clear();
+    } catch (error) {
+      console.error('BTW fork failed — keeping prompt in compose box:', error);
+    }
   };
 
   const handleSpawnModalConfirm = async (config: string | Partial<SpawnConfig>) => {
