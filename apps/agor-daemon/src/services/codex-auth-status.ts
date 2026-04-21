@@ -15,6 +15,15 @@ export class CodexAuthStatusService {
 
     return this.manager.getStatusForUser(userId);
   }
+
+  async remove(_id: string, params?: AuthenticatedParams) {
+    const userId = params?.user?.user_id as UserID | undefined;
+    if (!userId) {
+      throw new NotAuthenticated('Authentication required');
+    }
+
+    return this.manager.disconnectUser(userId);
+  }
 }
 
 export function createCodexAuthStatusService(

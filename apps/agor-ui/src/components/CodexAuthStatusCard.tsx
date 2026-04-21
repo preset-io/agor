@@ -12,6 +12,7 @@ export interface CodexAuthStatusCardProps {
   error?: string | null;
   onConnect?: () => void;
   onReconnect?: () => void;
+  onDisconnect?: () => void;
   onCancel?: () => void;
   onClearError?: () => void;
 }
@@ -39,6 +40,7 @@ export function CodexAuthStatusCard({
   error,
   onConnect,
   onReconnect,
+  onDisconnect,
   onCancel,
   onClearError,
 }: CodexAuthStatusCardProps) {
@@ -126,9 +128,14 @@ export function CodexAuthStatusCard({
         {flow?.status !== 'pending' ? (
           <Space wrap>
             {status?.status === 'signed_in_with_chatgpt' ? (
-              <Button onClick={onReconnect} loading={submitting}>
-                Reconnect Codex
-              </Button>
+              <>
+                <Button onClick={onReconnect} loading={submitting}>
+                  Reconnect Codex
+                </Button>
+                <Button danger onClick={onDisconnect} loading={submitting}>
+                  Disconnect Codex
+                </Button>
+              </>
             ) : null}
 
             {status?.status === 'not_signed_in' || status?.status === 'unknown' ? (

@@ -102,6 +102,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
   const [opencodeConnected, setOpencodeConnected] = useState<boolean | null>(null);
   const [opencodeTesting, setOpencodeTesting] = useState(false);
   const [loadingOpencode, setLoadingOpencode] = useState(true);
+  const [disconnectingCodex, setDisconnectingCodex] = useState(false);
   const {
     status: codexAuthStatus,
     loading: codexAuthLoading,
@@ -282,6 +283,23 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
     clearCodexDeviceAuthError();
   };
 
+  const handleDisconnectCodex = async () => {
+    if (!client) {
+      return;
+    }
+
+    try {
+      setDisconnectingCodex(true);
+      await client.service('codex-auth-status').remove('current');
+      await refreshCodexAuthStatus();
+      showSuccess('Codex login removed');
+    } catch (error) {
+      showError(error instanceof Error ? error.message : 'Failed to disconnect Codex');
+    } finally {
+      setDisconnectingCodex(false);
+    }
+  };
+
   const loading = loadingKeys || loadingOpencode;
 
   if (loading) {
@@ -339,10 +357,11 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
                   status={codexAuthStatus}
                   flow={codexAuthFlow}
                   loading={codexAuthLoading}
-                  submitting={codexAuthSubmitting}
+                  submitting={codexAuthSubmitting || disconnectingCodex}
                   error={codexDeviceAuthError ?? codexAuthError}
                   onConnect={handleConnectCodex}
                   onReconnect={handleConnectCodex}
+                  onDisconnect={handleDisconnectCodex}
                   onCancel={cancelCodexDeviceAuth}
                   onClearError={handleClearCodexError}
                 />

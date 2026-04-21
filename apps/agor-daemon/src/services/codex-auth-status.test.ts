@@ -30,4 +30,25 @@ describe('CodexAuthStatusService', () => {
 
     await expect(service.get('current', {} as any)).rejects.toThrow('Authentication required');
   });
+
+  it('disconnects the current user instead of touching shared auth state', async () => {
+    const manager = {
+      getStatusForUser: vi.fn(),
+      disconnectUser: vi.fn().mockResolvedValue({
+        success: true,
+        codexHome: '/tmp/.agor/codex/users/user-a',
+      }),
+    } as any;
+    const service = new CodexAuthStatusService(manager);
+
+    const result = await service.remove('current', {
+      user: { user_id: 'user-a' },
+    } as any);
+
+    expect(manager.disconnectUser).toHaveBeenCalledWith('user-a');
+    expect(result).toEqual({
+      success: true,
+      codexHome: '/tmp/.agor/codex/users/user-a',
+    });
+  });
 });

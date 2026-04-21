@@ -85,4 +85,29 @@ describe('CodexAuthStatusCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel login' }));
     expect(onCancel).toHaveBeenCalled();
   });
+
+  it('shows disconnect controls when Codex is already connected', () => {
+    const onDisconnect = vi.fn();
+
+    render(
+      <CodexAuthStatusCard
+        status={{
+          status: 'signed_in_with_chatgpt',
+          label: 'Signed in with ChatGPT',
+          description: 'Codex is connected for this user.',
+          warnings: [],
+          guidance: [],
+          codexHome: '/tmp/.agor/codex/users/user-123',
+          credentialStore: 'file',
+          unixUserMode: 'simple',
+          executionUnixUser: null,
+        }}
+        onReconnect={vi.fn()}
+        onDisconnect={onDisconnect}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Disconnect Codex' }));
+    expect(onDisconnect).toHaveBeenCalled();
+  });
 });

@@ -321,4 +321,14 @@ export class CodexAuthStatusManager {
   async getStatusForUser(userId: UserID): Promise<CodexAuthStatus> {
     return getCodexAuthStatus(this.db, this.config, { agorUserId: userId });
   }
+
+  async disconnectUser(userId: UserID): Promise<{ success: true; codexHome: string }> {
+    const codexHome = resolveCodexHomeForUser(userId);
+    await fs.rm(path.join(codexHome, 'auth.json'), { force: true });
+
+    return {
+      success: true,
+      codexHome,
+    };
+  }
 }
