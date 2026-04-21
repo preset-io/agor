@@ -100,6 +100,26 @@ describe('materializeCodexSessionHome', () => {
     expect(stats.isSymbolicLink()).toBe(true);
     expect(await fs.readlink(linkedAuthPath)).toBe(authPath);
   });
+
+  it('links auth.json from a per-user stable Codex home', async () => {
+    const userStableCodexHome = path.join(tempDir, '.agor', 'codex', 'users', 'user-123');
+    await fs.mkdir(userStableCodexHome, { recursive: true });
+    const authPath = path.join(userStableCodexHome, 'auth.json');
+    await fs.writeFile(authPath, '{"token":"user-123"}', 'utf-8');
+
+    const result = await materializeCodexSessionHome({
+      sessionId: 'session-user-home',
+      agorSystemPrompt: '# session prompt',
+      stableCodexHome: userStableCodexHome,
+      tmpBaseDir,
+      fallbackBaseDir,
+    });
+
+    const linkedAuthPath = path.join(result.sessionCodexHome, 'auth.json');
+    const stats = await fs.lstat(linkedAuthPath);
+    expect(stats.isSymbolicLink()).toBe(true);
+    expect(await fs.readlink(linkedAuthPath)).toBe(authPath);
+  });
 });
 
 describe('cleanupCodexSessionHome', () => {

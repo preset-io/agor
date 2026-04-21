@@ -136,6 +136,7 @@ export class CodexPromptService {
   private lastCodexHome: string | null = null;
   private authStrategy: CodexAuthStrategy;
   private lastAuthStrategyKey: string | null = null;
+  private stableCodexHome?: string;
 
   constructor(
     _messagesRepo: MessagesRepository,
@@ -145,7 +146,8 @@ export class CodexPromptService {
     private reposRepo?: RepoRepository,
     apiKeyOrAuthStrategy?: string | CodexAuthStrategy,
     private mcpServerRepo?: MCPServerRepository,
-    private usersRepo?: UsersRepository
+    private usersRepo?: UsersRepository,
+    stableCodexHome?: string
   ) {
     const authStrategy: CodexAuthStrategy | undefined =
       typeof apiKeyOrAuthStrategy === 'string'
@@ -156,6 +158,7 @@ export class CodexPromptService {
         : apiKeyOrAuthStrategy;
 
     this.authStrategy = authStrategy ?? { kind: 'native' };
+    this.stableCodexHome = stableCodexHome;
     this.lastAuthStrategyKey = getCodexAuthStrategyCacheKey(this.authStrategy);
 
     // Store API key from base-executor (already resolved with proper precedence)
@@ -239,7 +242,7 @@ export class CodexPromptService {
       users: this.usersRepo,
     });
 
-    const stableCodexHome = await resolveCodexHome();
+    const stableCodexHome = this.stableCodexHome ?? (await resolveCodexHome());
     return materializeCodexSessionHome({
       sessionId,
       agorSystemPrompt,

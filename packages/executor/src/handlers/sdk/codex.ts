@@ -7,6 +7,7 @@
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import { CodexTool, createCodexAuthStrategy } from '../../sdk-handlers/codex/index.js';
 import type { AgorClient } from '../../services/feathers-client.js';
+import type { NativeAuthContext } from './base-executor.js';
 
 /**
  * Execute Codex task (Feathers/WebSocket architecture)
@@ -30,7 +31,7 @@ export async function executeCodexTask(params: {
     ...params,
     apiKeyEnvVar: 'OPENAI_API_KEY',
     toolName: 'codex',
-    createTool: (repos, apiKey, useNativeAuth) =>
+    createTool: (repos, apiKey, useNativeAuth, nativeAuthContext?: NativeAuthContext) =>
       new CodexTool(
         repos.messages,
         repos.sessions,
@@ -42,7 +43,8 @@ export async function executeCodexTask(params: {
         repos.tasksService,
         repos.tasksStreamingService,
         repos.mcpServers, // MCPServerRepository for global MCP server resolution
-        repos.users
+        repos.users,
+        nativeAuthContext?.stableCodexHome
       ),
   });
 }

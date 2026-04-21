@@ -84,7 +84,8 @@ export class CodexTool implements ITool {
     tasksService?: TasksService,
     tasksStreamingService?: TasksStreamingService,
     mcpServerRepo?: MCPServerRepository,
-    usersRepo?: UsersRepository
+    usersRepo?: UsersRepository,
+    stableCodexHome?: string
   ) {
     this.messagesRepo = messagesRepo;
     this.sessionsRepo = sessionsRepo;
@@ -102,7 +103,8 @@ export class CodexTool implements ITool {
         reposRepo,
         authStrategy,
         mcpServerRepo,
-        usersRepo
+        usersRepo,
+        stableCodexHome
       );
     }
   }

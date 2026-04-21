@@ -286,6 +286,17 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
 
   const envWithDaemonUrl = essentialEnv;
 
+  const isCodexPrompt =
+    payload.command === 'prompt' &&
+    typeof payload.params === 'object' &&
+    payload.params !== null &&
+    'tool' in payload.params &&
+    payload.params.tool === 'codex';
+
+  if (isCodexPrompt) {
+    delete envWithDaemonUrl.OPENAI_API_KEY;
+  }
+
   // Route secret-looking env vars through an on-disk env file owned by the
   // target user (mode 0600). This keeps API keys/tokens out of argv and out
   // of /proc/<pid>/cmdline. Non-secret vars (PATH, DAEMON_URL, NODE_ENV)

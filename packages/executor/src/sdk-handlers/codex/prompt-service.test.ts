@@ -7,8 +7,10 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as sessionContextModule from '@agor/core/templates/session-context';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodexPromptService } from './prompt-service.js';
+import * as sessionHomeModule from './session-home.js';
 
 // Track how many Codex instances were created (module-level state)
 let mockInstanceCount = 0;
@@ -197,6 +199,46 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
     serviceWithPrivate.reinitializeCodex();
 
     expect(mockConstructorOptions).toEqual([{}, {}]);
+  });
+
+  it('uses the provided stable Codex home when materializing a session overlay', async () => {
+    const stableCodexHome = '/tmp/.agor/codex/users/user-123';
+    const renderPromptSpy = vi
+      .spyOn(sessionContextModule, 'renderAgorSystemPrompt')
+      .mockResolvedValue('# system prompt');
+    const materializeSpy = vi
+      .spyOn(sessionHomeModule, 'materializeCodexSessionHome')
+      .mockResolvedValue({
+        sessionCodexHome: '/tmp/session-home',
+        stableCodexHome,
+      });
+
+    try {
+      const service = new CodexPromptService(
+        mockMessagesRepo,
+        mockSessionsRepo,
+        mockSessionMCPServerRepo,
+        mockWorktreesRepo,
+        undefined,
+        { kind: 'native' },
+        undefined,
+        undefined,
+        undefined,
+        stableCodexHome
+      );
+
+      await (service as any).ensureCodexSessionContext('session-123');
+
+      expect(materializeSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: 'session-123',
+          stableCodexHome,
+        })
+      );
+    } finally {
+      materializeSpy.mockRestore();
+      renderPromptSpy.mockRestore();
+    }
   });
 });
 

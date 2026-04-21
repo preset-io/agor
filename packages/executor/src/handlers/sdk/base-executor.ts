@@ -98,6 +98,10 @@ export interface ExecutionContext {
   callbacks: StreamingCallbacks;
 }
 
+export interface NativeAuthContext {
+  stableCodexHome?: string;
+}
+
 /**
  * Create streaming callbacks that call daemon custom route to broadcast events
  *
@@ -291,6 +295,32 @@ async function resolveApiKeyForTask(
   }
 }
 
+async function resolveNativeAuthContext(
+  toolName: string,
+  client: AgorClient,
+  useNativeAuth: boolean
+): Promise<NativeAuthContext | undefined> {
+  if (toolName !== 'codex' || !useNativeAuth) {
+    return undefined;
+  }
+
+  try {
+    const status = (await client.service('codex-auth-status').get('current')) as {
+      codexHome?: string;
+    } | null;
+
+    if (status?.codexHome) {
+      return {
+        stableCodexHome: status.codexHome,
+      };
+    }
+  } catch (error) {
+    console.warn('[codex] Failed to resolve native auth context via daemon service:', error);
+  }
+
+  return undefined;
+}
+
 /**
  * Execute a tool task - shared implementation for all SDK tools
  */
@@ -307,7 +337,8 @@ export async function executeToolTask(params: {
   createTool: (
     repos: ReturnType<typeof createFeathersBackedRepositories>,
     apiKey: string,
-    useNativeAuth: boolean
+    useNativeAuth: boolean,
+    nativeAuthContext?: NativeAuthContext
   ) => BaseTool;
 }): Promise<void> {
   const { client, sessionId, taskId, prompt, permissionMode, apiKeyEnvVar, toolName, createTool } =
@@ -338,10 +369,20 @@ export async function executeToolTask(params: {
 
   // Create execution context
   const ctx = createExecutionContext(client, toolName, sessionId);
+  const nativeAuthContext = await resolveNativeAuthContext(
+    toolName,
+    client,
+    resolution.useNativeAuth
+  );
 
   // Create tool instance using factory function
   // Pass the resolved key (or empty string) and useNativeAuth flag
-  const tool = createTool(ctx.repos, resolution.apiKey || '', resolution.useNativeAuth);
+  const tool = createTool(
+    ctx.repos,
+    resolution.apiKey || '',
+    resolution.useNativeAuth,
+    nativeAuthContext
+  );
 
   // Wire up abort signal to tool's stopTask method.
   // Triggered by SIGTERM handler calling abortController.abort().
