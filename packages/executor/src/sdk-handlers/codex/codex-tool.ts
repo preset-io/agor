@@ -40,6 +40,7 @@ import type {
   TasksService,
   TasksStreamingService,
 } from '../claude/claude-tool.js';
+import type { CodexAuthStrategy } from './auth-strategy.js';
 import { DEFAULT_CODEX_MODEL } from './models.js';
 import { CodexPromptService } from './prompt-service.js';
 import { extractCodexContextWindowUsage } from './usage.js';
@@ -78,11 +79,10 @@ export class CodexTool implements ITool {
     sessionMCPServerRepo?: SessionMCPServerRepository,
     worktreesRepo?: WorktreeRepository,
     reposRepo?: RepoRepository,
-    apiKey?: string,
+    authStrategy?: CodexAuthStrategy,
     messagesService?: MessagesService,
     tasksService?: TasksService,
     tasksStreamingService?: TasksStreamingService,
-    _useNativeAuth?: boolean, // Codex doesn't have OAuth fallback, but accept for interface consistency
     mcpServerRepo?: MCPServerRepository,
     usersRepo?: UsersRepository
   ) {
@@ -100,7 +100,7 @@ export class CodexTool implements ITool {
         sessionMCPServerRepo,
         worktreesRepo,
         reposRepo,
-        apiKey,
+        authStrategy,
         mcpServerRepo,
         usersRepo
       );

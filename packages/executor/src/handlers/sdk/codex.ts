@@ -5,7 +5,7 @@
  */
 
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
-import { CodexTool } from '../../sdk-handlers/codex/index.js';
+import { CodexTool, createCodexAuthStrategy } from '../../sdk-handlers/codex/index.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 
 /**
@@ -37,11 +37,10 @@ export async function executeCodexTask(params: {
         repos.sessionMCP,
         repos.worktrees,
         repos.repos,
-        apiKey,
+        createCodexAuthStrategy(apiKey, useNativeAuth),
         repos.messagesService,
         repos.tasksService,
         repos.tasksStreamingService,
-        useNativeAuth, // Flag for native auth (if applicable)
         repos.mcpServers, // MCPServerRepository for global MCP server resolution
         repos.users
       ),

@@ -30,6 +30,7 @@ import type {
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID } from '../../types.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
+import { buildCodexClientOptions, type CodexAuthStrategy } from './auth-strategy.js';
 import { DEFAULT_CODEX_MODEL } from './models.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
 
@@ -134,12 +135,20 @@ export class CodexPromptService {
     private sessionMCPServerRepo?: SessionMCPServerRepository,
     private worktreesRepo?: WorktreeRepository,
     private reposRepo?: RepoRepository,
-    apiKey?: string,
+    apiKeyOrAuthStrategy?: string | CodexAuthStrategy,
     private mcpServerRepo?: MCPServerRepository,
     private usersRepo?: UsersRepository
   ) {
+    const authStrategy: CodexAuthStrategy | undefined =
+      typeof apiKeyOrAuthStrategy === 'string'
+        ? {
+            kind: 'api_key',
+            apiKey: apiKeyOrAuthStrategy,
+          }
+        : apiKeyOrAuthStrategy;
+
     // Store API key from base-executor (already resolved with proper precedence)
-    this.apiKey = apiKey || '';
+    this.apiKey = authStrategy?.kind === 'api_key' ? authStrategy.apiKey : '';
     this.lastApiKey = this.apiKey;
 
     if (!this.apiKey) {
@@ -150,9 +159,9 @@ export class CodexPromptService {
     }
 
     // Initialize Codex SDK with resolved API key
-    this.codex = new Codex.Codex({
-      apiKey: this.apiKey,
-    });
+    this.codex = new Codex.Codex(
+      authStrategy ? buildCodexClientOptions(authStrategy) : { apiKey: this.apiKey }
+    );
   }
 
   /**
