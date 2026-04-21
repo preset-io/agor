@@ -116,6 +116,33 @@ export function buildDeviceAuthSpawnEnv(env: NodeJS.ProcessEnv = process.env): N
   return nextEnv;
 }
 
+function toSpawnEnvRecord(env: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+  );
+}
+
+export function buildDeviceAuthSpawnOptions(
+  context: Pick<CodexDeviceAuthSpawnContext, 'codexHome' | 'executionUnixUser'>,
+  env: NodeJS.ProcessEnv = process.env
+): {
+  cmd: string;
+  args: string[];
+  env: NodeJS.ProcessEnv | undefined;
+} {
+  const scrubbedEnv = buildDeviceAuthSpawnEnv(env);
+  const { cmd, args } = buildSpawnArgs('sh', ['-lc', buildDeviceAuthCommand(context.codexHome)], {
+    asUser: context.executionUnixUser ?? undefined,
+    env: context.executionUnixUser ? toSpawnEnvRecord(scrubbedEnv) : undefined,
+  });
+
+  return {
+    cmd,
+    args,
+    env: context.executionUnixUser ? undefined : scrubbedEnv,
+  };
+}
+
 export function resolveCodexDeviceAuthSpawnContext(
   config: AgorConfig,
   options: SpawnCodexDeviceAuthProcessOptions
@@ -139,13 +166,10 @@ export async function spawnCodexDeviceAuthProcess(
     ...resolvedContext,
     codexHome,
   };
-  const command = buildDeviceAuthCommand(context.codexHome);
-  const { cmd, args } = buildSpawnArgs('sh', ['-lc', command], {
-    asUser: context.executionUnixUser ?? undefined,
-  });
+  const spawnOptions = buildDeviceAuthSpawnOptions(context);
 
-  const child = spawn(cmd, args, {
-    env: context.executionUnixUser ? undefined : buildDeviceAuthSpawnEnv(),
+  const child = spawn(spawnOptions.cmd, spawnOptions.args, {
+    env: spawnOptions.env,
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: false,
   }) as ChildProcess;

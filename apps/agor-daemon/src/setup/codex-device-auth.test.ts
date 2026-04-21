@@ -4,6 +4,7 @@ import type { AgorConfig } from '@agor/core/config';
 import { describe, expect, it } from 'vitest';
 import {
   buildDeviceAuthSpawnEnv,
+  buildDeviceAuthSpawnOptions,
   CodexDeviceAuthManager,
   type CodexDeviceAuthProcess,
   parseDeviceAuthOutput,
@@ -39,6 +40,24 @@ describe('buildDeviceAuthSpawnEnv', () => {
     ).toEqual({
       PATH: '/usr/bin',
     });
+  });
+
+  it('injects scrubbed env vars into the impersonated spawn command', () => {
+    const spawnOptions = buildDeviceAuthSpawnOptions(
+      {
+        codexHome: '/tmp/.agor/codex/users/user-123',
+        executionUnixUser: 'alice',
+      },
+      {
+        OPENAI_API_KEY: 'sk-test',
+        PATH: '/usr/bin',
+      }
+    );
+
+    expect(spawnOptions.cmd).toBe('sudo');
+    expect(spawnOptions.args.join(' ')).toContain("PATH='/usr/bin'");
+    expect(spawnOptions.args.join(' ')).not.toContain('OPENAI_API_KEY');
+    expect(spawnOptions.env).toBeUndefined();
   });
 });
 
