@@ -33,7 +33,7 @@ export function useCodexDeviceAuth(
   const [flow, setFlow] = useState<CodexDeviceAuthFlow | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof window.setInterval> | null>(null);
+  const pollRef = useRef<number | null>(null);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current !== null) {

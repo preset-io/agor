@@ -13,8 +13,8 @@ import {
   LoadingOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Form, Space, Spin, Switch, Tabs, Tooltip, theme } from 'antd';
-import { useEffect, useState } from 'react';
+import { Alert, Button, Form, Input, Space, Spin, Switch, Tabs, Tooltip, theme } from 'antd';
+import { type ChangeEvent, useEffect, useState } from 'react';
 import { useCodexAuthStatus } from '../../hooks/useCodexAuthStatus';
 import { useCodexDeviceAuth } from '../../hooks/useCodexDeviceAuth';
 import { useThemedMessage } from '../../utils/message';
@@ -118,7 +118,9 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
     cancel: cancelCodexDeviceAuth,
     clearError: clearCodexDeviceAuthError,
   } = useCodexDeviceAuth(client, {
-    onCompleted: refreshCodexAuthStatus,
+    onCompleted: async () => {
+      await refreshCodexAuthStatus();
+    },
   });
 
   // Load API keys configuration
@@ -458,7 +460,9 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
                           <Input
                             placeholder="http://localhost:4096"
                             value={opencodeServerUrl}
-                            onChange={(e) => setOpencodeServerUrl(e.target.value)}
+                            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                              setOpencodeServerUrl(e.target.value)
+                            }
                           />
                           <Tooltip title="Test connection to OpenCode server">
                             <Button
