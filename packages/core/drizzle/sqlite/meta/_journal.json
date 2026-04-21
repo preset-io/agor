@@ -253,6 +253,13 @@
       "when": 1776600000000,
       "tag": "0037_env_command_variants",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1777000000000,
+      "tag": "0038_mcp_oauth_token_refresh",
+      "breakpoints": true
     }
   ]
 }

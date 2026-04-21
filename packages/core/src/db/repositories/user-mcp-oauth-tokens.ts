@@ -1,12 +1,17 @@
 /**
- * User MCP OAuth Token Repository
+ * MCP OAuth Token Repository
  *
- * Manages per-user OAuth 2.1 tokens for MCP servers.
- * Used when MCP servers are configured with oauth_mode: 'per_user'.
+ * Unified storage for both per-user and shared-mode OAuth tokens.
+ *   - `user_id` set  → per-user token (oauth_mode: 'per_user')
+ *   - `user_id` NULL → shared-mode token for that MCP server (oauth_mode: 'shared')
+ *
+ * DCR / registered client credentials are co-located with the refresh_token
+ * because refreshing requires the exact client_id/client_secret the grant was
+ * issued under.
  */
 
 import type { MCPServerID, UserID } from '@agor/core/types';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import {
@@ -17,54 +22,72 @@ import {
 import { RepositoryError } from './base';
 
 /**
- * User MCP OAuth Token data structure
+ * MCP OAuth token record. `user_id` is null for shared-mode rows.
  */
 export interface UserMCPOAuthToken {
-  user_id: UserID;
+  user_id: UserID | null;
   mcp_server_id: MCPServerID;
   oauth_access_token: string;
   oauth_token_expires_at?: Date;
   oauth_refresh_token?: string;
+  oauth_client_id?: string;
+  oauth_client_secret?: string;
   created_at: Date;
   updated_at?: Date;
 }
 
-/**
- * User MCP OAuth Token repository implementation
- */
+/** Input shape for `saveToken`. */
+export interface SaveTokenInput {
+  accessToken: string;
+  /** Seconds until expiry, matching the OAuth token response. */
+  expiresInSeconds?: number;
+  /** If absent on update, the existing refresh_token is kept. */
+  refreshToken?: string;
+  /** If absent on update, the existing client_id is kept. */
+  clientId?: string;
+  /** If absent on update, the existing client_secret is kept. */
+  clientSecret?: string;
+}
+
+function rowToToken(row: UserMCPOAuthTokenRow): UserMCPOAuthToken {
+  return {
+    user_id: (row.user_id as UserID | null) ?? null,
+    mcp_server_id: row.mcp_server_id as MCPServerID,
+    oauth_access_token: row.oauth_access_token,
+    oauth_token_expires_at: row.oauth_token_expires_at
+      ? new Date(row.oauth_token_expires_at)
+      : undefined,
+    oauth_refresh_token: row.oauth_refresh_token || undefined,
+    oauth_client_id: row.oauth_client_id || undefined,
+    oauth_client_secret: row.oauth_client_secret || undefined,
+    created_at: new Date(row.created_at),
+    updated_at: row.updated_at ? new Date(row.updated_at) : undefined,
+  };
+}
+
+/** Match either a per-user row (user_id = X) or the shared row (user_id IS NULL). */
+function matchKey(userId: UserID | null, serverId: MCPServerID) {
+  return and(
+    userId === null ? isNull(userMcpOauthTokens.user_id) : eq(userMcpOauthTokens.user_id, userId),
+    eq(userMcpOauthTokens.mcp_server_id, serverId)
+  );
+}
+
 export class UserMCPOAuthTokenRepository {
   constructor(private db: Database) {}
 
   /**
-   * Get OAuth token for a user and MCP server
+   * Look up the token row for a (user, server) pair. Pass `null` for userId
+   * to read the shared-mode row.
    */
-  async getToken(userId: UserID, serverId: MCPServerID): Promise<UserMCPOAuthToken | null> {
+  async getToken(userId: UserID | null, serverId: MCPServerID): Promise<UserMCPOAuthToken | null> {
     try {
       const row = await select(this.db)
         .from(userMcpOauthTokens)
-        .where(
-          and(
-            eq(userMcpOauthTokens.user_id, userId),
-            eq(userMcpOauthTokens.mcp_server_id, serverId)
-          )
-        )
+        .where(matchKey(userId, serverId))
         .one();
 
-      if (!row) {
-        return null;
-      }
-
-      return {
-        user_id: row.user_id as UserID,
-        mcp_server_id: row.mcp_server_id as MCPServerID,
-        oauth_access_token: row.oauth_access_token,
-        oauth_token_expires_at: row.oauth_token_expires_at
-          ? new Date(row.oauth_token_expires_at)
-          : undefined,
-        oauth_refresh_token: row.oauth_refresh_token || undefined,
-        created_at: new Date(row.created_at),
-        updated_at: row.updated_at ? new Date(row.updated_at) : undefined,
-      };
+      return row ? rowToToken(row) : null;
     } catch (error) {
       throw new RepositoryError(
         `Failed to get OAuth token: ${error instanceof Error ? error.message : String(error)}`,
@@ -74,10 +97,14 @@ export class UserMCPOAuthTokenRepository {
   }
 
   /**
-   * Get valid (non-expired) OAuth access token for a user and MCP server
-   * Returns undefined if token doesn't exist or is expired
+   * Return the access token if it exists and is not expired. Does NOT refresh.
+   *
+   * Refresh is performed via `refreshAndPersistToken` in
+   * `@agor/core/tools/mcp/oauth-refresh`, and is orchestrated by the daemon
+   * service `mcp-servers/oauth-auth-headers` — which enforces the caller's
+   * identity matches the token's `user_id` before exposing the header.
    */
-  async getValidToken(userId: UserID, serverId: MCPServerID): Promise<string | undefined> {
+  async getValidToken(userId: UserID | null, serverId: MCPServerID): Promise<string | undefined> {
     try {
       const token = await this.getToken(userId, serverId);
 
@@ -85,9 +112,10 @@ export class UserMCPOAuthTokenRepository {
         return undefined;
       }
 
-      // Check if token is expired
       if (token.oauth_token_expires_at && token.oauth_token_expires_at <= new Date()) {
-        console.log(`[UserMCPOAuthToken] Token expired for user ${userId}, server ${serverId}`);
+        console.log(
+          `[UserMCPOAuthToken] Token expired for user ${userId ?? '<shared>'}, server ${serverId}`
+        );
         return undefined;
       }
 
@@ -101,56 +129,59 @@ export class UserMCPOAuthTokenRepository {
   }
 
   /**
-   * Save or update OAuth token for a user and MCP server
+   * Save or update the token row. On update, undefined fields preserve their
+   * existing value — important for refresh_token (providers may omit it if not
+   * rotating) and client_id/client_secret (bound for the lifetime of the grant).
    */
   async saveToken(
-    userId: UserID,
+    userId: UserID | null,
     serverId: MCPServerID,
-    accessToken: string,
-    expiresInSeconds?: number,
-    refreshToken?: string
+    input: SaveTokenInput
   ): Promise<void> {
     try {
       const now = new Date();
-      const expiresAt = expiresInSeconds
-        ? new Date(Date.now() + (expiresInSeconds - 60) * 1000) // 60s buffer
+      // Store the EXACT expiry the provider returned. The proactive-refresh
+      // buffer lives in `needsRefresh` (REFRESH_BUFFER_MS) so we don't apply
+      // it twice.
+      const expiresAt = input.expiresInSeconds
+        ? new Date(Date.now() + input.expiresInSeconds * 1000)
         : undefined;
 
-      // Check if token already exists
       const existing = await this.getToken(userId, serverId);
 
       if (existing) {
-        // Update existing token — only overwrite refresh_token when a new one is provided
         await update(this.db, userMcpOauthTokens)
           .set({
-            oauth_access_token: accessToken,
+            oauth_access_token: input.accessToken,
             oauth_token_expires_at: expiresAt,
-            ...(refreshToken != null ? { oauth_refresh_token: refreshToken } : {}),
+            ...(input.refreshToken != null ? { oauth_refresh_token: input.refreshToken } : {}),
+            ...(input.clientId != null ? { oauth_client_id: input.clientId } : {}),
+            ...(input.clientSecret != null ? { oauth_client_secret: input.clientSecret } : {}),
             updated_at: now,
           })
-          .where(
-            and(
-              eq(userMcpOauthTokens.user_id, userId),
-              eq(userMcpOauthTokens.mcp_server_id, serverId)
-            )
-          )
+          .where(matchKey(userId, serverId))
           .run();
 
-        console.log(`[UserMCPOAuthToken] Updated token for user ${userId}, server ${serverId}`);
+        console.log(
+          `[UserMCPOAuthToken] Updated token for user ${userId ?? '<shared>'}, server ${serverId}`
+        );
       } else {
-        // Insert new token
         const newToken: UserMCPOAuthTokenInsert = {
           user_id: userId,
           mcp_server_id: serverId,
-          oauth_access_token: accessToken,
+          oauth_access_token: input.accessToken,
           oauth_token_expires_at: expiresAt,
-          oauth_refresh_token: refreshToken,
+          oauth_refresh_token: input.refreshToken,
+          oauth_client_id: input.clientId,
+          oauth_client_secret: input.clientSecret,
           created_at: now,
         };
 
         await insert(this.db, userMcpOauthTokens).values(newToken).run();
 
-        console.log(`[UserMCPOAuthToken] Saved new token for user ${userId}, server ${serverId}`);
+        console.log(
+          `[UserMCPOAuthToken] Saved new token for user ${userId ?? '<shared>'}, server ${serverId}`
+        );
       }
     } catch (error) {
       throw new RepositoryError(
@@ -161,17 +192,13 @@ export class UserMCPOAuthTokenRepository {
   }
 
   /**
-   * Delete OAuth token for a user and MCP server
+   * Delete a specific token row. Used on `invalid_grant` responses and from
+   * the OAuth-disconnect service.
    */
-  async deleteToken(userId: UserID, serverId: MCPServerID): Promise<boolean> {
+  async deleteToken(userId: UserID | null, serverId: MCPServerID): Promise<boolean> {
     try {
       const result = await deleteFrom(this.db, userMcpOauthTokens)
-        .where(
-          and(
-            eq(userMcpOauthTokens.user_id, userId),
-            eq(userMcpOauthTokens.mcp_server_id, serverId)
-          )
-        )
+        .where(matchKey(userId, serverId))
         .run();
 
       return result.rowsAffected > 0;
@@ -183,9 +210,6 @@ export class UserMCPOAuthTokenRepository {
     }
   }
 
-  /**
-   * Delete all OAuth tokens for a user
-   */
   async deleteAllForUser(userId: UserID): Promise<number> {
     try {
       const result = await deleteFrom(this.db, userMcpOauthTokens)
@@ -201,9 +225,6 @@ export class UserMCPOAuthTokenRepository {
     }
   }
 
-  /**
-   * Delete all OAuth tokens for an MCP server
-   */
   async deleteAllForServer(serverId: MCPServerID): Promise<number> {
     try {
       const result = await deleteFrom(this.db, userMcpOauthTokens)
@@ -219,9 +240,6 @@ export class UserMCPOAuthTokenRepository {
     }
   }
 
-  /**
-   * List all OAuth tokens for a user
-   */
   async listForUser(userId: UserID): Promise<UserMCPOAuthToken[]> {
     try {
       const rows = await select(this.db)
@@ -229,17 +247,7 @@ export class UserMCPOAuthTokenRepository {
         .where(eq(userMcpOauthTokens.user_id, userId))
         .all();
 
-      return rows.map((row: UserMCPOAuthTokenRow) => ({
-        user_id: row.user_id as UserID,
-        mcp_server_id: row.mcp_server_id as MCPServerID,
-        oauth_access_token: row.oauth_access_token,
-        oauth_token_expires_at: row.oauth_token_expires_at
-          ? new Date(row.oauth_token_expires_at)
-          : undefined,
-        oauth_refresh_token: row.oauth_refresh_token || undefined,
-        created_at: new Date(row.created_at),
-        updated_at: row.updated_at ? new Date(row.updated_at) : undefined,
-      }));
+      return rows.map(rowToToken);
     } catch (error) {
       throw new RepositoryError(
         `Failed to list OAuth tokens for user: ${error instanceof Error ? error.message : String(error)}`,
@@ -248,10 +256,7 @@ export class UserMCPOAuthTokenRepository {
     }
   }
 
-  /**
-   * Check if a user has a valid token for an MCP server
-   */
-  async hasValidToken(userId: UserID, serverId: MCPServerID): Promise<boolean> {
+  async hasValidToken(userId: UserID | null, serverId: MCPServerID): Promise<boolean> {
     const token = await this.getValidToken(userId, serverId);
     return token !== undefined;
   }

@@ -1097,30 +1097,43 @@ export const sessionMcpServers = sqliteTable(
 );
 
 /**
- * User MCP OAuth Tokens table - Per-user OAuth 2.1 tokens for MCP servers
+ * MCP OAuth Tokens table - OAuth 2.1 tokens for MCP servers
  *
- * Used when MCP servers are configured with oauth_mode: 'per_user'.
- * Each user gets their own OAuth token for each MCP server.
+ * Holds BOTH per-user and shared-mode tokens:
+ *   - `user_id` set  → per-user token (oauth_mode: 'per_user')
+ *   - `user_id` NULL → shared token for this MCP server (oauth_mode: 'shared')
+ *
+ * `oauth_client_id`/`oauth_client_secret` are co-located because the
+ * refresh_token is bound to the client credentials that were used when
+ * it was issued (often via RFC 7591 Dynamic Client Registration, which
+ * generates fresh per-grant credentials on each daemon restart). Storing
+ * them alongside the refresh_token keeps the refresh path correct even
+ * if the server-level DCR cache is rebuilt.
  */
 export const userMcpOauthTokens = sqliteTable(
   'user_mcp_oauth_tokens',
   {
-    user_id: text('user_id', { length: 36 })
-      .notNull()
-      .references(() => users.user_id, { onDelete: 'cascade' }),
+    // NULL = shared-mode token (one per mcp_server_id)
+    user_id: text('user_id', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'cascade',
+    }),
     mcp_server_id: text('mcp_server_id', { length: 36 })
       .notNull()
       .references(() => mcpServers.mcp_server_id, { onDelete: 'cascade' }),
     oauth_access_token: text('oauth_access_token').notNull(),
     oauth_token_expires_at: t.timestamp('oauth_token_expires_at'), // Unix timestamp in milliseconds
     oauth_refresh_token: text('oauth_refresh_token'),
+    // DCR / registered client credentials this grant was issued under.
+    // Must be preserved across refreshes.
+    oauth_client_id: text('oauth_client_id'),
+    oauth_client_secret: text('oauth_client_secret'),
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
-    // Composite primary key via unique index
+    // Composite lookup indexes. Uniqueness enforced via partial unique indexes
+    // created in the migration (one for per-user rows, one for the shared row).
     pk: index('user_mcp_oauth_tokens_pk').on(table.user_id, table.mcp_server_id),
-    // Indexes for queries
     userIdx: index('user_mcp_oauth_tokens_user_idx').on(table.user_id),
     serverIdx: index('user_mcp_oauth_tokens_server_idx').on(table.mcp_server_id),
   })

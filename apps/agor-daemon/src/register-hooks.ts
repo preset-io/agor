@@ -770,49 +770,75 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     }
 
     const injectToken = async (server: MCPServer) => {
-      // Only process OAuth servers with per_user mode
-      if (server.auth?.type !== 'oauth' || server.auth?.oauth_mode !== 'per_user') {
-        console.log(
-          `[MCP OAuth] Server ${server.name}: authType=${server.auth?.type}, ` +
-            `oauthMode=${server.auth?.oauth_mode} - skipping (not per_user OAuth)`
-        );
+      if (server.auth?.type !== 'oauth') {
         return server;
       }
 
-      console.log(
-        `[MCP OAuth] Server ${server.name}: per_user OAuth mode - checking for user token...`
-      );
+      // Tokens for both modes live in user_mcp_oauth_tokens:
+      //   - per_user  → row keyed by (userId, serverId)
+      //   - shared    → row keyed by (NULL, serverId)
+      const mode = server.auth.oauth_mode ?? 'per_user';
+      const tokenUserId: import('@agor/core/types').UserID | null =
+        mode === 'per_user' ? (userId as import('@agor/core/types').UserID) : null;
 
       try {
         const userTokenRepo = new UserMCPOAuthTokenRepository(db);
-        const token = await userTokenRepo.getValidToken(
-          userId as import('@agor/core/types').UserID,
-          server.mcp_server_id
-        );
+        const row = await userTokenRepo.getToken(tokenUserId, server.mcp_server_id);
 
-        if (token) {
+        if (!row) {
           console.log(
-            `[MCP OAuth] ✅ Found valid token for user ${userId.substring(0, 8)}, ` +
-              `server ${server.name} - injecting into auth config`
+            `[MCP OAuth] No token row for user=${tokenUserId ?? '<shared>'} server=${server.name}`
           );
-          // Inject per-user token into the server's auth config
-          return {
-            ...server,
-            auth: {
-              ...server.auth,
-              oauth_access_token: token,
-              // Don't include expiry - the token is already validated
-            },
-          };
-        } else {
-          console.log(
-            `[MCP OAuth] ❌ No valid token for user ${userId.substring(0, 8)}, ` +
-              `server ${server.name} - user needs to authenticate`
-          );
+          return server;
         }
+
+        // JIT refresh — see `refreshAndPersistToken` for mutexing + invalid_grant cleanup.
+        let accessToken = row.oauth_access_token;
+        let expiresAt = row.oauth_token_expires_at;
+        const { needsRefresh, refreshAndPersistToken, InvalidGrantError } = await import(
+          '@agor/core/tools/mcp/oauth-refresh'
+        );
+        if (needsRefresh(row.oauth_token_expires_at) && row.oauth_refresh_token) {
+          console.log(`[MCP OAuth] Token near/past expiry for ${server.name} — refreshing`);
+          try {
+            accessToken = await refreshAndPersistToken({
+              db,
+              userId: tokenUserId,
+              mcpServerId: server.mcp_server_id,
+            });
+            // Re-read to pick up the rotated expiry for the UI.
+            const fresh = await userTokenRepo.getToken(tokenUserId, server.mcp_server_id);
+            if (fresh) expiresAt = fresh.oauth_token_expires_at;
+          } catch (refreshErr) {
+            if (refreshErr instanceof InvalidGrantError) {
+              console.warn(
+                `[MCP OAuth] invalid_grant refreshing ${server.name} — user must re-auth`
+              );
+              return server;
+            }
+            // Transient error: fall through with the stale access_token. The
+            // MCP call may still succeed or fail cleanly at the transport.
+            console.warn(
+              `[MCP OAuth] Refresh failed for ${server.name} (using stale token):`,
+              refreshErr instanceof Error ? refreshErr.message : refreshErr
+            );
+          }
+        }
+
+        return {
+          ...server,
+          auth: {
+            ...server.auth,
+            oauth_access_token: accessToken,
+            // Surface expiry so the UI can render "expires in X" tooltips.
+            // Stored as Date in the repo, emitted as ms epoch to match MCPAuth.
+            oauth_token_expires_at:
+              expiresAt instanceof Date ? expiresAt.getTime() : (expiresAt ?? undefined),
+          },
+        };
       } catch (error) {
         console.warn(
-          `[MCP OAuth] Failed to get per-user token for ${server.name}:`,
+          `[MCP OAuth] Failed to resolve OAuth token for ${server.name}:`,
           error instanceof Error ? error.message : error
         );
       }

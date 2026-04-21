@@ -60,16 +60,14 @@ describe('performOAuthDisconnect', () => {
     expect(deps.clearCoreTokenCache).toHaveBeenCalled();
   });
 
-  it('clears shared token from auth config when present', async () => {
+  it('deletes the shared-mode row from the unified token table when mode is shared', async () => {
+    const deleteToken = vi.fn().mockResolvedValue(true);
     const deps = createMockDeps({
+      userTokenRepo: { deleteToken },
       mcpServerRepo: {
         findById: vi.fn().mockResolvedValue({
           url: 'https://mcp.example.com/api',
-          auth: {
-            oauth_access_token: 'shared-token-abc',
-            oauth_token_expires_at: 9999999,
-            oauth_client_id: 'keep-this',
-          },
+          auth: { type: 'oauth', oauth_mode: 'shared' },
         }),
         update: vi.fn().mockResolvedValue(undefined),
       },
@@ -77,13 +75,28 @@ describe('performOAuthDisconnect', () => {
 
     await performOAuthDisconnect(deps);
 
-    expect(deps.mcpServerRepo.update).toHaveBeenCalledWith('srv-5678-efgh', {
-      auth: expect.objectContaining({
-        oauth_client_id: 'keep-this',
-        oauth_access_token: undefined,
-        oauth_token_expires_at: undefined,
-      }),
+    // Per-user deletion happens first, then shared-row deletion with user_id=null.
+    expect(deleteToken).toHaveBeenCalledWith('user-1234-abcd', 'srv-5678-efgh');
+    expect(deleteToken).toHaveBeenCalledWith(null, 'srv-5678-efgh');
+  });
+
+  it('does not touch the shared-mode row for per_user servers', async () => {
+    const deleteToken = vi.fn().mockResolvedValue(true);
+    const deps = createMockDeps({
+      userTokenRepo: { deleteToken },
+      mcpServerRepo: {
+        findById: vi.fn().mockResolvedValue({
+          url: 'https://mcp.example.com/api',
+          auth: { type: 'oauth', oauth_mode: 'per_user' },
+        }),
+        update: vi.fn().mockResolvedValue(undefined),
+      },
     });
+
+    await performOAuthDisconnect(deps);
+
+    expect(deleteToken).toHaveBeenCalledWith('user-1234-abcd', 'srv-5678-efgh');
+    expect(deleteToken).not.toHaveBeenCalledWith(null, 'srv-5678-efgh');
   });
 
   it('succeeds even when no per-user token was found', async () => {

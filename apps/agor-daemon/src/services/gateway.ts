@@ -630,17 +630,19 @@ export class GatewayService {
             const server = await this.mcpServerRepo.findById(serverId);
             if (server?.auth?.type === 'oauth') {
               const oauthMode = server.auth.oauth_mode || 'per_user';
-              let hasToken = false;
-              if (oauthMode === 'shared') {
-                hasToken = !!server.auth.oauth_access_token;
-              } else {
-                const validToken = await this.userTokenRepo.getValidToken(
-                  user.user_id as UserID,
-                  serverId as MCPServerID
-                );
-                hasToken = !!validToken;
-              }
-              if (!hasToken) {
+              // Unified token store — shared rows key on user_id=NULL, per_user on the caller's id.
+              const tokenUserId = oauthMode === 'shared' ? null : (user.user_id as UserID);
+              // Count a row with a valid refresh_token as "authed" even if the
+              // access_token is expired — the inject hook will JIT-refresh it
+              // before handing it to the executor. This avoids spurious
+              // "not authenticated" warnings for users who are one refresh away.
+              const row = await this.userTokenRepo.getToken(tokenUserId, serverId as MCPServerID);
+              const accessValid = !!(
+                row?.oauth_access_token &&
+                (!row.oauth_token_expires_at || row.oauth_token_expires_at > new Date())
+              );
+              const refreshable = !!row?.oauth_refresh_token;
+              if (!accessValid && !refreshable) {
                 unauthedMcpNames.push(server.display_name || server.name);
               }
             }

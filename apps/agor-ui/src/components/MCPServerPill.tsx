@@ -1,6 +1,8 @@
 import type { AgorClient, MCPServer } from '@agor-live/client';
-import { ApiOutlined, LoginOutlined } from '@ant-design/icons';
+import { ApiOutlined, LoginOutlined, ReloadOutlined } from '@ant-design/icons';
 import { App, Tooltip } from 'antd';
+import { useState } from 'react';
+import { formatAbsoluteTime } from '../utils/time';
 import { Tag } from './Tag';
 
 interface MCPServerPillProps {
@@ -10,12 +12,39 @@ interface MCPServerPillProps {
 }
 
 /**
- * Clickable MCP server pill. Shows orange with login icon when auth is needed,
- * purple with API icon otherwise. Clicking an unauthenticated pill starts the
- * OAuth flow and opens the provider in a new tab.
+ * Format a future timestamp as a short human-relative string ("in 3m",
+ * "in 2h", "in 4d", "expired 5m ago"). Unlike `formatRelativeTime`, this
+ * renders future offsets, which is what an expiring token needs.
+ */
+function formatExpiresIn(expiresAtMs: number): string {
+  const diffMs = expiresAtMs - Date.now();
+  const abs = Math.abs(diffMs);
+  const sec = Math.floor(abs / 1000);
+  const min = Math.floor(sec / 60);
+  const hr = Math.floor(min / 60);
+  const day = Math.floor(hr / 24);
+
+  const value = sec < 60 ? `${sec}s` : min < 60 ? `${min}m` : hr < 24 ? `${hr}h` : `${day}d`;
+
+  return diffMs >= 0 ? `in ${value}` : `expired ${value} ago`;
+}
+
+/**
+ * Clickable MCP server pill.
+ *
+ *   - Unauthenticated: orange + login icon, click starts OAuth.
+ *   - Authenticated:   purple + API icon, tooltip shows human-readable expiry,
+ *                      click force-refreshes the token (even before it's due)
+ *                      so operators can probe per-provider refresh policy.
  */
 export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth, client }) => {
   const { message } = App.useApp();
+  const [refreshing, setRefreshing] = useState(false);
+  // Local override so the tooltip reflects a just-refreshed expiry without
+  // waiting for a full MCPServer re-fetch from the parent.
+  const [expiresAtOverride, setExpiresAtOverride] = useState<number | undefined>(undefined);
+
+  const expiresAt = expiresAtOverride ?? server.auth?.oauth_token_expires_at;
 
   const handleOAuthClick = async () => {
     if (!client) return;
@@ -55,13 +84,67 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
     }
   };
 
+  const handleRefreshClick = async () => {
+    if (!client || refreshing) return;
+    setRefreshing(true);
+    try {
+      const result = (await client.service('mcp-servers/oauth-refresh').create({
+        mcp_server_id: server.mcp_server_id,
+      })) as {
+        success: boolean;
+        expires_at?: number;
+        error?: string;
+      };
+
+      if (result.success) {
+        setExpiresAtOverride(result.expires_at);
+        message.success(
+          result.expires_at
+            ? `${server.display_name || server.name} refreshed — expires ${formatExpiresIn(result.expires_at)}`
+            : `${server.display_name || server.name} refreshed`
+        );
+      } else if (result.error === 'needs_reauth') {
+        message.warning('Refresh token is no longer valid — sign in again.');
+        // Fall through to full OAuth flow so the user can re-auth in one click.
+        await handleOAuthClick();
+      } else {
+        message.error(`Refresh failed: ${result.error || 'unknown error'}`);
+      }
+    } catch (err) {
+      message.error(`Refresh error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // Build a multi-line tooltip for the authenticated case so operators can
+  // see both the relative countdown and the absolute wall-clock time — handy
+  // for spotting providers with suspiciously short or long TTLs.
+  let authedTooltip: React.ReactNode;
+  if (expiresAt) {
+    const date = new Date(expiresAt);
+    authedTooltip = (
+      <>
+        <div>Expires {formatExpiresIn(expiresAt)}</div>
+        <div style={{ opacity: 0.75, fontSize: 12 }}>{formatAbsoluteTime(date)}</div>
+        <div style={{ opacity: 0.75, fontSize: 12, marginTop: 4 }}>Click to refresh now</div>
+      </>
+    );
+  } else {
+    // No expiry surfaced (e.g. pre-migration row or provider that doesn't
+    // return expires_in). Still allow manual refresh as a diagnostic.
+    authedTooltip = 'Click to refresh token';
+  }
+
   return (
-    <Tooltip title={needsAuth ? 'Click to authenticate' : undefined}>
+    <Tooltip title={needsAuth ? 'Click to authenticate' : authedTooltip}>
       <Tag
         color={needsAuth ? 'orange' : 'purple'}
-        icon={needsAuth ? <LoginOutlined /> : <ApiOutlined />}
-        style={needsAuth ? { cursor: 'pointer' } : undefined}
-        onClick={needsAuth ? handleOAuthClick : undefined}
+        icon={
+          needsAuth ? <LoginOutlined /> : refreshing ? <ReloadOutlined spin /> : <ApiOutlined />
+        }
+        style={{ cursor: refreshing ? 'wait' : 'pointer' }}
+        onClick={needsAuth ? handleOAuthClick : handleRefreshClick}
       >
         {server.display_name || server.name}
       </Tag>

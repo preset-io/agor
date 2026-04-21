@@ -190,6 +190,11 @@
       "import": "./dist/tools/mcp/oauth-mcp-transport.js",
       "require": "./dist/tools/mcp/oauth-mcp-transport.cjs"
     },
+    "./tools/mcp/oauth-refresh": {
+      "types": "./dist/tools/mcp/oauth-refresh.d.ts",
+      "import": "./dist/tools/mcp/oauth-refresh.js",
+      "require": "./dist/tools/mcp/oauth-refresh.cjs"
+    },
     "./unix": {
       "types": "./dist/unix/index.d.ts",
       "import": "./dist/unix/index.js",

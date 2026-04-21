@@ -16,14 +16,12 @@ async function getOAuthStatus(
     return { authenticated: true };
   }
 
-  if (oauthMode === 'shared') {
-    return { authenticated: !!mcpServer.auth?.oauth_access_token };
-  }
-
-  // per_user OAuth — check user-specific token
+  // Both shared and per_user live in `user_mcp_oauth_tokens` — shared rows use
+  // `user_id = NULL`. See migration 0038 (sqlite) / 0027 (postgres).
   const { UserMCPOAuthTokenRepository } = await import('@agor/core/db');
   const userTokenRepo = new UserMCPOAuthTokenRepository(ctx.db);
-  const tokenData = await userTokenRepo.getToken(ctx.userId, mcpServer.mcp_server_id);
+  const lookupUserId = oauthMode === 'shared' ? null : ctx.userId;
+  const tokenData = await userTokenRepo.getToken(lookupUserId, mcpServer.mcp_server_id);
   if (tokenData) {
     if (!tokenData.oauth_token_expires_at || tokenData.oauth_token_expires_at > new Date()) {
       return {

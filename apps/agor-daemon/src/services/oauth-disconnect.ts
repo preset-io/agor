@@ -11,7 +11,11 @@ export interface OAuthDisconnectDeps {
   userId: string | undefined;
   mcpServerId: string;
   userTokenRepo: {
-    deleteToken(userId: string, serverId: string): Promise<boolean>;
+    /**
+     * `userId` may be null to target the shared-mode row for this server.
+     * Unified token storage lives in `user_mcp_oauth_tokens` for both modes.
+     */
+    deleteToken(userId: string | null, serverId: string): Promise<boolean>;
   };
   mcpServerRepo: {
     findById(id: string): Promise<{ url?: string; auth?: MCPAuth } | null>;
@@ -55,13 +59,24 @@ export async function performOAuthDisconnect(
   );
 
   try {
-    // 1. Delete per-user token from database
-    const deleted = await userTokenRepo.deleteToken(userId, mcpServerId);
+    // 1. Delete the caller's per-user token row (if any).
+    const deletedPerUser = await userTokenRepo.deleteToken(userId, mcpServerId);
 
-    // 2. Clear in-memory caches (daemon-level + core-level)
+    // 2. Also delete the shared-mode row (user_id = NULL) so the server is
+    //    fully disconnected. Shared tokens no longer live on
+    //    `mcp_servers.data.auth` — they moved to `user_mcp_oauth_tokens` in
+    //    migration 0038/0027.
+    let deletedShared = false;
     const server = await mcpServerRepo.findById(mcpServerId);
+    if (server?.auth?.oauth_mode === 'shared') {
+      deletedShared = await userTokenRepo.deleteToken(null, mcpServerId);
+      if (deletedShared) {
+        console.log('[OAuth Disconnect] Deleted shared-mode token row');
+      }
+    }
+
+    // 3. Clear in-memory caches (daemon-level + core-level)
     if (server?.url) {
-      // Clear daemon-level cache by origin
       try {
         const origin = new URL(server.url).origin;
         oauthTokenCache.delete(origin);
@@ -70,28 +85,15 @@ export async function performOAuthDisconnect(
         // Invalid URL, skip cache clear
       }
 
-      // Clear core-level authCodeTokenCache
       clearCoreTokenCache();
       console.log('[OAuth Disconnect] Cleared core OAuth token cache');
     }
 
-    // 3. Clear oauth_access_token from server's auth config (shared mode token)
-    if (server?.auth?.oauth_access_token) {
-      await mcpServerRepo.update(mcpServerId, {
-        auth: {
-          ...server.auth,
-          oauth_access_token: undefined,
-          oauth_token_expires_at: undefined,
-        },
-      });
-      console.log('[OAuth Disconnect] Cleared shared OAuth token from server config');
-    }
-
-    if (deleted) {
+    if (deletedPerUser || deletedShared) {
       console.log('[OAuth Disconnect] Token deleted successfully');
       return { success: true, message: 'OAuth connection removed' };
     } else {
-      console.log('[OAuth Disconnect] No per-user token found, caches cleared');
+      console.log('[OAuth Disconnect] No token found, caches cleared');
       return { success: true, message: 'OAuth connection removed' };
     }
   } catch (error) {

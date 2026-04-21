@@ -38,6 +38,7 @@ export default defineConfig({
     'tools/mcp/jwt-auth': 'src/tools/mcp/jwt-auth.ts', // MCP JWT authentication utilities
     'tools/mcp/oauth-auth': 'src/tools/mcp/oauth-auth.ts', // MCP OAuth 2.0 authentication utilities
     'tools/mcp/oauth-mcp-transport': 'src/tools/mcp/oauth-mcp-transport.ts', // MCP OAuth 2.1 protocol transport
+    'tools/mcp/oauth-refresh': 'src/tools/mcp/oauth-refresh.ts', // MCP OAuth refresh_token persistence + mutex
     'unix/index': 'src/unix/index.ts', // Unix group management utilities for worktree isolation
     'mcp/index': 'src/mcp/index.ts', // MCP template resolution utilities
     'gateway/index': 'src/gateway/index.ts', // Gateway platform connectors (Slack, etc.)

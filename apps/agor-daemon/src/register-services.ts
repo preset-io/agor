@@ -24,9 +24,11 @@ import {
   WorktreeRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
+import { NotAuthenticated } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   HookContext,
+  MCPServerID,
   MessageSource,
   SessionID,
   UserID,
@@ -44,8 +46,6 @@ import {
   cacheOAuth21Token,
   clearOAuth21Token,
   getOAuth21Token,
-  getOAuth21TokenFromDB,
-  getOAuth21TokenFromDBByUrl,
   oauth21TokenCache,
   persistOAuthToken,
 } from './oauth-cache.js';
@@ -1216,7 +1216,11 @@ async function registerMCPServices(
           db,
           tokenResponse,
           pendingFlow.mcpUrl,
-          pendingFlow,
+          {
+            ...pendingFlow,
+            clientId: pendingFlow.context.clientId,
+            clientSecret: pendingFlow.context.clientSecret,
+          },
           'OAuth Callback'
         );
 
@@ -1735,7 +1739,11 @@ async function registerMCPServices(
           db,
           tokenResponse,
           pendingFlow.mcpUrl,
-          pendingFlow,
+          {
+            ...pendingFlow,
+            clientId: pendingFlow.context.clientId,
+            clientSecret: pendingFlow.context.clientSecret,
+          },
           'OAuth Complete'
         );
         return { success: true, message: 'OAuth authentication successful!', tokenObtained: true };
@@ -1784,6 +1792,188 @@ async function registerMCPServices(
   });
   app.service('mcp-servers/oauth-status').hooks({ before: { find: [ctx.requireAuth] } });
 
+  // --------------------------------------------------------------------------
+  // OAuth auth-headers service
+  //
+  // Returns a map of { [mcp_server_id]: { authorization?, error? } } for the
+  // caller. Used by the executor to attach JIT-refreshed Bearer tokens only
+  // to in-scope MCP servers without ever exposing raw refresh_tokens or
+  // letting callers ask for someone else's token.
+  //
+  // Access control:
+  //   - per_user tokens are keyed on params.user.user_id — a caller cannot
+  //     request another user's row (no forUserId override here).
+  //   - shared tokens (user_id = NULL) are returned to any authenticated
+  //     caller who can see the server, matching existing shared-mode semantics.
+  //
+  // The caller is expected to pass only the server IDs it already resolved
+  // as in-scope for the session (see `getMcpServersForSession`).
+  // --------------------------------------------------------------------------
+  app.use('/mcp-servers/oauth-auth-headers', {
+    async create(
+      data: { mcp_server_ids: string[] },
+      params?: AuthenticatedParams
+    ): Promise<{
+      headers: Record<string, { authorization?: string; error?: string }>;
+    }> {
+      const userId = params?.user?.user_id;
+      if (!userId) {
+        throw new NotAuthenticated('oauth-auth-headers requires authentication');
+      }
+
+      const serverIds = Array.isArray(data?.mcp_server_ids) ? data.mcp_server_ids : [];
+      const headers: Record<string, { authorization?: string; error?: string }> = {};
+
+      if (serverIds.length === 0) {
+        return { headers };
+      }
+
+      const userTokenRepo = new UserMCPOAuthTokenRepository(db);
+      const mcpServerRepo = new MCPServerRepository(db);
+      const { needsRefresh, refreshAndPersistToken, InvalidGrantError } = await import(
+        '@agor/core/tools/mcp/oauth-refresh'
+      );
+
+      await Promise.all(
+        serverIds.map(async (serverId) => {
+          try {
+            const server = await mcpServerRepo.findById(serverId);
+            if (!server) {
+              headers[serverId] = { error: 'server_not_found' };
+              return;
+            }
+            if (server.auth?.type !== 'oauth') {
+              headers[serverId] = { error: 'not_oauth_server' };
+              return;
+            }
+
+            const mode = server.auth.oauth_mode ?? 'per_user';
+            const tokenUserId: UserID | null = mode === 'per_user' ? (userId as UserID) : null;
+
+            const row = await userTokenRepo.getToken(tokenUserId, serverId as MCPServerID);
+            if (!row) {
+              headers[serverId] = { error: 'needs_reauth' };
+              return;
+            }
+
+            let accessToken = row.oauth_access_token;
+            if (needsRefresh(row.oauth_token_expires_at) && row.oauth_refresh_token) {
+              try {
+                accessToken = await refreshAndPersistToken({
+                  db,
+                  userId: tokenUserId,
+                  mcpServerId: serverId as MCPServerID,
+                });
+              } catch (refreshErr) {
+                if (refreshErr instanceof InvalidGrantError) {
+                  headers[serverId] = { error: 'needs_reauth' };
+                  return;
+                }
+                // Transient: fall through with stale token rather than 500ing.
+                console.warn(
+                  `[OAuth AuthHeaders] Refresh failed for ${serverId} — using stale token:`,
+                  refreshErr instanceof Error ? refreshErr.message : refreshErr
+                );
+              }
+            } else if (
+              !accessToken ||
+              (row.oauth_token_expires_at && row.oauth_token_expires_at <= new Date())
+            ) {
+              // Expired with no refresh_token → must re-auth.
+              headers[serverId] = { error: 'needs_reauth' };
+              return;
+            }
+
+            headers[serverId] = { authorization: `Bearer ${accessToken}` };
+          } catch (err) {
+            console.error(`[OAuth AuthHeaders] Error for ${serverId}:`, err);
+            headers[serverId] = {
+              error: err instanceof Error ? err.message : 'unknown_error',
+            };
+          }
+        })
+      );
+
+      return { headers };
+    },
+  });
+  app.service('mcp-servers/oauth-auth-headers').hooks({
+    before: { create: [ctx.requireAuth] },
+  });
+
+  // --------------------------------------------------------------------------
+  // OAuth manual refresh
+  //
+  // POST { mcp_server_id } → force a refresh regardless of needsRefresh().
+  // Used by the UI "refresh now" action on the MCP pill so operators can
+  // probe / extend a token's lifetime on demand.
+  //
+  // Access control mirrors oauth-auth-headers: per_user rows are keyed on
+  // params.user.user_id (caller cannot refresh someone else's token); shared
+  // rows are accessible to any authenticated caller who can see the server.
+  // --------------------------------------------------------------------------
+  app.use('/mcp-servers/oauth-refresh', {
+    async create(
+      data: { mcp_server_id: string },
+      params?: AuthenticatedParams
+    ): Promise<{
+      success: boolean;
+      expires_at?: number;
+      error?: 'needs_reauth' | 'not_oauth_server' | 'server_not_found' | string;
+    }> {
+      const userId = params?.user?.user_id;
+      if (!userId) {
+        throw new NotAuthenticated('oauth-refresh requires authentication');
+      }
+
+      const serverId = data?.mcp_server_id;
+      if (!serverId) {
+        return { success: false, error: 'mcp_server_id is required' };
+      }
+
+      const userTokenRepo = new UserMCPOAuthTokenRepository(db);
+      const mcpServerRepo = new MCPServerRepository(db);
+      const { refreshAndPersistToken, InvalidGrantError, MissingRefreshTokenError } = await import(
+        '@agor/core/tools/mcp/oauth-refresh'
+      );
+
+      try {
+        const server = await mcpServerRepo.findById(serverId);
+        if (!server) return { success: false, error: 'server_not_found' };
+        if (server.auth?.type !== 'oauth') return { success: false, error: 'not_oauth_server' };
+
+        const mode = server.auth.oauth_mode ?? 'per_user';
+        const tokenUserId: UserID | null = mode === 'per_user' ? (userId as UserID) : null;
+
+        await refreshAndPersistToken({
+          db,
+          userId: tokenUserId,
+          mcpServerId: serverId as MCPServerID,
+        });
+
+        const fresh = await userTokenRepo.getToken(tokenUserId, serverId as MCPServerID);
+        const expiresAt =
+          fresh?.oauth_token_expires_at instanceof Date
+            ? fresh.oauth_token_expires_at.getTime()
+            : undefined;
+
+        return { success: true, expires_at: expiresAt };
+      } catch (err) {
+        if (err instanceof InvalidGrantError || err instanceof MissingRefreshTokenError) {
+          return { success: false, error: 'needs_reauth' };
+        }
+        console.error(`[OAuth Refresh] ${serverId}:`, err);
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'unknown_error',
+        };
+      }
+    },
+  });
+  app.service('mcp-servers/oauth-refresh').hooks({
+    before: { create: [ctx.requireAuth] },
+  });
+
   // Discover endpoint
   app.use('/mcp-servers/discover', {
     async create(
@@ -1802,6 +1992,7 @@ async function registerMCPServices(
           oauth_client_secret?: string;
           oauth_scope?: string;
           oauth_grant_type?: string;
+          oauth_mode?: 'per_user' | 'shared';
         };
       },
       params?: AuthenticatedParams
@@ -1966,15 +2157,23 @@ async function registerMCPServices(
 
         if (!authHeaders && serverConfig.auth?.type === 'oauth' && serverConfig.url) {
           let cachedToken = getOAuth21Token(serverConfig.url);
+          // Prefer a live row from the unified token table when we have a
+          // serverId. Look up the caller's per-user row, then fall back to
+          // the shared row (user_id IS NULL).
           if (!cachedToken && serverId) {
-            cachedToken = await getOAuth21TokenFromDB(mcpServerRepo, serverId);
-            if (cachedToken) cacheOAuth21Token(serverConfig.url, cachedToken, 3600);
-          }
-          if (!cachedToken && !serverId) {
-            const dbResult = await getOAuth21TokenFromDBByUrl(mcpServerRepo, serverConfig.url);
-            if (dbResult) {
-              cachedToken = dbResult.token;
-              cacheOAuth21Token(serverConfig.url, cachedToken, 3600);
+            const tokenRepo = new UserMCPOAuthTokenRepository(db);
+            const lookupUserId =
+              serverConfig.auth?.oauth_mode === 'shared'
+                ? null
+                : ((params?.user?.user_id as UserID | undefined) ?? null);
+            const dbToken =
+              (await tokenRepo.getValidToken(lookupUserId, serverId as MCPServerID)) ??
+              (lookupUserId !== null
+                ? await tokenRepo.getValidToken(null, serverId as MCPServerID)
+                : undefined);
+            if (dbToken) {
+              cachedToken = dbToken;
+              cacheOAuth21Token(serverConfig.url, dbToken, 3600);
             }
           }
           if (!cachedToken) {
