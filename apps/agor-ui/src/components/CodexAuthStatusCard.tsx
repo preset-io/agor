@@ -17,18 +17,36 @@ export interface CodexAuthStatusCardProps {
   onClearError?: () => void;
 }
 
-function getAlertType(status: CodexAuthStatus | null | undefined): 'info' | 'success' | 'warning' {
+function renderStatusSummary(status: CodexAuthStatus | null | undefined) {
   if (!status) {
-    return 'info';
+    return null;
   }
 
   switch (status.status) {
     case 'signed_in_with_chatgpt':
-      return 'success';
+      return (
+        <Alert
+          type="success"
+          title="Connected to Codex"
+          description="This user can use Codex with their ChatGPT subscription."
+          showIcon
+        />
+      );
     case 'using_api_key':
-      return 'warning';
+      return (
+        <Alert
+          type="warning"
+          title="Using OpenAI API key"
+          description="Remove the configured OPENAI_API_KEY if you want to use Codex login instead."
+          showIcon
+        />
+      );
     default:
-      return 'info';
+      return (
+        <Paragraph style={{ marginBottom: 0 }}>
+          Connect Codex to use your ChatGPT subscription in Agor.
+        </Paragraph>
+      );
   }
 }
 
@@ -47,7 +65,7 @@ export function CodexAuthStatusCard({
   const { token } = theme.useToken();
 
   return (
-    <Card title="Codex Login" size="small">
+    <Card title="Codex" size="small">
       <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
         {loading && !status ? (
           <div style={{ textAlign: 'center', padding: token.paddingSM }}>
@@ -59,50 +77,7 @@ export function CodexAuthStatusCard({
           <Alert type="error" title={error} showIcon closable onClose={onClearError} />
         ) : null}
 
-        {status ? (
-          <>
-            <Alert
-              type={getAlertType(status)}
-              title={status.label}
-              description={status.description}
-              showIcon
-            />
-
-            {status.status === 'using_api_key' ? (
-              <Alert
-                type="warning"
-                showIcon
-                title="API key precedence"
-                description="Configured OPENAI_API_KEY values will take precedence over ChatGPT or Codex CLI login."
-              />
-            ) : null}
-
-            {status.warnings.map((warning) => (
-              <Alert key={warning} type="warning" showIcon title={warning} />
-            ))}
-
-            {status.guidance.length > 0 ? (
-              <div>
-                <Text strong>How to connect</Text>
-                <ul
-                  style={{
-                    marginTop: token.marginXS,
-                    marginBottom: 0,
-                    paddingLeft: token.paddingLG,
-                  }}
-                >
-                  {status.guidance.map((guidance) => (
-                    <li key={guidance}>{guidance}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-
-            <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-              Stable Codex home: <Text code>{status.codexHome}</Text>
-            </Paragraph>
-          </>
-        ) : null}
+        {renderStatusSummary(status)}
 
         {flow?.status === 'pending' ? (
           <Alert
@@ -111,6 +86,9 @@ export function CodexAuthStatusCard({
             title="Complete login in your browser"
             description={
               <Space orientation="vertical" size="small">
+                <Paragraph style={{ marginBottom: 0 }}>
+                  Open the verification URL and enter the code below.
+                </Paragraph>
                 {flow.verificationUri ? <Text code>{flow.verificationUri}</Text> : null}
                 {flow.userCode ? <Text code>{flow.userCode}</Text> : null}
                 <Button onClick={onCancel} loading={submitting}>
@@ -138,7 +116,7 @@ export function CodexAuthStatusCard({
               </>
             ) : null}
 
-            {status?.status === 'not_signed_in' || status?.status === 'unknown' ? (
+            {status?.status === 'not_signed_in' || status?.status === 'unknown' || !status ? (
               <Button type="primary" onClick={onConnect} loading={submitting}>
                 Connect Codex
               </Button>
