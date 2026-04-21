@@ -133,7 +133,7 @@ export function resolveCodexAuthStatusContext(
   return {
     agorUserId: options.agorUserId,
     codexHome: resolveCodexHomeForUser(options.agorUserId),
-    executionUnixUser: null,
+    executionUnixUser: options.sessionUnixUsername ?? null,
     apiKeySource: undefined,
   };
 }

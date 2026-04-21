@@ -6,6 +6,7 @@ import {
   CodexDeviceAuthManager,
   type CodexDeviceAuthProcess,
   parseDeviceAuthOutput,
+  resolveCodexDeviceAuthSpawnContext,
 } from './codex-device-auth.js';
 
 class FakeCodexDeviceAuthProcess extends EventEmitter implements CodexDeviceAuthProcess {
@@ -30,9 +31,16 @@ describe('parseDeviceAuthOutput', () => {
 describe('CodexDeviceAuthManager', () => {
   it('deduplicates pending flows by user context key', async () => {
     const config: AgorConfig = {};
-    const process = new FakeCodexDeviceAuthProcess();
+    let releaseSpawn: (() => void) | null = null;
+    const spawnGate = new Promise<void>((resolve) => {
+      releaseSpawn = resolve;
+    });
+    let spawnCount = 0;
     const manager = new CodexDeviceAuthManager({
       spawnProcess: async (_config, _options, context) => {
+        spawnCount += 1;
+        const process = new FakeCodexDeviceAuthProcess();
+        await spawnGate;
         queueMicrotask(() => {
           process.stdout.write('Open https://chatgpt.com/device and enter ABCD-EFGHI');
         });
@@ -44,9 +52,26 @@ describe('CodexDeviceAuthManager', () => {
       },
     });
 
-    const first = await manager.start(config, { agorUserId: 'user-123' });
-    const second = await manager.start(config, { agorUserId: 'user-123' });
+    const firstPromise = manager.start(config, { agorUserId: 'user-123' });
+    const secondPromise = manager.start(config, { agorUserId: 'user-123' });
+
+    await Promise.resolve();
+    expect(spawnCount).toBe(1);
+    releaseSpawn?.();
+
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
     expect(second.flowId).toBe(first.flowId);
+  });
+
+  it('propagates an explicit session Unix user into the spawn context', () => {
+    const config: AgorConfig = {};
+
+    expect(
+      resolveCodexDeviceAuthSpawnContext(config, {
+        agorUserId: 'user-123',
+        sessionUnixUsername: 'alice',
+      }).executionUnixUser
+    ).toBe('alice');
   });
 });

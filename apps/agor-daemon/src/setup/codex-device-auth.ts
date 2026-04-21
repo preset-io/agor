@@ -62,6 +62,8 @@ interface CodexDeviceAuthManagerOptions {
   spawnProcess?: SpawnCodexDeviceAuthProcess;
 }
 
+type PendingContextStart = Promise<CodexDeviceAuthFlow>;
+
 function stripAnsi(text: string): string {
   let result = '';
 
@@ -98,8 +100,10 @@ export function parseDeviceAuthOutput(output: string): {
   };
 }
 
-function getContextKey(context: Pick<CodexDeviceAuthFlow, 'agorUserId' | 'codexHome'>): string {
-  return `${context.agorUserId}:${context.codexHome}`;
+function getContextKey(
+  context: Pick<CodexDeviceAuthFlow, 'agorUserId' | 'codexHome' | 'executionUnixUser'>
+): string {
+  return `${context.agorUserId}:${context.codexHome}:${context.executionUnixUser ?? 'current-user'}`;
 }
 
 function buildDeviceAuthCommand(codexHome: string): string {
@@ -149,6 +153,7 @@ export async function spawnCodexDeviceAuthProcess(
 export class CodexDeviceAuthManager {
   private flows = new Map<string, ManagedCodexDeviceAuthFlow>();
   private activeContextFlows = new Map<string, string>();
+  private pendingContextStarts = new Map<string, PendingContextStart>();
   private readonly now: () => number;
   private readonly flowTtlMs: number;
   private readonly spawnProcess: SpawnCodexDeviceAuthProcess;
@@ -192,6 +197,7 @@ export class CodexDeviceAuthManager {
     const contextKey = getContextKey({
       agorUserId: options.agorUserId,
       codexHome: context.codexHome,
+      executionUnixUser: context.executionUnixUser,
     });
 
     const activeFlowId = this.activeContextFlows.get(contextKey);
@@ -203,6 +209,58 @@ export class CodexDeviceAuthManager {
       this.activeContextFlows.delete(contextKey);
     }
 
+    const pendingStart = this.pendingContextStarts.get(contextKey);
+    if (pendingStart) {
+      return await pendingStart;
+    }
+
+    const startPromise = this.startFlow(config, options, context, contextKey);
+    this.pendingContextStarts.set(contextKey, startPromise);
+
+    try {
+      return await startPromise;
+    } finally {
+      if (this.pendingContextStarts.get(contextKey) === startPromise) {
+        this.pendingContextStarts.delete(contextKey);
+      }
+    }
+  }
+
+  private updateFlow(
+    flow: ManagedCodexDeviceAuthFlow,
+    updates: Partial<Pick<CodexDeviceAuthFlow, 'status' | 'verificationUri' | 'userCode' | 'error'>>
+  ): void {
+    flow.snapshot = {
+      ...flow.snapshot,
+      ...updates,
+      updatedAt: this.now(),
+    };
+    this.flows.set(flow.snapshot.flowId, flow);
+  }
+
+  private cleanupExpiredFlows(): void {
+    const cutoff = this.now() - this.flowTtlMs;
+
+    for (const [flowId, flow] of this.flows.entries()) {
+      if (flow.snapshot.updatedAt >= cutoff) {
+        continue;
+      }
+
+      if (flow.snapshot.status === 'pending') {
+        flow.process?.kill('SIGTERM');
+      }
+
+      this.flows.delete(flowId);
+      this.activeContextFlows.delete(flow.contextKey);
+    }
+  }
+
+  private async startFlow(
+    config: AgorConfig,
+    options: SpawnCodexDeviceAuthProcessOptions,
+    context: CodexDeviceAuthSpawnContext,
+    contextKey: string
+  ): Promise<CodexDeviceAuthFlow> {
     const { process, context: spawnedContext } = await this.spawnProcess(config, options, context);
     const startedAt = this.now();
     const flowId = randomUUID();
@@ -296,34 +354,5 @@ export class CodexDeviceAuthManager {
         }
       });
     });
-  }
-
-  private updateFlow(
-    flow: ManagedCodexDeviceAuthFlow,
-    updates: Partial<Pick<CodexDeviceAuthFlow, 'status' | 'verificationUri' | 'userCode' | 'error'>>
-  ): void {
-    flow.snapshot = {
-      ...flow.snapshot,
-      ...updates,
-      updatedAt: this.now(),
-    };
-    this.flows.set(flow.snapshot.flowId, flow);
-  }
-
-  private cleanupExpiredFlows(): void {
-    const cutoff = this.now() - this.flowTtlMs;
-
-    for (const [flowId, flow] of this.flows.entries()) {
-      if (flow.snapshot.updatedAt >= cutoff) {
-        continue;
-      }
-
-      if (flow.snapshot.status === 'pending') {
-        flow.process?.kill('SIGTERM');
-      }
-
-      this.flows.delete(flowId);
-      this.activeContextFlows.delete(flow.contextKey);
-    }
   }
 }

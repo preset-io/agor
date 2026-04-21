@@ -10,6 +10,17 @@ describe('resolveCodexAuthStatusContext', () => {
       '/.agor/codex/users/user-123'
     );
   });
+
+  it('honors an explicit session Unix user when provided', () => {
+    const config: AgorConfig = {};
+
+    expect(
+      resolveCodexAuthStatusContext(config, {
+        agorUserId: 'user-123',
+        sessionUnixUsername: 'alice',
+      }).executionUnixUser
+    ).toBe('alice');
+  });
 });
 
 describe('deriveCodexAuthStatus', () => {
