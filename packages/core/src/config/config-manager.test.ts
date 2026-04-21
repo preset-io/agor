@@ -207,6 +207,24 @@ describe('resolveCodexHome & ensureCodexHome', () => {
     expect(home).toBe(path.join(tempDir, '.agor', 'codex'));
   });
 
+  it('should prefer ~/.codex when auth.json exists and codex.home is not configured', async () => {
+    await fs.mkdir(path.join(tempDir, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(tempDir, '.codex', 'auth.json'), '{"token":"test"}', 'utf-8');
+
+    const home = await resolveCodexHome();
+
+    expect(home).toBe(path.join(tempDir, '.codex'));
+  });
+
+  it('should prefer ~/.codex when config.toml exists and codex.home is not configured', async () => {
+    await fs.mkdir(path.join(tempDir, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(tempDir, '.codex', 'config.toml'), 'model = "o4-mini"', 'utf-8');
+
+    const home = await resolveCodexHome();
+
+    expect(home).toBe(path.join(tempDir, '.codex'));
+  });
+
   it('should resolve a configured tilde path', async () => {
     const agorDir = path.join(tempDir, '.agor');
     await fs.mkdir(agorDir, { recursive: true });
@@ -223,6 +241,17 @@ describe('resolveCodexHome & ensureCodexHome', () => {
   it('should create the default Codex home directory when ensuring', async () => {
     const codexHome = await ensureCodexHome();
     expect(codexHome).toBe(path.join(tempDir, '.agor', 'codex'));
+    const stats = await fs.stat(codexHome);
+    expect(stats.isDirectory()).toBe(true);
+  });
+
+  it('should create ~/.codex when native Codex artifacts exist and no override is configured', async () => {
+    await fs.mkdir(path.join(tempDir, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(tempDir, '.codex', 'auth.json'), '{"token":"test"}', 'utf-8');
+
+    const codexHome = await ensureCodexHome();
+
+    expect(codexHome).toBe(path.join(tempDir, '.codex'));
     const stats = await fs.stat(codexHome);
     expect(stats.isDirectory()).toBe(true);
   });

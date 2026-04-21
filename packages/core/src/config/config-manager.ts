@@ -161,16 +161,40 @@ export function expandHomePath(input: string): string {
   return input;
 }
 
+async function detectDefaultCodexHome(): Promise<string> {
+  const nativeHome = expandHomePath('~/.codex');
+  const legacyHome = expandHomePath('~/.agor/codex');
+
+  for (const marker of ['auth.json', 'config.toml']) {
+    try {
+      await fs.access(path.join(nativeHome, marker));
+      return nativeHome;
+    } catch {}
+  }
+
+  return legacyHome;
+}
+
 /**
  * Resolve configured Codex home directory (expanded to absolute path)
  */
 export async function resolveCodexHome(): Promise<string> {
-  const config = await loadConfig();
-  const configured = config.codex?.home;
-  const defaultHome = getDefaultConfig().codex?.home ?? '~/.agor/codex';
-  const selected =
-    typeof configured === 'string' && configured.trim().length > 0 ? configured : defaultHome;
-  return expandHomePath(selected.trim());
+  let configured: string | undefined;
+
+  try {
+    const config = await loadConfigFromFile(getConfigPath());
+    configured = config.codex?.home;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  if (typeof configured === 'string' && configured.trim().length > 0) {
+    return expandHomePath(configured.trim());
+  }
+
+  return detectDefaultCodexHome();
 }
 
 /**

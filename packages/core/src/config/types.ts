@@ -246,7 +246,7 @@ export interface AgorDatabaseSettings {
  * Codex-specific configuration
  */
 export interface AgorCodexSettings {
-  /** Codex home directory (default: ~/.agor/codex) */
+  /** Stable Codex home override. When unset, prefer ~/.codex if Codex CLI artifacts exist, otherwise ~/.agor/codex. */
   home?: string;
 }
 
