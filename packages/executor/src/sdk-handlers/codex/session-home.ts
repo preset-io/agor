@@ -19,8 +19,16 @@ interface MaterializeCodexSessionHomeParams extends SessionHomePathOptions {
   stableCodexHome: string;
 }
 
+function sanitizeSessionIdForPath(sessionId: SessionID | string): string {
+  return String(sessionId)
+    .replace(/[\\/]/g, '-')
+    .replace(/\.\.+/g, '_')
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .replace(/-+/g, '-');
+}
+
 function getCodexSessionDirName(sessionId: SessionID | string): string {
-  return `agor-codex-${sessionId}`;
+  return `agor-codex-${sanitizeSessionIdForPath(sessionId)}`;
 }
 
 function getCodexSessionHomeCandidates(
@@ -61,7 +69,7 @@ async function syncStableAuthArtifact(
   const stableAuthPath = path.join(stableCodexHome, 'auth.json');
   const sessionAuthPath = path.join(sessionCodexHome, 'auth.json');
 
-  await fs.rm(sessionAuthPath, { force: true });
+  await fs.rm(sessionAuthPath, { recursive: true, force: true });
 
   try {
     await fs.access(stableAuthPath);

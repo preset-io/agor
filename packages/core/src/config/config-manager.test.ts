@@ -225,6 +225,14 @@ describe('resolveCodexHome & ensureCodexHome', () => {
     expect(home).toBe(path.join(tempDir, '.codex'));
   });
 
+  it('should rethrow unexpected fs errors while probing the native Codex home', async () => {
+    vi.spyOn(fs, 'access').mockRejectedValue(
+      Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    );
+
+    await expect(resolveCodexHome()).rejects.toThrow('permission denied');
+  });
+
   it('should resolve a configured tilde path', async () => {
     const agorDir = path.join(tempDir, '.agor');
     await fs.mkdir(agorDir, { recursive: true });
@@ -270,6 +278,29 @@ describe('resolveCodexHome & ensureCodexHome', () => {
     expect(codexHome).toBe(customHome);
     const stats = await fs.stat(customHome);
     expect(stats.isDirectory()).toBe(true);
+  });
+
+  it('should return the detected Codex home from getConfigValue when codex.home is unset', async () => {
+    await fs.mkdir(path.join(tempDir, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(tempDir, '.codex', 'auth.json'), '{"token":"test"}', 'utf-8');
+
+    const value = await getConfigValue('codex.home');
+
+    expect(value).toBe(path.join(tempDir, '.codex'));
+  });
+
+  it('should return the configured Codex home from getConfigValue when codex.home is set', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({ codex: { home: '~/.custom-codex' } }),
+      'utf-8'
+    );
+
+    const value = await getConfigValue('codex.home');
+
+    expect(value).toBe(path.join(tempDir, '.custom-codex'));
   });
 });
 

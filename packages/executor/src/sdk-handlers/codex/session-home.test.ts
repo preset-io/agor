@@ -65,6 +65,41 @@ describe('materializeCodexSessionHome', () => {
       code: 'ENOENT',
     });
   });
+
+  it('sanitizes session ids before deriving overlay paths', async () => {
+    const result = await materializeCodexSessionHome({
+      sessionId: '../session/../with\\\\slashes',
+      agorSystemPrompt: '# session prompt',
+      stableCodexHome,
+      tmpBaseDir,
+      fallbackBaseDir,
+    });
+
+    expect(result.sessionCodexHome).toBe(
+      path.join(tmpBaseDir, 'agor-codex-_-session-_-with-slashes')
+    );
+  });
+
+  it('replaces a pre-existing auth.json directory with the stable auth symlink', async () => {
+    const authPath = path.join(stableCodexHome, 'auth.json');
+    await fs.writeFile(authPath, '{"token":"test"}', 'utf-8');
+
+    const existingSessionHome = path.join(tmpBaseDir, 'agor-codex-session-dir-auth');
+    await fs.mkdir(path.join(existingSessionHome, 'auth.json'), { recursive: true });
+
+    const result = await materializeCodexSessionHome({
+      sessionId: 'session-dir-auth',
+      agorSystemPrompt: '# session prompt',
+      stableCodexHome,
+      tmpBaseDir,
+      fallbackBaseDir,
+    });
+
+    const linkedAuthPath = path.join(result.sessionCodexHome, 'auth.json');
+    const stats = await fs.lstat(linkedAuthPath);
+    expect(stats.isSymbolicLink()).toBe(true);
+    expect(await fs.readlink(linkedAuthPath)).toBe(authPath);
+  });
 });
 
 describe('cleanupCodexSessionHome', () => {

@@ -169,7 +169,11 @@ async function detectDefaultCodexHome(): Promise<string> {
     try {
       await fs.access(path.join(nativeHome, marker));
       return nativeHome;
-    } catch {}
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
+    }
   }
 
   return legacyHome;
@@ -230,6 +234,10 @@ export async function initConfig(): Promise<void> {
  * @returns Value or undefined if not set
  */
 export async function getConfigValue(key: string): Promise<string | boolean | number | undefined> {
+  if (key === 'codex.home') {
+    return resolveCodexHome();
+  }
+
   const config = await loadConfig();
   const defaults = getDefaultConfig();
 
