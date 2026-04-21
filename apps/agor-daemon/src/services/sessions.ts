@@ -190,8 +190,9 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   }
 
   /**
-   * Resolve the `created_by` identity for a child session being created via
-   * spawn / fork / btw. See {@link determineSpawnIdentity} for the rules.
+   * Resolve the `created_by` AND `unix_username` identity for a child session
+   * being created via spawn / fork / btw. See {@link determineSpawnIdentity}
+   * for the rules.
    *
    * Defaults the child to the MCP-authenticated caller; only inherits the
    * parent's identity when the worktree explicitly opts in via the
@@ -203,15 +204,27 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
    * to attribute. External calls (REST/socketio/MCP) must always be routed
    * through `determineSpawnIdentity`, which fails closed if the caller has
    * no `user_id`.
+   *
+   * `unix_username` is stamped explicitly here (not via a Feathers hook)
+   * because fork()/spawn() call `this.create(...)` directly, which bypasses
+   * the `before.create` hook pipeline — so `setSessionUnixUsername` never
+   * fires for these paths. Omitting unix_username silently breaks strict-mode
+   * deployments where the executor refuses to launch without one.
+   *
+   * - When the child inherits parent identity (internal call / legacy
+   *   sharing) → inherit the parent's unix_username too, so execution stays
+   *   consistent with attribution.
+   * - When the child is attributed to the caller → load the caller's current
+   *   `unix_username` so the executor runs as the attributed user.
    */
   private async resolveChildIdentity(
     parent: Session,
     params?: SessionParams
-  ): Promise<{ created_by: Session['created_by'] }> {
+  ): Promise<{ created_by: Session['created_by']; unix_username: Session['unix_username'] }> {
     // Internal call (no transport provider) → service-to-service or scheduler.
     // Preserve parent attribution; helper-level identity checks don't apply.
     if (!params?.provider) {
-      return { created_by: parent.created_by };
+      return { created_by: parent.created_by, unix_username: parent.unix_username ?? null };
     }
 
     const caller = params.user;
@@ -234,7 +247,31 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     }
 
     const result = determineSpawnIdentity(parent, caller, worktree);
-    return { created_by: result.created_by as Session['created_by'] };
+    const createdBy = result.created_by as Session['created_by'];
+
+    // Stamp unix_username based on attribution outcome:
+    // - Legacy sharing (child inherits parent.created_by) → inherit parent's unix_username
+    // - Otherwise (caller-attributed) → load caller's current unix_username
+    let unixUsername: Session['unix_username'] = null;
+    if (result.usedLegacySharing || createdBy === parent.created_by) {
+      unixUsername = parent.unix_username ?? null;
+    } else {
+      try {
+        const callerUser = (await this.app
+          .service('users')
+          .get(createdBy as string, { provider: undefined })) as { unix_username?: string | null };
+        unixUsername = callerUser?.unix_username ?? null;
+      } catch (err) {
+        // If we can't load the caller user, fail closed rather than silently
+        // creating a session with no unix_username (which would hang forever
+        // in strict mode).
+        throw new Forbidden(
+          `Cannot resolve unix_username for caller ${createdBy}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
+
+    return { created_by: createdBy, unix_username: unixUsername };
   }
 
   /**
@@ -252,7 +289,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     // Default: attribute the child to the MCP-authenticated caller, not the
     // parent owner. Legacy parent-inheriting "identity borrowing" is preserved
     // only when the worktree opts in via dangerously_allow_session_sharing.
-    const { created_by } = await this.resolveChildIdentity(parent, params);
+    const { created_by, unix_username } = await this.resolveChildIdentity(parent, params);
 
     const forkedSession = await this.create(
       {
@@ -262,9 +299,9 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         description: data.prompt,
         worktree_id: parent.worktree_id,
         created_by, // See resolveChildIdentity — defaults to caller, not parent owner
-        // unix_username intentionally omitted: setSessionUnixUsername hook
-        // stamps the child with the *caller's* current unix_username so that
-        // the execution context matches the attributed `created_by`.
+        unix_username, // Stamped by resolveChildIdentity — this.create() bypasses
+        // the setSessionUnixUsername hook so we must set it explicitly here.
+        // Strict-mode deployments refuse to launch sessions with null unix_username.
         git_state: { ...parent.git_state },
         genealogy: {
           forked_from_session_id: parent.session_id,
@@ -452,7 +489,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     // Default: attribute the child to the MCP-authenticated caller, not the
     // parent owner. Legacy parent-inheriting "identity borrowing" is preserved
     // only when the worktree opts in via dangerously_allow_session_sharing.
-    const { created_by } = await this.resolveChildIdentity(parent, params);
+    const { created_by, unix_username } = await this.resolveChildIdentity(parent, params);
 
     const spawnedSession = await this.create(
       {
@@ -462,9 +499,9 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         description: finalPrompt, // Use final prompt with extra instructions if provided
         worktree_id: parent.worktree_id,
         created_by, // See resolveChildIdentity — defaults to caller, not parent owner
-        // unix_username intentionally omitted: setSessionUnixUsername hook
-        // stamps the child with the *caller's* current unix_username so that
-        // the execution context matches the attributed `created_by`.
+        unix_username, // Stamped by resolveChildIdentity — this.create() bypasses
+        // the setSessionUnixUsername hook so we must set it explicitly here.
+        // Strict-mode deployments refuse to launch sessions with null unix_username.
         git_state: { ...parent.git_state },
         genealogy: {
           parent_session_id: parent.session_id,
