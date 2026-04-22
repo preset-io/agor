@@ -717,7 +717,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         </div>
       }
       closable
-      width={1050}
+      width="min(1050px, calc(100vw - 32px))"
       style={{ top: 40 }}
       styles={{
         wrapper: {

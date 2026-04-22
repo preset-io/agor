@@ -53,6 +53,11 @@ const SCOPE_COLOR: Record<EnvVarScope, string> = {
   executor: 'default',
 };
 
+const SCOPE_OPTIONS = ENV_VAR_SCOPES_V05.map((s) => ({
+  value: s,
+  label: SCOPE_LABEL[s],
+}));
+
 export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
   envVars,
   onSave,
@@ -144,10 +149,7 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
               popupMatchSelectWidth={false}
               disabled={disabled || loading[record.key]}
               onChange={(next) => handleScopeChange(record.key, next)}
-              options={ENV_VAR_SCOPES_V05.map((s) => ({
-                value: s,
-                label: SCOPE_LABEL[s],
-              }))}
+              options={SCOPE_OPTIONS}
             />
           );
         }
@@ -171,6 +173,7 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
                 onPressEnter={() => handleUpdate(record.key, record.scope)}
                 autoFocus
                 disabled={disabled}
+                style={{ flex: 1, minWidth: 180 }}
               />
               <Button
                 type="primary"
@@ -217,6 +220,7 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
           <Button
             danger
             type="text"
+            size="small"
             icon={<DeleteOutlined />}
             onClick={() => handleDeleteClick(record.key)}
             loading={loading[record.key]}
@@ -278,12 +282,9 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
           <Select<EnvVarScope>
             value={newScope}
             onChange={setNewScope}
-            style={{ width: 130 }}
+            style={{ width: 140 }}
             disabled={disabled}
-            options={ENV_VAR_SCOPES_V05.map((s) => ({
-              value: s,
-              label: SCOPE_LABEL[s],
-            }))}
+            options={SCOPE_OPTIONS}
           />
           <Input.Password
             placeholder="Value"
