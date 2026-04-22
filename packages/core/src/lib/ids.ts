@@ -13,9 +13,9 @@
  */
 
 import { v7 as uuidv7 } from 'uuid';
-import { toShortId, URL_SHORT_ID_LENGTH } from '../types/id';
+import { findByShortIdPrefix, toShortId, URL_SHORT_ID_LENGTH } from '../types/id';
 
-export { URL_SHORT_ID_LENGTH };
+export { findByShortIdPrefix, URL_SHORT_ID_LENGTH };
 
 // ============================================================================
 // Types
@@ -260,34 +260,6 @@ export class IdResolutionError extends Error {
 }
 
 /**
- * Find all entities whose ID matches the given prefix (either direction).
- *
- * Used by UI resolvers that need to handle ambiguity explicitly (e.g. pick
- * the most recent match for legacy short-ID URLs). Returns `[]` when no
- * entity matches.
- *
- * The match is bidirectional: `entity.id.startsWith(prefix) || prefix.startsWith(shortId(entity.id))`
- * so that a URL containing any reasonable prefix length still resolves.
- */
-export function findByShortIdPrefix<T extends { id: UUID }>(
-  prefix: IDPrefix,
-  entities: Iterable<T>
-): T[] {
-  const cleanPrefix = prefix.replace(/-/g, '').toLowerCase();
-  const matches: T[] = [];
-  for (const entity of entities) {
-    const cleanId = entity.id.replace(/-/g, '').toLowerCase();
-    if (
-      cleanId.startsWith(cleanPrefix) ||
-      cleanPrefix.startsWith(cleanId.slice(0, cleanPrefix.length))
-    ) {
-      matches.push(entity);
-    }
-  }
-  return matches;
-}
-
-/**
  * Resolve a short ID prefix to a full entity.
  *
  * This implements git-style ID resolution:
@@ -313,14 +285,7 @@ export function findByShortIdPrefix<T extends { id: UUID }>(
  * // => Error: Ambiguous ID prefix
  */
 export function resolveShortId<T extends { id: UUID }>(prefix: IDPrefix, entities: T[]): T {
-  // Normalize prefix (remove hyphens, lowercase)
-  const cleanPrefix = prefix.replace(/-/g, '').toLowerCase();
-
-  // Find all entities whose IDs start with this prefix
-  const matches = entities.filter((e) => {
-    const cleanId = e.id.replace(/-/g, '').toLowerCase();
-    return cleanId.startsWith(cleanPrefix);
-  });
+  const matches = findByShortIdPrefix(prefix, entities);
 
   if (matches.length === 0) {
     throw new IdResolutionError(

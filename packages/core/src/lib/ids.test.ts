@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   expandPrefix,
+  findByShortIdPrefix,
   findMinimumPrefixLength,
   formatIdForDisplay,
   generateId,
@@ -245,6 +246,78 @@ describe('findMinimumPrefixLength', () => {
     ];
     const minLength = findMinimumPrefixLength(ids);
     expect(minLength).toBeGreaterThan(8);
+  });
+});
+
+describe('findByShortIdPrefix', () => {
+  const entities = [
+    { id: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' as UUID, name: 'A' },
+    { id: '01933e4b-1234-7c35-a8f3-9d2e1c4b5a6f' as UUID, name: 'B' },
+    { id: '01934c2d-5678-7c35-a8f3-9d2e1c4b5a6f' as UUID, name: 'C' },
+  ];
+
+  it('returns [] for empty prefix', () => {
+    expect(findByShortIdPrefix('', entities)).toEqual([]);
+  });
+
+  it('returns [] for non-hex prefix', () => {
+    expect(findByShortIdPrefix('xyz12345', entities)).toEqual([]);
+    expect(findByShortIdPrefix('gggggggg', entities)).toEqual([]);
+  });
+
+  it('returns [] when prefix is only hyphens', () => {
+    expect(findByShortIdPrefix('----', entities)).toEqual([]);
+  });
+
+  it('returns [] when no entity matches', () => {
+    expect(findByShortIdPrefix('99999999', entities)).toEqual([]);
+  });
+
+  it('returns all entities sharing a short prefix (timestamp bucket collision)', () => {
+    const matches = findByShortIdPrefix('01933e4', entities);
+    expect(matches).toHaveLength(2);
+    expect(matches.map((e) => e.name).sort()).toEqual(['A', 'B']);
+  });
+
+  it('returns the single entity for a unique prefix', () => {
+    const matches = findByShortIdPrefix('01933e4a', entities);
+    expect(matches).toHaveLength(1);
+    expect(matches[0].name).toBe('A');
+  });
+
+  it('matches the full UUID against itself', () => {
+    const matches = findByShortIdPrefix(entities[0].id, entities);
+    expect(matches).toHaveLength(1);
+    expect(matches[0].name).toBe('A');
+  });
+
+  it('strips hyphens from both prefix and entity IDs', () => {
+    const matches = findByShortIdPrefix('01933e4a-7b89', entities);
+    expect(matches).toHaveLength(1);
+    expect(matches[0].name).toBe('A');
+  });
+
+  it('is case-insensitive', () => {
+    expect(findByShortIdPrefix('01933E4A', entities)).toHaveLength(1);
+    expect(findByShortIdPrefix('01933E4A-7B89', entities)).toHaveLength(1);
+  });
+
+  it('is forward-only: prefix longer than ID yields no match', () => {
+    // 33+ hex chars cannot be a prefix of a 32-char UUID
+    const tooLong = `${entities[0].id.replace(/-/g, '')}ff`;
+    expect(findByShortIdPrefix(tooLong, entities)).toEqual([]);
+  });
+
+  it('does not match on suffix or substring', () => {
+    // Last 8 chars of entity A should not match
+    const suffix = entities[0].id.replace(/-/g, '').slice(-8);
+    expect(findByShortIdPrefix(suffix, entities)).toEqual([]);
+  });
+
+  it('accepts any Iterable of { id } shaped items', () => {
+    const iter = new Set(entities);
+    const matches = findByShortIdPrefix('0193', iter);
+    expect(matches).toHaveLength(3);
   });
 });
 

@@ -34,15 +34,20 @@ export type UUID = string & { readonly __brand: 'UUID' };
  * Used for display in UI/CLI and user input.
  * Maps to full UUID via prefix matching.
  *
- * Collision probability with 8-char prefix:
- * - < 1% with 10,000 entities
- * - ~50% with 65,536 entities (birthday paradox)
- *
- * When collisions occur, expand to 12 or 16 characters.
+ * Collision behavior for UUIDv7-based IDs:
+ * - The first 48 bits of every ID are a millisecond Unix timestamp, so any
+ *   prefix of 12 hex chars or fewer carries zero random bits and collides
+ *   deterministically for IDs created in the same time bucket (e.g. 8 chars
+ *   collide within ~65.5 s, 10 chars within ~256 ms, 12 chars within 1 ms).
+ * - 16 hex chars covers the full timestamp plus the 12 random bits of
+ *   `rand_a`, giving ~4,096 random slots per millisecond — safe for URLs.
+ *   See `URL_SHORT_ID_LENGTH`.
+ * - Display contexts (compact pills, tables) tolerate collisions because
+ *   hover/tooltips reveal the full UUID; URL contexts do not.
  *
  * @example
- * const short: ShortID = "01933e4a";       // 8 chars (default)
- * const longer: ShortID = "01933e4a7b89";  // 12 chars (for disambiguation)
+ * const display: ShortID = "01933e4a";                  // 8 chars (pills/tables)
+ * const url: ShortID = "01933e4a7b897c35";              // 16 chars (URL routing)
  */
 export type ShortID = string;
 
@@ -97,6 +102,40 @@ export const URL_SHORT_ID_LENGTH = 16;
  */
 export function toShortId(id: AnyShortId, length: number = 8): ShortID {
   return id.replace(/-/g, '').slice(0, Math.min(length, 32));
+}
+
+/**
+ * Find all entities whose ID starts with the given short-ID prefix.
+ *
+ * This is the shared short-ID matching primitive used by both core
+ * resolution helpers (e.g. `resolveShortId`) and UI URL routers.
+ * Semantics:
+ * - Hyphens are stripped from both the prefix and entity IDs before matching.
+ * - Case-insensitive.
+ * - Forward prefix match only (`entity.id.startsWith(prefix)`) — this is the
+ *   only direction that makes semantic sense for "URL carries a truncated ID".
+ * - Empty or non-hex prefixes return `[]` (safe for direct use on
+ *   unvalidated user/router input, with no throw).
+ *
+ * Callers that want stricter behavior (throw on empty, throw on ambiguity)
+ * should wrap this with their own checks — see `resolveShortId` in `lib/ids`.
+ */
+export function findByShortIdPrefix<T extends { id: AnyShortId }>(
+  prefix: IDPrefix,
+  entities: Iterable<T>
+): T[] {
+  const cleanPrefix = prefix.replace(/-/g, '').toLowerCase();
+  if (cleanPrefix.length === 0 || !/^[0-9a-f]+$/.test(cleanPrefix)) {
+    return [];
+  }
+  const matches: T[] = [];
+  for (const entity of entities) {
+    const cleanId = entity.id.replace(/-/g, '').toLowerCase();
+    if (cleanId.startsWith(cleanPrefix)) {
+      matches.push(entity);
+    }
+  }
+  return matches;
 }
 
 // ============================================================================

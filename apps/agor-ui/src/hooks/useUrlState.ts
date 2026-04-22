@@ -14,7 +14,7 @@
  * - /b/550e8400/a1b2c3d4
  */
 
-import { URL_SHORT_ID_LENGTH } from '@agor-live/client';
+import { findByShortIdPrefix, toShortId, URL_SHORT_ID_LENGTH } from '@agor-live/client';
 import { useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
@@ -38,15 +38,8 @@ export interface UseUrlStateOptions {
   onSessionChange: (sessionId: string | null) => void;
 }
 
-/**
- * Extract short ID (URL length, no hyphens) from a UUID.
- *
- * 16 chars ensures the prefix covers full ms timestamp + `rand_a` random bits,
- * avoiding UUIDv7 timestamp-prefix collisions. See URL_SHORT_ID_LENGTH.
- */
-function shortId(uuid: string): string {
-  return uuid.replace(/-/g, '').slice(0, URL_SHORT_ID_LENGTH);
-}
+/** Extract the URL-length short ID from a UUID (16 chars, no hyphens). */
+const urlShortId = (uuid: string) => toShortId(uuid, URL_SHORT_ID_LENGTH);
 
 /**
  * Hook for bidirectional URL state synchronization
@@ -103,11 +96,11 @@ export function useUrlState(options: UseUrlStateOptions) {
 
       // Prefer slug over short ID for beautiful URLs
       const board = boardById.get(boardId);
-      const boardParam = board?.slug || shortId(boardId);
+      const boardParam = board?.slug || urlShortId(boardId);
 
       let url = `/b/${boardParam}`;
       if (sessionId) {
-        url += `/${shortId(sessionId)}`;
+        url += `/${urlShortId(sessionId)}`;
       }
       return `${url}/`; // Django-style trailing slash
     },
@@ -135,61 +128,50 @@ export function useUrlState(options: UseUrlStateOptions) {
   }, [currentBoardId, currentSessionId, buildUrl, location.pathname, location.search, navigate]);
 
   /**
-   * Resolve URL param to board ID
+   * Resolve URL param to board ID.
+   *
+   * Tries slug first (`boardParam === board.slug`), then falls back to a
+   * short-ID prefix match via the shared core helper. For short IDs, if
+   * multiple boards match (legacy 8-char timestamp-prefix collision), we
+   * pick the lexicographically-greatest board_id — UUIDv7 is time-ordered,
+   * so that's the most recently created board.
    */
   const resolveBoardFromUrl = useCallback(
     (boardParam: string): string | null => {
-      // First, try to find by slug
       for (const board of boardById.values()) {
         if (board.slug === boardParam) {
           return board.board_id;
         }
       }
 
-      // Then, try to find by short ID prefix
-      const normalizedParam = boardParam.toLowerCase();
-      for (const board of boardById.values()) {
-        const boardShortId = shortId(board.board_id).toLowerCase();
-        if (boardShortId.startsWith(normalizedParam) || normalizedParam.startsWith(boardShortId)) {
-          return board.board_id;
-        }
-      }
-
-      return null;
+      const matches = findByShortIdPrefix(
+        boardParam,
+        Array.from(boardById.values(), (b) => ({ id: b.board_id }))
+      );
+      if (matches.length === 0) return null;
+      return matches.reduce((a, b) => (a.id > b.id ? a : b)).id;
     },
     [boardById]
   );
 
   /**
-   * Resolve session ID from short ID.
+   * Resolve session ID from short ID via the shared core helper.
    *
-   * Collects all sessions whose ID matches the URL prefix (bidirectional
-   * startsWith, to keep legacy 8-char URLs working even after we bumped
-   * URL_SHORT_ID_LENGTH to 16). When multiple sessions match — which can
-   * happen for old short-ID URLs where the 32-bit timestamp prefix collides —
-   * we deterministically pick the newest session. Since IDs are UUIDv7
-   * (lexicographically time-ordered), max-by-string is max-by-creation-time.
+   * When multiple sessions match (legacy 8-char URLs collide on UUIDv7's
+   * timestamp prefix), we deterministically pick the newest session —
+   * UUIDv7 IDs are lexicographically time-ordered, so max-by-string is
+   * max-by-creation-time.
    */
   const resolveSessionFromShortId = useCallback(
     (sessionShortId: string): string | null => {
-      const normalizedShortId = sessionShortId.replace(/-/g, '').toLowerCase();
-
-      const matches: string[] = [];
-      for (const session of sessionById.values()) {
-        const normalizedId = session.session_id.replace(/-/g, '').toLowerCase();
-        if (
-          normalizedId.startsWith(normalizedShortId) ||
-          normalizedShortId.startsWith(normalizedId.slice(0, normalizedShortId.length))
-        ) {
-          matches.push(session.session_id);
-        }
-      }
-
+      const matches = findByShortIdPrefix(
+        sessionShortId,
+        Array.from(sessionById.values(), (s) => ({ id: s.session_id }))
+      );
       if (matches.length === 0) return null;
-      if (matches.length === 1) return matches[0];
+      if (matches.length === 1) return matches[0].id;
 
-      // Ambiguous: pick newest (UUIDv7 → lexicographically greatest = most recent).
-      const newest = matches.reduce((a, b) => (a > b ? a : b));
+      const newest = matches.reduce((a, b) => (a.id > b.id ? a : b)).id;
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
         console.warn(
