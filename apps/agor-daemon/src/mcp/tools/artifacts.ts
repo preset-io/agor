@@ -5,11 +5,13 @@
  * Artifacts are DB-backed live web applications that render on the board canvas.
  */
 
-import type { BoardID } from '@agor/core/types';
+import { WorktreeRepository } from '@agor/core/db';
+import type { BoardID, UUID, WorktreeID } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ArtifactsService } from '../../services/artifacts.js';
+import { hasWorktreePermission } from '../../utils/worktree-authorization.js';
 import { resolveArtifactId, resolveBoardId, resolveWorktreeId } from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
@@ -241,10 +243,8 @@ NOTE: sandpack_error and console_logs require a browser to be viewing the artifa
       }
 
       // Visibility check: private artifacts are only visible to their creator
-      if (!artifact.public) {
-        if (!ctx.userId || !artifact.created_by || artifact.created_by !== ctx.userId) {
-          return textResult({ error: `Artifact ${artifactId} not found` });
-        }
+      if (!service.isVisibleTo(artifact, ctx.userId)) {
+        return textResult({ error: `Artifact ${artifactId} not found` });
       }
 
       // Return metadata (without files blob) + full file map separately
@@ -329,7 +329,7 @@ Writes a sandpack.json manifest alongside the files so agor_artifacts_publish ca
 Safety:
 - Destination must be inside the target worktree (cannot escape via ".." or absolute paths).
 - Default subpath is \`.agor/artifacts/<artifact-id>\` (inside the worktree). Pass a custom subpath if you want a different location.
-- Refuses to write to an existing non-empty destination unless overwrite=true is passed.
+- Refuses to write to an existing destination unless overwrite=true is passed (empty or not).
 - overwrite=true removes the destination directory first (symlinks are unlinked, not followed).
 
 Visibility: public artifacts are readable by anyone; private artifacts are only landable by their owner.`,
@@ -363,19 +363,42 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
         }
         throw err;
       }
-      if (!artifact.public) {
-        if (!ctx.userId || !artifact.created_by || artifact.created_by !== ctx.userId) {
-          return textResult({ error: `Artifact ${artifactId} not found` });
-        }
+      if (!service.isVisibleTo(artifact, ctx.userId)) {
+        return textResult({ error: `Artifact ${artifactId} not found` });
       }
 
-      // Resolve worktree through the service layer so worktree RBAC is enforced.
+      // Resolve worktree through the service layer (enforces `view` via RBAC
+      // hooks). Landing an artifact writes to disk, so `view` is not enough —
+      // require at least `session` (the same tier that lets a user create
+      // sessions that could themselves write files in the worktree).
       const worktree = (await ctx.app
         .service('worktrees')
         .get(worktreeId, ctx.baseServiceParams)) as {
         worktree_id: string;
         path: string;
+        others_can?: 'none' | 'view' | 'session' | 'prompt' | 'all';
       };
+
+      const worktreeRepo = new WorktreeRepository(ctx.db);
+      const worktreeIdBranded = worktree.worktree_id as WorktreeID;
+      const userIdBranded = ctx.userId as UUID;
+      const isOwner = await worktreeRepo.isOwner(worktreeIdBranded, userIdBranded);
+      const fullWorktree = await worktreeRepo.findById(worktreeIdBranded);
+      if (!fullWorktree) {
+        return textResult({ error: `Worktree ${worktreeId} not found` });
+      }
+      const canWrite = hasWorktreePermission(
+        fullWorktree,
+        userIdBranded,
+        isOwner,
+        'session',
+        ctx.authenticatedUser.role
+      );
+      if (!canWrite) {
+        return textResult({
+          error: `Forbidden: 'session' permission or higher is required to land artifacts into worktree ${worktreeId}`,
+        });
+      }
 
       const result = await service.land(artifactId, worktree.path, {
         subpath: coerceString(args.subpath),

@@ -5,7 +5,7 @@
  * land (filesystem materialization, path-traversal defenses).
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { generateId } from '@agor/core';
@@ -138,6 +138,32 @@ describe('ArtifactsService.updateMetadata', () => {
     await expect(
       service.updateMetadata(artifact.artifact_id, { name: 'Hijacked' }, 'user-stranger')
     ).rejects.toThrow(/not the owner/i);
+  });
+
+  dbTest('rejects move to a nonexistent board without mutating the row', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const artifactRepo = new ArtifactRepository(db);
+    const boardRepo = new BoardRepository(db);
+    const boardA = await seedBoard(db);
+    const artifact = await seedArtifact(db, boardA.board_id, { userId: 'user-owner' });
+    const bogusBoardId = generateId() as BoardID;
+
+    await expect(
+      service.updateMetadata(
+        artifact.artifact_id,
+        { board_id: bogusBoardId, name: 'Should-not-apply' },
+        'user-owner'
+      )
+    ).rejects.toThrow(/destination board.*not found/i);
+
+    // Row is untouched: no orphaned board_id, no renamed metadata.
+    const after = await artifactRepo.findById(artifact.artifact_id);
+    expect(after?.board_id).toBe(boardA.board_id);
+    expect(after?.name).toBe('Seeded Artifact');
+
+    // board_objects on source board is still there.
+    const refreshedA = await boardRepo.findById(boardA.board_id);
+    expect(refreshedA?.objects?.[`artifact-${artifact.artifact_id}`]).toBeDefined();
   });
 
   dbTest('updates name and public flag without touching placement', async ({ db }) => {
@@ -344,6 +370,53 @@ describe('ArtifactsService.land', () => {
     // Stale file is gone.
     const fsSync = await import('node:fs');
     expect(fsSync.existsSync(path.join(dest, 'stale.txt'))).toBe(false);
+  });
+
+  dbTest(
+    'rejects subpath that escapes through a symlinked directory inside the worktree',
+    async ({ db }) => {
+      const service = new ArtifactsService(db, makeFakeApp());
+      const board = await seedBoard(db);
+      const artifact = await seedArtifact(db, board.board_id);
+
+      // Attack shape: the worktree contains a symlink `.agor` -> `/tmp/...`
+      // that points outside the worktree. The default subpath uses `.agor/...`,
+      // so without realpath canonicalization, a lexical containment check
+      // would let the write escape into the symlink target.
+      const outside = mkdtempSync(path.join(tmpdir(), 'agor-land-outside-'));
+      try {
+        symlinkSync(outside, path.join(tmpRoot, '.agor'), 'dir');
+
+        await expect(service.land(artifact.artifact_id, tmpRoot)).rejects.toThrow(
+          /escapes worktree root/i
+        );
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    }
+  );
+
+  dbTest('canonicalizes a symlinked worktree path before containment check', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifact = await seedArtifact(db, board.board_id);
+
+    // The worktree.path column may be a symlink (common when cloning the
+    // repo under /home vs. /var/home). Landing must still write inside the
+    // real (canonicalized) worktree — it should not throw and not land
+    // somewhere else.
+    const realWorktree = path.join(tmpRoot, 'real-worktree');
+    mkdirSync(realWorktree, { recursive: true });
+    const symlinkedWorktree = path.join(tmpRoot, 'linked-worktree');
+    symlinkSync(realWorktree, symlinkedWorktree, 'dir');
+
+    const result = await service.land(artifact.artifact_id, symlinkedWorktree);
+
+    // Destination path is reported under the real root (post-canonicalize).
+    expect(result.destinationPath.startsWith(realWorktree)).toBe(true);
+    expect(readFileSync(path.join(result.destinationPath, 'index.js'), 'utf-8')).toBe(
+      'console.log("hello")'
+    );
   });
 
   dbTest('errors when artifact has no stored files', async ({ db }) => {

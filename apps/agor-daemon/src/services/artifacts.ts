@@ -12,7 +12,7 @@
 
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { generateId } from '@agor/core';
 import { PAGINATION } from '@agor/core/config';
@@ -53,6 +53,31 @@ import type { UsersService } from './users.js';
  *   {{ artifact.boardId }}  - Board ID
  */
 const AGOR_CONFIG_FILE = '/agor.config.js';
+
+/**
+ * Resolve a destination path by canonicalizing the longest existing prefix via
+ * `realpath` and re-joining the still-nonexistent tail. Used by `land()` to
+ * detect symlinked ancestors that would otherwise defeat a lexical
+ * containment check.
+ *
+ * Example: if `/wt/.agor` is a symlink to `/etc` and the caller passes
+ * `.agor/artifacts/x`, the canonicalized destination is `/etc/artifacts/x`,
+ * which fails the worktree-root containment check.
+ */
+async function canonicalizeExistingPrefix(target: string): Promise<string> {
+  const segments = target.split(path.sep);
+  for (let i = segments.length; i >= 1; i--) {
+    const prefix = segments.slice(0, i).join(path.sep) || path.sep;
+    try {
+      const real = await realpath(prefix);
+      const tail = segments.slice(i).join(path.sep);
+      return tail ? path.join(real, tail) : real;
+    } catch {
+      // prefix does not exist yet — shrink and try again
+    }
+  }
+  return target;
+}
 
 export type ArtifactParams = QueryParams<{
   board_id?: BoardID;
@@ -132,20 +157,42 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       const existing = await this.artifactRepo.findById(artifactId);
       if (!existing) throw new Error(`Artifact ${artifactId} not found`);
 
-      return this.updateMetadata(existing.artifact_id, {
-        name: d.name,
-        description: d.description,
-        public: d.public,
-        archived: d.archived,
-        board_id: d.board_id,
-        x: d.x,
-        y: d.y,
-        width: d.width,
-        height: d.height,
-      });
+      // Pass through the caller's user_id when available (external REST/MCP
+      // calls) so updateMetadata's owner check engages. Feathers hooks are
+      // the primary gate; this is defence-in-depth for internal callers that
+      // forward a user. Internal service-to-service calls without a user
+      // still bypass the inline check (matches existing publish() behavior).
+      const callerUserId = (params as { user?: { user_id?: string } } | undefined)?.user?.user_id;
+
+      return this.updateMetadata(
+        existing.artifact_id,
+        {
+          name: d.name,
+          description: d.description,
+          public: d.public,
+          archived: d.archived,
+          board_id: d.board_id,
+          x: d.x,
+          y: d.y,
+          width: d.width,
+          height: d.height,
+        },
+        callerUserId
+      );
     }
 
     return (await super.patch(id, data as Partial<Artifact>, params as never)) as Artifact;
+  }
+
+  /**
+   * Centralized visibility predicate.
+   * Private artifacts are only readable by their creator; public artifacts
+   * are readable by anyone. Used by MCP tools (get, land) to avoid drift.
+   */
+  isVisibleTo(artifact: Pick<Artifact, 'public' | 'created_by'>, userId?: string): boolean {
+    if (artifact.public) return true;
+    if (!userId || !artifact.created_by) return false;
+    return artifact.created_by === userId;
   }
 
   async remove(id: string | number, _params?: unknown): Promise<Artifact> {
@@ -343,6 +390,16 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const newBoardId = updates.board_id ?? oldBoardId;
     const moving = newBoardId !== oldBoardId;
 
+    // Pre-validate destination board exists when moving. This avoids persisting
+    // a dangling `artifact.board_id` with no matching board_objects entry if
+    // the upsert would fail.
+    if (moving) {
+      const destBoard = await this.boardRepo.findById(newBoardId);
+      if (!destBoard) {
+        throw new Error(`Destination board ${newBoardId} not found`);
+      }
+    }
+
     // Read the current board object (if present) so we can preserve placement
     // when moving or when only some placement fields are provided.
     let currentPlacement: { x: number; y: number; width: number; height: number } | null = null;
@@ -399,8 +456,36 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         }
       }
 
-      const targetBoard = await this.boardRepo.upsertBoardObject(newBoardId, objectId, placement);
-      this.app.service('boards').emit('patched', targetBoard);
+      try {
+        const targetBoard = await this.boardRepo.upsertBoardObject(newBoardId, objectId, placement);
+        this.app.service('boards').emit('patched', targetBoard);
+      } catch (upsertError) {
+        // Compensate: if we already updated the DB row (in particular, moved
+        // `board_id` to newBoardId), roll it back so the artifact row and
+        // board_objects stay consistent.
+        if (Object.keys(dbUpdates).length > 0) {
+          try {
+            const rollback: Partial<Artifact> = {};
+            if (moving) rollback.board_id = oldBoardId;
+            if (updates.name !== undefined) rollback.name = existing.name;
+            if (updates.description !== undefined) rollback.description = existing.description;
+            if (updates.public !== undefined) rollback.public = existing.public;
+            if (updates.archived !== undefined) {
+              rollback.archived = existing.archived;
+              rollback.archived_at = existing.archived_at;
+            }
+            if (Object.keys(rollback).length > 0) {
+              await this.artifactRepo.update(fullArtifactId, rollback);
+            }
+          } catch (rollbackError) {
+            console.error(
+              `Rollback failed after board_objects upsert error for artifact ${fullArtifactId}:`,
+              rollbackError
+            );
+          }
+        }
+        throw upsertError;
+      }
     }
 
     this.app.service('artifacts').emit('patched', updated);
@@ -431,10 +516,15 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       throw new Error(`Artifact ${artifactId} has no stored files to land`);
     }
 
-    const worktreeRoot = path.resolve(worktreePath);
-    if (!fs.existsSync(worktreeRoot)) {
-      throw new Error(`Worktree path does not exist: ${worktreeRoot}`);
+    if (!fs.existsSync(worktreePath)) {
+      throw new Error(`Worktree path does not exist: ${worktreePath}`);
     }
+    // Canonicalize the worktree root so a symlinked root (e.g. a worktree
+    // whose `path` column is a symlink into $HOME) cannot be used to defeat
+    // the containment check below. Mirrors the pattern in
+    // apps/agor-daemon/src/services/file.ts and
+    // packages/core/src/git/index.ts.
+    const worktreeRoot = await realpath(worktreePath);
 
     // Default destination: .agor/artifacts/<artifact-id>
     const rawSubpath =
@@ -449,16 +539,25 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
     const destination = path.resolve(worktreeRoot, rawSubpath);
 
+    // Canonicalize any existing portion of the destination path (a
+    // pre-existing symlinked parent directory must not lift the write outside
+    // the worktree root).
+    const canonicalDestination = await canonicalizeExistingPrefix(destination);
+
     // Path-escape check: destination must be strictly inside the worktree.
     // Equal to worktree root is refused — writing the artifact at the worktree
     // root would stomp user code.
-    if (destination === worktreeRoot) {
-      throw new Error('subpath must not resolve to the worktree root');
-    }
-    const prefix = worktreeRoot + path.sep;
-    if (!destination.startsWith(prefix)) {
-      throw new Error(`subpath escapes worktree root: ${rawSubpath}`);
-    }
+    const assertInsideRoot = (candidate: string, reason: string): void => {
+      if (candidate === worktreeRoot) {
+        throw new Error(`${reason}: must not resolve to the worktree root`);
+      }
+      const rel = path.relative(worktreeRoot, candidate);
+      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+        throw new Error(`${reason}: escapes worktree root`);
+      }
+    };
+    assertInsideRoot(destination, `subpath ${rawSubpath}`);
+    assertInsideRoot(canonicalDestination, `subpath ${rawSubpath} (canonical)`);
 
     // Validate file-map keys for traversal. Artifact file keys are stored as
     // `/path/to/file` (leading slash, forward slashes). Strip leading slash,
@@ -469,7 +568,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         throw new Error(`Artifact contains absolute file path: ${filePath}`);
       }
       const resolved = path.resolve(destination, key);
-      if (resolved !== destination && !resolved.startsWith(destination + path.sep)) {
+      const rel = path.relative(destination, resolved);
+      if (rel.startsWith('..') || path.isAbsolute(rel)) {
         throw new Error(`Artifact file path escapes destination: ${filePath}`);
       }
     }

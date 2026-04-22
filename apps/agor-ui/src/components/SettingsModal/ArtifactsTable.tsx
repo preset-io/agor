@@ -57,16 +57,21 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
   const handleUpdate = () => {
     if (!editingArtifact) return;
     form.validateFields().then((values) => {
-      const updates: Partial<Artifact> = {
-        name: values.name,
-        description: values.description || undefined,
-      };
-      // Only include board_id if it actually changed — keeps patch payloads
-      // focused and avoids triggering a board-move round-trip for no reason.
+      // Build a patch of only fields that actually changed. If nothing
+      // changed, skip the network round-trip entirely — avoids firing a
+      // spurious `patched` broadcast for a no-op submit.
+      const updates: Partial<Artifact> = {};
+      const nextName = values.name;
+      const nextDescription = values.description || undefined;
+      const currentDescription = editingArtifact.description || undefined;
+      if (nextName !== editingArtifact.name) updates.name = nextName;
+      if (nextDescription !== currentDescription) updates.description = nextDescription;
       if (values.board_id && values.board_id !== editingArtifact.board_id) {
         updates.board_id = values.board_id;
       }
-      onUpdate?.(editingArtifact.artifact_id, updates);
+      if (Object.keys(updates).length > 0) {
+        onUpdate?.(editingArtifact.artifact_id, updates);
+      }
       form.resetFields();
       setEditModalOpen(false);
       setEditingArtifact(null);
@@ -215,7 +220,8 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
         >
           <Empty description="No artifacts yet">
             <Typography.Text type="secondary">
-              Artifacts are created by agents using the <code>agor_artifacts_create</code> MCP tool.
+              Artifacts are created by agents using the <code>agor_artifacts_publish</code> MCP
+              tool.
             </Typography.Text>
           </Empty>
         </div>

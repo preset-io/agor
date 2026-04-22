@@ -445,6 +445,35 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
   });
 
+  /**
+   * Before-hook for artifacts patch/remove: only the creator or an
+   * admin/superadmin may modify an artifact. Without this, any `member` could
+   * PATCH /artifacts/:id and rename, re-board, archive, or unpublish another
+   * user's artifact — role-only gating is not enough.
+   *
+   * Runs AFTER requireMinimumRole (which guarantees `params.user`), skips
+   * internal calls (no provider) and service accounts (executor).
+   */
+  const ensureArtifactOwnerOrAdmin = () => async (context: HookContext) => {
+    if (!context.params.provider) return context;
+    const user = (context.params as { user?: User })?.user;
+    if (!user) throw new NotAuthenticated('Authentication required');
+    if ((user as unknown as { _isServiceAccount?: boolean })._isServiceAccount) return context;
+    if (hasMinimumRole(user.role, ROLES.ADMIN)) return context;
+
+    const artifactId = context.id;
+    if (artifactId === undefined || artifactId === null) return context;
+    const artifactRepo = new ArtifactRepository(db);
+    const artifact = await artifactRepo.findById(String(artifactId));
+    if (!artifact) {
+      throw new Forbidden(`Artifact ${artifactId} not found or not accessible`);
+    }
+    if (artifact.created_by && artifact.created_by === user.user_id) return context;
+    throw new Forbidden(
+      "Only the artifact's creator or an admin may modify it. Use agor_artifacts_publish to create your own copy."
+    );
+  };
+
   safeService('artifacts')?.hooks({
     before: {
       all: [...getReadAuthHooks()],
@@ -459,8 +488,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
       ],
       create: [requireMinimumRole(ROLES.MEMBER, 'create artifacts'), injectCreatedBy()],
-      patch: [requireMinimumRole(ROLES.MEMBER, 'update artifacts')],
-      remove: [requireMinimumRole(ROLES.MEMBER, 'delete artifacts')],
+      patch: [requireMinimumRole(ROLES.MEMBER, 'update artifacts'), ensureArtifactOwnerOrAdmin()],
+      remove: [requireMinimumRole(ROLES.MEMBER, 'delete artifacts'), ensureArtifactOwnerOrAdmin()],
     },
   });
 
