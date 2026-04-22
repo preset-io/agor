@@ -107,6 +107,47 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     );
   }
 
+  /**
+   * Feathers patch override: route board_id and placement changes through
+   * updateMetadata so the board_objects entry is moved/resized alongside the
+   * row update. Plain metadata patches (name, description, public, archived,
+   * build state, etc.) fall through to the default DrizzleService patch.
+   *
+   * Ownership is enforced by Feathers hooks (role-based) rather than here, to
+   * match the existing patch behavior.
+   */
+  async patch(id: string | number, data: Partial<Artifact>, params?: unknown): Promise<Artifact> {
+    const d = data as Partial<Artifact> & {
+      x?: number;
+      y?: number;
+      width?: number;
+      height?: number;
+    };
+    const placementFields =
+      d.x !== undefined || d.y !== undefined || d.width !== undefined || d.height !== undefined;
+
+    if (d.board_id !== undefined || placementFields) {
+      const artifactId = String(id);
+      // Resolve short IDs to a full ID through the repository.
+      const existing = await this.artifactRepo.findById(artifactId);
+      if (!existing) throw new Error(`Artifact ${artifactId} not found`);
+
+      return this.updateMetadata(existing.artifact_id, {
+        name: d.name,
+        description: d.description,
+        public: d.public,
+        archived: d.archived,
+        board_id: d.board_id,
+        x: d.x,
+        y: d.y,
+        width: d.width,
+        height: d.height,
+      });
+    }
+
+    return (await super.patch(id, data as Partial<Artifact>, params as never)) as Artifact;
+  }
+
   async remove(id: string | number, _params?: unknown): Promise<Artifact> {
     const artifactId = String(id);
     const artifact = await this.artifactRepo.findById(artifactId);

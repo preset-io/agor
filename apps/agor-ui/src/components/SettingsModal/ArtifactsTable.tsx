@@ -8,6 +8,7 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Select,
   Space,
   Table,
   Tag,
@@ -15,7 +16,7 @@ import {
   Typography,
 } from 'antd';
 import { useState } from 'react';
-import { mapToSortedArray } from '@/utils/mapHelpers';
+import { mapToArray, mapToSortedArray } from '@/utils/mapHelpers';
 
 interface ArtifactsTableProps {
   artifactById: Map<string, Artifact>;
@@ -48,6 +49,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
     form.setFieldsValue({
       name: artifact.name,
       description: artifact.description || '',
+      board_id: artifact.board_id,
     });
     setEditModalOpen(true);
   };
@@ -55,15 +57,29 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
   const handleUpdate = () => {
     if (!editingArtifact) return;
     form.validateFields().then((values) => {
-      onUpdate?.(editingArtifact.artifact_id, {
+      const updates: Partial<Artifact> = {
         name: values.name,
         description: values.description || undefined,
-      });
+      };
+      // Only include board_id if it actually changed — keeps patch payloads
+      // focused and avoids triggering a board-move round-trip for no reason.
+      if (values.board_id && values.board_id !== editingArtifact.board_id) {
+        updates.board_id = values.board_id;
+      }
+      onUpdate?.(editingArtifact.artifact_id, updates);
       form.resetFields();
       setEditModalOpen(false);
       setEditingArtifact(null);
     });
   };
+
+  const boardOptions = mapToArray(boardById)
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((board) => ({
+      value: board.board_id,
+      label: `${board.icon || '📋'} ${board.name}`,
+    }));
 
   const columns = [
     {
@@ -151,7 +167,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
       width: 90,
       render: (_: unknown, artifact: Artifact) => (
         <Space size="small">
-          <Tooltip title="Edit name and description">
+          <Tooltip title="Edit artifact">
             <Button
               type="text"
               size="small"
@@ -234,6 +250,21 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
           </Form.Item>
           <Form.Item label="Description" name="description">
             <Input.TextArea rows={3} placeholder="Optional description" />
+          </Form.Item>
+          <Form.Item
+            label="Board"
+            name="board_id"
+            tooltip="Move this artifact to a different board. Its position on the board is preserved."
+            rules={[{ required: true, message: 'Please select a board' }]}
+          >
+            <Select
+              showSearch
+              placeholder="Select board..."
+              options={boardOptions}
+              filterOption={(input, option) =>
+                (option?.label?.toString() ?? '').toLowerCase().includes(input.toLowerCase())
+              }
+            />
           </Form.Item>
         </Form>
       </Modal>

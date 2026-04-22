@@ -165,6 +165,49 @@ describe('ArtifactsService.updateMetadata', () => {
   });
 });
 
+describe('ArtifactsService.patch (board move routing)', () => {
+  dbTest('board_id patch moves the board_objects entry to the new board', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const boardRepo = new BoardRepository(db);
+    const boardA = await seedBoard(db);
+    const boardB = await seedBoard(db);
+    const artifact = await seedArtifact(db, boardA.board_id, {
+      placement: { x: 70, y: 80, width: 500, height: 300 },
+    });
+
+    const patched = await service.patch(artifact.artifact_id, {
+      board_id: boardB.board_id,
+    });
+    expect((patched as Artifact).board_id).toBe(boardB.board_id);
+
+    const key = `artifact-${artifact.artifact_id}`;
+    const refreshedA = await boardRepo.findById(boardA.board_id);
+    const refreshedB = await boardRepo.findById(boardB.board_id);
+    expect(refreshedA?.objects?.[key]).toBeUndefined();
+    const placed = refreshedB?.objects?.[key];
+    expect(placed && placed.type === 'artifact' && placed.x).toBe(70);
+    expect(placed && placed.type === 'artifact' && placed.width).toBe(500);
+  });
+
+  dbTest('metadata-only patch does not touch board_objects', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const boardRepo = new BoardRepository(db);
+    const board = await seedBoard(db);
+    const artifact = await seedArtifact(db, board.board_id, {
+      placement: { x: 11, y: 22, width: 333, height: 444 },
+    });
+
+    await service.patch(artifact.artifact_id, { name: 'Renamed via patch' });
+
+    const key = `artifact-${artifact.artifact_id}`;
+    const refreshed = await boardRepo.findById(board.board_id);
+    const placed = refreshed?.objects?.[key];
+    // Placement is untouched.
+    expect(placed && placed.type === 'artifact' && placed.x).toBe(11);
+    expect(placed && placed.type === 'artifact' && placed.width).toBe(333);
+  });
+});
+
 describe('ArtifactsService.land', () => {
   let tmpRoot: string;
 
