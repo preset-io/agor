@@ -356,6 +356,13 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
           .where(eq(repos.repo_id, fullId))
           .run();
 
+        // repoToInsert may re-derive computed fields from the patch (e.g. the
+        // v1 environment_config projection is derived from v2 environment).
+        // Sync those back onto `next` so the returned Repo matches what was
+        // actually persisted — otherwise callers see stale values for any
+        // field we explicitly undefined'd in `patch`.
+        next.environment = insertData.data.environment;
+        next.environment_config = insertData.data.environment_config;
         next.last_updated = newUpdatedAt.toISOString();
         return next;
       });
