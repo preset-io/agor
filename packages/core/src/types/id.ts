@@ -86,8 +86,6 @@ export type AnyShortId = UUID | ShortID | string;
  * timestamp plus the 12 random bits of `rand_a`, giving ~4,096 random slots
  * per millisecond — safe against realistic spawn bursts. Display contexts
  * (pills, tables) keep the compact 8-char default via `toShortId`.
- *
- * See docs/short-id-collision-investigation.md
  */
 export const URL_SHORT_ID_LENGTH = 16;
 

@@ -194,7 +194,7 @@ export function useUrlState(options: UseUrlStateOptions) {
         // eslint-disable-next-line no-console
         console.warn(
           `[useUrlState] Short ID "${sessionShortId}" matched ${matches.length} sessions; ` +
-            `routing to newest (${newest}). See docs/short-id-collision-investigation.md.`
+            `routing to newest (${newest}).`
         );
       }
       return newest;
