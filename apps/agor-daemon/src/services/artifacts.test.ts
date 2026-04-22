@@ -166,6 +166,57 @@ describe('ArtifactsService.updateMetadata', () => {
     expect(refreshedA?.objects?.[`artifact-${artifact.artifact_id}`]).toBeDefined();
   });
 
+  dbTest('preserves old board_object when destination upsert fails mid-move', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const artifactRepo = new ArtifactRepository(db);
+    const boardRepo = new BoardRepository(db);
+    const boardA = await seedBoard(db);
+    const boardB = await seedBoard(db);
+    const artifact = await seedArtifact(db, boardA.board_id, {
+      userId: 'user-owner',
+      placement: { x: 55, y: 66, width: 700, height: 500 },
+    });
+
+    // Simulate a storage failure on the destination upsert. The service must
+    // leave the artifact row on boardA AND leave boardA's board_object intact
+    // — otherwise the artifact would be orphaned (row says boardA, but no
+    // board_object there).
+    const repo = (service as unknown as { boardRepo: BoardRepository }).boardRepo;
+    const originalUpsert = repo.upsertBoardObject.bind(repo);
+    repo.upsertBoardObject = async (boardId: BoardID, objectId: string, obj: unknown) => {
+      if (boardId === boardB.board_id) {
+        throw new Error('simulated storage failure');
+      }
+      return originalUpsert(boardId, objectId, obj as Parameters<typeof originalUpsert>[2]);
+    };
+
+    try {
+      await expect(
+        service.updateMetadata(artifact.artifact_id, { board_id: boardB.board_id }, 'user-owner')
+      ).rejects.toThrow(/simulated storage failure/i);
+    } finally {
+      repo.upsertBoardObject = originalUpsert;
+    }
+
+    // Row was rolled back to the original board.
+    const after = await artifactRepo.findById(artifact.artifact_id);
+    expect(after?.board_id).toBe(boardA.board_id);
+
+    // Critically: the original board_object on boardA is still there —
+    // upsert happens BEFORE removal, so a failed upsert never reaches the
+    // remove step.
+    const key = `artifact-${artifact.artifact_id}`;
+    const refreshedA = await boardRepo.findById(boardA.board_id);
+    const placed = refreshedA?.objects?.[key];
+    expect(placed).toBeDefined();
+    expect(placed && placed.type === 'artifact' && placed.x).toBe(55);
+    expect(placed && placed.type === 'artifact' && placed.width).toBe(700);
+
+    // Destination board has nothing.
+    const refreshedB = await boardRepo.findById(boardB.board_id);
+    expect(refreshedB?.objects?.[key]).toBeUndefined();
+  });
+
   dbTest('updates name and public flag without touching placement', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
     const boardRepo = new BoardRepository(db);

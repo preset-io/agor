@@ -138,8 +138,9 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * row update. Plain metadata patches (name, description, public, archived,
    * build state, etc.) fall through to the default DrizzleService patch.
    *
-   * Ownership is enforced by Feathers hooks (role-based) rather than here, to
-   * match the existing patch behavior.
+   * Ownership is enforced by Feathers hooks (creator-or-admin); this method
+   * additionally forwards the caller's user_id into updateMetadata as a
+   * defence-in-depth check for direct internal callers.
    */
   async patch(id: string | number, data: Partial<Artifact>, params?: unknown): Promise<Artifact> {
     const d = data as Partial<Artifact> & {
@@ -447,15 +448,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         height: updates.height ?? currentPlacement?.height ?? 400,
       };
 
-      if (moving) {
-        try {
-          const cleaned = await this.boardRepo.removeBoardObject(oldBoardId, objectId);
-          this.app.service('boards').emit('patched', cleaned);
-        } catch {
-          // Old board may not have this object (e.g. was already cleaned up).
-        }
-      }
-
+      // Upsert the destination board object FIRST. Only once the new placement
+      // is safely in place do we remove the old one — this way, a failing
+      // upsert leaves the old board object intact (we only have to roll back
+      // the DB row), rather than leaving the artifact orphaned on both boards.
       try {
         const targetBoard = await this.boardRepo.upsertBoardObject(newBoardId, objectId, placement);
         this.app.service('boards').emit('patched', targetBoard);
@@ -485,6 +481,17 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           }
         }
         throw upsertError;
+      }
+
+      if (moving) {
+        try {
+          const cleaned = await this.boardRepo.removeBoardObject(oldBoardId, objectId);
+          this.app.service('boards').emit('patched', cleaned);
+        } catch {
+          // Old board may not have this object (e.g. was already cleaned up),
+          // or the old board was deleted. The destination upsert already
+          // succeeded, so the artifact is reachable on its new board.
+        }
       }
     }
 
