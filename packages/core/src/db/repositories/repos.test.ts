@@ -549,6 +549,7 @@ describe('RepoRepository.setEnvironment', () => {
 
     // Initial state: two variants, "default" and "with-manager"
     await repo.setEnvironment(data.repo_id, {
+      version: 2,
       default: 'with-manager',
       variants: {
         default: { start: 'echo d-start', stop: 'echo d-stop' },
@@ -559,6 +560,7 @@ describe('RepoRepository.setEnvironment', () => {
     // User renames "with-manager" → "without-manager" (different key), also
     // points default at the unified variant
     const renamed = await repo.setEnvironment(data.repo_id, {
+      version: 2,
       default: 'default',
       variants: {
         default: { start: 'echo d-start-v2', stop: 'echo d-stop-v2' },
@@ -582,6 +584,7 @@ describe('RepoRepository.setEnvironment', () => {
     await repo.create(data);
 
     await repo.setEnvironment(data.repo_id, {
+      version: 2,
       default: 'default',
       variants: {
         default: {
@@ -595,6 +598,7 @@ describe('RepoRepository.setEnvironment', () => {
 
     // User edits yaml, removes `nuke` and `logs`
     const after = await repo.setEnvironment(data.repo_id, {
+      version: 2,
       default: 'default',
       variants: {
         default: { start: 'echo start', stop: 'echo stop' },
@@ -611,6 +615,7 @@ describe('RepoRepository.setEnvironment', () => {
     await repo.create(data);
 
     const updated = await repo.setEnvironment(data.repo_id, {
+      version: 2,
       default: 'default',
       variants: { default: { start: 'echo s', stop: 'echo p' } },
     });
@@ -627,6 +632,7 @@ describe('RepoRepository.setEnvironment', () => {
     await repo.create(data);
 
     await repo.setEnvironment(data.repo_id, {
+      version: 2,
       default: 'default',
       variants: { default: { start: 'echo s', stop: 'echo p' } },
     });
@@ -643,6 +649,7 @@ describe('RepoRepository.setEnvironment', () => {
     await repo.create(data);
 
     const v1 = await repo.setEnvironment(data.repo_id, {
+      version: 2,
       default: 'default',
       variants: {
         default: { start: 'echo up-1', stop: 'echo down-1' },
@@ -651,6 +658,7 @@ describe('RepoRepository.setEnvironment', () => {
     expect(v1.environment_config?.up_command).toBe('echo up-1');
 
     const v2 = await repo.setEnvironment(data.repo_id, {
+      version: 2,
       default: 'default',
       variants: {
         default: { start: 'echo up-2', stop: 'echo down-2' },
@@ -664,6 +672,7 @@ describe('RepoRepository.setEnvironment', () => {
     const repo = new RepoRepository(db);
     await expect(
       repo.setEnvironment('99999999', {
+        version: 2,
         default: 'default',
         variants: { default: { start: 'echo s', stop: 'echo p' } },
       })

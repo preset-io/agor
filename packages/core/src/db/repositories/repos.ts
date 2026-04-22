@@ -310,21 +310,21 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
   }
 
   /**
-   * Replace the repo's `environment` column wholesale.
+   * Replace specified top-level fields on the repo WITHOUT deep-merging.
    *
-   * Unlike {@link update}, this does NOT deep-merge — use this for imports
-   * and any other "source-of-truth refresh" that needs to CLEAR keys
-   * (renamed or removed variants, dropped fields inside a variant, etc).
+   * Unlike {@link update}, any key present in `patch` fully overwrites the
+   * corresponding value on the current row — nested objects are NOT merged.
+   * Fields omitted from `patch` are left untouched. Pass a field with value
+   * `undefined` to clear it.
    *
-   * Pass `null` to clear the environment entirely. `template_overrides` is
-   * not treated specially here; callers that need to preserve DB-only
-   * template overrides across a replace must fold them into the incoming
-   * `environment` object themselves.
+   * Used by named wrappers like {@link setEnvironment} that want replace
+   * semantics for a specific subset of fields. Kept private so callers must
+   * go through a wrapper where the decision to replace-vs-merge is explicit.
    *
    * Runs in a transaction so the read-replace-write is atomic, matching
    * {@link update}'s concurrency guarantees.
    */
-  async setEnvironment(id: string, environment: RepoEnvironment | null): Promise<Repo> {
+  private async replaceFields(id: string, patch: Partial<Repo>): Promise<Repo> {
     try {
       const fullId = await this.resolveId(id);
 
@@ -341,11 +341,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         }
 
         const current = this.rowToRepo(currentRow);
-        const next: Repo = { ...current, environment: environment ?? undefined };
-        // environment_config (v1 projection) is re-derived from the new v2
-        // environment by repoToInsert; drop the stale one so we don't carry
-        // a ghost projection through.
-        delete (next as Partial<Repo>).environment_config;
+        const next: Repo = { ...current, ...patch };
 
         const insertData = this.repoToInsert(next);
         const newUpdatedAt = new Date();
@@ -367,10 +363,33 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       if (error instanceof RepositoryError) throw error;
       if (error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(
-        `Failed to set repo environment: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to replace repo fields: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
+  }
+
+  /**
+   * Replace the repo's `environment` column wholesale.
+   *
+   * Unlike {@link update}, this does NOT deep-merge — use this for imports
+   * and any other "source-of-truth refresh" that needs to CLEAR keys
+   * (renamed or removed variants, dropped fields inside a variant, etc).
+   *
+   * Pass `null` to clear the environment entirely. `template_overrides` is
+   * not treated specially here; callers that need to preserve DB-only
+   * template overrides across a replace must fold them into the incoming
+   * `environment` object themselves.
+   */
+  async setEnvironment(id: string, environment: RepoEnvironment | null): Promise<Repo> {
+    // Clear the v1 projection explicitly — repoToInsert re-derives it from
+    // the new v2 environment, but only when environment_config is undefined
+    // on the incoming patch. Without this, clearing environment would leave
+    // a ghost v1 projection around.
+    return this.replaceFields(id, {
+      environment: environment ?? undefined,
+      environment_config: undefined,
+    });
   }
 
   /**
