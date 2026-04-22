@@ -310,6 +310,70 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
   }
 
   /**
+   * Replace the repo's `environment` column wholesale.
+   *
+   * Unlike {@link update}, this does NOT deep-merge — use this for imports
+   * and any other "source-of-truth refresh" that needs to CLEAR keys
+   * (renamed or removed variants, dropped fields inside a variant, etc).
+   *
+   * Pass `null` to clear the environment entirely. `template_overrides` is
+   * not treated specially here; callers that need to preserve DB-only
+   * template overrides across a replace must fold them into the incoming
+   * `environment` object themselves.
+   *
+   * Runs in a transaction so the read-replace-write is atomic, matching
+   * {@link update}'s concurrency guarantees.
+   */
+  async setEnvironment(id: string, environment: RepoEnvironment | null): Promise<Repo> {
+    try {
+      const fullId = await this.resolveId(id);
+
+      return await this.db.transaction(async (tx) => {
+        await lockRowForUpdate(txAsDb(tx), this.db, repos, eq(repos.repo_id, fullId));
+
+        const currentRow = await select(txAsDb(tx))
+          .from(repos)
+          .where(eq(repos.repo_id, fullId))
+          .one();
+
+        if (!currentRow) {
+          throw new EntityNotFoundError('Repo', id);
+        }
+
+        const current = this.rowToRepo(currentRow);
+        const next: Repo = { ...current, environment: environment ?? undefined };
+        // environment_config (v1 projection) is re-derived from the new v2
+        // environment by repoToInsert; drop the stale one so we don't carry
+        // a ghost projection through.
+        delete (next as Partial<Repo>).environment_config;
+
+        const insertData = this.repoToInsert(next);
+        const newUpdatedAt = new Date();
+        await update(txAsDb(tx), repos)
+          .set({
+            slug: insertData.slug,
+            updated_at: newUpdatedAt,
+            repo_type: insertData.repo_type,
+            unix_group: next.unix_group ?? null,
+            data: insertData.data,
+          })
+          .where(eq(repos.repo_id, fullId))
+          .run();
+
+        next.last_updated = newUpdatedAt.toISOString();
+        return next;
+      });
+    } catch (error) {
+      if (error instanceof RepositoryError) throw error;
+      if (error instanceof EntityNotFoundError) throw error;
+      throw new RepositoryError(
+        `Failed to set repo environment: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Delete repo by ID
    */
   async delete(id: string): Promise<void> {

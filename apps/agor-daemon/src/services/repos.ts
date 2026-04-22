@@ -796,16 +796,22 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     }
 
     // Preserve any existing DB-only template_overrides across import — the
-    // file never contains them, so a naive patch would otherwise wipe them.
-    const patch: Partial<Repo> = { environment };
-    if (repo.environment?.template_overrides) {
-      patch.environment = {
-        ...environment,
-        template_overrides: repo.environment.template_overrides,
-      };
-    }
+    // file never contains them, so a naive replace would otherwise wipe them.
+    const replacement: RepoEnvironment = repo.environment?.template_overrides
+      ? { ...environment, template_overrides: repo.environment.template_overrides }
+      : environment;
 
-    return this.patch(id, patch, params) as Promise<Repo>;
+    // Replace wholesale (NOT deep-merge) — otherwise deepMerge in
+    // RepoRepository.update would preserve stale variant keys that the user
+    // renamed or removed in .agor.yml, and fields dropped from a still-present
+    // variant would also linger. See packages/core/src/db/repositories/repos.ts
+    // setEnvironment() for the single-field replace semantics.
+    const updated = await this.repoRepo.setEnvironment(id, replacement);
+
+    // DrizzleService.patch would normally fire this; emit manually since we
+    // bypassed it to get replace semantics.
+    this.emit?.('patched', updated, params);
+    return updated;
   }
 
   /**

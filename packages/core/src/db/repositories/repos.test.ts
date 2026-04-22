@@ -534,6 +534,144 @@ describe('RepoRepository.update', () => {
 });
 
 // ============================================================================
+// setEnvironment
+// ============================================================================
+
+describe('RepoRepository.setEnvironment', () => {
+  dbTest('should replace environment wholesale, clearing renamed variants', async ({ db }) => {
+    // Reproduces the .agor.yml import bug: user renames a variant in the
+    // YAML file, re-imports, and the old variant key must NOT linger in the
+    // DB. With deepMerge-based update() it did linger — setEnvironment
+    // replaces wholesale.
+    const repo = new RepoRepository(db);
+    const data = createRepoData();
+    await repo.create(data);
+
+    // Initial state: two variants, "default" and "with-manager"
+    await repo.setEnvironment(data.repo_id, {
+      default: 'with-manager',
+      variants: {
+        default: { start: 'echo d-start', stop: 'echo d-stop' },
+        'with-manager': { start: 'echo wm-start-v1', stop: 'echo wm-stop' },
+      },
+    });
+
+    // User renames "with-manager" → "without-manager" (different key), also
+    // points default at the unified variant
+    const renamed = await repo.setEnvironment(data.repo_id, {
+      default: 'default',
+      variants: {
+        default: { start: 'echo d-start-v2', stop: 'echo d-stop-v2' },
+        'without-manager': { start: 'echo wom-start', stop: 'echo wom-stop' },
+      },
+    });
+
+    expect(Object.keys(renamed.environment!.variants).sort()).toEqual([
+      'default',
+      'without-manager',
+    ]);
+    expect(renamed.environment!.variants['with-manager']).toBeUndefined();
+    expect(renamed.environment!.variants.default.start).toBe('echo d-start-v2');
+  });
+
+  dbTest('should drop fields removed from a still-present variant', async ({ db }) => {
+    // Secondary symptom of the same merge bug: removing a field from a
+    // variant in .agor.yml should clear it from the DB.
+    const repo = new RepoRepository(db);
+    const data = createRepoData();
+    await repo.create(data);
+
+    await repo.setEnvironment(data.repo_id, {
+      default: 'default',
+      variants: {
+        default: {
+          start: 'echo start',
+          stop: 'echo stop',
+          nuke: 'echo nuke',
+          logs: 'echo logs',
+        },
+      },
+    });
+
+    // User edits yaml, removes `nuke` and `logs`
+    const after = await repo.setEnvironment(data.repo_id, {
+      default: 'default',
+      variants: {
+        default: { start: 'echo start', stop: 'echo stop' },
+      },
+    });
+
+    expect(after.environment!.variants.default.nuke).toBeUndefined();
+    expect(after.environment!.variants.default.logs).toBeUndefined();
+  });
+
+  dbTest('should preserve unrelated columns (name, slug, local_path)', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    const data = createRepoData({ name: 'My Repo', slug: 'my-repo' });
+    await repo.create(data);
+
+    const updated = await repo.setEnvironment(data.repo_id, {
+      default: 'default',
+      variants: { default: { start: 'echo s', stop: 'echo p' } },
+    });
+
+    expect(updated.name).toBe('My Repo');
+    expect(updated.slug).toBe('my-repo');
+    expect(updated.local_path).toBe(data.local_path);
+    expect(updated.remote_url).toBe(data.remote_url);
+  });
+
+  dbTest('should clear environment when passed null', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    const data = createRepoData();
+    await repo.create(data);
+
+    await repo.setEnvironment(data.repo_id, {
+      default: 'default',
+      variants: { default: { start: 'echo s', stop: 'echo p' } },
+    });
+
+    const cleared = await repo.setEnvironment(data.repo_id, null);
+    expect(cleared.environment).toBeUndefined();
+  });
+
+  dbTest('should re-derive the v1 environment_config projection', async ({ db }) => {
+    // rowToRepo derives environment_config from v2. Make sure setEnvironment
+    // keeps that projection in sync instead of leaving a stale v1 view.
+    const repo = new RepoRepository(db);
+    const data = createRepoData();
+    await repo.create(data);
+
+    const v1 = await repo.setEnvironment(data.repo_id, {
+      default: 'default',
+      variants: {
+        default: { start: 'echo up-1', stop: 'echo down-1' },
+      },
+    });
+    expect(v1.environment_config?.up_command).toBe('echo up-1');
+
+    const v2 = await repo.setEnvironment(data.repo_id, {
+      default: 'default',
+      variants: {
+        default: { start: 'echo up-2', stop: 'echo down-2' },
+      },
+    });
+    expect(v2.environment_config?.up_command).toBe('echo up-2');
+    expect(v2.environment_config?.down_command).toBe('echo down-2');
+  });
+
+  dbTest('should throw EntityNotFoundError for non-existent ID', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    await expect(
+      repo.setEnvironment('99999999', {
+        default: 'default',
+        variants: { default: { start: 'echo s', stop: 'echo p' } },
+      })
+    ).rejects.toThrow(EntityNotFoundError);
+  });
+});
+
+// ============================================================================
 // Delete
 // ============================================================================
 
