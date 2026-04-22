@@ -14,6 +14,7 @@
  * - /b/550e8400/a1b2c3d4
  */
 
+import { URL_SHORT_ID_LENGTH } from '@agor-live/client';
 import { useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
@@ -38,10 +39,13 @@ export interface UseUrlStateOptions {
 }
 
 /**
- * Extract short ID (first 8 chars without hyphens) from a UUID
+ * Extract short ID (URL length, no hyphens) from a UUID.
+ *
+ * 16 chars ensures the prefix covers full ms timestamp + `rand_a` random bits,
+ * avoiding UUIDv7 timestamp-prefix collisions. See URL_SHORT_ID_LENGTH.
  */
 function shortId(uuid: string): string {
-  return uuid.replace(/-/g, '').slice(0, 8);
+  return uuid.replace(/-/g, '').slice(0, URL_SHORT_ID_LENGTH);
 }
 
 /**
@@ -157,25 +161,43 @@ export function useUrlState(options: UseUrlStateOptions) {
   );
 
   /**
-   * Resolve session ID from short ID
+   * Resolve session ID from short ID.
+   *
+   * Collects all sessions whose ID matches the URL prefix (bidirectional
+   * startsWith, to keep legacy 8-char URLs working even after we bumped
+   * URL_SHORT_ID_LENGTH to 16). When multiple sessions match — which can
+   * happen for old short-ID URLs where the 32-bit timestamp prefix collides —
+   * we deterministically pick the newest session. Since IDs are UUIDv7
+   * (lexicographically time-ordered), max-by-string is max-by-creation-time.
    */
   const resolveSessionFromShortId = useCallback(
     (sessionShortId: string): string | null => {
-      // Normalize the short ID (remove hyphens, lowercase)
       const normalizedShortId = sessionShortId.replace(/-/g, '').toLowerCase();
 
-      // Find session whose ID starts with this short ID
+      const matches: string[] = [];
       for (const session of sessionById.values()) {
-        const sessionShortIdNormalized = shortId(session.session_id).toLowerCase();
+        const normalizedId = session.session_id.replace(/-/g, '').toLowerCase();
         if (
-          sessionShortIdNormalized.startsWith(normalizedShortId) ||
-          normalizedShortId.startsWith(sessionShortIdNormalized)
+          normalizedId.startsWith(normalizedShortId) ||
+          normalizedShortId.startsWith(normalizedId.slice(0, normalizedShortId.length))
         ) {
-          return session.session_id;
+          matches.push(session.session_id);
         }
       }
 
-      return null;
+      if (matches.length === 0) return null;
+      if (matches.length === 1) return matches[0];
+
+      // Ambiguous: pick newest (UUIDv7 → lexicographically greatest = most recent).
+      const newest = matches.reduce((a, b) => (a > b ? a : b));
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[useUrlState] Short ID "${sessionShortId}" matched ${matches.length} sessions; ` +
+            `routing to newest (${newest}). See docs/short-id-collision-investigation.md.`
+        );
+      }
+      return newest;
     },
     [sessionById]
   );

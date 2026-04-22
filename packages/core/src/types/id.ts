@@ -78,6 +78,20 @@ export type IdInput = string;
 export type AnyShortId = UUID | ShortID | string;
 
 /**
+ * Length of short IDs used in URLs (e.g. `/b/<board>/<session>/`).
+ *
+ * UUIDv7's first 48 bits are a millisecond timestamp, so an 8-char prefix
+ * carries zero random bits and collides deterministically for any two IDs
+ * created within the same ~65.5s window. 16 hex chars covers the full 48-bit
+ * timestamp plus the 12 random bits of `rand_a`, giving ~4,096 random slots
+ * per millisecond — safe against realistic spawn bursts. Display contexts
+ * (pills, tables) keep the compact 8-char default via `toShortId`.
+ *
+ * See docs/short-id-collision-investigation.md
+ */
+export const URL_SHORT_ID_LENGTH = 16;
+
+/**
  * Extract short ID prefix from a UUID-like string.
  *
  * Removes hyphens and truncates to the requested length (max 32).

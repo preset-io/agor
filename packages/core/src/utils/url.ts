@@ -4,7 +4,7 @@
  * Provides shared helpers for validating and normalizing user-provided URLs.
  */
 
-import { shortId } from '../lib/ids';
+import { shortId, URL_SHORT_ID_LENGTH } from '../lib/ids';
 import type { BoardID, SessionID } from '../types/id';
 
 /**
@@ -34,8 +34,8 @@ export function getSessionUrl(
   baseUrl: string
 ): string | null {
   if (!boardId) return null;
-  const boardParam = boardSlug || shortId(boardId);
-  return `${baseUrl}/b/${boardParam}/${shortId(sessionId)}`;
+  const boardParam = boardSlug || shortId(boardId, URL_SHORT_ID_LENGTH);
+  return `${baseUrl}/b/${boardParam}/${shortId(sessionId, URL_SHORT_ID_LENGTH)}`;
 }
 
 /**
@@ -62,7 +62,7 @@ export function getBoardUrl(
   boardSlug: string | null | undefined,
   baseUrl: string
 ): string {
-  const boardParam = boardSlug || shortId(boardId);
+  const boardParam = boardSlug || shortId(boardId, URL_SHORT_ID_LENGTH);
   return `${baseUrl}/b/${boardParam}`;
 }
 

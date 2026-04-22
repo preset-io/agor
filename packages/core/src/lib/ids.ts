@@ -13,7 +13,9 @@
  */
 
 import { v7 as uuidv7 } from 'uuid';
-import { toShortId } from '../types/id';
+import { toShortId, URL_SHORT_ID_LENGTH } from '../types/id';
+
+export { URL_SHORT_ID_LENGTH };
 
 // ============================================================================
 // Types
@@ -258,6 +260,34 @@ export class IdResolutionError extends Error {
 }
 
 /**
+ * Find all entities whose ID matches the given prefix (either direction).
+ *
+ * Used by UI resolvers that need to handle ambiguity explicitly (e.g. pick
+ * the most recent match for legacy short-ID URLs). Returns `[]` when no
+ * entity matches.
+ *
+ * The match is bidirectional: `entity.id.startsWith(prefix) || prefix.startsWith(shortId(entity.id))`
+ * so that a URL containing any reasonable prefix length still resolves.
+ */
+export function findByShortIdPrefix<T extends { id: UUID }>(
+  prefix: IDPrefix,
+  entities: Iterable<T>
+): T[] {
+  const cleanPrefix = prefix.replace(/-/g, '').toLowerCase();
+  const matches: T[] = [];
+  for (const entity of entities) {
+    const cleanId = entity.id.replace(/-/g, '').toLowerCase();
+    if (
+      cleanId.startsWith(cleanPrefix) ||
+      cleanPrefix.startsWith(cleanId.slice(0, cleanPrefix.length))
+    ) {
+      matches.push(entity);
+    }
+  }
+  return matches;
+}
+
+/**
  * Resolve a short ID prefix to a full entity.
  *
  * This implements git-style ID resolution:
@@ -421,6 +451,8 @@ export default {
   formatIdForDisplay,
   expandPrefix,
   resolveShortId,
+  findByShortIdPrefix,
   findMinimumPrefixLength,
   isUniquePrefix,
+  URL_SHORT_ID_LENGTH,
 };
