@@ -5,11 +5,12 @@
  * Artifacts are DB-backed live web applications that render on the board canvas.
  */
 
+import type { BoardID } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ArtifactsService } from '../../services/artifacts.js';
-import { resolveArtifactId, resolveBoardId } from '../resolve-ids.js';
+import { resolveArtifactId, resolveBoardId, resolveWorktreeId } from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
@@ -255,7 +256,144 @@ NOTE: sandpack_error and console_logs require a browser to be viewing the artifa
     }
   );
 
-  // Tool 6: agor_artifacts_list
+  // Tool 6: agor_artifacts_update
+  server.registerTool(
+    'agor_artifacts_update',
+    {
+      description: `Update artifact metadata without re-reading files from disk. Use this to move an artifact to a different board, rename it, toggle visibility, archive it, or reposition its board placement.
+
+Primary use case: move an artifact to a different board via \`boardId\` when you no longer have the original source folder on disk.
+
+For file/content changes, use agor_artifacts_publish (which re-reads a folder and updates the stored files).
+
+Placement (x, y, width, height) is preserved across board moves unless you explicitly override it — so a cross-board move keeps the artifact in the same relative layout.
+
+Caller must own the artifact (or be an admin).`,
+      inputSchema: z.object({
+        artifactId: z.string().describe('Artifact ID to update (full UUID or short prefix)'),
+        boardId: z.string().optional().describe('Move the artifact to a different board'),
+        name: z.string().optional().describe('Rename the artifact'),
+        description: z.string().optional().describe('Update the description'),
+        public: z
+          .boolean()
+          .optional()
+          .describe('Change visibility (true = visible to all board viewers, false = owner only)'),
+        archived: z.boolean().optional().describe('Archive or unarchive the artifact'),
+        x: z.number().optional().describe('New X position on board'),
+        y: z.number().optional().describe('New Y position on board'),
+        width: z.number().optional().describe('New width in pixels'),
+        height: z.number().optional().describe('New height in pixels'),
+      }),
+    },
+    async (args) => {
+      const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
+      const artifactId = await resolveArtifactId(ctx, coerceString(args.artifactId)!);
+
+      const boardIdInput = coerceString(args.boardId);
+      const resolvedBoardId = boardIdInput ? await resolveBoardId(ctx, boardIdInput) : undefined;
+
+      const updated = await service.updateMetadata(
+        artifactId,
+        {
+          name: coerceString(args.name),
+          description: coerceString(args.description),
+          public: args.public,
+          archived: args.archived,
+          board_id: resolvedBoardId as BoardID | undefined,
+          x: args.x,
+          y: args.y,
+          width: args.width,
+          height: args.height,
+        },
+        ctx.userId
+      );
+
+      const { files: _files, ...artifactSummary } = updated;
+      return textResult({
+        artifact: artifactSummary,
+        instructions: 'Artifact metadata updated.',
+      });
+    }
+  );
+
+  // Tool 7: agor_artifacts_land
+  server.registerTool(
+    'agor_artifacts_land',
+    {
+      description: `Materialize an artifact's stored files to disk inside a worktree. Inverse of agor_artifacts_publish.
+
+Use this when you want to tweak an artifact's code: land it into a worktree, edit the files locally, then call agor_artifacts_publish with the same artifactId to push the changes back.
+
+Writes a sandpack.json manifest alongside the files so agor_artifacts_publish can read the template/dependencies/entry back in a round-trip.
+
+Safety:
+- Destination must be inside the target worktree (cannot escape via ".." or absolute paths).
+- Default subpath is \`.agor/artifacts/<artifact-id>\` (inside the worktree). Pass a custom subpath if you want a different location.
+- Refuses to write to an existing non-empty destination unless overwrite=true is passed.
+- overwrite=true removes the destination directory first (symlinks are unlinked, not followed).
+
+Visibility: public artifacts are readable by anyone; private artifacts are only landable by their owner.`,
+      inputSchema: z.object({
+        artifactId: z.string().describe('Artifact ID to materialize (full UUID or short prefix)'),
+        worktreeId: z.string().describe('Destination worktree ID (full UUID or short prefix)'),
+        subpath: z
+          .string()
+          .optional()
+          .describe(
+            'Worktree-relative path for the destination folder. Default: .agor/artifacts/<artifact-id>. Must not be absolute or escape the worktree.'
+          ),
+        overwrite: z
+          .boolean()
+          .optional()
+          .describe('Remove the destination folder first if it exists. Default: false.'),
+      }),
+    },
+    async (args) => {
+      const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
+      const artifactId = await resolveArtifactId(ctx, coerceString(args.artifactId)!);
+      const worktreeId = await resolveWorktreeId(ctx, coerceString(args.worktreeId)!);
+
+      // Fetch artifact for visibility check.
+      let artifact: Awaited<ReturnType<typeof service.get>>;
+      try {
+        artifact = await service.get(artifactId, ctx.baseServiceParams);
+      } catch (err) {
+        if (err instanceof NotFoundError) {
+          return textResult({ error: `Artifact ${artifactId} not found` });
+        }
+        throw err;
+      }
+      if (!artifact.public) {
+        if (!ctx.userId || !artifact.created_by || artifact.created_by !== ctx.userId) {
+          return textResult({ error: `Artifact ${artifactId} not found` });
+        }
+      }
+
+      // Resolve worktree through the service layer so worktree RBAC is enforced.
+      const worktree = (await ctx.app
+        .service('worktrees')
+        .get(worktreeId, ctx.baseServiceParams)) as {
+        worktree_id: string;
+        path: string;
+      };
+
+      const result = await service.land(artifactId, worktree.path, {
+        subpath: coerceString(args.subpath),
+        overwrite: args.overwrite,
+      });
+
+      return textResult({
+        artifactId,
+        worktreeId: worktree.worktree_id,
+        destinationPath: result.destinationPath,
+        fileCount: result.fileCount,
+        bytesWritten: result.bytesWritten,
+        instructions: `Artifact materialized to ${result.destinationPath}. Edit files there, then call agor_artifacts_publish with folderPath=${result.destinationPath} and artifactId=${artifactId} to push changes back.`,
+      });
+    }
+  );
+
+  // Tool 8: agor_artifacts_list
   server.registerTool(
     'agor_artifacts_list',
     {

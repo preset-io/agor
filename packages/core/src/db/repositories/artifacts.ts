@@ -231,6 +231,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
 
       if (updates.name !== undefined) setData.name = updates.name;
       if (updates.description !== undefined) setData.description = updates.description ?? null;
+      if (updates.board_id !== undefined) setData.board_id = updates.board_id;
       if (updates.template !== undefined) setData.template = updates.template;
       if (updates.build_status !== undefined) setData.build_status = updates.build_status;
       if (updates.build_errors !== undefined) {

@@ -12,6 +12,7 @@
 
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { generateId } from '@agor/core';
 import { PAGINATION } from '@agor/core/config';
@@ -259,6 +260,217 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
     this.app.service('artifacts').emit('created', artifact);
     return artifact;
+  }
+
+  /**
+   * Update artifact metadata without touching file contents.
+   *
+   * Supports: name, description, public, archived flag, board move,
+   * and board placement (x/y/width/height).
+   *
+   * When moving between boards, the old board object is removed and a new one
+   * is created on the destination board. Placement (x/y/width/height) is
+   * preserved unless caller explicitly overrides — this makes cross-board
+   * moves layout-preserving by default.
+   *
+   * For file/content updates use publish() instead.
+   */
+  async updateMetadata(
+    artifactId: string,
+    updates: {
+      name?: string;
+      description?: string;
+      public?: boolean;
+      archived?: boolean;
+      board_id?: BoardID;
+      x?: number;
+      y?: number;
+      width?: number;
+      height?: number;
+    },
+    userId?: string
+  ): Promise<Artifact> {
+    const existing = await this.artifactRepo.findById(artifactId);
+    if (!existing) throw new Error(`Artifact ${artifactId} not found`);
+    if (userId && existing.created_by && existing.created_by !== userId) {
+      throw new Error('Cannot update artifact: not the owner');
+    }
+
+    const fullArtifactId = existing.artifact_id;
+    const objectId = `artifact-${fullArtifactId}`;
+    const oldBoardId = existing.board_id;
+    const newBoardId = updates.board_id ?? oldBoardId;
+    const moving = newBoardId !== oldBoardId;
+
+    // Read the current board object (if present) so we can preserve placement
+    // when moving or when only some placement fields are provided.
+    let currentPlacement: { x: number; y: number; width: number; height: number } | null = null;
+    try {
+      const oldBoard = await this.boardRepo.findById(oldBoardId);
+      const obj = oldBoard?.objects?.[objectId];
+      if (obj && obj.type === 'artifact') {
+        currentPlacement = { x: obj.x, y: obj.y, width: obj.width, height: obj.height };
+      }
+    } catch {
+      // Board may have been deleted out from under the artifact — placement
+      // falls back to defaults below.
+    }
+
+    // Apply DB updates (metadata + board_id).
+    const dbUpdates: Partial<Artifact> = {};
+    if (updates.name !== undefined) dbUpdates.name = updates.name;
+    if (updates.description !== undefined) dbUpdates.description = updates.description;
+    if (updates.public !== undefined) dbUpdates.public = updates.public;
+    if (updates.archived !== undefined) {
+      dbUpdates.archived = updates.archived;
+      dbUpdates.archived_at = updates.archived ? new Date().toISOString() : undefined;
+    }
+    if (moving) dbUpdates.board_id = newBoardId;
+
+    let updated = existing;
+    if (Object.keys(dbUpdates).length > 0) {
+      updated = await this.artifactRepo.update(fullArtifactId, dbUpdates);
+    }
+
+    // Sync board_objects if moving OR if placement fields were supplied.
+    const placementChanged =
+      updates.x !== undefined ||
+      updates.y !== undefined ||
+      updates.width !== undefined ||
+      updates.height !== undefined;
+
+    if (moving || placementChanged) {
+      const placement = {
+        type: 'artifact' as const,
+        artifact_id: fullArtifactId,
+        x: updates.x ?? currentPlacement?.x ?? 0,
+        y: updates.y ?? currentPlacement?.y ?? 0,
+        width: updates.width ?? currentPlacement?.width ?? 600,
+        height: updates.height ?? currentPlacement?.height ?? 400,
+      };
+
+      if (moving) {
+        try {
+          const cleaned = await this.boardRepo.removeBoardObject(oldBoardId, objectId);
+          this.app.service('boards').emit('patched', cleaned);
+        } catch {
+          // Old board may not have this object (e.g. was already cleaned up).
+        }
+      }
+
+      const targetBoard = await this.boardRepo.upsertBoardObject(newBoardId, objectId, placement);
+      this.app.service('boards').emit('patched', targetBoard);
+    }
+
+    this.app.service('artifacts').emit('patched', updated);
+    return updated;
+  }
+
+  /**
+   * Materialize an artifact's stored file map to a destination under a worktree.
+   * Inverse of publish().
+   *
+   * Security:
+   * - destination must resolve strictly inside the worktree (not equal to the
+   *   worktree root) — prevents overwriting random files via `subpath`.
+   * - per-file paths from the artifact's `files` map are re-validated to block
+   *   traversal keys like `../../etc/passwd` that could have been snuck into
+   *   the serialized file map.
+   * - when overwriting, uses `fs.rm` which removes symlinks rather than
+   *   following them.
+   */
+  async land(
+    artifactId: string,
+    worktreePath: string,
+    options?: { subpath?: string; overwrite?: boolean }
+  ): Promise<{ destinationPath: string; fileCount: number; bytesWritten: number }> {
+    const artifact = await this.artifactRepo.findById(artifactId);
+    if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
+    if (!artifact.files || Object.keys(artifact.files).length === 0) {
+      throw new Error(`Artifact ${artifactId} has no stored files to land`);
+    }
+
+    const worktreeRoot = path.resolve(worktreePath);
+    if (!fs.existsSync(worktreeRoot)) {
+      throw new Error(`Worktree path does not exist: ${worktreeRoot}`);
+    }
+
+    // Default destination: .agor/artifacts/<artifact-id>
+    const rawSubpath =
+      options?.subpath && options.subpath.trim().length > 0
+        ? options.subpath
+        : path.join('.agor', 'artifacts', artifact.artifact_id);
+
+    // Absolute subpath is always rejected — caller must pass a worktree-relative path.
+    if (path.isAbsolute(rawSubpath)) {
+      throw new Error(`subpath must be relative to the worktree root: ${rawSubpath}`);
+    }
+
+    const destination = path.resolve(worktreeRoot, rawSubpath);
+
+    // Path-escape check: destination must be strictly inside the worktree.
+    // Equal to worktree root is refused — writing the artifact at the worktree
+    // root would stomp user code.
+    if (destination === worktreeRoot) {
+      throw new Error('subpath must not resolve to the worktree root');
+    }
+    const prefix = worktreeRoot + path.sep;
+    if (!destination.startsWith(prefix)) {
+      throw new Error(`subpath escapes worktree root: ${rawSubpath}`);
+    }
+
+    // Validate file-map keys for traversal. Artifact file keys are stored as
+    // `/path/to/file` (leading slash, forward slashes). Strip leading slash,
+    // resolve inside destination, and verify containment.
+    for (const filePath of Object.keys(artifact.files)) {
+      const key = filePath.startsWith('/') ? filePath.slice(1) : filePath;
+      if (path.isAbsolute(key)) {
+        throw new Error(`Artifact contains absolute file path: ${filePath}`);
+      }
+      const resolved = path.resolve(destination, key);
+      if (resolved !== destination && !resolved.startsWith(destination + path.sep)) {
+        throw new Error(`Artifact file path escapes destination: ${filePath}`);
+      }
+    }
+
+    // Handle existing destination.
+    if (fs.existsSync(destination)) {
+      if (!options?.overwrite) {
+        throw new Error(
+          `Destination already exists: ${destination} (pass overwrite=true to replace)`
+        );
+      }
+      // fs.rm with recursive unlinks symlinks rather than following them.
+      await rm(destination, { recursive: true, force: true });
+    }
+
+    await mkdir(destination, { recursive: true });
+
+    // Write the file map.
+    let bytesWritten = 0;
+    let fileCount = 0;
+    for (const [filePath, content] of Object.entries(artifact.files)) {
+      const key = filePath.startsWith('/') ? filePath.slice(1) : filePath;
+      const fullPath = path.join(destination, key);
+      await mkdir(path.dirname(fullPath), { recursive: true });
+      await writeFile(fullPath, content, 'utf-8');
+      bytesWritten += Buffer.byteLength(content, 'utf-8');
+      fileCount += 1;
+    }
+
+    // Reconstruct sandpack.json for round-trip with publish() (publish skips
+    // sandpack.json when reading, and reconstitutes manifest state from DB
+    // columns).
+    const manifest: SandpackManifest = { template: artifact.template };
+    if (artifact.dependencies) manifest.dependencies = artifact.dependencies;
+    if (artifact.entry) manifest.entry = artifact.entry;
+    if (artifact.use_local_bundler) manifest.use_local_bundler = artifact.use_local_bundler;
+    const manifestJson = `${JSON.stringify(manifest, null, 2)}\n`;
+    await writeFile(path.join(destination, 'sandpack.json'), manifestJson, 'utf-8');
+    bytesWritten += Buffer.byteLength(manifestJson, 'utf-8');
+    fileCount += 1;
+
+    return { destinationPath: destination, fileCount, bytesWritten };
   }
 
   /**
