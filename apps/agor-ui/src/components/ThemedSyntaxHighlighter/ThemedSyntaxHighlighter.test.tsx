@@ -10,11 +10,9 @@ describe('ThemedSyntaxHighlighter', () => {
       </ThemedSyntaxHighlighter>
     );
 
-    const pre = container.querySelector('pre');
-    expect(pre).not.toBeNull();
-    // Must not be an inline <code> wrapper — that caused the staircase bug
-    // because soft-wrapped long lines flowed inline from the previous line.
-    expect(pre?.tagName.toLowerCase()).toBe('pre');
+    // Assert the *outer* wrapper tag specifically — inner token spans
+    // would mask a regression if we searched anywhere in the subtree.
+    expect(container.firstElementChild?.tagName.toLowerCase()).toBe('pre');
   });
 
   it('honors an explicit PreTag override', () => {
@@ -23,8 +21,9 @@ describe('ThemedSyntaxHighlighter', () => {
         {'echo hi'}
       </ThemedSyntaxHighlighter>
     );
-    // When overridden to span, there should be no <pre> wrapper.
+    // Check the outer wrapper tag directly — querySelector('span') would
+    // pass trivially due to inner token spans even if the wrapper changed.
+    expect(container.firstElementChild?.tagName.toLowerCase()).toBe('span');
     expect(container.querySelector('pre')).toBeNull();
-    expect(container.querySelector('span')).not.toBeNull();
   });
 });
