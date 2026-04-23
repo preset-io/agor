@@ -32,7 +32,7 @@ import {
   Typography,
   theme,
 } from 'antd';
-import EmojiPicker, { Theme } from 'emoji-picker-react';
+import EmojiPicker, { EmojiStyle, Theme } from 'emoji-picker-react';
 import React, { useEffect, useMemo, useState } from 'react';
 import { AgorAvatar } from '../AgorAvatar';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
@@ -144,6 +144,7 @@ const EmojiPickerButton: React.FC<{
             setPickerOpen(false);
           }}
           theme={Theme.DARK}
+          emojiStyle={EmojiStyle.NATIVE}
           width={350}
           height={400}
         />

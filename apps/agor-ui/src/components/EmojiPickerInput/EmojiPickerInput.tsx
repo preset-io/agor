@@ -1,6 +1,6 @@
 import { SmileOutlined } from '@ant-design/icons';
 import { Button, Form, Input, Popover } from 'antd';
-import EmojiPicker, { type EmojiClickData, Theme } from 'emoji-picker-react';
+import EmojiPicker, { type EmojiClickData, EmojiStyle, Theme } from 'emoji-picker-react';
 import { useState } from 'react';
 
 interface EmojiPickerInputProps {
@@ -42,6 +42,7 @@ export const EmojiPickerInput: React.FC<EmojiPickerInputProps> = ({
           <EmojiPicker
             onEmojiClick={handleEmojiClick}
             theme={Theme.DARK}
+            emojiStyle={EmojiStyle.NATIVE}
             width={350}
             height={400}
           />
