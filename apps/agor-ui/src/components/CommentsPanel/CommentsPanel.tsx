@@ -32,10 +32,10 @@ import {
   Typography,
   theme,
 } from 'antd';
-import EmojiPicker, { EmojiStyle, Theme } from 'emoji-picker-react';
 import React, { useEffect, useMemo, useState } from 'react';
 import { AgorAvatar } from '../AgorAvatar';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import { AgorEmojiPicker } from '../EmojiPickerInput';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { ZONE_CONTENT_OPACITY } from '../SessionCanvas/canvas/BoardObjectNodes';
 
@@ -138,15 +138,11 @@ const EmojiPickerButton: React.FC<{
   return (
     <Popover
       content={
-        <EmojiPicker
+        <AgorEmojiPicker
           onEmojiClick={(emojiData) => {
             onToggle(emojiData.emoji);
             setPickerOpen(false);
           }}
-          theme={Theme.DARK}
-          emojiStyle={EmojiStyle.NATIVE}
-          width={350}
-          height={400}
         />
       }
       trigger="click"

@@ -1,7 +1,28 @@
 import { SmileOutlined } from '@ant-design/icons';
 import { Button, Form, Input, Popover } from 'antd';
-import EmojiPicker, { type EmojiClickData, EmojiStyle, Theme } from 'emoji-picker-react';
+import EmojiPicker, {
+  type EmojiClickData,
+  EmojiStyle,
+  type PickerProps,
+  Theme,
+} from 'emoji-picker-react';
 import { useState } from 'react';
+
+/**
+ * Shared <EmojiPicker /> wrapper that pins CSP-safe and visually-consistent
+ * defaults. Always use this instead of importing EmojiPicker directly — the
+ * library defaults to EmojiStyle.APPLE which lazy-loads PNGs from
+ * cdn.jsdelivr.net, blocked by Agor's default img-src CSP.
+ */
+export const AgorEmojiPicker: React.FC<Pick<PickerProps, 'onEmojiClick'>> = ({ onEmojiClick }) => (
+  <EmojiPicker
+    onEmojiClick={onEmojiClick}
+    theme={Theme.DARK}
+    emojiStyle={EmojiStyle.NATIVE}
+    width={350}
+    height={400}
+  />
+);
 
 interface EmojiPickerInputProps {
   value?: string;
@@ -38,15 +59,7 @@ export const EmojiPickerInput: React.FC<EmojiPickerInputProps> = ({
         }}
       />
       <Popover
-        content={
-          <EmojiPicker
-            onEmojiClick={handleEmojiClick}
-            theme={Theme.DARK}
-            emojiStyle={EmojiStyle.NATIVE}
-            width={350}
-            height={400}
-          />
-        }
+        content={<AgorEmojiPicker onEmojiClick={handleEmojiClick} />}
         trigger="click"
         open={pickerOpen}
         onOpenChange={setPickerOpen}
