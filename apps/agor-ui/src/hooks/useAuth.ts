@@ -156,9 +156,7 @@ export function useAuth(): UseAuthReturn {
         }
       }
 
-      // Both tokens invalid or expired
-      console.error('❌ CLEARING TOKENS (both access and refresh tokens invalid/expired)');
-      console.trace('Token clearing stack trace');
+      // Both tokens invalid or expired — expected when refresh token hits its TTL.
       clearTokens();
       setState({
         user: null,
@@ -180,9 +178,7 @@ export function useAuth(): UseAuthReturn {
       // IMPORTANT: Don't clear tokens if this is a connection error
       // The daemon might still be restarting, and we want to keep tokens for next retry
       if (!isConnectionError) {
-        console.error('❌ CLEARING TOKENS due to authentication failure (not connection error)');
-        console.error('Error details:', error);
-        console.trace('Token clearing stack trace');
+        console.error('Authentication failure, clearing tokens:', error);
         clearTokens();
       }
 
