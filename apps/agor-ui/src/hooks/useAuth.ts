@@ -9,11 +9,13 @@ import type { User } from '@agor-live/client';
 import { createRestClient } from '@agor-live/client';
 import { useCallback, useEffect, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
+import { isExpiringSoon, msUntilExpiry } from '../utils/jwtExpiry';
+import { refreshTokensSingleFlight, TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 import {
   clearTokens,
   getStoredAccessToken,
   getStoredRefreshToken,
-  refreshAndStoreTokens,
+  type RefreshResult,
   storeTokens,
 } from '../utils/tokenRefresh';
 
@@ -138,7 +140,7 @@ export function useAuth(): UseAuthReturn {
       // Access token expired or missing, try refresh token
       if (storedRefreshToken) {
         try {
-          const refreshResult = await refreshAndStoreTokens(client, storedRefreshToken);
+          const refreshResult = await refreshTokensSingleFlight(client, storedRefreshToken);
 
           setState({
             user: refreshResult.user,
@@ -200,13 +202,48 @@ export function useAuth(): UseAuthReturn {
   }, [reAuthenticate]);
 
   // Listen for daemon reconnection events (window.ononline, storage events, etc.)
-  // This helps recover from daemon restarts automatically
+  // This helps recover from daemon restarts automatically, AND handles the
+  // laptop-sleep case: if the system suspends long enough for the access
+  // token to expire while the tab is hidden, setTimeout will not fire on
+  // time — we catch up here when the tab becomes visible again.
   useEffect(() => {
-    const handleVisibilityChange = () => {
-      // When tab becomes visible again, check if we need to re-auth
-      if (document.visibilityState === 'visible' && !state.authenticated) {
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState !== 'visible') return;
+
+      // Case 1: we think we're unauthenticated but have tokens — retry auth.
+      if (!state.authenticated) {
         const hasTokens = getStoredAccessToken() || getStoredRefreshToken();
         if (hasTokens) {
+          reAuthenticate();
+        }
+        return;
+      }
+
+      // Case 2: we think we're authenticated, but the access token has
+      // silently expired (or will within the next refresh buffer) while the
+      // tab was hidden. Refresh now, before the user's next click triggers a
+      // 401 and makes the stale state visible.
+      const REFRESH_BUFFER_MS = 60_000;
+      const storedAccess = getStoredAccessToken();
+      if (!storedAccess || !isExpiringSoon(storedAccess, REFRESH_BUFFER_MS)) return;
+
+      const refreshToken = getStoredRefreshToken();
+      if (!refreshToken) return;
+
+      try {
+        const client = await createRestClient(getDaemonUrl());
+        const result = await refreshTokensSingleFlight(client, refreshToken);
+        // Event listener below will pick up the refresh and sync state, but
+        // set it here too so that the sync is synchronous with the tab wake.
+        setState((prev) => ({
+          ...prev,
+          accessToken: result.accessToken,
+          user: result.user,
+        }));
+      } catch (error) {
+        // Refresh failed after wake. Let the normal reAuthenticate path
+        // decide whether to clear tokens (connection error vs auth error).
+        if (!isLikelyConnectionError(error)) {
           reAuthenticate();
         }
       }
@@ -233,23 +270,31 @@ export function useAuth(): UseAuthReturn {
     };
   }, [state.authenticated, state.loading, reAuthenticate]);
 
-  // Auto-refresh token before expiration
+  // Auto-refresh the access token before it expires.
+  //
+  // Strategy: decode the `exp` claim on the current access token and schedule
+  // a single setTimeout for (exp - REFRESH_BUFFER). When it fires, refresh;
+  // the state update then re-runs this effect with the new token, which
+  // schedules the next tick. This removes the historic drift bug where the
+  // refresh interval was hardcoded independently of the server's TTL.
   useEffect(() => {
     if (!state.authenticated || !state.accessToken) return;
 
-    // Access token expires in 7 days, refresh after 6 days (conservative approach)
-    const REFRESH_INTERVAL = 6 * 24 * 60 * 60 * 1000; // 6 days in milliseconds
+    const REFRESH_BUFFER_MS = 60_000; // refresh this many ms before exp
+    const MIN_DELAY_MS = 1_000; // never schedule tighter than this
+    const FALLBACK_DELAY_MS = 5 * 60_000; // if we can't decode exp
 
-    const refreshTimer = setInterval(async () => {
+    const untilExp = msUntilExpiry(state.accessToken);
+    const delay =
+      untilExp === null ? FALLBACK_DELAY_MS : Math.max(MIN_DELAY_MS, untilExp - REFRESH_BUFFER_MS);
+
+    const timer = setTimeout(async () => {
       const refreshToken = getStoredRefreshToken();
-      if (!refreshToken) {
-        return;
-      }
+      if (!refreshToken) return;
 
       try {
         const client = await createRestClient(getDaemonUrl());
-
-        const refreshResult = await refreshAndStoreTokens(client, refreshToken);
+        const refreshResult = await refreshTokensSingleFlight(client, refreshToken);
 
         setState((prev) => ({
           ...prev,
@@ -275,10 +320,30 @@ export function useAuth(): UseAuthReturn {
           });
         }
       }
-    }, REFRESH_INTERVAL);
+    }, delay);
 
-    return () => clearInterval(refreshTimer);
+    return () => clearTimeout(timer);
   }, [state.authenticated, state.accessToken]);
+
+  // When the single-flight refresh helper completes from a non-React path
+  // (e.g. the socket-client 401-retry hook, or a concurrent refresh in
+  // useAgorClient), sync our React state so the next render uses the fresh
+  // token and the auto-refresh effect re-schedules around the new `exp`.
+  useEffect(() => {
+    const handleRefreshed = (event: Event) => {
+      const detail = (event as CustomEvent<RefreshResult>).detail;
+      if (!detail) return;
+      setState((prev) => ({
+        ...prev,
+        accessToken: detail.accessToken,
+        user: detail.user,
+        authenticated: true,
+      }));
+    };
+
+    window.addEventListener(TOKENS_REFRESHED_EVENT, handleRefreshed);
+    return () => window.removeEventListener(TOKENS_REFRESHED_EVENT, handleRefreshed);
+  }, []);
 
   /**
    * Login with email and password

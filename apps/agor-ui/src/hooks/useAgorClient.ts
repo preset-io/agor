@@ -9,7 +9,8 @@ import type { AgorClient } from '@agor-live/client';
 import { createClient } from '@agor-live/client';
 import { useEffect, useRef, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
-import { getStoredRefreshToken, refreshAndStoreTokens } from '../utils/tokenRefresh';
+import { refreshTokensSingleFlight } from '../utils/singleFlightRefresh';
+import { getStoredRefreshToken, type RefreshResult } from '../utils/tokenRefresh';
 
 interface UseAgorClientResult {
   client: AgorClient | null;
@@ -63,6 +64,94 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
       client = createClient(url, false);
       clientRef.current = client;
 
+      // Register an around-hook that transparently recovers from mid-session
+      // access-token expiry. Any service call that fails with NotAuthenticated
+      // (typically "jwt expired" from the Feathers auth strategy) will:
+      //   1. Call /authentication/refresh via the single-flight helper — N
+      //      parallel 401s share one refresh request so we don't rotate the
+      //      refresh token multiple times.
+      //   2. Re-authenticate the socket with the freshly-issued access token.
+      //   3. Retry the original call exactly once.
+      // The `_refreshRetried` flag on params guards against infinite recursion
+      // if the retry itself fails auth (e.g. refresh token also expired).
+      //
+      // Auth-service paths are skipped so we never retry the refresh call or
+      // the initial authenticate() itself.
+      client.hooks({
+        around: {
+          all: [
+            async (context, next) => {
+              const path = context.path;
+              if (typeof path === 'string' && path.startsWith('authentication')) {
+                await next();
+                return;
+              }
+
+              try {
+                await next();
+              } catch (err) {
+                const errorObject = err as
+                  | { name?: string; code?: number; className?: string }
+                  | undefined;
+                const isAuthError =
+                  errorObject?.name === 'NotAuthenticated' ||
+                  errorObject?.code === 401 ||
+                  errorObject?.className === 'not-authenticated';
+                if (!isAuthError) throw err;
+
+                const currentParams = (context.params ?? {}) as Record<string, unknown>;
+                if (currentParams._refreshRetried) throw err;
+
+                const refreshToken = getStoredRefreshToken();
+                if (!refreshToken || !client) throw err;
+
+                let refreshed: RefreshResult;
+                try {
+                  refreshed = await refreshTokensSingleFlight(client, refreshToken);
+                } catch {
+                  // Refresh itself failed — surface the original auth error
+                  // so upstream code (useAuth, connect handler) can decide
+                  // whether to clear tokens and bounce to the login screen.
+                  throw err;
+                }
+
+                try {
+                  await client.authenticate({
+                    strategy: 'jwt',
+                    accessToken: refreshed.accessToken,
+                  });
+                } catch {
+                  throw err;
+                }
+
+                // Retry the original call once. Hooks fire again, but the
+                // `_refreshRetried` flag on params prevents another retry
+                // if the retry also 401s.
+                const retryParams = { ...currentParams, _refreshRetried: true };
+                const service = client.service(path as string);
+                const method = context.method as string;
+
+                if (method === 'find') {
+                  context.result = await service.find(retryParams);
+                } else if (method === 'get') {
+                  context.result = await service.get(context.id, retryParams);
+                } else if (method === 'create') {
+                  context.result = await service.create(context.data, retryParams);
+                } else if (method === 'update') {
+                  context.result = await service.update(context.id, context.data, retryParams);
+                } else if (method === 'patch') {
+                  context.result = await service.patch(context.id, context.data, retryParams);
+                } else if (method === 'remove') {
+                  context.result = await service.remove(context.id, retryParams);
+                } else {
+                  throw err;
+                }
+              }
+            },
+          ],
+        },
+      });
+
       // Store client globally for Vite HMR cleanup
       if (typeof window !== 'undefined') {
         (window as unknown as { __agorClient: AgorClient }).__agorClient = client;
@@ -92,7 +181,7 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
                 const refreshToken = getStoredRefreshToken();
                 if (refreshToken) {
                   try {
-                    const refreshResult = await refreshAndStoreTokens(client, refreshToken);
+                    const refreshResult = await refreshTokensSingleFlight(client, refreshToken);
 
                     // Authenticate with new access token
                     await client.authenticate({
