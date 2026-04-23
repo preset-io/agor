@@ -1,4 +1,5 @@
 import { WorktreeRepository, type WorktreeWithZoneAndSessions } from '@agor/core/db';
+import { resolveModelConfigPrecedence } from '@agor/core/models';
 import {
   AGENTIC_TOOL_CAPABILITIES,
   type AgenticToolName,
@@ -737,25 +738,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       // threaded through to session.model_config so the executor picks it up
       // when spawning the agent (see query-builder.ts: rawModel is read from
       // session.model_config.model).
-      let modelConfig: Record<string, unknown> | undefined;
-      if (args.modelConfig?.model) {
-        modelConfig = {
-          mode: args.modelConfig.mode || 'alias',
-          model: args.modelConfig.model,
-          updated_at: new Date().toISOString(),
-          ...(args.modelConfig.effort !== undefined && { effort: args.modelConfig.effort }),
-          ...(args.modelConfig.provider !== undefined && { provider: args.modelConfig.provider }),
-        };
-      } else if (userToolDefaults?.modelConfig?.model) {
-        modelConfig = {
-          mode: userToolDefaults.modelConfig.mode || 'alias',
-          model: userToolDefaults.modelConfig.model,
-          updated_at: new Date().toISOString(),
-          ...(userToolDefaults.modelConfig.effort !== undefined && {
-            effort: userToolDefaults.modelConfig.effort,
-          }),
-        };
-      }
+      const modelConfig = resolveModelConfigPrecedence([
+        args.modelConfig,
+        userToolDefaults?.modelConfig,
+      ]);
 
       // MCP server inheritance: explicit param > worktree config > user defaults
       // An explicit empty array means "no MCPs" — does NOT fall through to worktree/user defaults.

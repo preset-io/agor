@@ -1,5 +1,6 @@
 import { isWorktreeRbacEnabled } from '@agor/core/config';
 import { WorktreeRepository } from '@agor/core/db';
+import { resolveModelConfig } from '@agor/core/models';
 import type {
   AgenticToolName,
   BoardID,
@@ -799,16 +800,10 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
             };
           }
 
-          // Build model config from user defaults
-          let modelConfig: Record<string, unknown> | undefined;
-          if (userToolDefaults?.modelConfig?.model) {
-            modelConfig = {
-              mode: userToolDefaults.modelConfig.mode || 'alias',
-              model: userToolDefaults.modelConfig.model,
-              updated_at: new Date().toISOString(),
-              effort: userToolDefaults.modelConfig.effort,
-            };
-          }
+          // Build model config from user defaults. resolveModelConfig stamps
+          // updated_at and conditionally includes effort/provider so we write
+          // the same normalized shape as every other session-create path.
+          const modelConfig = resolveModelConfig(userToolDefaults?.modelConfig);
 
           // MCP server inheritance: worktree config > user defaults
           const mcpServerIds =

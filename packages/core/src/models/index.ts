@@ -13,3 +13,6 @@ export * from './codex.js';
 
 // Gemini models
 export * from './gemini.js';
+
+// Model config normalization (shared across session-creation paths)
+export * from './resolve-config.js';

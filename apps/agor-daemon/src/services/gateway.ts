@@ -22,6 +22,7 @@ import {
   hasConnector,
   parseGitHubThreadId,
 } from '@agor/core/gateway';
+import { resolveModelConfig } from '@agor/core/models';
 import type {
   AgenticToolName,
   ChannelType,
@@ -595,14 +596,7 @@ export class GatewayService {
         status: SessionStatus.IDLE,
         agentic_tool: agenticTool,
         permission_config: { mode: permissionMode },
-        model_config: modelConfig
-          ? {
-              mode: modelConfig.mode ?? 'alias',
-              model: modelConfig.model ?? '',
-              updated_at: new Date().toISOString(),
-              effort: modelConfig.effort,
-            }
-          : undefined,
+        model_config: resolveModelConfig(modelConfig),
         tasks: [],
         // Denormalized gateway metadata (immutable snapshot at creation time)
         // Avoids N+1 lookups when rendering board cards
