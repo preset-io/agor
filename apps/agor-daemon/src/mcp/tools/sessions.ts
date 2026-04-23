@@ -22,6 +22,28 @@ import {
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
 
+/**
+ * Shared Zod schema for specifying a model override at session-create / spawn /
+ * subsession time. Mirrors Session['model_config'] but keeps every field
+ * optional so callers can pass e.g. just `{ model: 'claude-opus-4-6' }` and
+ * inherit the rest. Wired through to `session.model_config` so the executor
+ * actually spawns on the requested model (see query-builder.ts).
+ */
+const modelConfigInputSchema = z
+  .object({
+    mode: z.enum(['alias', 'exact']).optional().describe("Model selection mode (default: 'alias')"),
+    model: z.string().describe("Model identifier (e.g. 'claude-opus-4-6', 'claude-sonnet-4-6')"),
+    effort: z
+      .enum(['low', 'medium', 'high', 'max'])
+      .optional()
+      .describe('Reasoning effort level (default: high)'),
+    provider: z.string().optional().describe("Provider ID (OpenCode only, e.g. 'anthropic')"),
+  })
+  .optional()
+  .describe(
+    'Model override for this session. When set, overrides the user default model_config. Threaded through to the spawned agent process so it actually runs on the requested model.'
+  );
+
 export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_sessions_list
   server.registerTool(
@@ -411,6 +433,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'MCP server IDs to attach. Overrides parent session inheritance. Omit to inherit from parent. Pass empty array for no MCPs.'
           ),
+        modelConfig: modelConfigInputSchema,
       }),
     },
     async (args) => {
@@ -424,6 +447,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         extraInstructions: args.extraInstructions,
         task_id: args.taskId,
         mcpServerIds: args.mcpServerIds,
+        modelConfig: args.modelConfig,
       };
 
       const childSession = await (
@@ -479,6 +503,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'MCP server IDs for subsession mode. Overrides parent inheritance. Omit to inherit from parent. Pass empty array for no MCPs.'
           ),
+        modelConfig: modelConfigInputSchema,
       }),
     },
     async (args) => {
@@ -575,6 +600,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         const spawnData: Partial<import('@agor/core/types').SpawnConfig> = {
           prompt: args.prompt,
           mcpServerIds: args.mcpServerIds,
+          modelConfig: args.modelConfig,
         };
         if (args.title) spawnData.title = args.title;
         if (args.agenticTool) spawnData.agent = args.agenticTool as AgenticToolName;
@@ -610,7 +636,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_create',
     {
       description:
-        'Create a new session in an existing worktree. Use for starting fresh work on a new task in the same codebase (e.g., new feature branch, separate investigation). Unlike spawn, this creates an independent session with no parent-child relationship. MCP servers are inherited from the worktree (if configured) or user defaults. Supports optional callbacks to notify the creating session when the new session completes.',
+        'Create a new session in an existing worktree. Use for starting fresh work on a new task in the same codebase (e.g., new feature branch, separate investigation). Unlike spawn, this creates an independent session with no parent-child relationship. MCP servers are inherited from the worktree (if configured) or user defaults, or can be overridden via `mcpServerIds`. Model selection falls back to user defaults and can be overridden via `modelConfig`. Supports optional callbacks to notify the creating session when the new session completes.',
       inputSchema: z.object({
         worktreeId: z.string().describe('Worktree ID where the session will run (required)'),
         agenticTool: z
@@ -660,6 +686,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'MCP server IDs to attach. Overrides worktree and user default inheritance. Omit to use worktree config > user defaults.'
           ),
+        modelConfig: modelConfigInputSchema,
       }),
     },
     async (args) => {
@@ -704,8 +731,21 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         };
       }
 
+      // Model selection: explicit modelConfig arg > user default.
+      // An explicit modelConfig overrides any user-default settings and is
+      // threaded through to session.model_config so the executor picks it up
+      // when spawning the agent (see query-builder.ts: rawModel is read from
+      // session.model_config.model).
       let modelConfig: Record<string, unknown> | undefined;
-      if (userToolDefaults?.modelConfig?.model) {
+      if (args.modelConfig?.model) {
+        modelConfig = {
+          mode: args.modelConfig.mode || 'alias',
+          model: args.modelConfig.model,
+          updated_at: new Date().toISOString(),
+          ...(args.modelConfig.effort !== undefined && { effort: args.modelConfig.effort }),
+          ...(args.modelConfig.provider !== undefined && { provider: args.modelConfig.provider }),
+        };
+      } else if (userToolDefaults?.modelConfig?.model) {
         modelConfig = {
           mode: userToolDefaults.modelConfig.mode || 'alias',
           model: userToolDefaults.modelConfig.model,
@@ -723,6 +763,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           : worktree.mcp_server_ids && worktree.mcp_server_ids.length > 0
             ? worktree.mcp_server_ids
             : userToolDefaults?.mcpServerIds || [];
+      // Track whether the caller explicitly requested these servers. When they
+      // did, we surface attach failures in the response instead of silently
+      // dropping them (the "mcpServerId doesn't stick" bug). For inherited
+      // servers (worktree/user defaults) we preserve the existing "gracefully
+      // skip deleted/invalid" behavior so startup doesn't get chatty.
+      const mcpServerIdsFromArgs = args.mcpServerIds !== undefined;
 
       // Build callback configuration for remote session callbacks
       const callbackConfig: Record<string, unknown> = {};
@@ -783,7 +829,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       const session = await ctx.app.service('sessions').create(sessionData, ctx.baseServiceParams);
 
-      // Attach MCP servers (inherited from worktree or user defaults)
+      // Attach MCP servers (inherited from worktree or user defaults, or
+      // explicitly requested via args.mcpServerIds). Explicit failures are
+      // collected and returned to the caller so they don't silently vanish.
+      const mcpAttachFailures: Array<{ mcp_server_id: string; reason: string }> = [];
       if (mcpServerIds && mcpServerIds.length > 0) {
         for (const mcpServerId of mcpServerIds) {
           try {
@@ -794,10 +843,16 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
                 ctx.baseServiceParams
               );
           } catch (error) {
-            // Gracefully skip deleted/invalid MCP servers
-            console.warn(
-              `Skipped MCP server ${mcpServerId} for session ${session.session_id}: ${error instanceof Error ? error.message : String(error)}`
-            );
+            const reason = error instanceof Error ? error.message : String(error);
+            if (mcpServerIdsFromArgs) {
+              // Caller explicitly asked for this server — surface the failure.
+              mcpAttachFailures.push({ mcp_server_id: mcpServerId, reason });
+            } else {
+              // Inherited from worktree/user defaults — gracefully skip.
+              console.warn(
+                `Skipped MCP server ${mcpServerId} for session ${session.session_id}: ${reason}`
+              );
+            }
           }
         }
       }
@@ -817,12 +872,18 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         ? ` Callback will be sent to session ${(callbackConfig.callback_session_id as string).substring(0, 8)} on completion.`
         : '';
 
+      const mcpFailureNote =
+        mcpAttachFailures.length > 0
+          ? ` Warning: ${mcpAttachFailures.length} requested MCP server(s) failed to attach — see mcpAttachFailures.`
+          : '';
+
       return textResult({
         session,
         taskId: promptResponse?.taskId,
         note: args.initialPrompt
-          ? `Session created and initial prompt execution started.${callbackNote}`
-          : `Session created successfully.${callbackNote}`,
+          ? `Session created and initial prompt execution started.${callbackNote}${mcpFailureNote}`
+          : `Session created successfully.${callbackNote}${mcpFailureNote}`,
+        ...(mcpAttachFailures.length > 0 && { mcpAttachFailures }),
       });
     }
   );
