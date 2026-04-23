@@ -9,8 +9,7 @@ import type { AgorClient } from '@agor-live/client';
 import { createClient } from '@agor-live/client';
 import { useEffect, useRef, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
-import { refreshTokensSingleFlight } from '../utils/singleFlightRefresh';
-import { getStoredRefreshToken, type RefreshResult } from '../utils/tokenRefresh';
+import { refreshAndReauthenticate } from '../utils/singleFlightRefresh';
 
 interface UseAgorClientResult {
   client: AgorClient | null;
@@ -71,18 +70,22 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
       //      parallel 401s share one refresh request so we don't rotate the
       //      refresh token multiple times.
       //   2. Re-authenticate the socket with the freshly-issued access token.
-      //   3. Retry the original call exactly once.
+      //   3. Retry the original call exactly once, via the raw method args so
+      //      custom (non-CRUD) service methods retry as well.
       // The `_refreshRetried` flag on params guards against infinite recursion
       // if the retry itself fails auth (e.g. refresh token also expired).
       //
-      // Auth-service paths are skipped so we never retry the refresh call or
-      // the initial authenticate() itself.
+      // Skip `authentication` (login) and `authentication/refresh` themselves
+      // so we never recurse on the refresh call. Auth-adjacent routes like
+      // `authentication/impersonate` go through the retry like any other
+      // service call.
+      const AUTH_PATHS_TO_SKIP = new Set(['authentication', 'authentication/refresh']);
       client.hooks({
         around: {
           all: [
             async (context, next) => {
               const path = context.path;
-              if (typeof path === 'string' && path.startsWith('authentication')) {
+              if (typeof path === 'string' && AUTH_PATHS_TO_SKIP.has(path)) {
                 await next();
                 return;
               }
@@ -99,53 +102,50 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
                   errorObject?.className === 'not-authenticated';
                 if (!isAuthError) throw err;
 
+                // Guard against infinite retry if the retry also 401s.
                 const currentParams = (context.params ?? {}) as Record<string, unknown>;
                 if (currentParams._refreshRetried) throw err;
 
-                const refreshToken = getStoredRefreshToken();
-                if (!refreshToken || !client) throw err;
+                if (!client) throw err;
 
-                let refreshed: RefreshResult;
                 try {
-                  refreshed = await refreshTokensSingleFlight(client, refreshToken);
+                  const result = await refreshAndReauthenticate(client);
+                  if (!result) throw err; // no refresh token stored
                 } catch {
-                  // Refresh itself failed — surface the original auth error
-                  // so upstream code (useAuth, connect handler) can decide
-                  // whether to clear tokens and bounce to the login screen.
+                  // Refresh or re-authenticate failed — surface the original
+                  // auth error so upstream code (useAuth, connect handler)
+                  // can decide whether to clear tokens and bounce to login.
                   throw err;
                 }
 
-                try {
-                  await client.authenticate({
-                    strategy: 'jwt',
-                    accessToken: refreshed.accessToken,
-                  });
-                } catch {
-                  throw err;
-                }
-
-                // Retry the original call once. Hooks fire again, but the
-                // `_refreshRetried` flag on params prevents another retry
-                // if the retry also 401s.
-                const retryParams = { ...currentParams, _refreshRetried: true };
-                const service = client.service(path as string);
-                const method = context.method as string;
-
-                if (method === 'find') {
-                  context.result = await service.find(retryParams);
-                } else if (method === 'get') {
-                  context.result = await service.get(context.id, retryParams);
-                } else if (method === 'create') {
-                  context.result = await service.create(context.data, retryParams);
-                } else if (method === 'update') {
-                  context.result = await service.update(context.id, context.data, retryParams);
-                } else if (method === 'patch') {
-                  context.result = await service.patch(context.id, context.data, retryParams);
-                } else if (method === 'remove') {
-                  context.result = await service.remove(context.id, retryParams);
+                // Retry the original call once via its raw argument list so
+                // custom service methods (non-CRUD) retry correctly too.
+                // Feathers service methods always end with a `params` arg; we
+                // inject `_refreshRetried: true` there to stop recursion if
+                // the retry itself 401s.
+                const args = context.arguments ? [...context.arguments] : [];
+                const lastIdx = args.length - 1;
+                const lastArg = args[lastIdx];
+                const isParamsObject =
+                  lastArg !== null && typeof lastArg === 'object' && !Array.isArray(lastArg);
+                const retryParams = {
+                  ...(isParamsObject ? (lastArg as Record<string, unknown>) : {}),
+                  _refreshRetried: true,
+                };
+                if (isParamsObject) {
+                  args[lastIdx] = retryParams;
                 } else {
-                  throw err;
+                  args.push(retryParams);
                 }
+
+                const service = client.service(path as string) as Record<string, unknown>;
+                const method = context.method as string;
+                const methodFn = service[method];
+                if (typeof methodFn !== 'function') throw err;
+                context.result = await (methodFn as (...a: unknown[]) => unknown).call(
+                  service,
+                  ...args
+                );
               }
             },
           ],
@@ -176,19 +176,13 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
                 setError(null);
                 return;
               } catch (_accessTokenErr) {
-                // Access token expired or invalid - try refresh token
-                // Check if we have a refresh token in localStorage
-                const refreshToken = getStoredRefreshToken();
-                if (refreshToken) {
-                  try {
-                    const refreshResult = await refreshTokensSingleFlight(client, refreshToken);
-
-                    // Authenticate with new access token
-                    await client.authenticate({
-                      strategy: 'jwt',
-                      accessToken: refreshResult.accessToken,
-                    });
-
+                // Access token expired or invalid — try the refresh token.
+                // `refreshAndReauthenticate` fires the single-flight refresh
+                // and re-authenticates this socket client with the new access
+                // token, shared with the 401-retry hook above.
+                try {
+                  const refreshResult = await refreshAndReauthenticate(client);
+                  if (refreshResult) {
                     setConnected(true);
                     setConnecting(false);
                     setError(null);
@@ -196,10 +190,10 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
                     // Trigger useAuth to reload (in case it's not in sync)
                     window.dispatchEvent(new Event('storage'));
                     return;
-                  } catch (refreshErr) {
-                    console.error('❌ Refresh token also failed:', refreshErr);
-                    // Fall through to error handling
                   }
+                } catch (refreshErr) {
+                  console.error('❌ Refresh token also failed:', refreshErr);
+                  // Fall through to error handling
                 }
               }
             } else if (allowAnonymous) {
