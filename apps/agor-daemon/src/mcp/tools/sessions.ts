@@ -34,7 +34,12 @@ import { textResult } from '../server.js';
 const modelConfigInputSchema = z
   .object({
     mode: z.enum(['alias', 'exact']).optional().describe("Model selection mode (default: 'alias')"),
-    model: z.string().describe("Model identifier (e.g. 'claude-opus-4-6', 'claude-sonnet-4-6')"),
+    // .min(1): reject empty-string model explicitly so callers don't silently
+    // fall through to user defaults when they meant to pin a specific model.
+    model: z
+      .string()
+      .min(1)
+      .describe("Model identifier (e.g. 'claude-opus-4-6', 'claude-sonnet-4-6')"),
     effort: z
       .enum(['low', 'medium', 'high', 'max'])
       .optional()
