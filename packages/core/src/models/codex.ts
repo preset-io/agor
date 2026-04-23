@@ -19,7 +19,13 @@ export const CODEX_MINI_MODEL = 'gpt-5-codex-mini';
  * Uses `as const satisfies` to preserve literal key types for CodexModel.
  */
 const _CODEX_MODEL_METADATA = {
-  // GPT-5.4 models (newest)
+  // GPT-5.5 models (newest — released 2026-04-23, codename "Spud")
+  'gpt-5.5': {
+    name: 'GPT-5.5',
+    description:
+      "OpenAI's newest frontier model - complex coding, computer use, research. ChatGPT-auth only at launch; API access rolling out.",
+  },
+  // GPT-5.4 models
   'gpt-5.4': {
     name: 'GPT-5.4 (Recommended)',
     description: 'Most capable model - unified coding, reasoning, and computer use',
@@ -112,6 +118,8 @@ const DEFAULT_CODEX_CONTEXT_LIMIT = 200_000;
  * Values mirror OpenAI's public docs (Dec 2025) and fall back to 200k if unknown.
  */
 export const CODEX_CONTEXT_LIMITS: Record<string, number> = {
+  // GPT-5.5 models (400k context in Codex; 1M in API when GA)
+  'gpt-5.5': 400_000,
   // GPT-5.4 models
   'gpt-5.4': 1_050_000,
   'gpt-5.4-mini': 400_000,

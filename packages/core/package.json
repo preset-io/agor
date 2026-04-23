@@ -247,7 +247,7 @@
     "@libsql/client": "^0.17.2",
     "@octokit/auth-app": "^8.2.0",
     "@octokit/rest": "^22.0.1",
-    "@openai/codex-sdk": "^0.120.0",
+    "@openai/codex-sdk": "^0.124.0",
     "@opencode-ai/sdk": "^1.2.15",
     "@slack/socket-mode": "^2.0.5",
     "@slack/web-api": "^7.14.1",
