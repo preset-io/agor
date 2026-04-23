@@ -100,7 +100,7 @@
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
     "swagger-ui-dist": "^5.32.0",
-    "uuid": "^13.0.0",
+    "uuid": "^14.0.0",
     "uuidv7": "^1.1.0",
     "zod": "^4.3.6"
   },
