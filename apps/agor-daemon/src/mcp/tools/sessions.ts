@@ -24,10 +24,11 @@ import { textResult } from '../server.js';
 
 /**
  * Shared Zod schema for specifying a model override at session-create / spawn /
- * subsession time. Mirrors Session['model_config'] but keeps every field
- * optional so callers can pass e.g. just `{ model: 'claude-opus-4-6' }` and
- * inherit the rest. Wired through to `session.model_config` so the executor
- * actually spawns on the requested model (see query-builder.ts).
+ * subsession time. Mirrors Session['model_config']: `model` is required (the
+ * whole point of this object is to pin a specific model), while `mode`,
+ * `effort`, and `provider` are optional and fall back to sensible defaults.
+ * Wired through to `session.model_config` so the executor actually spawns on
+ * the requested model (see query-builder.ts).
  */
 const modelConfigInputSchema = z
   .object({
@@ -750,7 +751,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           mode: userToolDefaults.modelConfig.mode || 'alias',
           model: userToolDefaults.modelConfig.model,
           updated_at: new Date().toISOString(),
-          effort: userToolDefaults.modelConfig.effort,
+          ...(userToolDefaults.modelConfig.effort !== undefined && {
+            effort: userToolDefaults.modelConfig.effort,
+          }),
         };
       }
 

@@ -343,4 +343,93 @@ describe('agor_sessions_spawn', () => {
       effort: 'high',
     });
   });
+
+  it('threads provider through SpawnConfig.modelConfig (OpenCode)', async () => {
+    const spawnCalls: Array<{ id: string; data: any }> = [];
+    const app = makeFakeApp({
+      sessions: {
+        spawn: async (id: string, data: any) => {
+          spawnCalls.push({ id, data });
+          return {
+            session_id: 'sess-child',
+            permission_config: { mode: 'acceptEdits' },
+          };
+        },
+      },
+      '/sessions/:id/prompt': {
+        create: async () => ({ taskId: 't1', status: 'running' }),
+      },
+    });
+
+    const { agor_sessions_spawn } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-parent' },
+      ['agor_sessions_spawn']
+    );
+
+    await agor_sessions_spawn({
+      prompt: 'do the thing',
+      modelConfig: { model: 'claude-sonnet-4-6', provider: 'anthropic' },
+    });
+
+    // Regression guard: without `provider` on SpawnConfig, Zod-validated input
+    // would reach the spawn service with provider set, but the service's merge
+    // would drop it (or TS would reject the field). This asserts the full
+    // shape survives the MCP → service boundary.
+    expect(spawnCalls[0].data.modelConfig).toEqual({
+      model: 'claude-sonnet-4-6',
+      provider: 'anthropic',
+    });
+  });
+});
+
+describe('agor_sessions_prompt (subsession mode)', () => {
+  beforeEach(() => {
+    vi.doMock('@agor/core/git', () => ({
+      getGitState: async () => 'sha-abc',
+      getCurrentBranch: async () => 'main',
+    }));
+  });
+
+  afterEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it('threads modelConfig into SpawnConfig when mode="subsession"', async () => {
+    const spawnCalls: Array<{ id: string; data: any }> = [];
+    const app = makeFakeApp({
+      sessions: {
+        spawn: async (id: string, data: any) => {
+          spawnCalls.push({ id, data });
+          return {
+            session_id: 'sess-sub',
+            permission_config: { mode: 'acceptEdits' },
+          };
+        },
+      },
+      '/sessions/:id/prompt': {
+        create: async () => ({ taskId: 't1', status: 'running' }),
+      },
+    });
+
+    const { agor_sessions_prompt } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_prompt']
+    );
+
+    await agor_sessions_prompt({
+      sessionId: 'sess-target',
+      prompt: 'delegated work',
+      mode: 'subsession',
+      modelConfig: { model: 'claude-opus-4-6', effort: 'max', provider: 'anthropic' },
+    });
+
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0].id).toBe('sess-target');
+    expect(spawnCalls[0].data.modelConfig).toEqual({
+      model: 'claude-opus-4-6',
+      effort: 'max',
+      provider: 'anthropic',
+    });
+  });
 });

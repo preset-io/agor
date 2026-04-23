@@ -523,6 +523,11 @@ export interface SpawnConfig {
     mode?: 'alias' | 'exact';
     model?: string;
     effort?: EffortLevel;
+    /**
+     * Provider ID (OpenCode only, e.g. 'anthropic', 'openai', 'opencode').
+     * Persisted on session.model_config.provider. Ignored for non-OpenCode tools.
+     */
+    provider?: string;
   };
 
   /** Codex sandbox mode (codex only) */

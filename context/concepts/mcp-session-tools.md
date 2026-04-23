@@ -17,9 +17,16 @@ All tools enforce the worktree-centric data model—sessions must point to a wor
 
 ## Implementation Notes
 
-- Tool handlers live in `apps/agor-daemon/src/mcp/routes.ts` (search for `agor_sessions_...`).
+- Tool handlers live in `apps/agor-daemon/src/mcp/tools/sessions.ts` (search for `agor_sessions_...`).
 - Reuses existing services so audit trails, genealogy, and WebSocket broadcasts stay consistent.
-- Tests in `apps/agor-daemon/src/mcp/routes.test.ts` cover prompt continuation, metadata updates, and session creation with initial prompts.
+- Tests in `apps/agor-daemon/src/mcp/tools/sessions.test.ts` cover prompt continuation, metadata updates, session creation with initial prompts, and the `modelConfig` / `mcpServerIds` overrides described below.
+
+## Overrides at create / spawn / subsession time
+
+`agor_sessions_create`, `agor_sessions_spawn`, and `agor_sessions_prompt` (with `mode: "subsession"`) all accept two optional override fields with consistent semantics:
+
+- **`modelConfig`** — pins a specific model for the new session. Shape: `{ model: string, mode?: 'alias' | 'exact', effort?: 'low' | 'medium' | 'high' | 'max', provider?: string }`. `model` is required when the object is provided. When omitted, the session falls back to the user's default `model_config` for that agent. Threaded through to `session.model_config` so the executor actually runs on the requested model (see `packages/executor/src/sdk-handlers/claude/query-builder.ts`).
+- **`mcpServerIds`** — pins which MCP servers attach to the new session. Overrides worktree/parent/user-default inheritance. Pass `[]` for "no MCPs"; omit the field entirely to inherit. When explicitly provided, any attach failures (RBAC denials, deleted server references) surface in the tool's response as `mcpAttachFailures: [{ mcp_server_id, reason }]` instead of being silently logged, so callers can distinguish "stuck silently" from "attached successfully."
 
 ## Usage
 

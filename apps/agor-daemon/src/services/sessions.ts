@@ -441,7 +441,12 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
                 mode: toolDefaults.modelConfig.mode || 'alias',
                 model: toolDefaults.modelConfig.model || '',
                 updated_at: new Date().toISOString(),
-                effort: toolDefaults.modelConfig.effort,
+                ...(toolDefaults.modelConfig.effort !== undefined && {
+                  effort: toolDefaults.modelConfig.effort,
+                }),
+                ...(toolDefaults.modelConfig.provider !== undefined && {
+                  provider: toolDefaults.modelConfig.provider,
+                }),
               };
             }
           }
@@ -478,7 +483,8 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         mode: data.modelConfig.mode || 'alias',
         model: data.modelConfig.model || '',
         updated_at: new Date().toISOString(),
-        effort: data.modelConfig.effort,
+        ...(data.modelConfig.effort !== undefined && { effort: data.modelConfig.effort }),
+        ...(data.modelConfig.provider !== undefined && { provider: data.modelConfig.provider }),
       };
     }
 
