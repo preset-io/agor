@@ -71,7 +71,7 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
       </Form.Item>
 
       <Form.Item name="emoji" label="Icon">
-        <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="\u{1F916}" />
+        <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="🤖" />
       </Form.Item>
 
       <Form.Item
