@@ -18,7 +18,11 @@ const CLONE_TIMEOUT_MS = 120_000;
  */
 export function useEnsureFrameworkRepo(
   repos: Repo[],
-  onCreateRepo?: (data: { url: string; slug: string; default_branch: string }) => void,
+  onCreateRepo?: (data: {
+    url: string;
+    slug: string;
+    default_branch: string;
+  }) => void | Promise<void>,
   { enabled = true }: { enabled?: boolean } = {}
 ): { frameworkRepo: Repo | undefined; isCloning: boolean } {
   const frameworkRepo = useFrameworkRepo(repos);
@@ -40,11 +44,15 @@ export function useEnsureFrameworkRepo(
     cloneTriggeredRef.current = true;
     setIsCloning(true);
 
-    void onCreateRepo({
-      url: FRAMEWORK_REPO_URL,
-      slug: FRAMEWORK_REPO_SLUG,
-      default_branch: 'main',
-    });
+    // Fire-and-forget: errors are surfaced by the parent handler (toast).
+    // Wrap with .catch so a rejected promise doesn't bubble up as unhandled.
+    Promise.resolve(
+      onCreateRepo({
+        url: FRAMEWORK_REPO_URL,
+        slug: FRAMEWORK_REPO_SLUG,
+        default_branch: 'main',
+      })
+    ).catch(() => {});
 
     // Safety timeout — if repo never appears, clear the loading state
     // so the user can pick an alternate repo or retry on next open.
