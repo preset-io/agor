@@ -40,12 +40,22 @@ import { textResult } from '../server.js';
  * the requested model (see query-builder.ts).
  *
  * Accepts two shapes for MCP-client ergonomics:
- *   - String shorthand: `"claude-opus-4-6"` → coerced to `{ model: "claude-opus-4-6" }`.
- *     Most callers just want to pin a model — forcing them to construct the
- *     full object is hostile UX (and several MCP clients silently drop nested
- *     objects in tool args, see PR #1056 background).
+ *   - String shorthand: `"claude-opus-4-6"` — coerced via `coerceModelConfig`
+ *     in each handler to `{ model: "claude-opus-4-6" }`. Most callers just
+ *     want to pin a model — forcing them to construct the full object is
+ *     hostile UX (and several MCP clients silently drop nested objects in
+ *     tool args, see PR #1056 background).
  *   - Full object: `{ mode, model, effort, provider }` for callers that need
  *     to override `mode`/`effort`/`provider`.
+ *
+ * IMPORTANT — no `.transform()` here. Zod's JSON-Schema converter
+ * (`zod/v4-mini`'s `toJSONSchema`, used in `mcp/server.ts` to populate the
+ * cached registry consumed by `agor_search_tools(detail:"full")`) throws on
+ * transforms with "Transforms cannot be represented in JSON Schema". The
+ * catch in `server.ts` then degrades the WHOLE containing tool schema to
+ * `{ type: 'object' }`, hiding every input parameter from MCP clients. So
+ * normalization happens in `coerceModelConfig` instead, called inline by
+ * each handler.
  *
  * Call `agor_models_list` to discover valid model IDs per agenticTool.
  */
@@ -75,10 +85,24 @@ const modelConfigInputSchema = z
     modelConfigObjectSchema,
   ])
   .optional()
-  .transform((val) => (typeof val === 'string' ? { model: val } : val))
   .describe(
     "Model override for this session. Pass either a model ID string (e.g. 'claude-opus-4-6') or a full { mode, model, effort, provider } object. Overrides the user default model_config and is threaded through to the spawned agent process. Call agor_models_list to discover valid model IDs per agenticTool."
   );
+
+/**
+ * Normalize the two input shapes (string shorthand or full object) into the
+ * partial-object shape downstream code expects (`ModelConfigInput` from
+ * `@agor/core/models`). See `modelConfigInputSchema` for why this lives at
+ * the handler boundary instead of as a Zod `.transform()`.
+ */
+type ModelConfigArg = string | z.infer<typeof modelConfigObjectSchema> | undefined;
+function coerceModelConfig(
+  input: ModelConfigArg
+): z.infer<typeof modelConfigObjectSchema> | undefined {
+  if (input === undefined) return undefined;
+  if (typeof input === 'string') return { model: input };
+  return input;
+}
 
 export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_sessions_list
@@ -483,7 +507,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         extraInstructions: args.extraInstructions,
         task_id: args.taskId,
         mcpServerIds: args.mcpServerIds,
-        modelConfig: args.modelConfig,
+        modelConfig: coerceModelConfig(args.modelConfig),
       };
 
       const childSession = await (
@@ -636,7 +660,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         const spawnData: Partial<import('@agor/core/types').SpawnConfig> = {
           prompt: args.prompt,
           mcpServerIds: args.mcpServerIds,
-          modelConfig: args.modelConfig,
+          modelConfig: coerceModelConfig(args.modelConfig),
         };
         if (args.title) spawnData.title = args.title;
         if (args.agenticTool) spawnData.agent = args.agenticTool as AgenticToolName;
@@ -773,7 +797,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       // when spawning the agent (see query-builder.ts: rawModel is read from
       // session.model_config.model).
       const modelConfig = resolveModelConfigPrecedence([
-        args.modelConfig,
+        coerceModelConfig(args.modelConfig),
         userToolDefaults?.modelConfig,
       ]);
 

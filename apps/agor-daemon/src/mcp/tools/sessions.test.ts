@@ -451,9 +451,10 @@ describe('modelConfig schema (string shorthand coercion)', () => {
   // The MCP-tool boundary historically required `modelConfig` as a structured
   // `{ mode, model, effort, provider }` object. Several MCP clients silently
   // mangle nested objects in tool args, and asking an agent to construct that
-  // shape just to pin a model is hostile UX. We now accept either form and
-  // normalize to the object shape internally.
-  it('coerces a plain string into { model: <string> }', async () => {
+  // shape just to pin a model is hostile UX. We now accept either form. The
+  // schema validates the union without transforming (so `toJSONSchema` works);
+  // handlers normalize the string form to `{ model: <id> }` internally.
+  it('accepts a plain string for modelConfig', async () => {
     const tools = await registerAndCaptureTools(
       { app: {}, userId: 'user-1', sessionId: 'sess-caller' },
       ['agor_sessions_create']
@@ -466,7 +467,10 @@ describe('modelConfig schema (string shorthand coercion)', () => {
       modelConfig: 'claude-opus-4-6',
     }) as Record<string, unknown>;
 
-    expect(parsed.modelConfig).toEqual({ model: 'claude-opus-4-6' });
+    // Schema validates but does NOT transform — coercion happens in handlers
+    // so the JSON Schema export (used by `agor_search_tools(detail:"full")`)
+    // doesn't blow up on a Zod transform.
+    expect(parsed.modelConfig).toBe('claude-opus-4-6');
   });
 
   it('passes through the full object form unchanged', async () => {
@@ -602,5 +606,39 @@ describe('agor_models_list', () => {
       displayName: expect.any(String),
       description: expect.any(String),
     });
+  });
+});
+
+describe('inputSchema → JSON Schema conversion (MCP discovery)', () => {
+  // Regression: a Zod `.transform()` on `modelConfig` made `toJSONSchema` throw
+  // ("Transforms cannot be represented in JSON Schema"). The catch in
+  // `mcp/server.ts` then degraded the *entire* containing tool's schema to
+  // `{ type: 'object' }`, hiding every parameter from MCP clients calling
+  // `agor_search_tools(detail:"full")`. Keep this test green to ensure the
+  // string-or-object union stays JSON-Schema-representable.
+  it('produces a non-empty JSON Schema for tools that accept modelConfig', async () => {
+    const { toJSONSchema } = await import('zod/v4-mini');
+    const tools = await registerAndCaptureTools(
+      { app: {}, userId: 'user-1', sessionId: 'sess-1' },
+      ['agor_sessions_create', 'agor_sessions_spawn', 'agor_sessions_prompt']
+    );
+
+    for (const name of ['agor_sessions_create', 'agor_sessions_spawn', 'agor_sessions_prompt']) {
+      const schema = tools[name].cfg.inputSchema!;
+      const jsonSchema = toJSONSchema(schema as Parameters<typeof toJSONSchema>[0]) as Record<
+        string,
+        any
+      >;
+
+      // Sanity: real param surface, not the `{ type: 'object' }` fallback
+      expect(jsonSchema.type).toBe('object');
+      expect(jsonSchema.properties).toBeDefined();
+      expect(Object.keys(jsonSchema.properties).length).toBeGreaterThan(1);
+
+      // The modelConfig union should be expressed as anyOf (string | object)
+      const mc = jsonSchema.properties.modelConfig;
+      expect(mc).toBeDefined();
+      expect(Array.isArray(mc.anyOf)).toBe(true);
+    }
   });
 });
