@@ -1,6 +1,6 @@
 {
   "name": "@agor-live/client",
-  "version": "0.17.0",
+  "version": "0.17.1",
   "description": "TypeScript client for connecting to the Agor daemon",
   "type": "module",
   "main": "./dist/index.js",
