@@ -1,4 +1,11 @@
-import type { AgorClient, Board, Repo, Session, Worktree } from '@agor-live/client';
+import type {
+  AgorClient,
+  Board,
+  CreateRepoRequest,
+  Repo,
+  Session,
+  Worktree,
+} from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import {
   DeleteOutlined,
@@ -44,11 +51,7 @@ interface AssistantsTableProps {
     }
   ) => Promise<Worktree | null>;
   onUpdateWorktree?: (worktreeId: string, updates: WorktreeUpdate) => void;
-  onCreateRepo?: (data: {
-    url: string;
-    slug: string;
-    default_branch: string;
-  }) => void | Promise<void>;
+  onCreateRepo?: (data: CreateRepoRequest) => void | Promise<void>;
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
 }

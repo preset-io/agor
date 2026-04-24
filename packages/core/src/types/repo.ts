@@ -134,6 +134,30 @@ export interface Repo {
 }
 
 /**
+ * Request shape for creating/cloning a remote repository from the UI.
+ *
+ * The UI validates and fills in `slug` and `default_branch` before dispatching,
+ * so these are required here. Lower-level service calls (e.g. the MCP
+ * `agor_repos_create_remote` tool and `reposService.cloneRepository`) accept
+ * a looser shape where slug is optional and derived server-side.
+ */
+export interface CreateRepoRequest {
+  url: string;
+  slug: string;
+  default_branch: string;
+}
+
+/**
+ * Request shape for registering an existing local git clone with Agor.
+ *
+ * Slug is optional — if omitted, the daemon derives it from the directory name.
+ */
+export interface CreateLocalRepoRequest {
+  path: string;
+  slug?: string;
+}
+
+/**
  * Git worktree configuration
  *
  * Worktrees are working directories for specific branches,

@@ -1,4 +1,4 @@
-import type { Board, Repo } from '@agor-live/client';
+import type { Board, CreateRepoRequest, Repo } from '@agor-live/client';
 import { Form } from 'antd';
 import { useEffect } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
@@ -22,11 +22,7 @@ export interface AssistantTabProps {
   boardById: Map<string, Board>;
   onValidityChange: (valid: boolean) => void;
   formRef: React.MutableRefObject<(() => Promise<AssistantTabResult | null>) | null>;
-  onCreateRepo?: (data: {
-    url: string;
-    slug: string;
-    default_branch: string;
-  }) => void | Promise<void>;
+  onCreateRepo?: (data: CreateRepoRequest) => void | Promise<void>;
 }
 
 export const AssistantTab: React.FC<AssistantTabProps> = ({

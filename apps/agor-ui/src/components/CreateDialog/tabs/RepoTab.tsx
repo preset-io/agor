@@ -1,3 +1,4 @@
+import type { CreateLocalRepoRequest, CreateRepoRequest } from '@agor-live/client';
 import type { RadioChangeEvent } from 'antd';
 import { Form } from 'antd';
 import { useCallback, useState } from 'react';
@@ -5,8 +6,8 @@ import { RepoFormFields } from '../../forms/RepoFormFields';
 
 export interface RepoTabResult {
   mode: 'remote' | 'local';
-  remote?: { url: string; slug: string; default_branch: string };
-  local?: { path: string; slug?: string };
+  remote?: CreateRepoRequest;
+  local?: CreateLocalRepoRequest;
 }
 
 export interface RepoTabProps {

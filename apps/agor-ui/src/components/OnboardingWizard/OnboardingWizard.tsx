@@ -12,6 +12,8 @@ import type {
   AgenticToolName,
   AssistantConfig,
   Board,
+  CreateLocalRepoRequest,
+  CreateRepoRequest,
   Repo,
   UpdateUserInput,
   User,
@@ -82,8 +84,8 @@ export interface OnboardingWizardProps {
   client: any;
 
   // Actions
-  onCreateRepo: (data: { url: string; slug: string; default_branch: string }) => Promise<void>;
-  onCreateLocalRepo: (data: { path: string; slug?: string }) => void | Promise<void>;
+  onCreateRepo: (data: CreateRepoRequest) => Promise<void>;
+  onCreateLocalRepo: (data: CreateLocalRepoRequest) => void | Promise<void>;
   onCreateWorktree: (
     repoId: string,
     data: {

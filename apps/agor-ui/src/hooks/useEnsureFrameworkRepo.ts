@@ -1,4 +1,4 @@
-import type { Repo } from '@agor-live/client';
+import type { CreateRepoRequest, Repo } from '@agor-live/client';
 import { useEffect, useRef, useState } from 'react';
 import { FRAMEWORK_REPO_SLUG, FRAMEWORK_REPO_URL, useFrameworkRepo } from './useFrameworkRepo';
 
@@ -18,11 +18,7 @@ const CLONE_TIMEOUT_MS = 120_000;
  */
 export function useEnsureFrameworkRepo(
   repos: Repo[],
-  onCreateRepo?: (data: {
-    url: string;
-    slug: string;
-    default_branch: string;
-  }) => void | Promise<void>,
+  onCreateRepo?: (data: CreateRepoRequest) => void | Promise<void>,
   { enabled = true }: { enabled?: boolean } = {}
 ): { frameworkRepo: Repo | undefined; isCloning: boolean } {
   const frameworkRepo = useFrameworkRepo(repos);

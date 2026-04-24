@@ -1,4 +1,4 @@
-import type { Board, Repo } from '@agor-live/client';
+import type { Board, CreateLocalRepoRequest, CreateRepoRequest, Repo } from '@agor-live/client';
 import {
   AppstoreOutlined,
   BranchesOutlined,
@@ -54,12 +54,8 @@ export interface CreateDialogProps {
   defaultTab?: ActiveTab;
   onCreateWorktree: (config: WorktreeTabConfig) => void;
   onCreateBoard: (board: Partial<Board>) => void;
-  onCreateRepo: (data: {
-    url: string;
-    slug: string;
-    default_branch: string;
-  }) => void | Promise<void>;
-  onCreateLocalRepo: (data: { path: string; slug?: string }) => void | Promise<void>;
+  onCreateRepo: (data: CreateRepoRequest) => void | Promise<void>;
+  onCreateLocalRepo: (data: CreateLocalRepoRequest) => void | Promise<void>;
   onCreateAssistant: (result: AssistantTabResult) => void;
 }
 

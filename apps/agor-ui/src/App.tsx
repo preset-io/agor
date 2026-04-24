@@ -1,7 +1,9 @@
 import type {
   Artifact,
   Board,
+  CreateLocalRepoRequest,
   CreateMCPServerInput,
+  CreateRepoRequest,
   CreateUserInput,
   GatewayChannel,
   PermissionMode,
@@ -720,7 +722,7 @@ function AppContent() {
   };
 
   // Handle repo CRUD
-  const handleCreateRepo = async (data: { url: string; slug: string; default_branch: string }) => {
+  const handleCreateRepo = async (data: CreateRepoRequest) => {
     if (!client) return;
     try {
       // Use the custom clone endpoint: POST /repos/clone
@@ -738,7 +740,7 @@ function AppContent() {
     }
   };
 
-  const handleCreateLocalRepo = async (data: { path: string; slug?: string }) => {
+  const handleCreateLocalRepo = async (data: CreateLocalRepoRequest) => {
     if (!client) return;
     try {
       showLoading('Adding local repository...', { key: 'add-local-repo' });

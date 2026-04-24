@@ -1,4 +1,4 @@
-import type { Repo } from '@agor-live/client';
+import type { CreateLocalRepoRequest, CreateRepoRequest, Repo } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined } from '@ant-design/icons';
 import type { RadioChangeEvent } from 'antd';
 import { Button, Card, Empty, Form, Modal, Space, Typography } from 'antd';
@@ -9,8 +9,8 @@ import { Tag } from '../Tag';
 
 interface ReposTableProps {
   repoById: Map<string, Repo>;
-  onCreate?: (data: { url: string; slug: string; default_branch: string }) => void;
-  onCreateLocal?: (data: { path: string; slug?: string }) => void;
+  onCreate?: (data: CreateRepoRequest) => void;
+  onCreateLocal?: (data: CreateLocalRepoRequest) => void;
   onUpdate?: (repoId: string, updates: Partial<Repo>) => void;
   onDelete?: (repoId: string, cleanup: boolean) => void;
 }
