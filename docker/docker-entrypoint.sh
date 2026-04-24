@@ -7,6 +7,13 @@ echo "🚀 Starting Agor development environment..."
 # No pnpm install needed at runtime - this is the key to fast startups!
 echo "✅ Using pre-built dependencies from Docker image"
 
+# Mark /app as a safe git directory. The bind-mounted source tree is owned by
+# the host UID, which trips git's "dubious ownership" guard inside the
+# container — this silently breaks the daemon's git-rev-parse fallback for
+# loadBuildInfo() and the version-sync banner gets stuck on 'dev'. Setting
+# this here lets every tsx-watch restart pick up the current HEAD SHA.
+git config --global --add safe.directory /app 2>/dev/null || true
+
 # Fix home directory permissions (volumes may have wrong UID/GID from previous builds)
 echo "🔧 Fixing home directory permissions..."
 mkdir -p /home/agor/.agor /home/agor/.cache

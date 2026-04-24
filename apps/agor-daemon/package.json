@@ -12,7 +12,7 @@
     }
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node scripts/stamp-build-info.mjs",
     "dev": "concurrently -k -n core,daemon -c cyan,green \"pnpm --filter @agor/core dev\" \"./node_modules/.bin/tsx watch --clear-screen=false --ignore 'node_modules/**' src/main.ts\"",
     "dev:daemon-only": "tsx watch --clear-screen=false --ignore 'node_modules/**' src/main.ts",
     "start": "node dist/main.js",

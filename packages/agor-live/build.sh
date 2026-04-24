@@ -43,13 +43,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CLIENT_DIR="$REPO_ROOT/packages/client"
 
-# Capture build identity for the version-sync banner. The SHA is the canonical
-# version signal — UI tabs compare it on each handshake and prompt a refresh
-# when the daemon's SHA changes mid-session. Env var (AGOR_BUILD_SHA from
-# Docker --build-arg or CI) takes precedence over this file at runtime.
-BUILD_SHA="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
-BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
 echo "🏗️  Building agor-live + @agor-live/client"
 echo ""
 echo "📍 Repository root: $REPO_ROOT"
@@ -248,13 +241,10 @@ cp -r "$REPO_ROOT/apps/agor-cli/dist/"* "$DIST_STAGE/cli/"
 
 echo "  → Copying daemon..."
 mkdir -p "$DIST_STAGE/daemon"
+# .build-info (sha + builtAt) is stamped into apps/agor-daemon/dist by the
+# daemon's own build script (apps/agor-daemon/scripts/stamp-build-info.mjs)
+# and gets carried along by this cp -r. loadBuildInfo() reads it at boot.
 cp -r "$REPO_ROOT/apps/agor-daemon/dist/"* "$DIST_STAGE/daemon/"
-
-# Stamp the daemon dist with the build SHA. Read by loadBuildInfo() at boot
-# (env > file > git > 'dev'); printed to /health and the socket welcome.
-printf '{"sha":"%s","builtAt":"%s"}\n' "$BUILD_SHA" "$BUILT_AT" \
-  > "$DIST_STAGE/daemon/.build-info"
-echo "    .build-info: sha=$BUILD_SHA builtAt=$BUILT_AT"
 
 echo "  → Copying executor..."
 mkdir -p "$DIST_STAGE/executor"
