@@ -1,23 +1,3 @@
-/** Extract org/repo slug from a git URL (HTTPS or SSH format) */
-export function extractSlugFromUrl(url: string): string {
-  try {
-    const cleanUrl = url.endsWith('.git') ? url.slice(0, -4) : url;
-    if (cleanUrl.includes('@')) {
-      const match = cleanUrl.match(/:([^/]+\/[^/]+)$/);
-      if (match) return match[1];
-    }
-    const match = cleanUrl.match(/[:/]([^/]+\/[^/]+)$/);
-    if (match) return match[1];
-    const segments = cleanUrl.split('/').filter(Boolean);
-    if (segments.length >= 2) {
-      return `${segments[segments.length - 2]}/${segments[segments.length - 1]}`;
-    }
-    return '';
-  } catch {
-    return '';
-  }
-}
-
 /** Create a best-effort slug from a local filesystem path (local/<dirname>) */
 export function extractSlugFromPath(path: string): string {
   if (!path) return '';

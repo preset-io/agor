@@ -1,6 +1,7 @@
+import { extractSlugFromUrl } from '@agor-live/client';
 import type { FormInstance, RadioChangeEvent } from 'antd';
 import { Form, Input, Radio, Typography } from 'antd';
-import { extractSlugFromPath, extractSlugFromUrl } from '@/utils/repoSlug';
+import { extractSlugFromPath } from '@/utils/repoSlug';
 
 export interface RepoFormFieldsProps {
   form: FormInstance;
@@ -27,9 +28,12 @@ export const RepoFormFields: React.FC<RepoFormFieldsProps> = ({
 
   const handleUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const url = e.target.value;
-    if (url) {
+    if (!url) return;
+    try {
       const slug = extractSlugFromUrl(url);
       if (slug) form.setFieldsValue({ slug });
+    } catch {
+      // Partial/invalid URL while typing — leave slug untouched.
     }
   };
 
