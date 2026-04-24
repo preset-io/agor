@@ -317,22 +317,37 @@ echo "✅ Build complete!"
 if [[ "$PUBLISH" == true ]]; then
   echo ""
 
+  # Verify the tarball does not contain workspace:* refs before pushing to npm.
+  # `npm publish` does NOT rewrite workspace: protocol — only `pnpm publish` /
+  # `pnpm pack` do. agor-live@0.16.4–0.17.1 shipped with `@agor-live/client:
+  # workspace:*` because they were published via `npm publish`, which broke
+  # `npm install agor-live` ("Unsupported URL Type 'workspace:'").
+  echo "🔎 Verifying publish artifacts have no unresolved workspace: refs..."
+  cd "$REPO_ROOT" && pnpm check:publish-artifact
+  echo ""
+
   if [[ "$DRY_RUN" == true ]]; then
     echo "🧪 Dry run — showing what would be published..."
     echo ""
     echo "── agor-live@$NEW_VERSION ──"
-    cd "$SCRIPT_DIR" && npm publish --dry-run 2>&1 | tail -20
+    cd "$SCRIPT_DIR" && pnpm publish --dry-run --no-git-checks 2>&1 | tail -20
     echo ""
     echo "── @agor-live/client@$NEW_VERSION ──"
-    cd "$CLIENT_DIR" && npm publish --access public --dry-run 2>&1 | tail -20
+    cd "$CLIENT_DIR" && pnpm publish --access public --dry-run --no-git-checks 2>&1 | tail -20
   else
     echo "🚀 Publishing packages..."
     echo ""
+    # IMPORTANT: use `pnpm publish` (not `npm publish`). pnpm transforms
+    # `workspace:*` into a concrete semver range when packing the tarball;
+    # plain `npm publish` leaves the protocol verbatim and breaks consumers.
+    # `--no-git-checks` skips pnpm's "branch must be main / clean tree" guard
+    # since this script runs from feature/release branches with dist/ artifacts.
     echo "── Publishing agor-live@$NEW_VERSION ──"
-    cd "$SCRIPT_DIR" && npm login && npm publish
+    cd "$SCRIPT_DIR" && npm whoami >/dev/null 2>&1 || npm login
+    cd "$SCRIPT_DIR" && pnpm publish --no-git-checks
     echo ""
     echo "── Publishing @agor-live/client@$NEW_VERSION ──"
-    cd "$CLIENT_DIR" && npm publish --access public
+    cd "$CLIENT_DIR" && pnpm publish --access public --no-git-checks
     echo ""
     echo "✅ Both packages published!"
     echo "  npm i agor-live@$NEW_VERSION"

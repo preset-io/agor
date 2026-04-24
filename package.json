@@ -35,7 +35,8 @@
     "agor": "NODE_NO_WARNINGS=1 pnpm --filter @agor/cli exec tsx bin/dev.ts",
     "seed": "tsx scripts/seed.ts",
     "sync:agor-live-deps": "node scripts/sync-agor-live-deps.mjs",
-    "check:agor-live-deps": "node scripts/sync-agor-live-deps.mjs --check"
+    "check:agor-live-deps": "node scripts/sync-agor-live-deps.mjs --check",
+    "check:publish-artifact": "node scripts/check-publish-artifact.mjs packages/agor-live packages/client"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.4",
