@@ -37,7 +37,7 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   connecting,
   onRetry,
 }) => {
-  const { outOfSync } = useConnectionState();
+  const { outOfSync, capturedSha, currentSha } = useConnectionState();
   const [showConnected, setShowConnected] = useState(false);
   const [justReconnected, setJustReconnected] = useState(false);
 
@@ -61,10 +61,16 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   }, [connecting, connected]);
 
   // Out of sync: backend was redeployed under us. Supersedes both connected
-  // and disconnected — the user needs to refresh, period. No auto-reload.
+  // and disconnected — the user needs to refresh, period. No auto-reload (we
+  // don't want to nuke a half-typed message or modal). Tooltip surfaces the
+  // actual SHA diff so the user can see *what* changed before reloading.
   if (outOfSync) {
+    const tooltipTitle =
+      capturedSha && currentSha
+        ? `Daemon was upgraded from ${capturedSha} to ${currentSha} since this tab loaded. Click to reload and pick up the latest UI. Anything unsaved (form text, etc.) will be lost.`
+        : 'Backend was updated — click to reload for the latest UI. Anything unsaved will be lost.';
     return (
-      <Tooltip title="Backend was updated — click to reload for the latest UI." placement="bottom">
+      <Tooltip title={tooltipTitle} placement="bottom">
         <Tag
           icon={<ReloadOutlined />}
           color="warning"
