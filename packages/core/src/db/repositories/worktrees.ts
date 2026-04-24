@@ -6,18 +6,7 @@
 
 import type { AgenticToolName, SessionStatus, UUID, Worktree, WorktreeID } from '@agor/core/types';
 import { WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
-import {
-  and,
-  desc,
-  eq,
-  getTableColumns,
-  inArray,
-  isNotNull,
-  isNull,
-  like,
-  or,
-  sql,
-} from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, inArray, isNotNull, like, or, sql } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
@@ -770,13 +759,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
           data: messagesTable.data,
         })
           .from(messagesTable)
-          .where(
-            and(
-              eq(messagesTable.session_id, sessionId),
-              eq(messagesTable.role, 'assistant'),
-              isNull(messagesTable.status) // Exclude queued messages
-            )
-          );
+          .where(and(eq(messagesTable.session_id, sessionId), eq(messagesTable.role, 'assistant')));
 
         // Chain orderBy and limit, then execute with one()
         // The spread operator in the wrapper passes through these methods

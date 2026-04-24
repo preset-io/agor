@@ -6,7 +6,7 @@
 
 import type { Session, UUID } from '@agor/core/types';
 import { SessionStatus, WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
-import { and, desc, eq, inArray, isNotNull, isNull, like, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { formatShortId, generateId } from '../../lib/ids';
 import { getSessionUrl } from '../../utils/url';
@@ -713,13 +713,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
           data: messagesTable.data,
         })
           .from(messagesTable)
-          .where(
-            and(
-              eq(messagesTable.session_id, sessionId),
-              eq(messagesTable.role, 'assistant'),
-              isNull(messagesTable.status) // Exclude queued messages
-            )
-          );
+          .where(and(eq(messagesTable.session_id, sessionId), eq(messagesTable.role, 'assistant')));
 
         // Chain orderBy and limit, then execute with one()
         // The spread operator in the wrapper passes through these methods

@@ -1,4 +1,4 @@
-import type { AgorClient, Message, Session, SpawnConfig, Worktree } from '@agor-live/client';
+import type { AgorClient, Session, SpawnConfig, Task, Worktree } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import {
   CopyOutlined,
@@ -28,8 +28,8 @@ export interface SessionPanelContentProps {
   scrollToTop: (() => void) | null;
   setScrollToBottom: (fn: (() => void) | null) => void;
   setScrollToTop: (fn: (() => void) | null) => void;
-  queuedMessages: Message[];
-  setQueuedMessages: React.Dispatch<React.SetStateAction<Message[]>>;
+  queuedTasks: Task[];
+  setQueuedTasks: React.Dispatch<React.SetStateAction<Task[]>>;
   spawnModalOpen: boolean;
   setSpawnModalOpen: (open: boolean) => void;
   onSpawnModalConfirm: (config: string | Partial<SpawnConfig>) => Promise<void>;
@@ -48,8 +48,8 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     scrollToTop,
     setScrollToBottom,
     setScrollToTop,
-    queuedMessages,
-    setQueuedMessages,
+    queuedTasks,
+    setQueuedTasks,
     spawnModalOpen,
     setSpawnModalOpen,
     onSpawnModalConfirm,
@@ -177,8 +177,11 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
           }
         />
 
-        {/* Queued Messages Drawer - Above Footer */}
-        {queuedMessages.length > 0 && (
+        {/* Queued Tasks Drawer - Above Footer.
+            Reads tasks (status='queued') instead of messages now that the queue
+            is task-centric (see never-lose-prompt §C). The full prompt lives on
+            task.full_prompt; description is the truncated 120-char preview. */}
+        {queuedTasks.length > 0 && (
           <div
             style={{
               flexShrink: 0,
@@ -204,12 +207,12 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                 letterSpacing: '0.5px',
               }}
             >
-              Queued Messages ({queuedMessages.length})
+              Queued Messages ({queuedTasks.length})
             </Typography.Text>
             <Space orientation="vertical" size={8} style={{ width: '100%' }}>
-              {queuedMessages.map((msg, idx) => (
+              {queuedTasks.map((task, idx) => (
                 <div
-                  key={msg.message_id}
+                  key={task.task_id}
                   style={{
                     background: token.colorBgContainer,
                     padding: `${token.sizeUnit * 2}px ${token.sizeUnit * 3}px`,
@@ -225,7 +228,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                     <span style={{ color: token.colorTextSecondary, marginRight: token.sizeUnit }}>
                       {idx + 1}.
                     </span>
-                    {msg.content_preview || (typeof msg.content === 'string' ? msg.content : '')}
+                    {task.description || task.full_prompt}
                   </Typography.Text>
                   <Space size={4}>
                     <Button
@@ -233,8 +236,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                       size="small"
                       icon={<CopyOutlined />}
                       onClick={async () => {
-                        const textToCopy = typeof msg.content === 'string' ? msg.content : '';
-                        await copyToClipboard(textToCopy);
+                        await copyToClipboard(task.full_prompt);
                         message.success('Message copied to clipboard');
                       }}
                     />
@@ -248,23 +250,22 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
 
                         try {
                           // Optimistically remove from UI
-                          setQueuedMessages((prev) =>
-                            prev.filter((m) => m.message_id !== msg.message_id)
-                          );
+                          setQueuedTasks((prev) => prev.filter((t) => t.task_id !== task.task_id));
 
-                          // Delete via messages service directly
-                          await client.service('messages').remove(msg.message_id);
+                          // Delete the queued task — cascade removes the row
+                          // entirely; spawnTaskExecutor never gets a chance.
+                          await client.service('tasks').remove(task.task_id);
                         } catch (error) {
                           message.error(
-                            `Failed to remove queued message: ${error instanceof Error ? error.message : String(error)}`
+                            `Failed to remove queued task: ${error instanceof Error ? error.message : String(error)}`
                           );
 
                           // Re-fetch queue to restore accurate state
                           const response = await client
-                            .service(`sessions/${session.session_id}/messages/queue`)
+                            .service(`sessions/${session.session_id}/tasks/queue`)
                             .find();
-                          const data = (response as { data: Message[] }).data || [];
-                          setQueuedMessages(data);
+                          const data = (response as { data: Task[] }).data || [];
+                          setQueuedTasks(data);
                         }
                       }}
                     />

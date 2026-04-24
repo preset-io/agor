@@ -30,8 +30,6 @@ export class MessagesRepository {
       content: (row.data as { content: Message['content'] }).content,
       tool_uses: (row.data as { tool_uses?: Message['tool_uses'] }).tool_uses,
       parent_tool_use_id: row.parent_tool_use_id || undefined,
-      status: row.status as Message['status'],
-      queue_position: row.queue_position ?? undefined,
       metadata: (row.data as { metadata?: Message['metadata'] }).metadata,
     };
   }
@@ -51,8 +49,6 @@ export class MessagesRepository {
       timestamp: new Date(message.timestamp),
       content_preview: message.content_preview,
       parent_tool_use_id: message.parent_tool_use_id || null,
-      status: message.status || null,
-      queue_position: message.queue_position ?? null,
       data: {
         content: message.content,
         tool_uses: message.tool_uses,
@@ -206,89 +202,5 @@ export class MessagesRepository {
    */
   async delete(messageId: MessageID): Promise<void> {
     await deleteFrom(this.db, messages).where(eq(messages.message_id, messageId)).run();
-  }
-
-  /**
-   * Create a queued message
-   * NOTE: Queued messages always store prompt as string content
-   * This ensures compatibility with prompt execution endpoint
-   *
-   * @param sessionId - Session to queue message for
-   * @param prompt - Message content (string)
-   * @param metadata - Optional metadata (e.g., is_agor_callback, source, child_session_id)
-   */
-  async createQueued(
-    sessionId: SessionID,
-    prompt: string,
-    metadata?: Record<string, unknown>
-  ): Promise<Message> {
-    if (!prompt || typeof prompt !== 'string') {
-      throw new Error('Prompt must be a non-empty string');
-    }
-
-    const { generateId } = await import('../../lib/ids');
-
-    // Get current max queue position for session
-    const result = await select(this.db)
-      .from(messages)
-      .where(and(eq(messages.session_id, sessionId), eq(messages.status, 'queued')))
-      .all();
-
-    const maxPosition = result.reduce(
-      (max: number, row: MessageRow) => Math.max(max, row.queue_position || 0),
-      0
-    );
-    const nextPosition = maxPosition + 1;
-
-    // Determine message type based on metadata
-    const messageType = metadata?.is_agor_callback ? 'system' : 'user';
-
-    // Create queued message
-    const message: Message = {
-      message_id: generateId() as MessageID,
-      session_id: sessionId,
-      type: messageType,
-      role: 'user' as Message['role'], // Always 'user' for right-side positioning
-      index: -1, // Not in conversation yet
-      timestamp: new Date().toISOString(),
-      content_preview: prompt.substring(0, 200),
-      content: prompt, // Always string for queued messages
-      status: 'queued',
-      queue_position: nextPosition,
-      task_id: undefined,
-      metadata, // Include metadata (is_agor_callback, source, child_session_id, etc.)
-    };
-
-    return this.create(message);
-  }
-
-  /**
-   * Find queued messages for a session
-   */
-  async findQueued(sessionId: SessionID): Promise<Message[]> {
-    const { asc } = await import('drizzle-orm');
-
-    const rows = await select(this.db)
-      .from(messages)
-      .where(and(eq(messages.session_id, sessionId), eq(messages.status, 'queued')))
-      .orderBy(asc(messages.queue_position))
-      .all();
-
-    return rows.map((r: MessageRow) => this.rowToMessage(r));
-  }
-
-  /**
-   * Get next queued message
-   */
-  async getNextQueued(sessionId: SessionID): Promise<Message | null> {
-    const queued = await this.findQueued(sessionId);
-    return queued[0] || null;
-  }
-
-  /**
-   * Delete queued message (when processing or user cancels)
-   */
-  async deleteQueued(messageId: MessageID): Promise<void> {
-    await this.delete(messageId);
   }
 }

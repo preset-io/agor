@@ -267,6 +267,13 @@
       "when": 1777200000000,
       "tag": "0039_queued_tasks",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "6",
+      "when": 1777200100000,
+      "tag": "0040_migrate_queued_messages",
+      "breakpoints": true
     }
   ]
 }

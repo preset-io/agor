@@ -51,7 +51,13 @@ export interface ReactiveSessionState {
   session: Session | null;
   tasks: Task[];
   messagesByTask: ReactiveMessagesByTask;
-  queuedMessages: Message[];
+  /**
+   * Queued tasks (status='queued'), ordered by queue_position ascending.
+   * As of never-lose-prompt §C the queue lives on tasks instead of messages,
+   * so this collection holds Task — not Message — and the wire format is the
+   * `/sessions/:id/tasks/queue` endpoint.
+   */
+  queuedTasks: Task[];
   streamingMessages: ReactiveStreamingMessagesById;
   toolsByTask: ReactiveToolsByTask;
   loadedTaskIds: ReactiveLoadedTaskIds;
@@ -64,7 +70,7 @@ export interface ReactiveSessionState {
 type Listener = () => void;
 
 interface QueueFindResult {
-  data?: Message[];
+  data?: Task[];
 }
 
 interface ToolStartEvent {
@@ -143,7 +149,7 @@ export class ReactiveSessionHandle {
       session: null,
       tasks: [],
       messagesByTask: new Map(),
-      queuedMessages: [],
+      queuedTasks: [],
       streamingMessages: new Map(),
       toolsByTask: new Map(),
       loadedTaskIds: new Set(),
@@ -307,7 +313,7 @@ export class ReactiveSessionHandle {
           },
         }),
         this.client
-          .service(`/sessions/${this.sessionId}/messages/queue`)
+          .service(`/sessions/${this.sessionId}/tasks/queue`)
           .find()
           .catch(() => ({ data: [] }) as QueueFindResult),
       ]);
@@ -332,7 +338,7 @@ export class ReactiveSessionHandle {
         tasks,
         messagesByTask,
         loadedTaskIds,
-        queuedMessages: sortMessagesByQueuePosition((queueResult as QueueFindResult).data || []),
+        queuedTasks: sortTasksByQueuePosition((queueResult as QueueFindResult).data || []),
         loading: false,
         error: null,
         lastSyncedAt: new Date().toISOString(),
@@ -392,10 +398,19 @@ export class ReactiveSessionHandle {
     const onTaskCreated = (task: Task) => {
       if (task.session_id !== this.sessionId) return;
       this.updateState((prev) => {
-        if (prev.tasks.some((t) => t.task_id === task.task_id)) return prev;
+        const tasks = prev.tasks.some((t) => t.task_id === task.task_id)
+          ? prev.tasks
+          : [...prev.tasks, task];
+        // Tasks can be born QUEUED (e.g. when the daemon auto-queues a prompt
+        // because the session is busy) — track them in queuedTasks too.
+        const queuedTasks =
+          task.status === 'queued' && !prev.queuedTasks.some((t) => t.task_id === task.task_id)
+            ? sortTasksByQueuePosition([...prev.queuedTasks, task])
+            : prev.queuedTasks;
         return {
           ...prev,
-          tasks: [...prev.tasks, task],
+          tasks,
+          queuedTasks,
           lastSyncedAt: new Date().toISOString(),
         };
       });
@@ -404,18 +419,29 @@ export class ReactiveSessionHandle {
       if (task.session_id !== this.sessionId) return;
       this.updateState((prev) => {
         const index = prev.tasks.findIndex((t) => t.task_id === task.task_id);
-        if (index === -1) {
-          return {
-            ...prev,
-            tasks: [...prev.tasks, task],
-            lastSyncedAt: new Date().toISOString(),
-          };
+        const nextTasks = index === -1 ? [...prev.tasks, task] : [...prev.tasks];
+        if (index !== -1) {
+          nextTasks[index] = task;
         }
-        const nextTasks = [...prev.tasks];
-        nextTasks[index] = task;
+
+        // Maintain queuedTasks: in if status='queued', out otherwise.
+        const isQueued = task.status === 'queued';
+        const inQueue = prev.queuedTasks.some((t) => t.task_id === task.task_id);
+        let nextQueuedTasks = prev.queuedTasks;
+        if (isQueued) {
+          nextQueuedTasks = inQueue
+            ? sortTasksByQueuePosition(
+                prev.queuedTasks.map((t) => (t.task_id === task.task_id ? task : t))
+              )
+            : sortTasksByQueuePosition([...prev.queuedTasks, task]);
+        } else if (inQueue) {
+          nextQueuedTasks = prev.queuedTasks.filter((t) => t.task_id !== task.task_id);
+        }
+
         return {
           ...prev,
           tasks: nextTasks,
+          queuedTasks: nextQueuedTasks,
           lastSyncedAt: new Date().toISOString(),
         };
       });
@@ -432,6 +458,7 @@ export class ReactiveSessionHandle {
         return {
           ...prev,
           tasks: prev.tasks.filter((t) => t.task_id !== task.task_id),
+          queuedTasks: prev.queuedTasks.filter((t) => t.task_id !== task.task_id),
           messagesByTask: nextByTask,
           loadedTaskIds: nextLoaded,
           toolsByTask: nextTools,
@@ -439,14 +466,24 @@ export class ReactiveSessionHandle {
         };
       });
     };
+    // The daemon emits a custom 'queued' event in addition to the standard
+    // 'created' event, so subscribers can distinguish "task entered the queue"
+    // from "task was created but is already running". onTaskCreated handles
+    // the queued state too as a safety net for clients that miss the event.
+    const onTaskQueued = (task: Task) => onTaskCreated(task);
+
     tasksService.on('created', onTaskCreated);
     tasksService.on('patched', onTaskPatched);
     tasksService.on('updated', onTaskPatched);
     tasksService.on('removed', onTaskRemoved);
+    tasksService.on('queued', onTaskQueued as (...args: unknown[]) => void);
     this.disposeCallbacks.push(() => tasksService.removeListener('created', onTaskCreated));
     this.disposeCallbacks.push(() => tasksService.removeListener('patched', onTaskPatched));
     this.disposeCallbacks.push(() => tasksService.removeListener('updated', onTaskPatched));
     this.disposeCallbacks.push(() => tasksService.removeListener('removed', onTaskRemoved));
+    this.disposeCallbacks.push(() =>
+      tasksService.removeListener('queued', onTaskQueued as (...args: unknown[]) => void)
+    );
 
     const onToolStart = (event: ToolStartEvent) => {
       if (event.session_id !== this.sessionId) return;
@@ -498,13 +535,11 @@ export class ReactiveSessionHandle {
     const onMessageCreated = (message: Message) => {
       if (message.session_id !== this.sessionId) return;
       this.updateState((prev) => {
-        const nextQueued = prev.queuedMessages.filter((m) => m.message_id !== message.message_id);
         const nextStreaming = new Map(prev.streamingMessages);
         nextStreaming.delete(message.message_id);
         if (!message.task_id) {
           return {
             ...prev,
-            queuedMessages: nextQueued,
             streamingMessages: nextStreaming,
             lastSyncedAt: new Date().toISOString(),
           };
@@ -516,7 +551,6 @@ export class ReactiveSessionHandle {
         if (!shouldTrackMessages) {
           return {
             ...prev,
-            queuedMessages: nextQueued,
             streamingMessages: nextStreaming,
             lastSyncedAt: new Date().toISOString(),
           };
@@ -531,7 +565,6 @@ export class ReactiveSessionHandle {
         return {
           ...prev,
           messagesByTask: nextByTask,
-          queuedMessages: nextQueued,
           streamingMessages: nextStreaming,
           lastSyncedAt: new Date().toISOString(),
         };
@@ -562,13 +595,11 @@ export class ReactiveSessionHandle {
       if (message.session_id !== this.sessionId) return;
       const taskId = message.task_id;
       this.updateState((prev) => {
-        const nextQueued = prev.queuedMessages.filter((m) => m.message_id !== message.message_id);
         const nextStreaming = new Map(prev.streamingMessages);
         nextStreaming.delete(message.message_id);
         if (!taskId) {
           return {
             ...prev,
-            queuedMessages: nextQueued,
             streamingMessages: nextStreaming,
             lastSyncedAt: new Date().toISOString(),
           };
@@ -581,23 +612,8 @@ export class ReactiveSessionHandle {
         );
         return {
           ...prev,
-          queuedMessages: nextQueued,
           streamingMessages: nextStreaming,
           messagesByTask: nextByTask,
-          lastSyncedAt: new Date().toISOString(),
-        };
-      });
-    };
-
-    const onQueued = (message: Message) => {
-      if (message.session_id !== this.sessionId) return;
-      this.updateState((prev) => {
-        if (prev.queuedMessages.some((m) => m.message_id === message.message_id)) {
-          return prev;
-        }
-        return {
-          ...prev,
-          queuedMessages: sortMessagesByQueuePosition([...prev.queuedMessages, message]),
           lastSyncedAt: new Date().toISOString(),
         };
       });
@@ -738,7 +754,6 @@ export class ReactiveSessionHandle {
     messagesService.on('patched', onMessagePatched);
     messagesService.on('updated', onMessagePatched);
     messagesService.on('removed', onMessageRemoved);
-    messagesService.on('queued', onQueued as (...args: unknown[]) => void);
     messagesService.on('streaming:start', onStreamingStart as (...args: unknown[]) => void);
     messagesService.on('streaming:chunk', onStreamingChunk as (...args: unknown[]) => void);
     messagesService.on('streaming:end', onStreamingEnd as (...args: unknown[]) => void);
@@ -751,9 +766,6 @@ export class ReactiveSessionHandle {
     this.disposeCallbacks.push(() => messagesService.removeListener('patched', onMessagePatched));
     this.disposeCallbacks.push(() => messagesService.removeListener('updated', onMessagePatched));
     this.disposeCallbacks.push(() => messagesService.removeListener('removed', onMessageRemoved));
-    this.disposeCallbacks.push(() =>
-      messagesService.removeListener('queued', onQueued as (...args: unknown[]) => void)
-    );
     this.disposeCallbacks.push(() =>
       messagesService.removeListener(
         'streaming:start',
@@ -807,7 +819,7 @@ export class ReactiveSessionHandle {
           },
         }),
         this.client
-          .service(`/sessions/${this.sessionId}/messages/queue`)
+          .service(`/sessions/${this.sessionId}/tasks/queue`)
           .find()
           .catch(() => ({ data: [] }) as QueueFindResult),
       ]);
@@ -843,7 +855,7 @@ export class ReactiveSessionHandle {
         ...prev,
         session,
         tasks,
-        queuedMessages: sortMessagesByQueuePosition((queueResult as QueueFindResult).data || []),
+        queuedTasks: sortTasksByQueuePosition((queueResult as QueueFindResult).data || []),
         messagesByTask,
         loadedTaskIds,
         error: null,
@@ -963,8 +975,8 @@ function sortMessagesByIndex(messages: Message[]): Message[] {
   return [...messages].sort((a, b) => a.index - b.index);
 }
 
-function sortMessagesByQueuePosition(messages: Message[]): Message[] {
-  return [...messages].sort((a, b) => (a.queue_position || 0) - (b.queue_position || 0));
+function sortTasksByQueuePosition(tasks: Task[]): Task[] {
+  return [...tasks].sort((a, b) => (a.queue_position || 0) - (b.queue_position || 0));
 }
 
 function groupMessagesByTask(messages: Message[]): Map<string, Message[]> {

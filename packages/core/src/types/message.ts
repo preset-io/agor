@@ -17,11 +17,6 @@ export enum MessageRole {
 }
 
 /**
- * Message status for queueing
- */
-export type MessageStatus = 'queued' | null;
-
-/**
  * Message source - where the message originated
  * - 'gateway': Message came from external platform (Slack, Discord, etc.)
  * - 'agor': Message originated from Agor UI
@@ -226,11 +221,9 @@ export interface Message {
    */
   parent_tool_use_id?: string | null;
 
-  /** Message status (queued vs normal) */
-  status?: MessageStatus;
-
-  /** Position in queue (for queued messages only) */
-  queue_position?: number | null;
+  // NOTE: queueing moved off `messages` and onto `tasks.status='queued'` as
+  // of migration sqlite/0040 (postgres/0030). The `status` and `queue_position`
+  // fields are gone — see `Task.queue_position` instead.
 
   /** Agent-specific metadata */
   metadata?: {

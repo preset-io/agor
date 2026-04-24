@@ -636,9 +636,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       const customTemplate = targetSession.callback_config?.template;
       const callbackMessage = renderChildCompletionCallback(context, customTemplate);
 
-      // Queue message to target session with special metadata
-      const messageRepo = new MessagesRepository(this.db);
-
       // Validate target session has a creator for authentication
       if (!targetSession.created_by) {
         console.warn(
@@ -647,26 +644,51 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         return;
       }
 
-      // Create queued message with Agor callback metadata
-      // IMPORTANT: queued_by_user_id = the person who set up the callback (task attribution),
-      // NOT the target session owner. Execution still runs as the target session's Unix user.
-      // Falls back to target session creator for backward compat (legacy sessions without callback_created_by).
+      // Create QUEUED task on the target session carrying the callback prompt.
+      // The metadata bag survives the queue → run transition: spawnTaskExecutor
+      // re-stamps `is_agor_callback` and `source` onto the synthesized
+      // user-message row so the UI's callback styling (MessageBlock.tsx) holds.
+      //
+      // IMPORTANT: queued_by_user_id = the person who set up the callback
+      // (task attribution), NOT the target session owner. Execution still runs
+      // as the target session's Unix user. Falls back to target session creator
+      // for backward compat (legacy sessions without callback_created_by).
       const callbackCreator =
         childSession.callback_config?.callback_created_by ?? targetSession.created_by;
-      await messageRepo.createQueued(targetSessionId, callbackMessage, {
-        is_agor_callback: true,
-        source: 'agor',
-        child_session_id: childSession.session_id,
-        child_task_id: task.task_id,
-        queued_by_user_id: callbackCreator,
+      const callbackTask = await this.taskRepo.createQueued({
+        session_id: targetSessionId,
+        created_by: callbackCreator,
+        description: callbackMessage.substring(0, 120),
+        full_prompt: callbackMessage,
+        // Sentinels — overwritten by spawnTaskExecutor at QUEUED → RUNNING.
+        message_range: {
+          start_index: -1,
+          end_index: -1,
+          start_timestamp: new Date().toISOString(),
+        },
+        git_state: {
+          ref_at_start: '',
+          sha_at_start: '',
+        },
+        tool_use_count: 0,
+        metadata: {
+          is_agor_callback: true,
+          source: 'agor',
+          child_session_id: childSession.session_id,
+          child_task_id: task.task_id,
+          queued_by_user_id: callbackCreator,
+        },
       });
 
+      // Emit so reactive-session subscribers see the new queued task.
+      this.emit?.('queued', callbackTask);
+
       console.log(
-        `🔔 Queued callback to ${targetSessionId.substring(0, 8)} from child ${childSession.session_id.substring(0, 8)}`
+        `🔔 Queued callback task ${callbackTask.task_id.substring(0, 8)} on session ${targetSessionId.substring(0, 8)} from child ${childSession.session_id.substring(0, 8)}`
       );
 
-      // NOTE: Queue processing is handled automatically via task completion hook
-      // When target session becomes idle, it will process all queued messages including this callback
+      // NOTE: Queue processing is handled automatically via task completion hook.
+      // When target session becomes idle, it will drain queued tasks including this callback.
     } catch (error) {
       console.error(
         `❌ [TasksService] Failed to queue callback to ${targetSessionId} for session ${childSession.session_id}:`,

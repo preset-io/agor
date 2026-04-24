@@ -255,7 +255,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
 
   /**
    * Find orphaned tasks (running, stopping, awaiting permission, or awaiting input)
-   * These are tasks that were interrupted when daemon stopped
+   * These are tasks that were interrupted when daemon stopped.
+   *
+   * NOTE: QUEUED tasks are intentionally NOT considered orphans — they were
+   * never spawned, so they have no executor to recover. The startup queue
+   * drainer (see register-routes.ts processNextQueuedTask) picks them up
+   * once any session goes idle. See never-lose-prompt §C.
    */
   async findOrphaned(): Promise<Task[]> {
     try {

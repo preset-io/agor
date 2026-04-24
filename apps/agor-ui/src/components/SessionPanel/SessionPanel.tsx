@@ -3,11 +3,11 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
-  Message,
   PermissionMode,
   Session,
   SessionID,
   SpawnConfig,
+  Task,
   User,
   Worktree,
 } from '@agor-live/client';
@@ -332,7 +332,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   );
   const [scrollToBottom, setScrollToBottom] = React.useState<(() => void) | null>(null);
   const [scrollToTop, setScrollToTop] = React.useState<(() => void) | null>(null);
-  const [queuedMessages, setQueuedMessages] = React.useState<Message[]>([]);
+  const [queuedTasks, setQueuedTasks] = React.useState<Task[]>([]);
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
   const [droppedFiles, setDroppedFiles] = React.useState<File[]>([]);
@@ -345,17 +345,15 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const tasks = reactiveSessionState?.tasks || [];
 
-  // Fetch queued messages
+  // Fetch queued tasks (post never-lose-prompt: queueing lives on tasks, not messages).
   React.useEffect(() => {
     if (!client || !session) return;
 
     const fetchQueue = async () => {
       try {
-        const response = await client
-          .service(`/sessions/${session.session_id}/messages/queue`)
-          .find();
-        const data = (response as { data: Message[] }).data || [];
-        setQueuedMessages(data);
+        const response = await client.service(`/sessions/${session.session_id}/tasks/queue`).find();
+        const data = (response as { data: Task[] }).data || [];
+        setQueuedTasks(data);
       } catch (error) {
         console.error('[SessionPanel] Failed to fetch queue:', error);
       }
@@ -363,30 +361,43 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
     fetchQueue();
 
-    const messagesService = client.service('messages');
+    const tasksService = client.service('tasks');
 
-    const handleQueued = (msg: Message) => {
-      if (msg.session_id === session.session_id) {
-        setQueuedMessages((prev) => {
-          // Deduplicate: optimistic update from enqueue may have already added this message
-          if (prev.some((m) => m.message_id === msg.message_id)) return prev;
-          return [...prev, msg].sort((a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0));
+    const handleQueued = (task: Task) => {
+      if (task.session_id === session.session_id) {
+        setQueuedTasks((prev) => {
+          // Deduplicate: optimistic update from enqueue may have already added this task
+          if (prev.some((t) => t.task_id === task.task_id)) return prev;
+          return [...prev, task].sort((a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0));
         });
       }
     };
 
-    const handleMessageRemoved = (msg: Message) => {
-      if (msg.status === 'queued' && msg.session_id === session.session_id) {
-        setQueuedMessages((prev) => prev.filter((m) => m.message_id !== msg.message_id));
+    // A queued task drops out of the drawer when its status flips off 'queued'
+    // (drained by spawnTaskExecutor → RUNNING, or admin-cancelled to STOPPED).
+    const handleTaskPatched = (task: Task) => {
+      if (task.session_id !== session.session_id) return;
+      if (task.status !== TaskStatus.QUEUED) {
+        setQueuedTasks((prev) => prev.filter((t) => t.task_id !== task.task_id));
       }
     };
 
-    messagesService.on('queued', handleQueued);
-    messagesService.on('removed', handleMessageRemoved);
+    const handleTaskRemoved = (task: Task) => {
+      if (task.session_id === session.session_id) {
+        setQueuedTasks((prev) => prev.filter((t) => t.task_id !== task.task_id));
+      }
+    };
+
+    tasksService.on('queued', handleQueued);
+    tasksService.on('patched', handleTaskPatched);
+    tasksService.on('updated', handleTaskPatched);
+    tasksService.on('removed', handleTaskRemoved);
 
     return () => {
-      messagesService.off('queued', handleQueued);
-      messagesService.off('removed', handleMessageRemoved);
+      tasksService.off('queued', handleQueued);
+      tasksService.off('patched', handleTaskPatched);
+      tasksService.off('updated', handleTaskPatched);
+      tasksService.off('removed', handleTaskRemoved);
     };
   }, [client, session]);
 
@@ -532,21 +543,21 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     try {
       if (isRunning && client) {
         const response = (await client
-          .service(`/sessions/${session.session_id}/messages/queue`)
+          .service(`/sessions/${session.session_id}/tasks/queue`)
           .create({
             prompt: promptToSend,
-          })) as { success: boolean; message: Message; queue_position: number };
+          })) as { success: boolean; task: Task; queue_position: number };
 
-        if (response.message) {
-          setQueuedMessages((prev) => {
-            if (prev.some((m) => m.message_id === response.message.message_id)) return prev;
-            return [...prev, response.message].sort(
+        if (response.task) {
+          setQueuedTasks((prev) => {
+            if (prev.some((t) => t.task_id === response.task.task_id)) return prev;
+            return [...prev, response.task].sort(
               (a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0)
             );
           });
         }
 
-        message.success(`Message queued at position ${response.message.queue_position}`);
+        message.success(`Message queued at position ${response.task.queue_position}`);
         promptRef.current?.clear();
       } else {
         promptRef.current?.clear();
@@ -1071,8 +1082,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           scrollToTop={scrollToTop}
           setScrollToBottom={setScrollToBottom}
           setScrollToTop={setScrollToTop}
-          queuedMessages={queuedMessages}
-          setQueuedMessages={setQueuedMessages}
+          queuedTasks={queuedTasks}
+          setQueuedTasks={setQueuedTasks}
           spawnModalOpen={spawnModalOpen}
           setSpawnModalOpen={setSpawnModalOpen}
           onSpawnModalConfirm={handleSpawnModalConfirm}
