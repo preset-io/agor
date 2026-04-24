@@ -15,6 +15,13 @@
  *    in-flight request makes all of them resolve with the same
  *    `RefreshResult`.
  *
+ *    This helper also latches an `unrecoverable` state once the refresh
+ *    endpoint returns a definite auth failure (401 / NotAuthenticated).
+ *    Once latched, every caller rejects immediately without hitting the
+ *    server so that a dead refresh token cannot produce a reconnect/refresh
+ *    loop as components retry failing service calls. The latch clears on
+ *    the next successful refresh (e.g. after the user logs back in).
+ *
  * 2. {@link refreshAndReauthenticate} — the common "token expired → refresh
  *    → reauthenticate the socket client" sequence used by both the socket
  *    reconnect fallback in useAgorClient and the 401-retry hook on the
@@ -23,6 +30,9 @@
  * The single-flight helper also emits a `TOKENS_REFRESHED_EVENT` on `window`
  * after a successful refresh so that React state (useAuth) can sync even when
  * the refresh was initiated by a non-React code path (e.g. the Feathers hook).
+ * On unrecoverable failure it emits `TOKENS_REFRESH_UNRECOVERABLE_EVENT` so
+ * useAuth can clear tokens and bounce the user to login exactly once,
+ * instead of every call site duplicating that cleanup.
  */
 
 import type { AgorClient } from '@agor-live/client';
@@ -31,7 +41,82 @@ import { getStoredRefreshToken, type RefreshResult, refreshAndStoreTokens } from
 /** Custom DOM event fired after tokens have been successfully refreshed. */
 export const TOKENS_REFRESHED_EVENT = 'agor:tokens-refreshed';
 
+/**
+ * Custom DOM event fired when the refresh endpoint returned a definite auth
+ * failure. Listeners (useAuth) should treat this as "session is dead" and
+ * clear tokens + bounce to login.
+ */
+export const TOKENS_REFRESH_UNRECOVERABLE_EVENT = 'agor:tokens-refresh-unrecoverable';
+
 let inflight: Promise<RefreshResult> | null = null;
+
+/**
+ * Latched once the refresh endpoint returns a definite auth failure. While
+ * latched, `refreshTokensSingleFlight` fast-fails without hitting the server.
+ * Cleared on any successful refresh.
+ */
+let unrecoverable = false;
+
+/**
+ * Sentinel rejection surfaced by {@link refreshTokensSingleFlight} while the
+ * unrecoverable latch is set. Exposed so callers can distinguish "we already
+ * know the refresh token is dead" from a fresh auth failure without
+ * reinspecting the original error.
+ */
+export class RefreshUnrecoverableError extends Error {
+  constructor(message = 'Refresh token is invalid or expired') {
+    super(message);
+    this.name = 'RefreshUnrecoverableError';
+  }
+}
+
+/**
+ * Classify a refresh-endpoint error as "permanently dead refresh token" vs
+ * "transient" (network, 5xx, CORS blip, etc.).
+ *
+ * We only latch on definite auth failures because latching on transient
+ * errors would spuriously log users out during daemon restarts or network
+ * blips. When in doubt, treat as transient and let the caller retry.
+ */
+function isDefiniteAuthFailure(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as {
+    name?: string;
+    code?: number;
+    status?: number;
+    statusCode?: number;
+    className?: string;
+  };
+  const status =
+    typeof e.code === 'number'
+      ? e.code
+      : typeof e.statusCode === 'number'
+        ? e.statusCode
+        : typeof e.status === 'number'
+          ? e.status
+          : undefined;
+  if (status === 401 || status === 403) return true;
+  if (e.name === 'NotAuthenticated') return true;
+  if (e.className === 'not-authenticated') return true;
+  return false;
+}
+
+/**
+ * Reset the unrecoverable latch. Called implicitly on any successful refresh
+ * and exported so the login flow can reset it after a fresh successful login
+ * (in case the user logs out and back in without a page reload).
+ */
+export function resetRefreshFailureState(): void {
+  unrecoverable = false;
+}
+
+/**
+ * True when the refresh endpoint has latched as unrecoverable. Exposed for
+ * tests and for callers that want to avoid kicking off doomed retries.
+ */
+export function isRefreshUnrecoverable(): boolean {
+  return unrecoverable;
+}
 
 /**
  * Request a token refresh, deduplicating concurrent callers.
@@ -44,10 +129,23 @@ export function refreshTokensSingleFlight(
   client: AgorClient,
   refreshToken: string
 ): Promise<RefreshResult> {
+  // Fast-fail if we already know the refresh token is dead. Without this,
+  // every 401 surfaced by the around-hook would trigger a brand-new POST
+  // to /authentication/refresh that also 401s, producing a tight loop as
+  // components retry failing service calls. One latched failure is enough;
+  // useAuth handles the cleanup (clearTokens + redirect to login).
+  if (unrecoverable) {
+    return Promise.reject(new RefreshUnrecoverableError());
+  }
+
   if (inflight) return inflight;
 
   inflight = refreshAndStoreTokens(client, refreshToken)
     .then((result) => {
+      // Successful refresh clears any prior unrecoverable state — e.g. if
+      // the user logged out and back in, or a transient failure was
+      // misclassified, resume normal operation.
+      unrecoverable = false;
       // Notify listeners (useAuth) that tokens have rotated.
       if (typeof window !== 'undefined') {
         window.dispatchEvent(
@@ -55,6 +153,18 @@ export function refreshTokensSingleFlight(
         );
       }
       return result;
+    })
+    .catch((err) => {
+      // Distinguish dead-refresh-token (latch + broadcast, break the loop)
+      // from transient failures (propagate; the caller will retry on its
+      // own cadence and the next attempt may succeed).
+      if (isDefiniteAuthFailure(err)) {
+        unrecoverable = true;
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent(TOKENS_REFRESH_UNRECOVERABLE_EVENT));
+        }
+      }
+      throw err;
     })
     .finally(() => {
       inflight = null;

@@ -43,6 +43,21 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
     let client: AgorClient | null = null;
     let hasConnectedOnce = false; // Track if we've ever connected successfully
 
+    // Bookkeeping for the manual reconnect path used on 'io server disconnect'.
+    // socket.io does NOT auto-reconnect for that reason, so we kick it
+    // ourselves — but without backoff+cap the loop can run at network speed
+    // if the server keeps closing the socket (e.g. auth failures, crash loop,
+    // config mismatch). Reset on any successful connect.
+    let manualReconnectAttempts = 0;
+    let manualReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    const MAX_MANUAL_RECONNECT_ATTEMPTS = 10;
+    const clearManualReconnectTimer = () => {
+      if (manualReconnectTimer !== null) {
+        clearTimeout(manualReconnectTimer);
+        manualReconnectTimer = null;
+      }
+    };
+
     async function connect() {
       // Don't create client if no access token and anonymous not allowed
       if (!accessToken && !allowAnonymous) {
@@ -161,6 +176,9 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
       client.io.on('connect', async () => {
         if (mounted) {
           hasConnectedOnce = true; // Mark that we've successfully connected
+          // Reset manual-reconnect backoff now that we're connected again.
+          manualReconnectAttempts = 0;
+          clearManualReconnectTimer();
 
           // Re-authenticate on reconnection (e.g., after daemon restart or network recovery)
           try {
@@ -238,8 +256,26 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
         // "Reconnecting" immediately rather than flashing "Disconnected" for
         // the gap before the first connect_error fires.
         if (reason === 'io server disconnect') {
+          // Manual reconnect with exponential backoff + cap. Previously we
+          // called `client.io.connect()` immediately on every disconnect;
+          // when the server repeatedly closed the socket (auth rejection,
+          // crash loop, server-side kick) this created a tight reconnect
+          // loop at network speed and a page refresh was the only way out.
+          if (manualReconnectAttempts >= MAX_MANUAL_RECONNECT_ATTEMPTS) {
+            setConnecting(false);
+            setError('Lost connection to daemon after multiple attempts. Please reload the page.');
+            return;
+          }
           setConnecting(true);
-          client?.io.connect();
+          const attempt = manualReconnectAttempts++;
+          // 500ms, 1s, 2s, 4s, 8s, 16s, 30s cap.
+          const delay = Math.min(500 * 2 ** attempt, 30_000);
+          clearManualReconnectTimer();
+          manualReconnectTimer = setTimeout(() => {
+            manualReconnectTimer = null;
+            if (!mounted) return;
+            client?.io.connect();
+          }, delay);
         } else if (
           reason === 'transport close' ||
           reason === 'transport error' ||
@@ -341,6 +377,7 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
     // Cleanup on unmount
     return () => {
       mounted = false;
+      clearManualReconnectTimer();
       if (client?.io) {
         // Remove all listeners to prevent memory leaks
         client.io.removeAllListeners();

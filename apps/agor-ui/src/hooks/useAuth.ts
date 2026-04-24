@@ -10,7 +10,12 @@ import { createRestClient } from '@agor-live/client';
 import { useCallback, useEffect, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
 import { isExpiringSoon, msUntilExpiry } from '../utils/jwtExpiry';
-import { refreshTokensSingleFlight, TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
+import {
+  refreshTokensSingleFlight,
+  resetRefreshFailureState,
+  TOKENS_REFRESH_UNRECOVERABLE_EVENT,
+  TOKENS_REFRESHED_EVENT,
+} from '../utils/singleFlightRefresh';
 import {
   clearTokens,
   getStoredAccessToken,
@@ -341,6 +346,29 @@ export function useAuth(): UseAuthReturn {
     return () => window.removeEventListener(TOKENS_REFRESHED_EVENT, handleRefreshed);
   }, []);
 
+  // When the single-flight refresh helper determines the refresh token is
+  // permanently dead (e.g. the server returned 401 / NotAuthenticated from
+  // the refresh endpoint), clear tokens and flip to unauthenticated. Without
+  // this, the socket around-hook and connect-handler would each re-throw
+  // the original auth error without cleanup, and a page reload would be the
+  // only way to escape the resulting refresh/reconnect loop.
+  useEffect(() => {
+    const handleUnrecoverable = () => {
+      clearTokens();
+      setState({
+        user: null,
+        accessToken: null,
+        authenticated: false,
+        loading: false,
+        error: 'Session expired, please login again',
+      });
+    };
+
+    window.addEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, handleUnrecoverable);
+    return () =>
+      window.removeEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, handleUnrecoverable);
+  }, []);
+
   /**
    * Login with email and password
    */
@@ -359,6 +387,11 @@ export function useAuth(): UseAuthReturn {
 
       // Store both access and refresh tokens
       storeTokens(result.accessToken, result.refreshToken);
+
+      // Fresh session — clear any stale "refresh is dead" latch from a
+      // previous login so the new refresh token isn't rejected before it
+      // ever gets tried.
+      resetRefreshFailureState();
 
       setState({
         user: result.user,
