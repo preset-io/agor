@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
 import { isExpiringSoon, msUntilExpiry } from '../utils/jwtExpiry';
 import {
+  RefreshUnrecoverableError,
   refreshTokensSingleFlight,
   resetRefreshFailureState,
   TOKENS_REFRESH_UNRECOVERABLE_EVENT,
@@ -202,11 +203,13 @@ export function useAuth(): UseAuthReturn {
     reAuthenticate();
   }, [reAuthenticate]);
 
-  // Listen for daemon reconnection events (window.ononline, storage events, etc.)
-  // This helps recover from daemon restarts automatically, AND handles the
-  // laptop-sleep case: if the system suspends long enough for the access
-  // token to expire while the tab is hidden, setTimeout will not fire on
-  // time — we catch up here when the tab becomes visible again.
+  // Visibility handler: recover from tab wake.
+  //
+  // Handles the laptop-sleep case where the access token has silently expired
+  // while the tab was hidden — setTimeout didn't fire on time, so we catch up
+  // here before the user's next click triggers a 401 and makes the stale
+  // state visible. Also retries auth if we woke up in the unauthenticated-
+  // with-tokens state (e.g. daemon was down when we last tried).
   useEffect(() => {
     const handleVisibilityChange = async () => {
       if (document.visibilityState !== 'visible') return;
@@ -233,42 +236,43 @@ export function useAuth(): UseAuthReturn {
 
       try {
         const client = await createRestClient(getDaemonUrl());
-        const result = await refreshTokensSingleFlight(client, refreshToken);
-        // Event listener below will pick up the refresh and sync state, but
-        // set it here too so that the sync is synchronous with the tab wake.
-        setState((prev) => ({
-          ...prev,
-          accessToken: result.accessToken,
-          user: result.user,
-        }));
+        await refreshTokensSingleFlight(client, refreshToken);
+        // State sync happens via TOKENS_REFRESHED_EVENT listener below —
+        // no need to setState here.
       } catch (error) {
-        // Refresh failed after wake. Let the normal reAuthenticate path
-        // decide whether to clear tokens (connection error vs auth error).
+        // Unrecoverable failures are handled by the unrecoverable-event
+        // listener (clearTokens + unauthenticated). Bail out so we don't
+        // kick off a reAuthenticate that will immediately fail again.
+        if (error instanceof RefreshUnrecoverableError) return;
+        // Transient/connection errors: let the poll effect pick us up.
+        // Other non-connection errors: force a full reAuthenticate, which
+        // has its own retry + token-clear policy.
         if (!isLikelyConnectionError(error)) {
           reAuthenticate();
         }
       }
     };
 
-    // Poll for daemon availability when we have tokens but aren't authenticated
-    // This handles the case where daemon restarts and we need to reconnect
-    let pollInterval: NodeJS.Timeout | null = null;
-    if (!state.authenticated && !state.loading) {
-      const hasTokens = getStoredAccessToken() || getStoredRefreshToken();
-      if (hasTokens) {
-        pollInterval = setInterval(() => {
-          reAuthenticate();
-        }, 3000); // Poll every 3 seconds
-      }
-    }
-
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      if (pollInterval) {
-        clearInterval(pollInterval);
-      }
-    };
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [state.authenticated, reAuthenticate]);
+
+  // Poll for daemon availability when we have tokens but aren't authenticated.
+  // This handles the case where the daemon restarts and we need to reconnect
+  // without a user-driven event to trigger it. Split from the visibility
+  // effect so that visibility-listener setup/teardown isn't churned every
+  // time `state.loading` flips.
+  useEffect(() => {
+    if (state.authenticated || state.loading) return;
+
+    const hasTokens = getStoredAccessToken() || getStoredRefreshToken();
+    if (!hasTokens) return;
+
+    const pollInterval = setInterval(() => {
+      reAuthenticate();
+    }, 3000); // Poll every 3 seconds
+
+    return () => clearInterval(pollInterval);
   }, [state.authenticated, state.loading, reAuthenticate]);
 
   // Auto-refresh the access token before it expires.
@@ -295,14 +299,13 @@ export function useAuth(): UseAuthReturn {
 
       try {
         const client = await createRestClient(getDaemonUrl());
-        const refreshResult = await refreshTokensSingleFlight(client, refreshToken);
-
-        setState((prev) => ({
-          ...prev,
-          accessToken: refreshResult.accessToken,
-          user: refreshResult.user,
-        }));
+        await refreshTokensSingleFlight(client, refreshToken);
+        // State sync happens via TOKENS_REFRESHED_EVENT listener below.
       } catch (error) {
+        // Unrecoverable: the unrecoverable-event listener already cleared
+        // tokens and flipped to unauthenticated. Avoid double-handling.
+        if (error instanceof RefreshUnrecoverableError) return;
+
         console.error('Failed to auto-refresh token:', error);
         if (isLikelyConnectionError(error)) {
           setState((prev) => ({
