@@ -36,6 +36,7 @@
  */
 
 import type { AgorClient } from '@agor-live/client';
+import { isDefiniteAuthFailure } from './authErrors';
 import { getStoredRefreshToken, type RefreshResult, refreshAndStoreTokens } from './tokenRefresh';
 
 /** Custom DOM event fired after tokens have been successfully refreshed. */
@@ -58,47 +59,18 @@ let inflight: Promise<RefreshResult> | null = null;
 let unrecoverable = false;
 
 /**
- * Sentinel rejection surfaced by {@link refreshTokensSingleFlight} while the
- * unrecoverable latch is set. Exposed so callers can distinguish "we already
- * know the refresh token is dead" from a fresh auth failure without
- * reinspecting the original error.
+ * Sentinel rejection surfaced by {@link refreshTokensSingleFlight} on any
+ * definite auth failure — both the first occurrence (where we latch and
+ * broadcast) and subsequent fast-fail calls. Callers can `instanceof`-check
+ * this to distinguish "the refresh token is dead, stop" from transient
+ * errors that are safe to retry. The original transport error is attached
+ * as `cause` for diagnostics.
  */
 export class RefreshUnrecoverableError extends Error {
-  constructor(message = 'Refresh token is invalid or expired') {
-    super(message);
+  constructor(message = 'Refresh token is invalid or expired', options?: { cause?: unknown }) {
+    super(message, options);
     this.name = 'RefreshUnrecoverableError';
   }
-}
-
-/**
- * Classify a refresh-endpoint error as "permanently dead refresh token" vs
- * "transient" (network, 5xx, CORS blip, etc.).
- *
- * We only latch on definite auth failures because latching on transient
- * errors would spuriously log users out during daemon restarts or network
- * blips. When in doubt, treat as transient and let the caller retry.
- */
-function isDefiniteAuthFailure(err: unknown): boolean {
-  if (!err || typeof err !== 'object') return false;
-  const e = err as {
-    name?: string;
-    code?: number;
-    status?: number;
-    statusCode?: number;
-    className?: string;
-  };
-  const status =
-    typeof e.code === 'number'
-      ? e.code
-      : typeof e.statusCode === 'number'
-        ? e.statusCode
-        : typeof e.status === 'number'
-          ? e.status
-          : undefined;
-  if (status === 401 || status === 403) return true;
-  if (e.name === 'NotAuthenticated') return true;
-  if (e.className === 'not-authenticated') return true;
-  return false;
 }
 
 /**
@@ -158,11 +130,19 @@ export function refreshTokensSingleFlight(
       // Distinguish dead-refresh-token (latch + broadcast, break the loop)
       // from transient failures (propagate; the caller will retry on its
       // own cadence and the next attempt may succeed).
+      //
+      // On definite failure, throw RefreshUnrecoverableError rather than the
+      // original auth error — otherwise the first caller's catch would see a
+      // plain 401 and fall through to its retry path, racing the
+      // unrecoverable-event listener that just cleared tokens. Wrapping with
+      // `cause` preserves diagnostics. Subsequent callers fast-fail with the
+      // same type via the `unrecoverable` guard above.
       if (isDefiniteAuthFailure(err)) {
         unrecoverable = true;
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent(TOKENS_REFRESH_UNRECOVERABLE_EVENT));
         }
+        throw new RefreshUnrecoverableError(undefined, { cause: err });
       }
       throw err;
     })

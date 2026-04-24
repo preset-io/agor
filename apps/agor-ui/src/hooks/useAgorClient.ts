@@ -9,7 +9,12 @@ import type { AgorClient } from '@agor-live/client';
 import { createClient } from '@agor-live/client';
 import { useEffect, useRef, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
-import { refreshAndReauthenticate, TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
+import { isDefiniteAuthFailure } from '../utils/authErrors';
+import {
+  RefreshUnrecoverableError,
+  refreshAndReauthenticate,
+  TOKENS_REFRESHED_EVENT,
+} from '../utils/singleFlightRefresh';
 import type { RefreshResult } from '../utils/tokenRefresh';
 
 interface UseAgorClientResult {
@@ -150,14 +155,7 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
               try {
                 await next();
               } catch (err) {
-                const errorObject = err as
-                  | { name?: string; code?: number; className?: string }
-                  | undefined;
-                const isAuthError =
-                  errorObject?.name === 'NotAuthenticated' ||
-                  errorObject?.code === 401 ||
-                  errorObject?.className === 'not-authenticated';
-                if (!isAuthError) throw err;
+                if (!isDefiniteAuthFailure(err)) throw err;
 
                 // Guard against infinite retry if the retry also 401s.
                 const currentParams = (context.params ?? {}) as Record<string, unknown>;
@@ -254,9 +252,30 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
                     setError(null);
                     return;
                   }
+                  // refreshResult === null means no refresh token stored —
+                  // treat as terminal (nothing to retry with).
                 } catch (refreshErr) {
-                  console.error('❌ Refresh token also failed:', refreshErr);
-                  // Fall through to error handling
+                  console.error('❌ Refresh failed on reconnect:', refreshErr);
+                  // Only flip to the terminal "session expired" state on
+                  // definite auth failure. Transient errors (5xx, network)
+                  // should keep `connecting: true` so the normal socket
+                  // reconnect can retry later — otherwise a daemon restart
+                  // that briefly 5xxs the refresh endpoint would strand
+                  // the UI in a hard "Session expired" state even though
+                  // the tokens may still be valid. useAuth's unrecoverable
+                  // listener has already cleared tokens on the auth path.
+                  if (
+                    refreshErr instanceof RefreshUnrecoverableError ||
+                    isDefiniteAuthFailure(refreshErr)
+                  ) {
+                    setConnecting(false);
+                    setConnected(false);
+                    setError('Session expired. Please log in again.');
+                    return;
+                  }
+                  setConnected(false);
+                  setConnecting(true);
+                  return;
                 }
               }
             } else if (allowAnonymous) {
