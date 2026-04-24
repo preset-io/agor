@@ -581,25 +581,30 @@ export function OnboardingWizard({
       return;
     }
 
+    // Decide whether this operation is async (clone) or synchronous (local registration).
+    // Keying on `path` explicitly avoids relying on `repoMode` state that isn't
+    // meaningful on the assistant path.
+    const isAsyncClone = path === 'assistant' || (path === 'own-repo' && repoMode === 'remote');
+
     // Transition to the clone step so the auto-advance effect can detect
     // the newly-created repo in repoById and move to the board step.
     // For assistant path, we're already on 'clone' (auto-triggered).
     // For local repos, registration is synchronous — skip the clone step entirely.
     if (path === 'own-repo') {
-      if (repoMode === 'local') {
+      if (isAsyncClone) {
+        setCurrentStep('clone');
+      } else {
         if (cloneIntervalRef.current) {
           clearInterval(cloneIntervalRef.current);
           cloneIntervalRef.current = null;
         }
         setLoading(false);
         setCurrentStep('board');
-      } else {
-        setCurrentStep('clone');
       }
     }
 
-    // Set timeout for async clone completion (remote/assistant repos only)
-    if (repoMode !== 'local') {
+    // Set timeout for async clone completion only.
+    if (isAsyncClone) {
       cloneTimeoutRef.current = setTimeout(() => {
         setLoading(false);
         setError(
@@ -1241,14 +1246,19 @@ export function OnboardingWizard({
     if (!path) return [];
 
     const allSteps = getStepsForPath(path);
-    // Don't include 'welcome' or 'clone' in the steps indicator.
-    // 'clone' is visually merged with 'add-repo' / the repo step.
-    const displaySteps = allSteps.filter((s) => s !== 'welcome' && s !== 'clone');
+    // Don't include 'welcome' in the steps indicator. For own-repo, also hide
+    // 'clone' since it's visually merged with 'add-repo' (both labelled "Repo").
+    // For assistant there's no 'add-repo' step, so keep 'clone' visible —
+    // otherwise the indicator jumps straight to "Board" while the framework
+    // is still cloning.
+    const displaySteps = allSteps.filter(
+      (s) => s !== 'welcome' && !(path === 'own-repo' && s === 'clone')
+    );
 
     const labelMap: Record<WizardStep, string> = {
       welcome: 'Welcome',
       'add-repo': 'Repo',
-      clone: 'Repo',
+      clone: path === 'own-repo' ? 'Repo' : 'Clone',
       board: 'Board',
       worktree: 'Worktree',
       'api-keys': 'Keys',
@@ -1274,10 +1284,13 @@ export function OnboardingWizard({
 
   const currentStepDisplay = useMemo(() => {
     if (!path || currentStep === 'welcome') return -1;
-    const displaySteps = getStepsForPath(path).filter((s) => s !== 'welcome' && s !== 'clone');
-    // When on the 'clone' step, highlight the repo step (add-repo for own-repo, first step for assistant)
-    const mappedStep =
-      currentStep === 'clone' ? (path === 'own-repo' ? 'add-repo' : displaySteps[0]) : currentStep;
+    // Mirror the filter used by stepsItems: hide 'clone' only for own-repo,
+    // where it's merged into 'add-repo'. Assistant keeps its 'clone' step.
+    const displaySteps = getStepsForPath(path).filter(
+      (s) => s !== 'welcome' && !(path === 'own-repo' && s === 'clone')
+    );
+    // For own-repo, map the internal 'clone' state onto the merged 'add-repo' index.
+    const mappedStep = currentStep === 'clone' && path === 'own-repo' ? 'add-repo' : currentStep;
     return displaySteps.indexOf(mappedStep);
   }, [path, currentStep]);
 
