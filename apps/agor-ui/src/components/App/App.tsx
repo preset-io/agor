@@ -38,6 +38,7 @@ import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { usePresence } from '../../hooks/usePresence';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
+import { useTaskCompletionChime } from '../../hooks/useTaskCompletionChime';
 import { useUrlState } from '../../hooks/useUrlState';
 import type { AgenticToolOption } from '../../types';
 import { createAssistantWorktree } from '../../utils/assistantCreation';
@@ -347,6 +348,10 @@ export const App: React.FC<AppProps> = ({
   useEffect(() => {
     initializeAudioOnInteraction();
   }, []);
+
+  // Play chime when tasks transition from RUNNING → COMPLETED/FAILED.
+  // Subscribed globally so it fires regardless of which session panel is open.
+  useTaskCompletionChime(client, user);
 
   // Programmatically collapse/expand the comments panel when toggle state changes
   useEffect(() => {
