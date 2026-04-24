@@ -203,4 +203,64 @@ describe('useServerVersion', () => {
     expect(result.current.capturedSha).toBeNull();
     expect(result.current.outOfSync).toBe(false);
   });
+
+  it('polls /health on the configured interval and flips outOfSync on drift', async () => {
+    // Drive each fetch with its own resolver so we can return different SHAs
+    // across polls without races. Real socket reconnect is irrelevant here —
+    // this exercises the poll-only path that catches deploys while the socket
+    // stays connected.
+    const responders: Array<(body: { buildSha: string }) => void> = [];
+    const fetchSpy = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          responders.push((body) =>
+            resolve({ ok: true, json: () => Promise.resolve(body) } as never)
+          );
+        })
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    try {
+      const { result } = renderHook(() => useServerVersion(null, TEST_URL, 1000));
+
+      // Initial fetch fires immediately on mount.
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      responders[0]({ buildSha: 'first-sha' });
+      await waitFor(() => {
+        expect(result.current.capturedSha).toBe('first-sha');
+      });
+
+      // Advance past the interval — the poll should fire a second fetch.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      responders[1]({ buildSha: 'second-sha' });
+      await waitFor(() => {
+        expect(result.current.currentSha).toBe('second-sha');
+      });
+      expect(result.current.capturedSha).toBe('first-sha');
+      expect(result.current.outOfSync).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('disables polling when pollIntervalMs is 0', async () => {
+    const fetchMock = mockFetch();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderHook(() => useServerVersion(null, TEST_URL, 0));
+      // Initial fetch fires once.
+      expect(fetchMock.fetchSpy).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+      // Still one — no interval was set up.
+      expect(fetchMock.fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -36,6 +36,14 @@ import { getDaemonUrl } from '../config/daemon';
 export const DEV_SHA = 'dev';
 
 /**
+ * How often to re-poll /health for drift after the initial baseline. 60s
+ * catches deploys quickly without being wasteful — /health is a tiny JSON
+ * response. The socket `server-info` event still fires on reconnect; this
+ * just covers the case where the socket stays connected through a deploy.
+ */
+export const DEFAULT_POLL_INTERVAL_MS = 60_000;
+
+/**
  * Pure comparison helper. Exposed for testing.
  *
  * Returns true ONLY when both values are concrete, non-empty SHAs and they
@@ -80,10 +88,14 @@ export interface UseServerVersionResult {
  *   from a direct /health fetch and does not require the client.
  * @param daemonUrl Override the URL probed for /health. Defaults to the
  *   resolved daemon URL. Exposed for tests.
+ * @param pollIntervalMs How often to re-fetch /health to catch drift when the
+ *   socket stays connected through a deploy. Pass 0 to disable. Exposed for
+ *   tests.
  */
 export function useServerVersion(
   client: AgorClient | null,
-  daemonUrl: string = getDaemonUrl()
+  daemonUrl: string = getDaemonUrl(),
+  pollIntervalMs: number = DEFAULT_POLL_INTERVAL_MS
 ): UseServerVersionResult {
   const [capturedSha, setCapturedSha] = useState<string | null>(null);
   const [currentSha, setCurrentSha] = useState<string | null>(null);
@@ -104,25 +116,36 @@ export function useServerVersion(
     }
   }, []);
 
-  // Initial baseline: fetch /health on mount. This runs regardless of socket
-  // state and guarantees we capture the SHA the daemon is running RIGHT NOW,
-  // before the daemon ever has a chance to be rebuilt under us. Without this,
-  // we'd race the welcome event and usually lose (see top-of-file comment).
+  // Initial baseline + periodic poll: fetch /health on mount and then every
+  // pollIntervalMs. The mount fetch guarantees we capture the SHA the daemon
+  // is running RIGHT NOW (without it we'd race the welcome event — see
+  // top-of-file). The poll covers the case where a deploy happens while the
+  // socket stays connected, so server-info never re-fires.
   useEffect(() => {
     const controller = new AbortController();
-    fetch(`${daemonUrl.replace(/\/$/, '')}/health`, { signal: controller.signal })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((body: { buildSha?: string } | null) => {
-        if (typeof body?.buildSha === 'string') recordSha(body.buildSha);
-      })
-      .catch(() => {
-        // Daemon unreachable on first load — no baseline. The socket listener
-        // below will pick up the SHA on the first real connection. This is
-        // acceptable because if the daemon was unreachable at load time, the
-        // tab couldn't have rendered against a stale SHA anyway.
-      });
-    return () => controller.abort();
-  }, [daemonUrl, recordSha]);
+    const base = daemonUrl.replace(/\/$/, '');
+
+    const fetchOnce = () => {
+      fetch(`${base}/health`, { signal: controller.signal })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((body: { buildSha?: string } | null) => {
+          if (typeof body?.buildSha === 'string') recordSha(body.buildSha);
+        })
+        .catch(() => {
+          // Daemon unreachable — no-op. If this is the first call we just
+          // have no baseline yet; the socket listener will fill it in. If
+          // it's a poll, we keep the previously-known currentSha.
+        });
+    };
+
+    fetchOnce();
+    const interval = pollIntervalMs > 0 ? setInterval(fetchOnce, pollIntervalMs) : null;
+
+    return () => {
+      controller.abort();
+      if (interval !== null) clearInterval(interval);
+    };
+  }, [daemonUrl, pollIntervalMs, recordSha]);
 
   // Live updates: a fresh socket connection (e.g. after the daemon is
   // rebuilt and clients reconnect) emits server-info, which lets us see the
