@@ -40,7 +40,7 @@ export function useEnsureFrameworkRepo(
     cloneTriggeredRef.current = true;
     setIsCloning(true);
 
-    onCreateRepo({
+    void onCreateRepo({
       url: FRAMEWORK_REPO_URL,
       slug: FRAMEWORK_REPO_SLUG,
       default_branch: 'main',

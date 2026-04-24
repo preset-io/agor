@@ -126,7 +126,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
             if (result.mode === 'local' && result.local) {
               onCreateLocalRepo(result.local);
             } else if (result.remote) {
-              onCreateRepo(result.remote);
+              void onCreateRepo(result.remote);
             }
             onClose();
           }

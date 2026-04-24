@@ -181,7 +181,7 @@ const AGENT_LABELS: Record<AgenticToolName, string> = {
 };
 
 function normalizeRepoUrl(url: string): string {
-  return url.replace(/\.git$/, '').replace(/\/$/, '');
+  return url.replace(/\/+$/, '').replace(/\.git$/, '');
 }
 
 const AGENT_KEY_CONSOLES: Record<AgenticToolName, { label: string; url: string } | null> = {
@@ -582,8 +582,18 @@ export function OnboardingWizard({
     // Transition to the clone step so the auto-advance effect can detect
     // the newly-created repo in repoById and move to the board step.
     // For assistant path, we're already on 'clone' (auto-triggered).
+    // For local repos, registration is synchronous — skip the clone step entirely.
     if (path === 'own-repo') {
-      setCurrentStep('clone');
+      if (repoMode === 'local') {
+        if (cloneIntervalRef.current) {
+          clearInterval(cloneIntervalRef.current);
+          cloneIntervalRef.current = null;
+        }
+        setLoading(false);
+        setCurrentStep('board');
+      } else {
+        setCurrentStep('clone');
+      }
     }
 
     // Set timeout for async clone completion (remote/assistant repos only)
