@@ -221,13 +221,31 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
       });
 
       client.io.on('disconnect', (reason) => {
-        if (mounted) {
-          setConnected(false);
+        if (!mounted) return;
+        setConnected(false);
 
-          // Auto-reconnect if disconnect was due to server restart (not intentional client disconnect)
-          if (reason === 'io server disconnect' || reason === 'transport close') {
-            // Socket.io will auto-reconnect, we just need to re-authenticate when it does
-          }
+        // Reason matters here. Per socket.io docs:
+        //   - 'io server disconnect' fires when the server explicitly closed
+        //     the socket (e.g. graceful shutdown calling io.close()). The
+        //     client will NOT auto-reconnect — we have to kick it manually.
+        //     This was the bug: tsx watch + production graceful restarts both
+        //     hit this path, and the UI got stuck on "Disconnected" until the
+        //     user clicked retry.
+        //   - 'transport close' / 'transport error' / 'ping timeout' fire on
+        //     network-level drops (container crash, wifi flap, etc.). Socket.io
+        //     handles auto-reconnect for these.
+        // In both auto-reconnect paths we flip connecting=true so the UI shows
+        // "Reconnecting" immediately rather than flashing "Disconnected" for
+        // the gap before the first connect_error fires.
+        if (reason === 'io server disconnect') {
+          setConnecting(true);
+          client?.io.connect();
+        } else if (
+          reason === 'transport close' ||
+          reason === 'transport error' ||
+          reason === 'ping timeout'
+        ) {
+          setConnecting(true);
         }
       });
 

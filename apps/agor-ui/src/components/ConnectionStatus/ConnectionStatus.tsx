@@ -61,8 +61,8 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   }, [connecting, connected]);
 
   // Out of sync: backend was redeployed under us. Supersedes both connected
-  // and disconnected — the user needs to refresh, period. No auto-reload (we
-  // don't want to nuke a half-typed message or modal). Tooltip surfaces the
+  // and disconnected — the user needs to refresh, period. No auto-reload, since
+  // that would nuke a half-typed message or open modal. Tooltip surfaces the
   // actual SHA diff so the user can see *what* changed before reloading.
   if (outOfSync) {
     const tooltipTitle =
