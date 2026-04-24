@@ -151,9 +151,10 @@ function meetsMinimumDuration(task: Task, minDurationSeconds: number): boolean {
 }
 
 /**
- * Check if task status indicates natural completion (not user-stopped)
+ * Check if task status indicates natural completion (not user-stopped).
+ * Exported so subscribers can gate chime logic on the same definition.
  */
-function isNaturalCompletion(status: TaskStatus): boolean {
+export function isNaturalCompletion(status: TaskStatus): boolean {
   return status === 'completed' || status === 'failed';
 }
 

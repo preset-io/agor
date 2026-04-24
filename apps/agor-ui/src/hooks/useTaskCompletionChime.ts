@@ -11,16 +11,17 @@
 import type { AgorClient, Task, User } from '@agor-live/client';
 import { TaskStatus } from '@agor-live/client';
 import { useEffect, useRef } from 'react';
-import { playTaskCompletionChime } from '../utils/audio';
+import { isNaturalCompletion, playTaskCompletionChime } from '../utils/audio';
 import type { FeathersEventHandler } from './index';
 
 export function useTaskCompletionChime(
   client: AgorClient | null,
   user: User | null | undefined
 ): void {
-  // Track last known status per task so we fire the chime exactly once on
-  // RUNNING → COMPLETED/FAILED transitions (patched events can fan out).
-  const lastStatusRef = useRef<Map<string, Task['status']>>(new Map());
+  // Track task IDs currently in RUNNING state so we fire exactly once on the
+  // RUNNING → terminal transition. Only RUNNING entries are kept, so the set
+  // is bounded by concurrent in-flight tasks rather than lifetime tasks.
+  const runningTaskIdsRef = useRef<Set<string>>(new Set());
 
   // Keep audio prefs in a ref so the subscription effect doesn't tear down on
   // every preference change (e.g. while the user is tweaking the slider).
@@ -36,21 +37,22 @@ export function useTaskCompletionChime(
 
     const handleTaskChange = (task: Task) => {
       if (!task?.task_id) return;
+      const running = runningTaskIdsRef.current;
 
-      const prev = lastStatusRef.current.get(task.task_id);
-      lastStatusRef.current.set(task.task_id, task.status);
+      if (task.status === TaskStatus.RUNNING) {
+        running.add(task.task_id);
+        return;
+      }
 
-      const wasRunning = prev === TaskStatus.RUNNING;
-      const isNowDone = task.status === TaskStatus.COMPLETED || task.status === TaskStatus.FAILED;
-
-      if (wasRunning && isNowDone) {
+      const wasRunning = running.delete(task.task_id);
+      if (wasRunning && isNaturalCompletion(task.status)) {
         void playTaskCompletionChime(task, audioPrefsRef.current);
       }
     };
 
     const handleTaskRemoved = (task: Task) => {
       if (task?.task_id) {
-        lastStatusRef.current.delete(task.task_id);
+        runningTaskIdsRef.current.delete(task.task_id);
       }
     };
 
@@ -64,7 +66,7 @@ export function useTaskCompletionChime(
       tasksService.removeListener('patched', handleTaskChange as FeathersEventHandler);
       tasksService.removeListener('updated', handleTaskChange as FeathersEventHandler);
       tasksService.removeListener('removed', handleTaskRemoved as FeathersEventHandler);
-      lastStatusRef.current.clear();
+      runningTaskIdsRef.current.clear();
     };
   }, [client]);
 }
