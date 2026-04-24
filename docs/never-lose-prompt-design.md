@@ -284,57 +284,119 @@ All alternatives are compatible with the existing long-running executor pattern 
 
 ---
 
-## 5. Recommendation
+## 5. Recommendation (post-review)
 
-**Do Alternative D.** It's the 80% of Max's idea with 20% of the risk, and it incidentally collapses the IDLE/queued code-path asymmetry that exists today.
+**Do Alternative D + the task-centric queue refactor from §6.3.** The review surfaced a deeper structural issue: the current *message*-queue is a misplaced abstraction of what should be a *task* queue. Fixing that in the same change removes the root cause of the IDLE/queued asymmetry, makes never-lose-prompt trivial (prompt lives on `tasks.full_prompt` from moment one), and aligns the code with what the Nov-2025 design doc had originally proposed.
 
 ### Concrete plan
 
-1. **In `apps/agor-daemon/src/register-routes.ts`** (the `POST /sessions/:id/prompt` handler, around line 889):
-   - Wrap task-create and message-create in a single block (ideally a transaction).
-   - Immediately after `tasksService.create`, call `messagesService.create({ type: 'user', role: 'user', task_id, session_id, content: data.prompt, … })`.
-   - Keep emitting the same `messages` events as the executor does today so the UI sees no change in event ordering.
+**A. Make the daemon the sole writer of the initial user-message row.** (Alt D)
 
-2. **Collapse the queued-path** (`register-routes.ts:821` and the drain at `1605`): queued messages already get a real row, but it's deleted and rewritten by the drain path. Change the drain path to *update* the queued row (`status: 'queued' → null/done`, set `index`, etc.) rather than delete + recreate. This removes the delete-and-recreate wart.
+1. In `apps/agor-daemon/src/register-routes.ts:889`, immediately after `tasksService.create`, call `messagesService.create({type:'user', role:'user', task_id, session_id, content: data.prompt, metadata:{source: messageSource}})`. Wrap in a Drizzle transaction *only if* the calls stay co-located (§6.2).
+2. On spawn-failure paths (`register-routes.ts:1036-1058`), additionally synthesize an error `type:'system'` message so the chat surfaces *why* the assistant didn't respond (§6.1).
 
-3. **In the executor SDK handlers** (`packages/executor/src/sdk-handlers/{claude,codex,gemini,copilot}/**`):
-   - At the top of each tool's execute path where `createUserMessage(sessionId, prompt, taskId, …)` is called for the initial prompt, first check `messagesRepo.findByTaskId(taskId)` (or equivalent) for an existing `role:'user'` row. If found: skip. If not: create (backward-compat, and covers the gateway/MCP callback path if any).
-   - Keep `createUserMessage` on hand for the *non-initial* cases (tool results, continuation messages). Only the very first user message per task gets moved.
+**B. Executor changes.**
 
-4. **Tests:**
-   - Unit: `POST /sessions/:id/prompt` idle-path creates task + user-message atomically.
-   - Unit: queued-path produces one row per prompt (no delete-and-recreate).
-   - Integration: kill executor mid-spawn → user message visible in chat + task `FAILED`.
-   - Integration: executor runs to completion → no duplicate user-message row.
+3. Consolidate the four `createUserMessage` implementations into one shared helper on the base handler (§6.6). Add a "skip if task already has a user-message row" check — covers Alt D plus any legacy/backward-compat path.
+4. Delete `createUserMessage` from `gemini-tool.ts`, `codex-tool.ts`, `copilot-tool.ts`; `message-builder.ts` retains a single canonical impl.
 
-5. **Rollout:**
-   - Behind a feature flag (`execution.daemon_writes_user_message`) is probably unnecessary — the change is small and easily revertable — but an env-var kill switch for the first release wouldn't hurt.
+**C. Collapse "queued messages" into "queued tasks".** (§6.3)
 
-### Why not do B (outbox/queue) now
+5. Add `TaskStatus.QUEUED`. Add `tasks.queue_position` (or a `task_queue` join table — pick the one the archived design preferred).
+6. In `POST /sessions/:id/prompt`, when session is not IDLE: create `task` with `status=QUEUED` + `queue_position`; do **not** create a queued `messages` row. User-message row is created when the task transitions to `RUNNING`.
+7. Replace `processNextQueuedMessage` (`register-routes.ts:1545`) with `processNextQueuedTask`. Same trigger points (task-completion hook, auto-process after queue add).
+8. One-time migration: any existing `messages.status='queued'` rows become `tasks.status='queued'` with `full_prompt := messages.content`. Drop `messages.status`, `messages.queue_position`, and related indexes afterward.
+9. UI: "Queued (n)" list in the session drawer reads tasks where `status='queued'`, ordered by `queue_position`. Display `task.description` (already truncated to 120 chars) and `task.full_prompt` on hover.
+10. Orphan sweep in `startup.ts:50-63`: leave `QUEUED` tasks alone — they should survive a restart and drain naturally.
 
-Worth revisiting once we have multi-daemon or multi-worker deployments. Today the daemon is a single process; the return value of the HTTP call already gives the UI the `taskId`, and the safety-net pattern in `executorProcess.on('exit')` plus the `tasks:failed` event covers the executor-crash case end-to-end. Outbox is the right shape for a distributed system, which this isn't yet.
+**D. Tests.**
 
-### What about daemon restart (scenario 8)?
+11. Unit: `POST /sessions/:id/prompt` (idle) creates task + user-message in one go.
+12. Unit: `POST /sessions/:id/prompt` (busy) creates `QUEUED` task, no message row, no legacy queued-message row.
+13. Integration: kill executor mid-spawn → user message *and* system error message both visible in chat + task `FAILED`.
+14. Integration: queue three prompts → all execute in order, one user-message row per task, no duplicates.
+15. Integration: daemon restart with queued tasks → tasks persist, drain correctly on reboot.
+16. Migration test: synthetic DB with queued-message rows → after migration, equivalent queued-task rows exist with identical content.
 
-Alt D does **not** fix this. A daemon restart with an executor in-flight leaves `tasks.RUNNING` orphans. A separate PR should add a startup-time reconciliation pass: *on daemon boot, scan for tasks in `RUNNING/AWAITING_*/STOPPING` whose `session_id` has no active executor process → mark `FAILED` with `error_message: 'daemon restart'`.* This is cheap and complements the never-lose-prompt work.
+**E. Rollout.**
+
+17. The Alt-D portion is revertable via a `config.execution.daemon_writes_user_message` kill switch; the task-queue portion is a schema migration so has a clearer cutover line. Ship as a single PR but call out the migration explicitly in release notes.
+
+### Out of scope (explicit)
+
+- **Outbox / queue-table architecture (Alt B).** Right shape at scale, wrong shape today. Revisit when we have multi-daemon.
+- **Daemon-restart reconciliation.** Already implemented in `startup.ts:50-132` (§6.4); nothing to add.
+- **Per-task callback overrides.** Worth formalizing (§6.5) but parked as a follow-up; bundling here risks scope blowup.
 
 ---
 
-## 6. Open questions for Max
+## 6. Resolved design questions (from review with Max, 2026-04-24)
 
-1. **Task failure message display.** Today, when a task is marked `FAILED` by the exit handler, the error message is set. But does the chat view surface it? I think it doesn't (it only renders `messages`). Should we emit a synthetic "system" message row on executor-spawn failure so the chat shows *why* the assistant didn't respond? (This is orthogonal but relevant to the "don't lose context" goal.)
+### 6.1 Error visibility in the chat view *(resolved: yes, always show)*
 
-2. **Should we atomize the write?** Drizzle supports transactions. Using one around `createTask + createUserMessage` is safer. Preference?
+Confirmed: today when the exit handler marks a task `FAILED` with `error_message`, the chat view does **not** surface it — it only renders `messages` rows. Resolution: **always** create the user-message row *and* synthesize an assistant/system error message when the task fails before producing output. The chat should never silently swallow an error. This becomes part of the spawn-failure path in `register-routes.ts:1036-1058`: after `safePatch(tasks, FAILED)`, also `messagesService.create({type:'system', role:'assistant', content: <rendered error>})`.
 
-3. **Queued-path cleanup scope.** Collapsing the `createQueued → delete → create` to `createQueued → update` is adjacent cleanup. Do as part of this work, or defer? I'd argue "do as part" because otherwise we still have two ways user-message rows get born.
+### 6.2 Atomicity *(resolved: yes if adjacent, no if threaded)*
 
-4. **Daemon-restart reconciliation.** Separate PR, or bundled? Leaning separate, but want confirmation.
+Wrap `createTask + createUserMessage` in a Drizzle transaction **if and only if** the two calls can stay co-located in the route handler. Don't thread a transaction through helper call stacks or subservices to make this work — the risk/complexity trade favors two back-to-back calls without a transaction over a transaction that's hard to reason about.
 
-5. **Gateway / MCP callback path.** Some queued-message metadata includes `is_agor_callback` (`packages/core/src/db/repositories/messages.ts:244`). Does the callback path currently go through the same `POST /sessions/:id/prompt`? If so, Alt D covers it. If it has its own path, we need to audit.
+### 6.3 Queued-path cleanup *(resolved: bundle — and it's really about TASKS, not messages)* ⭐
 
-6. **Multi-tool feature parity.** The four SDK handlers (`claude`, `codex`, `gemini`, `copilot`) each have their own `createUserMessage`. They should all skip if the row exists. Any tool-specific quirks (e.g., does Codex encode the prompt specially before writing?) that make a uniform "skip if exists" unsafe?
+**This turned out to be the most important reframe in the review.** Max's intuition: "wondering if it's really a queued Task, not message." Investigation confirms it.
 
-7. **`messageSource` metadata.** Today the executor stamps `metadata: { source: messageSource }` on the user message (`message-builder.ts:61`). The daemon-side handler has `messageSource` in scope, so this transfers cleanly — just making sure this isn't load-bearing in a way I missed.
+The archived design (`context/archives/task-queuing-and-message-lineup.md`, Nov 2025) **originally proposed a task-centric queue**:
+
+```ts
+Task.status: 'queued' | 'running' | 'completed' | 'failed'
+Session.task_queue: TaskID[]
+```
+
+That's the correct abstraction — a queued prompt *is* a pending unit of agent work, not a pending chat message. But the shipped implementation (`context/concepts/message-queueing.md`, Nov 2025) deviated and added `Message.status='queued'` + `Message.queue_position` instead. The likely reason was UI convenience (easy to list alongside real messages), but the cost is the two-writers / delete-and-recreate ugliness we're now trying to fix, plus the IDLE/queued asymmetry called out in §1.3.
+
+**Unified model (proposed):**
+
+| Concept | Source of truth |
+|---|---|
+| Prompt text (the thing that must not be lost) | `tasks.full_prompt` (already today) |
+| Scheduled work units per session | `tasks` with `status ∈ {queued, running, …}` |
+| Chat-transcript rendering | `messages` — *derived* from tasks, not the durable store |
+| Queue position | `tasks.queue_position` (or a `task_queue` join table, per the archived design) |
+
+Under this model, the durability guarantee is trivial: **the moment a prompt enters the system it becomes a `tasks` row**. The user-message row is a UI artifact created when the task starts running (or up-front as a convenience, as in Alt D). If the executor crashes, the task is there; no chat-transcript gap either, because a `messages` row pointing to that task can be re-synthesized from `task.full_prompt` as needed.
+
+**Scope proposal:** do this cleanup *here*, in the never-lose-prompt work. If we leave message-queueing as-is, we're forever patching around a leaky abstraction. Concretely:
+
+1. Add `TaskStatus.QUEUED`. Extend orphan cleanup in `startup.ts:52-63` to include it.
+2. In `POST /sessions/:id/prompt`, when session is not IDLE: create `task` with status=`QUEUED` and assign `queue_position` — do **not** create a queued message row.
+3. Rewrite `processNextQueuedMessage` (`register-routes.ts:1545`) as `processNextQueuedTask`: find lowest-position `QUEUED` task for session, transition to `RUNNING`, create user-message row (Alt D), spawn executor.
+4. Migration: one-time pass that converts existing `messages.status='queued'` rows into `tasks.status='queued'` rows with `full_prompt` copied from content. Then drop `messages.status` and `messages.queue_position`.
+5. UI: the "Queued (n)" drawer reads from tasks, not messages. The user can still *see* queued prompts because each has `task.full_prompt` + `task.description`.
+
+This is materially bigger than a pure never-lose-prompt fix — but given the queueing path is the root of the current two-writers problem, and given the archived design already points this direction, bundling feels right.
+
+### 6.4 Daemon-restart reconciliation *(resolved: already works)*
+
+Verified at `apps/agor-daemon/src/startup.ts:50-132`. On boot, `tasksService.getOrphaned()` finds tasks in `RUNNING/STOPPING/AWAITING_PERMISSION` and transitions them to `STOPPED`; sessions with active statuses are repaired to `IDLE`. **No action needed.** Striking this from the plan. If we add `TaskStatus.QUEUED` per §6.3, we should intentionally *not* include it in the orphan sweep (a queued task should survive a restart and drain when the daemon comes back up).
+
+### 6.5 Callbacks — session-level or task-level? *(needs formalization)*
+
+Callbacks today (`context/explorations/parent-session-callbacks.md`) are stored as `callback_config` on the **session** row (per-subsession-creator config), but fire on each child-**task** terminal status, delivering a `system/is_agor_callback` message via the parent's queue. So the current model is: *session configures callback policy, each task-completion triggers a delivery*.
+
+Max's observation: "both a session and a task could potentially have their own callback scheme (session creator and/or Task creator)." This is correct and latent today. A sensible formalization:
+
+- **Session-level callback config** (`session.callback_config`) — default behavior for *all* tasks spawned under this session (already exists).
+- **Task-level callback override** (`task.callback_config`, nullable) — per-prompt override, e.g., "when this specific task finishes, notify parent; ignore session-level default". Would support fire-once semantics natively.
+- Precedence: task > session.
+
+Not required for never-lose-prompt, but worth landing at the same time as §6.3 since we're already modifying task-centric plumbing. Parking as a distinct follow-up to avoid scope blowup.
+
+### 6.6 Multi-tool `createUserMessage` divergence *(resolved: consolidate)*
+
+Confirmed: `gemini-tool.ts:265-287`, `codex-tool.ts:559-581`, and `copilot-tool.ts:328-...` have **byte-for-byte identical** `createUserMessage` implementations to the one in `packages/executor/src/sdk-handlers/claude/message-builder.ts:43-66`. No tool-specific quirks — pure copy-paste debt. Resolution: move the shared `createUserMessage` to the base handler (likely `packages/executor/src/sdk-handlers/base.ts` or `base-executor.ts`), delete the three copies, and implement the "skip if task already has a user-message row" check once in one place.
+
+### 6.7 `metadata.source` *(resolved: it does apply to user messages; carries cleanly)*
+
+Per `packages/core/src/types/message.ts:236-265`, `metadata` is a general field on every message. The `source: 'gateway' | 'agor'` field is specifically documented as "where the message originated" — so yes, it legitimately lives on user-message rows (e.g., to distinguish a prompt that came in from Slack via the gateway vs. one typed in the Agor UI). `messageSource` is already in the route handler's scope (`register-routes.ts:1018` passes it into the payload; it comes in on the request body), so stamping `metadata.source` on the daemon side is a literal one-liner. Max's instinct that "metadata is mostly for tool calls" is partly right — most *fields* there (`model`, `tokens`, `parent_id`) are assistant-oriented — but `source` is the one that's user-oriented and we need to preserve it.
 
 ---
 
