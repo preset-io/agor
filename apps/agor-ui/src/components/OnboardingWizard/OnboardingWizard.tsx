@@ -406,7 +406,9 @@ export function OnboardingWizard({
     const normalizedInput = repoUrl ? normalizeRepoUrl(repoUrl) : '';
     for (const [id, repo] of repoById) {
       if (
-        (normalizedInput && repo.remote_url && normalizeRepoUrl(repo.remote_url) === normalizedInput) ||
+        (normalizedInput &&
+          repo.remote_url &&
+          normalizeRepoUrl(repo.remote_url) === normalizedInput) ||
         (repoSlug && repo.slug === repoSlug) ||
         (localRepoPath && repo.local_path === localRepoPath)
       ) {
