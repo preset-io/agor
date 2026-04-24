@@ -325,6 +325,23 @@ export interface AgorExecutionSettings {
   /** Sync web passwords to Unix user passwords (default: true). When enabled, passwords are synced on user creation/update. */
   sync_unix_passwords?: boolean;
 
+  /**
+   * When true (default), the daemon writes the initial user-message row inside
+   * `POST /sessions/:id/prompt`, immediately after the task is created. This
+   * guarantees the chat transcript reflects what the user typed even if the
+   * executor crashes during startup ("never lose a prompt").
+   *
+   * Set to false to revert to the legacy behavior where the executor is the
+   * sole writer of the user-message row. The legacy behavior is racy: any
+   * crash before the executor connects back via Feathers leaves the prompt
+   * visible only on `tasks.full_prompt`, not in the chat transcript.
+   *
+   * Kill switch only — intended for emergency rollback. The executor's
+   * `createUserMessage` path always honors a "skip if user-message row already
+   * exists for this task" guard, so toggling this flag is safe at runtime.
+   */
+  daemon_writes_user_message?: boolean;
+
   /** Permission request timeout in ms (default: 600000 = 10 minutes). When a permission request is not resolved within this time, the agent is notified and can continue. */
   permission_timeout_ms?: number;
 

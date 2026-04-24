@@ -908,6 +908,44 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           params
         );
 
+        // "Never lose a prompt" — daemon writes the initial user-message row
+        // synchronously, before the executor is spawned. Without this, any crash
+        // during executor startup (spawn ENOENT, SDK init error, Feathers connect
+        // failure, etc.) leaves the chat transcript with no record of what the
+        // user typed, even though `tasks.full_prompt` still has the text.
+        //
+        // Two writes (task + message) intentionally NOT wrapped in a single
+        // transaction: the design doc resolved this as "atomic only if calls
+        // stay co-located, don't thread a tx through helper call stacks."
+        // Threading a transaction through `tasksService.create` (which has
+        // hooks that patch sessions) would be invasive; ordering the writes
+        // back-to-back gives us the same practical durability.
+        if (config.execution?.daemon_writes_user_message !== false) {
+          try {
+            const userMessage: Message = {
+              message_id: generateId() as UUID,
+              session_id: id as SessionID,
+              type: 'user',
+              role: 'user' as Message['role'],
+              index: messageStartIndex,
+              timestamp: startTimestamp,
+              content_preview: data.prompt.substring(0, 200),
+              content: data.prompt,
+              task_id: task.task_id,
+              metadata: messageSource ? { source: messageSource } : undefined,
+            };
+            await app.service('messages').create(userMessage, params);
+          } catch (msgErr) {
+            // Log but don't fail the prompt: the executor still has a fallback
+            // `createUserMessage` path (with skip-if-exists guard) that will
+            // write the row when it connects.
+            console.warn(
+              `⚠️  [Daemon] Failed to write initial user-message row for task ${task.task_id.substring(0, 8)} (executor will retry):`,
+              msgErr
+            );
+          }
+        }
+
         await app.service('sessions').patch(
           id,
           {
@@ -1044,6 +1082,34 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               'Task',
               params
             );
+
+            // Synthesize a system message in the chat transcript so the user
+            // sees *why* the assistant didn't respond. Without this, the chat
+            // would render only the user's prompt followed by silence — the
+            // task list shows "FAILED" but the conversation looks broken.
+            try {
+              const sysIndex = messageStartIndex + 1;
+              const errorContent = `⚠️ The agent failed to start.\n\n${errorMessage}`;
+              const sysMessage: Message = {
+                message_id: generateId() as UUID,
+                session_id: id as SessionID,
+                type: 'system',
+                role: 'assistant' as Message['role'],
+                index: sysIndex,
+                timestamp: new Date().toISOString(),
+                content_preview: errorContent.substring(0, 200),
+                content: errorContent,
+                task_id: task.task_id,
+                metadata: { is_meta: true },
+              };
+              await app.service('messages').create(sysMessage, params);
+            } catch (sysErr) {
+              console.warn(
+                '[Daemon] Failed to write system error message after spawn failure:',
+                sysErr
+              );
+            }
+
             // Surface the failure to subscribed clients so the UI can show
             // a toast / inline error instead of letting the session sit idle
             // with a ghost task.
