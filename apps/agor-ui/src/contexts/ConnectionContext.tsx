@@ -5,20 +5,27 @@ import { createContext, useContext } from 'react';
  *
  * Prevents queued actions from flooding the daemon when reconnecting.
  *
- * `outOfSync` is set by useServerVersion when the daemon's build SHA changes
- * mid-session (e.g. after a deploy). It supersedes connected/disconnected in
- * the ConnectionStatus tag — the user is asked to refresh, period.
+ * `outOfSync`, `capturedSha`, and `currentSha` are populated by
+ * useServerVersion in App.tsx and shared with any consumer that needs the
+ * version-drift signal — the ConnectionStatus tag (banner) and the AboutTab
+ * (debug rows). Provider-side ownership ensures every consumer sees the same
+ * captured baseline; mounting useServerVersion in two places would give each
+ * its own independent (and usually empty) capture.
  */
 interface ConnectionContextValue {
   connected: boolean;
   connecting: boolean;
   outOfSync: boolean;
+  capturedSha: string | null;
+  currentSha: string | null;
 }
 
 const ConnectionContext = createContext<ConnectionContextValue>({
   connected: false,
   connecting: false,
   outOfSync: false,
+  capturedSha: null,
+  currentSha: null,
 });
 
 export const ConnectionProvider = ConnectionContext.Provider;

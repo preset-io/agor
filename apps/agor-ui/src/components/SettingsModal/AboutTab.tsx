@@ -6,7 +6,8 @@ import type { AgorClient, UnixUserMode } from '@agor-live/client';
 import { Card, Descriptions, Space, Tag, Tooltip, Typography } from 'antd';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { getDaemonUrl } from '../../config/daemon';
-import { isOutOfSync, useServerVersion } from '../../hooks/useServerVersion';
+import { useConnectionState } from '../../contexts/ConnectionContext';
+import { isOutOfSync } from '../../hooks/useServerVersion';
 
 // Lazy load particles
 const ParticleBackground = lazy(() =>
@@ -76,10 +77,9 @@ export const AboutTab: React.FC<AboutTabProps> = ({
   const daemonUrl = getDaemonUrl();
   const [detectionMethod, setDetectionMethod] = useState<string>('');
   const [healthInfo, setHealthInfo] = useState<HealthInfo | null>(null);
-  // SHA captured on first connect for this tab (in-memory; resets on reload).
-  // Compared against the live SHA from /health so the user can confirm whether
-  // their tab is in sync with the daemon — same data the banner uses.
-  const { capturedSha } = useServerVersion(client);
+  // SHA captured at tab-load time (resets on hard reload). Provider-owned in
+  // App.tsx via useServerVersion so this and the banner stay in lockstep.
+  const { capturedSha } = useConnectionState();
 
   useEffect(() => {
     // Determine which detection method was used
