@@ -11,7 +11,16 @@
  * order:
  *   1. AGOR_BUILD_SHA env (CI / Docker --build-arg)
  *   2. git rev-parse --short HEAD
- *   3. 'unknown' (build still succeeds; loadBuildInfo will fall through)
+ *   3. (none) — skip writing the file entirely
+ *
+ * IMPORTANT: when neither env nor git produces a SHA we DO NOT write a
+ * placeholder. loadBuildInfo() treats any non-empty `.build-info` SHA as
+ * authoritative (see build-info.ts:58), so writing 'unknown' would lock the
+ * daemon to a fake concrete SHA that can never match anything else and
+ * would falsely trigger the out-of-sync banner on every redeploy. By not
+ * writing the file, loadBuildInfo's own fallback chain runs at startup —
+ * its own runtime git attempt, then the 'dev' sentinel which disables the
+ * version check entirely. Both are safer than a poisoned baseline.
  *
  * This file is what loadBuildInfo()'s "file" precedence step (#2) reads at
  * daemon startup. The runtime git fallback (#3 in loadBuildInfo) still
@@ -40,13 +49,20 @@ function resolveSha() {
   } catch {
     // Not a git checkout, or git not installed
   }
-  return { sha: 'unknown', source: 'fallback' };
+  return { sha: null, source: 'fallback' };
 }
 
 const { sha, source } = resolveSha();
-const builtAt = process.env.AGOR_BUILT_AT?.trim() || new Date().toISOString();
 
-mkdirSync(distDir, { recursive: true });
-writeFileSync(outPath, `${JSON.stringify({ sha, builtAt })}\n`);
-
-console.log(`  .build-info: sha=${sha} builtAt=${builtAt} (source=${source})`);
+if (sha === null) {
+  // Intentional: see header comment. Better to skip the file than poison
+  // loadBuildInfo()'s file-step with a bogus 'unknown' SHA.
+  console.log(
+    `  .build-info: skipped (no SHA available; loadBuildInfo will fall through to git/dev)`
+  );
+} else {
+  const builtAt = process.env.AGOR_BUILT_AT?.trim() || new Date().toISOString();
+  mkdirSync(distDir, { recursive: true });
+  writeFileSync(outPath, `${JSON.stringify({ sha, builtAt })}\n`);
+  console.log(`  .build-info: sha=${sha} builtAt=${builtAt} (source=${source})`);
+}
