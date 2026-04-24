@@ -51,20 +51,25 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<{
   content: Array<{ type: string; text: string }>;
 }>;
 
-async function registerAndCaptureHandlers(
+/** Cfg captured alongside the handler — includes inputSchema for tests that
+ * exercise Zod validation/coercion (the fake server below bypasses the SDK's
+ * automatic schema parsing). */
+type CapturedTool = { cfg: { inputSchema?: { parse: (v: unknown) => unknown } }; cb: ToolHandler };
+
+async function registerAndCaptureTools(
   ctx: {
     app: unknown;
     userId: string;
     sessionId: string;
   },
   toolNames: string[]
-): Promise<Record<string, ToolHandler>> {
+): Promise<Record<string, CapturedTool>> {
   const { registerSessionTools } = await import('./sessions.js');
-  const captured: Record<string, ToolHandler> = {};
+  const captured: Record<string, CapturedTool> = {};
   const fakeServer = {
-    registerTool: (name: string, _cfg: unknown, cb: ToolHandler) => {
+    registerTool: (name: string, cfg: unknown, cb: ToolHandler) => {
       if (toolNames.includes(name)) {
-        captured[name] = cb;
+        captured[name] = { cfg: cfg as CapturedTool['cfg'], cb };
       }
     },
   } as unknown as McpServer;
@@ -82,6 +87,14 @@ async function registerAndCaptureHandlers(
     if (!captured[name]) throw new Error(`Tool ${name} was not registered`);
   }
   return captured;
+}
+
+async function registerAndCaptureHandlers(
+  ctx: { app: unknown; userId: string; sessionId: string },
+  toolNames: string[]
+): Promise<Record<string, ToolHandler>> {
+  const tools = await registerAndCaptureTools(ctx, toolNames);
+  return Object.fromEntries(Object.entries(tools).map(([name, { cb }]) => [name, cb]));
 }
 
 describe('agor_sessions_create', () => {
@@ -430,6 +443,164 @@ describe('agor_sessions_prompt (subsession mode)', () => {
       model: 'claude-opus-4-6',
       effort: 'max',
       provider: 'anthropic',
+    });
+  });
+});
+
+describe('modelConfig schema (string shorthand coercion)', () => {
+  // The MCP-tool boundary historically required `modelConfig` as a structured
+  // `{ mode, model, effort, provider }` object. Several MCP clients silently
+  // mangle nested objects in tool args, and asking an agent to construct that
+  // shape just to pin a model is hostile UX. We now accept either form and
+  // normalize to the object shape internally.
+  it('coerces a plain string into { model: <string> }', async () => {
+    const tools = await registerAndCaptureTools(
+      { app: {}, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+    const schema = tools.agor_sessions_create.cfg.inputSchema!;
+
+    const parsed = schema.parse({
+      worktreeId: 'wt-1',
+      agenticTool: 'claude-code',
+      modelConfig: 'claude-opus-4-6',
+    }) as Record<string, unknown>;
+
+    expect(parsed.modelConfig).toEqual({ model: 'claude-opus-4-6' });
+  });
+
+  it('passes through the full object form unchanged', async () => {
+    const tools = await registerAndCaptureTools(
+      { app: {}, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+    const schema = tools.agor_sessions_create.cfg.inputSchema!;
+
+    const parsed = schema.parse({
+      worktreeId: 'wt-1',
+      agenticTool: 'claude-code',
+      modelConfig: { mode: 'alias', model: 'claude-sonnet-4-6', effort: 'high' },
+    }) as Record<string, unknown>;
+
+    expect(parsed.modelConfig).toEqual({
+      mode: 'alias',
+      model: 'claude-sonnet-4-6',
+      effort: 'high',
+    });
+  });
+
+  it('rejects an empty string (would otherwise silently fall through to user default)', async () => {
+    const tools = await registerAndCaptureTools(
+      { app: {}, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+    const schema = tools.agor_sessions_create.cfg.inputSchema!;
+
+    expect(() =>
+      schema.parse({
+        worktreeId: 'wt-1',
+        agenticTool: 'claude-code',
+        modelConfig: '',
+      })
+    ).toThrow();
+  });
+
+  it('end-to-end: string modelConfig reaches session.model_config.model', async () => {
+    const sessionCreates: unknown[] = [];
+    const app = makeFakeApp({
+      users: {
+        get: async () => ({
+          user_id: 'user-1',
+          unix_username: 'alice',
+          default_agentic_config: {},
+        }),
+      },
+      worktrees: {
+        get: async () => ({ worktree_id: 'wt-1', path: '/tmp/wt', mcp_server_ids: [] }),
+      },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+      },
+      'session-mcp-servers': { create: async () => ({}) },
+    });
+    vi.doMock('@agor/core/git', () => ({
+      getGitState: async () => 'sha',
+      getCurrentBranch: async () => 'main',
+    }));
+    vi.doMock('@agor/core/types', async () => {
+      const actual = await vi.importActual<Record<string, unknown>>('@agor/core/types');
+      return { ...actual, getDefaultPermissionMode: () => 'acceptEdits' };
+    });
+    vi.doMock('@agor/core/utils/permission-mode-mapper', () => ({
+      mapPermissionMode: (m: string) => m,
+    }));
+
+    const tools = await registerAndCaptureTools(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+    const schema = tools.agor_sessions_create.cfg.inputSchema!;
+
+    // Parse with Zod (string → object), then dispatch to handler
+    const parsed = schema.parse({
+      worktreeId: 'wt-1',
+      agenticTool: 'claude-code',
+      modelConfig: 'claude-opus-4-6',
+    }) as Record<string, unknown>;
+    await tools.agor_sessions_create.cb(parsed);
+
+    expect(sessionCreates).toHaveLength(1);
+    const created = sessionCreates[0] as Record<string, any>;
+    expect(created.model_config.model).toBe('claude-opus-4-6');
+    expect(created.model_config.mode).toBe('alias'); // default applied by resolveModelConfig
+  });
+});
+
+describe('agor_models_list', () => {
+  it('returns model registries grouped by agenticTool', async () => {
+    const { agor_models_list } = await registerAndCaptureHandlers(
+      { app: {}, userId: 'user-1', sessionId: 'sess-1' },
+      ['agor_models_list']
+    );
+
+    const result = await agor_models_list({});
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed['claude-code']).toBeDefined();
+    expect(parsed.codex).toBeDefined();
+    expect(parsed.gemini).toBeDefined();
+
+    expect(parsed['claude-code'].default).toBe('claude-sonnet-4-6');
+    expect(Array.isArray(parsed['claude-code'].models)).toBe(true);
+    expect(parsed['claude-code'].models[0]).toMatchObject({
+      id: expect.any(String),
+      displayName: expect.any(String),
+    });
+
+    // Sanity: the canonical aliases an agent would want to pin should be discoverable
+    const claudeIds = parsed['claude-code'].models.map((m: { id: string }) => m.id);
+    expect(claudeIds).toContain('claude-opus-4-6');
+    expect(claudeIds).toContain('claude-sonnet-4-6');
+  });
+
+  it('filters to a single agenticTool when requested', async () => {
+    const { agor_models_list } = await registerAndCaptureHandlers(
+      { app: {}, userId: 'user-1', sessionId: 'sess-1' },
+      ['agor_models_list']
+    );
+
+    const result = await agor_models_list({ agenticTool: 'codex' });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(Object.keys(parsed)).toEqual(['codex']);
+    expect(parsed.codex.models.length).toBeGreaterThan(0);
+    expect(parsed.codex.models[0]).toMatchObject({
+      id: expect.any(String),
+      displayName: expect.any(String),
+      description: expect.any(String),
     });
   });
 });

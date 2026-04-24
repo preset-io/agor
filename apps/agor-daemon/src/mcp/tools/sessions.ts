@@ -1,5 +1,13 @@
 import { WorktreeRepository, type WorktreeWithZoneAndSessions } from '@agor/core/db';
-import { resolveModelConfigPrecedence } from '@agor/core/models';
+import {
+  AVAILABLE_CLAUDE_MODEL_ALIASES,
+  CODEX_MODEL_METADATA,
+  DEFAULT_CLAUDE_MODEL,
+  DEFAULT_CODEX_MODEL,
+  DEFAULT_GEMINI_MODEL,
+  GEMINI_MODELS,
+  resolveModelConfigPrecedence,
+} from '@agor/core/models';
 import {
   AGENTIC_TOOL_CAPABILITIES,
   type AgenticToolName,
@@ -30,25 +38,46 @@ import { textResult } from '../server.js';
  * `effort`, and `provider` are optional and fall back to sensible defaults.
  * Wired through to `session.model_config` so the executor actually spawns on
  * the requested model (see query-builder.ts).
+ *
+ * Accepts two shapes for MCP-client ergonomics:
+ *   - String shorthand: `"claude-opus-4-6"` → coerced to `{ model: "claude-opus-4-6" }`.
+ *     Most callers just want to pin a model — forcing them to construct the
+ *     full object is hostile UX (and several MCP clients silently drop nested
+ *     objects in tool args, see PR #1056 background).
+ *   - Full object: `{ mode, model, effort, provider }` for callers that need
+ *     to override `mode`/`effort`/`provider`.
+ *
+ * Call `agor_models_list` to discover valid model IDs per agenticTool.
  */
+const modelConfigObjectSchema = z.object({
+  mode: z.enum(['alias', 'exact']).optional().describe("Model selection mode (default: 'alias')"),
+  // .min(1): reject empty-string model explicitly so callers don't silently
+  // fall through to user defaults when they meant to pin a specific model.
+  model: z
+    .string()
+    .min(1)
+    .describe("Model identifier (e.g. 'claude-opus-4-6', 'claude-sonnet-4-6')"),
+  effort: z
+    .enum(['low', 'medium', 'high', 'max'])
+    .optional()
+    .describe('Reasoning effort level (default: high)'),
+  provider: z.string().optional().describe("Provider ID (OpenCode only, e.g. 'anthropic')"),
+});
+
 const modelConfigInputSchema = z
-  .object({
-    mode: z.enum(['alias', 'exact']).optional().describe("Model selection mode (default: 'alias')"),
-    // .min(1): reject empty-string model explicitly so callers don't silently
-    // fall through to user defaults when they meant to pin a specific model.
-    model: z
+  .union([
+    z
       .string()
       .min(1)
-      .describe("Model identifier (e.g. 'claude-opus-4-6', 'claude-sonnet-4-6')"),
-    effort: z
-      .enum(['low', 'medium', 'high', 'max'])
-      .optional()
-      .describe('Reasoning effort level (default: high)'),
-    provider: z.string().optional().describe("Provider ID (OpenCode only, e.g. 'anthropic')"),
-  })
+      .describe(
+        "Shorthand: just the model ID string (e.g. 'claude-opus-4-6'). Equivalent to { model: <id> }."
+      ),
+    modelConfigObjectSchema,
+  ])
   .optional()
+  .transform((val) => (typeof val === 'string' ? { model: val } : val))
   .describe(
-    'Model override for this session. When set, overrides the user default model_config. Threaded through to the spawned agent process so it actually runs on the requested model.'
+    "Model override for this session. Pass either a model ID string (e.g. 'claude-opus-4-6') or a full { mode, model, effort, provider } object. Overrides the user default model_config and is threaded through to the spawned agent process. Call agor_models_list to discover valid model IDs per agenticTool."
   );
 
 export function registerSessionTools(server: McpServer, ctx: McpContext): void {
@@ -643,7 +672,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_create',
     {
       description:
-        'Create a new session in an existing worktree. Use for starting fresh work on a new task in the same codebase (e.g., new feature branch, separate investigation). Unlike spawn, this creates an independent session with no parent-child relationship. MCP servers are inherited from the worktree (if configured) or user defaults, or can be overridden via `mcpServerIds`. Model selection falls back to user defaults and can be overridden via `modelConfig`. Supports optional callbacks to notify the creating session when the new session completes.',
+        'Create a new session in an existing worktree. Use for starting fresh work on a new task in the same codebase (e.g., new feature branch, separate investigation). Unlike spawn, this creates an independent session with no parent-child relationship. MCP servers are inherited from the worktree (if configured) or user defaults, or can be overridden via `mcpServerIds`. Model selection falls back to user defaults and can be overridden via `modelConfig` (accepts either a model ID string like "claude-opus-4-6" or a full {mode, model, effort, provider} object — call `agor_models_list` to discover valid model IDs per agenticTool). Supports optional callbacks to notify the creating session when the new session completes.',
       inputSchema: z.object({
         worktreeId: z.string().describe('Worktree ID where the session will run (required)'),
         agenticTool: z
@@ -1234,6 +1263,80 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         ...(args.reason ? { reason: args.reason } : {}),
         note: stopResult.reason || 'Session stopped successfully.',
       });
+    }
+  );
+
+  // Tool 13: agor_models_list
+  //
+  // Discovery tool so MCP-driven agents can find valid `model` strings without
+  // having to scrape tool descriptions. Sourced from the same in-process model
+  // registries the UI uses (packages/core/src/models/*), so when a new model
+  // ships and the registry is updated, this tool returns it on the very next
+  // call — no MCP-tool-description redeploy needed.
+  //
+  // Gemini and OpenCode aren't included here yet:
+  //   - Gemini's authoritative list is fetched live from the Google API per
+  //     user (fetchGeminiModels), so a static list would lie. The hardcoded
+  //     fallback IS exposed here as a best-effort starter list.
+  //   - OpenCode is a provider+model matrix and doesn't have a single static
+  //     list — it's exposed via the worktree config UI today.
+  server.registerTool(
+    'agor_models_list',
+    {
+      description:
+        'List valid model IDs grouped by agenticTool. Use this to discover what to pass for `modelConfig` (or its string shorthand) in agor_sessions_create / spawn / prompt. Sourced live from the daemon model registry — when new models ship and the registry is updated, this tool returns them on the next call.',
+      annotations: { readOnlyHint: true },
+      inputSchema: z.object({
+        agenticTool: z
+          .enum(['claude-code', 'codex', 'gemini'])
+          .optional()
+          .describe('Filter to a single agentic tool. Omit to return all tools.'),
+      }),
+    },
+    async (args) => {
+      const claudeModels = AVAILABLE_CLAUDE_MODEL_ALIASES.map((m) => ({
+        id: m.id,
+        displayName: m.displayName,
+        description: m.description,
+        family: m.family,
+      }));
+
+      const codexModels = Object.entries(CODEX_MODEL_METADATA).map(([id, meta]) => ({
+        id,
+        displayName: meta.name,
+        description: meta.description,
+      }));
+
+      // Note: Gemini's live list comes from the Google API (per-user API key).
+      // We surface the hardcoded fallback so agents have *something* to pass —
+      // but more recent models may exist on the user's account.
+      const geminiModels = Object.entries(GEMINI_MODELS).map(([id, meta]) => ({
+        id,
+        displayName: meta.name,
+        description: meta.description,
+        useCase: meta.useCase,
+      }));
+
+      const all = {
+        'claude-code': {
+          default: DEFAULT_CLAUDE_MODEL,
+          models: claudeModels,
+        },
+        codex: {
+          default: DEFAULT_CODEX_MODEL,
+          models: codexModels,
+        },
+        gemini: {
+          default: DEFAULT_GEMINI_MODEL,
+          models: geminiModels,
+          note: 'Gemini models are normally fetched live from the Google API per-user. This is the static fallback list — newer models may exist.',
+        },
+      };
+
+      if (args.agenticTool) {
+        return textResult({ [args.agenticTool]: all[args.agenticTool] });
+      }
+      return textResult(all);
     }
   );
 }
