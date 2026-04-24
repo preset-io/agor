@@ -59,7 +59,7 @@ export interface CreateDialogProps {
     slug: string;
     default_branch: string;
   }) => void | Promise<void>;
-  onCreateLocalRepo: (data: { path: string; slug?: string }) => void;
+  onCreateLocalRepo: (data: { path: string; slug?: string }) => void | Promise<void>;
   onCreateAssistant: (result: AssistantTabResult) => void;
 }
 

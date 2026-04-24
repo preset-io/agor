@@ -18,6 +18,7 @@ import type {
   UserPreferences,
   Worktree,
 } from '@agor-live/client';
+import { normalizeRepoUrl } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloudDownloadOutlined,
@@ -180,8 +181,29 @@ const AGENT_LABELS: Record<AgenticToolName, string> = {
   copilot: 'GitHub Copilot',
 };
 
-function normalizeRepoUrl(url: string): string {
-  return url.replace(/\/+$/, '').replace(/\.git$/, '');
+/**
+ * Find a repo in the wizard's in-memory map that matches the user's input.
+ * Used by both the clone-complete auto-advance effect and the board/worktree
+ * safety-net effect — centralised here so the match criteria cannot drift
+ * between the two.
+ */
+function findMatchingRepoId(
+  repoById: Map<string, Repo>,
+  criteria: { remoteUrl?: string; slug?: string; localPath?: string }
+): string | null {
+  const normalizedInput = criteria.remoteUrl ? normalizeRepoUrl(criteria.remoteUrl) : '';
+  for (const [id, repo] of repoById) {
+    if (
+      (normalizedInput &&
+        repo.remote_url &&
+        normalizeRepoUrl(repo.remote_url) === normalizedInput) ||
+      (criteria.slug && repo.slug === criteria.slug) ||
+      (criteria.localPath && repo.local_path === criteria.localPath)
+    ) {
+      return id;
+    }
+  }
+  return null;
 }
 
 const AGENT_KEY_CONSOLES: Record<AgenticToolName, { label: string; url: string } | null> = {
@@ -374,27 +396,21 @@ export function OnboardingWizard({
         return;
       }
     } else if (path === 'own-repo' && (repoUrl || localRepoPath)) {
-      // Normalize URL for comparison (strip trailing .git and slash)
-      const normalizedInput = repoUrl ? normalizeRepoUrl(repoUrl) : '';
-      // Look for user's repo by URL, slug, or local path
-      for (const [id, repo] of repoById) {
-        if (
-          (normalizedInput &&
-            repo.remote_url &&
-            normalizeRepoUrl(repo.remote_url) === normalizedInput) ||
-          (repoSlug && repo.slug === repoSlug) ||
-          (localRepoPath && repo.local_path === localRepoPath)
-        ) {
-          setCreatedRepoId(id);
-          setLoading(false);
-          setError(null);
-          if (cloneTimeoutRef.current) {
-            clearTimeout(cloneTimeoutRef.current);
-            cloneTimeoutRef.current = null;
-          }
-          setCurrentStep('board');
-          return;
+      const matchId = findMatchingRepoId(repoById, {
+        remoteUrl: repoUrl,
+        slug: repoSlug,
+        localPath: localRepoPath,
+      });
+      if (matchId) {
+        setCreatedRepoId(matchId);
+        setLoading(false);
+        setError(null);
+        if (cloneTimeoutRef.current) {
+          clearTimeout(cloneTimeoutRef.current);
+          cloneTimeoutRef.current = null;
         }
+        setCurrentStep('board');
+        return;
       }
     }
   }, [currentStep, loading, path, repoById, repoUrl, repoSlug, localRepoPath]);
@@ -402,19 +418,14 @@ export function OnboardingWizard({
   // ─── Safety net: ensure createdRepoId is set when reaching board/worktree ──
   useEffect(() => {
     if (createdRepoId || (currentStep !== 'board' && currentStep !== 'worktree')) return;
-    // Try to find the repo by URL, slug, or local path
-    const normalizedInput = repoUrl ? normalizeRepoUrl(repoUrl) : '';
-    for (const [id, repo] of repoById) {
-      if (
-        (normalizedInput &&
-          repo.remote_url &&
-          normalizeRepoUrl(repo.remote_url) === normalizedInput) ||
-        (repoSlug && repo.slug === repoSlug) ||
-        (localRepoPath && repo.local_path === localRepoPath)
-      ) {
-        setCreatedRepoId(id);
-        return;
-      }
+    const matchId = findMatchingRepoId(repoById, {
+      remoteUrl: repoUrl,
+      slug: repoSlug,
+      localPath: localRepoPath,
+    });
+    if (matchId) {
+      setCreatedRepoId(matchId);
+      return;
     }
     // For assistant path, find framework repo
     if (path === 'assistant') {

@@ -73,8 +73,12 @@ export interface SettingsModalProps {
   onDeleteBoard?: (boardId: string) => void;
   onArchiveBoard?: (boardId: string) => void;
   onUnarchiveBoard?: (boardId: string) => void;
-  onCreateRepo?: (data: { url: string; slug: string; default_branch: string }) => void;
-  onCreateLocalRepo?: (data: { path: string; slug?: string }) => void;
+  onCreateRepo?: (data: {
+    url: string;
+    slug: string;
+    default_branch: string;
+  }) => void | Promise<void>;
+  onCreateLocalRepo?: (data: { path: string; slug?: string }) => void | Promise<void>;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onDeleteRepo?: (repoId: string, cleanup: boolean) => void;
   onArchiveOrDeleteWorktree?: (

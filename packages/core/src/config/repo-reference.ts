@@ -120,6 +120,25 @@ export function isValidSlug(slug: string): boolean {
 }
 
 /**
+ * Normalize a repo URL for comparison.
+ *
+ * Strips trailing slash(es) and a trailing `.git` suffix so that
+ * `https://github.com/foo/bar.git`, `https://github.com/foo/bar/`, and
+ * `https://github.com/foo/bar` all compare equal. Intended for equality
+ * checks between user-entered URLs and URLs already stored on a cloned
+ * repo — NOT a full URL parser.
+ *
+ * Shared canonical form so UI and daemon cannot drift.
+ *
+ * @example
+ * normalizeRepoUrl('https://github.com/preset-io/agor.git/')
+ * // => 'https://github.com/preset-io/agor'
+ */
+export function normalizeRepoUrl(url: string): string {
+  return url.replace(/\/+$/, '').replace(/\.git$/, '');
+}
+
+/**
  * Validate git URL format
  *
  * @param url - Git URL to validate

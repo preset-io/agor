@@ -17,6 +17,7 @@ import {
   isValidGitUrl,
   isValidSlug,
   isWorktreeRbacEnabled,
+  normalizeRepoUrl,
   PAGINATION,
   parseAgorYml,
   resolveUserEnvironment,
@@ -151,9 +152,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // to fall through to derivation rather than be treated as "explicit".
     let slug = data.slug || data.name;
     if (!slug) {
-      // Strip trailing slashes (`/+`) before delegating so we match the UI's
-      // normalizeRepoUrl behaviour; extractSlugFromUrl already handles `.git`.
-      slug = extractSlugFromUrl(data.url.replace(/\/+$/, ''));
+      // Normalize URL (strip trailing slashes and `.git`) using the shared
+      // canonical form, so UI and daemon cannot drift.
+      slug = extractSlugFromUrl(normalizeRepoUrl(data.url));
     }
     if (!slug || !isValidSlug(slug)) {
       throw new Error('Could not derive a valid slug from URL. Please provide a slug.');

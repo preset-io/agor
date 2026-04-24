@@ -22,7 +22,11 @@ export interface AssistantTabProps {
   boardById: Map<string, Board>;
   onValidityChange: (valid: boolean) => void;
   formRef: React.MutableRefObject<(() => Promise<AssistantTabResult | null>) | null>;
-  onCreateRepo?: (data: { url: string; slug: string; default_branch: string }) => void;
+  onCreateRepo?: (data: {
+    url: string;
+    slug: string;
+    default_branch: string;
+  }) => void | Promise<void>;
 }
 
 export const AssistantTab: React.FC<AssistantTabProps> = ({

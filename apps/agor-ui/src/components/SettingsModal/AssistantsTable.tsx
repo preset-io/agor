@@ -44,7 +44,11 @@ interface AssistantsTableProps {
     }
   ) => Promise<Worktree | null>;
   onUpdateWorktree?: (worktreeId: string, updates: WorktreeUpdate) => void;
-  onCreateRepo?: (data: { url: string; slug: string; default_branch: string }) => void;
+  onCreateRepo?: (data: {
+    url: string;
+    slug: string;
+    default_branch: string;
+  }) => void | Promise<void>;
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
 }
