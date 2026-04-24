@@ -351,7 +351,7 @@ export const App: React.FC<AppProps> = ({
 
   // Play chime when tasks transition from RUNNING → COMPLETED/FAILED.
   // Subscribed globally so it fires regardless of which session panel is open.
-  useTaskCompletionChime(client, user);
+  useTaskCompletionChime(client, user?.preferences?.audio);
 
   // Programmatically collapse/expand the comments panel when toggle state changes
   useEffect(() => {

@@ -16,6 +16,15 @@ export const TaskStatus = {
 
 export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
 
+/**
+ * A task reached a terminal state *on its own* (finished or hit an error),
+ * as opposed to being user-stopped/timed-out/cancelled. Used e.g. to gate
+ * completion notifications that should only fire on natural finishes.
+ */
+export function isNaturalCompletion(status: TaskStatus): boolean {
+  return status === TaskStatus.COMPLETED || status === TaskStatus.FAILED;
+}
+
 export interface Task {
   /** Unique task identifier (UUIDv7) */
   task_id: TaskID;

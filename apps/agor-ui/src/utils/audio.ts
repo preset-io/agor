@@ -1,5 +1,6 @@
 // src/utils/audio.ts
-import type { AudioPreferences, ChimeSound, Task, TaskStatus } from '@agor-live/client';
+import type { AudioPreferences, ChimeSound, Task } from '@agor-live/client';
+import { isNaturalCompletion } from '@agor-live/client';
 
 /**
  * Map of chime sound names to their filenames in public/sounds/
@@ -148,14 +149,6 @@ function meetsMinimumDuration(task: Task, minDurationSeconds: number): boolean {
   // If we can't determine duration, allow it to play (optimistic approach)
   // The user set up audio notifications, so they probably want to hear them
   return true;
-}
-
-/**
- * Check if task status indicates natural completion (not user-stopped).
- * Exported so subscribers can gate chime logic on the same definition.
- */
-export function isNaturalCompletion(status: TaskStatus): boolean {
-  return status === 'completed' || status === 'failed';
 }
 
 /**

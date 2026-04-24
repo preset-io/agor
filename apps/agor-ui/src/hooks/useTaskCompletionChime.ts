@@ -8,15 +8,15 @@
  * mounted.
  */
 
-import type { AgorClient, Task, User } from '@agor-live/client';
-import { TaskStatus } from '@agor-live/client';
+import type { AgorClient, AudioPreferences, Task } from '@agor-live/client';
+import { isNaturalCompletion, TaskStatus } from '@agor-live/client';
 import { useEffect, useRef } from 'react';
-import { isNaturalCompletion, playTaskCompletionChime } from '../utils/audio';
+import { playTaskCompletionChime } from '../utils/audio';
 import type { FeathersEventHandler } from './index';
 
 export function useTaskCompletionChime(
   client: AgorClient | null,
-  user: User | null | undefined
+  audioPreferences: AudioPreferences | undefined
 ): void {
   // Track task IDs currently in RUNNING state so we fire exactly once on the
   // RUNNING → terminal transition. Only RUNNING entries are kept, so the set
@@ -25,19 +25,20 @@ export function useTaskCompletionChime(
 
   // Keep audio prefs in a ref so the subscription effect doesn't tear down on
   // every preference change (e.g. while the user is tweaking the slider).
-  const audioPrefsRef = useRef(user?.preferences?.audio);
+  const audioPrefsRef = useRef(audioPreferences);
   useEffect(() => {
-    audioPrefsRef.current = user?.preferences?.audio;
-  }, [user?.preferences?.audio]);
+    audioPrefsRef.current = audioPreferences;
+  }, [audioPreferences]);
 
   useEffect(() => {
     if (!client) return;
 
     const tasksService = client.service('tasks');
+    const running = runningTaskIdsRef.current;
+    let disposed = false;
 
     const handleTaskChange = (task: Task) => {
       if (!task?.task_id) return;
-      const running = runningTaskIdsRef.current;
 
       if (task.status === TaskStatus.RUNNING) {
         running.add(task.task_id);
@@ -52,7 +53,7 @@ export function useTaskCompletionChime(
 
     const handleTaskRemoved = (task: Task) => {
       if (task?.task_id) {
-        runningTaskIdsRef.current.delete(task.task_id);
+        running.delete(task.task_id);
       }
     };
 
@@ -61,12 +62,33 @@ export function useTaskCompletionChime(
     tasksService.on('updated', handleTaskChange as FeathersEventHandler);
     tasksService.on('removed', handleTaskRemoved as FeathersEventHandler);
 
+    // Seed the set with tasks that were already RUNNING when the hook mounted
+    // (e.g. after a page reload or reconnect). Without this, a subsequent
+    // transition to COMPLETED/FAILED would find no prior membership and skip
+    // the chime. Subscribe-first-then-fetch ordering means any transition
+    // that lands during the fetch is still handled by the live handler; at
+    // worst we add a stale ID for a task that has already finished, and the
+    // set gets one extra entry that never triggers a chime.
+    tasksService
+      .findAll({ query: { status: TaskStatus.RUNNING } })
+      .then((tasks: Task[]) => {
+        if (disposed) return;
+        for (const task of tasks) {
+          if (task?.task_id) running.add(task.task_id);
+        }
+      })
+      .catch(() => {
+        // Non-fatal: if the initial fetch fails we just miss chimes for
+        // tasks that were already running. Live events still work.
+      });
+
     return () => {
+      disposed = true;
       tasksService.removeListener('created', handleTaskChange as FeathersEventHandler);
       tasksService.removeListener('patched', handleTaskChange as FeathersEventHandler);
       tasksService.removeListener('updated', handleTaskChange as FeathersEventHandler);
       tasksService.removeListener('removed', handleTaskRemoved as FeathersEventHandler);
-      runningTaskIdsRef.current.clear();
+      running.clear();
     };
   }, [client]);
 }
