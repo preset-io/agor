@@ -141,6 +141,14 @@ services:
       # Instance identification (optional - displayed in UI navbar)
       - INSTANCE_LABEL=${INSTANCE_LABEL:-}
 
+      # Version-sync banner: SHA captured on the host (where git can resolve
+      # the worktree's gitdir) and forwarded into the container. Without this,
+      # loadBuildInfo() falls all the way through to 'dev' because the
+      # in-container git can't follow the /app/.git pointer to the host-side
+      # worktree metadata. See .agor.yml start commands for the capture.
+      - AGOR_BUILD_SHA=${AGOR_BUILD_SHA:-}
+      - AGOR_BUILT_AT=${AGOR_BUILT_AT:-}
+
     depends_on:
       postgres:
         condition: service_healthy
