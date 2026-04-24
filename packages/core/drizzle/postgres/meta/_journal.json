@@ -197,6 +197,13 @@
       "when": 1777000000000,
       "tag": "0027_mcp_oauth_token_refresh",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1777200000000,
+      "tag": "0028_queued_tasks",
+      "breakpoints": true
     }
   ]
 }

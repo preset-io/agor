@@ -33,6 +33,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       task_id: row.task_id as UUID,
       session_id: row.session_id as UUID,
       status: row.status,
+      queue_position: row.queue_position ?? undefined,
       created_at: new Date(row.created_at).toISOString(),
       completed_at: row.completed_at ? new Date(row.completed_at).toISOString() : undefined,
       created_by: row.created_by,
@@ -64,6 +65,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       created_at: new Date(now), // Always use server timestamp, ignore client-provided value
       completed_at: task.completed_at ? new Date(task.completed_at) : undefined,
       status: task.status ?? TaskStatus.CREATED,
+      queue_position: task.queue_position ?? null,
       created_by: task.created_by ?? 'anonymous',
       session_md5: task.session_md5 ?? null,
       data: {
@@ -85,6 +87,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         computed_context_window: task.computed_context_window, // Cumulative context window (computed by tool.computeContextWindow())
         report: task.report,
         permission_request: task.permission_request, // Permission state for UI approval flow
+        metadata: task.metadata, // Generic metadata bag (e.g., is_agor_callback, source)
       },
     };
   }
@@ -329,6 +332,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         await update(txAsDb(tx), tasks)
           .set({
             status: insertData.status,
+            queue_position: insertData.queue_position,
             completed_at: insertData.completed_at,
             session_md5: insertData.session_md5,
             data: insertData.data,
@@ -366,6 +370,81 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       if (error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(
         `Failed to delete task: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Create a QUEUED task with auto-assigned queue_position.
+   *
+   * Queue position is `max(queue_position) + 1` over existing QUEUED tasks for
+   * the session, or 1 if none exist. The lowest queue_position drains first.
+   *
+   * Used when a user prompt arrives while the session is busy — instead of
+   * creating a queued *message*, we create a QUEUED *task*. When the running
+   * task finishes, the drainer picks the lowest queue_position and transitions
+   * it to RUNNING via spawnTaskExecutor (which writes the user-message row).
+   */
+  async createQueued(data: Partial<Task>): Promise<Task> {
+    if (!data.session_id) {
+      throw new RepositoryError('session_id is required when queuing a task');
+    }
+
+    // Compute next queue position for this session
+    const positionRow = await select(this.db, {
+      maxPos: sql<number | null>`max(${tasks.queue_position})`,
+    })
+      .from(tasks)
+      .where(sql`${tasks.session_id} = ${data.session_id} AND ${tasks.status} = 'queued'`)
+      .one();
+
+    const nextPosition = (positionRow?.maxPos ?? 0) + 1;
+
+    return this.create({
+      ...data,
+      status: TaskStatus.QUEUED,
+      queue_position: nextPosition,
+    });
+  }
+
+  /**
+   * Find all QUEUED tasks for a session, ordered by queue_position ascending.
+   */
+  async findQueued(sessionId: string): Promise<Task[]> {
+    try {
+      const rows = await select(this.db)
+        .from(tasks)
+        .where(sql`${tasks.session_id} = ${sessionId} AND ${tasks.status} = 'queued'`)
+        .orderBy(tasks.queue_position)
+        .all();
+
+      return rows.map((row: TaskRow) => this.rowToTask(row));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find queued tasks: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Return the next QUEUED task to drain (lowest queue_position) for a session,
+   * or null if none.
+   */
+  async getNextQueued(sessionId: string): Promise<Task | null> {
+    try {
+      const row = await select(this.db)
+        .from(tasks)
+        .where(sql`${tasks.session_id} = ${sessionId} AND ${tasks.status} = 'queued'`)
+        .orderBy(tasks.queue_position)
+        .limit(1)
+        .one();
+
+      return row ? this.rowToTask(row) : null;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to get next queued task: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

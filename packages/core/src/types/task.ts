@@ -3,6 +3,7 @@ import type { SessionID, TaskID } from './id';
 import type { ReportPath, ReportTemplate } from './report';
 
 export const TaskStatus = {
+  QUEUED: 'queued', // Task created but not yet running (waiting for executor to drain queue)
   CREATED: 'created',
   RUNNING: 'running',
   STOPPING: 'stopping', // Stop requested, waiting for SDK to halt
@@ -42,6 +43,25 @@ export interface Task {
   description?: string;
 
   status: TaskStatus;
+
+  /**
+   * Queue position when status is QUEUED. Lower values drain first.
+   * Undefined for non-queued tasks.
+   */
+  queue_position?: number;
+
+  /**
+   * Generic metadata bag, symmetric with Message.metadata.
+   * Examples:
+   *   - is_agor_callback: true (queued callback from child session)
+   *   - source: 'agor' | 'user' | ...
+   *   - child_session_id, child_task_id, queued_by_user_id (for callbacks)
+   *
+   * When a QUEUED task transitions to RUNNING and a user-message row is
+   * written, `is_agor_callback` and `source` are copied onto the new
+   * message.metadata so the UI styling for callbacks is preserved.
+   */
+  metadata?: Record<string, unknown>;
 
   // Message range
   message_range: {

@@ -196,6 +196,7 @@ export const tasks = sqliteTable(
     completed_at: t.timestamp('completed_at'),
     status: text('status', {
       enum: [
+        'queued',
         'created',
         'running',
         'stopping',
@@ -207,6 +208,9 @@ export const tasks = sqliteTable(
         'stopped',
       ],
     }).notNull(),
+
+    // Queue position (lower drains first); only populated for status='queued'
+    queue_position: integer('queue_position'),
 
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull().default('anonymous'),
@@ -245,6 +249,9 @@ export const tasks = sqliteTable(
 
         report?: Task['report'];
         permission_request?: Task['permission_request'];
+
+        // Generic metadata (e.g., is_agor_callback, source, child_session_id)
+        metadata?: Task['metadata'];
       }>()
       .notNull(),
   },
@@ -252,6 +259,7 @@ export const tasks = sqliteTable(
     sessionIdx: index('tasks_session_idx').on(table.session_id),
     statusIdx: index('tasks_status_idx').on(table.status),
     createdIdx: index('tasks_created_idx').on(table.created_at),
+    queueIdx: index('tasks_queue_idx').on(table.session_id, table.status, table.queue_position),
   })
 );
 
