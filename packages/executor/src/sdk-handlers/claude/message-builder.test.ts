@@ -298,6 +298,107 @@ describe('createUserMessage', () => {
     expect(result.content).toBe(multilinePrompt);
     expect(result.content_preview).toBe(multilinePrompt);
   });
+
+  describe('skip-if-exists guard (Alt D — never-lose-prompt)', () => {
+    it('should skip create and return existing user message when one exists for taskId', async () => {
+      const messagesService = createMockMessagesService();
+      const sessionId = generateId() as SessionID;
+      const taskId = generateId() as TaskID;
+      const existingId = generateId() as MessageID;
+
+      const existingMessages = [
+        {
+          message_id: existingId,
+          session_id: sessionId,
+          type: 'user' as const,
+          role: MessageRole.USER,
+          index: 5,
+          timestamp: '2026-04-24T00:00:00.000Z',
+          content_preview: 'Daemon wrote this',
+          content: 'Daemon wrote this',
+          task_id: taskId,
+        },
+      ];
+
+      const result = await createUserMessage(
+        sessionId,
+        'Executor would re-write this',
+        taskId,
+        99, // would-be next index — should be ignored when skipping
+        messagesService,
+        { existingMessages }
+      );
+
+      // Returned the existing row, not a new insert
+      expect(result.message_id).toBe(existingId);
+      expect(result.index).toBe(5);
+      expect(result.content).toBe('Daemon wrote this');
+      // No second insert happened
+      expect(messagesService.create).not.toHaveBeenCalled();
+    });
+
+    it('should still create when existingMessages has no row for taskId', async () => {
+      const messagesService = createMockMessagesService();
+      const sessionId = generateId() as SessionID;
+      const taskId = generateId() as TaskID;
+      const otherTaskId = generateId() as TaskID;
+
+      const existingMessages = [
+        {
+          message_id: generateId() as MessageID,
+          session_id: sessionId,
+          type: 'user' as const,
+          role: MessageRole.USER,
+          index: 0,
+          timestamp: '2026-04-24T00:00:00.000Z',
+          content_preview: 'Other task',
+          content: 'Other task',
+          task_id: otherTaskId,
+        },
+      ];
+
+      const result = await createUserMessage(sessionId, 'New prompt', taskId, 1, messagesService, {
+        existingMessages,
+      });
+
+      expect(result.task_id).toBe(taskId);
+      expect(result.index).toBe(1);
+      expect(result.content).toBe('New prompt');
+      expect(messagesService.create).toHaveBeenCalledWith(result);
+    });
+
+    it('should still create when no taskId is provided (skip guard requires taskId)', async () => {
+      const messagesService = createMockMessagesService();
+      const sessionId = generateId() as SessionID;
+
+      const existingMessages = [
+        {
+          message_id: generateId() as MessageID,
+          session_id: sessionId,
+          type: 'user' as const,
+          role: MessageRole.USER,
+          index: 0,
+          timestamp: '2026-04-24T00:00:00.000Z',
+          content_preview: 'old',
+          content: 'old',
+          task_id: generateId() as TaskID,
+        },
+      ];
+
+      const result = await createUserMessage(
+        sessionId,
+        'No task id',
+        undefined,
+        1,
+        messagesService,
+        { existingMessages }
+      );
+
+      expect(result.task_id).toBeUndefined();
+      expect(result.index).toBe(1);
+      expect(messagesService.create).toHaveBeenCalledWith(result);
+    });
+  });
 });
 
 describe('createUserMessageFromContent', () => {

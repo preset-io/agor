@@ -40,6 +40,7 @@ import type {
   TasksService,
   TasksStreamingService,
 } from '../claude/claude-tool.js';
+import { createUserMessage } from '../claude/message-builder.js';
 import { DEFAULT_CODEX_MODEL } from './models.js';
 import { CodexPromptService } from './prompt-service.js';
 import { extractCodexContextWindowUsage } from './usage.js';
@@ -177,14 +178,17 @@ export class CodexTool implements ITool {
     const existingMessages = await this.messagesRepo.findBySessionId(sessionId);
     let nextIndex = existingMessages.length;
 
-    // Create user message
-    const userMessage = await this.createUserMessage(
+    // Create user message (or reuse the daemon's pre-write — see Alt D in
+    // docs/never-lose-prompt-design.md).
+    const userMessage = await createUserMessage(
       sessionId,
       prompt,
       taskId,
-      nextIndex++,
-      messageSource
+      nextIndex,
+      this.messagesService!,
+      { messageSource, existingMessages }
     );
+    nextIndex = userMessage.index + 1;
 
     // Execute prompt via Codex SDK with streaming
     const assistantMessageIds: MessageID[] = [];
@@ -553,34 +557,6 @@ export class CodexTool implements ITool {
   }
 
   /**
-   * Create user message in database
-   * @private
-   */
-  private async createUserMessage(
-    sessionId: SessionID,
-    prompt: string,
-    taskId: TaskID | undefined,
-    nextIndex: number,
-    messageSource?: MessageSource
-  ): Promise<Message> {
-    const userMessage: Message = {
-      message_id: generateId() as MessageID,
-      session_id: sessionId,
-      type: 'user',
-      role: MessageRole.USER,
-      index: nextIndex,
-      timestamp: new Date().toISOString(),
-      content_preview: prompt.substring(0, 200),
-      content: prompt,
-      task_id: taskId,
-      metadata: messageSource ? { source: messageSource } : undefined,
-    };
-
-    await this.messagesService?.create(userMessage);
-    return userMessage;
-  }
-
-  /**
    * Capture and store Codex thread ID for conversation continuity.
    * Throws if the Codex CLI returned a different thread than the one we asked to resume,
    * which means the original thread file was lost (e.g. container rebuild wiped /tmp).
@@ -697,14 +673,17 @@ export class CodexTool implements ITool {
     const existingMessages = await this.messagesRepo.findBySessionId(sessionId);
     let nextIndex = existingMessages.length;
 
-    // Create user message
-    const userMessage = await this.createUserMessage(
+    // Create user message (or reuse the daemon's pre-write — see Alt D in
+    // docs/never-lose-prompt-design.md).
+    const userMessage = await createUserMessage(
       sessionId,
       prompt,
       taskId,
-      nextIndex++,
-      messageSource
+      nextIndex,
+      this.messagesService!,
+      { messageSource, existingMessages }
     );
+    nextIndex = userMessage.index + 1;
 
     // Execute prompt via Codex SDK
     const assistantMessageIds: MessageID[] = [];

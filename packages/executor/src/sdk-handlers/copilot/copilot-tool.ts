@@ -36,6 +36,7 @@ import {
 } from '../../types.js';
 import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base/index.js';
 import type { MessagesService, SessionsService, TasksService } from '../claude/claude-tool.js';
+import { createUserMessage } from '../claude/message-builder.js';
 import { DEFAULT_COPILOT_MODEL } from './models.js';
 import { CopilotPromptService } from './prompt-service.js';
 
@@ -149,14 +150,17 @@ export class CopilotTool implements ITool {
     const existingMessages = await this.messagesRepo.findBySessionId(sessionId);
     let nextIndex = existingMessages.length;
 
-    // Create user message
-    const userMessage = await this.createUserMessage(
+    // Create user message (or reuse the daemon's pre-write — see Alt D in
+    // docs/never-lose-prompt-design.md).
+    const userMessage = await createUserMessage(
       sessionId,
       prompt,
       taskId,
-      nextIndex++,
-      messageSource
+      nextIndex,
+      this.messagesService!,
+      { messageSource, existingMessages }
     );
+    nextIndex = userMessage.index + 1;
 
     // Execute prompt via Copilot SDK with streaming
     const assistantMessageIds: MessageID[] = [];
@@ -319,34 +323,6 @@ export class CopilotTool implements ITool {
       rawSdkResponse,
       wasStopped,
     };
-  }
-
-  /**
-   * Create user message in database
-   * @private
-   */
-  private async createUserMessage(
-    sessionId: SessionID,
-    prompt: string,
-    taskId: TaskID | undefined,
-    nextIndex: number,
-    messageSource?: MessageSource
-  ): Promise<Message> {
-    const userMessage: Message = {
-      message_id: generateId() as MessageID,
-      session_id: sessionId,
-      type: 'user',
-      role: MessageRole.USER,
-      index: nextIndex,
-      timestamp: new Date().toISOString(),
-      content_preview: prompt.substring(0, 200),
-      content: prompt,
-      task_id: taskId,
-      metadata: messageSource ? { source: messageSource } : undefined,
-    };
-
-    await this.messagesService?.create(userMessage);
-    return userMessage;
   }
 
   /**

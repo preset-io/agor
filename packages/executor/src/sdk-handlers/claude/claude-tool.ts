@@ -310,15 +310,18 @@ export class ClaudeTool implements ITool {
     const existingMessages = await this.messagesRepo.findBySessionId(sessionId);
     let nextIndex = existingMessages.length;
 
-    // Create user message
+    // Create user message (or reuse the daemon's pre-write — see Alt D in
+    // docs/never-lose-prompt-design.md). When the row is reused, advance
+    // nextIndex from the returned message's actual index.
     const userMessage = await createUserMessage(
       sessionId,
       prompt,
       taskId,
-      nextIndex++,
+      nextIndex,
       this.messagesService!,
-      messageSource
+      { messageSource, existingMessages }
     );
+    nextIndex = userMessage.index + 1;
 
     // Execute prompt via Agent SDK with streaming
     const assistantMessageIds: MessageID[] = [];
@@ -995,15 +998,17 @@ export class ClaudeTool implements ITool {
     const existingMessages = await this.messagesRepo.findBySessionId(sessionId);
     let nextIndex = existingMessages.length;
 
-    // Create user message
+    // Create user message (or reuse the daemon's pre-write — see Alt D in
+    // docs/never-lose-prompt-design.md).
     const userMessage = await createUserMessage(
       sessionId,
       prompt,
       taskId,
-      nextIndex++,
+      nextIndex,
       this.messagesService!,
-      messageSource
+      { messageSource, existingMessages }
     );
+    nextIndex = userMessage.index + 1;
 
     // Execute prompt via Agent SDK
     const assistantMessageIds: MessageID[] = [];

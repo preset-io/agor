@@ -38,7 +38,21 @@ export function extractTokenUsage(raw: unknown): TokenUsage | undefined {
 }
 
 /**
- * Create user message in database (from text prompt)
+ * Create user message in database (from text prompt).
+ *
+ * Idempotency (Alt D — "never lose a prompt"): when `options.existingMessages` is
+ * provided AND a user message already exists for this `taskId`, this returns the
+ * pre-existing row WITHOUT inserting. This lets the executor remain a safe
+ * fallback writer even after the daemon adopts the user-message write up-front
+ * inside `POST /sessions/:id/prompt`.
+ *
+ * Callers should always pass `existingMessages` (the result of
+ * `messagesRepo.findBySessionId(sessionId)` they already fetched to compute
+ * `nextIndex`) so the guard can fire. The `nextIndex` argument is still used
+ * for the freshly-created row's `index`; if the guard fires, callers should
+ * recompute their next index from the returned message:
+ *
+ *   nextIndex = userMessage.index + 1;
  */
 export async function createUserMessage(
   sessionId: SessionID,
@@ -46,8 +60,28 @@ export async function createUserMessage(
   taskId: TaskID | undefined,
   nextIndex: number,
   messagesService: MessagesService,
-  messageSource?: MessageSource
+  options?: {
+    messageSource?: MessageSource;
+    /**
+     * Pre-fetched messages for this session. When provided, used to detect a
+     * pre-existing user-message row for `taskId` and skip the insert.
+     */
+    existingMessages?: ReadonlyArray<Message>;
+  }
 ): Promise<Message> {
+  const { messageSource, existingMessages } = options ?? {};
+
+  // Skip-if-exists guard (Alt D): if the daemon already wrote a user-message
+  // row for this task, return it instead of inserting a duplicate.
+  if (taskId && existingMessages) {
+    const existing = existingMessages.find(
+      (m) => m.task_id === taskId && m.type === 'user' && m.role === MessageRole.USER
+    );
+    if (existing) {
+      return existing;
+    }
+  }
+
   const userMessage: Message = {
     message_id: generateId() as MessageID,
     session_id: sessionId,
