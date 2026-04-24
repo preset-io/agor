@@ -1,5 +1,56 @@
-import { describe, expect, it } from 'vitest';
-import { redactCommandForAudit } from './environment-command-spawn.js';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { simpleGit } from 'simple-git';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { captureWorktreeBuildSha, redactCommandForAudit } from './environment-command-spawn.js';
+
+describe('captureWorktreeBuildSha', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-build-sha-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns 7-char short SHA for a valid git repo', async () => {
+    const repoPath = path.join(tmpDir, 'repo');
+    await fs.mkdir(repoPath, { recursive: true });
+    const git = simpleGit(repoPath);
+    await git.init(['--initial-branch=main']);
+    await git.addConfig('user.name', 'Test User');
+    await git.addConfig('user.email', 'test@example.com');
+    await fs.writeFile(path.join(repoPath, 'README.md'), '# Test', 'utf-8');
+    await git.add('README.md');
+    await git.commit('Initial commit');
+
+    const sha = await captureWorktreeBuildSha(repoPath);
+    expect(sha).toMatch(/^[0-9a-f]{7}$/);
+  });
+
+  it('returns undefined for a non-git path', async () => {
+    const sha = await captureWorktreeBuildSha(tmpDir);
+    expect(sha).toBeUndefined();
+  });
+
+  it('returns undefined for a nonexistent path', async () => {
+    const sha = await captureWorktreeBuildSha(path.join(tmpDir, 'does-not-exist'));
+    expect(sha).toBeUndefined();
+  });
+
+  it('returns undefined for a git repo with no commits', async () => {
+    const repoPath = path.join(tmpDir, 'empty-repo');
+    await fs.mkdir(repoPath, { recursive: true });
+    const git = simpleGit(repoPath);
+    await git.init(['--initial-branch=main']);
+
+    const sha = await captureWorktreeBuildSha(repoPath);
+    expect(sha).toBeUndefined();
+  });
+});
 
 describe('redactCommandForAudit', () => {
   it('redacts inline TOKEN= assignments', () => {

@@ -21,12 +21,10 @@ environment:
   variants:
     sqlite:
       description: Single-user dev with SQLite. No RBAC. Fastest to boot.
-      # AGOR_BUILD_SHA is captured here on the HOST (where git works) and
-      # forwarded into the container — git can't run inside the container
-      # because Agor worktrees use a /app/.git file pointing to a host-side
-      # gitdir that isn't bind-mounted. See loadBuildInfo() in agor-daemon.
+      # AGOR_BUILD_SHA / AGOR_BUILT_AT are injected by Agor's
+      # spawnEnvironmentCommand from the host-side worktree gitdir; no need to
+      # capture them here. See packages/core/src/unix/environment-command-spawn.ts.
       start: >-
-        AGOR_BUILD_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo dev)
         DAEMON_PORT={{add 3000 worktree.unique_id}}
         UI_PORT={{add 5000 worktree.unique_id}}
         docker compose -p agor-{{worktree.name}} up -d
@@ -43,7 +41,6 @@ environment:
       # docker-compose.override.yml (UID/GID only) and skips the postgres
       # override. Listing both files explicitly replaces that default.
       start: >-
-        AGOR_BUILD_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo dev)
         DAEMON_PORT={{add 3000 worktree.unique_id}}
         UI_PORT={{add 5000 worktree.unique_id}}
         docker compose
@@ -74,7 +71,6 @@ environment:
         impersonation (each Agor user runs sessions as their own Unix identity).
         Requires the sudoers config shipped under docker/sudoers/.
       start: >-
-        AGOR_BUILD_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo dev)
         DAEMON_PORT={{add 3000 worktree.unique_id}}
         UI_PORT={{add 5000 worktree.unique_id}}
         AGOR_RBAC_ENABLED=true

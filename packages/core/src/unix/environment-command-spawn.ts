@@ -9,11 +9,32 @@ import { type ChildProcess, type SpawnOptions, spawn } from 'node:child_process'
 import { createUserProcessEnvironment } from '../config/index.js';
 import type { Database } from '../db/index.js';
 import { UsersRepository } from '../db/repositories/index.js';
+import { getCurrentSha } from '../git/index.js';
 import type { Worktree } from '../types/index.js';
 import { assertEnvCommandAllowed } from './environment-command-deny-list.js';
 import { buildSpawnArgs } from './run-as-user.js';
 import { attachEnvFileCleanup, prepareImpersonationEnv } from './user-env-file.js';
 import { resolveUnixUserForImpersonation, validateResolvedUnixUser } from './user-manager.js';
+
+/**
+ * Capture the worktree's current HEAD SHA on the host, where git can resolve
+ * the gitdir. Useful for env commands that spawn into containers (docker
+ * compose, kubectl etc.) — those containers usually can't run git themselves
+ * because Agor worktrees use a /app/.git file pointing to a host-only
+ * gitdir. Daemon process here has full host access, so we capture once and
+ * forward via env. Best-effort: returns undefined on any failure (detached
+ * worktree, corrupted .git, etc.). Never blocks env spawning.
+ *
+ * Exported for testability.
+ */
+export async function captureWorktreeBuildSha(worktreePath: string): Promise<string | undefined> {
+  try {
+    const sha = await getCurrentSha(worktreePath);
+    return sha ? sha.slice(0, 7) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Environment command types for logging
@@ -152,9 +173,19 @@ export async function spawnEnvironmentCommand(
     console.log(`${logPrefix} Running as daemon user (mode: ${unixUserMode})`);
   }
 
+  // Capture current HEAD SHA on the host so downstream containers (which
+  // typically can't run git inside themselves — see captureWorktreeBuildSha)
+  // can read AGOR_BUILD_SHA / AGOR_BUILT_AT from their environment. The
+  // version-sync banner is the first consumer; future deploy markers,
+  // notification webhooks, etc. can use it without per-project plumbing.
+  const buildSha = await captureWorktreeBuildSha(worktree.path);
+  const additionalEnv: Record<string, string> | undefined = buildSha
+    ? { AGOR_BUILD_SHA: buildSha, AGOR_BUILT_AT: new Date().toISOString() }
+    : undefined;
+
   // Create clean environment for user process
   // If impersonating, strip HOME/USER/LOGNAME/SHELL so sudo -u can set them properly
-  const env = await createUserProcessEnvironment(worktree.created_by, db, undefined, !!asUser);
+  const env = await createUserProcessEnvironment(worktree.created_by, db, additionalEnv, !!asUser);
 
   // Route secret-looking env vars through an on-disk env file owned by the
   // target user (mode 0600) so user-scoped API keys/tokens never appear in
