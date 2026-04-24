@@ -23,6 +23,7 @@ import type {
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import type { Server, Socket } from 'socket.io';
+import type { BuildInfo } from './build-info.js';
 import type { CorsOrigin } from './cors.js';
 
 /**
@@ -80,6 +81,15 @@ export interface SocketIOOptions {
    * true if omitted.
    */
   webTerminalEnabled?: boolean;
+  /**
+   * Daemon build identity emitted as the `server-info` welcome event on every
+   * (re)connection. UI tabs capture the first value and compare each
+   * subsequent one — a mismatch flips ConnectionStatus into the amber
+   * "out of sync" state. /health carries the same field as a poll fallback.
+   * Optional so unit tests don't have to plumb it; the welcome event is
+   * simply skipped when omitted.
+   */
+  buildInfo?: BuildInfo;
 }
 
 /**
@@ -217,7 +227,7 @@ export function createSocketIOConfig(
   callback: (io: Server) => void;
   getSocketServer: () => Server | null;
 } {
-  const { corsOrigin, jwtSecret, allowAnonymous, credentialsAllowed } = options;
+  const { corsOrigin, jwtSecret, allowAnonymous, credentialsAllowed, buildInfo } = options;
   // Default ON to mirror the daemon-wide default (see register-hooks.ts).
   const webTerminalEnabled = options.webTerminalEnabled !== false;
 
@@ -338,6 +348,18 @@ export function createSocketIOConfig(
       console.log(
         `🔌 Socket.io connection established: ${socket.id} (user: ${user ? user.user_id.substring(0, 8) : 'anonymous'}, total: ${activeConnections})`
       );
+
+      // Welcome event: ship the daemon's build identity so UI tabs can spot
+      // FE/BE drift after a deploy without waiting for the next /health poll.
+      // Emitted BEFORE auth so even login-page tabs (which connect anonymously)
+      // get a baseline SHA on first connect. The UI is the source of truth for
+      // dev-mode short-circuit; we always send what we have.
+      if (buildInfo) {
+        socket.emit('server-info', {
+          buildSha: buildInfo.sha,
+          builtAt: buildInfo.builtAt,
+        });
+      }
 
       // Auto-join per-user room for user-scoped events (OAuth prompts, notifications)
       // Try at connection time (for sockets that authenticate via handshake token)

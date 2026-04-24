@@ -6,6 +6,8 @@
  * Phase 2: Configuration builders (swagger, socketio, database)
  */
 
+// Phase 1: Pure functions
+export { type BuildInfo, isDevSha, loadBuildInfo } from './build-info.js';
 export {
   buildCorsConfig,
   type CorsConfigOptions,
@@ -30,5 +32,4 @@ export {
 } from './socketio.js';
 // Phase 2: Configuration builders
 export { configureSwagger, type SwaggerOptions } from './swagger.js';
-// Phase 1: Pure functions
 export { loadDaemonVersion } from './version.js';

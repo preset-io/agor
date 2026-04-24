@@ -3,16 +3,22 @@ import { createContext, useContext } from 'react';
 /**
  * ConnectionContext - Global connection state for disabling UI during disconnections
  *
- * Prevents queued actions from flooding the daemon when reconnecting
+ * Prevents queued actions from flooding the daemon when reconnecting.
+ *
+ * `outOfSync` is set by useServerVersion when the daemon's build SHA changes
+ * mid-session (e.g. after a deploy). It supersedes connected/disconnected in
+ * the ConnectionStatus tag — the user is asked to refresh, period.
  */
 interface ConnectionContextValue {
   connected: boolean;
   connecting: boolean;
+  outOfSync: boolean;
 }
 
 const ConnectionContext = createContext<ConnectionContextValue>({
   connected: false,
   connecting: false,
+  outOfSync: false,
 });
 
 export const ConnectionProvider = ConnectionContext.Provider;

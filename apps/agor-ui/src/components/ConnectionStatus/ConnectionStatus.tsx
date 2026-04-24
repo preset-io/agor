@@ -1,6 +1,12 @@
-import { CheckCircleOutlined, LoadingOutlined, WarningOutlined } from '@ant-design/icons';
+import {
+  CheckCircleOutlined,
+  LoadingOutlined,
+  ReloadOutlined,
+  WarningOutlined,
+} from '@ant-design/icons';
 import { Space, Tooltip } from 'antd';
 import { useEffect, useState } from 'react';
+import { useConnectionState } from '../../contexts/ConnectionContext';
 import { Tag } from '../Tag';
 
 export interface ConnectionStatusProps {
@@ -13,17 +19,25 @@ export interface ConnectionStatusProps {
  * ConnectionStatus - Shows real-time WebSocket connection status
  *
  * States:
+ * - Out of sync: Amber refresh icon (FE/BE drift after a deploy — supersedes
+ *   Connected and Disconnected; click to hard-reload the tab)
  * - Connected: Green checkmark (only shown briefly after reconnect)
  * - Reconnecting: Yellow spinner (shown during reconnection)
  * - Disconnected: Red warning (shown when connection lost, click to retry)
  *
- * Auto-hides after 3 seconds when connected to reduce visual clutter
+ * Auto-hides after 3 seconds when connected to reduce visual clutter.
+ *
+ * `outOfSync` is read from ConnectionContext (populated by useServerVersion in
+ * App.tsx). It's deliberately checked first — when the daemon's build SHA has
+ * changed under us, refreshing the tab matters more than any other connection
+ * detail. We don't auto-reload (per design); the user clicks.
  */
 export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   connected,
   connecting,
   onRetry,
 }) => {
+  const { outOfSync } = useConnectionState();
   const [showConnected, setShowConnected] = useState(false);
   const [justReconnected, setJustReconnected] = useState(false);
 
@@ -45,6 +59,30 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
       setJustReconnected(true);
     }
   }, [connecting, connected]);
+
+  // Out of sync: backend was redeployed under us. Supersedes both connected
+  // and disconnected — the user needs to refresh, period. No auto-reload.
+  if (outOfSync) {
+    return (
+      <Tooltip title="Backend was updated — click to reload for the latest UI." placement="bottom">
+        <Tag
+          icon={<ReloadOutlined />}
+          color="warning"
+          onClick={() => window.location.reload()}
+          style={{
+            margin: 0,
+            display: 'flex',
+            alignItems: 'center',
+            cursor: 'pointer',
+          }}
+        >
+          <Space size={4}>
+            <span>Out of sync — refresh</span>
+          </Space>
+        </Tag>
+      </Tooltip>
+    );
+  }
 
   // Don't show anything when normally connected (reduces clutter)
   if (connected && !connecting && !showConnected) {

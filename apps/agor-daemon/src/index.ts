@@ -41,6 +41,7 @@ import expressStaticGzip from 'express-static-gzip';
 import { registerHooks } from './register-hooks.js';
 import { registerRoutes } from './register-routes.js';
 import { registerServices } from './register-services.js';
+import { loadBuildInfo } from './setup/build-info.js';
 import { buildCorsConfig, isSandpackOrigin } from './setup/cors.js';
 import {
   initializeAnthropicApiKey,
@@ -58,6 +59,15 @@ import { configureDaemonUrl } from './utils/spawn-executor.js';
 
 // Load daemon version at startup
 const DAEMON_VERSION = await loadDaemonVersion(import.meta.url);
+
+// Resolve build SHA (env > .build-info file > git > 'dev'). UI tabs capture
+// this on first connect and prompt a refresh if a later handshake disagrees.
+const DAEMON_BUILD_INFO = loadBuildInfo(import.meta.url);
+console.log(
+  `🔖 Build: sha=${DAEMON_BUILD_INFO.sha} ` +
+    `builtAt=${DAEMON_BUILD_INFO.builtAt ?? 'unknown'} ` +
+    `(source=${DAEMON_BUILD_INFO.source})`
+);
 
 // Database URL (env vars > config.yaml > defaults)
 const DB_PATH = getDatabaseUrl();
@@ -483,6 +493,10 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     // transport too. Without this the terminal:* relay events would still
     // accept traffic when the HTTP modal is disabled.
     webTerminalEnabled: config.execution?.allow_web_terminal !== false,
+    // Build info for the version-sync banner. Emitted as the `server-info`
+    // welcome event on every connect (and reconnect), so UI tabs can detect
+    // FE/BE drift after a deploy without waiting for the next /health poll.
+    buildInfo: DAEMON_BUILD_INFO,
   });
   app.configure(socketio(socketIOConfig.serverOptions, socketIOConfig.callback));
   configureChannels(app);
@@ -555,6 +569,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     DB_PATH,
     DAEMON_PORT,
     DAEMON_VERSION,
+    DAEMON_BUILD_INFO,
     servicesConfig,
     resolvedSecurity,
     sessionsService: services.sessionsService,

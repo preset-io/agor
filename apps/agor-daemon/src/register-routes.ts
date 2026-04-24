@@ -147,6 +147,12 @@ export interface RegisterRoutesContext {
   DB_PATH: string;
   DAEMON_PORT: number;
   DAEMON_VERSION: string;
+  /**
+   * Resolved build info (sha + builtAt). Surfaced on /health so the UI can
+   * detect FE/BE drift after a deploy. The SHA is the canonical version
+   * signal for the version-sync banner — see setup/build-info.ts.
+   */
+  DAEMON_BUILD_INFO: import('./setup/build-info.js').BuildInfo;
   servicesConfig: DaemonServicesConfig;
   /**
    * Resolved security config (CSP/CORS after defaults+extras+override merge).
@@ -189,6 +195,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     DB_PATH,
     DAEMON_PORT: _DAEMON_PORT,
     DAEMON_VERSION,
+    DAEMON_BUILD_INFO,
     servicesConfig,
     resolvedSecurity,
     sessionsService,
@@ -2703,6 +2710,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         status: 'ok',
         timestamp: Date.now(),
         version: DAEMON_VERSION,
+        // Build identity for the version-sync banner (apps/agor-ui ConnectionStatus).
+        // SHA precedence is resolved at startup — see setup/build-info.ts.
+        // Tabs capture this SHA on first connect and prompt a refresh whenever
+        // a later handshake reports a different value. 'dev' disables the check.
+        buildSha: DAEMON_BUILD_INFO.sha,
+        builtAt: DAEMON_BUILD_INFO.builtAt,
         auth: {
           requireAuth: config.daemon?.requireAuth === true,
           allowAnonymous: allowAnonymous,
