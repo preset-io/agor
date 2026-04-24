@@ -58,6 +58,31 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
       }
     };
 
+    // Grace period before flipping `connected` to false on a disconnect.
+    // Most reconnects (tsx watch reload, brief network blip, JWT refresh
+    // reauth) finish well under 1s. Flipping `connected` immediately makes
+    // every `useConnectionDisabled` consumer disable — buttons, forms,
+    // inline inputs — producing a UI flicker. Instead, fire `connecting:true`
+    // immediately for the navbar status tag, and only flip `connected` if
+    // the reconnect hasn't finished within DISCONNECT_GRACE_MS. If we
+    // reconnect inside the window, consumers never see a disabled frame.
+    const DISCONNECT_GRACE_MS = 1500;
+    let disconnectGraceTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearDisconnectGrace = () => {
+      if (disconnectGraceTimer !== null) {
+        clearTimeout(disconnectGraceTimer);
+        disconnectGraceTimer = null;
+      }
+    };
+    const scheduleDisconnectedFlip = () => {
+      if (disconnectGraceTimer !== null) return; // already pending
+      disconnectGraceTimer = setTimeout(() => {
+        disconnectGraceTimer = null;
+        if (!mounted) return;
+        setConnected(false);
+      }, DISCONNECT_GRACE_MS);
+    };
+
     async function connect() {
       // Don't create client if no access token and anonymous not allowed
       if (!accessToken && !allowAnonymous) {
@@ -179,6 +204,9 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
           // Reset manual-reconnect backoff now that we're connected again.
           manualReconnectAttempts = 0;
           clearManualReconnectTimer();
+          // Cancel any pending "flip to disconnected" — we made it back in
+          // time, so consumers never saw a disabled frame.
+          clearDisconnectGrace();
 
           // Re-authenticate on reconnection (e.g., after daemon restart or network recovery)
           try {
@@ -240,7 +268,15 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
 
       client.io.on('disconnect', (reason) => {
         if (!mounted) return;
-        setConnected(false);
+        // If we've never been connected (initial-load failure), flip
+        // immediately — no "reconnect" to wait for. Otherwise defer the
+        // flip via the grace timer so quick reconnects don't flicker the
+        // UI; the navbar still shows "Reconnecting" via connecting=true.
+        if (hasConnectedOnce) {
+          scheduleDisconnectedFlip();
+        } else {
+          setConnected(false);
+        }
 
         // Reason matters here. Per socket.io docs:
         //   - 'io server disconnect' fires when the server explicitly closed
@@ -263,6 +299,10 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
           // loop at network speed and a page refresh was the only way out.
           if (manualReconnectAttempts >= MAX_MANUAL_RECONNECT_ATTEMPTS) {
             setConnecting(false);
+            // Give-up path — flip connected immediately; the grace period
+            // is only for quick reconnects we expect to recover from.
+            clearDisconnectGrace();
+            setConnected(false);
             setError('Lost connection to daemon after multiple attempts. Please reload the page.');
             return;
           }
@@ -378,6 +418,7 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
     return () => {
       mounted = false;
       clearManualReconnectTimer();
+      clearDisconnectGrace();
       if (client?.io) {
         // Remove all listeners to prevent memory leaks
         client.io.removeAllListeners();
