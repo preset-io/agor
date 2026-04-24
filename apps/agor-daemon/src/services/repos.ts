@@ -147,9 +147,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     data: { url: string; slug?: string; name?: string },
     params?: RepoParams
   ): Promise<{ status: 'pending'; slug: string }> {
+    // Note: `||` (not `??`) is intentional — we want an empty `data.slug`
+    // to fall through to derivation rather than be treated as "explicit".
     let slug = data.slug || data.name;
     if (!slug) {
-      slug = extractSlugFromUrl(data.url.replace(/\/$/, ''));
+      // Strip trailing slashes (`/+`) before delegating so we match the UI's
+      // normalizeRepoUrl behaviour; extractSlugFromUrl already handles `.git`.
+      slug = extractSlugFromUrl(data.url.replace(/\/+$/, ''));
     }
     if (!slug || !isValidSlug(slug)) {
       throw new Error('Could not derive a valid slug from URL. Please provide a slug.');
