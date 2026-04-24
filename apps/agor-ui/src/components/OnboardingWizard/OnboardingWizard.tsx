@@ -82,7 +82,7 @@ export interface OnboardingWizardProps {
 
   // Actions
   onCreateRepo: (data: { url: string; slug: string; default_branch: string }) => Promise<void>;
-  onCreateLocalRepo: (data: { path: string; slug?: string }) => void;
+  onCreateLocalRepo: (data: { path: string; slug?: string }) => void | Promise<void>;
   onCreateWorktree: (
     repoId: string,
     data: {
@@ -342,12 +342,14 @@ export function OnboardingWizard({
     }
   }, [user, branchName, usernameSlug]);
 
-  // Initialize worktree name for own-repo path
+  // Initialize worktree name for own-repo path (only once when path is chosen)
+  const worktreeNameInitRef = useRef(false);
   useEffect(() => {
-    if (path === 'own-repo' && !worktreeName) {
+    if (path === 'own-repo' && !worktreeNameInitRef.current) {
+      worktreeNameInitRef.current = true;
       setWorktreeName('my-worktree');
     }
-  }, [path, worktreeName]);
+  }, [path]);
 
   // ─── Auto-advance: Watch repoById for clone completion ──
   useEffect(() => {
@@ -367,13 +369,18 @@ export function OnboardingWizard({
         setCurrentStep('board');
         return;
       }
-    } else if (path === 'own-repo' && repoUrl) {
-      // Look for user's repo by URL or slug
+    } else if (path === 'own-repo' && (repoUrl || localRepoPath)) {
+      // Normalize URL for comparison (strip trailing .git and slash)
+      const normalizeUrl = (url: string) => url.replace(/\.git$/, '').replace(/\/$/, '');
+      const normalizedInput = repoUrl ? normalizeUrl(repoUrl) : '';
+      // Look for user's repo by URL, slug, or local path
       for (const [id, repo] of repoById) {
         if (
-          repo.remote_url === repoUrl ||
+          (normalizedInput &&
+            repo.remote_url &&
+            normalizeUrl(repo.remote_url) === normalizedInput) ||
           (repoSlug && repo.slug === repoSlug) ||
-          repo.local_path === localRepoPath
+          (localRepoPath && repo.local_path === localRepoPath)
         ) {
           setCreatedRepoId(id);
           setLoading(false);
@@ -388,6 +395,31 @@ export function OnboardingWizard({
       }
     }
   }, [currentStep, loading, path, repoById, repoUrl, repoSlug, localRepoPath]);
+
+  // ─── Safety net: ensure createdRepoId is set when reaching board/worktree ──
+  useEffect(() => {
+    if (createdRepoId || (currentStep !== 'board' && currentStep !== 'worktree')) return;
+    // Try to find the repo by URL, slug, or local path
+    const normalizeUrl = (url: string) => url.replace(/\.git$/, '').replace(/\/$/, '');
+    const normalizedInput = repoUrl ? normalizeUrl(repoUrl) : '';
+    for (const [id, repo] of repoById) {
+      if (
+        (normalizedInput && repo.remote_url && normalizeUrl(repo.remote_url) === normalizedInput) ||
+        (repoSlug && repo.slug === repoSlug) ||
+        (localRepoPath && repo.local_path === localRepoPath)
+      ) {
+        setCreatedRepoId(id);
+        return;
+      }
+    }
+    // For assistant path, find framework repo
+    if (path === 'assistant') {
+      const found = findFrameworkRepo(repoById);
+      if (found) {
+        setCreatedRepoId(found[0]);
+      }
+    }
+  }, [currentStep, createdRepoId, repoById, repoUrl, repoSlug, localRepoPath, path]);
 
   // ─── Auto-advance: Watch boardById for board creation ──
   useEffect(() => {
@@ -533,7 +565,8 @@ export function OnboardingWizard({
           default_branch: 'main',
         });
       } else {
-        onCreateLocalRepo({
+        // Local repos are registered synchronously — no clone needed.
+        await onCreateLocalRepo({
           path: localRepoPath,
           slug: repoSlug || undefined,
         });
@@ -544,13 +577,22 @@ export function OnboardingWizard({
       return;
     }
 
-    // Set timeout for async clone completion
-    cloneTimeoutRef.current = setTimeout(() => {
-      setLoading(false);
-      setError(
-        'Clone is taking too long. This could be due to network issues, an unreachable repository, or a missing GITHUB_TOKEN for private repos. Please check and try again.'
-      );
-    }, CLONE_TIMEOUT_MS);
+    // Transition to the clone step so the auto-advance effect can detect
+    // the newly-created repo in repoById and move to the board step.
+    // For assistant path, we're already on 'clone' (auto-triggered).
+    if (path === 'own-repo') {
+      setCurrentStep('clone');
+    }
+
+    // Set timeout for async clone completion (remote/assistant repos only)
+    if (repoMode !== 'local') {
+      cloneTimeoutRef.current = setTimeout(() => {
+        setLoading(false);
+        setError(
+          'Clone is taking too long. This could be due to network issues, an unreachable repository, or a missing GITHUB_TOKEN for private repos. Please check and try again.'
+        );
+      }, CLONE_TIMEOUT_MS);
+    }
   }, [
     path,
     effectiveFrameworkUrl,
@@ -1185,16 +1227,17 @@ export function OnboardingWizard({
     if (!path) return [];
 
     const allSteps = getStepsForPath(path);
-    // Don't include 'welcome' in the steps indicator
-    const displaySteps = allSteps.filter((s) => s !== 'welcome');
+    // Don't include 'welcome' or 'clone' in the steps indicator.
+    // 'clone' is visually merged with 'add-repo' / the repo step.
+    const displaySteps = allSteps.filter((s) => s !== 'welcome' && s !== 'clone');
 
     const labelMap: Record<WizardStep, string> = {
       welcome: 'Welcome',
-      'add-repo': 'Add Repo',
-      clone: 'Clone',
+      'add-repo': 'Repo',
+      clone: 'Repo',
       board: 'Board',
       worktree: 'Worktree',
-      'api-keys': 'API Keys',
+      'api-keys': 'Keys',
       launch: 'Launch',
     };
 
@@ -1217,8 +1260,11 @@ export function OnboardingWizard({
 
   const currentStepDisplay = useMemo(() => {
     if (!path || currentStep === 'welcome') return -1;
-    const displaySteps = getStepsForPath(path).filter((s) => s !== 'welcome');
-    return displaySteps.indexOf(currentStep);
+    const displaySteps = getStepsForPath(path).filter((s) => s !== 'welcome' && s !== 'clone');
+    // When on the 'clone' step, highlight the repo step (add-repo for own-repo, first step for assistant)
+    const mappedStep =
+      currentStep === 'clone' ? (path === 'own-repo' ? 'add-repo' : displaySteps[0]) : currentStep;
+    return displaySteps.indexOf(mappedStep);
   }, [path, currentStep]);
 
   // ─── Auto-trigger steps that should auto-start ────

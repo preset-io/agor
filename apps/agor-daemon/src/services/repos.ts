@@ -147,9 +147,25 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     data: { url: string; slug?: string; name?: string },
     params?: RepoParams
   ): Promise<{ status: 'pending'; slug: string }> {
-    const slug = data.slug ?? data.name;
+    let slug = data.slug || data.name;
     if (!slug) {
-      throw new Error('Slug is required to clone a repository');
+      // Derive slug from URL: https://github.com/user/repo.git -> user/repo
+      try {
+        const urlPath = new URL(data.url).pathname;
+        slug = urlPath
+          .replace(/^\//, '') // strip leading slash
+          .replace(/\.git$/, ''); // strip .git suffix
+      } catch {
+        // Not a valid URL — use as-is stripped of protocol-like prefixes
+        slug = data.url
+          .replace(/\.git$/, '')
+          .split('/')
+          .slice(-2)
+          .join('/');
+      }
+    }
+    if (!slug) {
+      throw new Error('Could not derive slug from URL. Please provide a slug.');
     }
 
     // If repo with this slug already exists, return silently (idempotent)

@@ -722,13 +722,20 @@ function AppContent() {
   // Handle repo CRUD
   const handleCreateRepo = async (data: { url: string; slug: string; default_branch: string }) => {
     if (!client) return;
-    // Use the custom clone endpoint: POST /repos/clone
-    // This returns { status: 'pending' } immediately - actual clone happens async in executor
-    await client.service('repos/clone').create({
-      url: data.url,
-      slug: data.slug,
-      default_branch: data.default_branch,
-    });
+    try {
+      // Use the custom clone endpoint: POST /repos/clone
+      // This returns { status: 'pending' } immediately - actual clone happens async in executor
+      await client.service('repos/clone').create({
+        url: data.url,
+        slug: data.slug,
+        default_branch: data.default_branch,
+      });
+    } catch (error) {
+      showError(
+        `Failed to clone repository: ${error instanceof Error ? error.message : String(error)}`
+      );
+      throw error;
+    }
   };
 
   const handleCreateLocalRepo = async (data: { path: string; slug?: string }) => {
