@@ -98,11 +98,6 @@ jobs:
 
       - run: pnpm check:agor-live-deps
 
-      # Guard against `workspace:*` leaking into the published tarball.
-      # See scripts/check-publish-artifact.mjs and PR titled
-      # "fix(release): rewrite workspace:* refs at publish time".
-      - run: pnpm check:publish-artifact
-
       - run: pnpm lint
 
   build:

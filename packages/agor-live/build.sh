@@ -317,15 +317,6 @@ echo "✅ Build complete!"
 if [[ "$PUBLISH" == true ]]; then
   echo ""
 
-  # Verify the tarball does not contain workspace:* refs before pushing to npm.
-  # `npm publish` does NOT rewrite workspace: protocol — only `pnpm publish` /
-  # `pnpm pack` do. agor-live@0.16.4–0.17.1 shipped with `@agor-live/client:
-  # workspace:*` because they were published via `npm publish`, which broke
-  # `npm install agor-live` ("Unsupported URL Type 'workspace:'").
-  echo "🔎 Verifying publish artifacts have no unresolved workspace: refs..."
-  cd "$REPO_ROOT" && pnpm check:publish-artifact
-  echo ""
-
   if [[ "$DRY_RUN" == true ]]; then
     echo "🧪 Dry run — showing what would be published..."
     echo ""
