@@ -180,6 +180,10 @@ const AGENT_LABELS: Record<AgenticToolName, string> = {
   copilot: 'GitHub Copilot',
 };
 
+function normalizeRepoUrl(url: string): string {
+  return url.replace(/\.git$/, '').replace(/\/$/, '');
+}
+
 const AGENT_KEY_CONSOLES: Record<AgenticToolName, { label: string; url: string } | null> = {
   'claude-code': { label: 'console.anthropic.com', url: 'https://console.anthropic.com/' },
   codex: { label: 'platform.openai.com', url: 'https://platform.openai.com/api-keys' },
@@ -371,14 +375,13 @@ export function OnboardingWizard({
       }
     } else if (path === 'own-repo' && (repoUrl || localRepoPath)) {
       // Normalize URL for comparison (strip trailing .git and slash)
-      const normalizeUrl = (url: string) => url.replace(/\.git$/, '').replace(/\/$/, '');
-      const normalizedInput = repoUrl ? normalizeUrl(repoUrl) : '';
+      const normalizedInput = repoUrl ? normalizeRepoUrl(repoUrl) : '';
       // Look for user's repo by URL, slug, or local path
       for (const [id, repo] of repoById) {
         if (
           (normalizedInput &&
             repo.remote_url &&
-            normalizeUrl(repo.remote_url) === normalizedInput) ||
+            normalizeRepoUrl(repo.remote_url) === normalizedInput) ||
           (repoSlug && repo.slug === repoSlug) ||
           (localRepoPath && repo.local_path === localRepoPath)
         ) {
@@ -400,11 +403,10 @@ export function OnboardingWizard({
   useEffect(() => {
     if (createdRepoId || (currentStep !== 'board' && currentStep !== 'worktree')) return;
     // Try to find the repo by URL, slug, or local path
-    const normalizeUrl = (url: string) => url.replace(/\.git$/, '').replace(/\/$/, '');
-    const normalizedInput = repoUrl ? normalizeUrl(repoUrl) : '';
+    const normalizedInput = repoUrl ? normalizeRepoUrl(repoUrl) : '';
     for (const [id, repo] of repoById) {
       if (
-        (normalizedInput && repo.remote_url && normalizeUrl(repo.remote_url) === normalizedInput) ||
+        (normalizedInput && repo.remote_url && normalizeRepoUrl(repo.remote_url) === normalizedInput) ||
         (repoSlug && repo.slug === repoSlug) ||
         (localRepoPath && repo.local_path === localRepoPath)
       ) {
