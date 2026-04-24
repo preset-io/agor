@@ -21,22 +21,80 @@
  * ```
  */
 
-import { CopyOutlined } from '@ant-design/icons';
+import { CheckOutlined, CloseCircleOutlined, CopyOutlined } from '@ant-design/icons';
 import { App, Space, theme } from 'antd';
 import type { ArgsProps, ConfigOptions, MessageInstance } from 'antd/es/message/interface';
 import React from 'react';
 import { copyToClipboard } from './clipboard';
 
 /**
- * Message content wrapper with copy-to-clipboard functionality
+ * Message content wrapper with copy-to-clipboard functionality.
+ *
+ * Shows an inline confirmation icon (check on success, X on failure) for
+ * ~1.5s after click — otherwise there's no way for the user to tell whether
+ * the copy worked, which reads as "the button is broken".
  */
 interface MessageContentProps {
   children: React.ReactNode;
-  onCopy: () => void;
+  textContent: string;
 }
 
-const MessageContent: React.FC<MessageContentProps> = ({ children, onCopy }) => {
+const MessageContent: React.FC<MessageContentProps> = ({ children, textContent }) => {
   const { token } = theme.useToken();
+  const [copyState, setCopyState] = React.useState<'idle' | 'copied' | 'failed'>('idle');
+  const timeoutRef = React.useRef<ReturnType<typeof setTimeout>>();
+
+  React.useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const ok = await copyToClipboard(textContent);
+    setCopyState(ok ? 'copied' : 'failed');
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(() => setCopyState('idle'), 1500);
+  };
+
+  const iconStyle: React.CSSProperties = {
+    cursor: 'pointer',
+    marginLeft: token.marginSM,
+    transition: 'opacity 0.2s',
+    fontSize: token.fontSizeSM,
+  };
+
+  let icon: React.ReactNode;
+  if (copyState === 'copied') {
+    icon = (
+      <CheckOutlined
+        style={{ ...iconStyle, color: token.colorSuccess, opacity: 1 }}
+        title="Copied!"
+      />
+    );
+  } else if (copyState === 'failed') {
+    icon = (
+      <CloseCircleOutlined
+        style={{ ...iconStyle, color: token.colorError, opacity: 1 }}
+        title="Copy failed"
+      />
+    );
+  } else {
+    icon = (
+      <CopyOutlined
+        onClick={handleCopy}
+        style={{ ...iconStyle, opacity: 0.65 }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.opacity = '1';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.opacity = '0.65';
+        }}
+        title="Copy to clipboard"
+      />
+    );
+  }
 
   return (
     <Space
@@ -48,26 +106,7 @@ const MessageContent: React.FC<MessageContentProps> = ({ children, onCopy }) => 
       }}
     >
       <span style={{ flex: 1 }}>{children}</span>
-      <CopyOutlined
-        onClick={(e) => {
-          e.stopPropagation();
-          onCopy();
-        }}
-        style={{
-          cursor: 'pointer',
-          marginLeft: token.marginSM,
-          opacity: 0.65,
-          transition: 'opacity 0.2s',
-          fontSize: token.fontSizeSM,
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.opacity = '1';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.opacity = '0.65';
-        }}
-        title="Copy to clipboard"
-      />
+      {icon}
     </Space>
   );
 };
@@ -115,15 +154,7 @@ export function useThemedMessage() {
    * Wrap message content with copy functionality
    */
   const wrapContent = (content: React.ReactNode, textContent: string) => {
-    return (
-      <MessageContent
-        onCopy={() => {
-          copyToClipboard(textContent);
-        }}
-      >
-        {content}
-      </MessageContent>
-    );
+    return <MessageContent textContent={textContent}>{content}</MessageContent>;
   };
 
   /**

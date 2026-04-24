@@ -147,7 +147,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   async cloneRepository(
     data: { url: string; slug?: string; name?: string },
     params?: RepoParams
-  ): Promise<{ status: 'pending'; slug: string }> {
+  ): Promise<{ status: 'pending' | 'exists'; slug: string }> {
     // Note: `||` (not `??`) is intentional — we want an empty `data.slug`
     // to fall through to derivation rather than be treated as "explicit".
     let slug = data.slug || data.name;
@@ -160,10 +160,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       throw new Error('Could not derive a valid slug from URL. Please provide a slug.');
     }
 
-    // If repo with this slug already exists, return silently (idempotent)
+    // If repo with this slug already exists, this is a no-op but we surface
+    // it as `status: 'exists'` (rather than `pending`) so callers can give
+    // users immediate feedback — otherwise the UI would wait indefinitely
+    // for a `repos.created` event that will never fire.
     const existing = await this.repoRepo.findBySlug(slug);
     if (existing) {
-      return { status: 'pending', slug };
+      return { status: 'exists', slug };
     }
 
     // Resolve user environment for git credentials

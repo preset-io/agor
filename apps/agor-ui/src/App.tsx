@@ -92,7 +92,7 @@ function DeviceRouter() {
 function AppContent() {
   const { token } = theme.useToken();
   const { getCurrentThemeConfig } = useTheme();
-  const { showSuccess, showError, showLoading, destroy } = useThemedMessage();
+  const { showSuccess, showError, showWarning, showLoading, destroy } = useThemedMessage();
   const navigate = useNavigate();
 
   // Fetch daemon auth and instance configuration
@@ -772,11 +772,20 @@ function AppContent() {
     client.io.on('repo:cloneError', handleCloneError);
 
     try {
-      await client.service('repos/clone').create({
+      const result = (await client.service('repos/clone').create({
         url: data.url,
         slug: data.slug,
         default_branch: data.default_branch,
-      });
+      })) as { status?: 'pending' | 'exists'; slug?: string };
+
+      // Daemon short-circuits with `status: 'exists'` when a repo with this
+      // slug is already registered — no `repos.created` event will fire, so
+      // resolve the loading toast here instead of waiting for the timeout.
+      if (result?.status === 'exists' && !settled) {
+        settled = true;
+        showWarning(`Repository "${data.slug}" is already added`, { key: toastKey });
+        cleanup();
+      }
     } catch (error) {
       if (!settled) {
         settled = true;
