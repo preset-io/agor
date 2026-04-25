@@ -426,7 +426,7 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
 
 /**
  * Returns true when the error message from a failed git clone looks like an
- * authentication / authorisation failure rather than a network or
+ * authentication / authorization failure rather than a network or
  * configuration problem.
  *
  * Used to decide whether to retry an HTTPS GitHub clone over SSH.

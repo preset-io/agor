@@ -1,5 +1,5 @@
 /**
- * Unit tests for cloneRepo HTTPS→SSH fallback behaviour.
+ * Unit tests for cloneRepo HTTPS→SSH fallback behavior.
  *
  * These tests mock simple-git's clone call so we can exercise the retry logic
  * without making real network requests. They live in a separate file so the
