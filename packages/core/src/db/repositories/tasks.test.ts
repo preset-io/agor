@@ -809,17 +809,41 @@ describe('TaskRepository edge cases', () => {
 });
 
 // ============================================================================
-// CreateQueued (never-lose-prompt §C: queue lives on tasks)
+// CreatePending (never-lose-prompt §C: queue lives on tasks)
 // ============================================================================
 
-describe('TaskRepository.createQueued', () => {
+/**
+ * Helper: build the minimum-viable input for `createPending` so tests stay
+ * focused on the behavior under test instead of restating boilerplate.
+ */
+function createPendingInput(overrides: {
+  session_id: string;
+  status: typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED;
+  description?: string;
+  metadata?: Parameters<TaskRepository['createPending']>[0]['metadata'];
+}): Parameters<TaskRepository['createPending']>[0] {
+  return {
+    session_id: overrides.session_id as Parameters<
+      TaskRepository['createPending']
+    >[0]['session_id'],
+    full_prompt: overrides.description ?? 'test prompt',
+    created_by: 'test-user',
+    status: overrides.status,
+    description: overrides.description,
+    metadata: overrides.metadata,
+  };
+}
+
+describe('TaskRepository.createPending', () => {
   dbTest(
-    'should create task with status=QUEUED and queue_position=1 when no other queued tasks',
+    'should create QUEUED task with queue_position=1 when no other queued tasks',
     async ({ db }) => {
       const taskRepo = new TaskRepository(db);
       const sessionId = await createSessionWithDeps(db);
 
-      const queued = await taskRepo.createQueued({ session_id: sessionId });
+      const queued = await taskRepo.createPending(
+        createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
+      );
 
       expect(queued.status).toBe(TaskStatus.QUEUED);
       expect(queued.queue_position).toBe(1);
@@ -831,9 +855,15 @@ describe('TaskRepository.createQueued', () => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
 
-    const first = await taskRepo.createQueued({ session_id: sessionId });
-    const second = await taskRepo.createQueued({ session_id: sessionId });
-    const third = await taskRepo.createQueued({ session_id: sessionId });
+    const first = await taskRepo.createPending(
+      createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
+    );
+    const second = await taskRepo.createPending(
+      createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
+    );
+    const third = await taskRepo.createPending(
+      createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
+    );
 
     expect(first.queue_position).toBe(1);
     expect(second.queue_position).toBe(2);
@@ -845,38 +875,110 @@ describe('TaskRepository.createQueued', () => {
     const sessionA = await createSessionWithDeps(db);
     const sessionB = await createSessionWithDeps(db);
 
-    await taskRepo.createQueued({ session_id: sessionA });
-    await taskRepo.createQueued({ session_id: sessionA });
-    const onB = await taskRepo.createQueued({ session_id: sessionB });
+    await taskRepo.createPending(
+      createPendingInput({ session_id: sessionA, status: TaskStatus.QUEUED })
+    );
+    await taskRepo.createPending(
+      createPendingInput({ session_id: sessionA, status: TaskStatus.QUEUED })
+    );
+    const onB = await taskRepo.createPending(
+      createPendingInput({ session_id: sessionB, status: TaskStatus.QUEUED })
+    );
 
     // Session B's first queued task should be at position 1, not 3.
     expect(onB.queue_position).toBe(1);
   });
 
-  dbTest('should preserve metadata bag passed in', async ({ db }) => {
+  dbTest('should preserve metadata round-trip through findById', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
     const metadata = {
       is_agor_callback: true,
-      source: 'agor',
+      source: 'agor' as const,
       queued_by_user_id: 'user-123',
     };
 
-    const queued = await taskRepo.createQueued({ session_id: sessionId, metadata });
+    const queued = await taskRepo.createPending(
+      createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED, metadata })
+    );
 
     expect(queued.metadata).toEqual(metadata);
 
-    // Metadata round-trips through findById too.
     const refetched = await taskRepo.findById(queued.task_id);
     expect(refetched?.metadata).toEqual(metadata);
   });
 
-  dbTest('should throw if session_id missing', async ({ db }) => {
+  dbTest('should leave queue_position unset for CREATED tasks (idle path)', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
 
-    await expect(taskRepo.createQueued({})).rejects.toThrow(RepositoryError);
-    await expect(taskRepo.createQueued({})).rejects.toThrow('session_id is required');
+    const created = await taskRepo.createPending(
+      createPendingInput({ session_id: sessionId, status: TaskStatus.CREATED })
+    );
+
+    expect(created.status).toBe(TaskStatus.CREATED);
+    expect(created.queue_position).toBeUndefined();
   });
+
+  dbTest(
+    'should stamp sentinels on the row so spawnTaskExecutor knows what to recompute',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+
+      const queued = await taskRepo.createPending(
+        createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
+      );
+
+      // The sentinel contract: while a task is QUEUED/CREATED, message_range
+      // and git_state hold "not yet pinned" markers. spawnTaskExecutor is the
+      // sole place that overwrites these on the way to RUNNING.
+      expect(queued.message_range.start_index).toBe(-1);
+      expect(queued.git_state.sha_at_start).toBe('');
+      expect(queued.git_state.ref_at_start).toBe('');
+    }
+  );
+
+  dbTest(
+    'should serialize parallel QUEUED inserts via transaction (race regression)',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+
+      // Three callers fire in parallel — they must produce three distinct
+      // queue_positions rather than colliding on the same `max+1`. This is the
+      // createQueued TOCTOU race that existed before the read-then-insert was
+      // wrapped in a transaction.
+      //
+      // libsql serializes concurrent write transactions, so under contention
+      // some inserts may surface SQLITE_BUSY. Either outcome (success with
+      // unique position OR transient BUSY) is correct — what we forbid is
+      // *committed* duplicates. Successful rows must therefore have distinct,
+      // monotonically-increasing positions starting at 1.
+      const settled = await Promise.allSettled([
+        taskRepo.createPending(
+          createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
+        ),
+        taskRepo.createPending(
+          createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
+        ),
+        taskRepo.createPending(
+          createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
+        ),
+      ]);
+
+      const successes = settled
+        .filter((r): r is PromiseFulfilledResult<Task> => r.status === 'fulfilled')
+        .map((r) => r.value);
+
+      expect(successes.length).toBeGreaterThan(0);
+
+      const positions = successes.map((t) => t.queue_position).sort();
+      const unique = new Set(positions);
+      expect(unique.size).toBe(positions.length); // no duplicates
+      expect(positions[0]).toBe(1); // numbering starts at 1
+    }
+  );
 });
 
 // ============================================================================
@@ -888,9 +990,27 @@ describe('TaskRepository.findQueued', () => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
 
-    await taskRepo.createQueued({ session_id: sessionId, description: 'first queued' });
-    await taskRepo.createQueued({ session_id: sessionId, description: 'second queued' });
-    await taskRepo.createQueued({ session_id: sessionId, description: 'third queued' });
+    await taskRepo.createPending(
+      createPendingInput({
+        session_id: sessionId,
+        status: TaskStatus.QUEUED,
+        description: 'first queued',
+      })
+    );
+    await taskRepo.createPending(
+      createPendingInput({
+        session_id: sessionId,
+        status: TaskStatus.QUEUED,
+        description: 'second queued',
+      })
+    );
+    await taskRepo.createPending(
+      createPendingInput({
+        session_id: sessionId,
+        status: TaskStatus.QUEUED,
+        description: 'third queued',
+      })
+    );
 
     const found = await taskRepo.findQueued(sessionId);
 
@@ -961,7 +1081,9 @@ describe('TaskRepository.getNextQueued', () => {
     const sessionA = await createSessionWithDeps(db);
     const sessionB = await createSessionWithDeps(db);
 
-    await taskRepo.createQueued({ session_id: sessionA });
+    await taskRepo.createPending(
+      createPendingInput({ session_id: sessionA, status: TaskStatus.QUEUED })
+    );
 
     const next = await taskRepo.getNextQueued(sessionB);
 

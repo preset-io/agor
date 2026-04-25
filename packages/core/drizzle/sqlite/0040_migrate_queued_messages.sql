@@ -1,75 +1,25 @@
--- Task-centric queue refactor (Section C6 of never-lose-prompt design) — part 2
+-- Task-centric queue refactor (Section C of never-lose-prompt design) — part 2
 --
--- Backfill any rows in `messages` that are still pending in the legacy queue
--- (`status = 'queued'`) into the new task-centric queue (`tasks.status =
--- 'queued'`), then drop `messages.status` and `messages.queue_position`
--- columns + their composite index. The schema TS files mirror the post-state
--- (no status / queue_position on messages); after this migration runs, the
--- `MessagesRepository` queue helpers become dead code and are removed in the
--- same PR.
+-- Drops the legacy message-level queue (`messages.status='queued'`,
+-- `messages.queue_position`). Queued rows are simply discarded — preserving
+-- them across the upgrade is not a goal: any prompts queued at daemon
+-- restart can be re-issued by the caller. Pairs with
+-- postgres/0030_migrate_queued_messages.sql.
 --
--- Pairs with postgres/0030_migrate_queued_messages.sql.
+-- Belt-and-suspenders: a partial unique index on
+-- (session_id, queue_position) WHERE status='queued' guards the new
+-- `tasks.createPending` race fix at the storage layer, so even if a
+-- transactional read-then-insert ever slipped, the DB would reject the
+-- collision instead of silently double-queuing.
 
--- ---------------------------------------------------------------------------
--- 1. Backfill queued messages → queued tasks.
---    Each queued message becomes a fresh task with status='queued' carrying:
---      * the prompt as full_prompt (and a 120-char description preview)
---      * sentinel message_range / git_state — overwritten by spawnTaskExecutor
---        at the QUEUED → RUNNING transition
---      * the original metadata blob (preserves is_agor_callback, source,
---        child_session_id, child_task_id, queued_by_user_id)
---      * the queue_position copied straight across so order is preserved
---    UUIDs are generated via randomblob (good enough for an upgrade-time
---    backfill — collisions astronomically unlikely; UUID v4 layout
---    approximated, not strictly RFC compliant).
--- ---------------------------------------------------------------------------
-INSERT INTO `tasks` (
-  `task_id`,
-  `session_id`,
-  `created_at`,
-  `status`,
-  `queue_position`,
-  `created_by`,
-  `data`
-)
-SELECT
-  lower(hex(randomblob(4))) || '-' ||
-    lower(hex(randomblob(2))) || '-' ||
-    '4' || substr(lower(hex(randomblob(2))), 2) || '-' ||
-    substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' ||
-    lower(hex(randomblob(6))),
-  m.`session_id`,
-  m.`created_at`,
-  'queued',
-  m.`queue_position`,
-  COALESCE(json_extract(m.`data`, '$.metadata.queued_by_user_id'), 'anonymous'),
-  json_object(
-    'description', substr(json_extract(m.`data`, '$.content'), 1, 120),
-    'full_prompt', json_extract(m.`data`, '$.content'),
-    'message_range', json_object(
-      'start_index', -1,
-      'end_index', -1,
-      'start_timestamp', strftime('%Y-%m-%dT%H:%M:%fZ', m.`timestamp` / 1000.0, 'unixepoch')
-    ),
-    'git_state', json_object('ref_at_start', '', 'sha_at_start', ''),
-    'model', 'claude-sonnet-4-6',
-    'tool_use_count', 0,
-    'metadata', json_extract(m.`data`, '$.metadata')
-  )
-FROM `messages` m
-WHERE m.`status` = 'queued';
---> statement-breakpoint
-
--- 2. Drop the now-migrated rows so they don't survive the table rebuild as
---    orphan placeholder messages with `index = -1`.
+-- 1. Drop legacy queued message rows. They had `index = -1` and never
+--    participated in the conversation, so they're safe to discard.
 DELETE FROM `messages` WHERE `status` = 'queued';
 --> statement-breakpoint
 
--- ---------------------------------------------------------------------------
--- 3. Drop messages.status / messages.queue_position via SQLite's table-rebuild
---    idiom (no native DROP COLUMN that survives older SQLite versions). Index
---    `messages_queue_idx` covered both columns and goes away with them.
--- ---------------------------------------------------------------------------
+-- 2. Drop messages.status / messages.queue_position via SQLite's
+--    table-rebuild idiom. The composite `messages_queue_idx` covered both
+--    columns and goes away with them.
 PRAGMA foreign_keys=OFF;--> statement-breakpoint
 DROP INDEX IF EXISTS `messages_queue_idx`;--> statement-breakpoint
 CREATE TABLE `__new_messages` (
@@ -101,4 +51,11 @@ ALTER TABLE `__new_messages` RENAME TO `messages`;--> statement-breakpoint
 PRAGMA foreign_keys=ON;--> statement-breakpoint
 CREATE INDEX `messages_session_id_idx` ON `messages` (`session_id`);--> statement-breakpoint
 CREATE INDEX `messages_task_id_idx` ON `messages` (`task_id`);--> statement-breakpoint
-CREATE INDEX `messages_session_index_idx` ON `messages` (`session_id`,`index`);
+CREATE INDEX `messages_session_index_idx` ON `messages` (`session_id`,`index`);--> statement-breakpoint
+
+-- 3. Partial unique index — defense-in-depth for `tasks.createPending` race
+--    serialization. Only QUEUED rows are constrained; CREATED/RUNNING/done
+--    rows have NULL queue_position and are unaffected.
+CREATE UNIQUE INDEX `tasks_queued_position_unique`
+  ON `tasks` (`session_id`, `queue_position`)
+  WHERE `status` = 'queued';

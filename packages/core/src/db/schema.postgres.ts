@@ -272,6 +272,12 @@ export const tasks = pgTable(
     statusIdx: index('tasks_status_idx').on(table.status),
     createdIdx: index('tasks_created_idx').on(table.created_at),
     queueIdx: index('tasks_queue_idx').on(table.session_id, table.status, table.queue_position),
+    // Partial unique index — defense-in-depth for `tasks.createPending` race
+    // serialization. Only QUEUED rows are constrained; CREATED/RUNNING/done
+    // rows have NULL queue_position and are unaffected.
+    queuedPositionUnique: uniqueIndex('tasks_queued_position_unique')
+      .on(table.session_id, table.queue_position)
+      .where(sql`${table.status} = 'queued'`),
   })
 );
 

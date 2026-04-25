@@ -4,7 +4,7 @@
  * Type-safe CRUD operations for tasks with short ID support.
  */
 
-import type { Task, UUID } from '@agor/core/types';
+import type { SessionID, Task, TaskMetadata, UUID } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { eq, like, sql } from 'drizzle-orm';
 import { formatShortId, generateId } from '../../lib/ids';
@@ -381,35 +381,82 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   }
 
   /**
-   * Create a QUEUED task with auto-assigned queue_position.
+   * Create a pending task — either CREATED (will spawn immediately) or
+   * QUEUED (will drain later) — owning the sentinel defaults that the
+   * caller would otherwise have to assemble by hand.
    *
-   * Queue position is `max(queue_position) + 1` over existing QUEUED tasks for
-   * the session, or 1 if none exist. The lowest queue_position drains first.
+   * For QUEUED tasks, `queue_position = max(queue_position) + 1` is computed
+   * inside a transaction so concurrent writers don't both observe the same
+   * max and collide. (The schema also carries a partial unique index on
+   * `(session_id, queue_position) WHERE status='queued'` as a belt-and-
+   * suspenders against transaction-isolation surprises.)
    *
-   * Used when a user prompt arrives while the session is busy — instead of
-   * creating a queued *message*, we create a QUEUED *task*. When the running
-   * task finishes, the drainer picks the lowest queue_position and transitions
-   * it to RUNNING via spawnTaskExecutor (which writes the user-message row).
+   * Sentinel contract: while a task carries `message_range.start_index = -1`
+   * and `git_state.sha_at_start = ''`, it has not yet been pinned to real
+   * conversation/git state. spawnTaskExecutor is the sole place that
+   * overwrites these on the way to RUNNING.
    */
-  async createQueued(data: Partial<Task>): Promise<Task> {
-    if (!data.session_id) {
-      throw new RepositoryError('session_id is required when queuing a task');
+  async createPending(input: {
+    session_id: SessionID;
+    full_prompt: string;
+    created_by: string;
+    status: typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED;
+    description?: string;
+    metadata?: TaskMetadata;
+  }): Promise<Task> {
+    const taskBase: Partial<Task> = {
+      session_id: input.session_id,
+      full_prompt: input.full_prompt,
+      description: input.description ?? input.full_prompt.substring(0, 120),
+      created_by: input.created_by,
+      status: input.status,
+      metadata: input.metadata,
+      // Sentinels — overwritten by spawnTaskExecutor at the status → RUNNING
+      // transition. While `start_index === -1` / `sha_at_start === ''`, the
+      // task is intentionally unpinned.
+      message_range: {
+        start_index: -1,
+        end_index: -1,
+        start_timestamp: new Date().toISOString(),
+      },
+      git_state: {
+        ref_at_start: '',
+        sha_at_start: '',
+      },
+      tool_use_count: 0,
+    };
+
+    if (input.status === TaskStatus.CREATED) {
+      return this.create(taskBase);
     }
 
-    // Compute next queue position for this session
-    const positionRow = await select(this.db, {
-      maxPos: sql<number | null>`max(${tasks.queue_position})`,
-    })
-      .from(tasks)
-      .where(sql`${tasks.session_id} = ${data.session_id} AND ${tasks.status} = 'queued'`)
-      .one();
+    // QUEUED: serialize the read-then-insert in a transaction so concurrent
+    // callers can't both observe the same `max(queue_position)` and produce
+    // duplicate positions. Two prompts arriving in the same tick now order
+    // deterministically instead of racing.
+    return this.db.transaction(async (tx) => {
+      const positionRow = await select(txAsDb(tx), {
+        maxPos: sql<number | null>`max(${tasks.queue_position})`,
+      })
+        .from(tasks)
+        .where(sql`${tasks.session_id} = ${input.session_id} AND ${tasks.status} = 'queued'`)
+        .one();
 
-    const nextPosition = (positionRow?.maxPos ?? 0) + 1;
+      const nextPosition = (positionRow?.maxPos ?? 0) + 1;
+      const insertData = this.taskToInsert({
+        ...taskBase,
+        queue_position: nextPosition,
+      });
+      await insert(txAsDb(tx), tasks).values(insertData).run();
 
-    return this.create({
-      ...data,
-      status: TaskStatus.QUEUED,
-      queue_position: nextPosition,
+      const row = await select(txAsDb(tx))
+        .from(tasks)
+        .where(eq(tasks.task_id, insertData.task_id))
+        .one();
+      if (!row) {
+        throw new RepositoryError('Failed to retrieve created queued task');
+      }
+      return this.rowToTask(row);
     });
   }
 
