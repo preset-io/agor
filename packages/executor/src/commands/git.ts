@@ -144,9 +144,12 @@ export async function handleGitClone(
 
     // Resolve git credentials from environment
     const env = resolveGitCredentials();
-    const credKeys = Object.keys(env).filter((k) => k !== 'SSH_AUTH_SOCK' && k !== 'SSH_AGENT_PID');
+    const credKeys = Object.keys(env).filter(
+      (k) => k !== 'SSH_AUTH_SOCK' && k !== 'SSH_AGENT_PID' && k !== 'GIT_SSH_COMMAND'
+    );
+    const sshKeys = Object.keys(env).filter((k) => k === 'GIT_SSH_COMMAND');
     console.log(
-      `[git.clone] Credentials: ${credKeys.join(', ') || 'none'}, SSH_AUTH_SOCK: ${env.SSH_AUTH_SOCK ? 'set' : 'not set'}`
+      `[git.clone] Credentials: ${credKeys.join(', ') || 'none'}, SSH keys: ${sshKeys.join(', ') || 'none'}, SSH_AUTH_SOCK: ${env.SSH_AUTH_SOCK ? 'set' : 'not set'}`
     );
 
     // Determine output path - only pass targetDir if explicitly specified
