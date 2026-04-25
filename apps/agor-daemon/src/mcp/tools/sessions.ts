@@ -888,11 +888,15 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       if (mcpServerIds && mcpServerIds.length > 0) {
         for (const mcpServerId of mcpServerIds) {
           try {
+            // Attach via the session-scoped REST surface — `session-mcp-servers`
+            // (flat) is read-only here; the create handler lives on
+            // `/sessions/:id/mcp-servers` with `{ mcpServerId }` (camelCase).
+            // See register-routes.ts: `/sessions/:id/mcp-servers` create handler.
             await ctx.app
-              .service('session-mcp-servers')
+              .service('/sessions/:id/mcp-servers')
               .create(
-                { session_id: session.session_id, mcp_server_id: mcpServerId },
-                ctx.baseServiceParams
+                { mcpServerId },
+                { ...ctx.baseServiceParams, route: { id: session.session_id } }
               );
           } catch (error) {
             const reason = error instanceof Error ? error.message : String(error);

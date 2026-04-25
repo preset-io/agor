@@ -841,13 +841,15 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           if (mcpServerIds.length > 0) {
             for (const mcpServerId of mcpServerIds) {
               try {
-                await ctx.app.service('session-mcp-servers').create(
-                  {
-                    session_id: newSession.session_id,
-                    mcp_server_id: mcpServerId,
-                  },
-                  ctx.baseServiceParams
-                );
+                // Attach via the session-scoped REST surface — `session-mcp-servers`
+                // (flat) is read-only here; the create handler lives on
+                // `/sessions/:id/mcp-servers` with `{ mcpServerId }` (camelCase).
+                await ctx.app
+                  .service('/sessions/:id/mcp-servers')
+                  .create(
+                    { mcpServerId },
+                    { ...ctx.baseServiceParams, route: { id: newSession.session_id } }
+                  );
               } catch (error) {
                 console.warn(
                   `Skipped MCP server ${mcpServerId} for session ${newSession.session_id}: ${error instanceof Error ? error.message : String(error)}`

@@ -151,7 +151,7 @@ describe('agor_sessions_create', () => {
           return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
         },
       },
-      'session-mcp-servers': { create: async () => ({}) },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
     });
 
     const { agor_sessions_create } = await registerAndCaptureHandlers(
@@ -186,7 +186,7 @@ describe('agor_sessions_create', () => {
           return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
         },
       },
-      'session-mcp-servers': { create: async () => ({}) },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
     });
 
     const { agor_sessions_create } = await registerAndCaptureHandlers(
@@ -205,8 +205,13 @@ describe('agor_sessions_create', () => {
     expect(created.model_config.effort).toBe('medium');
   });
 
-  it('attaches explicit mcpServerIds to the session via session-mcp-servers (Bug 1)', async () => {
-    const attachCalls: unknown[] = [];
+  it('attaches explicit mcpServerIds via the /sessions/:id/mcp-servers route (Bug 1)', async () => {
+    // Regression: previously called the flat `session-mcp-servers` service which
+    // is read-only (find-only), so every attach silently failed with
+    // "ctx.app.service(...).create is not a function". The correct surface is
+    // the session-scoped REST route with `{ mcpServerId }` in the body and
+    // `route: { id: <session_id> }` in the params.
+    const attachCalls: Array<{ data: any; params: any }> = [];
     const app = makeFakeApp({
       users: { get: async () => baseUser },
       worktrees: { get: async () => baseWorktree },
@@ -216,9 +221,9 @@ describe('agor_sessions_create', () => {
           ...(data as Record<string, unknown>),
         }),
       },
-      'session-mcp-servers': {
-        create: async (data: unknown) => {
-          attachCalls.push(data);
+      '/sessions/:id/mcp-servers': {
+        create: async (data: unknown, params: unknown) => {
+          attachCalls.push({ data, params });
           return data;
         },
       },
@@ -237,9 +242,9 @@ describe('agor_sessions_create', () => {
 
     expect(attachCalls).toHaveLength(2);
     // resolveMcpServerId mock prefixes with 'full-'
-    expect((attachCalls[0] as any).mcp_server_id).toBe('full-short-id-1');
-    expect((attachCalls[0] as any).session_id).toBe('sess-new');
-    expect((attachCalls[1] as any).mcp_server_id).toBe('full-short-id-2');
+    expect(attachCalls[0].data.mcpServerId).toBe('full-short-id-1');
+    expect(attachCalls[0].params.route.id).toBe('sess-new');
+    expect(attachCalls[1].data.mcpServerId).toBe('full-short-id-2');
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.mcpAttachFailures).toBeUndefined();
@@ -252,7 +257,7 @@ describe('agor_sessions_create', () => {
       sessions: {
         create: async () => ({ session_id: 'sess-new' }),
       },
-      'session-mcp-servers': {
+      '/sessions/:id/mcp-servers': {
         create: async () => {
           throw new Error('RBAC: forbidden');
         },
@@ -287,7 +292,7 @@ describe('agor_sessions_create', () => {
       sessions: {
         create: async () => ({ session_id: 'sess-new' }),
       },
-      'session-mcp-servers': {
+      '/sessions/:id/mcp-servers': {
         create: async () => {
           throw new Error('boom');
         },
@@ -528,7 +533,7 @@ describe('modelConfig schema (string shorthand coercion)', () => {
           return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
         },
       },
-      'session-mcp-servers': { create: async () => ({}) },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
     });
     vi.doMock('@agor/core/git', () => ({
       getGitState: async () => 'sha',
