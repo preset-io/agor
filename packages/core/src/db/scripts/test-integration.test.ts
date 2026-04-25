@@ -331,7 +331,6 @@ describe('Task Repository Integration', () => {
 
     const task = await taskRepo.create({
       session_id: session.session_id,
-      description: 'Test task',
       full_prompt: 'This is a test task',
       status: TaskStatus.CREATED,
       message_range: {
@@ -349,7 +348,7 @@ describe('Task Repository Integration', () => {
 
     expect(task.task_id).toBeDefined();
     expect(task.session_id).toBe(session.session_id);
-    expect(task.description).toBe('Test task');
+    expect(task.full_prompt).toBe('This is a test task');
     expect(task.tool_use_count).toBe(5);
   });
 
@@ -376,11 +375,10 @@ describe('Task Repository Integration', () => {
     const session1 = await createSession();
     const session2 = await createSession();
 
-    const createTask = (sessionId: SessionID, description: string) =>
+    const createTask = (sessionId: SessionID, fullPrompt: string) =>
       taskRepo.create({
         session_id: sessionId,
-        description,
-        full_prompt: 'Test prompt',
+        full_prompt: fullPrompt,
         status: TaskStatus.CREATED,
         message_range: {
           start_index: 0,
@@ -423,7 +421,6 @@ describe('Task Repository Integration', () => {
 
     const task = await taskRepo.create({
       session_id: session.session_id,
-      description: 'Test task',
       full_prompt: 'Test prompt',
       status: TaskStatus.CREATED,
       message_range: {
@@ -845,7 +842,6 @@ describe('Edge Cases and Data Integrity', () => {
     const timestamp = '2024-01-15T10:30:45.123Z';
     const task = await taskRepo.create({
       session_id: session.session_id,
-      description: 'Test',
       full_prompt: 'Test',
       status: TaskStatus.CREATED,
       message_range: {
@@ -860,7 +856,7 @@ describe('Edge Cases and Data Integrity', () => {
     expect(task.message_range.start_timestamp).toBe(timestamp);
   });
 
-  it('should handle special characters in descriptions', async () => {
+  it('should handle special characters in full_prompt', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
     const { worktree } = await setupRepoAndWorktree(db);
@@ -879,11 +875,10 @@ describe('Edge Cases and Data Integrity', () => {
       tasks: [],
     });
 
-    const description = 'Task with "quotes", \'apostrophes\', and <tags>';
+    const fullPrompt = 'Task with "quotes", \'apostrophes\', and <tags>';
     const task = await taskRepo.create({
       session_id: session.session_id,
-      description,
-      full_prompt: 'Test',
+      full_prompt: fullPrompt,
       status: TaskStatus.CREATED,
       message_range: {
         start_index: 0,
@@ -894,7 +889,7 @@ describe('Edge Cases and Data Integrity', () => {
       model: 'claude-sonnet-4-6',
     });
 
-    expect(task.description).toBe(description);
+    expect(task.full_prompt).toBe(fullPrompt);
   });
 
   it('should preserve exact SHA hashes', async () => {

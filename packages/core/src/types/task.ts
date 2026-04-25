@@ -66,9 +66,6 @@ export interface Task {
   /** Original user prompt (can be multi-line) */
   full_prompt: string;
 
-  /** Optional: LLM-generated short summary */
-  description?: string;
-
   status: TaskStatus;
 
   /**

@@ -415,7 +415,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
               : '';
       }
       if (!promptText) {
-        promptText = task.description || btwSession.title || '(no prompt)';
+        promptText = task.full_prompt?.substring(0, 120) || btwSession.title || '(no prompt)';
       }
 
       // Extract the last assistant response
@@ -552,9 +552,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         targetSession.callback_config?.include_original_prompt ??
         false;
 
-      // Get spawn prompt from task description (only if enabled)
+      // Get spawn prompt from task (truncated to 120 chars for the callback template).
       const spawnPrompt = includeOriginalPrompt
-        ? task.description || '(no prompt available)'
+        ? task.full_prompt?.substring(0, 120) || '(no prompt available)'
         : undefined;
 
       // Fetch last assistant message from child session (if callback config allows)

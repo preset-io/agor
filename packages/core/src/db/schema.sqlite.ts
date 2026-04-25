@@ -221,7 +221,6 @@ export const tasks = sqliteTable(
     data: t
       .json<unknown>('data')
       .$type<{
-        description: string;
         full_prompt: string;
 
         message_range: Task['message_range'];

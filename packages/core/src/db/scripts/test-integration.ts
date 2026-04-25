@@ -143,7 +143,6 @@ async function testTaskRepository(db: ReturnType<typeof createDatabase>, session
   // Create task
   const task = await repo.create({
     session_id: session.session_id,
-    description: 'Test task',
     full_prompt: 'This is a test task',
     status: TaskStatus.CREATED,
     message_range: {

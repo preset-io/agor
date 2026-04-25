@@ -69,8 +69,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       created_by: task.created_by ?? 'anonymous',
       session_md5: task.session_md5 ?? null,
       data: {
-        description: task.description ?? '',
-        full_prompt: task.full_prompt ?? task.description ?? '',
+        full_prompt: task.full_prompt ?? '',
         message_range: task.message_range ?? {
           start_index: 0,
           end_index: 0,
@@ -401,13 +400,11 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     full_prompt: string;
     created_by: string;
     status: typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED;
-    description?: string;
     metadata?: TaskMetadata;
   }): Promise<Task> {
     const taskBase: Partial<Task> = {
       session_id: input.session_id,
       full_prompt: input.full_prompt,
-      description: input.description ?? input.full_prompt.substring(0, 120),
       created_by: input.created_by,
       status: input.status,
       metadata: input.metadata,

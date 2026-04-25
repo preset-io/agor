@@ -228,7 +228,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                     <span style={{ color: token.colorTextSecondary, marginRight: token.sizeUnit }}>
                       {idx + 1}.
                     </span>
-                    {task.description || task.full_prompt}
+                    {task.full_prompt}
                   </Typography.Text>
                   <Space size={4}>
                     <Button

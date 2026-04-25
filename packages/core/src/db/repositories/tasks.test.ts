@@ -26,7 +26,6 @@ function createTaskData(overrides?: Partial<Task>): Partial<Task> {
     session_id: generateId(), // Will be overridden in tests
     created_by: 'test-user',
     full_prompt: 'Test prompt',
-    description: 'Test task',
     status: TaskStatus.CREATED,
     message_range: {
       start_index: 0,
@@ -101,7 +100,6 @@ describe('TaskRepository.create', () => {
     expect(created.session_id).toBe(data.session_id);
     expect(created.created_by).toBe(data.created_by);
     expect(created.full_prompt).toBe(data.full_prompt);
-    expect(created.description).toBe(data.description);
     expect(created.status).toBe(data.status);
     expect(created.created_at).toBeDefined();
     expect(created.completed_at).toBeUndefined();
@@ -250,17 +248,17 @@ describe('TaskRepository.createMany', () => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
     const tasks = [
-      createTaskData({ session_id: sessionId, description: 'Task 1' }),
-      createTaskData({ session_id: sessionId, description: 'Task 2' }),
-      createTaskData({ session_id: sessionId, description: 'Task 3' }),
+      createTaskData({ session_id: sessionId, full_prompt: 'Task 1' }),
+      createTaskData({ session_id: sessionId, full_prompt: 'Task 2' }),
+      createTaskData({ session_id: sessionId, full_prompt: 'Task 3' }),
     ];
 
     const created = await taskRepo.createMany(tasks);
 
     expect(created).toHaveLength(3);
-    expect(created[0].description).toBe('Task 1');
-    expect(created[1].description).toBe('Task 2');
-    expect(created[2].description).toBe('Task 3');
+    expect(created[0].full_prompt).toBe('Task 1');
+    expect(created[1].full_prompt).toBe('Task 2');
+    expect(created[2].full_prompt).toBe('Task 3');
   });
 
   dbTest('should handle empty array', async ({ db }) => {
@@ -384,14 +382,14 @@ describe('TaskRepository.findAll', () => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
 
-    await taskRepo.create(createTaskData({ session_id: sessionId, description: 'Task 1' }));
-    await taskRepo.create(createTaskData({ session_id: sessionId, description: 'Task 2' }));
-    await taskRepo.create(createTaskData({ session_id: sessionId, description: 'Task 3' }));
+    await taskRepo.create(createTaskData({ session_id: sessionId, full_prompt: 'Task 1' }));
+    await taskRepo.create(createTaskData({ session_id: sessionId, full_prompt: 'Task 2' }));
+    await taskRepo.create(createTaskData({ session_id: sessionId, full_prompt: 'Task 3' }));
 
     const tasks = await taskRepo.findAll();
 
     expect(tasks).toHaveLength(3);
-    expect(tasks.map((t) => t.description).sort()).toEqual(['Task 1', 'Task 2', 'Task 3']);
+    expect(tasks.map((t) => t.full_prompt).sort()).toEqual(['Task 1', 'Task 2', 'Task 3']);
   });
 
   dbTest('should return fully populated task objects', async ({ db }) => {
@@ -400,7 +398,6 @@ describe('TaskRepository.findAll', () => {
     const data = createTaskData({
       session_id: sessionId,
       full_prompt: 'Test prompt',
-      description: 'Test description',
       status: TaskStatus.RUNNING,
       tool_use_count: 5,
     });
@@ -412,7 +409,6 @@ describe('TaskRepository.findAll', () => {
     const found = tasks[0];
     expect(found.task_id).toBe(data.task_id);
     expect(found.full_prompt).toBe(data.full_prompt);
-    expect(found.description).toBe(data.description);
     expect(found.status).toBe(data.status);
     expect(found.tool_use_count).toBe(data.tool_use_count);
   });
@@ -438,20 +434,20 @@ describe('TaskRepository.findBySession', () => {
     const session2 = await createSessionWithDeps(db);
 
     await taskRepo.create(
-      createTaskData({ session_id: session1, description: 'Session 1 Task 1' })
+      createTaskData({ session_id: session1, full_prompt: 'Session 1 Task 1' })
     );
     await taskRepo.create(
-      createTaskData({ session_id: session1, description: 'Session 1 Task 2' })
+      createTaskData({ session_id: session1, full_prompt: 'Session 1 Task 2' })
     );
     await taskRepo.create(
-      createTaskData({ session_id: session2, description: 'Session 2 Task 1' })
+      createTaskData({ session_id: session2, full_prompt: 'Session 2 Task 1' })
     );
 
     const tasks = await taskRepo.findBySession(session1);
 
     expect(tasks).toHaveLength(2);
     expect(tasks.every((t) => t.session_id === session1)).toBe(true);
-    expect(tasks.map((t) => t.description).sort()).toEqual([
+    expect(tasks.map((t) => t.full_prompt).sort()).toEqual([
       'Session 1 Task 1',
       'Session 1 Task 2',
     ]);
@@ -462,18 +458,18 @@ describe('TaskRepository.findBySession', () => {
     const sessionId = await createSessionWithDeps(db);
 
     // Create tasks with small delays to ensure different timestamps
-    await taskRepo.create(createTaskData({ session_id: sessionId, description: 'First' }));
+    await taskRepo.create(createTaskData({ session_id: sessionId, full_prompt: 'First' }));
     await new Promise((resolve) => setTimeout(resolve, 10));
-    await taskRepo.create(createTaskData({ session_id: sessionId, description: 'Second' }));
+    await taskRepo.create(createTaskData({ session_id: sessionId, full_prompt: 'Second' }));
     await new Promise((resolve) => setTimeout(resolve, 10));
-    await taskRepo.create(createTaskData({ session_id: sessionId, description: 'Third' }));
+    await taskRepo.create(createTaskData({ session_id: sessionId, full_prompt: 'Third' }));
 
     const tasks = await taskRepo.findBySession(sessionId);
 
     expect(tasks).toHaveLength(3);
-    expect(tasks[0].description).toBe('First');
-    expect(tasks[1].description).toBe('Second');
-    expect(tasks[2].description).toBe('Third');
+    expect(tasks[0].full_prompt).toBe('First');
+    expect(tasks[1].full_prompt).toBe('Second');
+    expect(tasks[2].full_prompt).toBe('Third');
   });
 
   dbTest('should not return tasks from other sessions', async ({ db }) => {
@@ -516,24 +512,24 @@ describe('TaskRepository.findRunning', () => {
       createTaskData({
         session_id: sessionId,
         status: TaskStatus.RUNNING,
-        description: 'Running 1',
+        full_prompt: 'Running 1',
       })
     );
     await taskRepo.create(
-      createTaskData({ session_id: sessionId, status: TaskStatus.CREATED, description: 'Created' })
+      createTaskData({ session_id: sessionId, status: TaskStatus.CREATED, full_prompt: 'Created' })
     );
     await taskRepo.create(
       createTaskData({
         session_id: sessionId,
         status: TaskStatus.RUNNING,
-        description: 'Running 2',
+        full_prompt: 'Running 2',
       })
     );
     await taskRepo.create(
       createTaskData({
         session_id: sessionId,
         status: TaskStatus.COMPLETED,
-        description: 'Completed',
+        full_prompt: 'Completed',
       })
     );
 
@@ -541,7 +537,7 @@ describe('TaskRepository.findRunning', () => {
 
     expect(running).toHaveLength(2);
     expect(running.every((t) => t.status === TaskStatus.RUNNING)).toBe(true);
-    expect(running.map((t) => t.description).sort()).toEqual(['Running 1', 'Running 2']);
+    expect(running.map((t) => t.full_prompt).sort()).toEqual(['Running 1', 'Running 2']);
   });
 
   dbTest('should return running tasks from all sessions', async ({ db }) => {
@@ -819,17 +815,16 @@ describe('TaskRepository edge cases', () => {
 function createPendingInput(overrides: {
   session_id: string;
   status: typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED;
-  description?: string;
+  full_prompt?: string;
   metadata?: Parameters<TaskRepository['createPending']>[0]['metadata'];
 }): Parameters<TaskRepository['createPending']>[0] {
   return {
     session_id: overrides.session_id as Parameters<
       TaskRepository['createPending']
     >[0]['session_id'],
-    full_prompt: overrides.description ?? 'test prompt',
+    full_prompt: overrides.full_prompt ?? 'test prompt',
     created_by: 'test-user',
     status: overrides.status,
-    description: overrides.description,
     metadata: overrides.metadata,
   };
 }
@@ -994,21 +989,21 @@ describe('TaskRepository.findQueued', () => {
       createPendingInput({
         session_id: sessionId,
         status: TaskStatus.QUEUED,
-        description: 'first queued',
+        full_prompt: 'first queued',
       })
     );
     await taskRepo.createPending(
       createPendingInput({
         session_id: sessionId,
         status: TaskStatus.QUEUED,
-        description: 'second queued',
+        full_prompt: 'second queued',
       })
     );
     await taskRepo.createPending(
       createPendingInput({
         session_id: sessionId,
         status: TaskStatus.QUEUED,
-        description: 'third queued',
+        full_prompt: 'third queued',
       })
     );
 
@@ -1016,7 +1011,7 @@ describe('TaskRepository.findQueued', () => {
 
     expect(found).toHaveLength(3);
     expect(found.map((t) => t.queue_position)).toEqual([1, 2, 3]);
-    expect(found.map((t) => t.description)).toEqual([
+    expect(found.map((t) => t.full_prompt)).toEqual([
       'first queued',
       'second queued',
       'third queued',
@@ -1049,7 +1044,7 @@ describe('TaskRepository.getNextQueued', () => {
         session_id: sessionId,
         status: TaskStatus.QUEUED,
         queue_position: 3,
-        description: 'pos 3',
+        full_prompt: 'pos 3',
       })
     );
     await taskRepo.create(
@@ -1057,7 +1052,7 @@ describe('TaskRepository.getNextQueued', () => {
         session_id: sessionId,
         status: TaskStatus.QUEUED,
         queue_position: 1,
-        description: 'pos 1',
+        full_prompt: 'pos 1',
       })
     );
     await taskRepo.create(
@@ -1065,7 +1060,7 @@ describe('TaskRepository.getNextQueued', () => {
         session_id: sessionId,
         status: TaskStatus.QUEUED,
         queue_position: 2,
-        description: 'pos 2',
+        full_prompt: 'pos 2',
       })
     );
 
@@ -1073,7 +1068,7 @@ describe('TaskRepository.getNextQueued', () => {
 
     expect(next).not.toBeNull();
     expect(next?.queue_position).toBe(1);
-    expect(next?.description).toBe('pos 1');
+    expect(next?.full_prompt).toBe('pos 1');
   });
 
   dbTest('should not return tasks from other sessions', async ({ db }) => {

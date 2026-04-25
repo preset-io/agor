@@ -464,10 +464,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
 
         {/* Right column: Content */}
         <Flex vertical flex={1} style={{ minWidth: 0 }}>
-          <Typography.Text ellipsis style={{ marginBottom: token.sizeUnit }}>
-            {typeof task.description === 'string'
-              ? task.description || 'User Prompt'
-              : 'User Prompt'}
+          <Typography.Text
+            ellipsis={{ tooltip: task.full_prompt }}
+            style={{ marginBottom: token.sizeUnit, display: 'block' }}
+          >
+            {task.full_prompt || 'User Prompt'}
           </Typography.Text>
 
           {/* Task metadata */}

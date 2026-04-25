@@ -77,12 +77,6 @@ export function extractTasksFromMessages(
       fullPrompt = JSON.stringify(userMessage.content);
     }
 
-    // Clean up newlines and excessive whitespace for description
-    const cleanPrompt = fullPrompt.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
-
-    // Generate short description (first 120 chars)
-    const description = cleanPrompt.substring(0, 120) + (cleanPrompt.length > 120 ? '...' : '');
-
     // Get timestamps
     const startTimestamp = userMessage.timestamp;
     const endMessage = messages[endIndex];
@@ -93,7 +87,6 @@ export function extractTasksFromMessages(
       task_id: generateId() as UUID,
       session_id: sessionId,
       full_prompt: fullPrompt,
-      description,
       status: TaskStatus.COMPLETED, // Imported sessions are historical
       message_range: {
         start_index: startIndex,

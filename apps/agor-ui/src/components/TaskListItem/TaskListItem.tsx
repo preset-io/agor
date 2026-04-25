@@ -36,8 +36,8 @@ const TaskListItem = ({ task, onClick, compact = false }: TaskListItemProps) => 
   const isDirty = displaySha?.endsWith('-dirty');
   const cleanSha = displaySha?.replace('-dirty', '');
 
-  // Truncate description if too long
-  const description = task.description || task.full_prompt || 'Untitled task';
+  // Truncate prompt if too long
+  const description = task.full_prompt || 'Untitled task';
   const isTruncated = description.length > TRUNCATION_LENGTH;
   const displayDescription = isTruncated
     ? `${description.substring(0, TRUNCATION_LENGTH)}...`
