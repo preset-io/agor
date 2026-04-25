@@ -3,6 +3,7 @@ import { Button, Form, Modal } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import type { WorktreeTabConfig } from '../CreateDialog/tabs/WorktreeTab';
+import { MutateButton } from '../MutateButton/MutateButton';
 import { WorktreeFormFields } from '../WorktreeFormFields';
 
 /** @deprecated Use WorktreeTabConfig directly. Kept as alias for backward compat. */
@@ -130,9 +131,9 @@ export const NewWorktreeModal: React.FC<NewWorktreeModalProps> = ({
         <Button key="cancel" onClick={handleCancel}>
           Cancel
         </Button>,
-        <Button key="create" type="primary" onClick={handleCreate} disabled={!isFormValid}>
+        <MutateButton key="create" type="primary" onClick={handleCreate} disabled={!isFormValid}>
           Create Worktree
-        </Button>,
+        </MutateButton>,
       ]}
     >
       <Form

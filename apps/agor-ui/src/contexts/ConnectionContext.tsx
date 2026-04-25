@@ -40,8 +40,7 @@ export const ConnectionProvider = ConnectionContext.Provider;
  * ```
  */
 export function useConnectionDisabled(): boolean {
-  const { connected } = useContext(ConnectionContext);
-  return !connected;
+  return !useMutationGate().canMutate;
 }
 
 /**
@@ -49,4 +48,50 @@ export function useConnectionDisabled(): boolean {
  */
 export function useConnectionState(): ConnectionContextValue {
   return useContext(ConnectionContext);
+}
+
+/**
+ * Why a mutation is currently blocked. Extend this union as we add new
+ * gates (e.g. RBAC, env-not-running, read-only viewer).
+ */
+export type MutationBlockReason = 'disconnected' | 'reconnecting' | 'out-of-sync';
+
+export interface MutationGate {
+  canMutate: boolean;
+  reason: MutationBlockReason | null;
+  message: string | null;
+}
+
+/**
+ * Single source of truth for "should this mutation site be disabled?"
+ *
+ * Returns a structured reason so UI can show a meaningful tooltip / toast
+ * instead of just `disabled=true`. The boolean shortcut is
+ * `useConnectionDisabled()`, which now delegates here.
+ */
+export function useMutationGate(): MutationGate {
+  const { connected, connecting, outOfSync } = useContext(ConnectionContext);
+
+  if (outOfSync) {
+    return {
+      canMutate: false,
+      reason: 'out-of-sync',
+      message: 'Daemon was upgraded — refresh the page to continue.',
+    };
+  }
+  if (!connected && connecting) {
+    return {
+      canMutate: false,
+      reason: 'reconnecting',
+      message: 'Reconnecting to daemon…',
+    };
+  }
+  if (!connected) {
+    return {
+      canMutate: false,
+      reason: 'disconnected',
+      message: 'Disconnected from daemon. Action unavailable.',
+    };
+  }
+  return { canMutate: true, reason: null, message: null };
 }
