@@ -91,6 +91,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
   const terminalRef = useRef<Terminal | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [modalReady, setModalReady] = useState(false);
+  const [zellijMissing, setZellijMissing] = useState(false);
   const [sessionInfo, setSessionInfo] = useState<{
     zellijSession?: string;
     zellijReused?: boolean;
@@ -291,11 +292,20 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         }
       } catch (error) {
         console.error('[Terminal] Failed to create terminal:', error);
+        const message = error instanceof Error ? error.message : String(error);
+        // Surface the "Zellij not installed" case as a friendly inline panel
+        // with a link to the install docs, rather than a raw xterm error.
+        if (/zellij is not installed/i.test(message)) {
+          setZellijMissing(true);
+          if (terminalRef.current) {
+            terminalRef.current.dispose();
+            terminalRef.current = null;
+          }
+          return;
+        }
         if (terminalRef.current) {
-          terminalRef.current.writeln('\r\n❌ Failed to connect to terminal');
-          terminalRef.current.writeln(
-            `Error: ${error instanceof Error ? error.message : String(error)}`
-          );
+          terminalRef.current.writeln('\r\nFailed to connect to terminal');
+          terminalRef.current.writeln(`Error: ${message}`);
         }
       }
     };
@@ -314,6 +324,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       removeChannelListeners();
       setIsConnected(false);
       setSessionInfo({});
+      setZellijMissing(false);
     };
   }, [open, modalReady, client, initialCommands, canUseTerminal, worktreeId, user?.user_id]);
 
@@ -358,6 +369,35 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
           </p>
           <p style={{ marginBottom: 0 }}>
             Contact your Agor administrator to request elevated permissions.
+          </p>
+        </div>
+      ) : zellijMissing ? (
+        <div style={{ padding: '24px', color: '#fff', maxWidth: 560 }}>
+          <p style={{ marginTop: 0 }}>
+            <strong>Zellij isn't installed on the daemon host.</strong>
+          </p>
+          <p>
+            The web terminal uses{' '}
+            <a
+              href="https://zellij.dev/"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#3db5ab' }}
+            >
+              Zellij
+            </a>{' '}
+            for persistent, multiplexed sessions. Install it to enable terminals — everything else
+            in Agor works without it.
+          </p>
+          <p style={{ marginBottom: 0 }}>
+            <a
+              href="https://agor.live/guide/extended-install#optional-zellij-for-the-web-terminal"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#3db5ab' }}
+            >
+              Extended install guide →
+            </a>
           </p>
         </div>
       ) : (

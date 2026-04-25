@@ -1,0 +1,112 @@
+---
+title: Extended Installation
+description: Alternative ways to install and run Agor — Docker Compose, building from source, optional companions like Zellij, and custom config locations.
+---
+
+# Extended Installation
+
+The [Getting Started](/guide/getting-started) guide covers the recommended path: `npm install -g agor-live`. This page covers everything else — alternatives, optional companions, and edge cases.
+
+## Requirements
+
+- **Node.js ≥ 22.12** — see [nodejs.org](https://nodejs.org) for installation.
+
+That's the only hard requirement. Everything below is either an alternative install method or an optional companion.
+
+---
+
+## Optional: Zellij (for the web terminal)
+
+Agor has a built-in web terminal that uses [Zellij](https://zellij.dev/) for persistent, multiplexed terminal sessions. The terminal is **optional** — Agor runs fine without it; if you don't have Zellij, terminal buttons in the UI will show a friendly message instead.
+
+If you want the terminal:
+
+1. Install Zellij from the [official installation guide](https://zellij.dev/documentation/installation).
+2. Restart the Agor daemon (`agor daemon restart`).
+
+The daemon detects Zellij at startup and logs whether it's available.
+
+---
+
+## Run from source
+
+For contributors or anyone who wants to track `main`:
+
+```bash
+git clone https://github.com/preset-io/agor
+cd agor
+pnpm install
+```
+
+Then in two terminals:
+
+```bash
+# Terminal 1: daemon (watches @agor/core + daemon, auto-restarts)
+cd apps/agor-daemon
+pnpm dev
+
+# Terminal 2: UI dev server (Vite HMR)
+cd apps/agor-ui
+pnpm dev
+```
+
+Visit `http://localhost:5173`.
+
+See the [Development Guide](/guide/development) for the full contributor workflow.
+
+---
+
+## Docker Compose
+
+Agor ships a `docker-compose.yml` for one-command setup, including an optional PostgreSQL backend.
+
+```bash
+git clone https://github.com/preset-io/agor
+cd agor
+docker compose up
+# Visit http://localhost:5173 → Login: admin@agor.live / admin
+```
+
+PostgreSQL mode:
+
+```bash
+docker compose --env-file .env.postgres up
+```
+
+For database modes, multi-instance setups, and gotchas (e.g. committing from inside the container), see the [Development Guide](/guide/development#docker-compose-recommended).
+
+---
+
+## GitHub Codespaces
+
+> **Community-maintained.** Codespaces is supported on a best-effort basis and is not part of the regular test/release cycle. For day-to-day use, prefer the npm install path.
+
+Agor has a devcontainer that boots a Codespace pre-configured with Node, pnpm, and the running daemon:
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://github.com/codespaces/new?skip_quickstart=true&machine=basicLinux32gb&repo=1069864589&ref=main&devcontainer_path=.devcontainer%2Fdevcontainer.json&geo=UsWest)
+
+Useful for quick demos. See the [Security guide](/security#codespaces-notes) for trust-boundary notes before sharing a Codespace with collaborators.
+
+---
+
+## Custom config location
+
+By default Agor reads `~/.agor/config.yaml` and stores the database at `~/.agor/agor.db`.
+
+Override the config path with the `--config` flag or the `AGOR_CONFIG_PATH` environment variable:
+
+```bash
+agor daemon start --config /etc/agor/config.yaml
+# or
+AGOR_CONFIG_PATH=/etc/agor/config.yaml agor daemon start
+```
+
+> **Heads-up:** custom config paths are not yet threaded through every code path (e.g. database URL resolution). If you hit issues, please [file an issue](https://github.com/preset-io/agor/issues).
+
+---
+
+## What's next?
+
+- [Getting Started](/guide/getting-started) — add your first repo and create a session.
+- [Concepts](/guide/concepts) — worktrees, boards, sessions, environments.
+- [Development Guide](/guide/development) — contributor workflow.

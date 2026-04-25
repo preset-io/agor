@@ -48,50 +48,20 @@
 
 ---
 
-## Installation
+## Quick Start
 
-### Requirements
-
-- **Node.js** 20.x
-- **Zellij** ≥ 0.40 (required - daemon will not start without it)
-
-Install Zellij:
-
-```bash
-# Ubuntu/Debian
-curl -L https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz | sudo tar -xz -C /usr/local/bin
-
-# macOS
-brew install zellij
-
-# RHEL/CentOS
-curl -L https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz | sudo tar -xz -C /usr/local/bin
-```
-
-### Install Agor
+Requires **Node.js ≥ 22.12** ([install](https://nodejs.org)).
 
 ```bash
 npm install -g agor-live
+agor init           # creates ~/.agor/ and database
+agor daemon start   # runs in the background
+agor open           # opens the UI
 ```
 
-**Note:** Agor requires Zellij for persistent terminal sessions. The daemon will fail to start with a helpful error message if Zellij is not installed.
+That's it. Visit [agor.live/guide/getting-started](https://agor.live/guide/getting-started) to add a repo and create your first session.
 
-## Quick Start
-
-```bash
-# 1. Initialize (creates ~/.agor/ and database)
-agor init
-
-# 2. Start the daemon
-agor daemon start
-
-# 3. Open the UI
-agor open
-```
-
-**Try in Codespaces:**
-
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://github.com/codespaces/new?skip_quickstart=true&machine=basicLinux32gb&repo=1069864589&ref=main&devcontainer_path=.devcontainer%2Fdevcontainer.json&geo=UsWest)
+> The web terminal needs **[Zellij](https://zellij.dev/documentation/installation)** for persistent sessions. Everything else works without it. See [Extended Installation](https://agor.live/guide/extended-install) for Docker, source builds, and other options.
 
 ---
 

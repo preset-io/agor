@@ -1,6 +1,7 @@
 export default {
   index: 'Overview',
   'getting-started': 'Getting Started',
+  'extended-install': 'Extended Installation',
   concepts: 'Concepts',
   assistants: 'Assistants',
   '--- Features': {
