@@ -632,7 +632,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   /**
    * Custom method: Trigger queue processing
    *
-   * Processes the next queued message for an idle session.
+   * Drains the next queued task for an idle session.
    * Used by callback system to trigger immediate queue processing.
    *
    * NOTE: The actual implementation is provided by index.ts via setQueueProcessor

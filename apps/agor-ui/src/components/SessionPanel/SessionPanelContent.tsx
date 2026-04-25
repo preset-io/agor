@@ -207,7 +207,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                 letterSpacing: '0.5px',
               }}
             >
-              Queued Messages ({queuedTasks.length})
+              Queued Tasks ({queuedTasks.length})
             </Typography.Text>
             <Space orientation="vertical" size={8} style={{ width: '100%' }}>
               {queuedTasks.map((task, idx) => (

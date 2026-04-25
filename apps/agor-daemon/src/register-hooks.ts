@@ -1804,8 +1804,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       patch: [
         async (context) => {
-          // Automatically process queued messages when session becomes IDLE
-          // This ensures queued messages are processed regardless of how the session became IDLE
+          // Automatically process queued tasks when session becomes IDLE
+          // This ensures queued tasks are processed regardless of how the session became IDLE
           const session = Array.isArray(context.result) ? context.result[0] : context.result;
 
           if (session && session.status === 'idle') {
@@ -1830,7 +1830,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               setImmediate(async () => {
                 try {
                   console.log(
-                    `🔄 [SessionsService.after.patch] Session ${session.session_id.substring(0, 8)} became IDLE, checking for queued messages...`
+                    `🔄 [SessionsService.after.patch] Session ${session.session_id.substring(0, 8)} became IDLE, checking for queued tasks...`
                   );
 
                   await sessionsService.triggerQueueProcessing(session.session_id, context.params);

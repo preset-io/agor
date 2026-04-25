@@ -298,7 +298,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
                   `🔄 [TasksService] Triggering callback target queue processing for ${targetSessionId.substring(0, 8)} (callback queued)`
                 );
                 // Pass empty params to avoid leaking child's auth context to target
-                // The queue processor will reconstruct target auth from queued message metadata
+                // The queue processor will reconstruct target auth from queued task metadata
                 await sessionsService.triggerQueueProcessing(targetSessionId, {});
               }
             } catch (error) {
@@ -354,7 +354,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             await this.injectBtwResultMessage(task, session, params);
           }
 
-          // IMPORTANT: Now that session is idle, process any queued messages (including callbacks)
+          // IMPORTANT: Now that session is idle, process any queued tasks (including callbacks)
           // This handles the case where callbacks were queued while this session was running
           const sessionsService = this.app.service('sessions') as unknown as SessionsService;
           if (sessionsService.triggerQueueProcessing) {
