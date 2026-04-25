@@ -122,7 +122,8 @@ export const taskQuerySchema = createQuerySchema(
     session_id: Type.Optional(CommonSchemas.uuid),
     status: Type.Optional(
       Type.Union([
-        Type.Literal('pending'),
+        Type.Literal('queued'),
+        Type.Literal('created'),
         Type.Literal('running'),
         Type.Literal('stopping'),
         Type.Literal('awaiting_permission'),

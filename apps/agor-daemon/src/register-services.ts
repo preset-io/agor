@@ -179,10 +179,18 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   );
 
   app.use('/tasks', createTasksService(db, app), {
-    // 'failed' is emitted by the prompt route when executor spawn throws so
-    // clients can surface the error instead of silently seeing an idle
-    // session with a ghost task.
-    events: ['tool:start', 'tool:complete', 'thinking:chunk', 'failed'],
+    // Custom events not in this list are dropped at the FeathersJS transport
+    // boundary — they fire on the local EventEmitter but never reach socket
+    // clients. Keep this in sync with every `app.service('tasks').emit(...)`
+    // call site.
+    //   - 'queued': prompt route auto-queues a task (session not idle / queue
+    //      not empty) — UI's queue drawer subscribes to this.
+    //   - 'failed': prompt route reports executor-spawn failures so clients
+    //      surface the error instead of seeing an idle session with a ghost
+    //      task.
+    //   - 'tool:start' / 'tool:complete' / 'thinking:chunk': forwarded from
+    //      the executor for live tool/thinking visualization.
+    events: ['queued', 'tool:start', 'tool:complete', 'thinking:chunk', 'failed'],
   });
   if (svcEnabled('leaderboard')) {
     app.use('/leaderboard', createLeaderboardService(db));
