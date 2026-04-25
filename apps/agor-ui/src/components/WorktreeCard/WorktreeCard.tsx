@@ -754,7 +754,8 @@ const WorktreeCardComponent = ({
       style={{
         width: 500,
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
-        transition: 'box-shadow 0.6s ease-in-out, border 0.6s ease-in-out',
+        transition:
+          'box-shadow 0.6s ease-in-out, border 0.6s ease-in-out, opacity 0.2s ease-in-out',
         willChange: needsAttention && !inPopover ? 'box-shadow' : 'auto',
         ...(needsAttention && !inPopover
           ? {
@@ -767,6 +768,13 @@ const WorktreeCardComponent = ({
               ? { borderColor: token.colorInfo, borderWidth: 1 }
               : {}),
         ...(isAgent ? { backgroundColor: token.colorInfoBg } : {}),
+        // Disconnected chokepoint: block all in-card interactions (clicking
+        // into a session, env pill actions, modals) and dim to communicate
+        // the state. Canvas pan/zoom and the slim app-shell banner remain
+        // active. See docs/disconnected-state-design.md.
+        ...(connectionDisabled && !inPopover
+          ? { pointerEvents: 'none' as const, opacity: 0.55 }
+          : {}),
       }}
       styles={{
         body: { padding: 16 },

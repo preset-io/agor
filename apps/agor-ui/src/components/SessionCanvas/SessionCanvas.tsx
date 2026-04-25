@@ -56,6 +56,7 @@ import 'reactflow/dist/style.css';
 import './SessionCanvas.css';
 import { mapToArray } from '@/utils/mapHelpers';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
+import { useMutationGate } from '../../contexts/ConnectionContext';
 import { useCursorTracking } from '../../hooks/useCursorTracking';
 import { usePresence } from '../../hooks/usePresence';
 import type { AgenticToolOption } from '../../types';
@@ -309,6 +310,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     ref
   ) => {
     const { token } = theme.useToken();
+    const mutationGate = useMutationGate();
     const isDarkMode = isDarkTheme(token);
     const defaultBackground = DEFAULT_BACKGROUNDS[isDarkMode ? 'dark' : 'light'];
     const hasCustomCss = Boolean(board?.custom_css?.trim());
@@ -2245,7 +2247,9 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             snapGrid={[20, 20]}
             minZoom={0.1}
             maxZoom={1.5}
-            nodesDraggable={true}
+            // Disconnected: lock drag-to-reposition. Pan/zoom stay alive so
+            // users can keep browsing the canvas in read-only mode.
+            nodesDraggable={mutationGate.canMutate}
             nodesConnectable={false}
             elementsSelectable={true}
             elevateNodesOnSelect={false}
