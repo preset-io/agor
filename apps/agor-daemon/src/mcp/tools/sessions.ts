@@ -30,6 +30,7 @@ import {
 } from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
+import { listAttachedMcpServers } from './mcp-servers.js';
 
 /**
  * Shared Zod schema for specifying a model override at session-create / spawn /
@@ -179,7 +180,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_get',
     {
       description:
-        'Get detailed information about a specific session, including genealogy and current state. The response includes a `url` field with a clickable link to view the session in the UI.',
+        'Get detailed information about a specific session, including genealogy, current state, and the MCP servers currently attached to it (with OAuth status — check `attached_mcp_servers[].oauth_authenticated` to spot servers needing auth). The response includes a `url` field with a clickable link to view the session in the UI.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         sessionId: z.string().describe('Session ID (UUIDv7 or short ID like 01a1b2c3)'),
@@ -194,7 +195,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       const session = await ctx.app
         .service('sessions')
         .get(args.sessionId, sessionParams as Parameters<SessionsServiceImpl['get']>[1]);
-      return textResult(session);
+      const attached_mcp_servers = await listAttachedMcpServers(ctx, session.session_id);
+      return textResult({ ...session, attached_mcp_servers });
     }
   );
 
@@ -203,7 +205,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_get_current',
     {
       description:
-        'Get information about the current session (the one making this MCP call). Returns session details plus denormalized worktree, repo, and board context — useful for introspection and getting IDs needed by other tools.',
+        'Get information about the current session (the one making this MCP call). Returns session details, denormalized worktree/repo/board context, and the MCP servers attached to this session (each with `oauth_authenticated` so callers can spot servers needing auth). To browse the broader catalog of servers eligible to attach, use `agor_mcp_servers_list`.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({}),
     },
@@ -266,11 +268,14 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         }
       }
 
+      const attached_mcp_servers = await listAttachedMcpServers(ctx, ctx.sessionId);
+
       return textResult({
         session,
         worktree,
         repo,
         board,
+        attached_mcp_servers,
       });
     }
   );

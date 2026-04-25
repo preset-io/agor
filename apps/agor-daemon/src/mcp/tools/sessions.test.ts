@@ -642,3 +642,85 @@ describe('inputSchema → JSON Schema conversion (MCP discovery)', () => {
     }
   });
 });
+
+describe('attached_mcp_servers in session-info tools', () => {
+  // The catalog (`agor_mcp_servers_list`) and the per-session attachment view
+  // are now distinct: catalog = "what could I attach", attached = "what IS
+  // attached to this session". This test pins the attachment view onto
+  // `agor_sessions_get_current` and `agor_sessions_get`, since previously the
+  // only way to read it was a session-biased version of `agor_mcp_servers_list`.
+  it('agor_sessions_get_current returns attached_mcp_servers from the junction', async () => {
+    const app = makeFakeApp({
+      sessions: {
+        get: async (id: string) => ({
+          session_id: id,
+          worktree_id: null, // skip worktree denormalization for brevity
+        }),
+      },
+      'session-mcp-servers': {
+        find: async () => ({ data: [{ mcp_server_id: 'srv-1' }, { mcp_server_id: 'srv-2' }] }),
+      },
+      'mcp-servers': {
+        get: async (id: string) => ({
+          mcp_server_id: id,
+          name: `name-${id}`,
+          display_name: `Display ${id}`,
+          transport: 'http',
+          enabled: true,
+          auth: { type: 'none' },
+        }),
+      },
+    });
+
+    const tools = await registerAndCaptureTools(
+      { app, userId: 'user-1', sessionId: 'sess-current' },
+      ['agor_sessions_get_current']
+    );
+    const result = await tools.agor_sessions_get_current.cb({});
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(Array.isArray(payload.attached_mcp_servers)).toBe(true);
+    expect(payload.attached_mcp_servers).toHaveLength(2);
+    expect(payload.attached_mcp_servers[0]).toMatchObject({
+      mcp_server_id: 'srv-1',
+      name: 'name-srv-1',
+      transport: 'http',
+      auth_type: 'none',
+      oauth_authenticated: true,
+      enabled: true,
+    });
+  });
+
+  it('agor_sessions_get returns attached_mcp_servers for the requested session', async () => {
+    const app = makeFakeApp({
+      sessions: {
+        get: async (id: string) => ({ session_id: id }),
+      },
+      'session-mcp-servers': {
+        find: async (params: { query?: { session_id?: string } }) => ({
+          data: params?.query?.session_id === 'sess-other' ? [{ mcp_server_id: 'srv-x' }] : [],
+        }),
+      },
+      'mcp-servers': {
+        get: async (id: string) => ({
+          mcp_server_id: id,
+          name: `name-${id}`,
+          transport: 'stdio',
+          enabled: true,
+          auth: { type: 'none' },
+        }),
+      },
+    });
+
+    const tools = await registerAndCaptureTools(
+      { app, userId: 'user-1', sessionId: 'sess-current' },
+      ['agor_sessions_get']
+    );
+    const result = await tools.agor_sessions_get.cb({ sessionId: 'sess-other' });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.attached_mcp_servers).toEqual([
+      expect.objectContaining({ mcp_server_id: 'srv-x', auth_type: 'none' }),
+    ]);
+  });
+});

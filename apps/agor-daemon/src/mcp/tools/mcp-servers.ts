@@ -4,6 +4,24 @@ import { z } from 'zod';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
 
+/**
+ * Standard MCP-server payload returned by the MCP tools. Shared by the catalog
+ * lister (`agor_mcp_servers_list`) and the per-session attachment view that
+ * `agor_sessions_get_current` / `agor_sessions_get` embeds as
+ * `attached_mcp_servers` — keeping one shape so agents can treat them
+ * identically.
+ */
+export interface McpServerSummary {
+  mcp_server_id: string;
+  name: string;
+  display_name?: string;
+  transport: string;
+  auth_type: string;
+  oauth_mode?: string;
+  oauth_authenticated: boolean;
+  enabled: boolean;
+}
+
 /** Resolve OAuth authentication status for an MCP server. */
 async function getOAuthStatus(
   ctx: McpContext,
@@ -33,13 +51,66 @@ async function getOAuthStatus(
   return { authenticated: false };
 }
 
+/** Build the standard MCP-server summary, resolving OAuth status inline. */
+export async function summarizeMcpServer(
+  ctx: McpContext,
+  mcpServer: MCPServer
+): Promise<McpServerSummary> {
+  const authType = mcpServer.auth?.type || 'none';
+  const oauthMode = mcpServer.auth?.oauth_mode || 'per_user';
+  const { authenticated } = await getOAuthStatus(ctx, mcpServer);
+  return {
+    mcp_server_id: mcpServer.mcp_server_id,
+    name: mcpServer.name,
+    display_name: mcpServer.display_name,
+    transport: mcpServer.transport,
+    auth_type: authType,
+    oauth_mode: oauthMode,
+    oauth_authenticated: authenticated,
+    enabled: mcpServer.enabled,
+  };
+}
+
+/**
+ * List MCP servers attached to a session (via the `session-mcp-servers`
+ * junction), enriched with OAuth status. Used by `agor_sessions_get_current`
+ * and `agor_sessions_get` to expose `attached_mcp_servers` in their payload.
+ */
+export async function listAttachedMcpServers(
+  ctx: McpContext,
+  sessionId: string,
+  opts: { includeDisabled?: boolean } = {}
+): Promise<McpServerSummary[]> {
+  const sessionMCPServers = await ctx.app.service('session-mcp-servers').find({
+    ...ctx.baseServiceParams,
+    query: {
+      session_id: sessionId,
+      ...(opts.includeDisabled ? {} : { enabled: true }),
+      $limit: 100,
+    },
+  });
+  const data = Array.isArray(sessionMCPServers) ? sessionMCPServers : sessionMCPServers.data;
+  const summaries: McpServerSummary[] = [];
+  for (const sms of data as Array<{ mcp_server_id: string }>) {
+    try {
+      const mcpServer = await ctx.app
+        .service('mcp-servers')
+        .get(sms.mcp_server_id, ctx.baseServiceParams);
+      summaries.push(await summarizeMcpServer(ctx, mcpServer));
+    } catch (error) {
+      console.warn(`Failed to fetch MCP server ${sms.mcp_server_id}:`, error);
+    }
+  }
+  return summaries;
+}
+
 export function registerMcpServerTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_mcp_servers_list
   server.registerTool(
     'agor_mcp_servers_list',
     {
       description:
-        "List MCP servers available to the current session. Shows each server's name, transport type, authentication type, and OAuth connection status. Use this to see which external tools/services are configured and whether they need authentication.",
+        'List the MCP-server catalog the current user can access (i.e. servers eligible to attach to a session). Each entry includes name, transport, auth type, and OAuth status. Use this to discover IDs to pass to `agor_sessions_create({ mcpServerIds })`. To see which servers are currently ATTACHED to a session, read `attached_mcp_servers` from `agor_sessions_get_current` or `agor_sessions_get`.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         includeDisabled: z
@@ -51,84 +122,22 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     async (args) => {
       const includeDisabled = args.includeDisabled === true;
 
-      const sessionMCPServers = await ctx.app.service('session-mcp-servers').find({
+      const result = await ctx.app.service('mcp-servers').find({
         ...ctx.baseServiceParams,
         query: {
-          session_id: ctx.sessionId,
+          scope: 'global',
           ...(includeDisabled ? {} : { enabled: true }),
           $limit: 100,
         },
       });
+      const data = (Array.isArray(result) ? result : result.data) as MCPServer[];
 
-      const servers: Array<{
-        mcp_server_id: string;
-        name: string;
-        display_name?: string;
-        transport: string;
-        auth_type: string;
-        oauth_mode?: string;
-        oauth_authenticated: boolean;
-        enabled: boolean;
-      }> = [];
-
-      const sessionMCPData = Array.isArray(sessionMCPServers)
-        ? sessionMCPServers
-        : sessionMCPServers.data;
-      const mcpServerIds = sessionMCPData.map(
-        (sms: { mcp_server_id: string }) => sms.mcp_server_id
-      );
-
-      for (const serverId of mcpServerIds) {
-        try {
-          const mcpServer = await ctx.app
-            .service('mcp-servers')
-            .get(serverId, ctx.baseServiceParams);
-          const authType = mcpServer.auth?.type || 'none';
-          const oauthMode = mcpServer.auth?.oauth_mode || 'per_user';
-          const { authenticated } = await getOAuthStatus(ctx, mcpServer);
-
-          servers.push({
-            mcp_server_id: mcpServer.mcp_server_id,
-            name: mcpServer.name,
-            display_name: mcpServer.display_name,
-            transport: mcpServer.transport,
-            auth_type: authType,
-            oauth_mode: oauthMode,
-            oauth_authenticated: authenticated,
-            enabled: mcpServer.enabled,
-          });
-        } catch (error) {
-          console.warn(`Failed to fetch MCP server ${serverId}:`, error);
-        }
-      }
-
-      // Also include global MCP servers not explicitly attached
-      const globalServers = await ctx.app.service('mcp-servers').find({
-        ...ctx.baseServiceParams,
-        query: { scope: 'global', ...(includeDisabled ? {} : { enabled: true }), $limit: 100 },
-      });
-
-      for (const mcpServer of Array.isArray(globalServers) ? globalServers : globalServers.data) {
-        if (!mcpServerIds.includes(mcpServer.mcp_server_id)) {
-          const authType = mcpServer.auth?.type || 'none';
-          const oauthMode = mcpServer.auth?.oauth_mode || 'per_user';
-          const { authenticated } = await getOAuthStatus(ctx, mcpServer);
-
-          servers.push({
-            mcp_server_id: mcpServer.mcp_server_id,
-            name: mcpServer.name,
-            display_name: mcpServer.display_name,
-            transport: mcpServer.transport,
-            auth_type: authType,
-            oauth_mode: oauthMode,
-            oauth_authenticated: authenticated,
-            enabled: mcpServer.enabled,
-          });
-        }
+      const servers: McpServerSummary[] = [];
+      for (const mcpServer of data) {
+        servers.push(await summarizeMcpServer(ctx, mcpServer));
       }
 
       return textResult({
-        session_id: ctx.sessionId,
         mcp_servers: servers,
         summary: {
           total: servers.length,
