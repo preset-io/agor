@@ -22,7 +22,7 @@ collapsed the navbar itself when disconnected.
 |---|---|---|
 | **React Flow freeze** | `nodesDraggable / elementsSelectable / nodesFocusable / edgesFocusable` all gated on `gate.canMutate` (`SessionCanvas.tsx:2248–2257`) | No drag, no selection, no focus — pan/zoom alive |
 | **WorktreeCard root** | `pointerEvents:'none'` + `opacity:0.55` on `<Card style>` (`WorktreeCard.tsx:770–774`) | All in-card clicks blocked, dimmed |
-| **AppHeader collapse** | Wrap each interactive nav element in `{connected && (...)}` (`AppHeader.tsx`) | Disconnected navbar reduces to logo + instance label + connection pill |
+| **AppHeader disable** | `disabled={!connected}` on the icon `Button`s that lead to fetch/mutate surfaces (`AppHeader.tsx`) | Disconnected navbar greys out drawer/comments toggles, event stream, settings cog, user menu. Local-only navigation (BoardSwitcher, RecentBoardPills, ThemeSwitcher, Documentation, Facepile) stays fully alive. |
 | **ConnectionStatus pill** | (pre-existing) | Single source of disconnected signal in the navbar |
 
 Plus the foundation: `useMutationGate()` hook extending the existing
@@ -63,10 +63,13 @@ The three boundaries are: **canvas drag**, **WorktreeCard click root**,
 
 ### What the user sees when disconnected
 
-- **Navbar collapses** to logo + instance label + connection pill (red
-  "Disconnected" tag with retry). All other icons (board switcher,
-  drawer toggle, comments, settings cog, theme switcher, user menu, etc.)
-  are hidden — physically removing the entry points to mutating UI.
+- **Navbar greys out** the icons that lead to fetch/mutate surfaces:
+  drawer toggle, comments, Live Event Stream, Settings cog, User menu —
+  all rendered with `disabled={!connected}`. The connection pill turns
+  red ("Disconnected" with retry). Local-only navigation stays fully
+  alive: BoardSwitcher (board navigation is local), RecentBoardPills,
+  ThemeSwitcher (local pref), Documentation (external link), Facepile
+  (presence display).
 - **Canvas:** pannable and zoomable as normal. Cards are dimmed
   (opacity 0.55) and unclickable. Cards cannot be dragged, selected,
   or focused.
@@ -511,9 +514,11 @@ The full plan landed in one PR.
 2. **WorktreeCard click surface.** `WorktreeCard.tsx:770–774` — extend the
    `<Card style>` with `opacity` + `pointerEvents` overrides keyed off
    `useConnectionDisabled()`.
-3. **AppHeader collapse.** `AppHeader.tsx:237–340` — wrap each interactive
-   element in `{connected && (...)}`. The `ConnectionStatus` pill is the
-   only icon that remains visible when disconnected.
+3. **AppHeader disable.** `AppHeader.tsx:237–355` — set `disabled={!connected}`
+   on the icon `Button`s that lead to fetch/mutate surfaces (drawer toggle,
+   comments, Live Event Stream, Settings, User menu). Local-only navigation
+   stays fully enabled: BoardSwitcher, RecentBoardPills, ThemeSwitcher,
+   Documentation link, Facepile.
 
 ### Phase 3 — Verification (low-risk audits, deferred)
 
