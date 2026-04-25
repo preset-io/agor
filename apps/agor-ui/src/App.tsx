@@ -92,7 +92,6 @@ function DeviceRouter() {
 
 function AppContent() {
   const { token } = theme.useToken();
-  const { getCurrentThemeConfig } = useTheme();
   const { showSuccess, showError, showWarning, showLoading, destroy } = useThemedMessage();
   const navigate = useNavigate();
 
@@ -269,21 +268,19 @@ function AppContent() {
   // Show loading while fetching auth config
   if (authConfigLoading) {
     return (
-      <ConfigProvider theme={getCurrentThemeConfig()}>
-        <div
-          style={{
-            height: '100vh',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: token.colorBgLayout,
-          }}
-        >
-          <Spin size="large" />
-          <div style={{ marginTop: 16, color: 'rgba(255, 255, 255, 0.65)' }}>Loading...</div>
-        </div>
-      </ConfigProvider>
+      <div
+        style={{
+          height: '100vh',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: token.colorBgLayout,
+        }}
+      >
+        <Spin size="large" />
+        <div style={{ marginTop: 16, color: 'rgba(255, 255, 255, 0.65)' }}>Loading...</div>
+      </div>
     );
   }
 
@@ -291,32 +288,30 @@ function AppContent() {
   // If we already have a config cached, continue with that even if there's an error
   if (authConfigError && !authConfig) {
     return (
-      <ConfigProvider theme={getCurrentThemeConfig()}>
-        <div
-          style={{
-            height: '100vh',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '2rem',
-          }}
-        >
-          <Alert
-            type="warning"
-            message="Could not fetch daemon configuration"
-            description={
-              <div>
-                <p>{authConfigError.message}</p>
-                <p>Defaulting to requiring authentication. Start the daemon with:</p>
-                <p>
-                  <code>cd apps/agor-daemon && pnpm dev</code>
-                </p>
-              </div>
-            }
-            showIcon
-          />
-        </div>
-      </ConfigProvider>
+      <div
+        style={{
+          height: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '2rem',
+        }}
+      >
+        <Alert
+          type="warning"
+          message="Could not fetch daemon configuration"
+          description={
+            <div>
+              <p>{authConfigError.message}</p>
+              <p>Defaulting to requiring authentication. Start the daemon with:</p>
+              <p>
+                <code>cd apps/agor-daemon && pnpm dev</code>
+              </p>
+            </div>
+          }
+          showIcon
+        />
+      </div>
     );
   }
 
@@ -327,55 +322,47 @@ function AppContent() {
     !!(localStorage.getItem('agor-access-token') || localStorage.getItem('agor-refresh-token'));
 
   if (authConfig?.requireAuth && !authLoading && !authenticated && !hasTokens) {
-    return (
-      <ConfigProvider theme={getCurrentThemeConfig()}>
-        <LoginPage onLogin={login} error={authError} />
-      </ConfigProvider>
-    );
+    return <LoginPage onLogin={login} error={authError} />;
   }
 
   // Show reconnecting state if we have tokens but lost connection
   // ONLY show fullscreen on initial connection, not during reconnections
   if (authConfig?.requireAuth && hasTokens && (!connected || !authenticated) && !hasLoadedOnce) {
     return (
-      <ConfigProvider theme={getCurrentThemeConfig()}>
-        <div
-          style={{
-            height: '100vh',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: token.colorBgLayout,
-          }}
-        >
-          <Spin size="large" />
-          <div style={{ marginTop: 16, color: 'rgba(255, 255, 255, 0.65)' }}>
-            Reconnecting to daemon...
-          </div>
+      <div
+        style={{
+          height: '100vh',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: token.colorBgLayout,
+        }}
+      >
+        <Spin size="large" />
+        <div style={{ marginTop: 16, color: 'rgba(255, 255, 255, 0.65)' }}>
+          Reconnecting to daemon...
         </div>
-      </ConfigProvider>
+      </div>
     );
   }
 
   // Show loading while checking authentication (only if auth is required)
   if (authConfig?.requireAuth && authLoading) {
     return (
-      <ConfigProvider theme={getCurrentThemeConfig()}>
-        <div
-          style={{
-            height: '100vh',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: token.colorBgLayout,
-          }}
-        >
-          <Spin size="large" />
-          <div style={{ marginTop: 16, color: 'rgba(255, 255, 255, 0.65)' }}>Authenticating...</div>
-        </div>
-      </ConfigProvider>
+      <div
+        style={{
+          height: '100vh',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: token.colorBgLayout,
+        }}
+      >
+        <Spin size="large" />
+        <div style={{ marginTop: 16, color: 'rgba(255, 255, 255, 0.65)' }}>Authenticating...</div>
+      </div>
     );
   }
 
@@ -386,39 +373,33 @@ function AppContent() {
 
     if (authConfig?.requireAuth && isAnonymousAuthError && !authenticated) {
       // Anonymous auth failed but auth is required - show login page
-      return (
-        <ConfigProvider theme={getCurrentThemeConfig()}>
-          <LoginPage onLogin={login} error={authError || connectionError} />
-        </ConfigProvider>
-      );
+      return <LoginPage onLogin={login} error={authError || connectionError} />;
     }
 
     return (
-      <ConfigProvider theme={getCurrentThemeConfig()}>
-        <div
-          style={{
-            height: '100vh',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '2rem',
-          }}
-        >
-          <Alert
-            type="error"
-            message="Failed to connect to Agor daemon"
-            description={
-              <div>
-                <p>{connectionError}</p>
-                <p>
-                  Start the daemon with: <code>cd apps/agor-daemon && pnpm dev</code>
-                </p>
-              </div>
-            }
-            showIcon
-          />
-        </div>
-      </ConfigProvider>
+      <div
+        style={{
+          height: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '2rem',
+        }}
+      >
+        <Alert
+          type="error"
+          message="Failed to connect to Agor daemon"
+          description={
+            <div>
+              <p>{connectionError}</p>
+              <p>
+                Start the daemon with: <code>cd apps/agor-daemon && pnpm dev</code>
+              </p>
+            </div>
+          }
+          showIcon
+        />
+      </div>
     );
   }
 
@@ -426,42 +407,38 @@ function AppContent() {
   // Once data is loaded, keep UI mounted and show connection status in header instead
   if ((connecting || loading) && !hasLoadedOnce) {
     return (
-      <ConfigProvider theme={getCurrentThemeConfig()}>
-        <div
-          style={{
-            height: '100vh',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: token.colorBgLayout,
-          }}
-        >
-          <Spin size="large" />
-          <div style={{ marginTop: 16, color: 'rgba(255, 255, 255, 0.65)' }}>
-            Connecting to daemon...
-          </div>
+      <div
+        style={{
+          height: '100vh',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: token.colorBgLayout,
+        }}
+      >
+        <Spin size="large" />
+        <div style={{ marginTop: 16, color: 'rgba(255, 255, 255, 0.65)' }}>
+          Connecting to daemon...
         </div>
-      </ConfigProvider>
+      </div>
     );
   }
 
   // Show data error (but not if user needs to change password - let the modal render)
   if (dataError && !user?.must_change_password) {
     return (
-      <ConfigProvider theme={getCurrentThemeConfig()}>
-        <div
-          style={{
-            height: '100vh',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '2rem',
-          }}
-        >
-          <Alert type="error" message="Failed to load data" description={dataError} showIcon />
-        </div>
-      </ConfigProvider>
+      <div
+        style={{
+          height: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '2rem',
+        }}
+      >
+        <Alert type="error" message="Failed to load data" description={dataError} showIcon />
+      </div>
     );
   }
 
