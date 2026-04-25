@@ -540,34 +540,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
     const promptToSend = value.trim();
 
-    try {
-      if (isRunning && client) {
-        // Route returns the Task entity directly. `task.status === 'queued'`
-        // and `task.queue_position` encode what happened — no envelope.
-        const queuedTask = (await client
-          .service(`/sessions/${session.session_id}/tasks/queue`)
-          .create({
-            prompt: promptToSend,
-          })) as Task;
-
-        setQueuedTasks((prev) => {
-          if (prev.some((t) => t.task_id === queuedTask.task_id)) return prev;
-          return [...prev, queuedTask].sort(
-            (a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0)
-          );
-        });
-
-        message.success(`Message queued at position ${queuedTask.queue_position}`);
-        promptRef.current?.clear();
-      } else {
-        promptRef.current?.clear();
-        onSendPrompt?.(session.session_id, promptToSend, permissionMode);
-      }
-    } catch (error) {
-      message.error(
-        `Failed to ${isRunning ? 'queue' : 'send'} message: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
+    // Single entry point: /prompt. The daemon decides run-vs-queue based on
+    // session state and reports it back via `task.status`. The 'queued'
+    // WebSocket event populates the queue panel for queued prompts.
+    promptRef.current?.clear();
+    onSendPrompt?.(session.session_id, promptToSend, permissionMode);
   };
 
   const handleStop = async () => {

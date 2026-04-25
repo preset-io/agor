@@ -1531,47 +1531,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   );
 
   // ============================================================================
-  // Queue management — task-centric (was message-centric pre-never-lose-prompt).
-  // The queue is a stable ordering of tasks with status='queued', ranked by
+  // Queue listing — task-centric (was message-centric pre-never-lose-prompt).
+  // The queue is the set of tasks with status='queued', ranked by
   // queue_position. Each queued task carries the full prompt + metadata; on
   // drain it transitions queued → running via spawnTaskExecutor.
+  //
+  // Enqueueing goes through `POST /sessions/:id/prompt` — the daemon decides
+  // run-vs-queue based on session state and reports it back via `task.status`.
   // ============================================================================
 
   registerAuthenticatedRoute(
     app,
     '/sessions/:id/tasks/queue',
     {
-      async create(data: { prompt: string; source?: MessageSource }, params: RouteParams) {
-        const sessionId = params.route?.id;
-        if (!sessionId) throw new Error('Session ID required');
-        if (!data.prompt) throw new Error('Prompt required');
-
-        const _session = await sessionsService.get(sessionId, params);
-
-        const taskRepo = new TaskRepository(db);
-        const queuedTask = await taskRepo.createPending({
-          session_id: sessionId as SessionID,
-          full_prompt: data.prompt,
-          created_by: params.user?.user_id ?? 'anonymous',
-          status: TaskStatus.QUEUED,
-          metadata: {
-            ...(params.user?.user_id ? { queued_by_user_id: params.user.user_id } : {}),
-            ...(data.source ? { source: data.source } : {}),
-          },
-        });
-
-        console.log(
-          `📬 Queued task for session ${sessionId.substring(0, 8)} at position ${queuedTask.queue_position}`
-        );
-
-        app.service('tasks').emit('queued', queuedTask);
-
-        // Uniform with the prompt route: return the Task entity directly.
-        // `task.status === 'queued'` and `task.queue_position` encode what
-        // happened — no separate envelope needed.
-        return queuedTask;
-      },
-
       async find(params: RouteParams) {
         const sessionId = params.route?.id;
         if (!sessionId) throw new Error('Session ID required');
@@ -1587,7 +1559,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
     } as any,
     {
-      create: { role: ROLES.MEMBER, action: 'queue tasks' },
       find: { role: ROLES.MEMBER, action: 'view queue' },
     },
     requireAuth
