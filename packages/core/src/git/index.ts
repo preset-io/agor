@@ -348,15 +348,6 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
     }
   }
 
-  // Auto-convert HTTPS GitHub URLs to SSH when no token is available but an
-  // SSH agent is running. Many developers have SSH keys configured but no
-  // GITHUB_TOKEN, so this avoids a confusing "exit code 1" clone failure.
-  if (!rawToken && cloneUrl.startsWith('https://github.com/') && options.env?.SSH_AUTH_SOCK) {
-    const repoPath = cloneUrl.replace('https://github.com/', '').replace(/\/$/, '');
-    cloneUrl = `git@github.com:${repoPath}${repoPath.endsWith('.git') ? '' : '.git'}`;
-    console.log('🔄 No GITHUB_TOKEN found but SSH agent available — converted to SSH URL');
-  }
-
   // Ensure repos directory exists
   await mkdir(reposDir, { recursive: true });
 
@@ -397,9 +388,28 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
       });
     }
 
-    // Clone the repo using the URL (potentially with injected token)
+    // Clone the repo using the URL (potentially with injected token).
+    // For HTTPS GitHub URLs with no token, we try HTTPS first (public repos
+    // clone fine without credentials). Only fall back to SSH if the clone
+    // fails with an auth-related error AND an SSH agent is running.
     console.log(`Cloning ${options.url} to ${targetPath}...`);
-    await git.clone(cloneUrl, targetPath, options.bare ? ['--bare'] : []);
+    try {
+      await git.clone(cloneUrl, targetPath, options.bare ? ['--bare'] : []);
+    } catch (httpsErr) {
+      const isHttpsNoToken = !rawToken && cloneUrl.startsWith('https://github.com/');
+      const hasSshAgent = !!options.env?.SSH_AUTH_SOCK;
+
+      if (isHttpsNoToken && hasSshAgent && isAuthRelatedGitError(httpsErr as Error)) {
+        const repoPath = cloneUrl.replace('https://github.com/', '').replace(/\/$/, '');
+        const sshUrl = `git@github.com:${repoPath}${repoPath.endsWith('.git') ? '' : '.git'}`;
+        console.log(
+          `🔄 HTTPS clone failed (${(httpsErr as Error).message.split('\n')[0]}), retrying with SSH: ${sshUrl}`
+        );
+        await git.clone(sshUrl, targetPath, options.bare ? ['--bare'] : []);
+      } else {
+        throw httpsErr;
+      }
+    }
 
     // Get default branch from remote HEAD
     const defaultBranch = await getDefaultBranch(targetPath);
@@ -412,6 +422,27 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
   } finally {
     await removeGitCredentialsFile(credPath);
   }
+}
+
+/**
+ * Returns true when the error message from a failed git clone looks like an
+ * authentication / authorisation failure rather than a network or
+ * configuration problem.
+ *
+ * Used to decide whether to retry an HTTPS GitHub clone over SSH.
+ */
+export function isAuthRelatedGitError(error: Error): boolean {
+  const msg = error.message.toLowerCase();
+  return (
+    msg.includes('authentication failed') ||
+    msg.includes('could not read username') ||
+    msg.includes('could not read password') ||
+    msg.includes('permission denied') ||
+    msg.includes('terminal prompts disabled') ||
+    msg.includes('repository not found') ||
+    msg.includes('access denied') ||
+    msg.includes('remote: not found')
+  );
 }
 
 /**
