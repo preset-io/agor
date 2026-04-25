@@ -128,7 +128,30 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
     }
   }
 
-  if (orphanedTasks.length === 0 && orphanedSessions.length === 0) {
+  // Wipe the queue. Running tasks are marked STOPPED above, which invalidates
+  // the ordering premise of anything that was waiting behind them — a queued
+  // prompt typically depends on whatever was running first. Rather than carry
+  // an ambiguous queue across the restart, mark all QUEUED tasks as FAILED
+  // with a recovery message. `full_prompt` is preserved on the row, so users
+  // can read history and re-issue any prompt they care about.
+  const queuedResult = (await tasksService.find({
+    query: { status: TaskStatus.QUEUED, $limit: 1000 },
+  })) as unknown as Paginated<Task>;
+  const queuedTasks = queuedResult.data;
+
+  if (queuedTasks.length > 0) {
+    console.log(`   Found ${queuedTasks.length} queued task(s) — wiping queue on restart`);
+    for (const task of queuedTasks) {
+      await tasksService.patch(task.task_id, {
+        status: TaskStatus.FAILED,
+        completed_at: new Date().toISOString(),
+        error_message:
+          'Daemon restarted before this task could run. The queue was wiped on boot — please re-prompt if still needed.',
+      });
+    }
+  }
+
+  if (orphanedTasks.length === 0 && orphanedSessions.length === 0 && queuedTasks.length === 0) {
     console.log('   No orphaned tasks or sessions found');
   }
 }
