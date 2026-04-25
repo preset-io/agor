@@ -894,7 +894,7 @@ export function OnboardingWizard({
         <Form layout="vertical">
           <Form.Item label="Git URL" required>
             <Input
-              placeholder="https://github.com/user/repo.git"
+              placeholder="git@github.com:user/repo.git"
               value={repoUrl}
               onChange={(e) => setRepoUrl(e.target.value)}
             />

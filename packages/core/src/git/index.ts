@@ -348,6 +348,15 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
     }
   }
 
+  // Auto-convert HTTPS GitHub URLs to SSH when no token is available but an
+  // SSH agent is running. Many developers have SSH keys configured but no
+  // GITHUB_TOKEN, so this avoids a confusing "exit code 1" clone failure.
+  if (!rawToken && cloneUrl.startsWith('https://github.com/') && options.env?.SSH_AUTH_SOCK) {
+    const repoPath = cloneUrl.replace('https://github.com/', '').replace(/\/$/, '');
+    cloneUrl = `git@github.com:${repoPath}${repoPath.endsWith('.git') ? '' : '.git'}`;
+    console.log('🔄 No GITHUB_TOKEN found but SSH agent available — converted to SSH URL');
+  }
+
   // Ensure repos directory exists
   await mkdir(reposDir, { recursive: true });
 

@@ -46,10 +46,10 @@ import {
 } from './unix.js';
 
 /**
- * Resolve git credentials (GITHUB_TOKEN, GH_TOKEN)
+ * Resolve git credentials (GITHUB_TOKEN, GH_TOKEN) and SSH agent vars.
  *
- * Checks environment variables for git authentication tokens.
- * These tokens are used to authenticate with GitHub/GitLab for private repos.
+ * Checks environment variables for git authentication tokens and SSH agent
+ * forwarding so both HTTPS (token) and SSH (key) clones work.
  */
 function resolveGitCredentials(): Record<string, string> {
   const env: Record<string, string> = {};
@@ -63,6 +63,11 @@ function resolveGitCredentials(): Record<string, string> {
   if (!env.GITHUB_TOKEN && process.env.GH_TOKEN) {
     env.GH_TOKEN = process.env.GH_TOKEN;
   }
+
+  // SSH agent forwarding — needed for SSH-based clones
+  if (process.env.SSH_AUTH_SOCK) env.SSH_AUTH_SOCK = process.env.SSH_AUTH_SOCK;
+  if (process.env.SSH_AGENT_PID) env.SSH_AGENT_PID = process.env.SSH_AGENT_PID;
+  if (process.env.GIT_SSH_COMMAND) env.GIT_SSH_COMMAND = process.env.GIT_SSH_COMMAND;
 
   return env;
 }
@@ -139,9 +144,10 @@ export async function handleGitClone(
 
     // Resolve git credentials from environment
     const env = resolveGitCredentials();
-    if (Object.keys(env).length > 0) {
-      console.log('[git.clone] Resolved credentials:', Object.keys(env));
-    }
+    const credKeys = Object.keys(env).filter((k) => k !== 'SSH_AUTH_SOCK' && k !== 'SSH_AGENT_PID');
+    console.log(
+      `[git.clone] Credentials: ${credKeys.join(', ') || 'none'}, SSH_AUTH_SOCK: ${env.SSH_AUTH_SOCK ? 'set' : 'not set'}`
+    );
 
     // Determine output path - only pass targetDir if explicitly specified
     // Otherwise let cloneRepo() compute the correct path (reposDir + repoName)
