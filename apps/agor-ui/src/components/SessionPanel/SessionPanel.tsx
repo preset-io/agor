@@ -542,22 +542,22 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
     try {
       if (isRunning && client) {
-        const response = (await client
+        // Route returns the Task entity directly. `task.status === 'queued'`
+        // and `task.queue_position` encode what happened — no envelope.
+        const queuedTask = (await client
           .service(`/sessions/${session.session_id}/tasks/queue`)
           .create({
             prompt: promptToSend,
-          })) as { success: boolean; task: Task; queue_position: number };
+          })) as Task;
 
-        if (response.task) {
-          setQueuedTasks((prev) => {
-            if (prev.some((t) => t.task_id === response.task.task_id)) return prev;
-            return [...prev, response.task].sort(
-              (a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0)
-            );
-          });
-        }
+        setQueuedTasks((prev) => {
+          if (prev.some((t) => t.task_id === queuedTask.task_id)) return prev;
+          return [...prev, queuedTask].sort(
+            (a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0)
+          );
+        });
 
-        message.success(`Message queued at position ${response.task.queue_position}`);
+        message.success(`Message queued at position ${queuedTask.queue_position}`);
         promptRef.current?.clear();
       } else {
         promptRef.current?.clear();
