@@ -234,7 +234,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             </Tag>
           ))}
         <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
-        {currentBoardId && boards.length > 0 && (
+        {/* Disconnected chokepoint: hide all interactive nav affordances
+            (board picker, drawer/comments toggles) so the disconnected
+            navbar collapses to brand + connection pill. Re-enabled the
+            moment we reconnect. See docs/disconnected-state-design.md. */}
+        {connected && currentBoardId && boards.length > 0 && (
           <>
             <div style={{ minWidth: 200 }}>
               <BoardSwitcher
@@ -251,7 +255,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             />
           </>
         )}
-        {currentBoardName && (
+        {connected && currentBoardName && (
           <Tooltip title="Toggle session drawer" placement="bottom">
             <Button
               type="text"
@@ -260,7 +264,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             />
           </Tooltip>
         )}
-        {currentBoardName && (
+        {connected && currentBoardName && (
           <Badge
             count={unreadCommentsCount}
             offset={[-2, 2]}
@@ -285,7 +289,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           connecting={connecting}
           onRetry={onRetryConnection}
         />
-        {activeUsers.length > 0 && (
+        {connected && activeUsers.length > 0 && (
           <>
             <Facepile
               activeUsers={activeUsers}
@@ -300,7 +304,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
           </>
         )}
-        {eventStreamEnabled && (
+        {connected && eventStreamEnabled && (
           <Tooltip title="Live Event Stream" placement="bottom">
             <Button
               type="text"
@@ -309,34 +313,40 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             />
           </Tooltip>
         )}
-        <Tooltip title="Documentation" placement="bottom">
-          <Button
-            type="text"
-            icon={<QuestionCircleOutlined style={{ fontSize: token.fontSizeLG }} />}
-            href="https://agor.live/guide/getting-started"
-            target="_blank"
-            rel="noopener noreferrer"
-          />
-        </Tooltip>
-        <ThemeSwitcher onOpenThemeEditor={onThemeEditorClick} />
-        <Tooltip title="Settings" placement="bottom">
-          <Button
-            type="text"
-            icon={<SettingOutlined style={{ fontSize: token.fontSizeLG }} />}
-            onClick={onSettingsClick}
-          />
-        </Tooltip>
-        <Dropdown
-          menu={{ items: userMenuItems }}
-          placement="bottomRight"
-          trigger={['click']}
-          open={userDropdownOpen}
-          onOpenChange={setUserDropdownOpen}
-        >
-          <Tooltip title={user?.name || 'User menu'} placement="bottom">
-            <Button type="text" icon={<UserOutlined style={{ fontSize: token.fontSizeLG }} />} />
+        {connected && (
+          <Tooltip title="Documentation" placement="bottom">
+            <Button
+              type="text"
+              icon={<QuestionCircleOutlined style={{ fontSize: token.fontSizeLG }} />}
+              href="https://agor.live/guide/getting-started"
+              target="_blank"
+              rel="noopener noreferrer"
+            />
           </Tooltip>
-        </Dropdown>
+        )}
+        {connected && <ThemeSwitcher onOpenThemeEditor={onThemeEditorClick} />}
+        {connected && (
+          <Tooltip title="Settings" placement="bottom">
+            <Button
+              type="text"
+              icon={<SettingOutlined style={{ fontSize: token.fontSizeLG }} />}
+              onClick={onSettingsClick}
+            />
+          </Tooltip>
+        )}
+        {connected && (
+          <Dropdown
+            menu={{ items: userMenuItems }}
+            placement="bottomRight"
+            trigger={['click']}
+            open={userDropdownOpen}
+            onOpenChange={setUserDropdownOpen}
+          >
+            <Tooltip title={user?.name || 'User menu'} placement="bottom">
+              <Button type="text" icon={<UserOutlined style={{ fontSize: token.fontSizeLG }} />} />
+            </Tooltip>
+          </Dropdown>
+        )}
       </Space>
     </Header>
   );

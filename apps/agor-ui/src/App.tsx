@@ -23,7 +23,6 @@ import { useEffect, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
 import { App as AgorApp } from './components/App';
-import { DisconnectedBanner } from './components/DisconnectedBanner/DisconnectedBanner';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
 import { LoginPage } from './components/LoginPage';
 import { MobileApp } from './components/mobile/MobileApp';
@@ -1282,10 +1281,6 @@ function AppContent() {
   return (
     <ServicesConfigContext.Provider value={servicesConfig}>
       <ConnectionProvider value={{ connected, connecting, outOfSync, capturedSha, currentSha }}>
-        {/* App-shell banner: unmissable disconnected/out-of-sync signal.
-            Mounted above all routes; renders nothing when healthy. */}
-        <DisconnectedBanner onRetry={retryConnection} />
-
         {/* Force Password Change Modal - shown when user.must_change_password is true */}
         <ForcePasswordChangeModal
           open={!!currentUser?.must_change_password}

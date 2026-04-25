@@ -7,42 +7,34 @@
 
 ---
 
-## TL;DR (v2 — chokepoints, not sites)
+## TL;DR (v3 — chokepoints, even leaner)
 
 Original v1 of this doc proposed a per-button `<MutateButton>` sweep across
 ~80 sites. **Rejected during review** — too much code-churn for a problem that
-collapses to three interaction chokepoints:
+collapses to a handful of interaction chokepoints. v2 added a top-of-screen
+banner; v3 dropped it (the existing `ConnectionStatus` pill in the navbar is
+sufficient signal — the banner duplicated it and shifted the layout) and
+collapsed the navbar itself when disconnected.
 
-1. **React Flow drag** on the canvas (server-mutating coordinate updates).
-2. **WorktreeCard click surface** (the click-to-open root for sessions, env
-   pill, action buttons, modals — all of which trigger fetches that fail).
-3. **SessionPanel internals** (composer, fork, env pill — *already gated*).
-
-Boards stay navigable (pan/zoom/inspect); local state (open conversation
-panels, scrollback) is preserved across disconnects; only the chokepoints
-become inert.
-
-**Final shape — three lines of code change** beyond the existing infrastructure:
+**Final shape — four small edits** beyond the existing infrastructure:
 
 | Chokepoint | Edit | Effect |
 |---|---|---|
-| **React Flow drag** | `<ReactFlow nodesDraggable={gate.canMutate} ...>` (`SessionCanvas.tsx:2248`) | Drag-to-reposition disabled |
-| **WorktreeCard root** | Add `pointerEvents` + `opacity` to `<Card style>` (`WorktreeCard.tsx:752`) when `!gate.canMutate` | All in-card clicks blocked, card visibly dimmed |
-| **App-shell banner** | `<DisconnectedBanner onRetry={retryConnection}>` mounted above route tree (`App.tsx:1283`) | Unmissable global signal |
+| **React Flow freeze** | `nodesDraggable / elementsSelectable / nodesFocusable / edgesFocusable` all gated on `gate.canMutate` (`SessionCanvas.tsx:2248–2257`) | No drag, no selection, no focus — pan/zoom alive |
+| **WorktreeCard root** | `pointerEvents:'none'` + `opacity:0.55` on `<Card style>` (`WorktreeCard.tsx:770–774`) | All in-card clicks blocked, dimmed |
+| **AppHeader collapse** | Wrap each interactive nav element in `{connected && (...)}` (`AppHeader.tsx`) | Disconnected navbar reduces to logo + instance label + connection pill |
+| **ConnectionStatus pill** | (pre-existing) | Single source of disconnected signal in the navbar |
 
-Plus the foundation already shipped: `useMutationGate()` hook (extends the
-existing `ConnectionContext`), `<DisconnectedBanner>` component, and the
-existing per-button gates in `SessionPanel` / `NewSessionButton` (which
-already use `useConnectionDisabled()`).
+Plus the foundation: `useMutationGate()` hook extending the existing
+`ConnectionContext`, and the per-button gates in `SessionPanel` /
+`NewSessionButton` / `WorktreeCard` that already use `useConnectionDisabled()`.
 
-**Not shipped, not needed:** the v1 `<MutateButton>` sweep across modal
-forms, settings tabs, and CRUD callsites. Entry points to those surfaces
-(modals, panels) are already blocked at the chokepoint level — once a user
-can't click into a worktree card, they can't reach the modal.
-
-`<MutateButton>` stays as an exported primitive for the rare "form is open
-when disconnect happens" case (e.g. settings modal already open), but is
-**not** the recommended primary approach.
+**Not shipped:**
+- `<DisconnectedBanner>` — removed in v3. The navbar pill plus the dimmed
+  cards plus the collapsed navbar are sufficient signal.
+- `<MutateButton>` — removed in v3. Once entry points (worktree card clicks,
+  navbar icons) are blocked at the chokepoint level, the deeper modal/form
+  surfaces are unreachable, so per-button wrappers are redundant.
 
 ---
 
@@ -71,18 +63,21 @@ The three boundaries are: **canvas drag**, **WorktreeCard click root**,
 
 ### What the user sees when disconnected
 
-- Slim red banner at top: "Disconnected from daemon — read-only mode."
-- Canvas: pannable and zoomable as normal. **Cards are dimmed (opacity
-  0.6) and unclickable** — visual + interaction signal that they're inert.
-- Cards cannot be dragged.
-- A SessionPanel that was already open before disconnect: stays open,
-  scrollback preserved, composer disabled with tooltip, env pill buttons
-  disabled. **Task expansion still works** (it's pure local state — the
-  earlier assumption that expansion fetches data was wrong; only the
-  initial panel-open does an REST fetch via `useMessages`).
-- On reconnect: banner vanishes, opacity returns to 1, cards re-enable.
-  Open panels resume their socket subscriptions automatically (existing
-  `useMessages` effect handles this).
+- **Navbar collapses** to logo + instance label + connection pill (red
+  "Disconnected" tag with retry). All other icons (board switcher,
+  drawer toggle, comments, settings cog, theme switcher, user menu, etc.)
+  are hidden — physically removing the entry points to mutating UI.
+- **Canvas:** pannable and zoomable as normal. Cards are dimmed
+  (opacity 0.55) and unclickable. Cards cannot be dragged, selected,
+  or focused.
+- **A SessionPanel that was already open before disconnect** stays open
+  (preserves user's place); scrollback intact; composer disabled with
+  tooltip; env pill buttons disabled. **Task expansion still works**
+  (pure local state — the initial panel-open is the only step that does
+  a REST fetch via `useMessages`).
+- **On reconnect:** navbar icons return, cards re-enable, opacity
+  restores. Open panels resume socket subscriptions automatically (existing
+  `useMessages` effect).
 
 ### What we explicitly do *not* do
 
@@ -499,55 +494,45 @@ try/catch obligation with one boundary.
 
 ---
 
-## 5. Migration plan (v2)
+## 5. Migration plan (v3)
 
-The full plan is small enough to land in one PR.
+The full plan landed in one PR.
 
-### Phase 1 — Foundation (already shipped on this branch)
+### Phase 1 — Foundation
 
 1. ✅ Extended `ConnectionContext.tsx` with `useMutationGate()` (keeps
    `useConnectionDisabled` as a back-compat alias).
-2. ✅ Added `<DisconnectedBanner>` and mounted it in `App.tsx` above the
-   route tree (`App.tsx:1283`).
-3. ✅ Added `<MutateButton>` as an exported primitive (used sparingly — see
-   §0). NewWorktreeModal POC wiring **reverted** during v2 review since
-   entry-point gating in WorktreeCard makes it redundant.
 
-### Phase 2 — The three chokepoints (this PR)
+### Phase 2 — Chokepoints
 
-1. **Canvas drag.** `SessionCanvas.tsx:2248` — change
-   `nodesDraggable={true}` to `nodesDraggable={gate.canMutate}`. One line.
-2. **WorktreeCard click surface.** `WorktreeCard.tsx:752-770` — extend the
-   `<Card style>` block with `opacity` + `pointerEvents` overrides keyed
-   off `useMutationGate()`. Two lines plus a hook call. The drag handle is
-   inside the Card so it's also disabled, which is fine because canvas
-   drag is gated upstream too.
+1. **Canvas freeze.** `SessionCanvas.tsx:2248–2257` — gate
+   `nodesDraggable`, `elementsSelectable`, `nodesFocusable`, and
+   `edgesFocusable` on `mutationGate.canMutate`. Pan/zoom unaffected.
+2. **WorktreeCard click surface.** `WorktreeCard.tsx:770–774` — extend the
+   `<Card style>` with `opacity` + `pointerEvents` overrides keyed off
+   `useConnectionDisabled()`.
+3. **AppHeader collapse.** `AppHeader.tsx:237–340` — wrap each interactive
+   element in `{connected && (...)}`. The `ConnectionStatus` pill is the
+   only icon that remains visible when disconnected.
 
-### Phase 3 — Verification (low-risk audits)
+### Phase 3 — Verification (low-risk audits, deferred)
 
-Spot-check three surfaces that should already be fine but warrant a quick
-look:
-
-- **EnvironmentPill action buttons** (`apps/agor-ui/src/components/EnvironmentPill/...`
-  — start/stop/nuke). These are reachable from inside an open SessionPanel.
-  Confirm their `disabled` props read from `useMutationGate()`.
-- **SessionPanel composer** (already gated at lines 907, 924, 932, 940, 956
-  of `SessionPanel.tsx`). Confirm tooltip surfaces the gate reason.
+- **EnvironmentPill action buttons** — reachable from inside an open
+  SessionPanel. Spot-check that `disabled` props read connection state.
 - **Other "panel-already-open" surfaces** (Settings modal, Worktree modal,
-  Comments). These are entered through buttons that are themselves gated
-  upstream, so are mostly safe — the rare path is "modal was already open
-  when disconnect happened." Apply `<MutateButton>` only if a real
-  user-reproducible bug surfaces. Do not pre-emptively sweep.
+  Comments). Entry points are gated upstream by AppHeader collapse +
+  WorktreeCard chokepoint. Rare path: modal already open when disconnect
+  happened. Defer until a real user-reproducible bug surfaces.
 
-### Phase 4 — Optional polish
+### Removed during the v2→v3 simplification
 
-- Tooltip on dimmed WorktreeCards: "Disconnected — reconnect to interact."
-  (Banner already conveys this globally; tooltip would be redundant. Defer.)
-- Visibility-change refresh trigger when tab regains focus while
-  disconnected (overlap with sister branch `fix-reconnect-loop` — let that
-  land first).
+- `<DisconnectedBanner>` — redundant with the navbar pill and the
+  collapsed navbar. Layout-shifting it adds without paying for itself.
+- `<MutateButton>` — once chokepoints block entry into mutating
+  surfaces, per-button wrappers add no value. Removed entirely.
 
-**Total LOC for Phase 2:** ~10 lines of source code. No sweep, no churn.
+**Total LOC for the working solution:** ~25 lines of source change. No
+sweep, no churn, no per-button threading.
 
 ---
 
