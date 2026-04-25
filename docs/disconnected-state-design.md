@@ -1,34 +1,98 @@
 # Disconnected-State UX Design
 
 **Branch:** `disconnected-state-ux`
-**Date:** 2026-04-25
+**Date:** 2026-04-25 (v2 revision after design discussion)
 **Author:** Working draft for review (Max + agent)
 **Sister branch:** `fix-reconnect-loop` (token-refresh + reconnect state machine — does not overlap with this design)
 
 ---
 
-## TL;DR
+## TL;DR (v2 — chokepoints, not sites)
 
-Agor already has a connection-state context (`ConnectionContext`) and a status pill
-(`ConnectionStatus`), but **gating is inconsistent** — only ~6 components use
-`useConnectionDisabled()` while there are ~80–120 mutation sites across the app.
-This causes the bug Max called out: actions partially work when disconnected,
-producing silent failures or out-of-sync local state.
+Original v1 of this doc proposed a per-button `<MutateButton>` sweep across
+~80 sites. **Rejected during review** — too much code-churn for a problem that
+collapses to three interaction chokepoints:
 
-**Recommendation:** **Approach D — Hybrid** (Mutation Gate context + slim banner).
-Keep the existing `ConnectionContext` as the single source of truth, layer a
-declarative `<MutateButton>` / `useMutationGate()` API on top of it, and add a
-single non-blocking app-shell banner so the disconnected state is unmissable.
-Pure-read interactions (panning the board, opening modals to inspect state)
-stay alive; everything that mutates the daemon disables at render time with a
-tooltip explaining why.
+1. **React Flow drag** on the canvas (server-mutating coordinate updates).
+2. **WorktreeCard click surface** (the click-to-open root for sessions, env
+   pill, action buttons, modals — all of which trigger fetches that fail).
+3. **SessionPanel internals** (composer, fork, env pill — *already gated*).
 
-The session pane is an exception — it's stream-dependent — and gets a
-thin `<SessionPaneShell>` overlay that locks composer + tool-call rendering
-while preserving scrollback for read-only inspection.
+Boards stay navigable (pan/zoom/inspect); local state (open conversation
+panels, scrollback) is preserved across disconnects; only the chokepoints
+become inert.
 
-POC commit ships the foundation + 1 wired site (NewWorktreeModal). The full
-sweep (~80 sites) is mechanical and can land incrementally.
+**Final shape — three lines of code change** beyond the existing infrastructure:
+
+| Chokepoint | Edit | Effect |
+|---|---|---|
+| **React Flow drag** | `<ReactFlow nodesDraggable={gate.canMutate} ...>` (`SessionCanvas.tsx:2248`) | Drag-to-reposition disabled |
+| **WorktreeCard root** | Add `pointerEvents` + `opacity` to `<Card style>` (`WorktreeCard.tsx:752`) when `!gate.canMutate` | All in-card clicks blocked, card visibly dimmed |
+| **App-shell banner** | `<DisconnectedBanner onRetry={retryConnection}>` mounted above route tree (`App.tsx:1283`) | Unmissable global signal |
+
+Plus the foundation already shipped: `useMutationGate()` hook (extends the
+existing `ConnectionContext`), `<DisconnectedBanner>` component, and the
+existing per-button gates in `SessionPanel` / `NewSessionButton` (which
+already use `useConnectionDisabled()`).
+
+**Not shipped, not needed:** the v1 `<MutateButton>` sweep across modal
+forms, settings tabs, and CRUD callsites. Entry points to those surfaces
+(modals, panels) are already blocked at the chokepoint level — once a user
+can't click into a worktree card, they can't reach the modal.
+
+`<MutateButton>` stays as an exported primitive for the rare "form is open
+when disconnect happens" case (e.g. settings modal already open), but is
+**not** the recommended primary approach.
+
+---
+
+## 0. Why chokepoints, not sites (the v2 pivot)
+
+The v1 approach (gate every mutation button with `<MutateButton>`) was wrong
+for two reasons:
+
+1. **Most mutation sites aren't reachable when disconnected.** The user has
+   to click into a worktree → open a panel → open a modal → submit. If we
+   block at the *click-into-worktree* boundary, we block all the deeper
+   surfaces transitively.
+2. **The canvas is the only mutation source that has no entry-point gate.**
+   Drag-to-reposition mutates server state without going through any
+   button — it has to be gated at React Flow itself.
+
+So the rule of "what to gate" is:
+
+> Gate at the boundary where a *user gesture* turns into a *server fetch
+> or mutation*. Everything downstream of a gated boundary is automatically
+> safe; everything upstream (pan/zoom, hover, opened-already panels) stays
+> interactive for read-only browsing.
+
+The three boundaries are: **canvas drag**, **WorktreeCard click root**,
+**already-open SessionPanel mutations** (the last is already done).
+
+### What the user sees when disconnected
+
+- Slim red banner at top: "Disconnected from daemon — read-only mode."
+- Canvas: pannable and zoomable as normal. **Cards are dimmed (opacity
+  0.6) and unclickable** — visual + interaction signal that they're inert.
+- Cards cannot be dragged.
+- A SessionPanel that was already open before disconnect: stays open,
+  scrollback preserved, composer disabled with tooltip, env pill buttons
+  disabled. **Task expansion still works** (it's pure local state — the
+  earlier assumption that expansion fetches data was wrong; only the
+  initial panel-open does an REST fetch via `useMessages`).
+- On reconnect: banner vanishes, opacity returns to 1, cards re-enable.
+  Open panels resume their socket subscriptions automatically (existing
+  `useMessages` effect handles this).
+
+### What we explicitly do *not* do
+
+- ❌ Close the SessionPanel on disconnect (would lose user's place).
+- ❌ Block pan/zoom (read-only browsing must stay alive).
+- ❌ Sweep `<MutateButton>` across 80 sites (over-engineered; entry-point
+  gating makes it unnecessary).
+- ❌ Build an offline outbox (out of scope; many mutations aren't safely
+  retryable).
+- ❌ Block typing in the composer (let users draft — only Send is gated).
 
 ---
 
@@ -435,53 +499,55 @@ try/catch obligation with one boundary.
 
 ---
 
-## 5. Migration plan
+## 5. Migration plan (v2)
 
-Foundation first; sweep second. Work is mechanical and parallelizable.
+The full plan is small enough to land in one PR.
 
-### Phase 1 — Foundation (this PR / next 1-2 PRs)
+### Phase 1 — Foundation (already shipped on this branch)
 
-1. ✅ Extend `ConnectionContext.tsx` with `useMutationGate()` (keep
+1. ✅ Extended `ConnectionContext.tsx` with `useMutationGate()` (keeps
    `useConnectionDisabled` as a back-compat alias).
-2. ✅ Add `<MutateButton>` and `<DisconnectedBanner>` components.
-3. ✅ Mount `<DisconnectedBanner>` in `App.tsx` immediately above the route tree.
-4. ✅ POC: convert one mutation site (`NewWorktreeModal` "Create" button) as
-   the first wired example.
+2. ✅ Added `<DisconnectedBanner>` and mounted it in `App.tsx` above the
+   route tree (`App.tsx:1283`).
+3. ✅ Added `<MutateButton>` as an exported primitive (used sparingly — see
+   §0). NewWorktreeModal POC wiring **reverted** during v2 review since
+   entry-point gating in WorktreeCard makes it redundant.
 
-### Phase 2 — Mechanical sweep (split into small PRs by domain)
+### Phase 2 — The three chokepoints (this PR)
 
-Order by user-impact-of-silent-failure:
+1. **Canvas drag.** `SessionCanvas.tsx:2248` — change
+   `nodesDraggable={true}` to `nodesDraggable={gate.canMutate}`. One line.
+2. **WorktreeCard click surface.** `WorktreeCard.tsx:752-770` — extend the
+   `<Card style>` block with `opacity` + `pointerEvents` overrides keyed
+   off `useMutationGate()`. Two lines plus a hook call. The drag handle is
+   inside the Card so it's also disabled, which is fine because canvas
+   drag is gated upstream too.
 
-1. **Session actions** (`useSessionActions.ts` callers — 7 sites). Highest
-   stakes: prompting a dead session.
-2. **Board actions** (`useBoardActions.ts`, `SessionCanvas`, `useBoardObjects`
-   drag handlers — ~25+ sites). Drag-drop is the trickiest because it has no
-   button to disable; gate inside the `onDragEnd` handler with the hook.
-3. **Worktree env controls** (start/stop/restart in `WorktreeHeaderPill`,
-   `EnvironmentTab`).
-4. **Settings modals** (`SettingsModal/*`, `WorktreeModal/tabs/*`) — highest
-   site count, lowest stakes (settings rarely change during a disconnect).
-5. **Comments, reactions, presence broadcast** — these are stream-dependent
-   too; consider gating at the hook level (`useComments`, `usePresence`).
+### Phase 3 — Verification (low-risk audits)
 
-### Phase 3 — Mutation-layer backstop
+Spot-check three surfaces that should already be fine but warrant a quick
+look:
 
-Add `withMutationGuard` proxy. Audit any remaining failures by grepping logs
-for `DisconnectedError`. By the end of Phase 2 this should be a no-op safety
-net.
+- **EnvironmentPill action buttons** (`apps/agor-ui/src/components/EnvironmentPill/...`
+  — start/stop/nuke). These are reachable from inside an open SessionPanel.
+  Confirm their `disabled` props read from `useMutationGate()`.
+- **SessionPanel composer** (already gated at lines 907, 924, 932, 940, 956
+  of `SessionPanel.tsx`). Confirm tooltip surfaces the gate reason.
+- **Other "panel-already-open" surfaces** (Settings modal, Worktree modal,
+  Comments). These are entered through buttons that are themselves gated
+  upstream, so are mostly safe — the rare path is "modal was already open
+  when disconnect happened." Apply `<MutateButton>` only if a real
+  user-reproducible bug surfaces. Do not pre-emptively sweep.
 
-### Phase 4 — Polish
+### Phase 4 — Optional polish
 
-- `<SessionPaneShell>` empty state for the composer.
-- Optional: queue pending prompts in `localStorage` while disconnected and
-  restore-on-reconnect (Approach E lite — only safe for prompts the user
-  explicitly opted to "queue").
-- Sister-branch `fix-reconnect-loop` will land in parallel; nothing here
-  conflicts.
+- Tooltip on dimmed WorktreeCards: "Disconnected — reconnect to interact."
+  (Banner already conveys this globally; tooltip would be redundant. Defer.)
+- Visibility-change refresh trigger when tab regains focus while
+  disconnected (overlap with sister branch `fix-reconnect-loop` — let that
+  land first).
 
-**Estimate of sites to gate:** ~80–120 (~177 raw `.create/.patch/.update/.remove`
-matches across 39 files, minus reads and false positives). Most can be done by
-find-and-replace at the import + JSX level.
+**Total LOC for Phase 2:** ~10 lines of source code. No sweep, no churn.
 
 ---
 
