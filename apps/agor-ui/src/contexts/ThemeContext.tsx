@@ -1,7 +1,7 @@
 import type { ThemeConfig } from 'antd';
 import { theme } from 'antd';
 import type React from 'react';
-import { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
 const { darkAlgorithm, defaultAlgorithm } = theme;
 
@@ -68,8 +68,12 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  // Get the current theme config based on mode
-  const getCurrentThemeConfig = useCallback((): ThemeConfig => {
+  // Memoize the theme config so every <ConfigProvider theme={...}> in the
+  // tree receives a stable object reference. Without this, each render
+  // produces a new ThemeConfig object and AntD's cssinjs cache invalidates +
+  // re-injects styles, which manifests as a brief unstyled flicker whenever
+  // anything mounts/unmounts (drawers opening, task expand/collapse, etc).
+  const currentThemeConfig = useMemo<ThemeConfig>(() => {
     const baseTheme: ThemeConfig = {
       // CSS variables are enabled by default in antd v6
       token: {
@@ -106,6 +110,11 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       algorithm: themeMode === 'dark' ? darkAlgorithm : defaultAlgorithm,
     };
   }, [themeMode, customTheme]);
+
+  const getCurrentThemeConfig = useCallback(
+    (): ThemeConfig => currentThemeConfig,
+    [currentThemeConfig]
+  );
 
   // Custom themes always render with darkAlgorithm (see `getCurrentThemeConfig`),
   // so `custom` implies dark. Anything non-`light` is considered dark.
