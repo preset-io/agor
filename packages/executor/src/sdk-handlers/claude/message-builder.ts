@@ -71,11 +71,19 @@ export async function createUserMessage(
 ): Promise<Message> {
   const { messageSource, existingMessages } = options ?? {};
 
-  // Skip-if-exists guard (Alt D): if the daemon already wrote a user-message
-  // row for this task, return it instead of inserting a duplicate.
+  // Skip-if-exists guard (Alt D): if the daemon already wrote the initial
+  // prompt row for this task, return it instead of inserting a duplicate.
+  //
+  // Match on `role === USER` regardless of `type`, because the daemon writes
+  // callback prompts as `type:'system', role:'user'` (so the UI can apply the
+  // Agor-callback styling) while normal prompts are `type:'user', role:'user'`.
+  // A `type`-strict predicate misses callback rows and double-inserts the
+  // prompt. Tool-result rows (also role:USER) cannot exist yet at executor
+  // startup — this guard runs before any agent turn has produced output —
+  // so role-only matching is safe here.
   if (taskId && existingMessages) {
     const existing = existingMessages.find(
-      (m) => m.task_id === taskId && m.type === 'user' && m.role === MessageRole.USER
+      (m) => m.task_id === taskId && m.role === MessageRole.USER
     );
     if (existing) {
       return existing;

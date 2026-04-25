@@ -337,6 +337,45 @@ describe('createUserMessage', () => {
       expect(messagesService.create).not.toHaveBeenCalled();
     });
 
+    it('should skip create for callback-shaped row (type:system, role:user) — blocker regression', async () => {
+      // Daemon writes Agor callback prompts as `type:'system', role:'user'`
+      // so the UI applies callback styling. The skip-if-exists guard MUST
+      // match by role only — a type-strict predicate would miss this row,
+      // causing the executor to double-insert the callback prompt.
+      const messagesService = createMockMessagesService();
+      const sessionId = generateId() as SessionID;
+      const taskId = generateId() as TaskID;
+      const existingId = generateId() as MessageID;
+
+      const existingMessages = [
+        {
+          message_id: existingId,
+          session_id: sessionId,
+          type: 'system' as const, // <-- callback shape
+          role: MessageRole.USER,
+          index: 3,
+          timestamp: '2026-04-24T00:00:00.000Z',
+          content_preview: 'Callback prompt from parent',
+          content: 'Callback prompt from parent',
+          task_id: taskId,
+          metadata: { is_agor_callback: true },
+        },
+      ];
+
+      const result = await createUserMessage(
+        sessionId,
+        'Executor would re-write this',
+        taskId,
+        99,
+        messagesService,
+        { existingMessages }
+      );
+
+      expect(result.message_id).toBe(existingId);
+      expect(result.type).toBe('system');
+      expect(messagesService.create).not.toHaveBeenCalled();
+    });
+
     it('should still create when existingMessages has no row for taskId', async () => {
       const messagesService = createMockMessagesService();
       const sessionId = generateId() as SessionID;
