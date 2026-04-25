@@ -869,11 +869,21 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       }
     }
 
-    // Append to session.tasks. Done here so both callers (idle prompt and
-    // queue drain) get this for free.
+    // Flip session to RUNNING and append to session.tasks. Done here so both
+    // callers (idle prompt and queue drain) get this for free.
+    //
+    // The session-status flip used to fall out of `TasksService.create` when
+    // the IDLE path created a task with `status: RUNNING` directly. Now the
+    // IDLE path creates `status: CREATED` and we patch to RUNNING here, which
+    // `TasksService.patch` does NOT mirror onto the session. Without this
+    // explicit patch, `session.status` stays IDLE while a task is RUNNING,
+    // causing the queue gate in the prompt route to wave subsequent prompts
+    // through instead of queuing them.
     await app.service('sessions').patch(
       task.session_id,
       {
+        status: SessionStatus.RUNNING,
+        ready_for_prompt: false,
         tasks: [...session.tasks, task.task_id],
       },
       params

@@ -85,6 +85,11 @@ const statusConfig: Record<
     color: PILL_COLORS.session,
     label: '00:00',
   },
+  [TaskStatus.QUEUED]: {
+    icon: <ClockCircleOutlined />,
+    color: PILL_COLORS.session,
+    label: 'Queued',
+  },
   pending: {
     icon: <HourglassOutlined />,
     color: PILL_COLORS.session,
