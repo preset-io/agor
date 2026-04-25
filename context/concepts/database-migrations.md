@@ -44,5 +44,3 @@ When adding manual/backfill migrations to `meta/_journal.json`, always ensure th
 Don't use `CHECK(col IN ('a', 'b', 'c'))` on SQLite columns. When a new value is added (like adding `'session'` to `others_can`), the CHECK constraint requires a full table recreation migration — SQLite can't alter constraints in place. This is error-prone and easy to forget when updating TypeScript enums.
 
 Instead, validate enum values at the application layer (Drizzle schema `enum` option, Zod, service hooks). The TypeScript types are the source of truth; the DB just stores text.
-
-_Detailed planning doc archived in `context/archives/database-migrations.md`._

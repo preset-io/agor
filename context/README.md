@@ -98,7 +98,6 @@ Historical documentation and completed research preserved for reference:
 - **[auto-generated-api-docs.md](archives/auto-generated-api-docs.md)** - Feathers Swagger evaluation and rollout plan
 - **[compaction-events.md](archives/compaction-events.md)** - Implemented compaction event stream capture (Jan 2025)
 - **[conversation-autocomplete.md](archives/conversation-autocomplete.md)** - Full UX spec for the `@` autocomplete experience
-- **[database-migrations.md](archives/database-migrations.md)** - Launch-blocker write-up for adopting Drizzle migrations
 - **[environment-logs-and-mcp.md](archives/environment-logs-and-mcp.md)** - Process control + log access blueprint
 - **[gemini-integration-research.md](archives/gemini-integration-research.md)** - Gemini CLI SDK discovery process, API analysis, and integration decisions (completed Oct 2025)
 - **[launch-prep.md](archives/launch-prep.md)** - v0.4.0 release checklist and launch validation
