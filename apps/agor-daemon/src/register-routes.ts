@@ -1466,11 +1466,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           console.warn(
             `⚠️  [Stop] No active tasks for session ${id.substring(0, 8)}, resetting to IDLE${stopReason ? ` (reason: ${stopReason})` : ''}`
           );
+          // ready_for_prompt: true so the post-patch hook drains any QUEUED tasks.
+          // Stop is "skip current", not "wipe everything" — queued prompts represent
+          // user intent and should still execute.
           await app.service('sessions').patch(
             id,
             {
               status: SessionStatus.IDLE,
-              ready_for_prompt: false,
+              ready_for_prompt: true,
             },
             params
           );
@@ -1509,11 +1512,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
 
         try {
+          // ready_for_prompt: true so the post-patch hook drains any QUEUED tasks.
+          // Stop is "skip current", not "wipe everything" — queued prompts represent
+          // user intent and should still execute.
           await app.service('sessions').patch(
             id,
             {
               status: SessionStatus.IDLE,
-              ready_for_prompt: false,
+              ready_for_prompt: true,
             },
             params
           );

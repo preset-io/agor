@@ -45,7 +45,8 @@ describe('isPromptFlowPatchOnly', () => {
 
     it('accepts the stop-route idle shape', () => {
       // register-routes.ts: /sessions/:id/stop sets status + ready_for_prompt
-      expect(isPromptFlowPatchOnly({ status: 'idle', ready_for_prompt: false })).toBe(true);
+      // (ready_for_prompt: true so the post-patch hook drains any QUEUED tasks)
+      expect(isPromptFlowPatchOnly({ status: 'idle', ready_for_prompt: true })).toBe(true);
     });
 
     it('accepts the executor git-SHA capture shape', () => {
