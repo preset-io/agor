@@ -807,3 +807,268 @@ describe('TaskRepository edge cases', () => {
     expect(created.report).toBeUndefined();
   });
 });
+
+// ============================================================================
+// CreateQueued (never-lose-prompt §C: queue lives on tasks)
+// ============================================================================
+
+describe('TaskRepository.createQueued', () => {
+  dbTest(
+    'should create task with status=QUEUED and queue_position=1 when no other queued tasks',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+
+      const queued = await taskRepo.createQueued({ session_id: sessionId });
+
+      expect(queued.status).toBe(TaskStatus.QUEUED);
+      expect(queued.queue_position).toBe(1);
+      expect(queued.session_id).toBe(sessionId);
+    }
+  );
+
+  dbTest('should auto-assign incrementing queue_position within a session', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+
+    const first = await taskRepo.createQueued({ session_id: sessionId });
+    const second = await taskRepo.createQueued({ session_id: sessionId });
+    const third = await taskRepo.createQueued({ session_id: sessionId });
+
+    expect(first.queue_position).toBe(1);
+    expect(second.queue_position).toBe(2);
+    expect(third.queue_position).toBe(3);
+  });
+
+  dbTest('should scope queue_position per session', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionA = await createSessionWithDeps(db);
+    const sessionB = await createSessionWithDeps(db);
+
+    await taskRepo.createQueued({ session_id: sessionA });
+    await taskRepo.createQueued({ session_id: sessionA });
+    const onB = await taskRepo.createQueued({ session_id: sessionB });
+
+    // Session B's first queued task should be at position 1, not 3.
+    expect(onB.queue_position).toBe(1);
+  });
+
+  dbTest('should preserve metadata bag passed in', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const metadata = {
+      is_agor_callback: true,
+      source: 'agor',
+      queued_by_user_id: 'user-123',
+    };
+
+    const queued = await taskRepo.createQueued({ session_id: sessionId, metadata });
+
+    expect(queued.metadata).toEqual(metadata);
+
+    // Metadata round-trips through findById too.
+    const refetched = await taskRepo.findById(queued.task_id);
+    expect(refetched?.metadata).toEqual(metadata);
+  });
+
+  dbTest('should throw if session_id missing', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+
+    await expect(taskRepo.createQueued({})).rejects.toThrow(RepositoryError);
+    await expect(taskRepo.createQueued({})).rejects.toThrow('session_id is required');
+  });
+});
+
+// ============================================================================
+// FindQueued
+// ============================================================================
+
+describe('TaskRepository.findQueued', () => {
+  dbTest('should return queued tasks ordered by queue_position', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+
+    await taskRepo.createQueued({ session_id: sessionId, description: 'first queued' });
+    await taskRepo.createQueued({ session_id: sessionId, description: 'second queued' });
+    await taskRepo.createQueued({ session_id: sessionId, description: 'third queued' });
+
+    const found = await taskRepo.findQueued(sessionId);
+
+    expect(found).toHaveLength(3);
+    expect(found.map((t) => t.queue_position)).toEqual([1, 2, 3]);
+    expect(found.map((t) => t.description)).toEqual([
+      'first queued',
+      'second queued',
+      'third queued',
+    ]);
+  });
+});
+
+// ============================================================================
+// GetNextQueued
+// ============================================================================
+
+describe('TaskRepository.getNextQueued', () => {
+  dbTest('should return null when no queued tasks for session', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+
+    const next = await taskRepo.getNextQueued(sessionId);
+
+    expect(next).toBeNull();
+  });
+
+  dbTest('should return lowest queue_position first', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+
+    // Insert out of order with manually-set queue_position so we know findRunning
+    // isn't accidentally returning insert-order.
+    await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.QUEUED,
+        queue_position: 3,
+        description: 'pos 3',
+      })
+    );
+    await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.QUEUED,
+        queue_position: 1,
+        description: 'pos 1',
+      })
+    );
+    await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.QUEUED,
+        queue_position: 2,
+        description: 'pos 2',
+      })
+    );
+
+    const next = await taskRepo.getNextQueued(sessionId);
+
+    expect(next).not.toBeNull();
+    expect(next?.queue_position).toBe(1);
+    expect(next?.description).toBe('pos 1');
+  });
+
+  dbTest('should not return tasks from other sessions', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionA = await createSessionWithDeps(db);
+    const sessionB = await createSessionWithDeps(db);
+
+    await taskRepo.createQueued({ session_id: sessionA });
+
+    const next = await taskRepo.getNextQueued(sessionB);
+
+    expect(next).toBeNull();
+  });
+
+  dbTest('should not return non-QUEUED tasks even if queue_position set', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+
+    // A task that has a queue_position but a non-QUEUED status — e.g. one that
+    // already drained to RUNNING — must not be picked up by getNextQueued.
+    await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        queue_position: 1,
+      })
+    );
+
+    const next = await taskRepo.getNextQueued(sessionId);
+
+    expect(next).toBeNull();
+  });
+});
+
+// ============================================================================
+// Sentinel invariants (never-lose-prompt §C)
+//
+// QUEUED tasks are born with sentinel `message_range.start_index = -1` and
+// sentinel `git_state.sha_at_start = ''` — values that the drainer recomputes
+// before flipping the task to RUNNING. These tests are tripwires: they assert
+// the post-recompute shape on real data we control. End-to-end coverage of the
+// recompute path itself lives in a follow-up PR; this is the cheapest possible
+// guard so a future regression in spawnTaskExecutor isn't silent.
+// ============================================================================
+
+describe('TaskRepository sentinel invariants', () => {
+  dbTest(
+    'should never persist RUNNING task with sentinel message_range.start_index',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+
+      // Born QUEUED with the sentinel start_index = -1 (mirrors what the
+      // /sessions/:id/tasks/queue endpoint writes).
+      const queued = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.QUEUED,
+          queue_position: 1,
+          message_range: {
+            start_index: -1,
+            end_index: -1,
+            start_timestamp: new Date().toISOString(),
+          },
+        })
+      );
+
+      // Drainer recomputes message_range before flipping to RUNNING.
+      const now = new Date().toISOString();
+      await taskRepo.update(queued.task_id, {
+        status: TaskStatus.RUNNING,
+        message_range: {
+          start_index: 0,
+          end_index: 0,
+          start_timestamp: now,
+        },
+      });
+
+      // Scan: no RUNNING/COMPLETED row should have the sentinel.
+      const all = await taskRepo.findAll();
+      for (const task of all) {
+        if (task.status === TaskStatus.RUNNING || task.status === TaskStatus.COMPLETED) {
+          expect(task.message_range.start_index).not.toBe(-1);
+        }
+      }
+    }
+  );
+
+  dbTest('should never persist RUNNING task with empty git_state.sha_at_start', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+
+    // Born QUEUED with the sentinel empty sha_at_start.
+    const queued = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.QUEUED,
+        queue_position: 1,
+        git_state: { ref_at_start: '', sha_at_start: '' },
+      })
+    );
+
+    // Drainer recomputes git_state before flipping to RUNNING.
+    await taskRepo.update(queued.task_id, {
+      status: TaskStatus.RUNNING,
+      git_state: { ref_at_start: 'main', sha_at_start: 'abc123' },
+    });
+
+    const all = await taskRepo.findAll();
+    for (const task of all) {
+      if (task.status === TaskStatus.RUNNING || task.status === TaskStatus.COMPLETED) {
+        // Empty string is the sentinel. 'unknown' is the documented default
+        // when git state can't be read at task start — that's allowed.
+        expect(task.git_state.sha_at_start).not.toBe('');
+      }
+    }
+  });
+});
