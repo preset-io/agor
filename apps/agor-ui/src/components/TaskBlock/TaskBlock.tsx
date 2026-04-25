@@ -39,6 +39,7 @@ import { getContextWindowGradient } from '../../utils/contextWindow';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
 import { CompactionBlock } from '../CompactionBlock';
+import { CopyableContent } from '../CopyableContent';
 import { MessageBlock } from '../MessageBlock';
 import { CreatedByTag } from '../metadata/CreatedByTag';
 import {
@@ -464,12 +465,28 @@ export const TaskBlock = React.memo<TaskBlockProps>(
 
         {/* Right column: Content */}
         <Flex vertical flex={1} style={{ minWidth: 0 }}>
-          <Typography.Text
-            ellipsis={{ tooltip: task.full_prompt }}
-            style={{ marginBottom: token.sizeUnit, display: 'block' }}
+          {/* Full prompt rendered with one-line CSS ellipsis. The complete
+              text stays in the DOM so users can recover it via the
+              copy-overlay (matches MessageBlock's pattern) — no tooltip,
+              which got in the way of normal hover behavior. */}
+          <CopyableContent
+            textContent={task.full_prompt || ''}
+            // Default offsets place the icon outside the wrapper, but the
+            // task header has rounded corners with overflow:hidden which
+            // clips it. Pull the icon inside the prompt row instead.
+            copyButtonOffset={{ top: 0, right: 0 }}
           >
-            {task.full_prompt || 'User Prompt'}
-          </Typography.Text>
+            <Typography.Text
+              ellipsis
+              style={{
+                marginBottom: token.sizeUnit,
+                display: 'block',
+                paddingRight: token.sizeUnit * 3,
+              }}
+            >
+              {task.full_prompt || 'User Prompt'}
+            </Typography.Text>
+          </CopyableContent>
 
           {/* Task metadata */}
           <Flex wrap gap={token.sizeUnit}>

@@ -20,6 +20,7 @@ import type {
   StreamingMessageState,
   User,
 } from '@agor-live/client';
+import { TaskStatus } from '@agor-live/client';
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
 import { Alert, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -207,7 +208,11 @@ export const ConversationView = React.memo<ConversationViewProps>(
       }
     );
 
-    const tasks = reactiveState?.tasks || [];
+    // Queued tasks belong to the queue drawer, not the conversation. They
+    // haven't run yet — there's no message_range, no user-message row, no
+    // assistant output to render — so showing them here as TaskBlocks just
+    // duplicates what the queue panel already shows.
+    const tasks = (reactiveState?.tasks || []).filter((t) => t.status !== TaskStatus.QUEUED);
     const allStreamingMessages = reactiveState?.streamingMessages || EMPTY_STREAMING_MESSAGES;
     const loading = reactiveState ? reactiveState.loading : !!sessionId;
     const error = reactiveState?.error || null;
@@ -260,23 +265,25 @@ export const ConversationView = React.memo<ConversationViewProps>(
       return new Set();
     });
 
-    // Update expanded state when tasks change (expand last task by default)
+    // When a new task arrives (i.e. the *last* task id changes), collapse
+    // whatever was open and expand the new one. We deliberately depend on
+    // `lastTaskId` rather than `tasks` so that:
+    //   1. unrelated re-renders don't fire this effect (tasks array gets a
+    //      new reference on every render thanks to the QUEUED filter), and
+    //   2. if the user collapses the current last task, we don't immediately
+    //      re-open it — that "auto re-expand on empty" behavior fought the
+    //      user and showed up as a flicker.
+    const lastTaskId = tasks.length > 0 ? tasks[tasks.length - 1].task_id : null;
     useEffect(() => {
-      if (tasks.length > 0) {
-        const lastTaskId = tasks[tasks.length - 1].task_id;
-        setExpandedTaskIds((prev) => {
-          // If no tasks expanded or last task changed, expand the last task
-          if (prev.size === 0 || !prev.has(lastTaskId)) {
-            // Scroll to bottom after expansion is rendered
-            requestAnimationFrame(() => {
-              scrollToBottom();
-            });
-            return new Set([lastTaskId]);
-          }
-          return prev;
+      if (!lastTaskId) return;
+      setExpandedTaskIds((prev) => {
+        if (prev.has(lastTaskId)) return prev;
+        requestAnimationFrame(() => {
+          scrollToBottom();
         });
-      }
-    }, [tasks, scrollToBottom]);
+        return new Set([lastTaskId]);
+      });
+    }, [lastTaskId, scrollToBottom]);
 
     // Handle task expand/collapse
     const handleTaskExpandChange = useCallback((taskId: string, expanded: boolean) => {
