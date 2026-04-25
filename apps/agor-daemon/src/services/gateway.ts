@@ -31,6 +31,7 @@ import type {
   MessageSource,
   Session,
   SessionID,
+  Task,
   User,
   UserID,
 } from '@agor/core/types';
@@ -712,7 +713,7 @@ export class GatewayService {
         create: (
           data: { prompt: string; permissionMode?: string; messageSource?: MessageSource },
           params: Record<string, unknown>
-        ) => Promise<Record<string, unknown>>;
+        ) => Promise<Task>;
       };
 
       // For new GitHub sessions, wrap the prompt with repository/PR context
@@ -744,19 +745,19 @@ export class GatewayService {
 
       // Internal call: pass user, omit provider to bypass auth hooks
       // Mark message source as 'gateway' so it won't be echoed back to the platform
-      const response = await promptService.create(
+      const task = await promptService.create(
         { prompt: promptText, permissionMode, messageSource: 'gateway' },
         { route: { id: sessionId }, user }
       );
 
-      if (response.queued) {
+      if (task.status === 'queued') {
         console.log(
-          `[gateway] Message queued for session ${sessionId.substring(0, 8)} at position ${response.queue_position}`
+          `[gateway] Message queued for session ${sessionId.substring(0, 8)} at position ${task.queue_position}`
         );
         this.sendDebugMessage(
           channel,
           data.thread_id,
-          `Session is busy, message queued at position ${response.queue_position}`
+          `Session is busy, message queued at position ${task.queue_position}`
         );
       } else {
         console.log(

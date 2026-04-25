@@ -701,30 +701,31 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         const renderedPrompt = renderTemplate(zone.trigger!.template, templateContext);
 
         if (renderedPrompt) {
-          const promptResponse = await ctx.app
+          const task = await ctx.app
             .service('/sessions/:id/prompt')
             .create(
               { prompt: renderedPrompt, stream: true },
               { ...ctx.baseServiceParams, route: { id: targetSessionId } }
             );
 
-          if (promptResponse.queued) {
+          if (task.status === 'queued') {
             promptResult = {
               queued: true,
-              queue_position: promptResponse.queue_position,
+              taskId: task.task_id,
+              queue_position: task.queue_position,
               sessionId: targetSessionId,
               note: 'Session is busy. Zone trigger prompt has been queued.',
             };
             console.log(
-              `📬 Zone trigger queued for session ${targetSessionId.substring(0, 8)} at position ${promptResponse.queue_position}`
+              `📬 Zone trigger queued for session ${targetSessionId.substring(0, 8)} at position ${task.queue_position}`
             );
           } else {
             promptResult = {
-              taskId: promptResponse.taskId,
+              taskId: task.task_id,
               sessionId: targetSessionId,
               note: 'Zone trigger prompt sent to target session',
             };
-            console.log(`✅ Zone trigger executed: task ${promptResponse.taskId.substring(0, 8)}`);
+            console.log(`✅ Zone trigger executed: task ${task.task_id.substring(0, 8)}`);
           }
         } else {
           promptResult = {
@@ -858,7 +859,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           }
 
           // Send rendered prompt to new session
-          const promptResponse = await ctx.app
+          const task = await ctx.app
             .service('/sessions/:id/prompt')
             .create(
               { prompt: renderedPrompt, stream: true },
@@ -866,11 +867,11 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
             );
 
           promptResult = {
-            taskId: promptResponse.taskId,
+            taskId: task.task_id,
             sessionId: newSession.session_id,
             note: `always_new trigger: created session ${newSession.session_id.substring(0, 8)} (${agenticTool}) and sent prompt`,
           };
-          console.log(`✅ Zone trigger executed: task ${promptResponse.taskId.substring(0, 8)}`);
+          console.log(`✅ Zone trigger executed: task ${task.task_id.substring(0, 8)}`);
         } else {
           promptResult = {
             note: 'Zone trigger template rendered to empty string (check template syntax)',

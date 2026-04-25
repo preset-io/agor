@@ -833,13 +833,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const isCallback = task.metadata?.is_agor_callback === true;
         const messageMetadata: Message['metadata'] = {};
         if (isCallback) {
-          (messageMetadata as Record<string, unknown>).is_agor_callback = true;
+          messageMetadata.is_agor_callback = true;
         }
         // Prefer task.metadata.source (set when the task was queued) over
         // the request's messageSource — the latter applies only to the
         // current draining tick, the former to where the prompt originated.
-        const source =
-          (task.metadata?.source as MessageSource | undefined) ?? options.messageSource;
+        const source = task.metadata?.source ?? options.messageSource;
         if (source) {
           messageMetadata.source = source;
         }
@@ -959,7 +958,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // didn't respond. Without this the transcript shows only the user
         // prompt and silence even though the task list reads FAILED.
         try {
-          const sysIndex = messageStartIndex + 1;
+          // Recompute the next index instead of trusting `messageStartIndex
+          // + 1` — the daemon-write user-message above is wrapped in a
+          // try/catch and may have been swallowed, leaving a gap at
+          // `messageStartIndex`. countMessages always reports the live row
+          // count, so it lands the system error at the true tail whether
+          // the user-message row exists or not (no gap, no collision).
+          const sysIndex = await sessionsRepository.countMessages(sessionId);
           const errorContent = `⚠️ The agent failed to start.\n\n${errorMessage}`;
           const sysMessage: Message = {
             message_id: generateId() as UUID,
@@ -1069,68 +1074,51 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           throw new Error('Cannot send prompt: session is currently stopping');
         }
 
-        // Queue guard — task-centric (was message-centric pre-never-lose-prompt).
-        // The `_fromQueue` legacy bypass is gone: the drainer now calls
-        // spawnTaskExecutor directly without re-entering this route, so there
-        // is no in-band signal to honor.
-        {
-          const taskQueueRepo = new TaskRepository(db);
-          const queuedTasks = await taskQueueRepo.findQueued(id as SessionID);
-          const hasQueuedTasks = queuedTasks.length > 0;
+        // The route is one path: always materialize a Task. Whether it runs
+        // immediately or gets queued is the *response*, not a different code
+        // path. Sentinels and queue-position assignment live in
+        // `taskRepo.createPending` so callers don't reassemble them by hand.
+        const taskRepo = new TaskRepository(db);
+        const queuedTasks = await taskRepo.findQueued(id as SessionID);
+        const shouldQueue = session.status !== SessionStatus.IDLE || queuedTasks.length > 0;
+        const createdBy = params.user?.user_id ?? 'anonymous';
 
-          if (session.status !== SessionStatus.IDLE || hasQueuedTasks) {
-            // Sentinel values for message_range / git_state are rewritten by
-            // spawnTaskExecutor at QUEUED → RUNNING. The contract is: while
-            // status === 'queued', these fields hold sentinels; once spawned
-            // they hold real values. A test in services/tasks asserts this.
-            const queuedTask = await taskQueueRepo.createQueued({
-              session_id: id as SessionID,
-              created_by: params.user?.user_id ?? 'anonymous',
-              description: data.prompt.substring(0, 120),
-              full_prompt: data.prompt,
-              message_range: {
-                start_index: -1,
-                end_index: -1,
-                start_timestamp: new Date().toISOString(),
-              },
-              git_state: {
-                ref_at_start: '',
-                sha_at_start: '',
-              },
-              tool_use_count: 0,
-              metadata: {
-                queued_by_user_id: params.user?.user_id,
-                ...(messageSource ? { source: messageSource } : {}),
-              },
+        if (shouldQueue) {
+          const queuedTask = await taskRepo.createPending({
+            session_id: id as SessionID,
+            full_prompt: data.prompt,
+            created_by: createdBy,
+            status: TaskStatus.QUEUED,
+            metadata: {
+              ...(params.user?.user_id ? { queued_by_user_id: params.user.user_id } : {}),
+              ...(messageSource ? { source: messageSource } : {}),
+            },
+          });
+
+          console.log(
+            `📬 [Prompt] Auto-queued task for session ${id.substring(0, 8)} at position ${queuedTask.queue_position} ` +
+              `(session status: ${session.status}, existing queue items: ${queuedTasks.length})`
+          );
+
+          app.service('tasks').emit('queued', queuedTask);
+
+          if (session.status === SessionStatus.IDLE) {
+            setImmediate(async () => {
+              try {
+                await sessionsService.triggerQueueProcessing(id as SessionID, params);
+              } catch (error) {
+                console.error(
+                  `❌ [Prompt] Failed to trigger queue processing after auto-queue:`,
+                  error
+                );
+              }
             });
-
-            console.log(
-              `📬 [Prompt] Auto-queued task for session ${id.substring(0, 8)} at position ${queuedTask.queue_position} ` +
-                `(session status: ${session.status}, existing queue items: ${queuedTasks.length})`
-            );
-
-            app.service('tasks').emit('queued', queuedTask);
-
-            if (session.status === SessionStatus.IDLE) {
-              setImmediate(async () => {
-                try {
-                  await sessionsService.triggerQueueProcessing(id as SessionID, params);
-                } catch (error) {
-                  console.error(
-                    `❌ [Prompt] Failed to trigger queue processing after auto-queue:`,
-                    error
-                  );
-                }
-              });
-            }
-
-            return {
-              success: true,
-              queued: true,
-              task: queuedTask,
-              queue_position: queuedTask.queue_position,
-            };
           }
+
+          // Uniform response: the entity is always a Task. Caller inspects
+          // `task.status` (`'queued'` here) and `task.queue_position` to know
+          // what happened.
+          return queuedTask;
         }
 
         console.log(`   Session agent: ${session.agentic_tool}`);
@@ -1138,53 +1126,33 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           `   Session permission_config.mode: ${session.permission_config?.mode || 'not set'}`
         );
 
-        // Idle path: create a CREATED task carrying the full prompt + metadata,
-        // then hand off to spawnTaskExecutor which is the sole place that
-        // populates message_range / git_state / writes the user-message row /
-        // spawns the executor. Both this path and processNextQueuedTask go
-        // through the same helper so behavior stays in lockstep.
-        const task = await tasksService.create(
-          {
-            session_id: id as SessionID,
-            status: TaskStatus.CREATED,
-            description: data.prompt.substring(0, 120),
-            full_prompt: data.prompt,
-            // Sentinels — overwritten by spawnTaskExecutor before status flips
-            // to RUNNING. The contract: a RUNNING/COMPLETED task must never
-            // hold these values. Asserted in services/tasks tests.
-            message_range: {
-              start_index: -1,
-              end_index: -1,
-              start_timestamp: new Date().toISOString(),
-            },
-            git_state: {
-              ref_at_start: '',
-              sha_at_start: '',
-            },
-            tool_use_count: 0,
-            metadata: messageSource ? { source: messageSource } : undefined,
-          },
-          params
-        );
+        // Idle path: create a CREATED task, then hand off to spawnTaskExecutor
+        // which is the sole place that populates message_range / git_state,
+        // writes the user-message row, and spawns the executor. Both this
+        // path and processNextQueuedTask go through that helper so behavior
+        // stays in lockstep.
+        const task = await taskRepo.createPending({
+          session_id: id as SessionID,
+          full_prompt: data.prompt,
+          created_by: createdBy,
+          status: TaskStatus.CREATED,
+          metadata: messageSource ? { source: messageSource } : undefined,
+        });
+        // Bypassing the service means no native 'created' emit; do it here
+        // so reactive clients see the new task before the executor spawns.
+        app.service('tasks').emit('created', task);
 
-        const useStreaming = data.stream !== false;
-
-        await spawnTaskExecutor(
+        const runningTask = await spawnTaskExecutor(
           task,
           {
             permissionMode: data.permissionMode,
-            stream: useStreaming,
+            stream: data.stream !== false,
             messageSource,
           },
           params
         );
 
-        return {
-          success: true,
-          taskId: task.task_id,
-          status: TaskStatus.RUNNING,
-          streaming: useStreaming,
-        };
+        return runningTask;
       },
     },
     {
@@ -1580,25 +1548,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         const _session = await sessionsService.get(sessionId, params);
 
-        const taskQueueRepo = new TaskRepository(db);
-        const queuedTask = await taskQueueRepo.createQueued({
+        const taskRepo = new TaskRepository(db);
+        const queuedTask = await taskRepo.createPending({
           session_id: sessionId as SessionID,
-          created_by: params.user?.user_id ?? 'anonymous',
-          description: data.prompt.substring(0, 120),
           full_prompt: data.prompt,
-          // Sentinels overwritten by spawnTaskExecutor at QUEUED → RUNNING.
-          message_range: {
-            start_index: -1,
-            end_index: -1,
-            start_timestamp: new Date().toISOString(),
-          },
-          git_state: {
-            ref_at_start: '',
-            sha_at_start: '',
-          },
-          tool_use_count: 0,
+          created_by: params.user?.user_id ?? 'anonymous',
+          status: TaskStatus.QUEUED,
           metadata: {
-            queued_by_user_id: params.user?.user_id,
+            ...(params.user?.user_id ? { queued_by_user_id: params.user.user_id } : {}),
             ...(data.source ? { source: data.source } : {}),
           },
         });
@@ -1609,11 +1566,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         app.service('tasks').emit('queued', queuedTask);
 
-        return {
-          success: true,
-          task: queuedTask,
-          queue_position: queuedTask.queue_position,
-        };
+        // Uniform with the prompt route: return the Task entity directly.
+        // `task.status === 'queued'` and `task.queue_position` encode what
+        // happened — no separate envelope needed.
+        return queuedTask;
       },
 
       async find(params: RouteParams) {
@@ -1693,7 +1649,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return;
     }
 
-    const userId = nextTask.metadata?.queued_by_user_id as string | undefined;
+    const userId = nextTask.metadata?.queued_by_user_id;
     const userRepo = new UsersRepository(db);
     const queuedByUser = userId ? await userRepo.findById(userId) : undefined;
 
@@ -1732,7 +1688,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // message_range/git_state, writes the user-message row, appends to
     // session.tasks, spawns the executor). We pass the messageSource from
     // task.metadata so callback styling survives the queue → run hop.
-    const source = nextTask.metadata?.source as MessageSource | undefined;
+    const source = nextTask.metadata?.source;
     await spawnTaskExecutor(
       stillQueued,
       {

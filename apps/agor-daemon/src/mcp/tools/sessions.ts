@@ -461,7 +461,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         ctx.app.service('sessions') as unknown as SessionsServiceImpl
       ).spawn(ctx.sessionId, spawnData, ctx.baseServiceParams);
 
-      const promptResponse = await ctx.app.service('/sessions/:id/prompt').create(
+      const task = await ctx.app.service('/sessions/:id/prompt').create(
         {
           prompt: args.prompt,
           permissionMode: childSession.permission_config?.mode || 'acceptEdits',
@@ -475,8 +475,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       return textResult({
         session: childSession,
-        taskId: promptResponse.taskId,
-        status: promptResponse.status,
+        taskId: task.task_id,
+        status: task.status,
         note: 'Subsession created and prompt execution started in background.',
       });
     }
@@ -518,25 +518,29 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       const sessionId = await resolveSessionId(ctx, args.sessionId);
 
       if (mode === 'continue') {
-        const promptResponse = await ctx.app
+        // The prompt route returns the Task entity directly. Whether it ran
+        // immediately or got queued is encoded in `task.status` — there's no
+        // separate "queued vs ran" wire shape to branch on.
+        const task = await ctx.app
           .service('/sessions/:id/prompt')
           .create(
             { prompt: args.prompt, stream: true },
             { ...ctx.baseServiceParams, route: { id: sessionId } }
           );
 
-        if (promptResponse.queued) {
+        if (task.status === 'queued') {
           return textResult({
             success: true,
             queued: true,
-            queue_position: promptResponse.queue_position,
+            taskId: task.task_id,
+            queue_position: task.queue_position,
             note: 'Session is busy. Prompt has been queued and will execute automatically when the session becomes idle.',
           });
         }
         return textResult({
           success: true,
-          taskId: promptResponse.taskId,
-          status: promptResponse.status,
+          taskId: task.task_id,
+          status: task.status,
           note: 'Prompt added to existing session and execution started.',
         });
       } else if (mode === 'fork' || mode === 'btw') {
@@ -583,7 +587,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .service('sessions')
           .get(forkedSession.session_id, ctx.baseServiceParams);
 
-        const promptResponse = await ctx.app.service('/sessions/:id/prompt').create(
+        const task = await ctx.app.service('/sessions/:id/prompt').create(
           {
             prompt: args.prompt,
             permissionMode: updatedSession.permission_config?.mode,
@@ -599,8 +603,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
         return textResult({
           session: updatedSession,
-          taskId: promptResponse.taskId,
-          status: promptResponse.status,
+          taskId: task.task_id,
+          status: task.status,
           note,
         });
       } else if (mode === 'subsession') {
@@ -617,7 +621,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           ctx.app.service('sessions') as unknown as SessionsServiceImpl
         ).spawn(sessionId, spawnData, ctx.baseServiceParams);
 
-        const promptResponse = await ctx.app.service('/sessions/:id/prompt').create(
+        const task = await ctx.app.service('/sessions/:id/prompt').create(
           {
             prompt: args.prompt,
             permissionMode: childSession.permission_config?.mode,
@@ -628,8 +632,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
         return textResult({
           session: childSession,
-          taskId: promptResponse.taskId,
-          status: promptResponse.status,
+          taskId: task.task_id,
+          status: task.status,
           note: 'Subsession created and prompt execution started.',
         });
       }
@@ -852,9 +856,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       }
 
       // Execute initial prompt if provided
-      let promptResponse = null;
+      let initialTask = null;
       if (args.initialPrompt) {
-        promptResponse = await ctx.app
+        initialTask = await ctx.app
           .service('/sessions/:id/prompt')
           .create(
             { prompt: args.initialPrompt, permissionMode, stream: true },
@@ -873,7 +877,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       return textResult({
         session,
-        taskId: promptResponse?.taskId,
+        taskId: initialTask?.task_id,
         note: args.initialPrompt
           ? `Session created and initial prompt execution started.${callbackNote}${mcpFailureNote}`
           : `Session created successfully.${callbackNote}${mcpFailureNote}`,

@@ -655,22 +655,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // for backward compat (legacy sessions without callback_created_by).
       const callbackCreator =
         childSession.callback_config?.callback_created_by ?? targetSession.created_by;
-      const callbackTask = await this.taskRepo.createQueued({
+      const callbackTask = await this.taskRepo.createPending({
         session_id: targetSessionId,
-        created_by: callbackCreator,
-        description: callbackMessage.substring(0, 120),
         full_prompt: callbackMessage,
-        // Sentinels — overwritten by spawnTaskExecutor at QUEUED → RUNNING.
-        message_range: {
-          start_index: -1,
-          end_index: -1,
-          start_timestamp: new Date().toISOString(),
-        },
-        git_state: {
-          ref_at_start: '',
-          sha_at_start: '',
-        },
-        tool_use_count: 0,
+        created_by: callbackCreator,
+        status: TaskStatus.QUEUED,
         metadata: {
           is_agor_callback: true,
           source: 'agor',
