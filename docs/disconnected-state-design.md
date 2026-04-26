@@ -20,7 +20,7 @@ collapsed the navbar itself when disconnected.
 
 | Chokepoint | Edit | Effect |
 |---|---|---|
-| **React Flow freeze** | `nodesDraggable / elementsSelectable / nodesFocusable / edgesFocusable` all gated on `gate.canMutate` (`SessionCanvas.tsx:2248–2257`) | No drag, no selection, no focus — pan/zoom alive |
+| **React Flow freeze** | `nodesDraggable` gated on `gate.canMutate` (`SessionCanvas.tsx:2253`) | Drag is the only canvas gesture that mutates server state — gating it is sufficient. Selection/focus/pan/zoom stay live so click handlers and a11y keep working. |
 | **WorktreeCard root** | `pointerEvents:'none'` + `opacity:0.55` on `<Card style>` (`WorktreeCard.tsx:770–774`) | All in-card clicks blocked, dimmed |
 | **AppHeader disable** | `disabled={!connected}` on the icon `Button`s that lead to fetch/mutate surfaces (`AppHeader.tsx`) | Disconnected navbar greys out drawer/comments toggles, event stream, settings cog, user menu. Local-only navigation (BoardSwitcher, RecentBoardPills, ThemeSwitcher, Documentation, Facepile) stays fully alive. |
 | **ConnectionStatus pill** | (pre-existing) | Single source of disconnected signal in the navbar |
@@ -508,9 +508,11 @@ The full plan landed in one PR.
 
 ### Phase 2 — Chokepoints
 
-1. **Canvas freeze.** `SessionCanvas.tsx:2248–2257` — gate
-   `nodesDraggable`, `elementsSelectable`, `nodesFocusable`, and
-   `edgesFocusable` on `mutationGate.canMutate`. Pan/zoom unaffected.
+1. **Canvas freeze.** `SessionCanvas.tsx:2253` — gate `nodesDraggable` on
+   `mutationGate.canMutate`. Drag is the only canvas gesture that mutates
+   server state (zone/worktree position), so gating it alone is enough.
+   `elementsSelectable`/focus/pan/zoom stay live — over-gating those
+   regressed zone drag detection in the connected path.
 2. **WorktreeCard click surface.** `WorktreeCard.tsx:770–774` — extend the
    `<Card style>` with `opacity` + `pointerEvents` overrides keyed off
    `useConnectionDisabled()`.

@@ -2247,14 +2247,13 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             snapGrid={[20, 20]}
             minZoom={0.1}
             maxZoom={1.5}
-            // Disconnected: freeze all node-driven interactions (drag,
-            // selection, focus). Pan/zoom stay alive so users can keep
-            // browsing the canvas in read-only mode.
+            // Disconnected: gate node dragging only. Drag is the only
+            // canvas gesture that mutates server state (zone/worktree
+            // position). Selection/focus stay enabled so click handlers
+            // and keyboard a11y keep working in read-only mode.
             nodesDraggable={mutationGate.canMutate}
             nodesConnectable={false}
-            elementsSelectable={mutationGate.canMutate}
-            nodesFocusable={mutationGate.canMutate}
-            edgesFocusable={mutationGate.canMutate}
+            elementsSelectable={true}
             elevateNodesOnSelect={false}
             // Two-finger scrolling to pan when in select mode (Figma-style)
             // Also allow click-drag to pan since selection box isn't useful here
