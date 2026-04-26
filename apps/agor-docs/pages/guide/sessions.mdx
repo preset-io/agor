@@ -19,6 +19,14 @@ Worktree: "auth-feature"
    └─ BTW:  "What's the version of node here?"   (ephemeral)
 ```
 
+<img
+  src="/screenshots/security-review-fanout.png"
+  alt="Worktree card on the board showing a parent coordinator session that spawned eight specialized security-review children in parallel — each child a separately introspectable conversation"
+  style={{ maxWidth: '500px', borderRadius: '8px' }}
+/>
+
+_A coordinator session fanned out to eight parallel security-review children — each its own introspectable conversation._
+
 ---
 
 ## Three ways to branch
@@ -58,6 +66,14 @@ The "btw" button (❓) sits next to the prompt input. Click it, type your questi
 For orchestrating agents, the same thing is exposed via `agor_sessions_prompt` with `mode: "btw"` — agents can ask peer sessions quick questions without breaking their flow.
 
 > BTW uses session forking under the hood, so it's currently Claude-only. For tools without fork support (Codex, Gemini), use `mode: "subsession"` instead.
+
+<img
+  src="/screenshots/btw-inline.png"
+  alt="A btw side-question rendered inline in the parent session timeline — the answer is delivered back as a message in the parent's conversation when the ephemeral fork completes"
+  style={{ maxWidth: '600px' }}
+/>
+
+_A btw question runs in an ephemeral fork; the answer is delivered back inline in the parent's timeline._
 
 ---
 
@@ -193,6 +209,14 @@ A session has more knobs than a CLI invocation:
 - **Effort and 1M context** — Models with `[1m]` enable extended context
 
 All of this is changeable at any point — you don't have to start a new session to dial things up or down.
+
+<img
+  src="/screenshots/session-settings.png"
+  alt="Session Settings modal with title, Claude model alias dropdown, permission mode, reasoning effort selector, MCP servers attachment, and collapsible Environment Variables / Callbacks / Advanced sections"
+  style={{ maxWidth: '500px' }}
+/>
+
+_Session Settings modal — model, effort, permissions, MCP, env vars, callbacks, all editable mid-session._
 
 ---
 

@@ -19,6 +19,21 @@ Agor uses [git worktrees](https://git-scm.com/docs/git-worktree) under the hood,
 └─ PR:     github.com/me/repo/pull/456
 ```
 
+<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'flex-start', marginTop: '16px', marginBottom: '16px' }}>
+  <img
+    src="/screenshots/worktree-anatomy.png"
+    alt="A worktree card on the board showing branch and PR badges, env / files / schedule tabs, and a list of sessions running inside"
+    style={{ width: '100%', borderRadius: '8px' }}
+  />
+  <img
+    src="/screenshots/security-review-fanout.png"
+    alt="A worktree card with a parent coordinator session that fanned out to eight specialized security-review children"
+    style={{ width: '100%', borderRadius: '8px' }}
+  />
+</div>
+
+_Left: a worktree's static anatomy — branch, PR, env, files, sessions in one tile. Right: the same primitive packed with a coordinator and eight running children._
+
 ---
 
 ## Why worktrees, not branches
@@ -46,6 +61,14 @@ A worktree is a filesystem directory plus a database record. The record tracks:
 | `owners` / `others_can` | RBAC permissions (when worktree RBAC is enabled) |
 | `board_id` + `(x, y)` | Where the card lives on the canvas |
 | `environment` | Per-worktree dev environment (start/stop, ports, URL) |
+
+<img
+  src="/screenshots/worktree-modal.png"
+  alt="Worktree details modal with tabs for General, Sessions (4), Environment, Files, and Schedule. The General tab shows Name, Repository, Branch, Base Branch, Path, plus a Work Context section with Board picker, Issue, Pull Request, Notes (markdown), MCP Servers, and an Owners & Permissions section with Owners and Others Can fields"
+  style={{ maxWidth: '600px', borderRadius: '8px' }}
+/>
+
+_Behind every card: the worktree details modal — General / Sessions / Environment / Files / Schedule tabs. The same fields the table above describes, rendered as actual inputs._
 
 Sessions, tasks, comments, and artifacts all reference a worktree. **The worktree is the spine.**
 

@@ -24,6 +24,7 @@ export default {
     title: 'Reference',
   },
   architecture: 'Architecture',
+  'typescript-client': 'TypeScript Client',
   'sdk-comparison': 'SDK Comparison',
   '--- Development': {
     type: 'separator',

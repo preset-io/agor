@@ -55,9 +55,9 @@ See the [Getting Started Guide](/guide/getting-started) to add your first repo, 
 
 ## Screenshots
 
-![Agor multiplayer spatial canvas showing AI agent sessions organized on a board with real-time cursors, zones, and worktree cards](/hero.png)
+![Agor board with custom-styled zones organizing worktrees into a pipeline (MAIN SESH, Agor Coding Tasks, Create a pull request, Codex review, Human review). Each worktree card shows its session tree, env tabs, and PR badge.](/screenshots/board-hero.png)
 
-_Multiplayer spatial canvas with zones, real-time cursors, and session organization_
+_Multiplayer spatial canvas with custom-styled zones, session trees, and worktree pipelines_
 
 <div
   style={{
@@ -90,42 +90,42 @@ _Multiplayer spatial canvas with zones, real-time cursors, and session organizat
   </div>
   <div>
     <img
-      src="/screenshots/zone_trigger_modal.png"
-      alt="Agor zone trigger modal displaying automated workflow prompts when dragging sessions into board zones"
+      src="/screenshots/zone-trigger.png"
+      alt="Agor zone trigger modal showing a templated prompt with mustache placeholders ({{ worktree.name }}, {{ worktree.pull_request_url }}) and Prompt/Fork/Spawn action choices"
       style={{ width: '100%', borderRadius: '8px' }}
     />
     <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
-      <em>Zone trigger on session drop</em>
+      <em>Zone trigger with templated prompt</em>
     </p>
   </div>
   <div>
     <img
-      src="/screenshots/zone_trigger_config.png"
-      alt="Agor zone trigger configuration interface for setting up kanban-style workflows and automated prompts"
+      src="/screenshots/tool-blocks.png"
+      alt="Agor chat showing structured tool blocks: collapsible thinking, Grep with pattern badge, Edit with red/green inline diff, and Bash with expandable output"
       style={{ width: '100%', borderRadius: '8px' }}
     />
     <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
-      <em>Zone trigger configuration</em>
+      <em>Structured tool blocks with inline diffs</em>
     </p>
   </div>
   <div>
     <img
-      src="/screenshots/env_configuration.png"
-      alt="Agor worktree environment configuration showing Docker compose commands and port management templates"
+      src="/screenshots/env-variants-full.png"
+      alt="Agor worktree environment tab showing YAML config with named variants (docs, full, sqlite, postgres) and Docker compose commands"
       style={{ width: '100%', borderRadius: '8px' }}
     />
     <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
-      <em>Worktree environment setup</em>
+      <em>Worktree environment with named variants</em>
     </p>
   </div>
   <div>
     <img
-      src="/screenshots/create_session_modal.png"
-      alt="Agor create session modal with agent selection options for Claude Code, Codex, and Gemini"
+      src="/screenshots/create-session-modal.png"
+      alt="Agor create session modal showing five agent runtime cards side-by-side: Claude Code, Codex, Gemini, OpenCode (BETA), GitHub Copilot (BETA)"
       style={{ width: '100%', borderRadius: '8px' }}
     />
     <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
-      <em>Session creation with agent selection</em>
+      <em>Pick any SDK: Claude, Codex, Gemini, OpenCode, Copilot</em>
     </p>
   </div>
   <div>

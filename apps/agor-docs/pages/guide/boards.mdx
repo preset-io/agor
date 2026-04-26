@@ -9,9 +9,9 @@ description: Boards are 2D spatial canvases for organizing worktrees. Zones are 
 
 Instead of linear lists or kanban columns, every [worktree](/guide/worktrees) lives at an `(x, y)` coordinate on a board. Sessions appear as a genealogy tree on the worktree card. Multiple users see the same canvas with live cursors.
 
-![Agor Board with Zones](/screenshots/agor_for_agor.png)
+![Agor board with custom-styled gradient zones organizing worktrees into a pipeline (MAIN SESH, Agor Coding Tasks, Create a pull request, Codex review, Human review). Each worktree card shows its session tree, env tabs, and PR badge.](/screenshots/board-hero.png)
 
-_An Agor board showing multiple worktrees organized across three zones (Analyze/plan, Code!, Done!). Each worktree card shows its session tree and metadata._
+_An Agor board with custom-styled zones forming a pipeline. Each worktree card shows its session tree, env tabs, and PR badge — and the floating PiP preview shows a session live-streaming as it works._
 
 ---
 
@@ -80,6 +80,14 @@ If approved, comment on {{ worktree.pull_request_url }} with summary.
 ```
 
 Drop a worktree → auto-prompts with issue and PR links pre-filled. **No copy-paste, no forgetting which ticket this was for.**
+
+<img
+  src="/screenshots/zone-trigger.png"
+  alt="Zone Trigger modal for a 'Codex review' zone — toggles between 'Create a new session' and 'Reuse a session', picks an action (Prompt / Fork / Spawn), and shows the editable templated prompt with mustache placeholders like {{ worktree.name }} and {{ worktree.pull_request_url }}"
+  style={{ maxWidth: '600px' }}
+/>
+
+_The zone trigger modal — pick an action, override session config, and edit the templated prompt before firing._
 
 ---
 

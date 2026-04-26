@@ -5,21 +5,29 @@ description: Route messages from Slack, GitHub, and other platforms directly int
 
 # Message Gateway
 
-<div style={{ marginTop: '16px', marginBottom: '24px', padding: '16px 20px', border: '1px solid #d4940a', borderRadius: '8px', backgroundColor: 'rgba(212, 148, 10, 0.08)' }}>
+<div style={{ marginTop: '16px', marginBottom: '24px', padding: '16px 20px', border: '1px solid #4a90c0', borderRadius: '8px', backgroundColor: 'rgba(74, 144, 192, 0.08)' }}>
 
-**Security Warning — Read Before Enabling**
+**Security — Think Before Enabling**
 
-The Message Gateway gives anyone who can message your bot the ability to create Agor sessions and interact with autonomous coding agents. This effectively grants **full access to the target worktree, the host machine (to the extent the agent can access it), and any connected services (MCP servers, APIs, credentials).**
+A Message Gateway channel opens an external pathway (Slack DM, GitHub `@mention`) that can prompt agents holding your worktree's full surface area: code, MCP servers, env vars, and any credentials in scope. Worth thinking through before you flip it on, but not categorically dangerous.
 
-Use with caution:
+Things working in your favor:
 
-- **Assume full access.** Anyone who can DM your Slack bot can prompt the agent to read, write, and execute code on the worktree. Treat this as giving them SSH access to that environment.
-- **Sandbox everything you can.** Run the daemon in a container, use restricted permission modes (`supervised` or `manual`), limit MCP server exposure, and avoid mounting sensitive host directories.
-- **Restrict bot access.** In Slack, limit who can DM the bot. Consider creating a private Slack workspace or restricting the bot to specific users via Slack's app distribution settings.
-- **Use dedicated worktrees.** Don't point channels at worktrees containing production code or credentials. Create isolated worktrees specifically for gateway use.
-- **Audit regularly.** Monitor sessions created by the gateway. All activity is logged in Agor's session transcripts.
-- **Rotate credentials.** Periodically rotate your Slack bot tokens and channel keys through the Settings UI.
-- **Don't run as root.** The daemon and agents should never run as root. Use Agor's [Unix isolation modes](/guide/multiplayer-unix-isolation) for additional sandboxing.
+- **Email-based user matching.** Inbound Slack messages are aligned to Agor users via the `users:read.email` scope; GitHub mentions are aligned via `user_map` (login → email) or the sender's public GitHub email. When a match exists, the spawned session is attributed to that real Agor user — so prompts run under their identity and audit trail, not as a generic bot. Unmatched senders are rejected (or surfaced to admins).
+- **Encrypted credentials at rest.** Bot tokens, app tokens, and private keys are stored encrypted in the daemon database.
+- **Outbound-only transport.** Slack uses Socket Mode and GitHub uses API polling — no public webhook URLs to defend.
+- **Per-channel agent config.** Permission modes, model, and MCP server attachments are scoped to the channel, not global.
+
+Things that still warrant caution:
+
+- **Channels open external pathways into agent context.** Anyone who can DM the bot (or `@mention` it on a watched repo) can ask the agent to read, write, or execute code on the target worktree. If the channel runs in `trust` mode with broad MCP access, that pathway is effectively a remote prompt seat — treat it as such.
+- **Restrict who can reach the bot.** Limit Slack DM scope (private workspace or app distribution settings); narrow GitHub `watch_repos` to repos where mentions are intended.
+- **Use dedicated worktrees.** Don't point channels at worktrees holding production secrets. Create isolated worktrees scoped to gateway use.
+- **Pick the right permission mode.** `supervised` or `manual` modes preserve human-in-the-loop on tool calls; `trust` is fine for bounded, well-understood automations but removes that gate.
+- **Mind the [Unix isolation mode](/guide/multiplayer-unix-isolation).** In `simple` mode the agent runs as the daemon user; in `strict` mode it runs as the matched Agor user's Unix identity, which is what you want when channels span teams.
+- **Rotate tokens.** Bot/app tokens and channel keys should be rotated like any other secret.
+
+> **The mental model:** a gateway channel is a remote terminal into an agent that holds the same authority as a human prompting that worktree. Configure who can reach it, what it can do, and which identity it runs as — and the rest is normal Agor surface area.
 
 </div>
 

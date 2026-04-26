@@ -108,9 +108,74 @@ This is the part that's hard to convey in a doc. Try it on a board with one othe
 
 ---
 
+## ⚙️ Per-User Settings
+
+**Multiplayer is more than presence — every user brings their own credentials, env, and tool config to the boards they share.**
+
+<img
+  src="/screenshots/user-settings-env-vars.png"
+  alt="User Settings modal — left rail with Profile (General, Env Vars, Audio, Personal API Keys) and Agentic Tools (API Keys, Claude Code, Codex, Gemini, OpenCode); right pane shows Environment Variables table with Global and Session scopes, AGOR_API_KEY/GITHUB_TOKEN/HUBSPOT_API_KEY/LINKEDIN_SECRET/FIVETRAN_API_KEY/SHORTCUT_API_TOKEN/CLAUDE_CODE_OAUTH_TOKEN encrypted at rest"
+  style={{ maxWidth: '720px', borderRadius: '8px' }}
+/>
+
+The settings panel is split into two surfaces:
+
+**Profile**
+- **General** — display name, avatar, email, role.
+- **Env Vars** — encrypted environment variables, scoped `Global` (auto-injected into every session you own) or `Session` (only injected when you opt in per session under Session → Settings → Env Vars). Useful for `GITHUB_TOKEN`, `HUBSPOT_API_KEY`, vendor credentials, or anything you'd otherwise paste into a `.env`.
+- **Audio** — chime / notification preferences for attention pulse and session events.
+- **Personal API Keys** — issue tokens for scripting Agor itself (CLI / external tools).
+
+**Agentic Tools**
+- **API Keys** — model-provider keys (Anthropic, OpenAI, Google, etc.) used when a session selects you as the actor.
+- **Claude Code / Codex / Gemini / OpenCode** — per-runtime config: default model, permission mode, extra arguments, OAuth login state. Each user authenticates the SDKs they actually use; no shared "agor-bot" credentials.
+
+### Why per-user matters in multiplayer
+
+When teammates share a board, sessions still execute under a specific user's identity:
+
+- The session's Anthropic / OpenAI key is the **session creator's** key (billing follows usage).
+- Env vars merge: `gateway/channel → user globals → session-scoped` — so a Slack-driven session run as you carries *your* `GITHUB_TOKEN`, not a shared bot token.
+- In `unix_user_mode: strict`, the executor process literally runs as the user's Unix account.
+
+This is what makes co-locating teams on one Agor instance work without secret-sharing: everyone keeps their own credentials, but the boards, worktrees, and conversations are shared.
+
+---
+
+## 🔌 Connected MCP Servers (Per-User OAuth)
+
+**Bring your tools — Slack, Linear, GitHub, HubSpot, custom internal MCP servers — and let Claude / Codex / Gemini call them with your authority.**
+
+Agor speaks the full MCP transport matrix:
+
+- **`stdio`** — local binaries (`@modelcontextprotocol/server-filesystem`, `@modelcontextprotocol/server-github`, etc.).
+- **`sse` / `http`** — remote HTTP-based MCP servers, with header-based auth or OAuth 2.1.
+- **OAuth 2.1 with auto-discovery** — Agor probes both OAuth 2.0 and OIDC discovery endpoints, completes the authorization code flow in-browser, and persists refresh tokens encrypted in the daemon database.
+
+### Per-user, not per-instance
+
+Each user authenticates **their own** OAuth grant per MCP server. When a session attaches an OAuth-secured MCP server, Agor injects the *acting user's* token — never another user's. Token refresh is handled transparently; revocation is per-user, per-server. The UI surfaces auth state with a `userAuthenticatedMcpServerIds` set so you can see at a glance which servers you're connected to.
+
+This is how a shared Linear or Slack MCP server can sit on the team's Agor instance and still respect each member's individual permissions — your prompt against Linear runs with *your* Linear scope, your teammate's runs with theirs.
+
+### Configuration scopes
+
+| Scope | Where defined | When attached |
+|---|---|---|
+| **Instance MCP servers** | Admin → MCP Servers | Available to be selected by any session |
+| **Per-session selection** | Session → Settings → MCP Servers | Toggled on per session |
+| **Per-channel attachment** | Gateway channel config | Auto-attached for sessions that channel spawns |
+| **User OAuth grants** | User Settings → MCP authorizations (per server) | Bound automatically when that user is the actor |
+
+> **Pairing with the Message Gateway:** a Slack-routed session that runs as the matched Agor user, with that user's OAuth-authenticated Linear MCP server attached, can take Linear actions under the human's identity — no shared service account, full audit trail.
+
+---
+
 ## Related
 
 - [Boards & Zones](/guide/boards) — The spatial canvas itself
 - [Worktrees](/guide/worktrees) — The primary entity that pulses, gets commented on, and hosts terminals
 - [Rich Chat UX](/guide/rich-chat-ux) — Favicon dots, chimes, queued messages
-- [Security](/security) — Trust boundaries for shared terminals
+- [Agor MCP Server](/guide/internal-mcp) — The other side: Agor exposing itself as an MCP server to agents
+- [Message Gateway](/guide/message-gateway) — How external messaging maps to Agor user identities
+- [Security](/security) — Trust boundaries for shared terminals and credentials

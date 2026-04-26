@@ -11,11 +11,23 @@ Agor's chat surface exposes everything the SDKs make available — and adds the 
 
 This isn't decoration. It's how you stay oriented when you have 5 sessions running across 3 worktrees.
 
+<img
+  src="/screenshots/context-meter-timeline.png"
+  alt="Session timeline with context-window meter rendered as a backdrop bar behind each prompt — green early, amber mid-session, red as the session fills up"
+  style={{ maxWidth: '500px', borderRadius: '8px' }}
+/>
+
 ---
 
 ## 💰 Per-Prompt Cost & Token Accounting
 
 **See exactly what every prompt costs.** Token counts (input, output, cache reads, cache writes) and dollar amounts are tracked and displayed inline per message and rolled up per session.
+
+<img
+  src="/screenshots/cost-tooltip.png"
+  alt="Cumulative cost and token tooltip showing input, output, cache reads, cache creation, and estimated dollar cost for a session"
+  style={{ maxWidth: '450px', borderRadius: '8px' }}
+/>
 
 You can spot:
 
@@ -54,6 +66,14 @@ You don't have to start a new session to dial things up or down — flip the sel
   style={{ maxWidth: '400px' }}
 />
 
+Hover any prompt to see the per-message context popover with raw token counts and per-model breakdown:
+
+<img
+  src="/screenshots/context-window-detail.png"
+  alt="Context window popover for a single prompt showing per-model token usage and the raw SDK response payload"
+  style={{ maxWidth: '500px' }}
+/>
+
 This makes "should I [spawn](/guide/sessions#spawn--delegate-with-fresh-context) a child or keep going?" a visual decision rather than a guessing game.
 
 ---
@@ -66,6 +86,14 @@ This makes "should I [spawn](/guide/sessions#spawn--delegate-with-fresh-context)
 - Reads show file paths with click-through
 - Bash shows the command and exit code
 - MCP tool calls show inputs/outputs as collapsible JSON
+
+<img
+  src="/screenshots/tool-blocks.png"
+  alt="Chat showing collapsible thinking blocks, a Grep with pattern badge, an Edit with red/green inline diff, and a Bash tool block — each with its own structured rendering"
+  style={{ maxWidth: '600px' }}
+/>
+
+_Thinking blocks, Grep, Edit (with inline diff), and Bash — each as its own structured, collapsible block._
 
 Plus a **per-message git tracking** view that shows what changed on disk after each agent turn — which files were modified and what the diff looks like.
 
@@ -220,6 +248,20 @@ The agent can return a Mermaid diagram of your service architecture, and you'll 
 | Agent defaults | Create Session → Advanced |
 
 See **[Security](/security)** for the trust boundary on per-user secrets.
+
+---
+
+## 📎 File Uploads
+
+**Drop files into the agent's context with one click.** The upload modal lets you choose where the file lands — committable inside the worktree, ephemeral in a temp folder, or shared across sessions in `~/.agor/uploads/`. A toggle auto-prompts the agent with a templated message referencing the file path.
+
+<img
+  src="/screenshots/upload-modal.png"
+  alt="Upload modal with three destination options (worktree, temp folder, global) and a 'Notify the agent about this file' toggle with a templated message using {filepath}"
+  style={{ maxWidth: '500px' }}
+/>
+
+Useful for handing screenshots, designs, error logs, or test fixtures to the agent without leaving the chat.
 
 ---
 

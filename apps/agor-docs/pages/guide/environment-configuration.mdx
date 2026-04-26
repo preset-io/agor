@@ -9,6 +9,14 @@ Agor's managed environments let a repo ship a **library of named variants** (`le
 
 This page documents the data model, the template vars, deployment-local overrides, and the permission rules.
 
+<img
+  src="/screenshots/env-pill-tooltip.png"
+  alt="Worktree card env pill (green checkmark, 'env' label) with adjacent start/stop/logs/edit icons and a hover tooltip showing 'Open environment - http://10.33.92.175:7760'"
+  style={{ maxWidth: '460px', borderRadius: '8px' }}
+/>
+
+_What it looks like on the card: a green env pill, one-click open, and start/stop/logs/edit icons right next to your worktree's PR badge._
+
 ---
 
 ## Overview
@@ -40,6 +48,22 @@ Managed environments are built out of three layers, precedence **low → high**:
 - **Layer 3** is the output: a flat set of rendered strings attached to the worktree. Executors run these verbatim — no templating at execute time.
 
 Re-rendering is **explicit**. Editing a variant or an override does not retroactively rewrite existing worktrees — you hit the **Render** button when you want a worktree to pick up changes.
+
+<img
+  src="/screenshots/env-variants-full.png"
+  alt="Worktree Environment tab showing the YAML variant config with start/stop/nuke/logs commands, the Variant selector dropdown, and the rendered command snapshot below"
+  style={{ maxWidth: '700px', borderRadius: '8px' }}
+/>
+
+_Worktree Environment tab — variant YAML on top, picker in the middle, rendered snapshot below. The `extends: sqlite` line on the `postgres` variant shows variants can inherit from each other._
+
+<img
+  src="/screenshots/env-variants-dropdown.png"
+  alt="Variant dropdown open showing four named variants — docs, full, sqlite (default), postgres — each with a one-line description"
+  style={{ maxWidth: '600px' }}
+/>
+
+_Picking a variant — `sqlite` is the default for fastest boot; `full` mirrors production with PostgreSQL + RBAC + Unix isolation._
 
 ---
 

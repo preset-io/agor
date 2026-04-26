@@ -17,6 +17,8 @@ description: Agents are first-class users in Agor. The built-in MCP server gives
 
 This is the foundational layer: [assistants](/guide/assistants), [scheduled prompts](/guide/scheduler), [cards](/guide/cards), [artifacts](/guide/artifacts), and the [message gateway](/guide/message-gateway) are all built on top of it.
 
+> **The other doorway:** if you're driving Agor from outside an agent — TS/JS scripts, custom dashboards, internal services — reach for the official [`@agor-live/client`](/guide/typescript-client) instead. Same daemon, same types, REST + Socket.IO + a reactive session API.
+
 ## Key Ideas
 
 - **Agents as first-class users:** Every MCP tool wraps a FeathersJS service. Sessions, worktrees, boards, zones, users, environments — anything you can click or `agor`-CLI is available as JSON-RPC.
@@ -145,5 +147,6 @@ execution:
 - [Sessions & Trees](/guide/sessions) — How agents spawn, fork, and ask side questions through MCP
 - [Assistants](/guide/assistants) — Long-lived agents that drive Agor through MCP
 - [Scheduler](/guide/scheduler) — Cron-style triggers that fire prompts via the same surface
+- [TypeScript Client](/guide/typescript-client) — The non-agent doorway: drive Agor from JS/TS apps, scripts, and services
 - [Architecture: Agor as an MCP Server](/guide/architecture#agor-as-an-mcp-server)
 - [SDK Comparison](/guide/sdk-comparison)

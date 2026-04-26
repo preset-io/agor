@@ -7,6 +7,14 @@ description: Persistent AI companions with memory, skills, orchestration, and sc
 
 An **Assistant** is a persistent AI companion that lives in your Agor workspace. While a normal worktree is _where_ code gets written, an Assistant is a _who_ — a persistent entity with memory, skills, and the ability to orchestrate work across your entire workspace.
 
+<img
+  src="/screenshots/assistants-list.png"
+  alt="A chat response listing twelve assistants in an Agor instance — a mix of coding orchestrators (AgorClaw, GitHub Handler), ops bots (patch-bot, OpEx), and business helpers (Saul, Blake, Peggy, Hippa) — each with an emoji, name, and one-line function"
+  style={{ maxWidth: '600px', borderRadius: '8px' }}
+/>
+
+_A real Agor instance with a curated mix of coding, ops, and business assistants — each callable from any session via the `agor_assistants_list` MCP tool._
+
 The assistant framework is heavily inspired by [OpenClaw](https://github.com/ricklamers/openclaw), a proven pattern for building persistent AI agents with file-based memory and identity. Agor's implementation adapts the core ideas — markdown-based memory, identity files, and scheduled loops — while making the assistant deeply aware of its environment through Agor's [MCP tools](/guide/internal-mcp). An Agor assistant can create worktrees, spawn sessions, manage boards, and coordinate multi-agent workflows — capabilities that go well beyond the original pattern.
 
 **Framework repository:** [github.com/preset-io/agor-assistant](https://github.com/preset-io/agor-assistant)
