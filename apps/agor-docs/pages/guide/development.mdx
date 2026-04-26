@@ -7,11 +7,7 @@ description: Complete guide for contributing to agor. Set up your development en
 
 Complete developer documentation for contributing to Agor.
 
-## Quick Setup
-
-### Docker Compose (Recommended)
-
-**Fastest way to start developing:**
+## Quick start
 
 ```bash
 git clone https://github.com/preset-io/agor
@@ -20,133 +16,114 @@ docker compose up
 # Visit http://localhost:5173 → Login: admin@agor.live / admin
 ```
 
-**Pros:**
+That gives you SQLite, single-user, no RBAC — the fastest path to a running daemon. For Postgres, multiplayer + RBAC, or the docs site, see the variant system below.
 
-- ✅ No Node.js/pnpm installation required
-- ✅ Consistent environment across team
-- ✅ Easy to run multiple instances on different branches
-- ✅ Supports both SQLite (default) and PostgreSQL databases
+## `.agor.yml` — the variant system
 
-**Cons:**
+Agor's repo ships [`.agor.yml`](https://github.com/preset-io/agor/blob/main/.agor.yml) — a declarative schema describing how to spawn an environment for this codebase. The same schema you'd write for any repo you load into Agor: Agor uses it to develop itself. Each variant is a Handlebars-templated `start` / `stop` / `nuke` / `logs` / `health` / `app` block.
 
-- ❌ Docker-in-docker complexity if your worktree environments use Docker (e.g., `docker compose up` in environment configs)
+| Variant | What you get | Base ports |
+|---|---|---|
+| **`sqlite`** _(default)_ | SQLite, single-user, no RBAC. Fastest to boot. | daemon: `3000 + worktree.unique_id`, UI: `5000 + …` |
+| **`postgres`** | Postgres backend (closer to multi-user prod). RBAC off. | same as `sqlite` |
+| **`full`** | Postgres + worktree RBAC + strict Unix-user impersonation. Requires the sudoers config under `docker/sudoers/`. | same as `sqlite` |
+| **`docs`** | The Nextra docs site (`apps/agor-docs`) in its own self-contained container. Standalone — no daemon, no DB. | `7000 + worktree.unique_id` |
 
-#### Database Modes
+Ports derive from `worktree.unique_id` so multiple worktrees run side-by-side without colliding. The `docs` variant uses `{{host.ip_address}}` in its app URL so the dev server is reachable from your laptop, not just localhost on the daemon host.
 
-Agor supports both SQLite (default) and PostgreSQL databases in Docker.
+Pick a variant by setting `AGOR_VARIANT` in your environment or selecting it in the worktree's environment settings — or render it manually with the appropriate `docker compose` invocation from the file.
 
-**SQLite mode (default):**
+A representative variant block, abridged from the file:
 
-```bash
-docker compose up
-# Uses SQLite database at ~/.agor/agor.db (inside container)
-# Perfect for single-user development
+```yaml
+sqlite:
+  description: Single-user dev with SQLite. No RBAC. Fastest to boot.
+  start: >-
+    DAEMON_PORT={{add 3000 worktree.unique_id}}
+    UI_PORT={{add 5000 worktree.unique_id}}
+    docker compose -p agor-{{worktree.name}} up -d
+  stop:   docker compose -p agor-{{worktree.name}} down
+  nuke:   docker compose -p agor-{{worktree.name}} down -v
+  logs:   docker compose -p agor-{{worktree.name}} logs --tail=100
+  health: http://localhost:{{add 3000 worktree.unique_id}}/health
+  app:    http://localhost:{{add 5000 worktree.unique_id}}
 ```
 
-**PostgreSQL mode:**
+Other variants `extends: sqlite` to inherit the unchanged blocks — the schema enforces single-level extension only (no chains).
+
+## Agor in Agor (recommended)
+
+The whole point of `.agor.yml` is that Agor can develop itself. The natural workflow:
+
+1. **Run a "host" Agor** (any way you like — `npm i -g agor-live`, `docker compose up`, anything).
+2. **Register the agor repo** in your host Agor — clone or point it at your local checkout.
+3. **Create a worktree per feature**. Each worktree gets a unique `worktree.unique_id` → unique ports → fully isolated dev stack.
+4. **Pick a variant** in the worktree's environment settings (sqlite for most things, postgres if you're touching DB code, full if you're testing RBAC, docs for documentation work).
+5. **Spawn an agent session**. The session has [Agor MCP](/guide/internal-mcp) access, so it can spin up environments, monitor health and logs, run tasks against the running stack, and tear it down — without you ever leaving the canvas.
+
+This is also the only sane way to develop multiple Agor features in parallel: each worktree's variant picks its own ports, mounts source for HMR, and persists `node_modules` in a named volume.
+
+## When to use `pnpm dev` instead
+
+Skip Docker if you're working on the **environment-spawning system itself** — running Agor in Docker while it tries to spawn `docker compose` for environments creates docker-in-docker entanglements that aren't worth fighting.
 
 ```bash
-# Single command - auto-starts postgres container
-docker compose --env-file .env.postgres up
-
-# Alternative: Copy env file for simpler workflow
-cp .env.postgres .env
-docker compose up  # Now defaults to PostgreSQL
-
-# Switch back to SQLite
-rm .env
-docker compose up
+git clone https://github.com/preset-io/agor && cd agor && pnpm install
 ```
 
-**What happens in PostgreSQL mode:**
-
-- Postgres container starts automatically (via `COMPOSE_PROFILES=postgres` in `.env.postgres`)
-- Agor connects to `postgresql://agor:agor_dev_secret@postgres:5432/agor`
-- Database runs in a Docker volume (persisted across restarts)
-- Great for testing multi-user scenarios or production-like setups
-
-**Check which database you're using:**
-
-Open Settings → About tab (admin only) to see:
-
-- 💾 SQLite - Shows database file path
-- 🐘 PostgreSQL - Shows connection URL (password masked)
-
-**Git Commits in Docker:**
-
-When using Docker, `pnpm install` installs Linux binaries (e.g., `turbo-linux-arm64`, `eslint-linux`), which won't run on your host OS. If you commit from your host machine, pre-commit hooks will fail because Husky tries to execute these Linux binaries.
-
-**Two solutions:**
-
-1. **Commit inside the container (Recommended)**
-
-   ```bash
-   docker compose exec agor-dev git add .
-   docker compose exec agor-dev git commit -m "your message"
-   ```
-
-   Hooks run inside the container with correct Linux binaries.
-
-2. **Reinstall node_modules on host**
-   ```bash
-   pnpm install  # Get host-specific binaries (macOS/Windows)
-   git commit -m "your message"  # Hooks use host binaries
-   ```
-   Note: This means you'll have both host and Linux binaries in node_modules.
-
-**Running multiple instances in parallel:**
-
-If you're developing across multiple branches, run each with unique ports:
-
-```bash
-# Main branch
-cd ~/code/agor
-docker compose up  # :3030 (daemon), :5173 (UI)
-
-# Feature branch 1
-cd ~/code/agor-feature-auth
-PORT=4030 VITE_PORT=5174 docker compose -p agor-feature-auth up
-
-# Feature branch 2
-cd ~/code/agor-feature-payments
-PORT=5030 VITE_PORT=5175 docker compose -p agor-feature-payments up
-```
-
-The `-p` flag ensures isolated volumes and no container naming conflicts.
-
-### Local Development with pnpm (For Environment Testing)
-
-**Use this if you're working on:**
-
-- **Environment management** (process spawning, health checks, port allocation)
-- Testing environments that use Docker (avoids docker-in-docker complexity)
-- Faster iteration with instant HMR/hot-reload
-
-**Setup:**
-
-```bash
-git clone https://github.com/preset-io/agor
-cd agor
-pnpm install
-```
-
-**Two-process workflow:**
+Two terminals:
 
 ```bash
 # Terminal 1: Daemon (watches @agor/core + daemon, auto-restarts)
-cd apps/agor-daemon
-pnpm dev
+cd apps/agor-daemon && pnpm dev
 
-# Terminal 2: UI dev server (Vite HMR for instant updates)
-cd apps/agor-ui
-pnpm dev
+# Terminal 2: UI dev server (Vite HMR)
+cd apps/agor-ui && pnpm dev
 
 # Visit http://localhost:5173
 ```
 
-**Why local for testing Environment features?**
+## Custom builds
 
-The Environment system spawns processes defined in your repo's environment config (e.g., `pnpm dev`, `docker compose up`, etc.). If your environment commands use Docker, running Agor itself in Docker requires docker-in-docker setup. Local development avoids this complexity.
+To test the **packaged artifact** end-to-end — the way users actually install Agor — build the `agor-live` npm package locally:
+
+```bash
+cd packages/agor-live
+./build.sh
+npm i -g .            # or: npm i -g ./agor-live-<version>.tgz
+```
+
+`build.sh` produces a single self-contained package: the UI is built as static assets and bundled into `agor-live` so the daemon serves it directly. After `npm i -g .`, the global `agor` and `agor-live` commands run your local build instead of the published version.
+
+Useful when you want to:
+
+- Verify the production-style flow (no Vite dev server, no separate UI process)
+- Test CLI behavior against a built package
+- Hand a colleague a tarball without publishing to npm
+
+Run `npm uninstall -g agor-live` to remove your local build and fall back to whatever you had installed before.
+
+## Committing from inside Docker
+
+When the daemon runs in Docker, `pnpm install` populates `node_modules/` with **Linux** binaries (`turbo-linux-arm64`, `eslint-linux`, etc.). If you commit from the host, Husky pre-commit hooks try to execute those Linux binaries and fail.
+
+Two fixes:
+
+1. **Commit inside the container** _(recommended)_ — `docker compose exec agor-dev git add . && docker compose exec agor-dev git commit -m "msg"`. Hooks run in Linux.
+2. **Reinstall on host** — run `pnpm install` from the host once to get host-OS binaries; commit normally afterward. (You'll end up with both binary sets in `node_modules`, which is harmless but bloats the tree.)
+
+## Checking which database is active
+
+Open **Settings → About** (admin only):
+
+- 💾 SQLite — shows the database file path
+- 🐘 PostgreSQL — shows the connection URL (password masked)
+
+Or hit the daemon directly:
+
+```bash
+curl http://localhost:3030/health
+```
 
 ## Project Structure
 

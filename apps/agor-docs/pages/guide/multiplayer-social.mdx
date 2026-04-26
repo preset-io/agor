@@ -1,0 +1,116 @@
+---
+title: Multiplayer & Social
+description: Real-time collaboration on Agor boards — live cursors, facepile, scoped comments, attention pulse, and shared multiplayer terminal sessions.
+---
+
+# Multiplayer & Social
+
+**Agor is great solo. Multiplayer is what makes it Figma.**
+
+Just as Figma turned design from a solo activity into real-time collaboration, Agor brings multiplayer presence to AI coding. No more "share your screen" calls or wondering what your teammate's agent is doing.
+
+---
+
+## 👀 Live Cursors
+
+**See where your teammates are working in real time.** Every user on a board has a cursor showing:
+
+- Position on the canvas
+- Name and avatar
+- What they're hovering or dragging
+
+Cursors update every ~100ms, making collaboration feel fluid. Notice someone hovering over a session? Jump in. See them dragging a worktree to the same zone? Coordinate live instead of stepping on each other.
+
+---
+
+## 👥 Facepile
+
+**Know who's online at a glance.** The facepile shows all active users on the current board with their avatars and presence status. Same pattern Figma uses — you always know who's in the room. No "are you looking at this?" pings on Slack.
+
+---
+
+## 💬 Spatial Comments
+
+**Annotate sessions, worktrees, zones, and boards with threaded conversations.**
+
+Leave scoped/spatial comments on:
+
+- **Board-level** — Team discussions about workflow or priorities
+- **Zones** — "All sessions in this zone need API keys configured"
+- **Worktrees** — "Ready for review" or "Blocked on API access"
+- **Sessions** — "This approach didn't work, try the forked version"
+
+Comments create a **persistent conversation layer** on top of your AI work:
+
+- Thread replies for focused discussion
+- `@username` mentions
+- Direct links to specific sessions or worktrees
+- Comment history with full timestamps
+- Organized by scope in the comments panel (Board → Zones → Worktrees → Sessions)
+
+**The insight:** AI conversations are ephemeral. Claude says something, you respond, it's buried in the chat. Comments are *spatial* and *persistent* — pin them to the exact artifact (zone, worktree, session) where they matter. Teammates discover insights without digging through transcripts.
+
+---
+
+## ✨ Attention Pulse
+
+**Worktrees pulse teal when they need attention.** Sessions ready for input, callbacks waiting to be reviewed, completed long-runs — the worktree card pulses on the board so you can pulse-watch from a peripheral browser tab.
+
+<img
+  src="/screenshots/worktree-highlighted.png"
+  alt="Worktree card with attention glow"
+  style={{ maxWidth: '400px' }}
+/>
+
+Combined with the **[favicon status dots](/guide/rich-chat-ux#-favicon-status-indicator)**, you don't have to keep your eye on Agor to know when something needs you.
+
+---
+
+## 🖥️ Multiplayer Terminal Sessions
+
+**Real-time shared terminals via tmux.** When multiple users open the same worktree's terminal, they see each other's keystrokes live.
+
+<img
+  src="/screenshots/tmux.png"
+  alt="Terminal showing multiplayer tmux session with collaborative commands"
+  style={{ maxWidth: '400px' }}
+/>
+
+### How it works
+
+- Each worktree gets a dedicated tmux window in the shared `agor` session
+- Multiple users connecting to the same worktree attach to the same window
+- WebSocket broadcasting synchronizes keystrokes and output
+- Works automatically when tmux is installed; no configuration
+
+### Use cases
+
+- **Pair programming** — Two devs in sync on the same feature
+- **Live debugging** — One person navigates while another observes
+- **Onboarding** — Senior dev demos commands; junior follows along
+- **Code review** — Reviewer explores the worktree interactively during review
+
+Terminal sessions are worktree-scoped — users only see terminals for worktrees they're actively using.
+
+> **Privacy note:** With `unix_user_mode: simple` (the default), the terminal runs as the daemon user and gives `member+` users access to daemon-readable files (config, DB, JWT secret). Use `insulated` or `strict` mode in shared environments. See [Security](/security).
+
+---
+
+## 🌐 Real-Time Strategy for AI Teams
+
+The combined effect of cursors + facepile + comments + zones + presence is something like an RTS for engineering work:
+
+- Watch teammates and agents move across tasks live
+- Cluster sessions, delegate, pivot, iterate together
+- Drag a worktree across the board and the trigger fires for everyone watching
+
+This is the part that's hard to convey in a doc. Try it on a board with one other person and you'll feel it.
+
+---
+
+## Related
+
+- [Boards & Zones](/guide/boards) — The spatial canvas itself
+- [Worktrees](/guide/worktrees) — The primary entity that pulses, gets commented on, and hosts terminals
+- [Rich Chat UX](/guide/rich-chat-ux) — Favicon dots, chimes, queued messages
+- [Security](/security) — Trust boundaries for shared terminals

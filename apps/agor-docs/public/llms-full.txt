@@ -85,20 +85,27 @@ Real-time events for sessions, tasks, messages, and multiplayer presence updates
 ## Documentation
 
 - [Getting Started](https://agor.live/guide/getting-started): Install and set up Agor in under 5 minutes
-- [Concepts](https://agor.live/guide/concepts): Core concepts — Worktrees, Boards, Sessions, Environments
+- [Extended Installation](https://agor.live/guide/extended-install): Docker, source builds, optional Zellij
+- [Worktrees](https://agor.live/guide/worktrees): Isolated git working directories — primary unit of work
+- [Sessions & Trees](https://agor.live/guide/sessions): Conversations that fork, spawn subsessions, ask side questions
+- [Boards & Zones](https://agor.live/guide/boards): 2D spatial canvases with templated zone triggers
+- [Features Overview](https://agor.live/guide/features-overview): Map of all features
 - [Assistants](https://agor.live/guide/assistants): Persistent AI companions with memory and orchestration
-- [Agor MCP Server](https://agor.live/guide/internal-mcp): Built-in MCP server for self-aware agents
-- [Message Gateway](https://agor.live/guide/message-gateway): Slack/Discord integration
-- [Scheduler](https://agor.live/guide/scheduler): Cron-driven agent automation
-- [Environments](https://agor.live/guide/environment-configuration): Worktree environment templates
-- [Advanced Features](https://agor.live/guide/advanced-features): Notifications, audio alerts, context tracking
-- [Spawned Subsessions](https://agor.live/guide/spawned-subsessions): Multi-agent delegation with callbacks
-- [Architecture](https://agor.live/guide/architecture): System design and data flow
+- [Agor MCP Server](https://agor.live/guide/internal-mcp): Anything a user can do, an agent can do too
+- [Rich Chat UX](https://agor.live/guide/rich-chat-ux): Token/$ accounting, context viz, tool blocks, queueing, Streamdown
+- [Multiplayer & Social](https://agor.live/guide/multiplayer-social): Cursors, facepile, comments, attention pulse, shared terminals
+- [Environments](https://agor.live/guide/environment-configuration): Per-worktree dev environments with unique ports
+- [Scheduler](https://agor.live/guide/scheduler): Cron-driven agent automation, powers assistant heartbeats
+- [Cards](https://agor.live/guide/cards): Generic workflow entities on boards (beta)
+- [Artifacts](https://agor.live/guide/artifacts): Live, interactive Sandpack apps on the canvas
+- [Message Gateway](https://agor.live/guide/message-gateway): Slack/GitHub integration
+- [Other Features](https://agor.live/guide/advanced-features): Catchall power-user features
+- [Architecture](https://agor.live/guide/architecture): System design, data flow, typed TypeScript client
 - [SDK Comparison](https://agor.live/guide/sdk-comparison): Claude Code vs Codex vs Gemini feature matrix
 - [Development Guide](https://agor.live/guide/development): Contributing to Agor
 - [Multiplayer Mode](https://agor.live/guide/multiplayer-unix-isolation): RBAC and Unix isolation
 - [Containerized Execution](https://agor.live/guide/containerized-execution): Kubernetes/Docker deployment
 - [API Reference](https://agor.live/api-reference): REST API documentation
 - [WebSocket Events](https://agor.live/api-reference/websockets): Real-time event reference
-- [Security](https://agor.live/security): Security guidance
+- [Security](https://agor.live/security): Deployment modes, RBAC, trust boundaries
 - [FAQ](https://agor.live/faq): Frequently asked questions

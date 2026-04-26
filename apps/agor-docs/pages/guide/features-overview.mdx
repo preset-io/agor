@@ -1,0 +1,114 @@
+---
+title: Features Overview
+description: A map of what Agor does — worktrees, sessions, boards, assistants, MCP server, rich chat UX, multiplayer, environments, scheduler, cards, artifacts, message gateway.
+---
+
+# Features Overview
+
+A map of what Agor does. The first three are the foundation everything else builds on — start there if you're new. Click into any feature for the full story.
+
+---
+
+## 🌳 [Worktrees](/guide/worktrees)
+
+**The unit of work in Agor.** A git worktree pinned to a board — branch, isolated environment, sessions, and conversations all attached. Multiple worktrees coexist with their own ports, dependencies, and database state, so parallel work doesn't collide.
+
+**Use when:** Always. Worktrees are how Agor organizes everything — you'll create one for each issue, PR, or experiment.
+
+---
+
+## 🧵 [Sessions & Trees](/guide/sessions)
+
+**Agent conversations with genealogy.** A session is one Claude Code / Codex / Gemini conversation pinned to a worktree. Fork to explore alternatives without losing the original path; spawn subsessions for focused subtasks that report back to the parent. The result is a visual tree of how a piece of work actually unfolded.
+
+**Use when:** You want to branch a conversation, delegate a subtask, or keep a clean trail of what each agent did and why.
+
+---
+
+## 🗺️ [Boards & Zones](/guide/boards)
+
+**Spatial canvas for worktrees.** A board is a 2D Figma-style canvas where worktrees live as cards. Zones are regions on the board that organize work — and can trigger templated prompts when you drop a worktree into them ("analyze this issue", "review this PR", "deploy"). Build kanban flows or freeform pipelines.
+
+**Use when:** You need an at-a-glance view of in-flight work, or want to automate "when something lands here, run this prompt."
+
+---
+
+## 🤖 [Assistants](/guide/assistants)
+
+**Persistent AI companions that live in your workspace.** Long-lived agents with file-based memory, identity, and skills, running on heartbeat schedules and orchestrating work across boards. Inspired by [OpenClaw](https://openclaw.ai/), adapted for teams.
+
+**Use when:** You want an agent that *remembers* across sessions and proactively manages a project — not a one-off conversation.
+
+---
+
+## 🔌 [Agor MCP Server](/guide/internal-mcp)
+
+**Anything a user can do in Agor, an agent can do too.** The daemon exposes a Model Context Protocol (MCP) server with tools for sessions, worktrees, boards, zones, users, environments, and more. Every session is auto-issued an MCP token, so agents are self-aware and can act on their own context.
+
+**Use when:** You want agents to *operate* Agor itself — spawn peers, reorganize the board, create worktrees, prompt other sessions.
+
+This is the foundational layer that makes assistants, scheduled prompts, message gateway, cards, and artifacts all possible.
+
+---
+
+## 💬 [Rich Chat UX](/guide/rich-chat-ux)
+
+**A CLI can't show you this.** Per-prompt token and dollar accounting, model and effort selectors, live context-window meter, structured tool blocks, todo lists, message queueing, file/user autocomplete, favicon status dots, completion chimes, and Streamdown-rendered markdown with Mermaid + KaTeX + syntax highlighting.
+
+**Use when:** Always. This is what makes Agor's surface objectively richer than running a coding agent in a terminal.
+
+---
+
+## 👥 [Multiplayer & Social](/guide/multiplayer-social)
+
+**Figma for AI coding.** Live cursors, facepile, real-time worktree movement, scoped/spatial comments on boards/zones/worktrees/sessions, attention pulse for completed work, and shared multiplayer terminal sessions via tmux.
+
+**Use when:** Working with teammates on the same board, or just want spatial awareness of where you've been.
+
+---
+
+## 🌳 [Environments](/guide/environment-configuration)
+
+**One-click dev servers per worktree, with no port collisions.** Configure start/stop commands once on the repo, with templates that derive unique ports from each worktree's ID. Everyone on your team gets one-click start/stop on every worktree, with health checks and live logs.
+
+**Use when:** Working on multiple PRs simultaneously and tired of "kill your dev server so I can test mine."
+
+---
+
+## ⏰ [Scheduler](/guide/scheduler)
+
+**Cron-style triggers for templated prompts.** Run a prompt every hour, every Monday, on a custom cadence. Targets a specific worktree or session. Powers [assistant](/guide/assistants) heartbeats, daily standups, scheduled audits, periodic backlog grooming.
+
+**Use when:** Something should happen on a cadence without you remembering to trigger it.
+
+---
+
+## 🃏 [Cards](/guide/cards) (Beta)
+
+**Generic workflow entities on boards.** Not every board entity is a git worktree — support tickets, sales leads, patient records, content pieces. Cards are spatial workflow units that an [assistant](/guide/assistants) creates and manages via MCP.
+
+**Use when:** You want spatial oversight of a non-code workflow, with agents driving state changes.
+
+---
+
+## 🎨 [Artifacts](/guide/artifacts)
+
+**Live, interactive applications rendered on the board.** Powered by [Sandpack](https://sandpack.codesandbox.io/), agents scaffold a small app via MCP and the board shows it running — no deploy, no preview URL. Custom dashboards, data visualizations, design mockups, calculators, redline viewers.
+
+**Use when:** You need *visual* output during agent collaboration. Agents can build interactive UIs in minutes that would take days to hand-roll.
+
+---
+
+## 📨 [Message Gateway](/guide/message-gateway)
+
+**Slack and GitHub as portals to Agor sessions.** DM a Slack bot or `@agor` mention on a PR — Agor spins up a session on the right worktree with the right agent, then routes responses back to the platform.
+
+**Use when:** You want to drive Agor from where conversations already happen — chat, PR threads — without switching contexts.
+
+---
+
+## Reference
+
+- **[Architecture](/guide/architecture)** — System design, data flow, the typed TypeScript client
+- **[SDK Comparison](/guide/sdk-comparison)** — Capability matrix across Claude / Codex / Gemini / OpenCode
+- **[Security](/security)** — Deployment modes (simple / insulated / strict), trust boundaries, RBAC

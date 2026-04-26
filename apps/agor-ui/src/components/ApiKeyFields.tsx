@@ -147,7 +147,7 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
                 claude setup-token
               </Text>{' '}
               instead.{' '}
-              <Link href="/guide/getting-started#claude-max-pro" target="_blank">
+              <Link href="/guide/extended-install#claude-max-pro" target="_blank">
                 See the docs
               </Link>
             </Text>

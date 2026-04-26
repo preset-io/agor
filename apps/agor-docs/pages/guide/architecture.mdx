@@ -142,6 +142,43 @@ The unified model is no longer used in current Agor releases.
 - **[React Flow](https://reactflow.dev/)** - Interactive session canvas with drag-and-drop
 - **[Socket.IO Client](https://socket.io/)** - Real-time WebSocket connection
 
+### Typed TypeScript Client (`@agor-live/client`)
+
+The UI and CLI both consume the daemon through a published, fully-typed client package. It's the same shape of API your own scripts and integrations use — there is no second-class "internal API."
+
+```typescript
+import { createAgorClient } from '@agor-live/client';
+
+const agor = createAgorClient({ url: 'http://localhost:3030' });
+await agor.authenticate({ strategy: 'local', email, password });
+
+// Strongly-typed CRUD across every service
+const { data: worktrees } = await agor.service('worktrees').find({
+  query: { board_id: boardId },
+});
+
+const session = await agor.service('sessions').create({
+  worktree_id: worktrees[0].id,
+  agentic_tool: 'claude-code',
+  initial_prompt: 'Add OAuth login',
+});
+
+// Real-time WebSocket events with typed payloads
+agor.service('messages').on('created', (msg) => {
+  console.log(`${msg.role}: ${msg.content}`);
+});
+```
+
+**What you get:**
+
+- **Branded ID types** — `WorktreeId`, `SessionId`, `BoardId` aren't interchangeable; the compiler catches mix-ups.
+- **Service hooks across REST + WebSocket** — One subscription, one event API; the same `created`/`patched`/`removed` pattern for every entity.
+- **Schema-driven types** — Generated from Drizzle ORM models so DB schema changes propagate to clients at compile time.
+- **Authentication strategies built in** — `anonymous`, `local`, `jwt`, and session-token strategies share one client surface.
+- **Same client the UI uses** — Whatever pattern works for an Agor screen works for your script.
+
+> If you're integrating Agor into your own tooling, prefer `@agor-live/client` over raw HTTP. You'll inherit every type and event the product evolves.
+
 ### CLI
 
 - **[oclif](https://oclif.io/)** - Enterprise-grade CLI framework
@@ -221,10 +258,12 @@ Every Agor session automatically gets MCP configured with **zero user configurat
    mcpServers: {
      agor: {
        type: 'http',
-       url: 'http://localhost:3030/mcp?sessionToken=cd5fc175...'
+       url: 'http://localhost:3030/mcp',
+       headers: { Authorization: 'Bearer cd5fc175...' }
      }
    }
    ```
+   The daemon requires the token in the `Authorization: Bearer` header. Query-string tokens are rejected so secrets don't leak into access logs.
 3. **Immediate Availability** - The agent can use MCP tools without any setup
 
 **Benefits:**
@@ -316,7 +355,7 @@ https://localhost:3030/
 
 ## MCP Tools Reference
 
-The MCP server provides **14 tools** across sessions, worktrees, boards, tasks, and users, enabling structured programmatic access instead of brittle CLI parsing:
+The MCP server provides a growing toolkit across sessions, worktrees, boards, tasks, users, environments, cards, artifacts, and more — enabling structured programmatic access instead of brittle CLI parsing. See the [Agor MCP Server](/guide/internal-mcp) page for the up-to-date capability map.
 
 ```typescript
 // ❌ Brittle approach
@@ -470,6 +509,8 @@ All strategies use FeathersJS authentication with configurable storage.
 
 ## Next Steps
 
-- **[Getting Started](/guide/getting-started)** - Install and run Agor
-- **[API Reference](/api-reference)** - REST endpoints and WebSocket events
+- **[Getting Started](/guide/getting-started)** — Install and run Agor
+- **[Agor MCP Server](/guide/internal-mcp)** — The agent-facing automation surface
+- **[Security](/security)** — Deployment modes, RBAC, Unix isolation, trust boundaries
+- **[SDK Comparison](/guide/sdk-comparison)** — Capability matrix across agent SDKs
 - Run `agor --help` for complete CLI documentation

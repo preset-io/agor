@@ -3,7 +3,7 @@ title: Message Gateway
 description: Route messages from Slack, GitHub, and other platforms directly into Agor sessions — turning any chat thread or PR comment into a portal to an autonomous coding agent.
 ---
 
-# Message Gateway (Beta)
+# Message Gateway
 
 <div style={{ marginTop: '16px', marginBottom: '24px', padding: '16px 20px', border: '1px solid #d4940a', borderRadius: '8px', backgroundColor: 'rgba(212, 148, 10, 0.08)' }}>
 
@@ -11,7 +11,7 @@ description: Route messages from Slack, GitHub, and other platforms directly int
 
 The Message Gateway gives anyone who can message your bot the ability to create Agor sessions and interact with autonomous coding agents. This effectively grants **full access to the target worktree, the host machine (to the extent the agent can access it), and any connected services (MCP servers, APIs, credentials).**
 
-This is a **beta feature**. Use at your own risk and with caution:
+Use with caution:
 
 - **Assume full access.** Anyone who can DM your Slack bot can prompt the agent to read, write, and execute code on the worktree. Treat this as giving them SSH access to that environment.
 - **Sandbox everything you can.** Run the daemon in a container, use restricted permission modes (`supervised` or `manual`), limit MCP server exposure, and avoid mounting sensitive host directories.

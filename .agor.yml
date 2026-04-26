@@ -1,10 +1,12 @@
 # Agor's own .agor.yml — dogfoods the v2 variant schema.
 #
-# Three variants cover the common development / testing topologies:
+# Variants cover the common development / testing topologies:
 #   - sqlite  (default): single-user dev, SQLite, no RBAC. Fastest to boot.
 #   - postgres:          PostgreSQL-backed dev. Closer to multi-user prod layout.
 #   - full:              production-like — PostgreSQL + worktree RBAC + strict
 #                        Unix user impersonation.
+#   - docs:              Nextra docs site (apps/agor-docs). No daemon, no DB —
+#                        just `next dev` for previewing /guide/* edits.
 #
 # postgres/full override start/stop/nuke so every docker compose call loads
 # docker-compose.override.postgres.yml (otherwise docker auto-loads only
@@ -13,7 +15,10 @@
 # are rejected at parse time.
 #
 # Ports derive from {{worktree.unique_id}} so multiple worktrees run side-by-side
-# without colliding.
+# without colliding. The `docs` variant uses {{host.ip_address}} for the app URL
+# so the dev server is reachable from your laptop, not just localhost on the
+# daemon host. Override the autodetected IP via `daemon.host_ip_address` in
+# ~/.agor/config.yaml or `template_overrides.host.ip_address` per-repo.
 
 environment:
   default: sqlite
@@ -63,6 +68,37 @@ environment:
         -p agor-{{worktree.name}}
         --profile postgres
         down -v
+
+    docs:
+      description: >-
+        Nextra docs site (apps/agor-docs) for previewing documentation edits.
+        Runs `next dev` in a self-contained Docker container — no daemon,
+        no database, no host-side `pnpm install` needed. Port =
+        {{add 7000 worktree.unique_id}}; app URL uses {{host.ip_address}}
+        so it's reachable from outside the daemon host.
+      start: >-
+        PORT={{add 7000 worktree.unique_id}}
+        docker compose
+        -f apps/agor-docs/docker-compose.yml
+        -p agor-docs-{{worktree.name}}
+        up -d --build
+      stop: >-
+        docker compose
+        -f apps/agor-docs/docker-compose.yml
+        -p agor-docs-{{worktree.name}}
+        down
+      nuke: >-
+        docker compose
+        -f apps/agor-docs/docker-compose.yml
+        -p agor-docs-{{worktree.name}}
+        down -v --rmi local
+      logs: >-
+        docker compose
+        -f apps/agor-docs/docker-compose.yml
+        -p agor-docs-{{worktree.name}}
+        logs --tail=100
+      health: http://localhost:{{add 7000 worktree.unique_id}}
+      app: http://{{host.ip_address}}:{{add 7000 worktree.unique_id}}
 
     full:
       extends: sqlite

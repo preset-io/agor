@@ -1,11 +1,13 @@
 ---
 title: Extended Installation
-description: Alternative ways to install and run Agor — Docker Compose, building from source, optional companions like Zellij, and custom config locations.
+description: Alternative ways to install and run Agor — optional companions, GitHub Codespaces, authentication options, and custom config locations.
 ---
 
 # Extended Installation
 
-The [Getting Started](/guide/getting-started) guide covers the recommended path: `npm install -g agor-live`. This page covers everything else — alternatives, optional companions, and edge cases.
+The [Getting Started](/guide/getting-started) guide covers the recommended user path: `npm install -g agor-live`. This page covers everything else for **users and teams** running Agor — optional companions, deployment alternatives, authentication options, and edge-case configurations.
+
+> Want to **build, modify, or contribute to** Agor? Head to the [Development Guide](/guide/development) — it covers `docker compose up`, the `.agor.yml` variant system (SQLite / Postgres / RBAC / docs), and developing Agor with Agor itself.
 
 ## Requirements
 
@@ -28,55 +30,6 @@ The daemon detects Zellij at startup and logs whether it's available.
 
 ---
 
-## Run from source
-
-For contributors or anyone who wants to track `main`:
-
-```bash
-git clone https://github.com/preset-io/agor
-cd agor
-pnpm install
-```
-
-Then in two terminals:
-
-```bash
-# Terminal 1: daemon (watches @agor/core + daemon, auto-restarts)
-cd apps/agor-daemon
-pnpm dev
-
-# Terminal 2: UI dev server (Vite HMR)
-cd apps/agor-ui
-pnpm dev
-```
-
-Visit `http://localhost:5173`.
-
-See the [Development Guide](/guide/development) for the full contributor workflow.
-
----
-
-## Docker Compose
-
-Agor ships a `docker-compose.yml` for one-command setup, including an optional PostgreSQL backend.
-
-```bash
-git clone https://github.com/preset-io/agor
-cd agor
-docker compose up
-# Visit http://localhost:5173 → Login: admin@agor.live / admin
-```
-
-PostgreSQL mode:
-
-```bash
-docker compose --env-file .env.postgres up
-```
-
-For database modes, multi-instance setups, and gotchas (e.g. committing from inside the container), see the [Development Guide](/guide/development#docker-compose-recommended).
-
----
-
 ## GitHub Codespaces
 
 > **Community-maintained.** Codespaces is supported on a best-effort basis and is not part of the regular test/release cycle. For day-to-day use, prefer the npm install path.
@@ -86,6 +39,75 @@ Agor has a devcontainer that boots a Codespace pre-configured with Node, pnpm, a
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://github.com/codespaces/new?skip_quickstart=true&machine=basicLinux32gb&repo=1069864589&ref=main&devcontainer_path=.devcontainer%2Fdevcontainer.json&geo=UsWest)
 
 Useful for quick demos. See the [Security guide](/security#codespaces-notes) for trust-boundary notes before sharing a Codespace with collaborators.
+
+---
+
+## Authentication
+
+Agor supports Claude Code, Codex, Gemini, OpenCode, and GitHub Copilot. The [onboarding wizard](/guide/getting-started#meet-your-first-assistant) handles the simple case — paste an API key, done. This section covers the alternatives: subscription-based auth, server-side CLI login, workspace-wide fallbacks, and how Agor resolves them when several are present.
+
+### Credential resolution order
+
+When a session starts, Agor looks for credentials in this order and uses the first one it finds:
+
+1. **Per-user API keys** — encrypted in the DB, scoped to the user. Set via the wizard or Settings → Agentic Tools.
+2. **`CLAUDE_CODE_OAUTH_TOKEN`** — per-user env var (e.g. from `claude setup-token`).
+3. **`claude login` credentials** — `~/.claude/` on the daemon host.
+4. **Workspace env vars** — `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_AI_API_KEY`. Visible to all users on the instance.
+
+Mixing is fine: one user can run on a Max Pro token while teammates use per-user API keys.
+
+<a id="claude-max-pro" />
+
+### Claude Max / Pro plan
+
+If you have a Claude Max or Pro subscription, you can use it instead of an API key.
+
+**1. Install the Claude CLI locally** (skip if already installed):
+
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+**2. Generate a session token:**
+
+```bash
+claude setup-token
+```
+
+Copy the output.
+
+**3. Paste it into Agor:** open **User Settings → Env vars** and add `CLAUDE_CODE_OAUTH_TOKEN` = _your token_. All your Claude Code sessions will use the subscription.
+
+### CLI login on the daemon host (self-hosted)
+
+If you can SSH into the machine running the daemon:
+
+```bash
+claude login
+```
+
+Credentials land in `~/.claude/` and Agor picks them up automatically. This is the lowest-config path for solo self-hosted setups.
+
+### Workspace env vars (global fallback)
+
+For instances where everyone shares one set of credentials:
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+export OPENAI_API_KEY="sk-..."
+export GOOGLE_AI_API_KEY="..."
+```
+
+Or via **Settings → Environment Variables** (admin only). These are visible to every user on the instance — pick this only if that's intentional.
+
+### Per-user API keys (recommended for teams)
+
+The wizard's default. Each user pastes their own key in **Settings → Agentic Tools**. Keys are encrypted at rest, scoped per-user, and never exposed to other users on the instance. Get keys at:
+
+- Anthropic: [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
+- OpenAI: [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+- Google AI: [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
 
 ---
 
@@ -108,5 +130,5 @@ AGOR_CONFIG_PATH=/etc/agor/config.yaml agor daemon start
 ## What's next?
 
 - [Getting Started](/guide/getting-started) — add your first repo and create a session.
-- [Concepts](/guide/concepts) — worktrees, boards, sessions, environments.
+- [Worktrees](/guide/worktrees), [Sessions & Trees](/guide/sessions), [Boards & Zones](/guide/boards) — core primitives.
 - [Development Guide](/guide/development) — contributor workflow.

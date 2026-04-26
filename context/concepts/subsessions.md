@@ -2,7 +2,7 @@
 
 **Status:** ✅ Implemented
 **Feature:** Multi-agent orchestration via parent-child session relationships
-**User Docs:** [`/guide/spawned-subsessions`](../../apps/agor-docs/pages/guide/spawned-subsessions.mdx)
+**User Docs:** [`/guide/sessions`](../../apps/agor-docs/pages/guide/sessions.mdx) (Spawned Subsessions section)
 **Related:** [agent-integration.md](./agent-integration.md), [permissions.md](./permissions.md), [websockets.md](./websockets.md)
 
 ---

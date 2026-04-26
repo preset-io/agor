@@ -1,6 +1,6 @@
 ---
 title: Agor MCP Server
-description: How Agor’s built-in Model Context Protocol server unlocks self-aware agents and deep automation inside your workspace.
+description: Agents are first-class users in Agor. The built-in MCP server gives them the same surface area you have in the UI — sessions, worktrees, boards, zones, users, environments — as structured JSON-RPC.
 ---
 
 # Agor MCP Server
@@ -13,15 +13,18 @@ description: How Agor’s built-in Model Context Protocol server unlocks self-aw
   />
 </div>
 
-Agor ships with an **internal Model Context Protocol (MCP) server**. The same daemon that serves REST and WebSocket APIs also exposes MCP, giving agents and external tools full parity with what a user can do in the UI or CLI—without shelling out or scraping text.
+**Anything a user can do in Agor, an agent can do too.** The same daemon that serves the UI's REST and WebSocket APIs also exposes a built-in **Model Context Protocol (MCP) server** — a structured automation surface that turns every session into a self-aware orchestrator.
+
+This is the foundational layer: [assistants](/guide/assistants), [scheduled prompts](/guide/scheduler), [cards](/guide/cards), [artifacts](/guide/artifacts), and the [message gateway](/guide/message-gateway) are all built on top of it.
 
 ## Key Ideas
 
-- **First-class automation surface:** MCP tools wrap FeathersJS services, so anything you can click or run via CLI is available as a structured JSON-RPC call.
-- **Self-aware agents:** Sessions automatically receive an MCP token scoped to their worktree/board, letting the agent understand where it is and take contextual action.
-- **Remote access when needed:** External agents can connect over HTTP to orchestrate Agor, creating boards, worktrees, or even new user accounts.
+- **Agents as first-class users:** Every MCP tool wraps a FeathersJS service. Sessions, worktrees, boards, zones, users, environments — anything you can click or `agor`-CLI is available as JSON-RPC.
+- **Self-aware sessions:** Each session is auto-issued a scoped MCP token, so the agent already knows *which* session, worktree, and board it's in — and can act on that context.
+- **No separate server:** MCP is part of the daemon. Nothing to install, nothing extra to run.
+- **Remote access:** External agents and dashboards can connect over HTTP to drive Agor (create boards, worktrees, or even invite new users).
 
-> MCP is enabled by default—no extra servers to run—and every session already has credentials injected.
+> MCP is enabled by default and every session already has credentials injected — no setup required for in-Agor agents.
 
 ## Capabilities At a Glance
 
@@ -139,6 +142,8 @@ execution:
 
 ## Related Reading
 
-- [Architecture Guide: Agor as an MCP Server](./architecture#agor-as-an-mcp-server)
-- [Agent SDK Comparison](./sdk-comparison)
-- Context concept: `context/concepts/mcp-integration.md`
+- [Sessions & Trees](/guide/sessions) — How agents spawn, fork, and ask side questions through MCP
+- [Assistants](/guide/assistants) — Long-lived agents that drive Agor through MCP
+- [Scheduler](/guide/scheduler) — Cron-style triggers that fire prompts via the same surface
+- [Architecture: Agor as an MCP Server](/guide/architecture#agor-as-an-mcp-server)
+- [SDK Comparison](/guide/sdk-comparison)

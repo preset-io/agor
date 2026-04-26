@@ -1,11 +1,11 @@
 ---
 title: Getting Started
-description: Install and set up agor for AI agent orchestration in under 5 minutes. Learn how to add repositories, create worktrees, authenticate with AI providers, and start your first session.
+description: Install Agor and follow the onboarding wizard. Your first assistant takes it from there.
 ---
 
 # Getting Started
 
-Get Agor running and create your first AI coding session in under 5 minutes.
+Install Agor, open the UI, and follow the onboarding wizard. Your **first assistant** will help you get your bearings and get everything else set up.
 
 ## Install
 
@@ -23,311 +23,56 @@ agor daemon start   # runs in the background
 agor open           # opens the UI in your browser
 ```
 
-That's it — keep reading to add a repo and start your first session.
-
-> Want Docker, source builds, or to know what's optional? See [Extended Installation](/guide/extended-install).
-
----
-
-## Step 1: Link a Code Repository
-
-Before you can create AI sessions, Agor needs to know about your code repositories.
-
-### Add a Local Repository
-
-If you have a git repository on your machine:
-
-**Via UI:**
-
-1. Open Agor (`agor open`)
-2. Click **Settings** (⚙️ icon in header)
-3. Go to **Repos** tab
-4. Click **Add Repository**
-5. Enter the absolute path to your repo (e.g., `/Users/you/projects/myapp`)
-
-**Via CLI:**
-
-```bash
-agor repo add /path/to/your/repo
-```
-
-### Add a Remote Repository
-
-Agor can clone remote repositories for you:
-
-**Via UI:**
-
-1. Open Settings → Repos
-2. Click **Add Repository**
-3. Enter the git URL (e.g., `https://github.com/username/repo.git`)
-4. Agor will clone it to `~/.agor/repos/<repo-name>`
-
-<img src="/screenshots/clone-repo.png" alt="Clone Repository Dialog" width="400px" />
-
-**Via CLI:**
-
-```bash
-agor repo add https://github.com/username/repo.git
-```
-
----
-
-## Step 2: Create Your First Worktree
-
-**What's a worktree?** A worktree is an isolated working directory for your repository - think of it as checking out a branch in a separate location. This lets you work on multiple features simultaneously without switching branches or stashing changes.
-
-[Learn more about worktrees →](/guide/concepts#worktrees)
-
-### Why Worktrees?
-
-Git worktrees allow you to have multiple branches checked out at once in different places on your filesystem. In Agor:
-
-- **1 worktree = 1 issue = 1 PR = 1 feature**
-- Each worktree contains a tree of AI sessions working on that feature
-- Completely isolated - changes in one don't affect others
-
-### Create a Worktree
-
-**Via UI:**
-
-1. Click **New Worktree** button (+ icon near top)
-2. Choose your repository
-3. Pick a name (like you would for a branch - e.g., `auth-feature`, `fix-bug-123`)
-4. Optionally:
-   - Create a new branch or checkout existing one
-   - Link to an issue URL or PR URL
-   - Add notes about what you're working on
-
-<img src="/screenshots/new-worktree.png" alt="Create New Worktree Dialog" width="400px" />
-
-**Via CLI:**
-
-```bash
-# Create worktree with new branch
-agor worktree create my-repo feature-name
-
-# Create from existing branch
-agor worktree create my-repo feature-name --branch existing-branch
-
-# Link to issue
-agor worktree create my-repo feature-name --issue https://github.com/user/repo/issues/123
-```
-
-Your worktree will be created at `~/.agor/worktrees/<repo>/<name>`
-
----
-
-## Step 3: Authenticate with AI Providers
-
-Agor supports multiple AI coding agents (Claude Code, Codex, Gemini, OpenCode). To use them, you need to authenticate.
-
-### Authentication Options
-
-Agor offers **three ways** to configure AI credentials, in order of priority:
-
-<a id="claude-max-pro" />
-
-#### Option 1: Claude Max Pro / Pro Plan (Recommended)
-
-If you have a **Claude Max Pro** (or Pro) subscription, you can use it directly with Agor — no API key needed.
-
-**Step 1: Install Claude CLI** on your local machine (skip if you already have it):
-
-```bash
-npm install -g @anthropic-ai/claude-code
-```
-
-> Don't have `npm`? Install [Node.js](https://nodejs.org) first (download the LTS version), then retry the command above.
-
-**Step 2: Generate a session token:**
-
-```bash
-claude setup-token
-```
-
-This outputs a token value — copy it.
-
-**Step 3: Paste the token into Agor:**
-
-1. In Agor, click the **gear icon** (top right) to open **User Settings**
-2. Go to the **"Env vars"** section
-3. Add: **`CLAUDE_CODE_OAUTH_TOKEN`** = _your token_
-
-That's it! Agor will use your Claude subscription for all Claude Code sessions.
-
-#### Option 1b: CLI Login (Alternative for self-hosted)
-
-If you're running Agor on a machine where you can SSH in and run commands directly:
-
-```bash
-claude login
-```
-
-This stores your credentials in `~/.claude/` and Agor automatically detects them.
-
-#### Option 2: Per-User API Keys (Recommended for Teams)
-
-Store encrypted API keys in Agor, scoped to your user account:
-
-**Via UI:**
-
-1. Open **Settings** → **Agentic Tools** tab
-2. Enter your API keys:
-   - **Anthropic API Key** for Claude Code
-   - **OpenAI API Key** for Codex
-   - **Google AI API Key** for Gemini
-3. Click **Save**
-
-<img src="/screenshots/configure-agentic-tools.png" alt="Configure Agentic Tools" width="400px" />
-
-Your keys are:
-
-- ✅ Encrypted at rest in the database
-- ✅ Only visible to you (per-user scope)
-- ✅ Automatically used by all your sessions
-
-**Get API Keys:**
-
-- Anthropic: https://console.anthropic.com/settings/keys
-- OpenAI: https://platform.openai.com/api-keys
-- Google AI: https://aistudio.google.com/app/apikey
-
-#### Option 3: Environment Variables (Global Fallback)
-
-Set environment variables that all users can access (workspace-level):
-
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-export OPENAI_API_KEY="sk-..."
-export GOOGLE_AI_API_KEY="..."
-```
-
-**Via UI (Global Settings):**
-
-1. Open **Settings** → **Environment Variables** tab
-2. Add variables for your workspace
-
-**Note:** Environment variables are visible to all users in your Agor instance.
-
-### How Authentication Priority Works
-
-When you start a session, Agor checks for credentials in this order:
-
-1. **Per-user API keys** (if set in Settings → Agentic Tools)
-2. **`CLAUDE_CODE_OAUTH_TOKEN`** (if set via `claude setup-token` in User Settings → Env vars)
-3. **`claude login` credentials** (if you ran `claude login` on the server)
-4. **Environment variables** (global fallback)
-
-This lets you mix approaches — use `claude setup-token` with your Max Pro plan while teammates use per-user API keys.
-
----
-
-## Step 4: Start Your First AI Session
-
-Now you're ready to create an AI coding session!
-
-**Via UI:**
-
-1. Find your worktree card on the board
-2. Click **New Session** (+ icon on the worktree card)
-3. Choose your agentic tool (Claude Code, Codex, or Gemini)
-4. Optionally configure:
-   - Model selection
-   - Permission mode (auto-approve tools, ask before each, etc.)
-   - MCP servers
-5. Click **Create**
-
-**Via CLI:**
-
-```bash
-# Create session in your worktree
-agor session create <worktree-id> --tool claude-code
-
-# Or use interactive mode
-agor session create <worktree-id> --interactive
-```
-
-### Send Your First Prompt
-
-Once the session is created:
-
-1. Click on the session to open the conversation view
-2. Type your prompt (e.g., "Add a login form to the app")
-3. Hit **Enter** or click **Send**
-
-Watch as the AI agent:
-
-- Reads your code
-- Plans changes
-- Edits files
-- Runs tests
-- Reports back to you
-
-All tool calls, file edits, and command outputs are streamed in real-time!
-
----
-
-## What's Next?
-
-Now that you have your first session running:
-
-- **[Concepts](/guide/concepts)** - Deep dive into worktrees, boards, sessions, and environments
-- **[Advanced Features](/guide/advanced-features)** - Zones, subsessions, schedulers, and more
-- **[Architecture](/guide/architecture)** - System design and internals
-- **[Development Guide](/guide/development)** - Contributing to Agor
-
-**Pro Tips:**
-
-- Use **zones** on your board to automate workflows (drag worktree to "Ready for Review" → auto-prompt for code review)
-- **Fork sessions** to try different approaches to the same problem
-- **Spawn subsessions** to delegate subtasks to child agents
-- Check the **environment status** to see if your dev server is running
-
-## Troubleshooting
-
-### Port 3030 already in use
-
-```bash
-# Find and kill the process
-lsof -ti:3030 | xargs kill -9
-
-# Or configure a different port
-agor config set daemon.port 4030
-agor daemon start
-```
-
-### Daemon not starting
-
-```bash
-# Check daemon status
-agor daemon status
-
-# View logs
-agor daemon logs
-
-# Check health endpoint
-curl http://localhost:3030/health
-```
-
-### Can't connect to daemon
-
-Make sure the daemon is running:
-
-```bash
-agor daemon status
-# If not running:
-agor daemon start
-```
-
-## Getting Help
-
-- **[Discord](https://discord.gg/Qh4TrFQZpd)** - Join our Discord community for support and discussion
-- **[GitHub Discussions](https://github.com/preset-io/agor/discussions)** - Ask questions, share ideas
-- **[GitHub Issues](https://github.com/preset-io/agor/issues)** - Report bugs, request features
-
-## Next Steps
-
-- **[Concepts](/guide/concepts)** - Learn about worktrees, boards, sessions, and environments
-- Run `agor --help` for complete CLI documentation
-- **[Development Guide](/guide/development)** - Contributing to Agor
-- **[Architecture](/guide/architecture)** - System design and internals
+## Follow the onboarding wizard
+
+The first time you open the UI, the **Onboarding Wizard** runs. It picks between cloning the [assistant framework repo](https://github.com/preset-io/agor-assistant) or pointing at one of your own, then walks through **Clone → Board → Worktree → API Keys → Launch** and drops you into a live session.
+
+<div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', margin: '24px 0' }}>
+  <img
+    src="/screenshots/onboarding-welcome.png"
+    alt="Onboarding: Welcome — Set up your assistant or use your own repo"
+    style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
+  />
+  <img
+    src="/screenshots/onboarding-worktree.png"
+    alt="Onboarding: Worktree — name a personal branch"
+    style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
+  />
+  <img
+    src="/screenshots/onboarding-api-keys.png"
+    alt="Onboarding: API Keys — pick an agent and paste a key (or skip)"
+    style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
+  />
+  <img
+    src="/screenshots/onboarding-launch.png"
+    alt="Onboarding: Launch — your assistant is ready"
+    style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
+  />
+</div>
+
+Once you're in the session, your assistant introduces itself — asks for a name and emoji, who you are, and what you'd like to get started on. From there it can register more repos, set up boards, structure a workflow, or just be a thinking partner. **Anything a user can do in Agor, the assistant can do too** — it has full access to the [Agor MCP Server](/guide/internal-mcp).
+
+## Customize your install
+
+Agor runs out of the box on SQLite as a single-user instance, but it's designed to scale up:
+
+- **PostgreSQL backend** instead of SQLite, for multi-user / team setups
+- **Multiplayer mode** with worktree-level [RBAC](/guide/multiplayer-unix-isolation) and per-user permissions
+- **Unix-user impersonation** so each Agor user's sessions run as their own OS identity
+- **Docker Compose**, source builds, and **GitHub Codespaces**
+- **Custom config / database paths** for non-default install layouts
+
+For any of those, see [Extended Installation](/guide/extended-install). For credential alternatives (Claude Max/Pro plan, server-side `claude login`, workspace-wide env vars), see [Authentication](/guide/extended-install#authentication).
+
+## What's next
+
+- **[Worktrees](/guide/worktrees)** · **[Sessions & Trees](/guide/sessions)** · **[Boards & Zones](/guide/boards)** — the core primitives
+- **[Features Overview](/guide/features-overview)** — Assistants, MCP, Rich Chat UX, Multiplayer, Environments, Scheduler, Cards, Artifacts
+- **[Architecture](/guide/architecture)** — system design and the typed TypeScript client
+
+## Get help
+
+- **[Discord](https://discord.gg/Qh4TrFQZpd)** — community support and discussion
+- **[GitHub Discussions](https://github.com/preset-io/agor/discussions)** — questions and ideas
+- **[GitHub Issues](https://github.com/preset-io/agor/issues)** — bugs and feature requests
+- Run `agor --help` for the full CLI reference

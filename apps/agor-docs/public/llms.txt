@@ -11,19 +11,29 @@ Agor is open-source software licensed under BSL 1.1, created by Maxime Beauchemi
 ## Core Documentation
 
 - [Getting Started](https://agor.live/guide/getting-started): Install and set up Agor for AI agent orchestration in under 5 minutes
-- [Concepts](https://agor.live/guide/concepts): Core concepts — Worktrees, Boards, Sessions, and Environments
-- [Architecture](https://agor.live/guide/architecture): System architecture, daemon-based design, data flow, and tech stack
+- [Extended Installation](https://agor.live/guide/extended-install): Docker, source builds, and other install options
+- [Architecture](https://agor.live/guide/architecture): System architecture, daemon-based design, typed TypeScript client, data flow
 - [SDK Comparison](https://agor.live/guide/sdk-comparison): Feature matrix for Claude Code, Codex, and Gemini integrations
+
+## Core Primitives
+
+- [Worktrees](https://agor.live/guide/worktrees): Isolated git working directories — the primary unit of work in Agor
+- [Sessions & Trees](https://agor.live/guide/sessions): AI conversations that fork, spawn subsessions, and ask side questions (BTW)
+- [Boards & Zones](https://agor.live/guide/boards): 2D spatial canvases for organizing worktrees, with templated zone triggers
 
 ## Features
 
+- [Features Overview](https://agor.live/guide/features-overview): Map of all major features
 - [Assistants](https://agor.live/guide/assistants): Persistent AI companions with memory, skills, orchestration, and scheduled heartbeats
-- [Agor MCP Server](https://agor.live/guide/internal-mcp): Built-in Model Context Protocol server for self-aware agents and deep automation
-- [Message Gateway](https://agor.live/guide/message-gateway): Route messages from Slack, Discord, and other platforms into Agor sessions
-- [Scheduler](https://agor.live/guide/scheduler): Automate recurring work with cron-driven agent sessions attached to worktrees
-- [Environments](https://agor.live/guide/environment-configuration): Configure reusable worktree environment templates with templated commands
-- [Advanced Features](https://agor.live/guide/advanced-features): Notifications, audio alerts, context tracking, and personalized configuration
-- [Spawned Subsessions](https://agor.live/guide/spawned-subsessions): Delegate work to specialized subagents with automatic callback reports
+- [Agor MCP Server](https://agor.live/guide/internal-mcp): Built-in MCP server — anything a user can do, an agent can do too
+- [Rich Chat UX](https://agor.live/guide/rich-chat-ux): Per-prompt token/$ accounting, context viz, tool blocks, queueing, autocomplete, Streamdown
+- [Multiplayer & Social](https://agor.live/guide/multiplayer-social): Live cursors, facepile, spatial comments, attention pulse, shared terminals
+- [Environments](https://agor.live/guide/environment-configuration): Per-worktree dev environments with auto-assigned unique ports
+- [Scheduler](https://agor.live/guide/scheduler): Cron-driven agent sessions attached to worktrees
+- [Cards](https://agor.live/guide/cards): Generic workflow entities on boards (beta)
+- [Artifacts](https://agor.live/guide/artifacts): Live, interactive Sandpack apps rendered on the canvas
+- [Message Gateway](https://agor.live/guide/message-gateway): Route messages from Slack and GitHub into Agor sessions
+- [Other Features](https://agor.live/guide/advanced-features): Catchall for power-user utilities
 
 ## API Reference
 
