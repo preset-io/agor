@@ -324,14 +324,16 @@ export async function setupQuery(
   // Add canUseTool callback if permission service is available and taskId provided
   // This enables Agor's custom permission UI (WebSocket-based) when SDK would show a prompt
   // Fires AFTER SDK checks settings.json - respects user's existing Claude CLI permissions!
-  // IMPORTANT: Only skip for bypassPermissions (which never asks for permissions)
-  if (
-    deps.permissionService &&
-    taskId &&
-    effectivePermissionMode !== 'bypassPermissions' &&
-    deps.sessionMCPRepo &&
-    deps.mcpServerRepo
-  ) {
+  //
+  // We register canUseTool even in `bypassPermissions` mode. AskUserQuestion's tool
+  // descriptor sets `requiresUserInteraction: true`, which makes the SDK's permission
+  // resolver return `{behavior: "ask", message: "Answer questions?"}` BEFORE checking
+  // the bypass-mode shortcut (see @anthropic-ai/claude-agent-sdk 0.2.x). With no
+  // canUseTool registered, the SDK's default deny fires and the model receives
+  // "Answer questions?" as the tool error — bypassing Agor's input-request UI.
+  // The callback itself fast-paths non-AskUserQuestion tools to `allow` when in
+  // bypass mode so the rest of bypass semantics are preserved.
+  if (deps.permissionService && taskId && deps.sessionMCPRepo && deps.mcpServerRepo) {
     queryOptions.canUseTool = createCanUseToolCallback(sessionId, taskId, {
       permissionService: deps.permissionService,
       inputRequestService: deps.inputRequestService,
@@ -343,6 +345,7 @@ export async function setupQuery(
       permissionLocks: deps.permissionLocks,
       mcpServerRepo: deps.mcpServerRepo,
       sessionMCPRepo: deps.sessionMCPRepo,
+      permissionMode: effectivePermissionMode,
     });
     console.log(`✅ canUseTool callback added (permission mode: ${effectivePermissionMode})`);
     console.log(`   SDK will check settings.json first, then call Agor UI if needed`);

@@ -7,7 +7,7 @@
  */
 
 import { generateId } from '@agor/core';
-import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
+import type { Message, MessageID, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import {
   InputRequestStatus,
   MessageRole,
@@ -47,6 +47,14 @@ export function createCanUseToolCallback(
     permissionLocks: Map<SessionID, Promise<void>>;
     mcpServerRepo: MCPServerRepository;
     sessionMCPRepo: SessionMCPServerRepository;
+    /**
+     * Effective permission mode for this query. Used to fast-path non-
+     * AskUserQuestion tools to `allow` when running in `bypassPermissions`,
+     * since the callback is now registered in bypass mode too (see
+     * query-builder.ts for why — AskUserQuestion's `requiresUserInteraction`
+     * forces the SDK to invoke `canUseTool` regardless of mode).
+     */
+    permissionMode?: PermissionMode;
   }
 ) {
   return async (
@@ -214,6 +222,19 @@ export function createCanUseToolCallback(
           message: error instanceof Error ? error.message : 'Error processing user question',
         };
       }
+    }
+
+    // Bypass-mode fast-path: when permissionMode is `bypassPermissions`, the SDK
+    // would normally skip canUseTool entirely. We register the callback anyway
+    // so AskUserQuestion (handled above) still routes through Agor's UI — but
+    // every other tool should be auto-allowed without prompting, matching the
+    // mode's semantics. Without this, registering canUseTool in bypass mode
+    // would force every tool through the WebSocket permission flow.
+    if (deps.permissionMode === 'bypassPermissions') {
+      return {
+        behavior: 'allow' as const,
+        updatedInput: toolInput,
+      };
     }
 
     // Auto-approve MCP tools only if they belong to an attached MCP server
