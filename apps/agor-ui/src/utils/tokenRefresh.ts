@@ -5,7 +5,7 @@
  * Used by both useAuth and useAgorClient hooks to avoid duplication.
  */
 
-import type { AgorClient } from '@agor-live/client';
+import type { AgorClient, User } from '@agor-live/client';
 
 export const ACCESS_TOKEN_KEY = 'agor-access-token';
 export const REFRESH_TOKEN_KEY = 'agor-refresh-token';
@@ -13,13 +13,13 @@ export const REFRESH_TOKEN_KEY = 'agor-refresh-token';
 export interface RefreshResult {
   accessToken: string;
   refreshToken?: string;
-  user: {
-    user_id: string;
-    email: string;
-    name?: string;
-    emoji?: string;
-    role: string;
-  };
+  /**
+   * Full user object — matches the shape returned by POST /authentication.
+   * Importantly includes `must_change_password` so the UI's force-password-
+   * change guard (App.tsx) keeps working across token refreshes; previously
+   * the field was stripped here and on the server, breaking that flow.
+   */
+  user: User;
 }
 
 /**
