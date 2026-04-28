@@ -79,7 +79,11 @@ export function useMutationGate(): MutationGate {
       message: 'Daemon was upgraded — refresh the page to continue.',
     };
   }
-  if (!connected && connecting) {
+  // `connecting` is set immediately on socket drop, while `connected` stays
+  // true for a ~1.5s grace window in useAgorClient before flipping. We must
+  // close the gate as soon as `connecting` is true, otherwise mutations slip
+  // through during the grace window.
+  if (connecting) {
     return {
       canMutate: false,
       reason: 'reconnecting',

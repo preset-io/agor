@@ -1868,6 +1868,13 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
     const handlePointerUp = useCallback(() => {
       if (activeTool === 'zone' && drawingZone && reactFlowInstanceRef.current) {
+        // Bail out if the daemon isn't usable — the in-flight gesture is
+        // discarded rather than persisted as a half-formed zone.
+        if (!mutationGate.canMutate) {
+          setDrawingZone(null);
+          setActiveTool('select');
+          return;
+        }
         const { start, end } = drawingZone;
 
         // Calculate position and dimensions in screen space
@@ -1956,7 +1963,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         setDrawingZone(null);
         setActiveTool('select');
       }
-    }, [activeTool, drawingZone, board, client, setNodes]);
+    }, [activeTool, drawingZone, board, client, setNodes, mutationGate.canMutate]);
 
     // Pane click handler for comment placement
     const handlePaneClick = useCallback(
@@ -1990,6 +1997,9 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // Handler to create spatial comment
     const handleCreateSpatialComment = useCallback(async () => {
       if (!commentPlacement || !board || !client || !currentUserId || !commentInput.trim()) {
+        return;
+      }
+      if (!mutationGate.canMutate) {
         return;
       }
 
@@ -2052,11 +2062,14 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       } catch (error) {
         console.error('Failed to create spatial comment:', error);
       }
-    }, [commentPlacement, board, client, currentUserId, commentInput]);
+    }, [commentPlacement, board, client, currentUserId, commentInput, mutationGate.canMutate]);
 
     // Handler to create/update markdown note
     const handleCreateMarkdownNote = useCallback(async () => {
       if (!markdownModal || !board || !client || !markdownContent.trim()) {
+        return;
+      }
+      if (!mutationGate.canMutate) {
         return;
       }
 
@@ -2146,12 +2159,16 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       markdownWidth,
       setNodes,
       handleEditMarkdownNote,
+      mutationGate.canMutate,
     ]);
 
     // Node click handler for eraser mode and comment placement
     const handleNodeClick = useCallback(
       (event: React.MouseEvent, node: Node) => {
         if (activeTool === 'eraser') {
+          if (!mutationGate.canMutate) {
+            return;
+          }
           // Only delete board objects (zones, markdown), not worktrees or cursors
           if (node.type === 'zone' || node.type === 'markdown') {
             deleteObject(node.id);
@@ -2179,7 +2196,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         // Worktree cards handle their own session clicks internally
         // (no canvas-level click handler needed for worktreeNode)
       },
-      [activeTool, deleteObject]
+      [activeTool, deleteObject, mutationGate.canMutate]
     );
 
     // Clear comment placement state when switching away from comment tool
@@ -2189,6 +2206,19 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         setCommentInput('');
       }
     }, [activeTool, commentPlacement]);
+
+    // Snap back to the select tool when the mutation gate closes so that a
+    // half-engaged mode (e.g. mid-drag zone) doesn't sit armed during the
+    // disconnect/grace/out-of-sync window.
+    useEffect(() => {
+      if (!mutationGate.canMutate && activeTool !== 'select') {
+        setActiveTool('select');
+        setDrawingZone(null);
+        setCommentPlacement(null);
+        setCommentInput('');
+        setMarkdownModal(null);
+      }
+    }, [mutationGate.canMutate, activeTool]);
 
     return (
       <div
@@ -2333,54 +2363,90 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   </ControlButton>
                 </span>
               </Tooltip>
-              <Tooltip title="Add Zone" placement="right" mouseEnterDelay={0.3}>
+              <Tooltip
+                title={mutationGate.canMutate ? 'Add Zone' : (mutationGate.message ?? 'Add Zone')}
+                placement="right"
+                mouseEnterDelay={0.3}
+              >
                 <span>
                   <ControlButton
+                    disabled={!mutationGate.canMutate}
                     onClick={(e) => {
                       e.stopPropagation();
                       setActiveTool('zone');
                     }}
                     style={{
                       borderLeft: activeTool === 'zone' ? '3px solid #1677ff' : 'none',
+                      opacity: mutationGate.canMutate ? 1 : 0.4,
+                      cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
                     }}
                   >
                     <BorderOutlined style={{ fontSize: '16px' }} />
                   </ControlButton>
                 </span>
               </Tooltip>
-              <Tooltip title="Add Comment" placement="right" mouseEnterDelay={0.3}>
+              <Tooltip
+                title={
+                  mutationGate.canMutate ? 'Add Comment' : (mutationGate.message ?? 'Add Comment')
+                }
+                placement="right"
+                mouseEnterDelay={0.3}
+              >
                 <span>
                   <ControlButton
+                    disabled={!mutationGate.canMutate}
                     onClick={(e) => {
                       e.stopPropagation();
                       setActiveTool('comment');
                     }}
                     style={{
                       borderLeft: activeTool === 'comment' ? '3px solid #1677ff' : 'none',
+                      opacity: mutationGate.canMutate ? 1 : 0.4,
+                      cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
                     }}
                   >
                     <CommentOutlined style={{ fontSize: '16px' }} />
                   </ControlButton>
                 </span>
               </Tooltip>
-              <Tooltip title="Add Markdown Note" placement="right" mouseEnterDelay={0.3}>
+              <Tooltip
+                title={
+                  mutationGate.canMutate
+                    ? 'Add Markdown Note'
+                    : (mutationGate.message ?? 'Add Markdown Note')
+                }
+                placement="right"
+                mouseEnterDelay={0.3}
+              >
                 <span>
                   <ControlButton
+                    disabled={!mutationGate.canMutate}
                     onClick={(e) => {
                       e.stopPropagation();
                       setActiveTool('markdown');
                     }}
                     style={{
                       borderLeft: activeTool === 'markdown' ? '3px solid #1677ff' : 'none',
+                      opacity: mutationGate.canMutate ? 1 : 0.4,
+                      cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
                     }}
                   >
                     <FileMarkdownOutlined style={{ fontSize: '16px' }} />
                   </ControlButton>
                 </span>
               </Tooltip>
-              <Tooltip title="Eraser - Click to toggle" placement="right" mouseEnterDelay={0.3}>
+              <Tooltip
+                title={
+                  mutationGate.canMutate
+                    ? 'Eraser - Click to toggle'
+                    : (mutationGate.message ?? 'Eraser')
+                }
+                placement="right"
+                mouseEnterDelay={0.3}
+              >
                 <span>
                   <ControlButton
+                    disabled={!mutationGate.canMutate}
                     onClick={(e) => {
                       e.stopPropagation();
                       setActiveTool(activeTool === 'eraser' ? 'select' : 'eraser');
@@ -2391,6 +2457,8 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       color: activeTool === 'eraser' ? token.colorError : 'inherit',
                       backgroundColor:
                         activeTool === 'eraser' ? `${token.colorError}15` : 'transparent',
+                      opacity: mutationGate.canMutate ? 1 : 0.4,
+                      cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
                     }}
                   >
                     <DeleteOutlined style={{ fontSize: '16px' }} />
