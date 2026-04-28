@@ -442,7 +442,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           user,
         };
       } catch (_error) {
-        throw new Error('Invalid or expired refresh token');
+        // Must throw NotAuthenticated (not plain Error) so the UI's
+        // isDefiniteAuthFailure classifier (apps/agor-ui/src/utils/authErrors.ts)
+        // recognizes a dead refresh token as a 401-class failure and clears
+        // session state. A plain Error has no status/name and gets treated as
+        // transient, leading the single-flight refresh loop to keep retrying.
+        throw new NotAuthenticated('Invalid or expired refresh token');
       }
     },
   });
