@@ -339,6 +339,26 @@ pnpm agor repo list
 
 ## Troubleshooting
 
+### Build fails with `ERR_WORKER_OUT_OF_MEMORY` / `JS heap out of memory`
+
+`@agor/core` exports ~40 entry points and emits TypeScript declarations for
+both CJS and ESM. tsup's DTS pipeline peaks around **3 GB of memory**, which
+exceeds Node's default heap ceiling on smaller hosts (4 GB RAM containers,
+Raspberry Pis, low-tier Codespaces, etc.).
+
+The shipped scripts already set `NODE_OPTIONS=--max-old-space-size=4096` for
+`@agor/core`'s `build`/`dev`, plus `packages/agor-live/build.sh`,
+`docker/docker-entrypoint.sh`, and the dev Codespace entrypoint. If you build
+from a custom path (e.g. running `tsup` directly, or wrapping the build in
+your own script) and hit the OOM, set it yourself:
+
+```bash
+export NODE_OPTIONS="--max-old-space-size=4096"
+pnpm --filter @agor/core build
+```
+
+If 4 GB isn't enough on a particularly large feature branch, raise to 8192.
+
 ### "Method is not a function" after editing @agor/core
 
 **Should NOT happen** with new 2-process workflow (daemon watches core and auto-restarts).

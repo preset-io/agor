@@ -13,6 +13,11 @@
 
 set -e  # Exit on error
 
+# Raise Node's heap ceiling so DTS generation in @agor/core (~3 GB peak) and
+# vite/next bundle steps don't OOM on low-RAM hosts. User-set NODE_OPTIONS
+# wins because Node honors the last `--max-old-space-size` it sees.
+export NODE_OPTIONS="--max-old-space-size=4096 ${NODE_OPTIONS:-}"
+
 # ── Parse flags ──────────────────────────────────────────────────────────────
 
 PUBLISH=false
