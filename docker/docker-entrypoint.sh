@@ -1,11 +1,6 @@
 #!/bin/sh
 set -e
 
-# Raise Node's heap ceiling so the @agor/core DTS build (~3 GB peak) doesn't
-# OOM with ERR_WORKER_OUT_OF_MEMORY on memory-constrained hosts. User-set
-# NODE_OPTIONS wins because Node honors the last `--max-old-space-size` flag.
-export NODE_OPTIONS="--max-old-space-size=4096 ${NODE_OPTIONS:-}"
-
 echo "🚀 Starting Agor development environment..."
 
 # Dependencies are baked into the Docker image and preserved via anonymous volumes
