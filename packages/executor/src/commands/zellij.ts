@@ -19,20 +19,11 @@
  */
 
 import { spawn } from 'node:child_process';
+import type { IPty } from 'node-pty';
 import type { ExecutorResult, ZellijAttachPayload, ZellijTabPayload } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
 import { createExecutorClient } from '../services/feathers-client.js';
 import type { CommandOptions } from './index.js';
-
-// node-pty types - imported dynamically to avoid native module issues
-interface IPty {
-  pid: number;
-  write(data: string): void;
-  resize(cols: number, rows: number): void;
-  kill(signal?: string): void;
-  onData(handler: (data: string) => void): void;
-  onExit(handler: (e: { exitCode: number; signal?: number }) => void): void;
-}
 
 /**
  * Global PTY process - only one per executor instance
@@ -112,19 +103,7 @@ export async function handleZellijAttach(
 
     // Import node-pty dynamically (native module)
     // Using upstream microsoft/node-pty (no engines cap, supports Node 24/25)
-    const nodePty = (await import('node-pty')) as {
-      spawn: (
-        file: string,
-        args: string[],
-        options: {
-          name?: string;
-          cols?: number;
-          rows?: number;
-          cwd?: string;
-          env?: Record<string, string | undefined>;
-        }
-      ) => IPty;
-    };
+    const nodePty: typeof import('node-pty') = await import('node-pty');
 
     // Build zellij command - config path added after fs/actualHome are defined below
     const zellijArgs = ['attach', sessionName, '--create'];
