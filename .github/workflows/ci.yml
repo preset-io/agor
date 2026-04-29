@@ -185,3 +185,39 @@ jobs:
       - name: pnpm audit (all, high — advisory)
         if: always()
         run: pnpm audit --audit-level=high || true
+
+  node-compat:
+    name: Node ${{ matrix.node }} install compat
+    # Verifies that `agor-live` (and its native deps like node-pty) install
+    # cleanly on currently-supported Node versions. Fails the build if any
+    # transitive dependency emits an EBADENGINE warning, which is what
+    # surfaces to end users during `npm install -g agor-live` (see #278).
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24', '25']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: 'pnpm'
+
+      - name: Install (fail on EBADENGINE)
+        run: |
+          set -o pipefail
+          pnpm install --frozen-lockfile --config.engine-strict=false 2>&1 | tee install.log
+          if grep -q "EBADENGINE" install.log; then
+            echo "::error::EBADENGINE warning detected on Node ${{ matrix.node }}"
+            grep -A 3 "EBADENGINE" install.log
+            exit 1
+          fi
+
+      - name: Smoke build (agor-live + executor)
+        run: pnpm turbo run build --filter=agor-live --filter=@agor/executor

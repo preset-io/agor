@@ -483,9 +483,6 @@ importers:
       '@google/genai':
         specifier: ^1.43.0
         version: 1.43.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))
-      '@homebridge/node-pty-prebuilt-multiarch':
-        specifier: ^0.13.1
-        version: 0.13.1
       '@iarna/toml':
         specifier: ^2.2.5
         version: 2.2.5
@@ -579,6 +576,9 @@ importers:
       multer:
         specifier: ^2.1.1
         version: 2.1.1
+      node-pty:
+        specifier: ^1.2.0-beta.12
+        version: 1.2.0-beta.12
       open:
         specifier: ^11.0.0
         version: 11.0.0
@@ -794,9 +794,6 @@ importers:
       '@github/copilot-sdk':
         specifier: ^0.2.2
         version: 0.2.2
-      '@homebridge/node-pty-prebuilt-multiarch':
-        specifier: ^0.13.1
-        version: 0.13.1
       '@iarna/toml':
         specifier: ^2.2.5
         version: 2.2.5
@@ -806,6 +803,9 @@ importers:
       diff:
         specifier: '>=8.0.3 <9'
         version: 8.0.3
+      node-pty:
+        specifier: ^1.2.0-beta.12
+        version: 1.2.0-beta.12
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -1950,10 +1950,6 @@ packages:
     peerDependencies:
       react: ^18 || ^19 || ^19.0.0-rc
       react-dom: ^18 || ^19 || ^19.0.0-rc
-
-  '@homebridge/node-pty-prebuilt-multiarch@0.13.1':
-    resolution: {integrity: sha512-ccQ60nMcbEGrQh0U9E6x0ajW9qJNeazpcM/9CH6J8leyNtJgb+gu24WTBAfBUVeO486ZhscnaxLEITI2HXwhow==}
-    engines: {node: '>=18.0.0 <25.0.0'}
 
   '@hono/node-server@1.19.14':
     resolution: {integrity: sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw==}
@@ -7574,6 +7570,9 @@ packages:
   node-pty@1.0.0:
     resolution: {integrity: sha512-wtBMWWS7dFZm/VgqElrTvtfMq4GzJ6+edFI0Y0zyzygUSZMgZdraDUMUhCIvkjhJjme15qWmbyJbtAx4ot4uZA==}
 
+  node-pty@1.2.0-beta.12:
+    resolution: {integrity: sha512-uExTCG/4VmSJa4+TjxFwPXv8BfacmfFEBL6JpxCMDghcwqzvD0yTcGmZ1fKOK6HY33tp0CelLblqTECJizc+Yw==}
+
   node-releases@2.0.27:
     resolution: {integrity: sha512-nmh3lCkYZ3grZvqcCH+fjmQ7X+H0OeZgP40OierEaAptX4XofMh5kwNbWh7lBduUzCcV/8kZ+NDLCwm2iorIlA==}
 
@@ -11017,11 +11016,6 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
       use-sync-external-store: 1.6.0(react@18.3.1)
-
-  '@homebridge/node-pty-prebuilt-multiarch@0.13.1':
-    dependencies:
-      node-addon-api: 7.1.1
-      prebuild-install: 7.1.3
 
   '@hono/node-server@1.19.14(hono@4.12.14)':
     dependencies:
@@ -14646,6 +14640,7 @@ snapshots:
       buffer: 5.7.1
       inherits: 2.0.4
       readable-stream: 3.6.2
+    optional: true
 
   body-parser@1.20.4:
     dependencies:
@@ -14710,6 +14705,7 @@ snapshots:
     dependencies:
       base64-js: 1.5.1
       ieee754: 1.2.1
+    optional: true
 
   buffer@6.0.3:
     dependencies:
@@ -14844,7 +14840,8 @@ snapshots:
     dependencies:
       readdirp: 4.1.2
 
-  chownr@1.1.4: {}
+  chownr@1.1.4:
+    optional: true
 
   chromatic@12.2.0: {}
 
@@ -15276,7 +15273,8 @@ snapshots:
 
   deep-eql@5.0.2: {}
 
-  deep-extend@0.6.0: {}
+  deep-extend@0.6.0:
+    optional: true
 
   deepmerge@4.3.1: {}
 
@@ -15703,7 +15701,8 @@ snapshots:
       strip-final-newline: 4.0.0
       yoctocolors: 2.1.2
 
-  expand-template@2.0.3: {}
+  expand-template@2.0.3:
+    optional: true
 
   expect-type@1.2.2: {}
 
@@ -15990,7 +15989,8 @@ snapshots:
 
   fresh@2.0.0: {}
 
-  fs-constants@1.0.0: {}
+  fs-constants@1.0.0:
+    optional: true
 
   fs-extra@10.1.0:
     dependencies:
@@ -16101,7 +16101,8 @@ snapshots:
 
   git-hooks-list@3.2.0: {}
 
-  github-from-package@0.0.0: {}
+  github-from-package@0.0.0:
+    optional: true
 
   github-slugger@2.0.0: {}
 
@@ -17672,7 +17673,8 @@ snapshots:
 
   mj-context-menu@0.6.1: {}
 
-  mkdirp-classic@0.5.3: {}
+  mkdirp-classic@0.5.3:
+    optional: true
 
   mlly@1.8.0:
     dependencies:
@@ -17713,7 +17715,8 @@ snapshots:
 
   nanoid@3.3.11: {}
 
-  napi-build-utils@2.0.0: {}
+  napi-build-utils@2.0.0:
+    optional: true
 
   negotiator@0.6.3: {}
 
@@ -17839,6 +17842,7 @@ snapshots:
   node-abi@3.85.0:
     dependencies:
       semver: 7.7.3
+    optional: true
 
   node-addon-api@4.3.0:
     optional: true
@@ -17865,6 +17869,10 @@ snapshots:
     dependencies:
       nan: 2.23.1
     optional: true
+
+  node-pty@1.2.0-beta.12:
+    dependencies:
+      node-addon-api: 7.1.1
 
   node-releases@2.0.27: {}
 
@@ -18197,6 +18205,7 @@ snapshots:
       simple-get: 4.0.1
       tar-fs: 2.1.4
       tunnel-agent: 0.6.0
+    optional: true
 
   prettier@3.8.1: {}
 
@@ -18327,6 +18336,7 @@ snapshots:
       ini: 1.3.8
       minimist: 1.2.8
       strip-json-comments: 2.0.1
+    optional: true
 
   react-devtools-inline@4.4.0:
     dependencies:
@@ -19002,13 +19012,15 @@ snapshots:
 
   signal-exit@4.1.0: {}
 
-  simple-concat@1.0.1: {}
+  simple-concat@1.0.1:
+    optional: true
 
   simple-get@4.0.1:
     dependencies:
       decompress-response: 6.0.0
       once: 1.4.0
       simple-concat: 1.0.1
+    optional: true
 
   simple-git@3.36.0:
     dependencies:
@@ -19270,7 +19282,8 @@ snapshots:
 
   strip-indent@4.1.1: {}
 
-  strip-json-comments@2.0.1: {}
+  strip-json-comments@2.0.1:
+    optional: true
 
   strip-json-comments@3.1.1: {}
 
@@ -19337,6 +19350,7 @@ snapshots:
       mkdirp-classic: 0.5.3
       pump: 3.0.3
       tar-stream: 2.2.0
+    optional: true
 
   tar-stream@2.2.0:
     dependencies:
@@ -19345,6 +19359,7 @@ snapshots:
       fs-constants: 1.0.0
       inherits: 2.0.4
       readable-stream: 3.6.2
+    optional: true
 
   teeny-request@10.1.0:
     dependencies:

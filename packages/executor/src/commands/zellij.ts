@@ -111,8 +111,8 @@ export async function handleZellijAttach(
     });
 
     // Import node-pty dynamically (native module)
-    // Using @homebridge/node-pty-prebuilt-multiarch for consistency with daemon
-    const nodePty = (await import('@homebridge/node-pty-prebuilt-multiarch')) as {
+    // Using upstream microsoft/node-pty (no engines cap, supports Node 24/25)
+    const nodePty = (await import('node-pty')) as {
       spawn: (
         file: string,
         args: string[],
