@@ -29,7 +29,18 @@ environment:
       # AGOR_BUILD_SHA / AGOR_BUILT_AT are injected by Agor's
       # spawnEnvironmentCommand from the host-side worktree gitdir; no need to
       # capture them here. See packages/core/src/unix/environment-command-spawn.ts.
+      #
+      # UID/GID are passed explicitly so docker-compose.override.yml's
+      # `user: '${UID:-1000}:${GID:-1000}'` resolves to the host's actual
+      # identity (and the `args: { UID, GID }` build args do too on rebuild).
+      # Bash's $UID/$GID are readonly but not exported, so without this prefix
+      # compose silently falls through to 1000:1000 — and once the image and
+      # runtime UIDs disagree, the container's UID has no /etc/passwd entry
+      # and the entrypoint dies on `sudo: you do not exist in the passwd
+      # database`. TODO: lift this into spawnEnvironmentCommand alongside
+      # AGOR_BUILD_SHA so every Docker-based .agor.yml gets it for free.
       start: >-
+        UID=$(id -u) GID=$(id -g)
         DAEMON_PORT={{add 3000 worktree.unique_id}}
         UI_PORT={{add 5000 worktree.unique_id}}
         docker compose -p agor-{{worktree.name}} up -d
@@ -46,6 +57,7 @@ environment:
       # docker-compose.override.yml (UID/GID only) and skips the postgres
       # override. Listing both files explicitly replaces that default.
       start: >-
+        UID=$(id -u) GID=$(id -g)
         DAEMON_PORT={{add 3000 worktree.unique_id}}
         UI_PORT={{add 5000 worktree.unique_id}}
         docker compose
@@ -107,6 +119,7 @@ environment:
         impersonation (each Agor user runs sessions as their own Unix identity).
         Requires the sudoers config shipped under docker/sudoers/.
       start: >-
+        UID=$(id -u) GID=$(id -g)
         DAEMON_PORT={{add 3000 worktree.unique_id}}
         UI_PORT={{add 5000 worktree.unique_id}}
         AGOR_RBAC_ENABLED=true
