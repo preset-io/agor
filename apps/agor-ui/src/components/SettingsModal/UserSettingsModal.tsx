@@ -11,7 +11,6 @@ import { hasMinimumRole, ROLES } from '@agor-live/client';
 import {
   ApiOutlined,
   CloseOutlined,
-  KeyOutlined,
   RobotOutlined,
   SettingOutlined,
   SoundOutlined,
@@ -83,6 +82,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // API key management state
   const [userApiKeyStatus, setUserApiKeyStatus] = useState<ApiKeyStatus>({
     ANTHROPIC_API_KEY: false,
+    CLAUDE_CODE_OAUTH_TOKEN: false,
     OPENAI_API_KEY: false,
     GEMINI_API_KEY: false,
     COPILOT_GITHUB_TOKEN: false,
@@ -151,6 +151,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     if (user?.api_keys) {
       setUserApiKeyStatus({
         ANTHROPIC_API_KEY: !!user.api_keys.ANTHROPIC_API_KEY,
+        CLAUDE_CODE_OAUTH_TOKEN: !!user.api_keys.CLAUDE_CODE_OAUTH_TOKEN,
         OPENAI_API_KEY: !!user.api_keys.OPENAI_API_KEY,
         GEMINI_API_KEY: !!user.api_keys.GEMINI_API_KEY,
         COPILOT_GITHUB_TOKEN: !!user.api_keys.COPILOT_GITHUB_TOKEN,
@@ -158,6 +159,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     } else {
       setUserApiKeyStatus({
         ANTHROPIC_API_KEY: false,
+        CLAUDE_CODE_OAUTH_TOKEN: false,
         OPENAI_API_KEY: false,
         GEMINI_API_KEY: false,
         COPILOT_GITHUB_TOKEN: false,
@@ -403,7 +405,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       case 'general':
         handleUpdate();
         break;
-      case 'api-keys':
       case 'env-vars':
       case 'personal-api-keys':
         // These tabs save individually, just close
@@ -447,7 +448,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         },
         {
           key: 'personal-api-keys',
-          label: 'Personal API Keys',
+          label: 'Agor API Tokens',
           icon: <ApiOutlined />,
         },
       ],
@@ -457,11 +458,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       label: 'Agentic Tools',
       type: 'group',
       children: [
-        {
-          key: 'api-keys',
-          label: 'API Keys',
-          icon: <KeyOutlined />,
-        },
         {
           key: 'claude-code',
           label: 'Claude Code',
@@ -585,21 +581,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               )}
           </Form>
         );
-      case 'api-keys':
-        return (
-          <>
-            <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-              Per-user API keys take precedence over global settings. These keys are encrypted at
-              rest.
-            </Typography.Paragraph>
-            <ApiKeyFields
-              keyStatus={userApiKeyStatus}
-              onSave={handleApiKeySave}
-              onClear={handleApiKeyClear}
-              saving={savingApiKeys}
-            />
-          </>
-        );
       case 'env-vars':
         return (
           <>
@@ -641,12 +622,46 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           opencode: 'OpenCode',
           copilot: 'Copilot',
         };
+        // Auth fields shown for each tool (encrypted at rest, take precedence over global config).
+        // Claude Code accepts EITHER an API key OR an OAuth token (Pro/Max plan); the SDK
+        // prefers the OAuth token when both are present.
+        const authFieldsByTool: Record<AgenticToolName, (keyof ApiKeyStatus)[]> = {
+          'claude-code': ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'],
+          codex: ['OPENAI_API_KEY'],
+          gemini: ['GEMINI_API_KEY'],
+          opencode: [],
+          copilot: ['COPILOT_GITHUB_TOKEN'],
+        };
+        const authFields = authFieldsByTool[toolName];
+        const filteredKeyStatus: Partial<ApiKeyStatus> = Object.fromEntries(
+          authFields.map((f) => [f, userApiKeyStatus[f]])
+        );
         return (
           <>
             <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
               Configure default settings for {displayNames[toolName]}. These will prepopulate
               session creation forms.
             </Typography.Paragraph>
+            {authFields.length > 0 && (
+              <div style={{ marginBottom: 24 }}>
+                <Typography.Title level={5} style={{ marginTop: 0, marginBottom: 8 }}>
+                  Authentication
+                </Typography.Title>
+                <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
+                  Per-user credentials. Encrypted at rest; take precedence over the daemon's global
+                  configuration.
+                </Typography.Paragraph>
+                <ApiKeyFields
+                  keyStatus={filteredKeyStatus}
+                  onSave={handleApiKeySave}
+                  onClear={handleApiKeyClear}
+                  saving={savingApiKeys}
+                />
+              </div>
+            )}
+            <Typography.Title level={5} style={{ marginTop: 0, marginBottom: 8 }}>
+              Defaults
+            </Typography.Title>
             <Form form={currentForm} layout="vertical">
               <AgenticToolConfigForm
                 agenticTool={toolName}
@@ -669,10 +684,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const getSectionTitle = () => {
     const titles: Record<string, string> = {
       general: 'General',
-      'api-keys': 'API Keys',
       'env-vars': 'Environment Variables',
       audio: 'Audio',
-      'personal-api-keys': 'Personal API Keys',
+      'personal-api-keys': 'Agor API Tokens',
       'claude-code': 'Claude Code',
       codex: 'Codex',
       gemini: 'Gemini',

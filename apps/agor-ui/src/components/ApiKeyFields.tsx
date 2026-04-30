@@ -7,6 +7,7 @@ const { Text, Link } = Typography;
 
 export interface ApiKeyStatus {
   ANTHROPIC_API_KEY: boolean;
+  CLAUDE_CODE_OAUTH_TOKEN: boolean;
   OPENAI_API_KEY: boolean;
   GEMINI_API_KEY: boolean;
   COPILOT_GITHUB_TOKEN: boolean;
@@ -31,15 +32,24 @@ interface KeyFieldConfig {
   description: string;
   placeholder: string;
   docUrl: string;
+  /** Optional helper rendered below the doc link (e.g. CLI command to obtain the value). */
+  helper?: React.ReactNode;
 }
 
 const KEY_CONFIGS: KeyFieldConfig[] = [
   {
     field: 'ANTHROPIC_API_KEY',
     label: 'Anthropic API Key',
-    description: '(Claude Code / Agent SDK)',
+    description: '(pay-as-you-go / Console)',
     placeholder: 'sk-ant-api03-...',
     docUrl: 'https://console.anthropic.com',
+  },
+  {
+    field: 'CLAUDE_CODE_OAUTH_TOKEN',
+    label: 'Claude Subscription Token',
+    description: '(Pro / Max plan)',
+    placeholder: 'sk-ant-oat01-...',
+    docUrl: 'https://docs.claude.com/en/docs/claude-code/setup',
   },
   {
     field: 'OPENAI_API_KEY',
@@ -140,16 +150,14 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
               {docUrl}
             </Link>
           </Text>
-          {field === 'ANTHROPIC_API_KEY' && !isSet && (
+          {field === 'CLAUDE_CODE_OAUTH_TOKEN' && !isSet && (
             <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-              Claude Max/Pro plan user? You don't need an API key — use{' '}
+              Run{' '}
               <Text code style={{ fontSize: token.fontSizeSM }}>
                 claude setup-token
               </Text>{' '}
-              instead.{' '}
-              <Link href="/guide/extended-install#claude-max-pro" target="_blank">
-                See the docs
-              </Link>
+              in a terminal where the Claude CLI is installed and signed in to your Pro/Max plan,
+              then paste the resulting token here.
             </Text>
           )}
         </Space>

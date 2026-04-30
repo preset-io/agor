@@ -87,6 +87,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
   const [keysError, setKeysError] = useState<string | null>(null);
   const [keyStatus, setKeyStatus] = useState<ApiKeyStatus>({
     ANTHROPIC_API_KEY: false,
+    CLAUDE_CODE_OAUTH_TOKEN: false,
     OPENAI_API_KEY: false,
     GEMINI_API_KEY: false,
     COPILOT_GITHUB_TOKEN: false,
@@ -120,6 +121,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
 
         setKeyStatus({
           ANTHROPIC_API_KEY: !!config?.ANTHROPIC_API_KEY,
+          CLAUDE_CODE_OAUTH_TOKEN: !!(config as Record<string, unknown>)?.CLAUDE_CODE_OAUTH_TOKEN,
           OPENAI_API_KEY: !!config?.OPENAI_API_KEY,
           GEMINI_API_KEY: !!config?.GEMINI_API_KEY,
           COPILOT_GITHUB_TOKEN: !!(config as Record<string, unknown>)?.COPILOT_GITHUB_TOKEN,

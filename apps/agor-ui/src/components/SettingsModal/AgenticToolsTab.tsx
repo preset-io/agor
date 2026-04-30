@@ -17,6 +17,7 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
   const [error, setError] = useState<string | null>(null);
   const [keyStatus, setKeyStatus] = useState<ApiKeyStatus>({
     ANTHROPIC_API_KEY: false,
+    CLAUDE_CODE_OAUTH_TOKEN: false,
     OPENAI_API_KEY: false,
     GEMINI_API_KEY: false,
     COPILOT_GITHUB_TOKEN: false,
@@ -43,6 +44,7 @@ export const AgenticToolsTab: React.FC<AgenticToolsTabProps> = ({ client }) => {
         // Check which keys are set (truthy values mean key exists)
         setKeyStatus({
           ANTHROPIC_API_KEY: !!config?.ANTHROPIC_API_KEY,
+          CLAUDE_CODE_OAUTH_TOKEN: !!(config as Record<string, unknown>)?.CLAUDE_CODE_OAUTH_TOKEN,
           OPENAI_API_KEY: !!config?.OPENAI_API_KEY,
           GEMINI_API_KEY: !!config?.GEMINI_API_KEY,
           COPILOT_GITHUB_TOKEN: !!config?.COPILOT_GITHUB_TOKEN,

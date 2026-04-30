@@ -50,10 +50,9 @@ Agor supports Claude Code, Codex, Gemini, OpenCode, and GitHub Copilot. The [onb
 
 When a session starts, Agor looks for credentials in this order and uses the first one it finds:
 
-1. **Per-user API keys** — encrypted in the DB, scoped to the user. Set via the wizard or Settings → Agentic Tools.
-2. **`CLAUDE_CODE_OAUTH_TOKEN`** — per-user env var (e.g. from `claude setup-token`).
-3. **`claude login` credentials** — `~/.claude/` on the daemon host.
-4. **Workspace env vars** — `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_AI_API_KEY`. Visible to all users on the instance.
+1. **Per-user credentials** — encrypted in the DB, scoped to the user. Set via the wizard or **Settings → Agentic Tools → _tool_**. For Claude Code this means either an `ANTHROPIC_API_KEY` (pay-as-you-go) or a `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max subscription, from `claude setup-token`); the SDK prefers the OAuth token when both are set.
+2. **`claude login` credentials** — `~/.claude/` on the daemon host.
+3. **Workspace env vars** — `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_AI_API_KEY`. Visible to all users on the instance.
 
 Mixing is fine: one user can run on a Max Pro token while teammates use per-user API keys.
 
@@ -77,7 +76,7 @@ claude setup-token
 
 Copy the output.
 
-**3. Paste it into Agor:** open **User Settings → Env vars** and add `CLAUDE_CODE_OAUTH_TOKEN` = _your token_. All your Claude Code sessions will use the subscription.
+**3. Paste it into Agor:** open **User Settings → Agentic Tools → Claude Code** and paste the token into the **Claude Subscription Token** field. All your Claude Code sessions will use the subscription.
 
 ### CLI login on the daemon host (self-hosted)
 

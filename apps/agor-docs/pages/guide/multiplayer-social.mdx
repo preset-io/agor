@@ -114,7 +114,7 @@ This is the part that's hard to convey in a doc. Try it on a board with one othe
 
 <img
   src="/screenshots/user-settings-env-vars.png"
-  alt="User Settings modal — left rail with Profile (General, Env Vars, Audio, Personal API Keys) and Agentic Tools (API Keys, Claude Code, Codex, Gemini, OpenCode); right pane shows Environment Variables table with Global and Session scopes, AGOR_API_KEY/GITHUB_TOKEN/HUBSPOT_API_KEY/LINKEDIN_SECRET/FIVETRAN_API_KEY/SHORTCUT_API_TOKEN/CLAUDE_CODE_OAUTH_TOKEN encrypted at rest"
+  alt="User Settings modal — left rail with Profile (General, Env Vars, Audio, Agor API Tokens) and Agentic Tools (Claude Code, Codex, Gemini, OpenCode); right pane shows Environment Variables table with Global and Session scopes, AGOR_API_KEY/GITHUB_TOKEN/HUBSPOT_API_KEY/LINKEDIN_SECRET/FIVETRAN_API_KEY/SHORTCUT_API_TOKEN encrypted at rest"
   style={{ maxWidth: '720px', borderRadius: '8px' }}
 />
 
@@ -124,11 +124,10 @@ The settings panel is split into two surfaces:
 - **General** — display name, avatar, email, role.
 - **Env Vars** — encrypted environment variables, scoped `Global` (auto-injected into every session you own) or `Session` (only injected when you opt in per session under Session → Settings → Env Vars). Useful for `GITHUB_TOKEN`, `HUBSPOT_API_KEY`, vendor credentials, or anything you'd otherwise paste into a `.env`.
 - **Audio** — chime / notification preferences for attention pulse and session events.
-- **Personal API Keys** — issue tokens for scripting Agor itself (CLI / external tools).
+- **Agor API Tokens** — issue tokens for scripting Agor itself (CLI / external tools).
 
 **Agentic Tools**
-- **API Keys** — model-provider keys (Anthropic, OpenAI, Google, etc.) used when a session selects you as the actor.
-- **Claude Code / Codex / Gemini / OpenCode** — per-runtime config: default model, permission mode, extra arguments, OAuth login state. Each user authenticates the SDKs they actually use; no shared "agor-bot" credentials.
+- **Claude Code / Codex / Gemini / OpenCode / Copilot** — per-runtime config: provider credentials, default model, permission mode, extra arguments. Each tool screen carries its own auth field(s) (e.g. Claude Code accepts either an Anthropic API key or a Pro/Max subscription token). Each user authenticates the SDKs they actually use; no shared "agor-bot" credentials.
 
 ### Why per-user matters in multiplayer
 

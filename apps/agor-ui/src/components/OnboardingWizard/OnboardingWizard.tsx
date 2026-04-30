@@ -271,8 +271,11 @@ export function OnboardingWizard({
   const usernameSlug = getUsernameSlug(user);
   const effectiveFrameworkUrl = frameworkRepoUrl || FRAMEWORK_REPO_URL;
 
+  // Claude Code accepts either an Anthropic API key or a Pro/Max subscription
+  // OAuth token (from `claude setup-token`). Either is a valid credential.
   const hasAnthropicKey = !!(
     user?.api_keys?.ANTHROPIC_API_KEY ||
+    user?.api_keys?.CLAUDE_CODE_OAUTH_TOKEN ||
     user?.env_vars?.ANTHROPIC_API_KEY ||
     systemCredentials?.ANTHROPIC_API_KEY
   );
