@@ -191,8 +191,15 @@ export async function resolveResourceMetadataUrl(
  * origin. Claude Desktop's MCP client probes this path; we mirror that
  * behaviour so 'paste URL → click Connect' works without manual config.
  *
- * Probes (in order):
- *   1. {origin}{path}/.well-known/oauth-authorization-server   (path-aware)
+ * Probes (in order). Note that RFC 8414 and OIDC use *different* path-construction
+ * rules for path-bearing issuers:
+ *   - RFC 8414 §3.1: insert `.well-known/oauth-authorization-server` between
+ *     the host and the issuer's path → `{origin}/.well-known/...{path}`
+ *   - OIDC Discovery 1.0 §4: append `.well-known/openid-configuration` after
+ *     the issuer's path → `{origin}{path}/.well-known/...`
+ *
+ * Probe order:
+ *   1. {origin}/.well-known/oauth-authorization-server{path}   (RFC 8414 path-aware)
  *   2. {origin}/.well-known/oauth-authorization-server         (root)
  *   3. {origin}{path}/.well-known/openid-configuration         (OIDC path-aware)
  *   4. {origin}/.well-known/openid-configuration               (OIDC root)
@@ -207,14 +214,17 @@ export async function discoverAuthorizationServerFromMcpOrigin(
   const origin = url.origin;
   const path = url.pathname === '/' ? '' : url.pathname.replace(/\/$/, '');
 
-  const suffixes = ['oauth-authorization-server', 'openid-configuration'];
   const candidates: string[] = [];
-  for (const suffix of suffixes) {
-    if (path) {
-      candidates.push(`${origin}/.well-known/${suffix}${path}`);
-    }
-    candidates.push(`${origin}/.well-known/${suffix}`);
+  // RFC 8414: path-insertion (between host and path)
+  if (path) {
+    candidates.push(`${origin}/.well-known/oauth-authorization-server${path}`);
   }
+  candidates.push(`${origin}/.well-known/oauth-authorization-server`);
+  // OIDC Discovery: path-append (after the issuer's path)
+  if (path) {
+    candidates.push(`${origin}${path}/.well-known/openid-configuration`);
+  }
+  candidates.push(`${origin}/.well-known/openid-configuration`);
 
   // Dedupe (no path → path-aware == root)
   const unique = Array.from(new Set(candidates));
@@ -430,7 +440,7 @@ function buildWellKnownUrl(issuerUrl: string, wellKnownSuffix: string): string {
  * Implements path-aware discovery per RFC 8414 Section 3.
  * Falls back to OIDC discovery and naive URL construction.
  */
-async function fetchAuthorizationServerMetadata(
+export async function fetchAuthorizationServerMetadata(
   authServerUrl: string
 ): Promise<AuthorizationServerMetadata> {
   const cleanUrl = authServerUrl.replace(/\/$/, '');

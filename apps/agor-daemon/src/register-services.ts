@@ -1047,20 +1047,32 @@ async function registerMCPServices(
    *     which need to return the token-validation result in the same HTTP
    *     response. Bounded by {@link AWAIT_TOKEN_TIMEOUT_MS}.
    */
+  /**
+   * Human-readable enumeration of every discovery strategy
+   * `resolveMCPOAuthDiscovery` walks. Kept in sync with the cascade in
+   * `@agor/core/tools/mcp/oauth-mcp-transport.ts` so error messages don't
+   * drift when strategies are added or reordered.
+   */
+  const DISCOVERY_CASCADE_TRIED =
+    'Tried: (1) WWW-Authenticate resource_metadata hint, ' +
+    '(2) /.well-known/oauth-protected-resource (RFC 9728), ' +
+    '(3) /.well-known/oauth-authorization-server at MCP origin (RFC 8414), ' +
+    '(4) /.well-known/openid-configuration at MCP origin (OIDC).';
+
   type StartTwoPhaseOAuthOptions = {
     mcpUrl: string;
     wwwAuthenticate: string;
     /**
-     * RFC 9728 Protected Resource Metadata URL. Required for the standard MCP
-     * spec discovery path. Optional when `prefetchedAuthServerMetadata` is
-     * provided — see Reo.Dev-style discovery.
+     * RFC 9728 Protected Resource Metadata URL. Set when discovery hit the
+     * standard MCP spec path. Mutually exclusive with
+     * `prefetchedAuthServerMetadata` — exactly one must be provided.
      */
     resourceMetadataUrl?: string;
     /**
      * Pre-discovered Authorization Server metadata, set when discovery hit the
      * AS-direct fallback (`<mcp-origin>/.well-known/oauth-authorization-server`).
-     * Mutually populated with — but not exclusive of — `resourceMetadataUrl`;
-     * exactly one of the two must be set.
+     * Mutually exclusive with `resourceMetadataUrl` — exactly one must be
+     * provided.
      */
     prefetchedAuthServerMetadata?: import('@agor/core/tools/mcp/oauth-mcp-transport').AuthorizationServerMetadata;
     mcpServerId?: string;
@@ -1109,10 +1121,14 @@ async function registerMCPServices(
     const baseUrl = await requirePublicBaseUrl();
     const redirectUri = new URL('/mcp-servers/oauth-callback', baseUrl).toString();
 
-    if (!opts.resourceMetadataUrl && !opts.prefetchedAuthServerMetadata) {
+    const hasRfc9728 = !!opts.resourceMetadataUrl;
+    const hasAsDirect = !!opts.prefetchedAuthServerMetadata;
+    if (hasRfc9728 === hasAsDirect) {
+      // Both set → ambiguous; neither set → no path forward.
       throw new Error(
-        'startTwoPhaseMCPOAuthFlow requires either resourceMetadataUrl (RFC 9728) ' +
-          'or prefetchedAuthServerMetadata (AS-direct discovery).'
+        'startTwoPhaseMCPOAuthFlow requires exactly one of resourceMetadataUrl ' +
+          '(RFC 9728) or prefetchedAuthServerMetadata (AS-direct discovery), ' +
+          `received resourceMetadataUrl=${hasRfc9728}, prefetchedAuthServerMetadata=${hasAsDirect}.`
       );
     }
 
@@ -1524,30 +1540,27 @@ async function registerMCPServices(
             }
 
             const authServerUrl = metadata.authorization_servers[0];
+            // Reuse core's fetchAuthorizationServerMetadata so we get RFC 8414
+            // path-aware insertion + OIDC path-append fallback. The previous
+            // hand-rolled `${authServerUrl}${wellKnownPath}` loop only worked
+            // for root-issuer servers and silently mis-reported "no metadata"
+            // for path-bearing issuers.
+            const { fetchAuthorizationServerMetadata } = await import(
+              '@agor/core/tools/mcp/oauth-mcp-transport'
+            );
             let authServerMetadata: {
               authorization_endpoint?: string;
               token_endpoint?: string;
               registration_endpoint?: string;
             } | null = null;
-
-            for (const wellKnownPath of [
-              '/.well-known/oauth-authorization-server',
-              '/.well-known/openid-configuration',
-            ]) {
-              try {
-                const authMetaResponse = await fetch(`${authServerUrl}${wellKnownPath}`);
-                if (authMetaResponse.ok) {
-                  authServerMetadata = (await authMetaResponse.json()) as {
-                    authorization_endpoint?: string;
-                    token_endpoint?: string;
-                    registration_endpoint?: string;
-                  };
-                  console.log('[OAuth Test] Auth server metadata:', authServerMetadata);
-                  break;
-                }
-              } catch {
-                /* Try next */
-              }
+            try {
+              authServerMetadata = await fetchAuthorizationServerMetadata(authServerUrl);
+              console.log('[OAuth Test] Auth server metadata:', authServerMetadata);
+            } catch (asMetaError) {
+              console.log(
+                '[OAuth Test] Auth server metadata unavailable:',
+                asMetaError instanceof Error ? asMetaError.message : String(asMetaError)
+              );
             }
 
             return {
@@ -1661,10 +1674,7 @@ async function registerMCPServices(
             responseHeaders: allHeaders,
             responseBody: responseBody.substring(0, 500),
             hint:
-              'Tried: (1) WWW-Authenticate resource_metadata hint, ' +
-              '(2) /.well-known/oauth-protected-resource (RFC 9728), ' +
-              '(3) /.well-known/oauth-authorization-server at MCP origin (RFC 8414), ' +
-              '(4) /.well-known/openid-configuration at MCP origin. ' +
+              `${DISCOVERY_CASCADE_TRIED} ` +
               'None returned valid metadata. Options: (a) provide Client Credentials with explicit token URL, ' +
               '(b) ask the MCP server operator to publish OAuth metadata, or (c) configure manual OAuth URLs in the server settings.',
           };
@@ -1734,13 +1744,7 @@ async function registerMCPServices(
         if (!discovery) {
           return {
             success: false,
-            error:
-              'Server returned 401 but does not advertise OAuth metadata. ' +
-              'Tried: (1) WWW-Authenticate resource_metadata hint, ' +
-              '(2) .well-known/oauth-protected-resource (RFC 9728), ' +
-              '(3) .well-known/oauth-authorization-server (RFC 8414 at MCP origin), ' +
-              '(4) .well-known/openid-configuration (OIDC at MCP origin). ' +
-              'None succeeded.',
+            error: `Server returned 401 but does not advertise OAuth metadata. ${DISCOVERY_CASCADE_TRIED} None succeeded.`,
           };
         }
 

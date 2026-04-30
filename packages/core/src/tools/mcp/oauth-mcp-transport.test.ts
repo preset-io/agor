@@ -15,6 +15,7 @@ import {
   isOAuthRequired,
   resolveMCPOAuthDiscovery,
   resolveResourceMetadataUrl,
+  startMCPOAuthFlow,
 } from './oauth-mcp-transport';
 
 // ---------------------------------------------------------------------------
@@ -351,6 +352,37 @@ describe('discoverAuthorizationServerFromMcpOrigin', () => {
     expect(result!.discoveredAt).toBe('https://example.com/.well-known/openid-configuration');
   });
 
+  it('uses OIDC path-append construction for path-bearing issuers', async () => {
+    // OIDC Discovery 1.0 §4: issuer https://host/path → discovery URL is
+    // https://host/path/.well-known/openid-configuration (NOT
+    // https://host/.well-known/openid-configuration/path which is RFC 8414's
+    // path-insertion rule).
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      calls.push(url);
+      if (url === 'https://example.com/mcp/.well-known/openid-configuration') {
+        return {
+          ok: true,
+          json: async () => ({
+            issuer: 'https://example.com/mcp',
+            authorization_endpoint: 'https://example.com/mcp/authorize',
+            token_endpoint: 'https://example.com/mcp/token',
+          }),
+        };
+      }
+      return { ok: false };
+    }) as unknown as typeof fetch;
+
+    const result = await discoverAuthorizationServerFromMcpOrigin('https://example.com/mcp');
+    expect(result).not.toBeNull();
+    expect(result!.discoveredAt).toBe('https://example.com/mcp/.well-known/openid-configuration');
+    // Confirm RFC 8414 path-insert was tried before OIDC path-append
+    expect(calls).toContain('https://example.com/.well-known/oauth-authorization-server/mcp');
+    expect(calls).toContain('https://example.com/mcp/.well-known/openid-configuration');
+    // Negative: never built the malformed path-insert variant for OIDC
+    expect(calls).not.toContain('https://example.com/.well-known/openid-configuration/mcp');
+  });
+
   it('rejects responses missing required endpoints', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -477,5 +509,80 @@ describe('resolveMCPOAuthDiscovery', () => {
 
     const result = await resolveMCPOAuthDiscovery(null, 'https://example.com/mcp');
     expect(result?.kind).toBe('resource-metadata');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// startMCPOAuthFlow — short-circuit path when AS metadata is prefetched
+// (the actual fix wired up end-to-end). Without this, a wiring bug in the
+// AS-direct branch could ship green if only discovery is tested.
+// ---------------------------------------------------------------------------
+
+describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('skips RFC 9728 fetch and uses prefetched AS metadata + DCR', async () => {
+    const fetchCalls: string[] = [];
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      fetchCalls.push(url);
+      // DCR endpoint from prefetched metadata should be the only fetch.
+      if (url === 'https://auth.reo.dev/oauth/register' && init?.method === 'POST') {
+        return {
+          ok: true,
+          json: async () => ({ client_id: 'dcr-client-123' }),
+        };
+      }
+      // Fail loud on anything else — we should NOT be probing well-known here.
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const ctx = await startMCPOAuthFlow('', undefined, 'http://127.0.0.1:9999/oauth/callback', {
+      prefetchedAuthServerMetadata: {
+        issuer: 'https://auth.reo.dev',
+        authorization_endpoint: 'https://auth.reo.dev/oauth/authorize',
+        token_endpoint: 'https://auth.reo.dev/oauth/token',
+        registration_endpoint: 'https://auth.reo.dev/oauth/register',
+      },
+      cacheKey: 'https://mcp.reo.dev/mcp',
+    });
+
+    // No well-known probing happened — only the DCR POST.
+    expect(fetchCalls).toEqual(['https://auth.reo.dev/oauth/register']);
+
+    // Auth URL was built from the prefetched metadata, with PKCE wired up.
+    const authUrl = new URL(ctx.authorizationUrl);
+    expect(authUrl.origin + authUrl.pathname).toBe('https://auth.reo.dev/oauth/authorize');
+    expect(authUrl.searchParams.get('client_id')).toBe('dcr-client-123');
+    expect(authUrl.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(authUrl.searchParams.get('code_challenge')).toBeTruthy();
+    expect(authUrl.searchParams.get('state')).toBeTruthy();
+    expect(authUrl.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:9999/oauth/callback');
+  });
+
+  it('throws when cacheKey is missing (would silently break token reuse)', async () => {
+    globalThis.fetch = vi.fn() as unknown as typeof fetch;
+
+    await expect(
+      startMCPOAuthFlow('', undefined, undefined, {
+        prefetchedAuthServerMetadata: {
+          issuer: 'https://auth.reo.dev',
+          authorization_endpoint: 'https://auth.reo.dev/oauth/authorize',
+          token_endpoint: 'https://auth.reo.dev/oauth/token',
+          registration_endpoint: 'https://auth.reo.dev/oauth/register',
+        },
+        // cacheKey omitted on purpose
+      })
+    ).rejects.toThrow(/cacheKey is required/);
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 });
