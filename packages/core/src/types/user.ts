@@ -183,6 +183,13 @@ export interface User extends BaseUserFields {
     OPENAI_API_KEY?: boolean;
     GEMINI_API_KEY?: boolean;
     COPILOT_GITHUB_TOKEN?: boolean;
+    /**
+     * Claude Code subscription token (Pro/Max plan), obtained via `claude setup-token`.
+     * Stored alongside ANTHROPIC_API_KEY; the executor exports whichever is set as the
+     * matching env var on session spawn. The Claude Code SDK prefers the OAuth token
+     * when both are present.
+     */
+    CLAUDE_CODE_OAUTH_TOKEN?: boolean;
   };
   // Environment variable status with scope (never exposes actual values).
   // Map from env var name → presence/scope metadata. For v0.5 the only validated
@@ -264,6 +271,7 @@ export interface UpdateUserInput extends Partial<BaseUserFields> {
     OPENAI_API_KEY?: string | null;
     GEMINI_API_KEY?: string | null;
     COPILOT_GITHUB_TOKEN?: string | null;
+    CLAUDE_CODE_OAUTH_TOKEN?: string | null;
   };
   // Environment variables for update (accepts plaintext, encrypted before storage).
   // `null` clears the variable. A plain `string` creates/updates the value and leaves

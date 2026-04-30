@@ -728,6 +728,7 @@ export const users = pgTable(
           OPENAI_API_KEY?: string; // Encrypted with AES-256-GCM
           GEMINI_API_KEY?: string; // Encrypted with AES-256-GCM
           COPILOT_GITHUB_TOKEN?: string; // Encrypted with AES-256-GCM
+          CLAUDE_CODE_OAUTH_TOKEN?: string; // Claude Pro/Max subscription token (from `claude setup-token`)
         };
         // Encrypted environment variables with scope metadata.
         //

@@ -374,7 +374,12 @@ export class UsersService {
    */
   async getApiKey(
     userId: UserID,
-    keyName: 'ANTHROPIC_API_KEY' | 'OPENAI_API_KEY' | 'GEMINI_API_KEY'
+    keyName:
+      | 'ANTHROPIC_API_KEY'
+      | 'OPENAI_API_KEY'
+      | 'GEMINI_API_KEY'
+      | 'COPILOT_GITHUB_TOKEN'
+      | 'CLAUDE_CODE_OAUTH_TOKEN'
   ): Promise<string | undefined> {
     const row = await select(this.db).from(users).where(eq(users.user_id, userId)).one();
 
@@ -469,6 +474,8 @@ export class UsersService {
             ANTHROPIC_API_KEY: !!data.api_keys.ANTHROPIC_API_KEY,
             OPENAI_API_KEY: !!data.api_keys.OPENAI_API_KEY,
             GEMINI_API_KEY: !!data.api_keys.GEMINI_API_KEY,
+            COPILOT_GITHUB_TOKEN: !!data.api_keys.COPILOT_GITHUB_TOKEN,
+            CLAUDE_CODE_OAUTH_TOKEN: !!data.api_keys.CLAUDE_CODE_OAUTH_TOKEN,
           }
         : undefined,
       // Return env var metadata (presence + scope), NOT actual values
@@ -545,6 +552,8 @@ class UsersServiceWithAuth extends UsersService {
             ANTHROPIC_API_KEY: !!data.api_keys.ANTHROPIC_API_KEY,
             OPENAI_API_KEY: !!data.api_keys.OPENAI_API_KEY,
             GEMINI_API_KEY: !!data.api_keys.GEMINI_API_KEY,
+            COPILOT_GITHUB_TOKEN: !!data.api_keys.COPILOT_GITHUB_TOKEN,
+            CLAUDE_CODE_OAUTH_TOKEN: !!data.api_keys.CLAUDE_CODE_OAUTH_TOKEN,
           }
         : undefined,
       env_vars: envVarMetadata,

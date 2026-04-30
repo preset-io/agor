@@ -211,6 +211,13 @@
       "when": 1777200100000,
       "tag": "0030_migrate_queued_messages",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1777300000000,
+      "tag": "0031_lift_claude_oauth_token",
+      "breakpoints": true
     }
   ]
 }
