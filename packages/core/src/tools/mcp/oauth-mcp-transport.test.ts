@@ -10,8 +10,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  discoverAuthorizationServerFromMcpOrigin,
   discoverResourceMetadataUrl,
   isOAuthRequired,
+  resolveMCPOAuthDiscovery,
   resolveResourceMetadataUrl,
 } from './oauth-mcp-transport';
 
@@ -229,5 +231,251 @@ describe('resolveResourceMetadataUrl', () => {
     await resolveResourceMetadataUrl(header, 'https://example.com/mcp');
 
     expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// discoverAuthorizationServerFromMcpOrigin — RFC 8414 / OIDC at MCP origin
+// (Reo.Dev fallback when RFC 9728 is absent.)
+// ---------------------------------------------------------------------------
+
+describe('discoverAuthorizationServerFromMcpOrigin', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('discovers AS metadata at root .well-known when MCP URL has no path', async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      calls.push(url);
+      if (url === 'https://mcp.example.com/.well-known/oauth-authorization-server') {
+        return {
+          ok: true,
+          json: async () => ({
+            issuer: 'https://auth.example.com',
+            authorization_endpoint: 'https://auth.example.com/authorize',
+            token_endpoint: 'https://auth.example.com/token',
+            registration_endpoint: 'https://auth.example.com/register',
+          }),
+        };
+      }
+      return { ok: false };
+    }) as unknown as typeof fetch;
+
+    const result = await discoverAuthorizationServerFromMcpOrigin('https://mcp.example.com');
+    expect(result).not.toBeNull();
+    expect(result!.discoveredAt).toBe(
+      'https://mcp.example.com/.well-known/oauth-authorization-server'
+    );
+    expect(result!.metadata.token_endpoint).toBe('https://auth.example.com/token');
+    expect(result!.metadata.registration_endpoint).toBe('https://auth.example.com/register');
+  });
+
+  it('reproduces the Reo.Dev pattern: 401 on resource metadata, 200 on AS metadata', async () => {
+    // Reo.Dev returns 401 on /.well-known/oauth-protected-resource (broken
+    // RFC 9728) but 200 on /.well-known/oauth-authorization-server.
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url === 'https://mcp.reo.dev/.well-known/oauth-authorization-server') {
+        return {
+          ok: true,
+          json: async () => ({
+            issuer: 'https://auth.reo.dev',
+            authorization_endpoint: 'https://auth.reo.dev/oauth/authorize',
+            token_endpoint: 'https://auth.reo.dev/oauth/token',
+            registration_endpoint: 'https://auth.reo.dev/oauth/register',
+            code_challenge_methods_supported: ['S256'],
+            grant_types_supported: ['authorization_code', 'refresh_token'],
+            response_types_supported: ['code'],
+            token_endpoint_auth_methods_supported: ['none'],
+          }),
+        };
+      }
+      return { ok: false, status: 401 };
+    }) as unknown as typeof fetch;
+
+    const result = await discoverAuthorizationServerFromMcpOrigin('https://mcp.reo.dev/mcp');
+    expect(result).not.toBeNull();
+    expect(result!.metadata.registration_endpoint).toBe('https://auth.reo.dev/oauth/register');
+    // Public client (no secret) — `none` is the indicator
+    expect(result!.metadata.code_challenge_methods_supported).toContain('S256');
+  });
+
+  it('tries path-aware first, then falls back to root', async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      calls.push(url);
+      if (url === 'https://example.com/.well-known/oauth-authorization-server') {
+        return {
+          ok: true,
+          json: async () => ({
+            authorization_endpoint: 'https://example.com/authorize',
+            token_endpoint: 'https://example.com/token',
+          }),
+        };
+      }
+      return { ok: false };
+    }) as unknown as typeof fetch;
+
+    const result = await discoverAuthorizationServerFromMcpOrigin('https://example.com/mcp');
+    expect(result).not.toBeNull();
+    // Path-aware was tried first
+    expect(calls[0]).toBe('https://example.com/.well-known/oauth-authorization-server/mcp');
+    // Then root fallback succeeded
+    expect(calls).toContain('https://example.com/.well-known/oauth-authorization-server');
+  });
+
+  it('falls back to OIDC discovery when oauth-authorization-server is unavailable', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url === 'https://example.com/.well-known/openid-configuration') {
+        return {
+          ok: true,
+          json: async () => ({
+            issuer: 'https://example.com',
+            authorization_endpoint: 'https://example.com/authorize',
+            token_endpoint: 'https://example.com/token',
+          }),
+        };
+      }
+      return { ok: false };
+    }) as unknown as typeof fetch;
+
+    const result = await discoverAuthorizationServerFromMcpOrigin('https://example.com');
+    expect(result).not.toBeNull();
+    expect(result!.discoveredAt).toBe('https://example.com/.well-known/openid-configuration');
+  });
+
+  it('rejects responses missing required endpoints', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ issuer: 'https://example.com' }), // no endpoints
+    }) as unknown as typeof fetch;
+
+    const result = await discoverAuthorizationServerFromMcpOrigin('https://example.com');
+    expect(result).toBeNull();
+  });
+
+  it('returns null when no endpoint responds', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: false }) as unknown as typeof fetch;
+
+    const result = await discoverAuthorizationServerFromMcpOrigin('https://example.com/mcp');
+    expect(result).toBeNull();
+  });
+
+  it('handles fetch errors gracefully', async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValue(new Error('network error')) as unknown as typeof fetch;
+
+    const result = await discoverAuthorizationServerFromMcpOrigin('https://example.com');
+    expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveMCPOAuthDiscovery — full cascade: WWW-Authenticate → RFC 9728 →
+// AS-direct → OIDC.
+// ---------------------------------------------------------------------------
+
+describe('resolveMCPOAuthDiscovery', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('returns RFC 9728 result when WWW-Authenticate has resource_metadata', async () => {
+    globalThis.fetch = vi.fn() as unknown as typeof fetch;
+    const header =
+      'Bearer resource_metadata="https://example.com/.well-known/oauth-protected-resource"';
+
+    const result = await resolveMCPOAuthDiscovery(header, 'https://example.com/mcp');
+
+    expect(result).toEqual({
+      kind: 'resource-metadata',
+      metadataUrl: 'https://example.com/.well-known/oauth-protected-resource',
+      source: 'header',
+    });
+    // RFC 9728 header parse short-circuits — no fetch needed.
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('falls through to AS-direct when RFC 9728 is unavailable (Reo.Dev case)', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      // 9728 endpoints all fail
+      if (url.includes('/.well-known/oauth-protected-resource')) {
+        return { ok: false, status: 401 };
+      }
+      // AS metadata at MCP origin succeeds (root fallback)
+      if (url === 'https://mcp.reo.dev/.well-known/oauth-authorization-server') {
+        return {
+          ok: true,
+          json: async () => ({
+            issuer: 'https://auth.reo.dev',
+            authorization_endpoint: 'https://auth.reo.dev/oauth/authorize',
+            token_endpoint: 'https://auth.reo.dev/oauth/token',
+            registration_endpoint: 'https://auth.reo.dev/oauth/register',
+          }),
+        };
+      }
+      return { ok: false };
+    }) as unknown as typeof fetch;
+
+    const result = await resolveMCPOAuthDiscovery(null, 'https://mcp.reo.dev/mcp');
+
+    expect(result).not.toBeNull();
+    expect(result!.kind).toBe('authorization-server');
+    if (result!.kind === 'authorization-server') {
+      expect(result!.authServerMetadata.registration_endpoint).toBe(
+        'https://auth.reo.dev/oauth/register'
+      );
+    }
+  });
+
+  it('returns null when every strategy fails', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: false }) as unknown as typeof fetch;
+
+    const result = await resolveMCPOAuthDiscovery(null, 'https://broken.example.com/mcp');
+    expect(result).toBeNull();
+  });
+
+  it('prefers RFC 9728 well-known over AS-direct when both succeed', async () => {
+    // If a server publishes both RFC 9728 *and* serves AS metadata at its
+    // origin, RFC 9728 should win — it's the spec-compliant indirection that
+    // can list multiple ASs.
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/.well-known/oauth-protected-resource')) {
+        return {
+          ok: true,
+          json: async () => ({
+            authorization_servers: ['https://auth.example.com'],
+          }),
+        };
+      }
+      if (url.includes('/.well-known/oauth-authorization-server')) {
+        return {
+          ok: true,
+          json: async () => ({
+            authorization_endpoint: 'https://example.com/authorize',
+            token_endpoint: 'https://example.com/token',
+          }),
+        };
+      }
+      return { ok: false };
+    }) as unknown as typeof fetch;
+
+    const result = await resolveMCPOAuthDiscovery(null, 'https://example.com/mcp');
+    expect(result?.kind).toBe('resource-metadata');
   });
 });

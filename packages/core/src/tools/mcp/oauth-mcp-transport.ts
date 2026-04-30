@@ -183,6 +183,135 @@ export async function resolveResourceMetadataUrl(
 }
 
 /**
+ * Discover OAuth Authorization Server metadata directly at the MCP server's
+ * origin (RFC 8414 / OIDC fallback when RFC 9728 isn't implemented).
+ *
+ * Some MCP servers (e.g. Reo.Dev) skip the RFC 9728 Protected Resource Metadata
+ * layer entirely and instead serve the AS metadata document at their own
+ * origin. Claude Desktop's MCP client probes this path; we mirror that
+ * behaviour so 'paste URL → click Connect' works without manual config.
+ *
+ * Probes (in order):
+ *   1. {origin}{path}/.well-known/oauth-authorization-server   (path-aware)
+ *   2. {origin}/.well-known/oauth-authorization-server         (root)
+ *   3. {origin}{path}/.well-known/openid-configuration         (OIDC path-aware)
+ *   4. {origin}/.well-known/openid-configuration               (OIDC root)
+ *
+ * @param mcpUrl - The MCP server URL
+ * @returns Discovered AS metadata + the URL it was fetched from, or null
+ */
+export async function discoverAuthorizationServerFromMcpOrigin(
+  mcpUrl: string
+): Promise<{ metadata: AuthorizationServerMetadata; discoveredAt: string } | null> {
+  const url = new URL(mcpUrl);
+  const origin = url.origin;
+  const path = url.pathname === '/' ? '' : url.pathname.replace(/\/$/, '');
+
+  const suffixes = ['oauth-authorization-server', 'openid-configuration'];
+  const candidates: string[] = [];
+  for (const suffix of suffixes) {
+    if (path) {
+      candidates.push(`${origin}/.well-known/${suffix}${path}`);
+    }
+    candidates.push(`${origin}/.well-known/${suffix}`);
+  }
+
+  // Dedupe (no path → path-aware == root)
+  const unique = Array.from(new Set(candidates));
+
+  for (const candidate of unique) {
+    try {
+      console.log('[MCP OAuth] Trying AS-direct discovery:', candidate);
+      const response = await fetch(candidate, { signal: AbortSignal.timeout(10_000) });
+      if (!response.ok) continue;
+      const data = (await response.json()) as Partial<AuthorizationServerMetadata>;
+      // Minimal validation: must have authorization_endpoint + token_endpoint
+      if (
+        typeof data.authorization_endpoint === 'string' &&
+        typeof data.token_endpoint === 'string'
+      ) {
+        console.log('[MCP OAuth] ✓ Discovered AS metadata at:', candidate);
+        return {
+          metadata: data as AuthorizationServerMetadata,
+          discoveredAt: candidate,
+        };
+      }
+    } catch (err) {
+      console.log(
+        '[MCP OAuth] AS-direct discovery failed for',
+        candidate,
+        ':',
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Discriminated discovery result for MCP OAuth.
+ *
+ * The MCP Authorization spec layers three RFCs:
+ *   - RFC 9728 (Protected Resource Metadata) — links resource server → AS list
+ *   - RFC 8414 (Authorization Server Metadata) — describes the AS endpoints
+ *   - RFC 7591 (Dynamic Client Registration) — register a client at runtime
+ *
+ * Real-world servers vary in what they actually implement. This type lets
+ * callers distinguish:
+ *   - 'resource-metadata': RFC 9728 worked → fetch metadata URL → derive AS
+ *   - 'authorization-server': RFC 9728 absent, but AS metadata served directly
+ *     at the MCP origin (Reo.Dev pattern) → use it directly, skip RFC 9728.
+ */
+export type MCPOAuthDiscoveryResult =
+  | {
+      kind: 'resource-metadata';
+      metadataUrl: string;
+      source: 'header' | 'well-known';
+    }
+  | {
+      kind: 'authorization-server';
+      authServerMetadata: AuthorizationServerMetadata;
+      discoveredAt: string;
+    };
+
+/**
+ * Full MCP OAuth discovery cascade — the single entry point new daemon
+ * callsites should use.
+ *
+ * Walks the cascade in order:
+ *   1. WWW-Authenticate `resource_metadata="..."` (RFC 9728 via header hint)
+ *   2. `<origin>/.well-known/oauth-protected-resource` (RFC 9728 well-known)
+ *   3. `<origin>/.well-known/oauth-authorization-server` (RFC 8414 direct)
+ *   4. `<origin>/.well-known/openid-configuration` (OIDC discovery direct)
+ *
+ * Returns the first success. Each step's failure is logged but never thrown —
+ * a clean `null` lets the caller emit a single, specific error message.
+ */
+export async function resolveMCPOAuthDiscovery(
+  wwwAuthenticateHeader: string | null,
+  mcpUrl: string
+): Promise<MCPOAuthDiscoveryResult | null> {
+  // Strategies 1 + 2: RFC 9728 (header hint, then well-known fallback)
+  const rfc9728 = await resolveResourceMetadataUrl(wwwAuthenticateHeader, mcpUrl);
+  if (rfc9728) {
+    return { kind: 'resource-metadata', ...rfc9728 };
+  }
+
+  // Strategies 3 + 4: AS metadata directly at MCP origin (RFC 8414 / OIDC)
+  const asDirect = await discoverAuthorizationServerFromMcpOrigin(mcpUrl);
+  if (asDirect) {
+    return {
+      kind: 'authorization-server',
+      authServerMetadata: asDirect.metadata,
+      discoveredAt: asDirect.discoveredAt,
+    };
+  }
+
+  return null;
+}
+
+/**
  * Fetch Protected Resource Metadata (RFC 9728)
  */
 async function fetchResourceMetadata(metadataUrl: string): Promise<OAuthMetadata> {
@@ -928,6 +1057,149 @@ export interface OAuthFlowContext {
  * @param options.tokenUrlOverride - Override the auto-discovered token endpoint URL
  * @returns Authorization URL and flow context
  */
+/**
+ * Build the OAuth authorization URL + cache context once we already have AS
+ * metadata. Shared by both the RFC 9728 path (after fetching resource +
+ * AS metadata) and the AS-direct path (Reo.Dev-style discovery, where the
+ * caller hands us prefetched AS metadata).
+ *
+ * Inputs:
+ *   - `authServerMetadata`: required when no full URL overrides are supplied
+ *   - `cacheKey`: token cache key (must share origin with the MCP URL so
+ *     `getCachedOAuth21Token` can find it on later requests)
+ */
+async function startMCPOAuthFlowWithAS(opts: {
+  authServerMetadata: AuthorizationServerMetadata | null;
+  cacheKey: string;
+  clientId?: string;
+  redirectUri?: string;
+  authorizationUrlOverride?: string;
+  tokenUrlOverride?: string;
+  clientSecret?: string;
+  scope?: string;
+  /** Optional fallback registration endpoint (e.g. `${authServerUrl}/register`) */
+  fallbackRegistrationEndpoint?: string;
+  /** Scopes advertised by the resource server (RFC 9728 path only) */
+  resourceScopesSupported?: string[];
+}): Promise<OAuthFlowContext> {
+  const {
+    authServerMetadata,
+    cacheKey,
+    clientId,
+    redirectUri,
+    authorizationUrlOverride,
+    tokenUrlOverride,
+    fallbackRegistrationEndpoint,
+    resourceScopesSupported,
+  } = opts;
+
+  const hasFullOverrides = !!(authorizationUrlOverride && tokenUrlOverride);
+
+  // PKCE
+  const pkce = generatePKCE();
+
+  // Redirect URI default — preserved for legacy CLI callers
+  const actualRedirectUri = redirectUri || 'http://127.0.0.1:0/oauth/callback';
+
+  // Scope: explicit option > resource-metadata advertised scopes > none
+  // (Skip auto-populating when client_id is pre-registered — see comment in
+  // the RFC 9728 path for the rationale.)
+  const scopeString = opts.scope
+    ? opts.scope
+    : !clientId && resourceScopesSupported && resourceScopesSupported.length > 0
+      ? resourceScopesSupported.join(' ')
+      : undefined;
+
+  // Client ID resolution (DCR if available)
+  let actualClientId = clientId;
+  let resolvedClientSecret = opts.clientSecret;
+
+  if (!actualClientId) {
+    const registrationEndpoint =
+      authServerMetadata?.registration_endpoint || fallbackRegistrationEndpoint;
+    if (registrationEndpoint) {
+      console.log('[MCP OAuth] Using DCR endpoint:', registrationEndpoint);
+      try {
+        const registration = await registerDynamicClient(
+          registrationEndpoint,
+          actualRedirectUri,
+          'Agor MCP Client',
+          scopeString
+        );
+        actualClientId = registration.client_id;
+        resolvedClientSecret = registration.client_secret;
+      } catch (regError) {
+        const detail = regError instanceof Error ? regError.message : String(regError);
+        throw new Error(
+          'Dynamic Client Registration failed.\n\n' +
+            `Registration endpoint: ${registrationEndpoint}\n` +
+            `Error: ${detail}\n\n` +
+            "Register an OAuth app in the provider's developer portal and enter " +
+            'the Client ID (and Client Secret if required) in the MCP server configuration.'
+        );
+      }
+    } else if (hasFullOverrides) {
+      throw new Error(
+        'OAuth client_id is required when using manual OAuth URL overrides.\n\n' +
+          'Please provide a client_id in the MCP server configuration.'
+      );
+    } else {
+      throw new Error(
+        'OAuth client_id is required but the authorization server does not advertise ' +
+          'a Dynamic Client Registration endpoint (RFC 7591).\n\n' +
+          "Register an OAuth app in the provider's developer portal and enter " +
+          'the Client ID (and Client Secret if required) in the MCP server configuration.'
+      );
+    }
+  }
+
+  // CSRF state
+  const state = crypto.randomUUID();
+
+  // Resolve token + auth endpoints
+  const tokenEndpoint = tokenUrlOverride || authServerMetadata?.token_endpoint;
+  if (!tokenEndpoint) {
+    throw new Error(
+      'No token endpoint available. Either provide oauth_token_url in the MCP server config, ' +
+        'or ensure the authorization server supports RFC 8414 metadata discovery.'
+    );
+  }
+  const authorizationEndpoint =
+    authorizationUrlOverride || authServerMetadata?.authorization_endpoint;
+  if (!authorizationEndpoint) {
+    throw new Error(
+      'No authorization endpoint available. Either provide oauth_authorization_url in the MCP server config, ' +
+        'or ensure the authorization server supports RFC 8414 metadata discovery.'
+    );
+  }
+  console.log('[MCP OAuth] Using authorization endpoint:', authorizationEndpoint);
+  console.log('[MCP OAuth] Using token endpoint:', tokenEndpoint);
+
+  const authUrl = new URL(authorizationEndpoint);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('client_id', actualClientId!);
+  authUrl.searchParams.set('redirect_uri', actualRedirectUri);
+  authUrl.searchParams.set('code_challenge', pkce.challenge);
+  authUrl.searchParams.set('code_challenge_method', 'S256');
+  authUrl.searchParams.set('state', state);
+  if (scopeString) {
+    authUrl.searchParams.set('scope', scopeString);
+  }
+
+  console.log('[MCP OAuth] Authorization URL:', authUrl.toString());
+
+  return {
+    metadataUrl: cacheKey,
+    tokenEndpoint,
+    redirectUri: actualRedirectUri,
+    pkceVerifier: pkce.verifier,
+    clientId: actualClientId!,
+    clientSecret: resolvedClientSecret,
+    state,
+    authorizationUrl: authUrl.toString(),
+  };
+}
+
 export async function startMCPOAuthFlow(
   wwwAuthenticateHeader: string,
   clientId?: string,
@@ -939,9 +1211,56 @@ export async function startMCPOAuthFlow(
     scope?: string;
     /** Pre-discovered resource metadata URL (used when WWW-Authenticate lacks resource_metadata) */
     resourceMetadataUrl?: string;
+    /**
+     * Pre-discovered Authorization Server metadata. Used when the MCP server
+     * doesn't implement RFC 9728 but does serve RFC 8414 / OIDC metadata
+     * directly at its own origin (e.g. Reo.Dev). When provided, both
+     * `fetchResourceMetadata` and `fetchAuthorizationServerMetadata` are
+     * skipped — `prefetchedAuthServerMetadata` is used as-is.
+     *
+     * The `cacheKey` option (or the MCP URL via the caller's redirect plumbing)
+     * is used as the token cache key in place of an RFC 9728 metadata URL.
+     */
+    prefetchedAuthServerMetadata?: AuthorizationServerMetadata;
+    /**
+     * Token cache key. When `prefetchedAuthServerMetadata` is provided there's
+     * no real RFC 9728 metadata URL to use as the key, so the caller passes a
+     * stable string (typically the MCP URL itself). `getCachedOAuth21Token`
+     * matches by URL origin, so any value sharing the MCP URL's origin works.
+     */
+    cacheKey?: string;
   }
 ): Promise<OAuthFlowContext> {
   console.log('[MCP OAuth] Starting two-phase OAuth 2.1 flow');
+
+  // When AS metadata is prefetched (Reo.Dev-style discovery), there's no RFC
+  // 9728 resource metadata to fetch. Take the short path and skip directly to
+  // PKCE / DCR / auth-URL construction.
+  if (options?.prefetchedAuthServerMetadata) {
+    if (!options.cacheKey) {
+      // Without a cache key, `getCachedOAuth21Token` can't find the token on
+      // future requests — every MCP call would re-trigger the browser flow.
+      // The daemon callsites have the MCP URL handy and should pass it.
+      throw new Error(
+        'startMCPOAuthFlow: cacheKey is required when prefetchedAuthServerMetadata is provided ' +
+          '(typically pass the MCP server URL).'
+      );
+    }
+    console.log(
+      '[MCP OAuth] Using prefetched AS metadata (RFC 9728 skipped):',
+      options.prefetchedAuthServerMetadata
+    );
+    return startMCPOAuthFlowWithAS({
+      authServerMetadata: options.prefetchedAuthServerMetadata,
+      cacheKey: options.cacheKey,
+      clientId,
+      redirectUri,
+      authorizationUrlOverride: options.authorizationUrlOverride,
+      tokenUrlOverride: options.tokenUrlOverride,
+      clientSecret: options.clientSecret,
+      scope: options.scope,
+    });
+  }
 
   // Step 1: Parse WWW-Authenticate header, fall back to pre-discovered URL
   const metadataUrl = parseWWWAuthenticate(wwwAuthenticateHeader) || options?.resourceMetadataUrl;
@@ -998,122 +1317,22 @@ export async function startMCPOAuthFlow(
     }
   }
 
-  // Step 4: Generate PKCE challenge
-  const pkce = generatePKCE();
-
-  // Step 5: Use provided redirect URI or generate a placeholder
-  // When running remotely, the actual callback server won't work,
-  // so we use a known URI pattern that the user will copy from
-  const actualRedirectUri = redirectUri || 'http://127.0.0.1:0/oauth/callback';
-
-  // Compute scopes early — needed for both DCR registration and auth URL.
-  // When a client_id is pre-registered (e.g. Figma, GitHub), don't auto-populate scopes
-  // from resource metadata — the resource server may advertise scopes (like "mcp:connect")
-  // that the authorization server doesn't recognize. Pre-registered apps have scopes
-  // configured during app registration, so omitting them lets the auth server use defaults.
-  const scopeString = options?.scope
-    ? options.scope
-    : !clientId && resourceMetadata.scopes_supported && resourceMetadata.scopes_supported.length > 0
-      ? resourceMetadata.scopes_supported.join(' ')
-      : undefined;
-
-  // Step 6: Get or register client_id
-  let actualClientId = clientId;
-  let clientSecret: string | undefined = options?.clientSecret;
-
-  if (!actualClientId) {
-    // Check if server supports Dynamic Client Registration (RFC 7591)
-    if (authServerMetadata?.registration_endpoint) {
-      console.log('[MCP OAuth] Server supports Dynamic Client Registration');
-      const registration = await registerDynamicClient(
-        authServerMetadata.registration_endpoint,
-        actualRedirectUri,
-        'Agor MCP Client',
-        scopeString
-      );
-      actualClientId = registration.client_id;
-      clientSecret = registration.client_secret;
-    } else if (!hasFullOverrides) {
-      // No DCR support and no client_id provided - try MCP-style endpoint
-      const mcpRegisterEndpoint = `${authServerUrl}/register`;
-      console.log('[MCP OAuth] Trying MCP-style registration endpoint:', mcpRegisterEndpoint);
-
-      try {
-        const registration = await registerDynamicClient(
-          mcpRegisterEndpoint,
-          actualRedirectUri,
-          'Agor MCP Client',
-          scopeString
-        );
-        actualClientId = registration.client_id;
-        clientSecret = registration.client_secret;
-      } catch (_regError) {
-        throw new Error(
-          'OAuth client_id is required but the authorization server does not support ' +
-            'Dynamic Client Registration.\n\n' +
-            "Register an OAuth app in the provider's developer portal and enter " +
-            'the Client ID (and Client Secret if required) in the MCP server configuration.'
-        );
-      }
-    } else {
-      throw new Error(
-        'OAuth client_id is required when using manual OAuth URL overrides.\n\n' +
-          'Please provide a client_id in the MCP server configuration.'
-      );
-    }
-  }
-
-  // Generate state for CSRF protection
-  const state = crypto.randomUUID();
-
-  // Resolve token endpoint (use override if provided)
-  const tokenEndpoint = options?.tokenUrlOverride || authServerMetadata?.token_endpoint;
-  if (!tokenEndpoint) {
-    throw new Error(
-      'No token endpoint available. Either provide oauth_token_url in the MCP server config, ' +
-        'or ensure the authorization server supports RFC 8414 metadata discovery.'
-    );
-  }
-  console.log('[MCP OAuth] Using token endpoint:', tokenEndpoint);
-  if (options?.tokenUrlOverride) {
-    console.log('[MCP OAuth] (overridden from:', authServerMetadata?.token_endpoint, ')');
-  }
-
-  // Step 7: Build authorization URL (use override if provided)
-  const authorizationEndpoint =
-    options?.authorizationUrlOverride || authServerMetadata?.authorization_endpoint;
-  if (!authorizationEndpoint) {
-    throw new Error(
-      'No authorization endpoint available. Either provide oauth_authorization_url in the MCP server config, ' +
-        'or ensure the authorization server supports RFC 8414 metadata discovery.'
-    );
-  }
-  console.log('[MCP OAuth] Using authorization endpoint:', authorizationEndpoint);
-  const authUrl = new URL(authorizationEndpoint);
-  authUrl.searchParams.set('response_type', 'code');
-  authUrl.searchParams.set('client_id', actualClientId);
-  authUrl.searchParams.set('redirect_uri', actualRedirectUri);
-  authUrl.searchParams.set('code_challenge', pkce.challenge);
-  authUrl.searchParams.set('code_challenge_method', 'S256');
-  authUrl.searchParams.set('state', state);
-
-  // Add scopes (same scopes used during DCR registration)
-  if (scopeString) {
-    authUrl.searchParams.set('scope', scopeString);
-  }
-
-  console.log('[MCP OAuth] Authorization URL:', authUrl.toString());
-
-  return {
-    metadataUrl,
-    tokenEndpoint,
-    redirectUri: actualRedirectUri,
-    pkceVerifier: pkce.verifier,
-    clientId: actualClientId,
-    clientSecret,
-    state,
-    authorizationUrl: authUrl.toString(),
-  };
+  // Steps 4-7: Delegate PKCE / DCR / endpoint resolution / auth URL build to
+  // the shared helper. The legacy MCP-style fallback (`${authServerUrl}/register`)
+  // is preserved here via `fallbackRegistrationEndpoint` so RFC 9728 servers
+  // that omit a registration_endpoint in their AS metadata still get probed.
+  return startMCPOAuthFlowWithAS({
+    authServerMetadata,
+    cacheKey: metadataUrl,
+    clientId,
+    redirectUri,
+    authorizationUrlOverride: options?.authorizationUrlOverride,
+    tokenUrlOverride: options?.tokenUrlOverride,
+    clientSecret: options?.clientSecret,
+    scope: options?.scope,
+    fallbackRegistrationEndpoint: hasFullOverrides ? undefined : `${authServerUrl}/register`,
+    resourceScopesSupported: resourceMetadata.scopes_supported,
+  });
 }
 
 /**
