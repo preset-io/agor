@@ -277,6 +277,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
           ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
           ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
           ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
+          CLAUDE_CODE_OAUTH_TOKEN: env.CLAUDE_CODE_OAUTH_TOKEN,
           OPENAI_API_KEY: env.OPENAI_API_KEY,
           GEMINI_API_KEY: env.GEMINI_API_KEY,
           GOOGLE_API_KEY: env.GOOGLE_API_KEY,
