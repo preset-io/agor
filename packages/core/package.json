@@ -269,13 +269,13 @@
     "@types/iarna__toml": "^2.0.5",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.10.2",
-    "@vitest/coverage-v8": "^4.0.18",
+    "@vitest/coverage-v8": "^4.1.5",
     "drizzle-kit": "^0.31.10",
     "handlebars": "^4.7.8",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.5"
   },
   "peerDependencies": {
     "handlebars": "^4.7.8"

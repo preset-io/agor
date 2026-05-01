@@ -28,7 +28,7 @@
     "@types/diff": "^6.0.0",
     "@types/node": "^22.19.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.5"
   },
   "files": [
     "dist",
