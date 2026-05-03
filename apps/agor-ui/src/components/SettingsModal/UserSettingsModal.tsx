@@ -418,6 +418,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       case 'codex':
       case 'gemini':
       case 'opencode':
+      case 'copilot':
         await handleAgenticConfigSave(activeTab as AgenticToolName);
         break;
     }
@@ -477,6 +478,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         {
           key: 'opencode',
           label: 'OpenCode',
+          icon: <RobotOutlined />,
+        },
+        {
+          key: 'copilot',
+          label: 'GitHub Copilot',
           icon: <RobotOutlined />,
         },
       ],
@@ -702,6 +708,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       codex: 'Codex',
       gemini: 'Gemini',
       opencode: 'OpenCode',
+      copilot: 'GitHub Copilot',
     };
     return titles[activeTab] || 'User Settings';
   };
@@ -726,15 +733,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             type="primary"
             onClick={handleModalSave}
             loading={
-              activeTab === 'claude-code'
-                ? savingAgenticConfig['claude-code']
-                : activeTab === 'codex'
-                  ? savingAgenticConfig.codex
-                  : activeTab === 'gemini'
-                    ? savingAgenticConfig.gemini
-                    : activeTab === 'opencode'
-                      ? savingAgenticConfig.opencode
-                      : false
+              activeTab in savingAgenticConfig
+                ? savingAgenticConfig[activeTab as AgenticToolName]
+                : false
             }
           >
             Save
