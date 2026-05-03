@@ -12,7 +12,10 @@
  */
 
 import type { UserID } from '@agor/core/types';
+import { eq } from 'drizzle-orm';
 import { beforeAll, describe, expect } from 'vitest';
+import { select, update } from '../database-wrapper';
+import { users } from '../schema';
 import { dbTest } from '../test-helpers';
 import { UsersRepository } from './users';
 
@@ -199,5 +202,30 @@ describe('UsersRepository.update — credential blob preservation', () => {
     const user = await repo.findById(userId);
     expect(user?.name).toBe('Renamed User');
     expect(user?.agentic_tools?.['claude-code']?.ANTHROPIC_API_KEY).toBe(true);
+  });
+
+  // Sibling regression: env_vars lives next to agentic_tools under data.*.
+  // The repo doesn't expose a public env_vars mutator (those are managed by
+  // the daemon services layer), so we patch the row directly to seed state,
+  // then verify a generic .update() round-trip leaves it intact.
+  dbTest('updating an unrelated field preserves stored env_vars', async ({ db }) => {
+    const repo = new UsersRepository(db);
+    const userId = await makeUser(repo);
+
+    const seedEnvVars = {
+      GITHUB_TOKEN: { value_encrypted: 'enc-gh-token', scope: 'global' },
+    };
+    const row = await select(db).from(users).where(eq(users.user_id, userId)).one();
+    const currentData = (row?.data ?? {}) as Record<string, unknown>;
+    await update(db, users)
+      .set({ data: { ...currentData, env_vars: seedEnvVars } })
+      .where(eq(users.user_id, userId))
+      .run();
+
+    await repo.update(userId, { name: 'Renamed User' });
+
+    const after = await select(db).from(users).where(eq(users.user_id, userId)).one();
+    const afterData = (after?.data ?? {}) as { env_vars?: typeof seedEnvVars };
+    expect(afterData.env_vars).toEqual(seedEnvVars);
   });
 });

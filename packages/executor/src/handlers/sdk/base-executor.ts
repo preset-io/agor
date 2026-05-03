@@ -9,6 +9,7 @@ import { type ApiKeyName, resolveApiKey } from '@agor/core/config';
 import { generateId } from '@agor/core/db';
 import { getGitState } from '@agor/core/git';
 import type {
+  AgenticToolName,
   MessageID,
   MessageSource,
   PermissionMode,
@@ -273,14 +274,18 @@ async function captureGitStateAtTaskEnd(
 async function resolveApiKeyForTask(
   keyName: ApiKeyName,
   client: AgorClient,
-  taskId: TaskID
+  taskId: TaskID,
+  tool: AgenticToolName
 ): Promise<import('@agor/core/config').KeyResolutionResult> {
   // Call daemon service to resolve API key (no direct database access from executor!)
-  // This allows executors to run as different Unix users without needing database access
+  // This allows executors to run as different Unix users without needing database access.
+  // `tool` scopes the per-user lookup to the calling SDK's bucket so a Codex spawn
+  // never resolves a key stored under `agentic_tools['claude-code']`, and vice versa.
   try {
     const result = (await client.service('config/resolve-api-key').create({
       taskId,
       keyName,
+      tool,
     })) as import('@agor/core/config').KeyResolutionResult;
     console.log(`[API Key Resolution] Resolved ${keyName} via daemon (source: ${result.source})`);
     return result;
@@ -302,7 +307,7 @@ export async function executeToolTask(params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
   apiKeyEnvVar: string;
-  toolName: string;
+  toolName: AgenticToolName;
   messageSource?: 'gateway' | 'agor';
   createTool: (
     repos: ReturnType<typeof createFeathersBackedRepositories>,
@@ -315,15 +320,23 @@ export async function executeToolTask(params: {
 
   console.log(`[${toolName}] Executing task ${taskId.substring(0, 8)}...`);
 
-  // Resolve API key with proper precedence (user → config → env → native auth)
-  const resolution = await resolveApiKeyForTask(apiKeyEnvVar as ApiKeyName, client, taskId);
+  // Resolve API key with proper precedence (user → config → env → native auth).
+  // Pass `toolName` so the daemon scopes the per-user lookup to this tool's
+  // credential bucket — prevents cross-SDK leak (e.g. Codex picking up an
+  // ANTHROPIC_API_KEY stored under claude-code).
+  const resolution = await resolveApiKeyForTask(
+    apiKeyEnvVar as ApiKeyName,
+    client,
+    taskId,
+    toolName
+  );
 
   // Fail fast if stored key can't be decrypted (e.g. master secret changed)
   if (resolution.decryptionFailed) {
     throw new Error(
       `API key "${apiKeyEnvVar}" could not be decrypted. ` +
         `The stored key may have been encrypted with a different master secret. ` +
-        `Please re-enter your API key in Settings > API Keys.`
+        `Please re-enter your API key in Settings > ${toolName} > Authentication.`
     );
   }
 

@@ -2,7 +2,7 @@ import { decryptApiKey, eq } from '../db';
 import type { Database } from '../db/client';
 import { select } from '../db/database-wrapper';
 import { users } from '../db/schema';
-import type { UserID } from '../types';
+import type { AgenticToolName, StoredAgenticTools, UserID } from '../types';
 import { getCredential } from './config-manager';
 
 export type ApiKeyName = 'ANTHROPIC_API_KEY' | 'OPENAI_API_KEY' | 'GEMINI_API_KEY';
@@ -12,6 +12,15 @@ export interface KeyResolutionContext {
   userId?: UserID;
   /** Database instance for user lookup */
   db?: Database;
+  /**
+   * Restrict the per-user lookup to a specific tool's credential bucket
+   * (`data.agentic_tools[tool][keyName]`). When omitted, the resolver sweeps
+   * every tool bucket — kept for back-compat with non-SDK callers (e.g. CLI).
+   *
+   * SDK executors should ALWAYS pass this so a Codex spawn never resolves a
+   * key stored under `agentic_tools['claude-code']`, and vice versa.
+   */
+  tool?: AgenticToolName;
 }
 
 /**
@@ -47,28 +56,32 @@ export async function resolveApiKey(
     `🔍 [API Key Resolution] Resolving ${keyName} for user ${context.userId?.substring(0, 8) || 'none'}`
   );
 
-  // 1. Check per-user key (highest precedence). Storage moved from a flat
-  //    `data.api_keys` namespace to `data.agentic_tools[toolName][envVarName]`,
-  //    so we sweep every tool bucket looking for the requested keyName. The
-  //    first non-empty match wins. This preserves the legacy "any user key for
-  //    this name" semantic — a tool-scoped resolver is a follow-up; for now
-  //    the executor spawn path (env-resolver) is the one that actually enforces
-  //    per-SDK isolation.
+  // 1. Check per-user key (highest precedence). Storage lives at
+  //    `data.agentic_tools[toolName][envVarName]`. When `context.tool` is
+  //    provided (the recommended path for SDK executors), only that tool's
+  //    bucket is consulted — this enforces cross-SDK credential isolation
+  //    matching the spawn-time `env-resolver` behavior. When `context.tool`
+  //    is omitted (CLI / generic callers), we fall back to sweeping every
+  //    bucket to preserve the legacy "any user key for this name" semantic.
   if (context.userId && context.db) {
     console.log(`   → Checking user-level configuration...`);
     const row = await select(context.db).from(users).where(eq(users.user_id, context.userId)).one();
 
     if (row) {
       const data = row.data as {
-        agentic_tools?: Record<string, Record<string, string> | undefined>;
+        agentic_tools?: StoredAgenticTools;
       };
 
       let encryptedKey: string | undefined;
       const tools = data.agentic_tools ?? {};
-      for (const fields of Object.values(tools)) {
-        if (fields?.[keyName]) {
-          encryptedKey = fields[keyName];
-          break;
+      if (context.tool) {
+        encryptedKey = tools[context.tool]?.[keyName];
+      } else {
+        for (const fields of Object.values(tools)) {
+          if (fields?.[keyName]) {
+            encryptedKey = fields[keyName];
+            break;
+          }
         }
       }
 

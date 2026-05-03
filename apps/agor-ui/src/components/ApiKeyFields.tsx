@@ -58,6 +58,12 @@ export const TOOL_FIELD_CONFIGS: Record<AgenticToolName, AgenticToolFieldConfig[
       docUrl: 'https://docs.claude.com/en/docs/claude-code/setup',
     },
     {
+      field: 'ANTHROPIC_AUTH_TOKEN',
+      label: 'Anthropic Auth Token',
+      description: '(optional — proxy / enterprise)',
+      placeholder: 'token...',
+    },
+    {
       field: 'ANTHROPIC_BASE_URL',
       label: 'Anthropic Base URL',
       description: '(optional — gateway / proxy)',
@@ -99,8 +105,8 @@ export type FieldStatus = Record<string, boolean>;
 
 export interface ApiKeyFieldsProps {
   /**
-   * Tool whose credential/config fields are being edited. The component
-   * renders one input per entry in `TOOL_FIELD_CONFIGS[tool]`.
+   * Tool whose credential/config fields are being edited. Used for the
+   * "Passed to the X SDK as Y" tooltip and as the default field-set lookup.
    */
   tool: AgenticToolName;
   /** Per-field set/unset flags from `user.agentic_tools[tool]`. */
@@ -113,6 +119,13 @@ export interface ApiKeyFieldsProps {
   saving?: Record<string, boolean>;
   /** Disable all inputs (e.g. while RBAC is loading). */
   disabled?: boolean;
+  /**
+   * Override the field set rendered for this tool. Defaults to
+   * `TOOL_FIELD_CONFIGS[tool]`. Used by the global/admin config screen to
+   * exclude per-user-only fields (e.g. `CLAUDE_CODE_OAUTH_TOKEN` is a
+   * Pro/Max subscription token and is meaningless at global scope).
+   */
+  fields?: AgenticToolFieldConfig[];
 }
 
 export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
@@ -122,11 +135,12 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
   onClear,
   saving = {},
   disabled = false,
+  fields,
 }) => {
   const { token } = theme.useToken();
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
 
-  const configs = TOOL_FIELD_CONFIGS[tool] ?? [];
+  const configs = fields ?? TOOL_FIELD_CONFIGS[tool] ?? [];
 
   const handleSave = async (field: string) => {
     const value = inputValues[field]?.trim();
@@ -222,6 +236,12 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
               </Text>{' '}
               in a terminal where the Claude CLI is installed and signed in to your Pro/Max plan,
               then paste the resulting token here.
+            </Text>
+          )}
+          {field === 'ANTHROPIC_AUTH_TOKEN' && (
+            <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+              Alternative to the API key for token-based auth (AWS Bedrock, OAuth proxies, custom
+              auth flows). Leave empty unless your gateway requires it.
             </Text>
           )}
           {field === 'ANTHROPIC_BASE_URL' && (

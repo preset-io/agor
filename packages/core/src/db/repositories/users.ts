@@ -9,11 +9,12 @@
 import type {
   AgenticToolName,
   AgenticToolsConfig,
-  AgenticToolsStatus,
   EnvVarMetadata,
+  StoredAgenticTools,
   User,
   UUID,
 } from '@agor/core/types';
+import { toAgenticToolsStatus } from '@agor/core/types';
 import { eq, like } from 'drizzle-orm';
 import { normalizeStoredEnvMap, type RawStoredEnvVar } from '../../config/env-vars';
 import { generateId } from '../../lib/ids';
@@ -27,35 +28,6 @@ import {
   EntityNotFoundError,
   RepositoryError,
 } from './base';
-
-/**
- * Raw on-disk shape of `data.agentic_tools` — values are encrypted strings.
- * Mirrors `AgenticToolsConfig` field-for-field but is the storage projection.
- */
-type StoredAgenticTools = {
-  [Tool in keyof AgenticToolsConfig]?: Record<string, string>;
-};
-
-/**
- * Project the encrypted-at-rest `agentic_tools` blob to the boolean presence DTO.
- */
-function toAgenticToolsStatus(
-  stored: StoredAgenticTools | undefined
-): AgenticToolsStatus | undefined {
-  if (!stored) return undefined;
-  const out: Record<string, Record<string, boolean>> = {};
-  for (const [tool, fields] of Object.entries(stored)) {
-    if (!fields) continue;
-    const flags: Record<string, boolean> = {};
-    for (const [field, value] of Object.entries(fields)) {
-      if (value) flags[field] = true;
-    }
-    if (Object.keys(flags).length > 0) {
-      out[tool] = flags;
-    }
-  }
-  return Object.keys(out).length > 0 ? (out as AgenticToolsStatus) : undefined;
-}
 
 /**
  * Users repository implementation
@@ -111,6 +83,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
     user: Partial<User> & {
       password?: string;
       agentic_tools_raw?: StoredAgenticTools;
+      env_vars_raw?: SchemaUserInsert['data']['env_vars'];
     }
   ): SchemaUserInsert {
     const now = new Date();
@@ -141,7 +114,10 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
         // contract); StoredAgenticTools widens that to string values for shape
         // uniformity. Runtime never writes opencode, so the cast is safe.
         agentic_tools: user.agentic_tools_raw as SchemaUserInsert['data']['agentic_tools'],
-        env_vars: undefined, // Not implemented yet
+        // Same pass-through as agentic_tools: env_vars are encrypted blobs
+        // not represented on the public DTO. `update()` threads the raw value
+        // from the existing row so a generic field update doesn't wipe them.
+        env_vars: user.env_vars_raw,
         default_agentic_config: user.default_agentic_config,
       },
     };
@@ -297,16 +273,20 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
       }
     }
 
-    // Merge updates. Preserve the encrypted agentic_tools blob from the raw row
-    // so a generic field update (name, preferences, etc.) doesn't nuke stored
-    // credentials — the boolean projection on `current` can't round-trip back
-    // to encrypted bytes.
+    // Merge updates. Preserve the encrypted agentic_tools and env_vars blobs
+    // from the raw row so a generic field update (name, preferences, etc.)
+    // doesn't nuke stored credentials — the boolean projection on `current`
+    // can't round-trip back to encrypted bytes.
     const rawRow = await this.getRawRow(fullId);
     const merged = { ...current, ...updates } as Partial<User> & {
       agentic_tools_raw?: StoredAgenticTools;
+      env_vars_raw?: SchemaUserInsert['data']['env_vars'];
     };
     if (rawRow?.data.agentic_tools) {
       merged.agentic_tools_raw = rawRow.data.agentic_tools as StoredAgenticTools;
+    }
+    if (rawRow?.data.env_vars) {
+      merged.env_vars_raw = rawRow.data.env_vars;
     }
     const insertData = this.userToInsert(merged);
 

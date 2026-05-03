@@ -48,9 +48,9 @@ async function createUserWithEnv(db: any, envVars: Record<string, unknown>): Pro
     email: `test-${Date.now()}-${Math.random()}@example.com`,
     name: 'Test',
   });
-  // Patch the user's JSON `data.env_vars` directly. UsersRepository.userToInsert
-  // doesn't currently persist env_vars (only raw api_keys), so we write the
-  // stored shape ourselves to exercise the resolver.
+  // Patch the user's JSON `data.env_vars` directly. UsersRepository has no
+  // public env_vars mutator (managed by the daemon services layer); writing
+  // the stored shape ourselves is the cleanest way to exercise the resolver.
   const row = await select(db).from(users).where(eq(users.user_id, user.user_id)).one();
   const currentData =
     (row?.data as Record<string, unknown> | undefined) ?? ({} as Record<string, unknown>);

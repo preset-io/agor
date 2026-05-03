@@ -145,7 +145,7 @@ export class CodexPromptService {
     if (!this.apiKey) {
       console.warn(
         '⚠️  [Codex] No OPENAI_API_KEY provided — Codex SDK requests will fail with 401. ' +
-          'Please configure your API key in Settings > API Keys.'
+          'Please configure your API key in Settings > Codex > Authentication.'
       );
     }
 
@@ -1058,8 +1058,8 @@ export class CodexPromptService {
             if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
               const isEmptyKey = errorMessage.includes('Missing bearer');
               const guidance = isEmptyKey
-                ? 'No OPENAI_API_KEY is configured. Please add your API key in Settings > API Keys.'
-                : 'Your OPENAI_API_KEY may be invalid or expired. Please check Settings > API Keys.';
+                ? 'No OPENAI_API_KEY is configured. Please add your API key in Settings > Codex > Authentication.'
+                : 'Your OPENAI_API_KEY may be invalid or expired. Please check Settings > Codex > Authentication.';
               console.error(
                 `❌ [Codex] Authentication failed for session ${sessionId.substring(0, 8)}: ${guidance}`
               );

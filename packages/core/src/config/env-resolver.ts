@@ -6,21 +6,13 @@ import { SessionEnvSelectionRepository } from '../db/repositories/session-env-se
 import { users } from '../db/schema';
 import type {
   AgenticToolName,
-  AgenticToolsConfig,
   GatewayEnvVar,
   SessionID,
+  StoredAgenticTools,
   UserID,
 } from '../types';
 import { filterEnv } from './env-blocklist';
 import { normalizeStoredEnvMap, type StoredEnvVar } from './env-vars';
-
-/**
- * Encrypted-at-rest shape stored under `users.data.agentic_tools`.
- * Mirrors AgenticToolsConfig field-for-field; values are encrypted strings.
- */
-type StoredAgenticTools = {
-  [Tool in keyof AgenticToolsConfig]?: Record<string, string>;
-};
 
 /**
  * SECURITY: Allowlisted environment variable names that are safe to pass

@@ -14,7 +14,7 @@ import {
 } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { Params, TaskID, UserID } from '@agor/core/types';
+import type { AgenticToolName, Params, TaskID, UserID } from '@agor/core/types';
 
 /**
  * Mask API keys for secure display
@@ -93,13 +93,22 @@ export class ConfigService {
    *
    * Called via: client.service('config').resolveApiKey({ taskId, keyName })
    */
-  async resolveApiKey(data: { taskId: TaskID; keyName: string }): Promise<{
+  async resolveApiKey(data: {
+    taskId: TaskID;
+    keyName: string;
+    /**
+     * Restrict the per-user lookup to this tool's credential bucket. Executors
+     * always pass this; absent it, the resolver falls back to a cross-tool
+     * sweep (legacy behavior preserved for non-SDK callers).
+     */
+    tool?: AgenticToolName;
+  }): Promise<{
     apiKey: string | null;
     source: 'user' | 'config' | 'env' | 'native';
     useNativeAuth: boolean;
     decryptionFailed?: boolean;
   }> {
-    const { taskId, keyName } = data;
+    const { taskId, keyName, tool } = data;
 
     // Fetch task to get creator user ID
     let userId: UserID | undefined;
@@ -117,6 +126,7 @@ export class ConfigService {
     const result = await resolveApiKey(keyName as ApiKeyName, {
       userId,
       db: this.db,
+      tool,
     });
 
     // Map KeyResolutionResult to service response type

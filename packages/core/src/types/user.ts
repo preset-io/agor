@@ -153,6 +153,43 @@ export type AgenticToolsStatus = {
 };
 
 /**
+ * Encrypted-at-rest projection of `AgenticToolsConfig` — the on-disk shape of
+ * `users.data.agentic_tools`. Each field's `string` (plaintext) is replaced
+ * with the encrypted ciphertext bytes (also a string at the storage layer).
+ *
+ * Lives next to `AgenticToolsConfig` so the canonical type, the public DTO,
+ * and the storage projection move together. Imported by the repo (writer/
+ * decryptor), the env resolver (reader), and the daemon users service
+ * (patcher) — keeping the alias single-source avoids the historical drift
+ * across these three call sites.
+ */
+export type StoredAgenticTools = {
+  [Tool in keyof AgenticToolsConfig]?: Record<string, string>;
+};
+
+/**
+ * Project the encrypted-at-rest blob to the boolean presence DTO returned to
+ * clients. Empty buckets are dropped so the API response stays compact.
+ */
+export function toAgenticToolsStatus(
+  stored: StoredAgenticTools | undefined
+): AgenticToolsStatus | undefined {
+  if (!stored) return undefined;
+  const out: Record<string, Record<string, boolean>> = {};
+  for (const [tool, fields] of Object.entries(stored)) {
+    if (!fields) continue;
+    const flags: Record<string, boolean> = {};
+    for (const [field, value] of Object.entries(fields)) {
+      if (value) flags[field] = true;
+    }
+    if (Object.keys(flags).length > 0) {
+      out[tool] = flags;
+    }
+  }
+  return Object.keys(out).length > 0 ? (out as AgenticToolsStatus) : undefined;
+}
+
+/**
  * Update DTO shape: per-tool credential patch payload.
  *
  * String values set the field (plaintext, encrypted before storage); `null`

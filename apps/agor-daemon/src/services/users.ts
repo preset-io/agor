@@ -31,42 +31,17 @@ import { isLikelyGitToken } from '@agor/core/git';
 import type {
   AgenticToolName,
   AgenticToolsConfig,
-  AgenticToolsStatus,
   AgenticToolsUpdate,
   EnvVarMetadata,
   EnvVarScope,
   Paginated,
   Params,
+  StoredAgenticTools,
   User,
   UserID,
   UserRole,
 } from '@agor/core/types';
-import { normalizeRole, ROLES } from '@agor/core/types';
-
-/**
- * Encrypted-at-rest shape stored under `users.data.agentic_tools`.
- * Mirrors AgenticToolsConfig field-for-field, but each value is the encrypted bytes.
- */
-type StoredAgenticTools = {
-  [Tool in keyof AgenticToolsConfig]?: Record<string, string>;
-};
-
-/** Project the encrypted blob to the boolean presence DTO returned to clients. */
-function toAgenticToolsStatus(
-  stored: StoredAgenticTools | undefined
-): AgenticToolsStatus | undefined {
-  if (!stored) return undefined;
-  const out: Record<string, Record<string, boolean>> = {};
-  for (const [tool, fields] of Object.entries(stored)) {
-    if (!fields) continue;
-    const flags: Record<string, boolean> = {};
-    for (const [field, value] of Object.entries(fields)) {
-      if (value) flags[field] = true;
-    }
-    if (Object.keys(flags).length > 0) out[tool] = flags;
-  }
-  return Object.keys(out).length > 0 ? (out as AgenticToolsStatus) : undefined;
-}
+import { normalizeRole, ROLES, toAgenticToolsStatus } from '@agor/core/types';
 
 /**
  * Apply a per-tool credential patch to the encrypted-at-rest blob.

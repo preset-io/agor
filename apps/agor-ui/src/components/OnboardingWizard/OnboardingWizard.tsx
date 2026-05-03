@@ -748,12 +748,17 @@ export function OnboardingWizard({
     try {
       // Persist into the per-tool credential bucket. Field name = env var name
       // = ANTHROPIC_API_KEY / OPENAI_API_KEY / etc., as `apiKeyNameForAgent`
-      // returns. The `selectedAgent` IS the bucket — onboarding only ever sets
-      // a single tool's primary credential at a time.
+      // returns. The `selectedAgent` IS the bucket — except for `opencode`,
+      // which is a multi-provider tool with no canonical credential of its
+      // own (`OpencodeConfig` has no fields). The onboarding fallback for
+      // opencode collects an Anthropic key, so we route it to claude-code's
+      // bucket where it's modeled, surfaced in settings, and resolvable.
       const keyName = apiKeyNameForAgent(selectedAgent);
+      const targetTool: AgenticToolName =
+        selectedAgent === 'opencode' ? 'claude-code' : selectedAgent;
       onUpdateUser(user.user_id, {
         agentic_tools: {
-          [selectedAgent]: { [keyName]: apiKey.trim() },
+          [targetTool]: { [keyName]: apiKey.trim() },
         } as UpdateUserInput['agentic_tools'],
       });
       setLoading(false);
