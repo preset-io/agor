@@ -456,6 +456,24 @@ docker exec <container-name> psql $DATABASE_URL -c "\d mcp_servers"
 
 ---
 
+## Gotchas
+
+### Journal `when` timestamps must be monotonically increasing
+
+Drizzle determines pending migrations by comparing each journal entry's `when` against the max `created_at` in `__drizzle_migrations`. A migration is "pending" only if `when > maxAppliedMillis`.
+
+**If you manually add or edit a journal entry with a `when` value earlier than an already-applied migration, it will be silently skipped** — never run, but classified as "already applied" by both the migrator and `checkMigrationStatus`.
+
+When inserting manual or backfill migrations into `meta/_journal.json`, ensure the `when` value is **strictly greater** than every preceding entry. The sqlite and postgres journals are tracked independently — apply this rule to each one separately.
+
+### Avoid `CHECK` constraints for enum-like columns on SQLite
+
+Don't use `CHECK(col IN ('a', 'b', 'c'))` on a SQLite column. When a new value is added (e.g. extending `others_can` with `'session'`), the CHECK constraint forces a full table-recreation migration — SQLite can't alter constraints in place. This is error-prone and easy to forget when updating TypeScript enums.
+
+Validate enum values at the application layer instead — Drizzle schema `enum` option, Zod, or service hooks. The TypeScript types are the source of truth; the DB just stores text.
+
+---
+
 ## Reference
 
 ### Drizzle Kit Commands
@@ -485,9 +503,7 @@ agor db migrate
 
 ### Related Documentation
 
-- [[database-migrations]] - Architecture overview
-- [[postgres-support]] - Dual-dialect support
-- [[architecture]] - System design
+- [`context/concepts/architecture.md`](../concepts/architecture.md) — System design
 - [Drizzle Migrations Docs](https://orm.drizzle.team/docs/migrations)
 
 ---
