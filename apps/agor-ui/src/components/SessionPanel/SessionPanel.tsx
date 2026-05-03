@@ -11,7 +11,12 @@ import type {
   User,
   Worktree,
 } from '@agor-live/client';
-import { AGENTIC_TOOL_CAPABILITIES, SessionStatus, TaskStatus } from '@agor-live/client';
+import {
+  AGENTIC_TOOL_CAPABILITIES,
+  getDefaultPermissionMode,
+  SessionStatus,
+  TaskStatus,
+} from '@agor-live/client';
 import {
   BranchesOutlined,
   CloseOutlined,
@@ -314,12 +319,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [hasInput, setHasInput] = React.useState(() => !!inputValueRef.current.trim());
   const handleHasInputChange = React.useCallback((v: boolean) => setHasInput(v), []);
 
-  const getDefaultPermissionMode = React.useCallback((agent?: string): PermissionMode => {
-    return agent === 'codex' ? 'auto' : 'acceptEdits';
-  }, []);
+  // getDefaultPermissionMode imported from @agor-live/client — canonical
+  // per-tool defaults live in core's `getDefaultPermissionMode`. The local
+  // shadow that used to live here was stale (missing gemini/opencode/copilot)
+  // and silently drifted from the core definition.
 
   const [permissionMode, setPermissionMode] = React.useState<PermissionMode>(
-    session?.permission_config?.mode || getDefaultPermissionMode(session?.agentic_tool)
+    session?.permission_config?.mode ||
+      (session?.agentic_tool ? getDefaultPermissionMode(session.agentic_tool) : 'acceptEdits')
   );
   const [codexSandboxMode, setCodexSandboxMode] = React.useState<CodexSandboxMode>(
     session?.permission_config?.codex?.sandboxMode || 'workspace-write'
@@ -487,12 +494,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       setCodexSandboxMode(session.permission_config.codex.sandboxMode);
       setCodexApprovalPolicy(session.permission_config.codex.approvalPolicy);
     }
-  }, [
-    session?.permission_config?.mode,
-    session?.permission_config?.codex,
-    session?.agentic_tool,
-    getDefaultPermissionMode,
-  ]);
+  }, [session?.permission_config?.mode, session?.permission_config?.codex, session?.agentic_tool]);
 
   // Update effort level when session changes (default to 'high' for sessions without effort config)
   React.useEffect(() => {
