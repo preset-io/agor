@@ -18,10 +18,11 @@ Use it alone. Don't pair it with a co-tagline.
 ## Short paragraph (~50 words)
 
 > **Team command center for all things agentic.** Agor is a shared canvas
-> where coding agents (Claude Code, Codex, Gemini) and persisted
-> assistants run side-by-side on isolated git worktrees. You see what every
-> agent is doing in real time, your teammates see it too, and the agents
-> themselves can drive Agor over MCP.
+> where coding agents (Claude Code, Codex, Gemini) and long-lived
+> assistants run side-by-side on isolated git worktrees — the anchor
+> entity where sessions, dev environments, prompts, and PRs converge. Your
+> whole team rallies around the same live work in real time, and the
+> agents themselves drive Agor over MCP.
 
 For: README intro, docs landing TL;DR, deck slide 1, blog lead.
 
@@ -54,27 +55,43 @@ list when picking what to highlight — feature pages, launch threads, deck
 slides, sales conversations.
 
 1. **A team workspace for AI agents.** Multiplayer is the core
-   differentiator: live cursors, facepile, scoped comments, attention
-   pulse, shared tmux terminals. Most agentic tools today are solo. Agor
-   isn't.
-2. **A Figma-like spatial canvas.** Boards are 2D — worktrees are cards,
+   differentiator. Most agentic tools today are solo. Agor isn't. Why it
+   matters:
+   - **Shared worktrees and dev envs.** Engineers, reviewers, PMs, QA, and
+     stakeholders rally around the *same* live dev environment instead of
+     "spin up your own to see it." One link, one running thing,
+     everyone's looking at it.
+   - **Shared AI sessions.** Work alongside teammates' agents in real
+     time. Watch how others prompt, lift their patterns, standardize the
+     workflows that work, codify the ones worth keeping as zone triggers.
+   - **Cross-team observability.** Clarity on who's running what, which
+     tools they use, how their workflows are structured, where tokens
+     get spent. The team learns from itself.
+2. **Worktrees as the anchor.** Every unit of work is a git worktree —
+   and a worktree is where sessions, dev environments, zone-triggered
+   standard prompts, issues, and PRs all converge. One entity to point
+   at, one place where the full context of a piece of work lives.
+3. **A Figma-like spatial canvas.** Boards are 2D — worktrees are cards,
    zones are regions, you arrange your work and your teammates see where
    you're at. The spatial layout is what makes the multiplayer real.
-3. **Multi-agent, multi-runtime.** Claude Code, Codex, Gemini, OpenCode,
+4. **Shared, long-lived assistants.** Persistent agents with identity, a
+   file-based memory system, and a skill system (OpenClaw-inspired), with
+   full access to Agor through its MCP server. Agor is the shared place
+   where teams give birth to assistants, configure and teach them, and
+   wire them into team channels through the message gateway (Slack,
+   GitHub). Distinct from one-off sessions — assistants are durable
+   coworkers.
+5. **Multi-agent, multi-runtime.** Claude Code, Codex, Gemini, OpenCode,
    Copilot — interchangeable per session. Pick the right tool for the job;
    don't lock yourself into one vendor.
-4. **Worktree-isolated.** Every unit of work is a git worktree with its
-   own branch, environment, ports, and conversations. Parallel work
-   doesn't collide.
-5. **Observable.** Every session, every prompt, every tool call, every
-   dollar — visible, durable, queryable. Status dots, completion chimes,
-   token + dollar accounting per prompt, full conversation history per
-   worktree. No more "what was that agent doing again."
-6. **MCP-native.** Anything a user can do in Agor, an agent can do too.
+6. **Observable end-to-end.** Every session, every prompt, every tool
+   call, every dollar — visible, durable, queryable. Status dots,
+   completion chimes, token + dollar accounting per prompt, full
+   conversation history per worktree. No more "what was that agent doing
+   again."
+7. **MCP-native.** Anything a user can do in Agor, an agent can do too.
    Sessions are auto-issued tokens; agents fork, spawn, schedule, and
    report on their own work.
-7. **A home for persisted assistants.** Long-lived agents with file-based
-   memory and skills, OpenClaw-style. Distinct from one-off sessions.
 8. **A scheduler.** Cron-style triggers for templated prompts. Powers
    assistant heartbeats, daily standups, scheduled audits.
 9. **Self-hosted.** BSL 1.1, your repos, your DB (LibSQL or Postgres),
@@ -95,6 +112,10 @@ When the audience is technical and skeptical, lead with the problem:
 When the audience is multiplayer-curious, lead with the Figma frame:
 
 > *Think Figma's spatial canvas, applied to AI agents. You see your teammates, you see what their agents are running, you coordinate live instead of after-the-fact.*
+
+When the audience is non-engineering (PMs, QA, design, leadership), lead with the rally:
+
+> *Agor is where the whole team — not just the engineer — gathers around a piece of work. The worktree is the anchor: live dev env, agent conversations, the PR, the prompts that produced it. Everyone sees the same thing.*
 
 The Figma analogy is reserved for team / multiplayer / canvas framing —
 it's the right reference there. Don't use it as the master tagline (the
