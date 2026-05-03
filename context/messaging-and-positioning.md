@@ -33,10 +33,12 @@ For: README intro, docs landing TL;DR, deck slide 1, blog lead.
 > **Team command center for all things agentic.** Running one coding agent
 > in a terminal works. Running five — across teammates, across repos, with
 > assistants quietly grooming the backlog at night — falls apart fast.
-> Conversations vanish, branches collide, dev servers fight for ports, and
-> nobody can see what anyone else's agent is doing. Agor is a Figma-like
-> spatial canvas for that work: every unit of work is a git worktree with
-> its own branch, environment, and session tree; Claude Code, Codex,
+> Conversations vanish, branches collide, dev servers fight for ports,
+> configs rot on individual laptops, parallel runs are an afterthought,
+> and nobody can see what anyone else's agent is doing. Agor is a
+> Figma-like spatial canvas for that work: every unit of work is a git
+> worktree with its own branch, environment, and session tree; Claude
+> Code, Codex,
 > Gemini, and any MCP-driven assistant are interchangeable runtimes you
 > pick per session; teammates show up live with cursors, facepile,
 > comments, and shared terminals; and every action is exposed to agents
@@ -45,6 +47,57 @@ For: README intro, docs landing TL;DR, deck slide 1, blog lead.
 > isolation when you need it.
 
 For: docs landing extended intro, sales one-pager, announcement post.
+
+---
+
+## The problem Agor addresses
+
+Every team is being told to ramp on AI fast. Most are doing it in silos,
+on laptops, without a shared place for the work to live — and it isn't
+working. Specifically:
+
+1. **AI agent work is trapped on individual laptops.** Sessions are
+   private, dev envs are local, long-lived agents live in someone's
+   `~/`, MCP servers are configured per-machine. Your team's AI work
+   doesn't accumulate anywhere.
+2. **Handoffs are a tax.** Sharing a piece of work means `git push`,
+   `git pull`, "what prompt was that again?", `docker compose up`,
+   rebuild context. Every hop loses something.
+3. **Teams can't learn from each other, and models move faster than
+   anyone can keep up alone.** No way to see how a teammate prompts,
+   which model they're on, what worked. Everyone reinvents the same
+   workflows in private — and by the time one person figures out what
+   works for the current model, the model has shifted again.
+4. **Local config hell.** Each developer wires up their own MCP servers,
+   credentials, scripts. There's no shared place to publish an agent, a
+   skill, or a workflow.
+5. **Parallel work is still an afterthought.** Spinning up an agent is
+   cheap now — parallel runs should be the *premise*, not the exception.
+   But one branch / one terminal / one dev server is still the default.
+6. **The CLI is the wrong medium long-term.** Today's coding CLIs are
+   impressively pushing the limits of what a terminal can do, but the
+   ceiling is real — no token meter, no structured tool blocks, no live
+   presence, no spatial layout. Web + sockets is where this lives.
+7. **The IDE is being eclipsed for this work.** IDEs are familiar and
+   solid, but they're laid out for a single human editing files — not
+   for orchestrating multiple agents with conversations, dev
+   environments, and teammate presence. We need a higher-level control
+   plane that sits *above* the IDE: team-oriented, agent-oriented,
+   multi-worktree by default. Keep your IDE; attach it to Agor.
+
+These bullets are the internal source. What propagates into customer-
+facing copy is two compressed forms:
+
+- **The long-paragraph compressor** ("Conversations vanish, branches
+  collide, dev servers fight for ports, configs rot on individual
+  laptops, parallel runs are an afterthought, and nobody can see what
+  anyone else's agent is doing") — folds bullets #1–#5 into one rhythm.
+- **The one-liner** ("One agent in a terminal is fine. Five agents
+  across a team is chaos.") — the entire problem in two sentences. Used
+  in the technical/skeptical "How we speak" lead below.
+
+The "What Agor is" bullets that follow mirror these problems implicitly.
+Don't label the mapping — the design is felt, not narrated.
 
 ---
 
