@@ -39,7 +39,7 @@ environment:
     sqlite:
       start: >-
         UID=$(id -u) GID=$(id -g) DAEMON_PORT={{add 3000 worktree.unique_id}} UI_PORT={{add 5000
-        worktree.unique_id}} docker compose -p agor-{{worktree.name}} up -d --build
+        worktree.unique_id}} SEED=true docker compose -p agor-{{worktree.name}} up -d --build
       stop: docker compose -p agor-{{worktree.name}} down
       description: Single-user dev with SQLite. No RBAC. Fastest to boot.
       nuke: docker compose -p agor-{{worktree.name}} down -v
@@ -49,7 +49,7 @@ environment:
     postgres:
       start: >-
         UID=$(id -u) GID=$(id -g) DAEMON_PORT={{add 3000 worktree.unique_id}} UI_PORT={{add 5000
-        worktree.unique_id}} docker compose -f docker-compose.yml -f
+        worktree.unique_id}} SEED=true docker compose -f docker-compose.yml -f
         docker-compose.override.postgres.yml -p agor-{{worktree.name}} --profile postgres up -d
         --build
       stop: >-
