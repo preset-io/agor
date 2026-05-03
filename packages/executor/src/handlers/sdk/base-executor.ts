@@ -306,7 +306,7 @@ export async function executeToolTask(params: {
   prompt: string;
   permissionMode?: PermissionMode;
   abortController: AbortController;
-  apiKeyEnvVar: string;
+  apiKeyEnvVar: ApiKeyName;
   toolName: AgenticToolName;
   messageSource?: 'gateway' | 'agor';
   createTool: (
@@ -324,12 +324,7 @@ export async function executeToolTask(params: {
   // Pass `toolName` so the daemon scopes the per-user lookup to this tool's
   // credential bucket — prevents cross-SDK leak (e.g. Codex picking up an
   // ANTHROPIC_API_KEY stored under claude-code).
-  const resolution = await resolveApiKeyForTask(
-    apiKeyEnvVar as ApiKeyName,
-    client,
-    taskId,
-    toolName
-  );
+  const resolution = await resolveApiKeyForTask(apiKeyEnvVar, client, taskId, toolName);
 
   // Fail fast if stored key can't be decrypted (e.g. master secret changed)
   if (resolution.decryptionFailed) {

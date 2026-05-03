@@ -83,4 +83,17 @@ describe('resolveApiKey — per-tool credential scoping', () => {
     expect(result.apiKey).toBe('claude-key');
     expect(result.source).toBe('user');
   });
+
+  dbTest('tool=copilot resolves COPILOT_GITHUB_TOKEN from its own bucket', async ({ db }) => {
+    const userId = await createUserWithToolCreds(db, {
+      copilot: { COPILOT_GITHUB_TOKEN: encryptApiKey('copilot-key') },
+      // A nonsense entry under another bucket should never be returned even
+      // though a cross-bucket sweep would otherwise pick it up first.
+      'claude-code': { COPILOT_GITHUB_TOKEN: encryptApiKey('wrong-bucket') },
+    });
+
+    const result = await resolveApiKey('COPILOT_GITHUB_TOKEN', { userId, db, tool: 'copilot' });
+    expect(result.apiKey).toBe('copilot-key');
+    expect(result.source).toBe('user');
+  });
 });
