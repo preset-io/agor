@@ -617,7 +617,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           id: worktree.worktree_id,
           type: 'worktreeNode',
           position, // When pinned (parentId set), this is relative to zone; otherwise absolute
-          draggable: true,
+          // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
           zIndex: 500, // Above zones, below comments
           // Set dimensions for collision detection (matches WorktreeCard size)
           width: 500,
@@ -749,7 +749,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           id: `card-${cardId}`,
           type: 'cardNode',
           position,
-          draggable: true,
+          // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
           zIndex: 500, // Same level as worktrees
           width: 380,
           height: 120,
@@ -935,7 +935,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           position,
           parentId, // Set parent for relative positioning (moves with parent)
           // No extent constraint - comments can be dragged anywhere and re-pinned
-          draggable: true,
+          // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
           selectable: true,
           zIndex: 1000, // Always on top (elevateNodesOnSelect is disabled)
           data: {
@@ -1909,7 +1909,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               id: objectId,
               type: 'zone',
               position,
-              draggable: true,
+              // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
               zIndex: 100, // Zones behind worktrees and comments
               style: { width, height },
               data: {
@@ -2101,7 +2101,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             id: objectId,
             type: 'markdown',
             position,
-            draggable: true,
+            // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
             zIndex: 300, // Above zones (100), below worktrees (500)
             data: {
               objectId,

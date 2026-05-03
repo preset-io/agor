@@ -224,7 +224,7 @@ export const useBoardObjects = ({
             id: objectId,
             type: 'appNode',
             position: { x: objectData.x, y: objectData.y },
-            draggable: true,
+            // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
             selectable: true,
             zIndex: 400, // Above markdown (300), below worktrees (500)
             className: eraserMode ? 'eraser-mode' : undefined,
@@ -252,7 +252,7 @@ export const useBoardObjects = ({
             id: objectId,
             type: 'artifactNode',
             position: { x: objectData.x, y: objectData.y },
-            draggable: true,
+            // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
             selectable: true,
             zIndex: 400,
             className: eraserMode ? 'eraser-mode' : undefined,
@@ -273,7 +273,7 @@ export const useBoardObjects = ({
             id: objectId,
             type: 'markdown',
             position: { x: objectData.x, y: objectData.y },
-            draggable: true,
+            // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
             selectable: true,
             zIndex: 300, // Above zones (100), below worktrees (500)
             className: eraserMode ? 'eraser-mode' : undefined,
@@ -308,7 +308,9 @@ export const useBoardObjects = ({
           id: objectId,
           type: 'zone',
           position: { x: objectData.x, y: objectData.y },
-          draggable: !isLocked, // Respect locked state
+          // Locked zones are never draggable. Unlocked zones inherit from
+          // canvas-level nodesDraggable (mutationGate.canMutate).
+          ...(isLocked ? { draggable: false } : {}),
           zIndex: 100, // Zones behind worktrees and comments
           className: eraserMode ? 'eraser-mode' : undefined,
           // Set dimensions both as direct props (for collision detection) and style (for rendering)
@@ -368,7 +370,7 @@ export const useBoardObjects = ({
           id: objectId,
           type: 'zone',
           position: { x, y },
-          draggable: true,
+          // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
           zIndex: 100, // Zones behind worktrees and comments
           style: {
             width,

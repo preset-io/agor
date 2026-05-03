@@ -5,6 +5,7 @@
 import type { AgenticToolName, BoardObject, ZoneTriggerBehavior } from '@agor-live/client';
 import { Alert, Form, Input, Modal, Select } from 'antd';
 import { useEffect, useRef, useState } from 'react';
+import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../../AgentSelectionGrid';
 
 interface ZoneConfigModalProps {
@@ -33,6 +34,7 @@ export const ZoneConfigModal = ({
   const [form] = Form.useForm<ZoneFormValues>();
   const [triggerAgent, setTriggerAgent] = useState<AgenticToolName>('claude-code');
   const isInitializingRef = useRef(false);
+  const mutationGate = useMutationGate();
 
   const triggerBehavior = Form.useWatch('triggerBehavior', form);
   const triggerTemplate = Form.useWatch('triggerTemplate', form);
@@ -62,6 +64,7 @@ export const ZoneConfigModal = ({
   }, [open, zoneName, zoneData, form]);
 
   const handleSave = async () => {
+    if (!mutationGate.canMutate) return;
     try {
       const values = await form.validateFields();
 
@@ -103,8 +106,9 @@ export const ZoneConfigModal = ({
       okText="Save"
       okButtonProps={{
         disabled:
+          !mutationGate.canMutate ||
           // Warn: trigger behavior set but no template (incomplete trigger config)
-          !!triggerBehavior && !triggerTemplate?.trim(),
+          (!!triggerBehavior && !triggerTemplate?.trim()),
       }}
       cancelText="Cancel"
       width={600}

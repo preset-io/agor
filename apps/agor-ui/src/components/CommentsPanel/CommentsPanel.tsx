@@ -565,34 +565,24 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   // send button still also flips `disabled` for visible feedback; threaded
   // action buttons rely on the navbar/footer connection indicator.
   const mutationGate = useMutationGate();
-  const sendComment = (content: string) => {
-    if (!mutationGate.canMutate) return;
-    onSendComment(content);
-  };
-  const replyComment = onReplyComment
-    ? (parentId: string, content: string) => {
-        if (!mutationGate.canMutate) return;
-        onReplyComment(parentId, content);
-      }
-    : undefined;
-  const resolveComment = onResolveComment
-    ? (commentId: string) => {
-        if (!mutationGate.canMutate) return;
-        onResolveComment(commentId);
-      }
-    : undefined;
-  const toggleReaction = onToggleReaction
-    ? (commentId: string, emoji: string) => {
-        if (!mutationGate.canMutate) return;
-        onToggleReaction(commentId, emoji);
-      }
-    : undefined;
-  const deleteComment = onDeleteComment
-    ? (commentId: string) => {
-        if (!mutationGate.canMutate) return;
-        onDeleteComment(commentId);
-      }
-    : undefined;
+  // Wrap a callback so it no-ops when the mutation gate is closed. Preserves
+  // `undefined` when the underlying optional callback wasn't supplied.
+  function guarded<Args extends unknown[]>(fn: (...args: Args) => void): (...args: Args) => void;
+  function guarded<Args extends unknown[]>(
+    fn: ((...args: Args) => void) | undefined
+  ): ((...args: Args) => void) | undefined;
+  function guarded<Args extends unknown[]>(fn: ((...args: Args) => void) | undefined) {
+    if (!fn) return undefined;
+    return (...args: Args) => {
+      if (!mutationGate.canMutate) return;
+      fn(...args);
+    };
+  }
+  const sendComment = guarded(onSendComment);
+  const replyComment = guarded(onReplyComment);
+  const resolveComment = guarded(onResolveComment);
+  const toggleReaction = guarded(onToggleReaction);
+  const deleteComment = guarded(onDeleteComment);
 
   // Get current user's name and email for mention detection
   const currentUser = currentUserId ? userById.get(currentUserId) : undefined;

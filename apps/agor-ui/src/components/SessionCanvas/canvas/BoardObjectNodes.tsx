@@ -9,6 +9,7 @@ import type { Color } from 'antd/es/color-picker';
 import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useEffect, useRef, useState } from 'react';
 import { NodeResizer, useViewport } from 'reactflow';
+import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { DeleteZoneModal } from './DeleteZoneModal';
 import { ZoneConfigModal } from './ZoneConfigModal';
 
@@ -90,6 +91,13 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   const labelInputRef = useRef<HTMLInputElement>(null);
   const colors = getColorPalette(token);
 
+  // Connection gate: when disconnected / reconnecting / out-of-sync, every
+  // mutator inside the zone (resize, label edit, color, lock, config, delete)
+  // short-circuits. The toolbar is still rendered for read-only signal but
+  // its controls visually dim and silently no-op on click.
+  const mutationGate = useMutationGate();
+  const mutationDisabled = !mutationGate.canMutate;
+
   // Inverse scale to keep toolbar at constant size regardless of zoom
   const scale = 1 / zoom;
 
@@ -148,6 +156,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
 
   const handleSaveLabel = () => {
     setIsEditingLabel(false);
+    if (mutationDisabled) return;
     if (label !== data.label && data.onUpdate) {
       data.onUpdate(data.objectId, createObjectData({ label }));
     }
@@ -163,6 +172,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   };
 
   const handleBorderColorChange = (color: Color) => {
+    if (mutationDisabled) return;
     const hexColor = color.toHexString();
     if (data.onUpdate) {
       data.onUpdate(data.objectId, createObjectData({ borderColor: hexColor }));
@@ -173,6 +183,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   };
 
   const handleBackgroundColorChange = (color: Color) => {
+    if (mutationDisabled) return;
     const hexColor = color.toHexString();
     if (data.onUpdate) {
       data.onUpdate(data.objectId, createObjectData({ backgroundColor: hexColor }));
@@ -183,6 +194,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   };
 
   const handleToggleLock = () => {
+    if (mutationDisabled) return;
     if (data.onUpdate) {
       data.onUpdate(data.objectId, createObjectData({ locked: !data.locked }));
     }
@@ -242,7 +254,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   return (
     <>
       <NodeResizer
-        isVisible={selected && !data.locked}
+        isVisible={selected && !data.locked && !mutationDisabled}
         minWidth={200}
         minHeight={200}
         handleStyle={{
@@ -302,9 +314,11 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             boxShadow: token.boxShadowSecondary,
             zIndex: 1000,
             userSelect: 'none',
-            // CSS-only visibility control (no DOM changes)
-            opacity: toolbarVisible ? 1 : 0,
-            pointerEvents: toolbarVisible ? 'auto' : 'none',
+            // CSS-only visibility control (no DOM changes). When the
+            // connection gate is closed we also dim and block clicks so the
+            // toolbar reads as read-only and never accidentally fires.
+            opacity: toolbarVisible ? (mutationDisabled ? 0.5 : 1) : 0,
+            pointerEvents: toolbarVisible && !mutationDisabled ? 'auto' : 'none',
             transition: 'opacity 0.15s ease',
           }}
         >
@@ -469,6 +483,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             onPointerUp={(e) => {
               e.preventDefault();
               e.stopPropagation();
+              if (mutationDisabled) return;
               handleToggleLock();
             }}
             onClick={(e) => {
@@ -521,6 +536,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             onPointerUp={(e) => {
               e.preventDefault();
               e.stopPropagation();
+              if (mutationDisabled) return;
               setConfigModalOpen(true);
             }}
             onClick={(e) => {
@@ -561,6 +577,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             onPointerUp={(e) => {
               e.preventDefault();
               e.stopPropagation();
+              if (mutationDisabled) return;
               setDeleteModalOpen(true);
             }}
             onClick={(e) => {
@@ -610,7 +627,10 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             // Reserve space for scaled label (base font size / zoom)
             minHeight: `${token.fontSize * scale}px`,
           }}
-          onDoubleClick={() => setIsEditingLabel(true)}
+          onDoubleClick={() => {
+            if (mutationDisabled) return;
+            setIsEditingLabel(true);
+          }}
         >
           {isEditingLabel ? (
             <input

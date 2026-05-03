@@ -4,6 +4,7 @@
 
 import { Modal, Radio, theme } from 'antd';
 import { useState } from 'react';
+import { useMutationGate } from '../../../contexts/ConnectionContext';
 
 interface DeleteZoneModalProps {
   open: boolean;
@@ -22,8 +23,10 @@ export const DeleteZoneModal = ({
 }: DeleteZoneModalProps) => {
   const { token } = theme.useToken();
   const [deleteAssociatedSessions, setDeleteAssociatedSessions] = useState(false);
+  const mutationGate = useMutationGate();
 
   const handleOk = () => {
+    if (!mutationGate.canMutate) return;
     onConfirm(deleteAssociatedSessions);
   };
 
@@ -36,6 +39,7 @@ export const DeleteZoneModal = ({
       okText="Delete Zone"
       okButtonProps={{
         danger: true,
+        disabled: !mutationGate.canMutate,
       }}
       cancelText="Cancel"
       width={480}
