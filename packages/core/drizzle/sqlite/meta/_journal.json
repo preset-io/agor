@@ -279,7 +279,7 @@
       "idx": 41,
       "version": "6",
       "when": 1777300000000,
-      "tag": "0041_lift_claude_oauth_token",
+      "tag": "0041_restructure_agentic_tool_config",
       "breakpoints": true
     }
   ]

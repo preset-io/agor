@@ -719,13 +719,36 @@ export const users = sqliteTable(
       .$type<{
         avatar?: string;
         preferences?: Record<string, unknown>;
-        // Encrypted API keys (stored as hex-encoded encrypted strings)
-        api_keys?: {
-          ANTHROPIC_API_KEY?: string; // Encrypted with AES-256-GCM
-          OPENAI_API_KEY?: string; // Encrypted with AES-256-GCM
-          GEMINI_API_KEY?: string; // Encrypted with AES-256-GCM
-          COPILOT_GITHUB_TOKEN?: string; // Encrypted with AES-256-GCM
-          CLAUDE_CODE_OAUTH_TOKEN?: string; // Claude Pro/Max subscription token (from `claude setup-token`)
+        // Per-tool credentials and auth-adjacent config.
+        //
+        // Each entry is keyed by AgenticToolName and holds env-var-named fields
+        // (e.g. `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`). All values are
+        // encrypted at rest (AES-256-GCM, hex-encoded) for shape uniformity —
+        // the runtime decrypts on read; the UI controls plain-vs-password
+        // rendering based on per-field config.
+        //
+        // Field name = env var name. The session executor exports these as
+        // env vars to the SDK CLI, scoped to the session's agentic_tool
+        // (i.e. claude-code's keys never reach codex sessions).
+        //
+        // See `context/concepts/agentic-tool-config.md` (TODO).
+        agentic_tools?: {
+          'claude-code'?: {
+            ANTHROPIC_API_KEY?: string;
+            CLAUDE_CODE_OAUTH_TOKEN?: string;
+            ANTHROPIC_AUTH_TOKEN?: string;
+            ANTHROPIC_BASE_URL?: string;
+          };
+          codex?: {
+            OPENAI_API_KEY?: string;
+          };
+          gemini?: {
+            GEMINI_API_KEY?: string;
+          };
+          copilot?: {
+            COPILOT_GITHUB_TOKEN?: string;
+          };
+          opencode?: Record<string, never>;
         };
         // Encrypted environment variables with scope metadata.
         //

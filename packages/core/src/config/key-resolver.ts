@@ -47,14 +47,30 @@ export async function resolveApiKey(
     `🔍 [API Key Resolution] Resolving ${keyName} for user ${context.userId?.substring(0, 8) || 'none'}`
   );
 
-  // 1. Check per-user key (highest precedence)
+  // 1. Check per-user key (highest precedence). Storage moved from a flat
+  //    `data.api_keys` namespace to `data.agentic_tools[toolName][envVarName]`,
+  //    so we sweep every tool bucket looking for the requested keyName. The
+  //    first non-empty match wins. This preserves the legacy "any user key for
+  //    this name" semantic — a tool-scoped resolver is a follow-up; for now
+  //    the executor spawn path (env-resolver) is the one that actually enforces
+  //    per-SDK isolation.
   if (context.userId && context.db) {
     console.log(`   → Checking user-level configuration...`);
     const row = await select(context.db).from(users).where(eq(users.user_id, context.userId)).one();
 
     if (row) {
-      const data = row.data as { api_keys?: Record<string, string> };
-      const encryptedKey = data.api_keys?.[keyName];
+      const data = row.data as {
+        agentic_tools?: Record<string, Record<string, string> | undefined>;
+      };
+
+      let encryptedKey: string | undefined;
+      const tools = data.agentic_tools ?? {};
+      for (const fields of Object.values(tools)) {
+        if (fields?.[keyName]) {
+          encryptedKey = fields[keyName];
+          break;
+        }
+      }
 
       if (encryptedKey) {
         try {

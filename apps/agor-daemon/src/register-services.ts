@@ -665,13 +665,16 @@ function createExecuteHandler(
       }
     }
 
+    // SDK spawn: scope per-tool credentials to the session's agentic_tool, so
+    // an Anthropic key on the user never leaks into a Codex/Gemini executor.
     const executorEnv = await createUserProcessEnvironment(
       userId,
       db,
       undefined,
       !!executorUnixUser,
       gatewayEnv,
-      sessionId as SessionID
+      sessionId as SessionID,
+      session.agentic_tool
     );
 
     // Validate required user environment variables

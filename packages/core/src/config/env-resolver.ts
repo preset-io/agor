@@ -4,9 +4,23 @@ import { select } from '../db/database-wrapper';
 import { decryptApiKey } from '../db/encryption';
 import { SessionEnvSelectionRepository } from '../db/repositories/session-env-selections';
 import { users } from '../db/schema';
-import type { GatewayEnvVar, SessionID, UserID } from '../types';
+import type {
+  AgenticToolName,
+  AgenticToolsConfig,
+  GatewayEnvVar,
+  SessionID,
+  UserID,
+} from '../types';
 import { filterEnv } from './env-blocklist';
 import { normalizeStoredEnvMap, type StoredEnvVar } from './env-vars';
+
+/**
+ * Encrypted-at-rest shape stored under `users.data.agentic_tools`.
+ * Mirrors AgenticToolsConfig field-for-field; values are encrypted strings.
+ */
+type StoredAgenticTools = {
+  [Tool in keyof AgenticToolsConfig]?: Record<string, string>;
+};
 
 /**
  * SECURITY: Allowlisted environment variable names that are safe to pass
@@ -145,17 +159,35 @@ export interface ResolveUserEnvOptions {
    * contexts without a session — e.g. worktree-level terminals).
    */
   sessionId?: SessionID;
+  /**
+   * If set, the user's per-tool credentials for THIS tool are merged into the
+   * resolved env (e.g. claude-code → ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL).
+   * Other tools' credentials are NEVER merged regardless of value.
+   *
+   * If omitted, NO per-tool credentials are merged — safe default for
+   * worktree-level terminals and other contexts that don't run an SDK.
+   */
+  tool?: AgenticToolName;
 }
 
 /**
- * Resolve user environment variables (decrypted from database, no system env vars)
- * Includes both env_vars and api_keys from user data.
+ * Resolve user environment variables (decrypted from database, no system env vars).
  *
- * Scope filtering (v0.5):
+ * Includes:
+ *   - User-defined env vars from `data.env_vars` (scope-filtered)
+ *   - If `options.tool` is set, the matching tool's credentials from
+ *     `data.agentic_tools[tool]` (e.g. claude-code → ANTHROPIC_API_KEY +
+ *     ANTHROPIC_BASE_URL). Other tools' credentials are NEVER merged.
+ *
+ * Precedence (later wins): tool credentials > user env vars. This matches the
+ * UX intent: per-tool config screens are the explicit, "this is the credential
+ * I want for this SDK" surface; global env vars are the fallback. The caller
+ * (`createUserProcessEnvironment`) layers config.yaml/system env underneath.
+ *
+ * Scope filtering on env_vars (v0.5):
  *   - `scope: 'global'` → always included
  *   - `scope: 'session'` → only included if `options.sessionId` is provided
- *     AND the var name has an entry in `session_env_selections` for that
- *     session.
+ *     AND the var name has an entry in `session_env_selections` for that session.
  *   - Any other scope value (reserved for v1+) is skipped.
  *
  * Legacy entries (plain-string values on disk) are treated as global-scope.
@@ -166,7 +198,7 @@ export async function resolveUserEnvironment(
   options: ResolveUserEnvOptions = {}
 ): Promise<Record<string, string>> {
   const env: Record<string, string> = {};
-  const { sessionId } = options;
+  const { sessionId, tool } = options;
 
   try {
     const row = await select(db).from(users).where(eq(users.user_id, userId)).one();
@@ -174,7 +206,7 @@ export async function resolveUserEnvironment(
     if (row) {
       const data = row.data as {
         env_vars?: Record<string, string | StoredEnvVar>;
-        api_keys?: Record<string, string>;
+        agentic_tools?: StoredAgenticTools;
       };
 
       // Normalize legacy + v0.5 shapes into StoredEnvVar records with scopes.
@@ -193,7 +225,7 @@ export async function resolveUserEnvironment(
         }
       }
 
-      // Decrypt and merge scoped env vars
+      // 1. Decrypt and merge scoped env vars (lower precedence — overridden by tool config)
       for (const [key, entry] of Object.entries(normalized)) {
         // Scope gating
         if (entry.scope === 'global') {
@@ -217,18 +249,25 @@ export async function resolveUserEnvironment(
         }
       }
 
-      // Decrypt and merge user API keys and base URLs (e.g., OPENAI_API_KEY, ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL)
-      // Only override if the decrypted value is non-empty
-      const encryptedApiKeys = data.api_keys;
-      if (encryptedApiKeys) {
-        for (const [key, encryptedValue] of Object.entries(encryptedApiKeys)) {
-          try {
-            const decryptedValue = decryptApiKey(encryptedValue);
-            if (decryptedValue && decryptedValue.trim() !== '') {
-              env[key] = decryptedValue;
+      // 2. Decrypt and merge ONLY this tool's per-SDK credentials (higher precedence).
+      //    Without `options.tool`, no tool config is merged — this is the fix for the
+      //    cross-SDK credential leak: a Codex spawn never sees ANTHROPIC_API_KEY.
+      if (tool) {
+        const toolFields = data.agentic_tools?.[tool];
+        if (toolFields) {
+          for (const [key, encryptedValue] of Object.entries(toolFields)) {
+            if (!encryptedValue) continue;
+            try {
+              const decryptedValue = decryptApiKey(encryptedValue);
+              if (decryptedValue && decryptedValue.trim() !== '') {
+                env[key] = decryptedValue;
+              }
+            } catch (err) {
+              console.error(
+                `Failed to decrypt agentic_tools.${tool}.${key} for user ${userId}:`,
+                err
+              );
             }
-          } catch (err) {
-            console.error(`Failed to decrypt API key ${key} for user ${userId}:`, err);
           }
         }
       }
@@ -349,7 +388,14 @@ export async function createUserProcessEnvironment(
    * If provided, session-scope env vars selected for this session are
    * included in the user env. Session-scope vars are otherwise excluded.
    */
-  sessionId?: SessionID
+  sessionId?: SessionID,
+  /**
+   * If provided, the user's per-tool credentials for THIS tool are merged
+   * into the environment (e.g. claude-code → ANTHROPIC_*). Other tools'
+   * credentials are NEVER merged. Omit for non-SDK contexts (worktree
+   * terminals, generic background jobs).
+   */
+  tool?: AgenticToolName
 ): Promise<Record<string, string>> {
   // SECURITY: Start with allowlisted env vars only — never inherit full process.env
   const env = buildAllowlistedEnv();
@@ -378,9 +424,11 @@ export async function createUserProcessEnvironment(
   }
 
   // 2. Resolve and merge user environment variables (if userId provided)
-  // Only override if values are non-empty — takes precedence over gateway fallback vars
+  // Only override if values are non-empty — takes precedence over gateway fallback vars.
+  // When `tool` is set, only THAT tool's per-SDK credentials are folded in;
+  // other tools' credentials are excluded (cross-SDK credential isolation).
   if (userId && db) {
-    const userEnv = await resolveUserEnvironment(userId, db, { sessionId });
+    const userEnv = await resolveUserEnvironment(userId, db, { sessionId, tool });
     for (const [key, value] of Object.entries(userEnv)) {
       if (value && value.trim() !== '') {
         env[key] = value;

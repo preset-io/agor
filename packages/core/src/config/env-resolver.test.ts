@@ -12,7 +12,7 @@
 import type { Session, SessionID, UserID, UUID, WorktreeID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
-import { describe, expect } from 'vitest';
+import { beforeAll, describe, expect } from 'vitest';
 import { select, update } from '../db/database-wrapper';
 import { encryptApiKey } from '../db/encryption';
 import { RepoRepository } from '../db/repositories/repos';
@@ -25,6 +25,14 @@ import { dbTest } from '../db/test-helpers';
 import { generateId } from '../lib/ids';
 import { resolveUserEnvironment } from './env-resolver';
 import type { StoredEnvVar } from './env-vars';
+
+// Force real AES encryption so URL-shaped tool config (e.g. ANTHROPIC_BASE_URL)
+// round-trips without tripping decryptApiKey's dev-mode `:` heuristic.
+beforeAll(() => {
+  if (!process.env.AGOR_MASTER_SECRET) {
+    process.env.AGOR_MASTER_SECRET = 'test-master-secret-env-resolver';
+  }
+});
 
 function encEntry(value: string, scope: StoredEnvVar['scope']): StoredEnvVar {
   return {
@@ -188,5 +196,128 @@ describe('resolveUserEnvironment — scope filtering (v0.5)', () => {
     const envB = await resolveUserEnvironment(userId, db, { sessionId: sessionB });
     expect(envA.SHARED_NAME).toBe('secret');
     expect(envB.SHARED_NAME).toBeUndefined();
+  });
+});
+
+// ============================================================================
+// Per-tool credential scoping (cross-SDK isolation)
+//
+// Verifies that `resolveUserEnvironment(..., { tool })` merges ONLY the
+// requested tool's credentials from `data.agentic_tools[tool]` and never
+// leaks credentials from other tools' buckets — the security regression
+// that motivated PR #1077.
+// ============================================================================
+
+describe('resolveUserEnvironment — per-tool credential scoping', () => {
+  /**
+   * Seed a user with full per-tool credential blobs across multiple tools so
+   * we can verify that selecting one tool does not surface another's keys.
+   * Mirrors the on-disk shape: `data.agentic_tools[tool][envVarName] = encrypted`.
+   */
+  // biome-ignore lint/suspicious/noExplicitAny: test helper
+  async function createUserWithToolCreds(db: any): Promise<UserID> {
+    const usersRepo = new UsersRepository(db);
+    const user = await usersRepo.create({
+      email: `tool-test-${Date.now()}-${Math.random()}@example.com`,
+      name: 'Tool Test',
+    });
+    const userId = user.user_id as UserID;
+
+    await usersRepo.setToolConfigField(userId, 'claude-code', 'ANTHROPIC_API_KEY', 'anthropic-key');
+    await usersRepo.setToolConfigField(
+      userId,
+      'claude-code',
+      'ANTHROPIC_BASE_URL',
+      'https://gateway.example.com'
+    );
+    await usersRepo.setToolConfigField(userId, 'codex', 'OPENAI_API_KEY', 'openai-key');
+    await usersRepo.setToolConfigField(userId, 'gemini', 'GEMINI_API_KEY', 'gemini-key');
+    await usersRepo.setToolConfigField(userId, 'copilot', 'COPILOT_GITHUB_TOKEN', 'gh-copilot');
+
+    return userId;
+  }
+
+  dbTest('omitting `tool` excludes ALL per-tool credentials', async ({ db }) => {
+    const userId = await createUserWithToolCreds(db);
+    const env = await resolveUserEnvironment(userId, db);
+    // Safe default: worktree-level terminals don't run an SDK and shouldn't
+    // see any per-SDK keys.
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.GEMINI_API_KEY).toBeUndefined();
+    expect(env.COPILOT_GITHUB_TOKEN).toBeUndefined();
+  });
+
+  dbTest('tool=claude-code merges only claude-code fields', async ({ db }) => {
+    const userId = await createUserWithToolCreds(db);
+    const env = await resolveUserEnvironment(userId, db, { tool: 'claude-code' });
+    expect(env.ANTHROPIC_API_KEY).toBe('anthropic-key');
+    expect(env.ANTHROPIC_BASE_URL).toBe('https://gateway.example.com');
+    // Other tools' credentials must NOT leak.
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.GEMINI_API_KEY).toBeUndefined();
+    expect(env.COPILOT_GITHUB_TOKEN).toBeUndefined();
+  });
+
+  dbTest('tool=codex merges only OPENAI_API_KEY', async ({ db }) => {
+    const userId = await createUserWithToolCreds(db);
+    const env = await resolveUserEnvironment(userId, db, { tool: 'codex' });
+    expect(env.OPENAI_API_KEY).toBe('openai-key');
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.GEMINI_API_KEY).toBeUndefined();
+    expect(env.COPILOT_GITHUB_TOKEN).toBeUndefined();
+  });
+
+  dbTest('tool=gemini merges only GEMINI_API_KEY', async ({ db }) => {
+    const userId = await createUserWithToolCreds(db);
+    const env = await resolveUserEnvironment(userId, db, { tool: 'gemini' });
+    expect(env.GEMINI_API_KEY).toBe('gemini-key');
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+  });
+
+  dbTest('tool=copilot merges only COPILOT_GITHUB_TOKEN', async ({ db }) => {
+    const userId = await createUserWithToolCreds(db);
+    const env = await resolveUserEnvironment(userId, db, { tool: 'copilot' });
+    expect(env.COPILOT_GITHUB_TOKEN).toBe('gh-copilot');
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.GEMINI_API_KEY).toBeUndefined();
+  });
+
+  dbTest('tool credentials override same-named global env vars', async ({ db }) => {
+    // Seed env_vars with a global ANTHROPIC_API_KEY, then set a different
+    // value via the agentic_tools bucket. The tool-scoped value should win
+    // because per-SDK config is the explicit "use this for this tool" surface.
+    const usersRepo = new UsersRepository(db);
+    const user = await usersRepo.create({
+      email: `precedence-${Date.now()}-${Math.random()}@example.com`,
+      name: 'Precedence',
+    });
+    const userId = user.user_id as UserID;
+
+    const row = await select(db).from(users).where(eq(users.user_id, userId)).one();
+    const currentData = (row?.data as Record<string, unknown>) ?? {};
+    await update(db, users)
+      .set({
+        data: {
+          ...currentData,
+          env_vars: {
+            ANTHROPIC_API_KEY: encEntry('global-fallback', 'global'),
+          },
+        },
+      })
+      .where(eq(users.user_id, userId))
+      .run();
+
+    await usersRepo.setToolConfigField(userId, 'claude-code', 'ANTHROPIC_API_KEY', 'tool-specific');
+
+    const envWithTool = await resolveUserEnvironment(userId, db, { tool: 'claude-code' });
+    expect(envWithTool.ANTHROPIC_API_KEY).toBe('tool-specific');
+
+    // Without `tool`, the global env var still wins (no tool merge happens).
+    const envNoTool = await resolveUserEnvironment(userId, db);
+    expect(envNoTool.ANTHROPIC_API_KEY).toBe('global-fallback');
   });
 });

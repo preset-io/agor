@@ -29,6 +29,10 @@ import {
 } from '@agor/core/db';
 import { isLikelyGitToken } from '@agor/core/git';
 import type {
+  AgenticToolName,
+  AgenticToolsConfig,
+  AgenticToolsStatus,
+  AgenticToolsUpdate,
   EnvVarMetadata,
   EnvVarScope,
   Paginated,
@@ -38,6 +42,74 @@ import type {
   UserRole,
 } from '@agor/core/types';
 import { normalizeRole, ROLES } from '@agor/core/types';
+
+/**
+ * Encrypted-at-rest shape stored under `users.data.agentic_tools`.
+ * Mirrors AgenticToolsConfig field-for-field, but each value is the encrypted bytes.
+ */
+type StoredAgenticTools = {
+  [Tool in keyof AgenticToolsConfig]?: Record<string, string>;
+};
+
+/** Project the encrypted blob to the boolean presence DTO returned to clients. */
+function toAgenticToolsStatus(
+  stored: StoredAgenticTools | undefined
+): AgenticToolsStatus | undefined {
+  if (!stored) return undefined;
+  const out: Record<string, Record<string, boolean>> = {};
+  for (const [tool, fields] of Object.entries(stored)) {
+    if (!fields) continue;
+    const flags: Record<string, boolean> = {};
+    for (const [field, value] of Object.entries(fields)) {
+      if (value) flags[field] = true;
+    }
+    if (Object.keys(flags).length > 0) out[tool] = flags;
+  }
+  return Object.keys(out).length > 0 ? (out as AgenticToolsStatus) : undefined;
+}
+
+/**
+ * Apply a per-tool credential patch to the encrypted-at-rest blob.
+ *
+ * Patch semantics (mirror UpdateUserInput.agentic_tools):
+ *   - `string` value → encrypt and set the field
+ *   - `null` value   → delete the field
+ *   - omitted field  → untouched
+ *   - if a tool's bucket becomes empty post-patch, the bucket is removed
+ *
+ * Returns the next stored shape (caller writes it back to `data.agentic_tools`).
+ */
+function applyAgenticToolsPatch(
+  current: StoredAgenticTools,
+  patch: AgenticToolsUpdate
+): StoredAgenticTools {
+  const next: StoredAgenticTools = { ...current };
+  for (const [tool, fields] of Object.entries(patch) as Array<
+    [AgenticToolName, Record<string, string | null> | undefined]
+  >) {
+    if (!fields) continue;
+    const bucket: Record<string, string> = { ...((next[tool] as Record<string, string>) ?? {}) };
+    for (const [field, value] of Object.entries(fields)) {
+      if (value === null || value === undefined) {
+        delete bucket[field];
+      } else {
+        try {
+          bucket[field] = encryptApiKey(value);
+          console.log(`🔐 Encrypted user agentic_tools.${tool}.${field}`);
+        } catch (err) {
+          console.error(`Failed to encrypt agentic_tools.${tool}.${field}:`, err);
+          throw new Error(`Failed to encrypt agentic_tools.${tool}.${field}`);
+        }
+      }
+    }
+    if (Object.keys(bucket).length > 0) {
+      (next as Record<string, Record<string, string>>)[tool] = bucket;
+    } else {
+      delete next[tool];
+    }
+  }
+  return next;
+}
 
 /**
  * Create user input
@@ -66,11 +138,12 @@ interface UpdateUserData {
   avatar?: string;
   preferences?: Record<string, unknown>;
   onboarding_completed?: boolean;
-  api_keys?: {
-    ANTHROPIC_API_KEY?: string | null;
-    OPENAI_API_KEY?: string | null;
-    GEMINI_API_KEY?: string | null;
-  };
+  /**
+   * Per-tool credential patch. Each tool's sub-object is a partial patch —
+   * `string` sets and encrypts, `null` clears, omitted fields are untouched.
+   * Field names are env var names exported into the SDK CLI environment.
+   */
+  agentic_tools?: AgenticToolsUpdate;
   // Environment variables for update (accepts plaintext, encrypted before storage)
   env_vars?: Record<string, string | null>; // { "GITHUB_TOKEN": "ghp_...", "NPM_TOKEN": null }
   // Per-var scope updates (v0.5: 'global' | 'session'). Applied after env_vars
@@ -202,7 +275,7 @@ export class UsersService {
     if (
       data.avatar ||
       data.preferences ||
-      data.api_keys ||
+      data.agentic_tools ||
       data.env_vars ||
       data.env_var_scopes ||
       data.default_agentic_config
@@ -212,30 +285,15 @@ export class UsersService {
       const currentData = currentRow?.data as {
         avatar?: string;
         preferences?: Record<string, unknown>;
-        api_keys?: Record<string, string>;
+        agentic_tools?: StoredAgenticTools;
         env_vars?: Record<string, string | StoredEnvVar>;
         default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
       };
 
-      // Handle API keys (encrypt before storage)
-      const encryptedKeys = currentData?.api_keys || {};
-      if (data.api_keys) {
-        for (const [key, value] of Object.entries(data.api_keys)) {
-          if (value === null || value === undefined) {
-            // Clear key
-            delete encryptedKeys[key];
-          } else {
-            // Encrypt and store
-            try {
-              encryptedKeys[key] = encryptApiKey(value);
-              console.log(`🔐 Encrypted user API key: ${key}`);
-            } catch (err) {
-              console.error(`Failed to encrypt ${key}:`, err);
-              throw new Error(`Failed to encrypt ${key}`);
-            }
-          }
-        }
-      }
+      // Handle per-tool credential patches (encrypt-on-write, drop-on-null).
+      const nextAgenticTools: StoredAgenticTools = data.agentic_tools
+        ? applyAgenticToolsPatch(currentData?.agentic_tools ?? {}, data.agentic_tools)
+        : (currentData?.agentic_tools ?? {});
 
       // Handle env vars (encrypt before storage).
       //
@@ -317,7 +375,7 @@ export class UsersService {
       updates.data = {
         avatar: data.avatar ?? current.avatar,
         preferences: data.preferences ?? current.preferences,
-        api_keys: Object.keys(encryptedKeys).length > 0 ? encryptedKeys : undefined,
+        agentic_tools: Object.keys(nextAgenticTools).length > 0 ? nextAgenticTools : undefined,
         env_vars: Object.keys(nextEnvVars).length > 0 ? nextEnvVars : undefined,
         default_agentic_config: data.default_agentic_config ?? current.default_agentic_config,
       };
@@ -369,33 +427,59 @@ export class UsersService {
   }
 
   /**
-   * Get decrypted API key for a user
-   * Used by key resolution service
+   * Get a single decrypted credential field scoped to a specific agentic tool.
+   *
+   * Replaces the legacy flat-namespace `getApiKey(userId, 'ANTHROPIC_API_KEY')`
+   * call site with `(userId, 'claude-code', 'ANTHROPIC_API_KEY')` so an
+   * Anthropic key stored on the user can no longer leak into a Codex spawn.
    */
-  async getApiKey(
+  async getToolConfigField<T extends AgenticToolName>(
     userId: UserID,
-    keyName:
-      | 'ANTHROPIC_API_KEY'
-      | 'OPENAI_API_KEY'
-      | 'GEMINI_API_KEY'
-      | 'COPILOT_GITHUB_TOKEN'
-      | 'CLAUDE_CODE_OAUTH_TOKEN'
+    tool: T,
+    field: keyof AgenticToolsConfig[T] & string
   ): Promise<string | undefined> {
     const row = await select(this.db).from(users).where(eq(users.user_id, userId)).one();
-
     if (!row) return undefined;
 
-    const data = row.data as { api_keys?: Record<string, string> };
-    const encryptedKey = data.api_keys?.[keyName];
-
-    if (!encryptedKey) return undefined;
+    const data = row.data as { agentic_tools?: StoredAgenticTools };
+    const encrypted = data.agentic_tools?.[tool]?.[field];
+    if (!encrypted) return undefined;
 
     try {
-      return decryptApiKey(encryptedKey);
+      return decryptApiKey(encrypted);
     } catch (err) {
-      console.error(`Failed to decrypt ${keyName} for user ${userId}:`, err);
+      console.error(`Failed to decrypt agentic_tools.${tool}.${field} for user ${userId}:`, err);
       return undefined;
     }
+  }
+
+  /**
+   * Get the full decrypted credential bag for one tool. Used when spawning an
+   * SDK so the executor environment receives only that tool's env vars.
+   * Returns `null` if the user has no stored config for the tool.
+   */
+  async getToolConfig<T extends AgenticToolName>(
+    userId: UserID,
+    tool: T
+  ): Promise<AgenticToolsConfig[T] | null> {
+    const row = await select(this.db).from(users).where(eq(users.user_id, userId)).one();
+    if (!row) return null;
+
+    const data = row.data as { agentic_tools?: StoredAgenticTools };
+    const fields = data.agentic_tools?.[tool];
+    if (!fields || Object.keys(fields).length === 0) return null;
+
+    const out: Record<string, string> = {};
+    for (const [field, encrypted] of Object.entries(fields)) {
+      if (!encrypted) continue;
+      try {
+        out[field] = decryptApiKey(encrypted);
+      } catch (err) {
+        console.error(`Failed to decrypt agentic_tools.${tool}.${field} for user ${userId}:`, err);
+      }
+    }
+
+    return Object.keys(out).length > 0 ? (out as AgenticToolsConfig[T]) : null;
   }
 
   /**
@@ -439,7 +523,7 @@ export class UsersService {
     const data = row.data as {
       avatar?: string;
       preferences?: Record<string, unknown>;
-      api_keys?: Record<string, string>; // Encrypted keys
+      agentic_tools?: StoredAgenticTools; // Encrypted per-tool credential blobs
       env_vars?: Record<string, string | StoredEnvVar>; // Encrypted env vars (legacy + v0.5 shape)
       default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
     };
@@ -468,16 +552,8 @@ export class UsersService {
       must_change_password: !!row.must_change_password,
       created_at: row.created_at,
       updated_at: row.updated_at ?? undefined,
-      // Return key status (boolean), NOT actual keys
-      api_keys: data.api_keys
-        ? {
-            ANTHROPIC_API_KEY: !!data.api_keys.ANTHROPIC_API_KEY,
-            OPENAI_API_KEY: !!data.api_keys.OPENAI_API_KEY,
-            GEMINI_API_KEY: !!data.api_keys.GEMINI_API_KEY,
-            COPILOT_GITHUB_TOKEN: !!data.api_keys.COPILOT_GITHUB_TOKEN,
-            CLAUDE_CODE_OAUTH_TOKEN: !!data.api_keys.CLAUDE_CODE_OAUTH_TOKEN,
-          }
-        : undefined,
+      // Per-tool credential presence (boolean only — never expose decrypted values).
+      agentic_tools: toAgenticToolsStatus(data.agentic_tools),
       // Return env var metadata (presence + scope), NOT actual values
       env_vars: envVarMetadata,
       // Return default agentic config
@@ -519,7 +595,7 @@ class UsersServiceWithAuth extends UsersService {
     const data = row.data as {
       avatar?: string;
       preferences?: Record<string, unknown>;
-      api_keys?: Record<string, string>;
+      agentic_tools?: StoredAgenticTools;
       env_vars?: Record<string, string | StoredEnvVar>;
     };
 
@@ -547,15 +623,7 @@ class UsersServiceWithAuth extends UsersService {
       must_change_password: !!row.must_change_password,
       created_at: row.created_at,
       updated_at: row.updated_at ?? undefined,
-      api_keys: data.api_keys
-        ? {
-            ANTHROPIC_API_KEY: !!data.api_keys.ANTHROPIC_API_KEY,
-            OPENAI_API_KEY: !!data.api_keys.OPENAI_API_KEY,
-            GEMINI_API_KEY: !!data.api_keys.GEMINI_API_KEY,
-            COPILOT_GITHUB_TOKEN: !!data.api_keys.COPILOT_GITHUB_TOKEN,
-            CLAUDE_CODE_OAUTH_TOKEN: !!data.api_keys.CLAUDE_CODE_OAUTH_TOKEN,
-          }
-        : undefined,
+      agentic_tools: toAgenticToolsStatus(data.agentic_tools),
       env_vars: envVarMetadata,
     };
   }

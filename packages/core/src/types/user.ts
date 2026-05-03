@@ -95,6 +95,76 @@ export interface DefaultAgenticConfig {
 }
 
 /**
+ * Per-tool credential field shapes.
+ *
+ * Field names equal the env var names exported into the SDK CLI's environment.
+ * Storage values are encrypted at rest; the public DTO (User.agentic_tools)
+ * exposes the same field names with `boolean` presence flags.
+ */
+export interface ClaudeCodeConfig {
+  ANTHROPIC_API_KEY?: string;
+  CLAUDE_CODE_OAUTH_TOKEN?: string;
+  ANTHROPIC_AUTH_TOKEN?: string;
+  ANTHROPIC_BASE_URL?: string;
+}
+
+export interface CodexConfig {
+  OPENAI_API_KEY?: string;
+}
+
+export interface GeminiConfig {
+  GEMINI_API_KEY?: string;
+}
+
+export interface CopilotConfig {
+  COPILOT_GITHUB_TOKEN?: string;
+}
+
+/**
+ * Per-tool credential map. Each tool's config is independent and
+ * scoped to its own SDK at session-spawn time.
+ */
+export interface AgenticToolsConfig {
+  'claude-code'?: ClaudeCodeConfig;
+  codex?: CodexConfig;
+  gemini?: GeminiConfig;
+  copilot?: CopilotConfig;
+  opencode?: Record<string, never>;
+}
+
+/** Union of all valid env-var-named fields across all tool configs. */
+export type AgenticToolConfigField =
+  | keyof ClaudeCodeConfig
+  | keyof CodexConfig
+  | keyof GeminiConfig
+  | keyof CopilotConfig;
+
+/**
+ * Public DTO shape: per-tool credential presence flags.
+ *
+ * Flips every field of every tool config from `string` (encrypted) to `boolean`
+ * (set/unset). Used by `User.agentic_tools` and the user-facing API responses
+ * — the daemon never returns decrypted credential values to clients.
+ */
+export type AgenticToolsStatus = {
+  [Tool in keyof AgenticToolsConfig]?: AgenticToolsConfig[Tool] extends infer Cfg
+    ? { [Field in keyof Cfg]?: boolean }
+    : never;
+};
+
+/**
+ * Update DTO shape: per-tool credential patch payload.
+ *
+ * String values set the field (plaintext, encrypted before storage); `null`
+ * clears the field. Omitted fields are untouched. Used by PATCH /users/:id.
+ */
+export type AgenticToolsUpdate = {
+  [Tool in keyof AgenticToolsConfig]?: AgenticToolsConfig[Tool] extends infer Cfg
+    ? { [Field in keyof Cfg]?: string | null }
+    : never;
+};
+
+/**
  * Available task completion chime sounds
  */
 export type ChimeSound =
@@ -177,20 +247,13 @@ export interface User extends BaseUserFields {
   updated_at?: Date;
   // Unix username for process impersonation (optional, unique, admin-managed)
   unix_username?: string;
-  // API key status (boolean only, never exposes actual keys)
-  api_keys?: {
-    ANTHROPIC_API_KEY?: boolean; // true = key is set, false/undefined = not set
-    OPENAI_API_KEY?: boolean;
-    GEMINI_API_KEY?: boolean;
-    COPILOT_GITHUB_TOKEN?: boolean;
-    /**
-     * Claude Code subscription token (Pro/Max plan), obtained via `claude setup-token`.
-     * Stored alongside ANTHROPIC_API_KEY; the executor exports whichever is set as the
-     * matching env var on session spawn. The Claude Code SDK prefers the OAuth token
-     * when both are present.
-     */
-    CLAUDE_CODE_OAUTH_TOKEN?: boolean;
-  };
+  /**
+   * Per-tool credential & auth status (boolean only, never exposes actual values).
+   *
+   * Mirrors `AgenticToolsConfig` field-for-field with each value flipped from
+   * encrypted-string to `boolean` for presence checking.
+   */
+  agentic_tools?: AgenticToolsStatus;
   // Environment variable status with scope (never exposes actual values).
   // Map from env var name → presence/scope metadata. For v0.5 the only validated
   // scope values are 'global' and 'session'; other values are reserved for v1 and
@@ -265,14 +328,13 @@ export interface UpdateUserInput extends Partial<BaseUserFields> {
   unix_username?: string;
   /** Force user to change password on next login (admin-only) */
   must_change_password?: boolean;
-  // API keys for update (accepts plaintext, encrypted before storage)
-  api_keys?: {
-    ANTHROPIC_API_KEY?: string | null; // string = set key, null = clear key
-    OPENAI_API_KEY?: string | null;
-    GEMINI_API_KEY?: string | null;
-    COPILOT_GITHUB_TOKEN?: string | null;
-    CLAUDE_CODE_OAUTH_TOKEN?: string | null;
-  };
+  /**
+   * Per-tool credential updates (accepts plaintext, encrypted before storage).
+   *
+   * Each tool's sub-object is a partial patch — only fields you include are
+   * touched; `null` clears the field, a string sets it. Field names = env var names.
+   */
+  agentic_tools?: AgenticToolsUpdate;
   // Environment variables for update (accepts plaintext, encrypted before storage).
   // `null` clears the variable. A plain `string` creates/updates the value and leaves
   // the existing scope in place (defaults to 'global' for new vars).
