@@ -82,7 +82,9 @@ const config: DocsThemeConfig = {
       frontMatter.description ||
       'Team command center for all things agentic. A shared canvas for coding agents and long-lived assistants — Claude Code, Codex, Gemini — anchored on git worktrees, with real-time multiplayer and an MCP surface agents drive themselves.';
     const fullTitle =
-      pageTitle === 'agor' ? 'agor – Team command center for all things agentic' : `${pageTitle} – agor`;
+      pageTitle === 'agor'
+        ? 'agor – Team command center for all things agentic'
+        : `${pageTitle} – agor`;
     const rawOgImage = frontMatter.ogImage || frontMatter.image || defaultOgImage;
     const ogImage = rawOgImage.startsWith('http') ? rawOgImage : `${defaultSiteUrl}${rawOgImage}`;
     const ogType = frontMatter.date ? 'article' : 'website';
