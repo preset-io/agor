@@ -1,146 +1,62 @@
-# Agor's own .agor.yml — dogfoods the v2 variant schema.
-#
-# Variants cover the common development / testing topologies:
-#   - sqlite  (default): single-user dev, SQLite, no RBAC. Fastest to boot.
-#   - postgres:          PostgreSQL-backed dev. Closer to multi-user prod layout.
-#   - full:              production-like — PostgreSQL + worktree RBAC + strict
-#                        Unix user impersonation.
-#   - docs:              Nextra docs site (apps/agor-docs). No daemon, no DB —
-#                        just `next dev` for previewing /guide/* edits.
-#
-# postgres/full override start/stop/nuke so every docker compose call loads
-# docker-compose.override.postgres.yml (otherwise docker auto-loads only
-# docker-compose.override.yml, which has no postgres config). logs / health /
-# app are inherited via `extends: sqlite`. Single-level extends only — chains
-# are rejected at parse time.
-#
-# Ports derive from {{worktree.unique_id}} so multiple worktrees run side-by-side
-# without colliding. The `docs` variant uses {{host.ip_address}} for the app URL
-# so the dev server is reachable from your laptop, not just localhost on the
-# daemon host. Override the autodetected IP via `daemon.host_ip_address` in
-# ~/.agor/config.yaml or `template_overrides.host.ip_address` per-repo.
-
 environment:
   default: sqlite
-
   variants:
-    sqlite:
-      description: Single-user dev with SQLite. No RBAC. Fastest to boot.
-      # AGOR_BUILD_SHA / AGOR_BUILT_AT are injected by Agor's
-      # spawnEnvironmentCommand from the host-side worktree gitdir; no need to
-      # capture them here. See packages/core/src/unix/environment-command-spawn.ts.
-      #
-      # UID/GID are passed explicitly so docker-compose.override.yml's
-      # `user: '${UID:-1000}:${GID:-1000}'` resolves to the host's actual
-      # identity (and the `args: { UID, GID }` build args do too on rebuild).
-      # Bash's $UID/$GID are readonly but not exported, so without this prefix
-      # compose silently falls through to 1000:1000 — and once the image and
-      # runtime UIDs disagree, the container's UID has no /etc/passwd entry
-      # and the entrypoint dies on `sudo: you do not exist in the passwd
-      # database`. TODO: lift this into spawnEnvironmentCommand alongside
-      # AGOR_BUILD_SHA so every Docker-based .agor.yml gets it for free.
+    docs:
       start: >-
-        UID=$(id -u) GID=$(id -g)
-        DAEMON_PORT={{add 3000 worktree.unique_id}}
-        UI_PORT={{add 5000 worktree.unique_id}}
-        docker compose -p agor-{{worktree.name}} up -d
+        PORT={{add 7000 worktree.unique_id}} docker compose -f apps/agor-docs/docker-compose.yml -p
+        agor-docs-{{worktree.name}} up -d --build
+      stop: docker compose -f apps/agor-docs/docker-compose.yml -p agor-docs-{{worktree.name}} down
+      description: >-
+        Nextra docs site (apps/agor-docs) for previewing documentation edits. Runs `next dev` in a
+        self-contained Docker container — no daemon, no database, no host-side `pnpm install`
+        needed. Port = {{add 7000 worktree.unique_id}}; app URL uses {{host.ip_address}} so it's
+        reachable from outside the daemon host.
+      nuke: >-
+        docker compose -f apps/agor-docs/docker-compose.yml -p agor-docs-{{worktree.name}} down -v
+        --rmi local
+      logs: >-
+        docker compose -f apps/agor-docs/docker-compose.yml -p agor-docs-{{worktree.name}} logs
+        --tail=100
+      health: http://localhost:{{add 7000 worktree.unique_id}}
+      app: http://{{host.ip_address}}:{{add 7000 worktree.unique_id}}
+    full:
+      start: >-
+        UID=$(id -u) GID=$(id -g) DAEMON_PORT={{add 3000 worktree.unique_id}} UI_PORT={{add 5000
+        worktree.unique_id}} AGOR_RBAC_ENABLED=true AGOR_UNIX_USER_MODE=strict docker compose -f
+        docker-compose.yml -f docker-compose.override.postgres.yml -p agor-{{worktree.name}}
+        --profile postgres up -d
+      stop: >-
+        docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
+        agor-{{worktree.name}} --profile postgres down
+      description: >-
+        Production-like: PostgreSQL + worktree RBAC + strict Unix user impersonation (each Agor user
+        runs sessions as their own Unix identity). Requires the sudoers config shipped under
+        docker/sudoers/.
+      extends: sqlite
+      nuke: >-
+        docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
+        agor-{{worktree.name}} --profile postgres down -v
+    sqlite:
+      start: >-
+        UID=$(id -u) GID=$(id -g) DAEMON_PORT={{add 3000 worktree.unique_id}} UI_PORT={{add 5000
+        worktree.unique_id}} docker compose -p agor-{{worktree.name}} up -d --build
       stop: docker compose -p agor-{{worktree.name}} down
+      description: Single-user dev with SQLite. No RBAC. Fastest to boot.
       nuke: docker compose -p agor-{{worktree.name}} down -v
       logs: docker compose -p agor-{{worktree.name}} logs --tail=100
       health: http://localhost:{{add 3000 worktree.unique_id}}/health
-      app: http://localhost:{{add 5000 worktree.unique_id}}
-
+      app: http://{{host.ip_address}}:{{add 5000 worktree.unique_id}}
     postgres:
-      extends: sqlite
+      start: >-
+        UID=$(id -u) GID=$(id -g) DAEMON_PORT={{add 3000 worktree.unique_id}} UI_PORT={{add 5000
+        worktree.unique_id}} docker compose -f docker-compose.yml -f
+        docker-compose.override.postgres.yml -p agor-{{worktree.name}} --profile postgres up -d
+        --build
+      stop: >-
+        docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
+        agor-{{worktree.name}} --profile postgres down
       description: Dev with PostgreSQL. RBAC off. Closer to multi-user prod layout.
-      # Explicit -f flags: without them, docker compose auto-loads
-      # docker-compose.override.yml (UID/GID only) and skips the postgres
-      # override. Listing both files explicitly replaces that default.
-      start: >-
-        UID=$(id -u) GID=$(id -g)
-        DAEMON_PORT={{add 3000 worktree.unique_id}}
-        UI_PORT={{add 5000 worktree.unique_id}}
-        docker compose
-        -f docker-compose.yml
-        -f docker-compose.override.postgres.yml
-        -p agor-{{worktree.name}}
-        --profile postgres
-        up -d
-      stop: >-
-        docker compose
-        -f docker-compose.yml
-        -f docker-compose.override.postgres.yml
-        -p agor-{{worktree.name}}
-        --profile postgres
-        down
-      nuke: >-
-        docker compose
-        -f docker-compose.yml
-        -f docker-compose.override.postgres.yml
-        -p agor-{{worktree.name}}
-        --profile postgres
-        down -v
-
-    docs:
-      description: >-
-        Nextra docs site (apps/agor-docs) for previewing documentation edits.
-        Runs `next dev` in a self-contained Docker container — no daemon,
-        no database, no host-side `pnpm install` needed. Port =
-        {{add 7000 worktree.unique_id}}; app URL uses {{host.ip_address}}
-        so it's reachable from outside the daemon host.
-      start: >-
-        PORT={{add 7000 worktree.unique_id}}
-        docker compose
-        -f apps/agor-docs/docker-compose.yml
-        -p agor-docs-{{worktree.name}}
-        up -d --build
-      stop: >-
-        docker compose
-        -f apps/agor-docs/docker-compose.yml
-        -p agor-docs-{{worktree.name}}
-        down
-      nuke: >-
-        docker compose
-        -f apps/agor-docs/docker-compose.yml
-        -p agor-docs-{{worktree.name}}
-        down -v --rmi local
-      logs: >-
-        docker compose
-        -f apps/agor-docs/docker-compose.yml
-        -p agor-docs-{{worktree.name}}
-        logs --tail=100
-      health: http://localhost:{{add 7000 worktree.unique_id}}
-      app: http://{{host.ip_address}}:{{add 7000 worktree.unique_id}}
-
-    full:
       extends: sqlite
-      description: >-
-        Production-like: PostgreSQL + worktree RBAC + strict Unix user
-        impersonation (each Agor user runs sessions as their own Unix identity).
-        Requires the sudoers config shipped under docker/sudoers/.
-      start: >-
-        UID=$(id -u) GID=$(id -g)
-        DAEMON_PORT={{add 3000 worktree.unique_id}}
-        UI_PORT={{add 5000 worktree.unique_id}}
-        AGOR_RBAC_ENABLED=true
-        AGOR_UNIX_USER_MODE=strict
-        docker compose
-        -f docker-compose.yml
-        -f docker-compose.override.postgres.yml
-        -p agor-{{worktree.name}}
-        --profile postgres
-        up -d
-      stop: >-
-        docker compose
-        -f docker-compose.yml
-        -f docker-compose.override.postgres.yml
-        -p agor-{{worktree.name}}
-        --profile postgres
-        down
       nuke: >-
-        docker compose
-        -f docker-compose.yml
-        -f docker-compose.override.postgres.yml
-        -p agor-{{worktree.name}}
-        --profile postgres
-        down -v
+        docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
+        agor-{{worktree.name}} --profile postgres down -v
