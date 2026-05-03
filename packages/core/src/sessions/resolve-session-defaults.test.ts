@@ -180,4 +180,73 @@ describe('resolveSessionDefaults', () => {
       expect(r.permission_config.mode).toBe('bypassPermissions');
     });
   });
+
+  describe('cross-tool spawn fallback (covers SessionsService.spawn)', () => {
+    // Regression coverage for the spawn() cross-tool change in 7992a712:
+    // when the user has NO default for the target tool, the spawn path now
+    // adopts the helper's resolved values instead of partially keeping the
+    // parent's. Verify the helper produces sensible output for that case.
+
+    it('cross-tool spawn with no user default for target tool: returns mapped system default permission mode', () => {
+      // User has Claude defaults but is spawning a Codex child. There's no
+      // codex entry in default_agentic_config, so we should fall back to
+      // codex's system default ('auto'), not to whatever the parent had.
+      const r = resolveSessionDefaults({
+        agenticTool: 'codex',
+        user: makeUser({ 'claude-code': { permissionMode: 'bypassPermissions' } }),
+      });
+      expect(r.permission_config.mode).toBe('auto');
+    });
+
+    it('cross-tool spawn from Claude → Gemini with no user default: returns gemini system default', () => {
+      const r = resolveSessionDefaults({
+        agenticTool: 'gemini',
+        user: makeUser({ 'claude-code': { permissionMode: 'acceptEdits' } }),
+      });
+      expect(r.permission_config.mode).toBe('autoEdit');
+    });
+
+    it('cross-tool spawn with no user at all: returns system default and is non-null', () => {
+      // The helper is called from the catch branch in spawn() when the user
+      // lookup fails. Ensure it still returns a populated permission_config.
+      const r = resolveSessionDefaults({ agenticTool: 'codex' });
+      expect(r.permission_config).toBeDefined();
+      expect(r.permission_config.mode).toBe('auto');
+    });
+  });
+
+  describe('gateway-style overrides (covers GatewayService channel config)', () => {
+    // Regression coverage for 7992a712: gateway now threads codex sub-config
+    // and mcpServerIds from GatewayAgenticConfig through the helper. Verify
+    // that the full set of fields is honored as a single bundle.
+
+    it('threads codex sub-config + mcp ids + permission/model overrides together', () => {
+      const r = resolveSessionDefaults({
+        agenticTool: 'codex',
+        user: makeUser({
+          codex: {
+            permissionMode: 'auto',
+            codexSandboxMode: 'workspace-write',
+            codexApprovalPolicy: 'on-request',
+            mcpServerIds: ['user-mcp'],
+          },
+        }),
+        overrides: {
+          // Simulates GatewayAgenticConfig fully populated by a Slack channel.
+          permissionMode: 'auto',
+          codexSandboxMode: 'danger-full-access',
+          codexApprovalPolicy: 'never',
+          codexNetworkAccess: true,
+          mcpServerIds: ['gateway-mcp-1', 'gateway-mcp-2'],
+        },
+      });
+      expect(r.permission_config.mode).toBe('auto');
+      expect(r.permission_config.codex).toEqual({
+        sandboxMode: 'danger-full-access',
+        approvalPolicy: 'never',
+        networkAccess: true,
+      });
+      expect(r.mcp_server_ids).toEqual(['gateway-mcp-1', 'gateway-mcp-2']);
+    });
+  });
 });
