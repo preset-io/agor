@@ -29,6 +29,7 @@ import {
   Select,
   Space,
   Switch,
+  Tabs,
   Tag,
   Typography,
   theme,
@@ -636,32 +637,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         const filteredKeyStatus: Partial<ApiKeyStatus> = Object.fromEntries(
           authFields.map((f) => [f, userApiKeyStatus[f]])
         );
-        return (
+        const defaultsPane = (
           <>
             <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
               Configure default settings for {displayNames[toolName]}. These will prepopulate
               session creation forms.
             </Typography.Paragraph>
-            {authFields.length > 0 && (
-              <div style={{ marginBottom: 24 }}>
-                <Typography.Title level={5} style={{ marginTop: 0, marginBottom: 8 }}>
-                  Authentication
-                </Typography.Title>
-                <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
-                  Per-user credentials. Encrypted at rest; take precedence over the daemon's global
-                  configuration.
-                </Typography.Paragraph>
-                <ApiKeyFields
-                  keyStatus={filteredKeyStatus}
-                  onSave={handleApiKeySave}
-                  onClear={handleApiKeyClear}
-                  saving={savingApiKeys}
-                />
-              </div>
-            )}
-            <Typography.Title level={5} style={{ marginTop: 0, marginBottom: 8 }}>
-              Defaults
-            </Typography.Title>
             <Form form={currentForm} layout="vertical">
               <AgenticToolConfigForm
                 agenticTool={toolName}
@@ -673,6 +654,36 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               <Button onClick={() => handleAgenticConfigClear(toolName)}>Clear Defaults</Button>
             </div>
           </>
+        );
+
+        // Tools with no auth fields (e.g. OpenCode) skip the tab strip entirely.
+        if (authFields.length === 0) {
+          return defaultsPane;
+        }
+
+        const authPane = (
+          <>
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+              Per-user credentials for {displayNames[toolName]}. Encrypted at rest; take precedence
+              over the daemon's global configuration.
+            </Typography.Paragraph>
+            <ApiKeyFields
+              keyStatus={filteredKeyStatus}
+              onSave={handleApiKeySave}
+              onClear={handleApiKeyClear}
+              saving={savingApiKeys}
+            />
+          </>
+        );
+
+        return (
+          <Tabs
+            defaultActiveKey="auth"
+            items={[
+              { key: 'auth', label: 'Authentication', children: authPane },
+              { key: 'defaults', label: 'Defaults', children: defaultsPane },
+            ]}
+          />
         );
       }
       default:
