@@ -2,9 +2,15 @@
 
 # Agor
 
-**Think Figma, but for AI coding assistants.** Orchestrate Claude Code, Codex, and Gemini sessions on a multiplayer canvas. Manage git worktrees, track AI conversations, and visualize your team's agentic work in real-time.
+**Team command center for all things agentic.**
 
-> **TL;DR:** Agor is a multiplayer spatial canvas where you coordinate multiple AI coding assistants on parallel tasks, with GitHub-linked worktrees, automated workflow zones, and isolated test environments—all running simultaneously.
+Agor is a shared canvas where coding agents (Claude Code, Codex, Gemini) and long-lived assistants run side-by-side on isolated git worktrees — the anchor entity where sessions, dev environments, prompts, and PRs converge. Your whole team rallies around the same live work in real time, and the agents themselves drive Agor over MCP.
+
+- **Team workspace for AI agents** — multiplayer is the core differentiator. Live cursors, facepile, scoped comments, shared sessions and dev envs.
+- **Worktrees as the anchor** — one entity per piece of work, where conversations + dev env + PR + prompts all converge.
+- **Multi-agent, multi-runtime** — Claude Code, Codex, Gemini, OpenCode, Copilot, interchangeable per session.
+- **Shared, long-lived assistants** — persistent agents with identity, memory, and skills that you publish for the whole team.
+- **Self-hosted** — your repos, your DB, your isolation posture.
 
 **📖 [Read the full documentation at agor.live →](https://agor.live/)**
 

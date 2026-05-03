@@ -105,7 +105,7 @@ export function LoginPage({ onLogin, loading = false, error }: LoginPageProps) {
               <BrandLogo level={1} />
             </div>
             <div>
-              <Text type="secondary">Next-gen agent orchestration</Text>
+              <Text type="secondary">Team command center for all things agentic</Text>
             </div>
             <Divider style={{ margin: '16px 0 0 0' }} />
           </div>

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "//": "This is the monorepo root. Published package version is in packages/agor-live/package.json",
-  "description": "Next-gen agent orchestration platform",
+  "description": "Team command center for all things agentic — shared canvas for coding agents and long-lived assistants on isolated git worktrees, with real-time multiplayer and an MCP surface agents drive themselves.",
   "keywords": [
     "ai",
     "agents",

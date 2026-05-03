@@ -4,14 +4,15 @@ Related: [[architecture]], [[design]], [[worktrees]], [[board-objects]]
 
 ## What Is Agor?
 
-**Agor is a multiplayer canvas for orchestrating agentic coding sessions** - the spatial layer that connects Claude Code, Codex, Gemini, and any agentic coding tool into one unified workspace.
+**Agor is a team command center for all things agentic** — a shared canvas where coding agents (Claude Code, Codex, Gemini) and long-lived assistants run side-by-side on isolated git worktrees, with real-time multiplayer presence and an MCP surface agents drive themselves.
 
 **Pronunciation:** "AY-gore"
 
 **Tagline:**
 
-> **Multiplayer canvas for orchestrating AI coding sessions.**
-> The spatial layer that connects Claude Code, Codex, Gemini, and any agentic coding tool into one unified workspace.
+> **Team command center for all things agentic.**
+
+See [[messaging-and-positioning]] for paragraph forms, audience pitches, and the canonical vocabulary. Don't paraphrase from this doc when writing customer-facing copy — pull from M&P.
 
 ## The Vision
 

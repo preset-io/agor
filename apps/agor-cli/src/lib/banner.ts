@@ -19,7 +19,7 @@ export const HERO_ART = `
 /**
  * Tagline
  */
-export const TAGLINE = 'Next-gen agent orchestration platform';
+export const TAGLINE = 'Team command center for all things agentic';
 
 /**
  * Version info

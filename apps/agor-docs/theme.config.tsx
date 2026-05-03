@@ -80,9 +80,9 @@ const config: DocsThemeConfig = {
     const pageTitle = frontMatter.title ?? title ?? 'agor';
     const description =
       frontMatter.description ||
-      'Next-gen agent orchestration for AI coding. Multiplayer workspace for Claude Code, Codex, and Gemini.';
+      'Team command center for all things agentic. A shared canvas for coding agents and long-lived assistants — Claude Code, Codex, Gemini — anchored on git worktrees, with real-time multiplayer and an MCP surface agents drive themselves.';
     const fullTitle =
-      pageTitle === 'agor' ? 'agor – Next-gen agent orchestration' : `${pageTitle} – agor`;
+      pageTitle === 'agor' ? 'agor – Team command center for all things agentic' : `${pageTitle} – agor`;
     const rawOgImage = frontMatter.ogImage || frontMatter.image || defaultOgImage;
     const ogImage = rawOgImage.startsWith('http') ? rawOgImage : `${defaultSiteUrl}${rawOgImage}`;
     const ogType = frontMatter.date ? 'article' : 'website';
@@ -118,7 +118,7 @@ const config: DocsThemeConfig = {
         <meta name="description" content={description} />
         <meta
           name="keywords"
-          content="AI coding, agent orchestration, Claude Code, Codex, Gemini, AI development, multiplayer IDE, git worktrees, agentic coding, AI agents, developer tools"
+          content="team command center, agentic, AI agents, agent orchestration, multiplayer, spatial canvas, Claude Code, Codex, Gemini, git worktrees, MCP, persistent assistants, AI workflow, developer tools"
         />
         <meta name="author" content="Maxime Beauchemin" />
 
@@ -177,7 +177,7 @@ const config: DocsThemeConfig = {
                     '@type': 'SoftwareApplication',
                     name: 'agor',
                     description:
-                      'Next-gen agent orchestration for AI coding. Multiplayer workspace for Claude Code, Codex, and Gemini.',
+                      'Team command center for all things agentic. A shared canvas for coding agents and long-lived assistants — Claude Code, Codex, Gemini — anchored on git worktrees, with real-time multiplayer and an MCP surface agents drive themselves.',
                     applicationCategory: 'DeveloperApplication',
                     operatingSystem: 'macOS, Linux, Windows',
                     offers: {

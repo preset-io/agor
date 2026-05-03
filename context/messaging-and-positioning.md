@@ -257,9 +257,12 @@ grouped Features / Reference / Development / Deployment, and works.
 
 ---
 
-## Survey appendix — current copy in the codebase
+## Survey appendix — pre-cascade baseline
 
-Baseline for the cascade rollout. Cite this when reviewing the cascade PR.
+The phrases below were in place before the cascade was applied (PR #1080).
+Rows are kept for historical reference; the "Action" column reflects what
+landed in the cascade. Dated blog posts (e.g. `pages/blog/announcement.mdx`)
+were intentionally left untouched as historical records.
 
 | File | Line | Quoted phrase | Action |
 |---|---|---|---|
@@ -281,3 +284,13 @@ Baseline for the cascade rollout. Cite this when reviewing the cascade PR.
 | `packages/agor-live/package.json` | — | "Multiplayer canvas for orchestrating AI coding sessions" | Refresh |
 | `apps/agor-docs/pages/guide/multiplayer-social.mdx` | 8 | "Agor is great solo. Multiplayer is what makes it Figma." | Keep |
 | `apps/agor-docs/pages/guide/features-overview.mdx` | 70 | "Figma for AI coding." | Keep (in multiplayer/team context only) |
+
+### Additional surfaces caught during cascade (not in original survey)
+
+| File | Line | Quoted phrase | Action |
+|---|---|---|---|
+| `apps/agor-cli/src/lib/banner.ts` | 22 | `TAGLINE = 'Next-gen agent orchestration platform'` (CLI banner shown on every command) | Replaced |
+| `apps/agor-ui/src/components/LoginPage/LoginPage.tsx` | 108 | "Next-gen agent orchestration" (login subtitle) | Replaced |
+| `context/concepts/core.md` | 7, 13–14 | "Multiplayer canvas for orchestrating agentic coding sessions" + "spatial layer" framing in the internal concept doc that other agents read | Replaced (and added pointer to this M&P doc) |
+| `apps/agor-docs/pages/blog/announcement.mdx` | 2, 8, 12 | "A Multiplayer-ready, Spatial Layer for Agentic Coding" (launch post, dated 2025-10-26) | Kept as historical record |
+| `apps/agor-docs/pages/blog/agor-cloud.mdx` | 10 | "next-gen, multi-agent, multiplayer servers" (body text, not tagline) | Kept (incidental use, not positioning) |
