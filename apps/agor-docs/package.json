@@ -13,7 +13,7 @@
     "@tsparticles/engine": "^3.9.1",
     "@tsparticles/react": "^3.0.0",
     "@tsparticles/slim": "^3.9.1",
-    "katex": "^0.16.33",
+    "katex": "^0.16.39",
     "next": "^14.2.35",
     "nextra": "^3.2.0",
     "nextra-theme-docs": "^3.2.0",
@@ -21,7 +21,7 @@
     "react-dom": "^18.3.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^24.6.0",
     "@types/react": "^18.3.0",
     "next-sitemap": "^4.2.3",
     "tsx": "^4.21.0",

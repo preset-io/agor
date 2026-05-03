@@ -41,7 +41,7 @@ jobs:
       - run: pnpm turbo run build --filter='!@agor/docs'
 
       - name: Save turbo cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: .turbo/cache
           key: ${{ env.TURBO_CACHE_KEY }}
@@ -65,7 +65,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Restore turbo cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: .turbo/cache
           key: ${{ env.TURBO_CACHE_KEY }}
@@ -91,7 +91,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Restore turbo cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: .turbo/cache
           key: ${{ env.TURBO_CACHE_KEY }}
@@ -119,7 +119,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Restore turbo cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: .turbo/cache
           key: ${{ env.TURBO_CACHE_KEY }}
@@ -145,7 +145,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Restore turbo cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: .turbo/cache
           key: ${{ env.TURBO_CACHE_KEY }}

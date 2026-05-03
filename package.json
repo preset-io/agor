@@ -38,14 +38,14 @@
     "check:agor-live-deps": "node scripts/sync-agor-live-deps.mjs --check"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.4",
+    "@biomejs/biome": "2.4.4",
     "@google-analytics/admin": "^9.0.1",
     "husky": "^9.1.7",
     "knip": "^5.85.0",
-    "lint-staged": "^16.3.1",
-    "prettier": "^3.8.1",
+    "lint-staged": "^16.4.0",
+    "prettier": "^3.8.3",
     "tsx": "^4.21.0",
-    "turbo": "^2.9.6",
+    "turbo": "^2.9.7",
     "typescript": "^5.9.3"
   },
   "packageManager": "pnpm@9.15.1",
