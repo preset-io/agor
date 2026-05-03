@@ -50,7 +50,7 @@ pnpm test
 
 ## IPC Protocol
 
-See `context/explorations/ipc-message-catalog.md` for complete message type definitions.
+Message types live in `packages/executor/src/` (the code is the source of truth).
 
 ### Example: Ping Request
 
@@ -78,4 +78,4 @@ See `context/explorations/ipc-message-catalog.md` for complete message type defi
 
 - `context/explorations/executor-isolation.md` - Main architecture
 - `context/explorations/executor-implementation-plan.md` - Implementation roadmap
-- `context/explorations/ipc-message-catalog.md` - Message type definitions
+- `context/explorations/executor-expansion.md` - Expansion plan

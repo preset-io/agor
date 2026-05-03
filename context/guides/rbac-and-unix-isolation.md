@@ -881,11 +881,9 @@ GET    /messages/:id                            # 403 if no view permission on s
 
 ### Related Documentation
 
-- **`context/explorations/rbac.md`** - Original RBAC design and exploration
-- **`context/explorations/unix-user-modes.md`** - Deep-dive on Unix integration modes
-- **`context/concepts/worktrees.md`** - Worktree-centric architecture
-- **`context/concepts/permissions.md`** - Permission system architecture
-- **`CLAUDE.md`** - Feature flag configuration
+- **`apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx`** - User-facing setup guide (canonical reference)
+- **`context/concepts/worktrees.md`** - Worktree-centric architecture cheat sheet
+- **`AGENTS.md`** - Feature flag configuration and mode matrix
 
 ---
 

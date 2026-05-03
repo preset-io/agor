@@ -221,7 +221,7 @@ Highlights:
 
 - **Match CLI-Native Features** — SDKs are evolving rapidly and exposing more functionality. Push integrations deeper to match all key features available in the underlying CLIs
 - **Bring Your Own IDE** — Connect VSCode, Cursor, or any IDE directly to Agor-managed worktrees via SSH/Remote
-- **Unix User Integration** — Enable true multi-tenancy with per-user Unix isolation for secure collaboration. [Read the exploration →](https://github.com/preset-io/agor/blob/main/context/explorations/unix-user-integration.md)
+- **Unix User Integration** — Enable true multi-tenancy with per-user Unix isolation for secure collaboration. [Read the guide →](https://github.com/preset-io/agor/blob/main/apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx)
 
 ---
 

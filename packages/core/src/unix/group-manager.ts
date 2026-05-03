@@ -8,8 +8,7 @@
  * These functions are designed to be called via `sudo agor admin` commands
  * to perform privileged operations safely.
  *
- * @see context/explorations/unix-user-modes.md
- * @see context/explorations/rbac.md
+ * @see context/guides/rbac-and-unix-isolation.md
  */
 
 import { formatShortId } from '../lib/ids.js';

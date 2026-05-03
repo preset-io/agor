@@ -1,177 +1,78 @@
-# Agor Context
+# context/ — fast orientation for agents
 
-This directory contains modular knowledge files that document Agor's concepts, architecture, and design principles. These files are designed to be:
+This folder is **not** Agor's documentation. The user-facing docs live in [`apps/agor-docs/pages/guide/`](../apps/agor-docs/pages/guide/) and on [agor.live](https://agor.live).
 
-- **Composable** - Load only what you need
-- **Self-referencing** - Concepts link to related concepts
-- **Version-controlled** - Track evolution of ideas over time
-- **AI-friendly** - Agents can load specific concepts as context
+This folder is a small set of **agent-oriented cheat sheets** — tight pointers, file maps, gotchas, and design rationale that an LLM dropped into the repo would actually want to skim before opening code.
 
-## Available Concepts
+## Working principles
 
-### Core Concepts
+- **Code is ground truth.** If a doc here drifts from the code, the code wins.
+- **Guides are user truth.** If a topic has a guide page, this folder links to it instead of duplicating it.
+- **Keep it small.** A bloated `context/` is a tax on every agent that loads it.
 
-- **[core.md](concepts/core.md)** - The 5 primitives, core insights, and vision
-- **[models.md](concepts/models.md)** - Information architecture, data models, and relationships
-- **[id-management.md](concepts/id-management.md)** - UUIDv7 strategy, short IDs, collision resolution
-- **[architecture.md](concepts/architecture.md)** - System design, storage structure, data flow
-- **[design.md](concepts/design.md)** - UI/UX principles and component patterns
-- **[frontend-guidelines.md](concepts/frontend-guidelines.md)** - React/Ant Design patterns, token-based styling, WebSocket integration, component structure
-- **[conversation-ui.md](concepts/conversation-ui.md)** - Task-centric conversation UI, universal message schema, component patterns
-- **[tool-blocks.md](concepts/tool-blocks.md)** - Advanced tool visualization, semantic grouping, file impact graphs
-- **[llm-enrichment.md](concepts/llm-enrichment.md)** - AI-powered session analysis, summaries, pattern detection, quality insights
-- **[websockets.md](concepts/websockets.md)** - Real-time communication with FeathersJS/Socket.io, progressive streaming, future scalability
-- **[agent-integration.md](concepts/agent-integration.md)** - Claude Agent SDK integration, session continuity, live execution
-- **[agentic-coding-tool-integrations.md](concepts/agentic-coding-tool-integrations.md)** - Feature comparison matrix for Claude Code, Codex, and Gemini integrations
-- **[auth.md](concepts/auth.md)** - Authentication & authorization, anonymous-first, JWT/Local strategies, user attribution
-- **[multiplayer.md](concepts/multiplayer.md)** - Real-time collaboration, facepile, cursor swarm, presence indicators
-- **[board-objects.md](concepts/board-objects.md)** - Board layout system, zones, session pinning, zone triggers with Handlebars
-- **[worktrees.md](concepts/worktrees.md)** - Worktree-centric architecture: data model, worktree-centric boards, WorktreeModal (5 tabs), environments, terminal integration
-- **[session-worktree-attribute-migration.md](concepts/session-worktree-attribute-migration.md)** - Data attribute migration analysis (issue_url, pull_request_url, etc.)
-- **[mcp-integration.md](concepts/mcp-integration.md)** - MCP server management, CRUD UI/CLI, session-level selection
-- **[permissions.md](concepts/permissions.md)** - Permission system, task-centric approval, audit trails
-- **[agor-mcp-server.md](concepts/agor-mcp-server.md)** - Built-in MCP endpoint that gives agents self-awareness of sessions, boards, and worktrees
-- **[api-docs.md](concepts/api-docs.md)** - Auto-generated Swagger/OpenAPI docs for every Feathers service
-- **[conversation-autocomplete.md](concepts/conversation-autocomplete.md)** - `@` autocomplete for files and users inside prompt inputs
-- **[database-migrations.md](concepts/database-migrations.md)** - Drizzle migration workflow plus `agor db status/migrate`
-- **[environment-logs.md](concepts/environment-logs.md)** - Worktree environment controls, log viewer, and MCP hooks
-- **[mcp-session-tools.md](concepts/mcp-session-tools.md)** - `agor_sessions_*` MCP tools for continuing, forking, and editing sessions
-- **[task-queueing.md](concepts/task-queueing.md)** - Task-level prompt queueing: uniform Task response, sentinel/drain lifecycle
-- **[opencode-integration.md](concepts/opencode-integration.md)** - Server-mode OpenCode agent integration
-- **[per-user-api-keys.md](concepts/per-user-api-keys.md)** - Encrypted Anthropic/OpenAI/Gemini key storage with reusable UI component
-- **[scheduler.md](concepts/scheduler.md)** - Worktree-scoped cron scheduler that spawns autonomous sessions
-- **[sdk-compaction-status.md](concepts/sdk-compaction-status.md)** - Surfacing Claude SDK compaction events in UI + metrics
-- **[messaging.md](concepts/messaging.md)** - Product taglines, before/after framing, and visual storytelling cues
-- **[task-tool-message-attribution.md](concepts/task-tool-message-attribution.md)** - Proper labeling for Task tool prompts/results
-- **[text-display.md](concepts/text-display.md)** - Collapsible/ANSI text patterns for readable tool output
-- **[thinking-mode.md](concepts/thinking-mode.md)** - Auto/manual/off thinking controls with keyword detection
-- **[user-env-vars.md](concepts/user-env-vars.md)** - Encrypted per-user environment variables merged into agent subprocesses
+If you're tempted to add a long prose doc here — write it as a guide in `apps/agor-docs/pages/guide/` instead, and link to it from here.
 
-### Guides (How-To)
+---
 
-Step-by-step implementation guides for common development tasks:
+## Layout
 
-- **[creating-database-migrations.md](guides/creating-database-migrations.md)** - Creating and running Drizzle migrations for SQLite and PostgreSQL
-- **[extending-feathers-services.md](guides/extending-feathers-services.md)** - Adding new Feathers services with custom methods
-- **[rbac-and-unix-isolation.md](guides/rbac-and-unix-isolation.md)** - Worktree RBAC and Unix user isolation setup
+### `concepts/` — agent cheat sheets
 
-### Guidelines
+Tight, code-pointer-heavy notes on internals.
 
-Development standards and best practices:
+| File | What it's for |
+|---|---|
+| [`core.md`](concepts/core.md) | The five primitives (Worktree, Board, Session, Task, Report). Mental model. |
+| [`architecture.md`](concepts/architecture.md) | System shape: services / repos / executor / storage. Where to look first. |
+| [`worktrees.md`](concepts/worktrees.md) | Worktree-centric architecture (read before touching boards). |
+| [`security.md`](concepts/security.md) | Web-layer hardening: CSP, CORS, recipes, debugging. |
+| [`id-management.md`](concepts/id-management.md) | UUIDv7, branded ID types, short-ID resolution. |
+| [`task-queueing.md`](concepts/task-queueing.md) | Task lifecycle and queue-on-busy semantics. |
+| [`mcp-session-tools.md`](concepts/mcp-session-tools.md) | `agor_sessions_*` MCP tool surface and override semantics. |
 
-- **[testing.md](guidelines/testing.md)** - Testing patterns and conventions
+### `guides/` — how-tos
 
-### Explorations (Work in Progress)
+Step-by-step implementation guides referenced from code.
 
-Experimental ideas and designs not yet crystallized into concepts. These represent active thinking and may graduate to `concepts/` when ready:
+- [`creating-database-migrations.md`](guides/creating-database-migrations.md) — Drizzle migrations (sqlite + postgres).
+- [`extending-feathers-services.md`](guides/extending-feathers-services.md) — Adding services, methods, hooks.
+- [`rbac-and-unix-isolation.md`](guides/rbac-and-unix-isolation.md) — Implementation guide for worktree RBAC + Unix user modes (referenced from CLI admin commands and unix utilities).
 
-**Executor Isolation (Active)**
+### `guidelines/` — house rules
 
-- **[executor-isolation.md](explorations/executor-isolation.md)** - Daemon/executor process separation for security
-- **[executor-feathers-architecture.md](explorations/executor-feathers-architecture.md)** - Refactoring from IPC to WebSocket communication
-- **[executor-implementation-plan.md](explorations/executor-implementation-plan.md)** - Phased implementation plan
-- **[executor-subprocess-spawning.md](explorations/executor-subprocess-spawning.md)** - Subprocess spawning patterns
-- **[unix-user-integration.md](explorations/unix-user-integration.md)** - Deep dive on sudo-based impersonation
-- **[unix-user-modes.md](explorations/unix-user-modes.md)** - Progressive Unix isolation modes
+- [`testing.md`](guidelines/testing.md) — Vitest patterns and conventions.
 
-**Multi-Agent Orchestration**
+### `explorations/` — active design docs
 
-- **[parent-session-callbacks.md](explorations/parent-session-callbacks.md)** - Notifying parent sessions on child completion
+Designs that are referenced from code or in flight. Anything here is either still being built or documents a security/behavior contract you'd want before touching the relevant code.
 
-**UI/UX Enhancements**
+- [`executor-isolation.md`](explorations/executor-isolation.md) — executor process / unix isolation architecture (referenced from `packages/executor/` and `apps/agor-docs/pages/guide/architecture.mdx`).
+- [`executor-expansion.md`](explorations/executor-expansion.md) — referenced from `packages/core/src/config/`.
+- [`executor-implementation-plan.md`](explorations/executor-implementation-plan.md) — phased plan for executor work.
+- [`env-var-access.md`](explorations/env-var-access.md) — per-user / per-session env var access model (referenced from schemas, types, and migrations).
+- [`session-sharing.md`](explorations/session-sharing.md) — `dangerously_allow_session_sharing` security contract (referenced from `AGENTS.md` and `apps/agor-docs/pages/security.mdx`).
+- [`parent-session-callbacks.md`](explorations/parent-session-callbacks.md) — child-session completion notifications (referenced from `docs/never-lose-prompt-design.md`).
 
-- **[text-highlights.md](explorations/text-highlights.md)** - Text highlighting features
+### `messaging-and-positioning.md`
 
-**Infrastructure**
+Internal source of truth for product copy (taglines, hero, package descriptions, blog voice). Read this before writing user-facing prose; do **not** paraphrase the codebase to invent new framing.
 
-- **[ide-integration.md](explorations/ide-integration.md)** - Remote SSH vs code-server for IDE support
-- **[knowledge-graph.md](explorations/knowledge-graph.md)** - Knowledge graph for codebase understanding
+### `images/`
 
-**Lifecycle:** `explorations/` → `concepts/` when design is validated and ready to be official
+Assets used by docs in this folder.
 
-### Archives
+---
 
-Historical documentation and completed research preserved for reference:
+## What lives elsewhere now
 
-- **[agor-mcp-server.md](archives/agor-mcp-server.md)** - Research + prototypes for exposing Agor as its own MCP server
-- **[async-jobs.md](archives/async-jobs.md)** - Background job processing exploration (resolved: not needed for local dev tool, use async functions + WebSocket events)
-- **[auto-generated-api-docs.md](archives/auto-generated-api-docs.md)** - Feathers Swagger evaluation and rollout plan
-- **[compaction-events.md](archives/compaction-events.md)** - Implemented compaction event stream capture (Jan 2025)
-- **[conversation-autocomplete.md](archives/conversation-autocomplete.md)** - Full UX spec for the `@` autocomplete experience
-- **[environment-logs-and-mcp.md](archives/environment-logs-and-mcp.md)** - Process control + log access blueprint
-- **[gemini-integration-research.md](archives/gemini-integration-research.md)** - Gemini CLI SDK discovery process, API analysis, and integration decisions (completed Oct 2025)
-- **[launch-prep.md](archives/launch-prep.md)** - v0.4.0 release checklist and launch validation
-- **[markdown-notes.md](archives/markdown-notes.md)** - Implemented markdown notes on boards
-- **[materialize_normalized_sdk_payload.md](archives/materialize_normalized_sdk_payload.md)** - Implemented token accounting (Dec 2025)
-- **[mcp-jwt-auth.md](archives/mcp-jwt-auth.md)** - Implemented JWT auth for MCP servers
-- **[mcp-session-management.md](archives/mcp-session-management.md)** - MCP tool spec for session CRUD, forks, and updates
-- **[message-queueing.md](archives/message-queueing.md)** - Queueing proposal that informed the current implementation
-- **[messaging.md](archives/messaging.md)** - Original brainstorm for taglines, metaphors, and visual cues
-- **[native-cli-feature-gaps.md](archives/native-cli-feature-gaps.md)** - Superseded by agor.live/guide/sdk-comparison
-- **[opencode-integration.md](archives/opencode-integration.md)** - OpenCode server-mode analysis and integration plan
-- **[per-user-api-keys.md](archives/per-user-api-keys.md)** - API key UX + encryption decisions
-- **[postgres-migration-strategy.md](archives/postgres-migration-strategy.md)** - Dual-dialect migration theory (see guides/creating-database-migrations.md)
-- **[postgres-support.md](archives/postgres-support.md)** - Original design doc (see concepts/postgres-support.md for current)
-- **[scheduler.md](archives/scheduler.md)** - Autonomous worktree automation deep dive
-- **[sdk-compaction-status.md](archives/sdk-compaction-status.md)** - Claude compaction event handling research
-- **[task-queuing-and-message-lineup.md](archives/task-queuing-and-message-lineup.md)** - Advanced sequencing concepts (interrupt, priority) for future queue iterations
-- **[task-tool-message-attribution.md](archives/task-tool-message-attribution.md)** - Bug record + UI fix proposal
-- **[text-display-improvements.md](archives/text-display-improvements.md)** - Exploration that drove Collapsible/ANSI components
-- **[thinking-mode.md](archives/thinking-mode.md)** - Keyword detection + UX decisions for thinking controls
-- **[user-comments-and-conversation.md](archives/user-comments-and-conversation.md)** - Historical notes on conversation surfacing
-- **[user-env-vars.md](archives/user-env-vars.md)** - Per-user environment variable architecture
-- **[rbac-exploration.md](archives/rbac-exploration.md)** - Worktree-centric RBAC exploration (see guides/rbac-and-unix-isolation.md for current)
+A previous version of this folder had ~95 files (concepts/, archives/, explorations/, projects/) totaling ~57k lines. Most was either:
 
-**Purpose:** Archives preserve the research journey and decision-making context for completed features. They're valuable for understanding "why" things were built certain ways.
+- duplicated by the user-facing guide pages in `apps/agor-docs/pages/guide/*.mdx`,
+- design exploration for features that have since shipped (the code is the source of truth),
+- or stale plans for features that never shipped.
 
-### Primitives (Deep Dives)
+If you're looking for a topic and don't see it here, try (in order):
 
-Future location for detailed explorations of each primitive:
-
-- `primitives/session.md` - Sessions in depth
-- `primitives/task.md` - Tasks in depth
-- `primitives/report.md` - Reports in depth
-- `primitives/worktree.md` - Worktrees in depth
-- `primitives/concept.md` - Concepts in depth (meta!)
-
-## Using Context Files
-
-### For Developers
-
-Read concept files to understand specific aspects of Agor:
-
-```bash
-# Start with core concepts
-cat context/concepts/core.md
-
-# Then explore specific areas
-cat context/concepts/architecture.md
-cat context/concepts/design.md
-```
-
-### For AI Agents
-
-Load relevant concepts into session context:
-
-```bash
-# Example: Starting a session focused on UI work
-agor session start \
-  --concepts design \
-  --agent claude-code
-```
-
-## Contributing
-
-When adding new concepts:
-
-1. Create focused, single-topic files (prefer smaller over larger)
-2. Use wiki-style links to reference related concepts: `[[concept-name]]`
-3. Include "Related:" section at the top
-4. Add entry to this README
-5. Update cross-references in existing concepts
-
-## Philosophy
-
-> "Context engineering isn't about prompt templates—it's about managing modular knowledge as first-class composable primitives."
-
-These concept files embody Agor's own design philosophy applied to documentation.
+1. The relevant guide page in `apps/agor-docs/pages/guide/`
+2. `git log --all --diff-filter=D -- 'context/**'` to find the deleted version
+3. The actual code under `packages/` or `apps/`

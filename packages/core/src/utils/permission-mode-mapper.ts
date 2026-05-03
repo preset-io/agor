@@ -9,8 +9,6 @@
  * - Claude Code: default, acceptEdits, bypassPermissions, plan, dontAsk
  * - Gemini: default, autoEdit, yolo
  * - Codex: ask, auto, on-failure, allow-all
- *
- * See: context/explorations/mcp-session-management.md for full specification
  */
 
 import type { AgenticToolName, PermissionMode } from '../types';

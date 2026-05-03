@@ -4,7 +4,7 @@
 // databases, and APIs. Agor federates MCP configurations to enable users
 // to leverage existing MCP investments while adding orchestration value.
 //
-// See: context/explorations/mcp-integration.md for full design
+// See: apps/agor-docs/pages/guide/internal-mcp.mdx for the user-facing reference
 
 import type { SessionID, UserID, UUID } from './id';
 

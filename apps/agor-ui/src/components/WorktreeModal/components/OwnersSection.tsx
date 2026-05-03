@@ -4,8 +4,7 @@
  * Displays and manages worktree owners and permission settings.
  * Integrates with RBAC system for owner management and permission levels.
  *
- * @see context/explorations/rbac.md
- * @see context/explorations/unix-user-modes.md
+ * @see context/guides/rbac-and-unix-isolation.md
  */
 
 import type { AgorClient, User, Worktree, WorktreePermissionLevel } from '@agor-live/client';

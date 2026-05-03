@@ -90,4 +90,4 @@ gh workflow run deploy-docs.yml
 
 **Deployment URL:** https://agor.live/
 
-Alternative options: Cloudflare Pages or Vercel (see [context/explorations/docs-website.md](../../context/explorations/docs-website.md))
+Alternative deployment targets (Cloudflare Pages, Vercel) work as well — Nextra static export is portable.

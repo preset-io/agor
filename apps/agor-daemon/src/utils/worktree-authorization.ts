@@ -6,8 +6,7 @@
  * Uses RBACParams to provide type-safe access to cached RBAC entities (worktree, session, ownership).
  * This avoids redundant database queries within hook chains.
  *
- * @see context/explorations/rbac.md
- * @see context/explorations/unix-user-modes.md
+ * @see context/guides/rbac-and-unix-isolation.md
  */
 
 import type { BoardRepository, SessionRepository, WorktreeRepository } from '@agor/core/db';
@@ -803,8 +802,7 @@ export function loadWorktreeFromSession(worktreeRepo: WorktreeRepository) {
  * This is CRITICAL for Unix isolation - session execution context is determined
  * by session.created_by (which maps to Unix user) and session.unix_username.
  *
- * @see context/explorations/rbac.md - Session Ownership (CRITICAL)
- * @see context/explorations/unix-user-modes.md - Session Execution Model
+ * @see context/guides/rbac-and-unix-isolation.md — Session Ownership / Execution Model
  */
 export function ensureSessionImmutability() {
   return (context: HookContext) => {

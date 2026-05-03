@@ -8,8 +8,6 @@
  * - Latest task expanded by default
  * - Progressive disclosure for older tasks
  * - Auto-scrolling to latest content
- *
- * Based on design in context/explorations/conversation-design.md
  */
 
 import type {

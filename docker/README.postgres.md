@@ -382,8 +382,8 @@ docker compose --profile postgres down -v --rmi all --remove-orphans
 ## Related Documentation
 
 - **`context/guides/rbac-and-unix-isolation.md`** - Complete RBAC + Unix integration guide
-- **`context/explorations/unix-user-modes.md`** - Unix user mode design
-- **`CLAUDE.md`** - Feature flags and configuration reference
+- **`apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx`** - User-facing setup walkthrough
+- **`AGENTS.md`** - Feature flags and configuration reference
 - **`docker-compose.yml`** - Base Docker Compose configuration
 - **`.env.postgres`** - PostgreSQL + RBAC environment variables
 

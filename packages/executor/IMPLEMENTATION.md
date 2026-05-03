@@ -232,9 +232,8 @@ packages/executor/src/handlers/
 ## Resources
 
 - Design docs: `context/explorations/executor-isolation.md`
-- IPC protocol: `context/explorations/ipc-message-catalog.md`
-- Implementation examples: `context/explorations/ipc-implementation-examples.md`
 - Implementation plan: `context/explorations/executor-implementation-plan.md`
+- IPC protocol & message types: see `packages/executor/src/` (the code is the source of truth)
 
 ---
 

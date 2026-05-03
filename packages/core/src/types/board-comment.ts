@@ -26,8 +26,6 @@ export type ReactionSummary = Record<string, string[]>;
  * Threading model: Figma-style 2-layer (thread roots + replies)
  * - Thread roots: parent_comment_id IS NULL, can be resolved, must have attachments
  * - Replies: parent_comment_id IS NOT NULL, cannot be resolved, inherit parent context
- *
- * @see context/explorations/user-comments-and-conversation.md
  */
 export interface BoardComment {
   /** Unique comment identifier (UUIDv7) */

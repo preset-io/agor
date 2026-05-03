@@ -344,14 +344,14 @@ Wrap `createTask + createUserMessage` in a Drizzle transaction **if and only if*
 
 **This turned out to be the most important reframe in the review.** Max's intuition: "wondering if it's really a queued Task, not message." Investigation confirms it.
 
-The archived design (`context/archives/task-queuing-and-message-lineup.md`, Nov 2025) **originally proposed a task-centric queue**:
+The archived design (formerly `context/archives/task-queuing-and-message-lineup.md`, removed in the context audit — see git history, Nov 2025) **originally proposed a task-centric queue**:
 
 ```ts
 Task.status: 'queued' | 'running' | 'completed' | 'failed'
 Session.task_queue: TaskID[]
 ```
 
-That's the correct abstraction — a queued prompt *is* a pending unit of agent work, not a pending chat message. But the shipped implementation (`context/concepts/message-queueing.md`, Nov 2025) deviated and added `Message.status='queued'` + `Message.queue_position` instead. The likely reason was UI convenience (easy to list alongside real messages), but the cost is the two-writers / delete-and-recreate ugliness we're now trying to fix, plus the IDLE/queued asymmetry called out in §1.3.
+That's the correct abstraction — a queued prompt *is* a pending unit of agent work, not a pending chat message. But the shipped implementation (formerly documented in `context/concepts/message-queueing.md`, removed in the context audit — see git history, Nov 2025) deviated and added `Message.status='queued'` + `Message.queue_position` instead. The likely reason was UI convenience (easy to list alongside real messages), but the cost is the two-writers / delete-and-recreate ugliness we're now trying to fix, plus the IDLE/queued asymmetry called out in §1.3.
 
 **Unified model (proposed):**
 
