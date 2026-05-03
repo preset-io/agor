@@ -160,6 +160,21 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
               then paste the resulting token here.
             </Text>
           )}
+          {field === 'COPILOT_GITHUB_TOKEN' && (
+            <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+              Falls back to{' '}
+              <Text code style={{ fontSize: token.fontSizeSM }}>
+                GH_TOKEN
+              </Text>{' '}
+              /{' '}
+              <Text code style={{ fontSize: token.fontSizeSM }}>
+                GITHUB_TOKEN
+              </Text>{' '}
+              if unset. Set this explicitly to point Copilot at a different account (e.g. one with
+              an active Copilot subscription) or to limit blast radius — the global git token often
+              has broader scopes than Copilot needs.
+            </Text>
+          )}
         </Space>
       </div>
     );
