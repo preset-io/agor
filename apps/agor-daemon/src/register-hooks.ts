@@ -50,6 +50,7 @@ import type {
 import { gatewayRouteHook } from './hooks/gateway-route.js';
 import type { ArtifactsService } from './services/artifacts.js';
 import type { GatewayService } from './services/gateway.js';
+import { applySessionConfigDefaults } from './utils/apply-session-config-defaults.js';
 import {
   ensureMinimumRole,
   registerAuthenticatedRoute,
@@ -1522,6 +1523,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ]
           : []),
         injectCreatedBy(),
+        // Auto-fill permission_config / model_config from the creator's
+        // default_agentic_config[tool] when the caller omits them. Must run
+        // after injectCreatedBy() so `data.created_by` is the trusted user
+        // ID. See utils/apply-session-config-defaults.ts.
+        applySessionConfigDefaults(),
         async (context) => {
           // Populate repo field and auto-populate git_state from worktree_id
           if (!Array.isArray(context.data) && context.data?.worktree_id) {

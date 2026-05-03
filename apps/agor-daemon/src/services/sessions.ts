@@ -16,6 +16,7 @@ import {
 } from '@agor/core/db';
 import { type Application, Forbidden } from '@agor/core/feathers';
 import { resolveModelConfig } from '@agor/core/models';
+import { resolveSessionDefaults } from '@agor/core/sessions';
 import type {
   AuthenticatedParams,
   MCPServerID,
@@ -412,32 +413,23 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     let permissionConfig = inherited.permission_config;
     let modelConfig = inherited.model_config;
 
-    // If spawning a different tool and no explicit overrides, fetch user preferences
+    // If spawning a different tool and no explicit overrides, fall through to
+    // the user's defaults for the target tool (parent's config is meaningless
+    // for a different agent — e.g. a Claude session's `acceptEdits` mode means
+    // nothing for a Codex spawn). Same resolution helper used by all other
+    // session-creation paths so we can't drift.
     if (!isSameTool && !data.permissionMode && !data.modelConfig) {
       const userId = parent.created_by;
       if (userId && this.app) {
         try {
           const user = await this.app.service('users').get(userId, params);
-          const toolDefaults = user?.default_agentic_config?.[targetTool];
-
-          if (toolDefaults) {
-            // Use user's preferred settings for this tool
-            permissionConfig = {
-              mode: toolDefaults.permissionMode,
-              ...(targetTool === 'codex' &&
-              toolDefaults.codexSandboxMode &&
-              toolDefaults.codexApprovalPolicy
-                ? {
-                    codex: {
-                      sandboxMode: toolDefaults.codexSandboxMode,
-                      approvalPolicy: toolDefaults.codexApprovalPolicy,
-                      networkAccess: toolDefaults.codexNetworkAccess,
-                    },
-                  }
-                : {}),
-            };
-
-            modelConfig = resolveModelConfig(toolDefaults.modelConfig) ?? modelConfig;
+          const userResolved = resolveSessionDefaults({ agenticTool: targetTool, user });
+          // Only adopt user-resolved values if the user has explicit defaults
+          // for this tool — otherwise keep the parent's settings rather than
+          // fall through to the system default (matches prior behavior).
+          if (user?.default_agentic_config?.[targetTool]) {
+            permissionConfig = userResolved.permission_config;
+            modelConfig = userResolved.model_config ?? modelConfig;
           }
         } catch (error) {
           // If we can't fetch user preferences, fall back to parent settings

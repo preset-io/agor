@@ -1,6 +1,6 @@
 import { isWorktreeRbacEnabled } from '@agor/core/config';
 import { WorktreeRepository } from '@agor/core/db';
-import { resolveModelConfig } from '@agor/core/models';
+import { resolveSessionDefaults } from '@agor/core/sessions';
 import type {
   AgenticToolName,
   BoardID,
@@ -776,41 +776,15 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           const currentSha = await getGitState(worktree.path);
           const currentRef = await getCurrentBranch(worktree.path);
 
-          // Resolve permission mode from user defaults
-          const { getDefaultPermissionMode } = await import('@agor/core/types');
-          const { mapPermissionMode } = await import('@agor/core/utils/permission-mode-mapper');
-          const userToolDefaults = user?.default_agentic_config?.[agenticTool];
-          const requestedMode =
-            userToolDefaults?.permissionMode || getDefaultPermissionMode(agenticTool);
-          const permissionMode = mapPermissionMode(requestedMode, agenticTool);
-
-          // Build permission config
-          const permissionConfig: Record<string, unknown> = {
-            mode: permissionMode,
-            allowedTools: [],
-          };
-          if (
-            agenticTool === 'codex' &&
-            userToolDefaults?.codexSandboxMode &&
-            userToolDefaults?.codexApprovalPolicy
-          ) {
-            permissionConfig.codex = {
-              sandboxMode: userToolDefaults.codexSandboxMode,
-              approvalPolicy: userToolDefaults.codexApprovalPolicy,
-              networkAccess: userToolDefaults.codexNetworkAccess,
-            };
-          }
-
-          // Build model config from user defaults. resolveModelConfig stamps
-          // updated_at and conditionally includes effort/provider so we write
-          // the same normalized shape as every other session-create path.
-          const modelConfig = resolveModelConfig(userToolDefaults?.modelConfig);
-
-          // MCP server inheritance: worktree config > user defaults
-          const mcpServerIds =
-            worktree.mcp_server_ids && worktree.mcp_server_ids.length > 0
-              ? worktree.mcp_server_ids
-              : userToolDefaults?.mcpServerIds || [];
+          // Resolve permission_config / model_config / inherited mcp_server_ids
+          // from the user's defaults via the shared helper. Same logic the
+          // sessions `before:create` hook applies to UI/REST callers, kept
+          // explicit here so the rest of this handler can pass full sessionData.
+          const {
+            permission_config: permissionConfig,
+            model_config: modelConfig,
+            mcp_server_ids: mcpServerIds,
+          } = resolveSessionDefaults({ agenticTool, user, worktree });
 
           // Create new session
           const sessionData: Record<string, unknown> = {

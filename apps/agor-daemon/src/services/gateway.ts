@@ -22,7 +22,7 @@ import {
   hasConnector,
   parseGitHubThreadId,
 } from '@agor/core/gateway';
-import { resolveModelConfig } from '@agor/core/models';
+import { resolveSessionDefaults } from '@agor/core/sessions';
 import type {
   AgenticToolName,
   ChannelType,
@@ -35,7 +35,7 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
-import { getDefaultPermissionMode, SessionStatus } from '@agor/core/types';
+import { SessionStatus } from '@agor/core/types';
 
 /**
  * Inbound message data (platform → session)
@@ -515,15 +515,21 @@ export class GatewayService {
     let created = false;
     let mcpAuthWarning: string | undefined;
 
-    // Resolve agentic config: channel config > user defaults > system defaults
+    // Resolve agentic config: channel config > user defaults > system defaults.
+    // Channel-level agentic_config maps to the helper's `overrides` (it's the
+    // gateway's analogue of an MCP tool's explicit args).
     const agenticConfig = channel.agentic_config;
     const agenticTool: AgenticToolName = (agenticConfig?.agent as AgenticToolName) ?? 'claude-code';
-    const userDefaults = user.default_agentic_config?.[agenticTool];
-    const permissionMode =
-      agenticConfig?.permissionMode ??
-      userDefaults?.permissionMode ??
-      getDefaultPermissionMode(agenticTool);
-    const modelConfig = agenticConfig?.modelConfig ?? userDefaults?.modelConfig;
+    const { permission_config: gatewayPermissionConfig, model_config: gatewayModelConfig } =
+      resolveSessionDefaults({
+        agenticTool,
+        user,
+        overrides: {
+          permissionMode: agenticConfig?.permissionMode,
+          modelConfig: agenticConfig?.modelConfig,
+        },
+      });
+    const permissionMode = gatewayPermissionConfig.mode;
 
     if (existingMapping) {
       // Existing thread → existing session
@@ -596,8 +602,8 @@ export class GatewayService {
         unix_username: user.unix_username ?? null,
         status: SessionStatus.IDLE,
         agentic_tool: agenticTool,
-        permission_config: { mode: permissionMode },
-        model_config: resolveModelConfig(modelConfig),
+        permission_config: gatewayPermissionConfig,
+        model_config: gatewayModelConfig,
         tasks: [],
         // Denormalized gateway metadata (immutable snapshot at creation time)
         // Avoids N+1 lookups when rendering board cards

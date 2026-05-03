@@ -11,6 +11,7 @@ export * from './environment/render-snapshot.js';
 export * from './git/index.js';
 export * from './lib/validation.js';
 export * from './mcp/index.js';
+export * from './sessions/index.js';
 // Re-export everything from submodules
 export * from './types/index.js';
 export * from './unix/index.js';

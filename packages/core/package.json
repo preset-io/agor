@@ -160,6 +160,11 @@
       "import": "./dist/models/index.js",
       "require": "./dist/models/index.cjs"
     },
+    "./sessions": {
+      "types": "./dist/sessions/index.d.ts",
+      "import": "./dist/sessions/index.js",
+      "require": "./dist/sessions/index.cjs"
+    },
     "./models/browser": {
       "types": "./dist/models/browser.d.ts",
       "import": "./dist/models/browser.js",

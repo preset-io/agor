@@ -34,6 +34,7 @@ export default defineConfig({
     'models/browser': 'src/models/browser.ts', // Browser-safe model metadata only
     'models/gemini-shared': 'src/models/gemini-shared.ts', // Shared Gemini metadata/constants
     'models/index': 'src/models/index.ts', // Model metadata (browser-safe)
+    'sessions/index': 'src/sessions/index.ts', // Session config defaults resolution
     'sdk/index': 'src/sdk/index.ts', // AI SDK re-exports (Claude, Codex, Gemini, OpenCode)
     'tools/mcp/jwt-auth': 'src/tools/mcp/jwt-auth.ts', // MCP JWT authentication utilities
     'tools/mcp/oauth-auth': 'src/tools/mcp/oauth-auth.ts', // MCP OAuth 2.0 authentication utilities

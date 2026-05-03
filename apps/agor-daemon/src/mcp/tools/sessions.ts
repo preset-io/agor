@@ -6,8 +6,8 @@ import {
   DEFAULT_CODEX_MODEL,
   DEFAULT_GEMINI_MODEL,
   GEMINI_MODELS,
-  resolveModelConfigPrecedence,
 } from '@agor/core/models';
+import { resolveSessionDefaults } from '@agor/core/sessions';
 import {
   AGENTIC_TOOL_CAPABILITIES,
   type AgenticToolName,
@@ -774,51 +774,31 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       const currentSha = await getGitState(worktree.path);
       const currentRef = await getCurrentBranch(worktree.path);
 
-      // Determine permission mode from user defaults only
-      const { getDefaultPermissionMode } = await import('@agor/core/types');
-      const { mapPermissionMode } = await import('@agor/core/utils/permission-mode-mapper');
-
-      const userToolDefaults = user?.default_agentic_config?.[agenticTool];
-      const requestedMode =
-        userToolDefaults?.permissionMode || getDefaultPermissionMode(agenticTool);
-      const permissionMode = mapPermissionMode(requestedMode, agenticTool);
-
-      const permissionConfig: Record<string, unknown> = {
-        mode: permissionMode,
-        allowedTools: [],
-      };
-
-      if (
-        agenticTool === 'codex' &&
-        userToolDefaults?.codexSandboxMode &&
-        userToolDefaults?.codexApprovalPolicy
-      ) {
-        permissionConfig.codex = {
-          sandboxMode: userToolDefaults.codexSandboxMode,
-          approvalPolicy: userToolDefaults.codexApprovalPolicy,
-          networkAccess: userToolDefaults.codexNetworkAccess,
-        };
-      }
-
-      // Model selection: explicit modelConfig arg > user default.
-      // An explicit modelConfig overrides any user-default settings and is
-      // threaded through to session.model_config so the executor picks it up
-      // when spawning the agent (see query-builder.ts: rawModel is read from
-      // session.model_config.model).
-      const modelConfig = resolveModelConfigPrecedence([
-        coerceModelConfig(args.modelConfig),
-        userToolDefaults?.modelConfig,
-      ]);
-
-      // MCP server inheritance: explicit param > worktree config > user defaults
-      // An explicit empty array means "no MCPs" — does NOT fall through to worktree/user defaults.
-      // Resolve short IDs when from user input; worktree/user defaults are already full UUIDs.
-      const mcpServerIds =
+      // Resolve permission_config / model_config / inherited mcp_server_ids
+      // from the explicit MCP args (highest priority) > user defaults > system
+      // fallback. Single source of truth for this dance lives in
+      // `@agor/core/sessions` so MCP tools, the gateway, and the
+      // `before:create` hook can't drift apart.
+      //
+      // For the explicit MCP args we resolve short IDs first; worktree/user
+      // defaults are already full UUIDs, so the helper passes them through.
+      const explicitMcpServerIds =
         args.mcpServerIds !== undefined
           ? await Promise.all(args.mcpServerIds.map((id) => resolveMcpServerId(ctx, id)))
-          : worktree.mcp_server_ids && worktree.mcp_server_ids.length > 0
-            ? worktree.mcp_server_ids
-            : userToolDefaults?.mcpServerIds || [];
+          : undefined;
+      const resolvedDefaults = resolveSessionDefaults({
+        agenticTool,
+        user,
+        worktree,
+        overrides: {
+          modelConfig: coerceModelConfig(args.modelConfig),
+          mcpServerIds: explicitMcpServerIds,
+        },
+      });
+      const permissionConfig = resolvedDefaults.permission_config;
+      const modelConfig = resolvedDefaults.model_config;
+      const mcpServerIds = resolvedDefaults.mcp_server_ids;
+      const permissionMode = permissionConfig.mode;
       // Track whether the caller explicitly requested these servers. When they
       // did, we surface attach failures in the response instead of silently
       // dropping them (the "mcpServerId doesn't stick" bug). For inherited
