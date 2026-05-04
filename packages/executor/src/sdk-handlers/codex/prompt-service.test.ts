@@ -9,6 +9,9 @@ import { CodexPromptService } from './prompt-service.js';
 
 // Track how many Codex instances were created (module-level state)
 let mockInstanceCount = 0;
+// Track the baseUrl each constructed instance saw, in creation order. Lets
+// tests assert that custom OPENAI_BASE_URL values flow into Codex.Codex().
+let mockInstanceBaseUrls: Array<string | undefined> = [];
 let mockStreamEvents: Array<Record<string, unknown>> = [];
 
 async function* streamMockEvents() {
@@ -21,11 +24,14 @@ async function* streamMockEvents() {
 vi.mock('@agor/core/sdk', () => {
   class MockCodexClient {
     apiKey: string;
+    baseUrl: string | undefined;
     instanceId: number;
 
-    constructor(options: { apiKey?: string }) {
+    constructor(options: { apiKey?: string; baseUrl?: string }) {
       this.apiKey = options.apiKey || '';
+      this.baseUrl = options.baseUrl;
       this.instanceId = ++mockInstanceCount;
+      mockInstanceBaseUrls.push(options.baseUrl);
     }
 
     startThread() {
@@ -68,7 +74,9 @@ const mockDb = {} as any;
 describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
   beforeEach(() => {
     mockInstanceCount = 0;
+    mockInstanceBaseUrls = [];
     mockStreamEvents = [];
+    delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
   });
 
@@ -160,6 +168,68 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
     // Call with actual key - should create new instance
     serviceWithPrivate.refreshClient('new-key');
     expect(mockInstanceCount).toBe(countAfterInit + 1);
+  });
+});
+
+describe('CodexPromptService - OPENAI_BASE_URL handling', () => {
+  // These tests guard the per-user custom OpenAI-compatible endpoint surface.
+  // The SDK takes baseUrl via its CodexOptions, so we assert the env var is
+  // read, trimmed, propagated to Codex.Codex(), and treated as a refresh
+  // signal independent of API-key changes.
+  beforeEach(() => {
+    mockInstanceCount = 0;
+    mockInstanceBaseUrls = [];
+    delete process.env.OPENAI_BASE_URL;
+    vi.clearAllMocks();
+  });
+
+  const makeService = (apiKey: string | undefined) =>
+    new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockWorktreesRepo,
+      undefined,
+      apiKey,
+      mockDb
+    );
+
+  it('passes OPENAI_BASE_URL into Codex.Codex on construction', () => {
+    process.env.OPENAI_BASE_URL = 'https://gateway.example.com/v1';
+    makeService('test-api-key');
+    expect(mockInstanceBaseUrls).toEqual(['https://gateway.example.com/v1']);
+  });
+
+  it('omits baseUrl when OPENAI_BASE_URL is unset', () => {
+    makeService('test-api-key');
+    expect(mockInstanceBaseUrls).toEqual([undefined]);
+  });
+
+  it('trims whitespace and treats whitespace-only as unset', () => {
+    process.env.OPENAI_BASE_URL = '   ';
+    makeService('test-api-key');
+    expect(mockInstanceBaseUrls).toEqual([undefined]);
+  });
+
+  it('reinitializes Codex when OPENAI_BASE_URL changes between refreshes', () => {
+    const service = makeService('stable-key');
+    const countAfterInit = mockInstanceCount;
+
+    // Same key, base URL appears -> must recreate.
+    process.env.OPENAI_BASE_URL = 'https://gateway.example.com/v1';
+    (service as any).refreshClient('stable-key');
+    expect(mockInstanceCount).toBe(countAfterInit + 1);
+    expect(mockInstanceBaseUrls.at(-1)).toBe('https://gateway.example.com/v1');
+
+    // Same key, same URL -> must NOT recreate (issue #133 protection).
+    (service as any).refreshClient('stable-key');
+    expect(mockInstanceCount).toBe(countAfterInit + 1);
+
+    // Same key, URL cleared -> must recreate without baseUrl.
+    delete process.env.OPENAI_BASE_URL;
+    (service as any).refreshClient('stable-key');
+    expect(mockInstanceCount).toBe(countAfterInit + 2);
+    expect(mockInstanceBaseUrls.at(-1)).toBeUndefined();
   });
 });
 

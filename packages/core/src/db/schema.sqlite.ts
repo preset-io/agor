@@ -741,6 +741,7 @@ export const users = sqliteTable(
           };
           codex?: {
             OPENAI_API_KEY?: string;
+            OPENAI_BASE_URL?: string;
           };
           gemini?: {
             GEMINI_API_KEY?: string;

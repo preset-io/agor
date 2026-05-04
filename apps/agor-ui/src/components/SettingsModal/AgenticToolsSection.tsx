@@ -37,7 +37,10 @@ const GLOBAL_TOOL_FIELDS: Record<AgenticToolName, AgenticToolFieldConfig[]> = {
   'claude-code': TOOL_FIELD_CONFIGS['claude-code'].filter(
     (f) => f.field !== 'CLAUDE_CODE_OAUTH_TOKEN'
   ),
-  codex: TOOL_FIELD_CONFIGS.codex,
+  // OPENAI_BASE_URL is per-user only: in multiplayer Agor instances hosting
+  // multiple companies, a global override would silently route every user's
+  // Codex traffic through one tenant's endpoint. Each user sets their own.
+  codex: TOOL_FIELD_CONFIGS.codex.filter((f) => f.field !== 'OPENAI_BASE_URL'),
   gemini: TOOL_FIELD_CONFIGS.gemini,
   copilot: TOOL_FIELD_CONFIGS.copilot,
   opencode: TOOL_FIELD_CONFIGS.opencode,

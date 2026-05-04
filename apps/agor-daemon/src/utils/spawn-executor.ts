@@ -279,6 +279,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
           ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
           CLAUDE_CODE_OAUTH_TOKEN: env.CLAUDE_CODE_OAUTH_TOKEN,
           OPENAI_API_KEY: env.OPENAI_API_KEY,
+          OPENAI_BASE_URL: env.OPENAI_BASE_URL,
           GEMINI_API_KEY: env.GEMINI_API_KEY,
           GOOGLE_API_KEY: env.GOOGLE_API_KEY,
         }).filter(([_, v]) => v !== undefined)
