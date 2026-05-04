@@ -26,7 +26,11 @@ export function mcpServerNeedsAuth(
   if (!server || server.auth?.type !== 'oauth') return false;
 
   const expiresAt = server.auth.oauth_token_expires_at;
-  const isExpired = !!(expiresAt && expiresAt < Date.now());
+  // Use `<=` to match the daemon-side boundary: `oauth-status` treats
+  // `> now` as still-valid (so `<= now` is expired) and the executor's
+  // auth-headers path also flips at `<=`. Without this we'd silently
+  // disagree with the daemon at the exact expiry millisecond.
+  const isExpired = !!(expiresAt && expiresAt <= Date.now());
 
   // A token only counts as "authenticated" while it's still valid.
   if (server.auth.oauth_access_token && !isExpired) return false;

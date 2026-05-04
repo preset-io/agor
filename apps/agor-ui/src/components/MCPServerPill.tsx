@@ -12,12 +12,13 @@ interface MCPServerPillProps {
 }
 
 /**
- * Format a (future or past) timestamp as a short human-relative phrase
- * ("in 3m", "in 2h", "in 4d", "5m ago"). Unlike `formatRelativeTime`, this
- * renders future offsets, which is what an expiring token needs. Callers
- * prepend the verb ("Expires" / "Expired") so we don't double up on it.
+ * Format a (future or past) timestamp into the verb + phrase used in expiry
+ * tooltips: `{ verb: 'Expires', phrase: 'in 3m' }` for future,
+ * `{ verb: 'Expired', phrase: '5m ago' }` for past. Returning both from one
+ * `Date.now()` read makes mismatched output ("Expires 0s ago" or
+ * "Expired in 0s") impossible by construction at the expiry boundary.
  */
-function formatExpiresIn(expiresAtMs: number): string {
+function formatExpiresIn(expiresAtMs: number): { verb: 'Expires' | 'Expired'; phrase: string } {
   const diffMs = expiresAtMs - Date.now();
   const abs = Math.abs(diffMs);
   const sec = Math.floor(abs / 1000);
@@ -27,7 +28,9 @@ function formatExpiresIn(expiresAtMs: number): string {
 
   const value = sec < 60 ? `${sec}s` : min < 60 ? `${min}m` : hr < 24 ? `${hr}h` : `${day}d`;
 
-  return diffMs >= 0 ? `in ${value}` : `${value} ago`;
+  return diffMs >= 0
+    ? { verb: 'Expires', phrase: `in ${value}` }
+    : { verb: 'Expired', phrase: `${value} ago` };
 }
 
 /**
@@ -101,7 +104,7 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
         setExpiresAtOverride(result.expires_at);
         message.success(
           result.expires_at
-            ? `${server.display_name || server.name} refreshed — expires ${formatExpiresIn(result.expires_at)}`
+            ? `${server.display_name || server.name} refreshed — expires ${formatExpiresIn(result.expires_at).phrase}`
             : `${server.display_name || server.name} refreshed`
         );
       } else if (result.error === 'needs_reauth') {
@@ -124,11 +127,11 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
   let authedTooltip: React.ReactNode;
   if (expiresAt) {
     const date = new Date(expiresAt);
-    const verb = expiresAt - Date.now() >= 0 ? 'Expires' : 'Expired';
+    const { verb, phrase } = formatExpiresIn(expiresAt);
     authedTooltip = (
       <>
         <div>
-          {verb} {formatExpiresIn(expiresAt)}
+          {verb} {phrase}
         </div>
         <div style={{ opacity: 0.75, fontSize: 12 }}>{formatAbsoluteTime(date)}</div>
         <div style={{ opacity: 0.75, fontSize: 12, marginTop: 4 }}>Click to refresh now</div>
