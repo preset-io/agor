@@ -183,6 +183,18 @@ export function createTokenBucket(
 }
 
 /**
+ * Per-user socket.io room name. Sockets owned by `userId` auto-join this room
+ * on connect / login (see the connection handler and the `app.on('login', …)`
+ * hook in this file). Use this everywhere we want to emit to "every tab the
+ * user owns" — e.g. user-scoped notifications like `oauth:completed`.
+ *
+ * Centralized so the prefix can change in one place without drift.
+ */
+export function userRoomName(userId: string): string {
+  return `user:${userId}`;
+}
+
+/**
  * Validate a terminal channel name and extract its target user_id.
  *
  * Channel format: `user/<uuid>/terminal`. Returns null on bad shape.
@@ -364,7 +376,7 @@ export function createSocketIOConfig(
       // Auto-join per-user room for user-scoped events (OAuth prompts, notifications)
       // Try at connection time (for sockets that authenticate via handshake token)
       if (user?.user_id) {
-        socket.join(`user:${user.user_id}`);
+        socket.join(userRoomName(user.user_id));
         console.log(
           `🏠 Socket ${socket.id} joined user room at connection: user:${user.user_id.substring(0, 8)}`
         );
@@ -677,7 +689,7 @@ export function createSocketIOConfig(
       // Find the socket whose feathers connection matches this login
       for (const [, socket] of io.sockets.sockets) {
         if ((socket as FeathersSocket).feathers === context.connection) {
-          socket.join(`user:${userId}`);
+          socket.join(userRoomName(userId));
           console.log(
             `🏠 Socket ${socket.id} joined user room after login: user:${userId.substring(0, 8)}`
           );

@@ -77,6 +77,7 @@ import { createThreadSessionMapService } from './services/thread-session-map.js'
 import { createUsersService } from './services/users.js';
 import { setupWorktreeOwnersService } from './services/worktree-owners.js';
 import { createWorktreesService } from './services/worktrees.js';
+import { userRoomName } from './setup/socketio.js';
 import { escapeHtml } from './utils/html.js';
 import {
   computeFileHash,
@@ -1285,26 +1286,27 @@ async function registerMCPServices(
             oauth_mode: pendingFlow.oauthMode || 'per_user',
           };
           // Targeting precedence:
-          //   1. Originating socket — narrowest, used when the flow was started
-          //      from a live tab.
-          //   2. Per-user room (`user:<userId>`) — every tab owned by the user
-          //      who initiated the flow. Sockets auto-join this room on
-          //      connect/login (see `apps/agor-daemon/src/setup/socketio.ts`).
-          //   3. Global broadcast — only safe for `shared` oauth_mode, where
-          //      tokens live on the server record itself and every tab needs
-          //      to refetch. Never used for `per_user` flows: doing so would
-          //      let the event reach OTHER users and incorrectly mark their
-          //      `userAuthenticatedMcpServerIds` set as authed for a server
-          //      they don't own a token for.
-          if (pendingFlow.socketId) {
-            app.io.to(pendingFlow.socketId).emit('oauth:completed', oauthEvent);
-          } else if (oauthEvent.oauth_mode === 'per_user' && pendingFlow.userId) {
-            app.io.to(`user:${pendingFlow.userId}`).emit('oauth:completed', oauthEvent);
+          //   1. `per_user` mode + `userId` known — emit to the user's room so
+          //      every tab the user owns updates (including the tab that
+          //      kicked off the flow, which already auto-joined the room on
+          //      connect/login). Targeting only the originating socket would
+          //      leave that user's other tabs stuck on the pre-auth state.
+          //   2. `shared` mode — broadcast: shared tokens live on the server
+          //      record itself, every tab on every user needs to refetch.
+          //   3. Originating socket — defensive fallback for the unusual case
+          //      where we have a `socketId` but no `userId` (shouldn't happen
+          //      for normal flows but keeps single-tab UX working).
+          //   4. Otherwise log + skip; the UI will catch up on its next
+          //      `mcp-servers` fetch.
+          if (oauthEvent.oauth_mode === 'per_user' && pendingFlow.userId) {
+            app.io.to(userRoomName(pendingFlow.userId)).emit('oauth:completed', oauthEvent);
           } else if (oauthEvent.oauth_mode === 'shared') {
             app.io.emit('oauth:completed', oauthEvent);
+          } else if (pendingFlow.socketId) {
+            app.io.to(pendingFlow.socketId).emit('oauth:completed', oauthEvent);
           } else {
             console.warn(
-              `[OAuth Callback] per_user flow ${state} has no socketId or userId — skipping oauth:completed emit (UI will catch up on next mcp-servers find)`
+              `[OAuth Callback] per_user flow ${state} has no userId or socketId — skipping oauth:completed emit (UI will catch up on next mcp-servers find)`
             );
           }
         }
