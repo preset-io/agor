@@ -124,9 +124,25 @@ export class CodexPromptService {
   private codex: InstanceType<typeof Codex.Codex>;
   private lastMCPServersHash: string | null = null;
   private lastApiKey: string | null = null;
+  private lastBaseUrl: string | null = null;
   private stopRequested = new Map<SessionID, boolean>();
   private apiKey: string | undefined;
   private lastCodexHome: string | null = null;
+
+  /**
+   * Resolve the per-user custom OpenAI-compatible base URL.
+   *
+   * Sourced from `process.env.OPENAI_BASE_URL`, which the daemon populates
+   * from the user's `agentic_tools.codex.OPENAI_BASE_URL` setting via
+   * `createUserProcessEnvironment` (see packages/core/src/config/env-resolver.ts).
+   *
+   * Empty / unset → returns undefined so the Codex SDK uses its default endpoint.
+   * Logged at DEBUG only (could leak internal hostnames).
+   */
+  private resolveBaseUrl(): string | undefined {
+    const raw = process.env.OPENAI_BASE_URL?.trim();
+    return raw && raw.length > 0 ? raw : undefined;
+  }
 
   constructor(
     _messagesRepo: MessagesRepository,
@@ -141,6 +157,8 @@ export class CodexPromptService {
     // Store API key from base-executor (already resolved with proper precedence)
     this.apiKey = apiKey || '';
     this.lastApiKey = this.apiKey;
+    const baseUrl = this.resolveBaseUrl();
+    this.lastBaseUrl = baseUrl ?? null;
 
     if (!this.apiKey) {
       console.warn(
@@ -149,9 +167,14 @@ export class CodexPromptService {
       );
     }
 
-    // Initialize Codex SDK with resolved API key
+    if (baseUrl) {
+      console.debug(`🔗 [Codex] Using custom OPENAI_BASE_URL`);
+    }
+
+    // Initialize Codex SDK with resolved API key + optional custom base URL
     this.codex = new Codex.Codex({
       apiKey: this.apiKey,
+      ...(baseUrl ? { baseUrl } : {}),
     });
   }
 
@@ -165,10 +188,13 @@ export class CodexPromptService {
   private reinitializeCodex(): void {
     console.log('🔄 [Codex] Reinitializing SDK to pick up config changes...');
     // Use the resolved API key from base-executor (no fallback to env needed)
+    const baseUrl = this.resolveBaseUrl();
     this.codex = new Codex.Codex({
       apiKey: this.apiKey,
+      ...(baseUrl ? { baseUrl } : {}),
     });
     this.lastApiKey = this.apiKey || null;
+    this.lastBaseUrl = baseUrl ?? null;
     console.log('✅ [Codex] SDK reinitialized');
   }
 
@@ -176,18 +202,25 @@ export class CodexPromptService {
    * Refresh Codex client with latest API key from config
    * Ensures hot-reload of credentials from Settings UI
    *
-   * IMPORTANT: Only recreates Codex instance if API key actually changed
-   * This prevents memory leak from spawning multiple Codex CLI processes
+   * IMPORTANT: Only recreates Codex instance if API key OR base URL actually
+   * changed. This prevents memory leak from spawning multiple Codex CLI
+   * processes (issue #133).
    */
   private refreshClient(currentApiKey: string): void {
-    // Only recreate if API key changed (prevents memory leak - issue #133)
-    if (this.lastApiKey !== currentApiKey) {
-      console.log('🔄 [Codex] API key changed, reinitializing SDK...');
+    const currentBaseUrl = this.resolveBaseUrl();
+    const baseUrlChanged = (this.lastBaseUrl ?? null) !== (currentBaseUrl ?? null);
+    // Only recreate if API key OR base URL changed (prevents memory leak - issue #133)
+    if (this.lastApiKey !== currentApiKey || baseUrlChanged) {
+      console.log(
+        `🔄 [Codex] ${this.lastApiKey !== currentApiKey ? 'API key' : 'Base URL'} changed, reinitializing SDK...`
+      );
       this.codex = new Codex.Codex({
         apiKey: currentApiKey,
+        ...(currentBaseUrl ? { baseUrl: currentBaseUrl } : {}),
       });
       this.lastApiKey = currentApiKey;
-      console.log('✅ [Codex] SDK reinitialized with new API key');
+      this.lastBaseUrl = currentBaseUrl ?? null;
+      console.log('✅ [Codex] SDK reinitialized');
     }
   }
 

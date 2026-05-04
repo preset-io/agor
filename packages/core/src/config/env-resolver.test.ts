@@ -231,6 +231,12 @@ describe('resolveUserEnvironment — per-tool credential scoping', () => {
       'https://gateway.example.com'
     );
     await usersRepo.setToolConfigField(userId, 'codex', 'OPENAI_API_KEY', 'openai-key');
+    await usersRepo.setToolConfigField(
+      userId,
+      'codex',
+      'OPENAI_BASE_URL',
+      'https://codex-gateway.example.com/v1'
+    );
     await usersRepo.setToolConfigField(userId, 'gemini', 'GEMINI_API_KEY', 'gemini-key');
     await usersRepo.setToolConfigField(userId, 'copilot', 'COPILOT_GITHUB_TOKEN', 'gh-copilot');
 
@@ -260,11 +266,15 @@ describe('resolveUserEnvironment — per-tool credential scoping', () => {
     expect(env.COPILOT_GITHUB_TOKEN).toBeUndefined();
   });
 
-  dbTest('tool=codex merges only OPENAI_API_KEY', async ({ db }) => {
+  dbTest('tool=codex merges OPENAI_API_KEY + OPENAI_BASE_URL only', async ({ db }) => {
     const userId = await createUserWithToolCreds(db);
     const env = await resolveUserEnvironment(userId, db, { tool: 'codex' });
     expect(env.OPENAI_API_KEY).toBe('openai-key');
+    // Per-user custom OpenAI-compatible endpoint (vLLM, Ollama, internal gateway, etc.)
+    // must propagate so the executor's Codex SDK picks it up.
+    expect(env.OPENAI_BASE_URL).toBe('https://codex-gateway.example.com/v1');
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
     expect(env.GEMINI_API_KEY).toBeUndefined();
     expect(env.COPILOT_GITHUB_TOKEN).toBeUndefined();
   });

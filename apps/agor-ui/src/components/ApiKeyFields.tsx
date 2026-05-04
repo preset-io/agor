@@ -79,6 +79,13 @@ export const TOOL_FIELD_CONFIGS: Record<AgenticToolName, AgenticToolFieldConfig[
       placeholder: 'sk-proj-...',
       docUrl: 'https://platform.openai.com/api-keys',
     },
+    {
+      field: 'OPENAI_BASE_URL',
+      label: 'OpenAI Base URL',
+      description: '(optional — gateway / proxy / self-hosted)',
+      placeholder: 'https://api.openai.com/v1',
+      type: 'text',
+    },
   ],
   gemini: [
     {
@@ -248,6 +255,13 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
             <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
               Override only when routing Claude Code through an internal gateway, proxy, or regional
               endpoint. Leave empty to use Anthropic's default API.
+            </Text>
+          )}
+          {field === 'OPENAI_BASE_URL' && (
+            <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+              Point Codex at any OpenAI-compatible endpoint (internal gateway, corporate proxy, or a
+              localhost server like vLLM / Ollama / LM Studio). Leave empty to use OpenAI's default
+              API. The OpenAI API Key above is sent as the bearer token.
             </Text>
           )}
           {field === 'COPILOT_GITHUB_TOKEN' && (

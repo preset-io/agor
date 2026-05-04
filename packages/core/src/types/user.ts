@@ -110,6 +110,7 @@ export interface ClaudeCodeConfig {
 
 export interface CodexConfig {
   OPENAI_API_KEY?: string;
+  OPENAI_BASE_URL?: string;
 }
 
 export interface GeminiConfig {
