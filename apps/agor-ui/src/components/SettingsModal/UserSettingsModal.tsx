@@ -704,6 +704,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               onSave={(field, value) => handleToolFieldSave(toolName, field, value)}
               onClear={(field) => handleToolFieldClear(toolName, field)}
               saving={savingForTool}
+              publicValues={
+                user?.agentic_tools_public_values?.[toolName] as Record<string, string> | undefined
+              }
             />
           </>
         );

@@ -32,6 +32,7 @@ import type {
   AgenticToolName,
   AgenticToolsConfig,
   AgenticToolsUpdate,
+  AuthenticatedParams,
   EnvVarMetadata,
   EnvVarScope,
   Paginated,
@@ -41,7 +42,12 @@ import type {
   UserID,
   UserRole,
 } from '@agor/core/types';
-import { normalizeRole, ROLES, toAgenticToolsStatus } from '@agor/core/types';
+import {
+  extractAgenticToolsPublicValues,
+  normalizeRole,
+  ROLES,
+  toAgenticToolsStatus,
+} from '@agor/core/types';
 
 /**
  * Apply a per-tool credential patch to the encrypted-at-rest blob.
@@ -141,6 +147,9 @@ export class UsersService {
     // Check if filtering by email (for authentication)
     const email = params?.query?.email as string | undefined;
     const includePassword = !!email; // Include password when looking up by email (for authentication)
+    const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as
+      | UserID
+      | undefined;
 
     let rows: (typeof users.$inferSelect)[];
     if (email) {
@@ -152,7 +161,7 @@ export class UsersService {
       rows = await select(this.db).from(users).all();
     }
 
-    const results = rows.map((row) => this.rowToUser(row, includePassword));
+    const results = rows.map((row) => this.rowToUser(row, includePassword, requesterId));
 
     return {
       total: results.length,
@@ -165,14 +174,17 @@ export class UsersService {
   /**
    * Get user by ID
    */
-  async get(id: UserID, _params?: Params): Promise<User> {
+  async get(id: UserID, params?: Params): Promise<User> {
     const row = await select(this.db).from(users).where(eq(users.user_id, id)).one();
 
     if (!row) {
       throw new Error(`User not found: ${id}`);
     }
 
-    return this.rowToUser(row);
+    const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as
+      | UserID
+      | undefined;
+    return this.rowToUser(row, false, requesterId);
   }
 
   /**
@@ -221,7 +233,7 @@ export class UsersService {
   /**
    * Update user
    */
-  async patch(id: UserID, data: UpdateUserData, _params?: Params): Promise<User> {
+  async patch(id: UserID, data: UpdateUserData, params?: Params): Promise<User> {
     const now = new Date();
     const updates: Record<string, unknown> = { updated_at: now };
 
@@ -366,7 +378,10 @@ export class UsersService {
       throw new Error(`User not found: ${id}`);
     }
 
-    return this.rowToUser(row);
+    const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as
+      | UserID
+      | undefined;
+    return this.rowToUser(row, false, requesterId);
   }
 
   /**
@@ -490,10 +505,17 @@ export class UsersService {
    *
    * @param row - Database row
    * @param includePassword - Include password field (for authentication only)
+   * @param requesterId - Authenticated user making the request. When equal to
+   *   the row's `user_id`, the returned DTO includes `agentic_tools_public_values`
+   *   (decrypted plaintext for the whitelisted non-secret fields like
+   *   `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`). For any other requester —
+   *   including admins viewing someone else's profile — public values are
+   *   omitted, since base URLs can leak internal hostnames.
    */
   private rowToUser(
     row: typeof users.$inferSelect,
-    includePassword = false
+    includePassword = false,
+    requesterId?: UserID
   ): User & { password?: string } {
     const data = row.data as {
       avatar?: string;
@@ -529,6 +551,13 @@ export class UsersService {
       updated_at: row.updated_at ?? undefined,
       // Per-tool credential presence (boolean only — never expose decrypted values).
       agentic_tools: toAgenticToolsStatus(data.agentic_tools),
+      // Self-only: return plaintext for whitelisted non-secret fields
+      // (base URLs) so the UI can render the saved value back. Field-level
+      // secrets are NEVER on the whitelist; see `AGENTIC_TOOLS_PUBLIC_FIELDS`.
+      agentic_tools_public_values:
+        requesterId === row.user_id
+          ? extractAgenticToolsPublicValues(data.agentic_tools, decryptApiKey)
+          : undefined,
       // Return env var metadata (presence + scope), NOT actual values
       env_vars: envVarMetadata,
       // Return default agentic config

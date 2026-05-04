@@ -203,6 +203,81 @@ export type AgenticToolsUpdate = {
 };
 
 /**
+ * Per-tool whitelist of fields whose plaintext is safe to echo back to the
+ * field's owner.
+ *
+ * Base URLs are config (not credentials) — the user benefits from seeing the
+ * exact value they configured (e.g. distinguishing
+ * `https://gateway.example.com/v1` from `https://gateway.example.com`). API
+ * keys, OAuth tokens, and auth tokens are NEVER on this list and never
+ * decrypted on read.
+ *
+ * Even for whitelisted fields, the daemon only returns the plaintext to the
+ * field's *owner* — never to other users (base URLs can leak internal
+ * hostnames) and never to admins viewing someone else's profile.
+ */
+export const AGENTIC_TOOLS_PUBLIC_FIELDS: {
+  readonly [Tool in keyof AgenticToolsConfig]?: ReadonlyArray<
+    keyof NonNullable<AgenticToolsConfig[Tool]> & string
+  >;
+} = {
+  'claude-code': ['ANTHROPIC_BASE_URL'],
+  codex: ['OPENAI_BASE_URL'],
+} as const;
+
+/**
+ * Owner-visible plaintext values for the fields listed in
+ * `AGENTIC_TOOLS_PUBLIC_FIELDS`. Sibling map to `AgenticToolsStatus` —
+ * presence remains the source of truth; this just lets the UI render the
+ * saved value back without forcing a clear-and-retype.
+ *
+ * Always undefined / partial when the requester is not the field's owner.
+ */
+export type AgenticToolsPublicValues = {
+  [Tool in keyof AgenticToolsConfig]?: AgenticToolsConfig[Tool] extends infer Cfg
+    ? { [Field in keyof Cfg]?: string }
+    : never;
+};
+
+/**
+ * Decrypt the whitelisted public fields from the on-disk encrypted blob.
+ * Returns undefined when no public fields are populated, so the API response
+ * stays compact.
+ *
+ * The caller is responsible for the self-only authorization check — this
+ * helper assumes the requester is already authorized to see the values.
+ */
+export function extractAgenticToolsPublicValues(
+  stored: StoredAgenticTools | undefined,
+  decrypt: (ciphertext: string) => string
+): AgenticToolsPublicValues | undefined {
+  if (!stored) return undefined;
+  const out: Record<string, Record<string, string>> = {};
+  for (const [tool, fields] of Object.entries(stored) as Array<
+    [keyof AgenticToolsConfig, Record<string, string> | undefined]
+  >) {
+    if (!fields) continue;
+    const whitelist = AGENTIC_TOOLS_PUBLIC_FIELDS[tool];
+    if (!whitelist || whitelist.length === 0) continue;
+    const plaintext: Record<string, string> = {};
+    for (const field of whitelist) {
+      const ciphertext = fields[field as string];
+      if (!ciphertext) continue;
+      try {
+        plaintext[field as string] = decrypt(ciphertext);
+      } catch {
+        // Silently skip undecryptable values; the boolean status flag will
+        // still indicate presence so the user can clear and re-set.
+      }
+    }
+    if (Object.keys(plaintext).length > 0) {
+      out[tool] = plaintext;
+    }
+  }
+  return Object.keys(out).length > 0 ? (out as AgenticToolsPublicValues) : undefined;
+}
+
+/**
  * Available task completion chime sounds
  */
 export type ChimeSound =
@@ -292,6 +367,13 @@ export interface User extends BaseUserFields {
    * encrypted-string to `boolean` for presence checking.
    */
   agentic_tools?: AgenticToolsStatus;
+  /**
+   * Plaintext values for fields listed in `AGENTIC_TOOLS_PUBLIC_FIELDS` —
+   * only populated when the requester is the field's owner. Lets the UI
+   * render the saved value (e.g. the user's custom `OPENAI_BASE_URL`) back
+   * without forcing a clear-and-retype. Never contains API keys or tokens.
+   */
+  agentic_tools_public_values?: AgenticToolsPublicValues;
   // Environment variable status with scope (never exposes actual values).
   // Map from env var name → presence/scope metadata. For v0.5 the only validated
   // scope values are 'global' and 'session'; other values are reserved for v1 and
