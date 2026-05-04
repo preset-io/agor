@@ -12,9 +12,10 @@ interface MCPServerPillProps {
 }
 
 /**
- * Format a future timestamp as a short human-relative string ("in 3m",
- * "in 2h", "in 4d", "expired 5m ago"). Unlike `formatRelativeTime`, this
- * renders future offsets, which is what an expiring token needs.
+ * Format a (future or past) timestamp as a short human-relative phrase
+ * ("in 3m", "in 2h", "in 4d", "5m ago"). Unlike `formatRelativeTime`, this
+ * renders future offsets, which is what an expiring token needs. Callers
+ * prepend the verb ("Expires" / "Expired") so we don't double up on it.
  */
 function formatExpiresIn(expiresAtMs: number): string {
   const diffMs = expiresAtMs - Date.now();
@@ -26,7 +27,7 @@ function formatExpiresIn(expiresAtMs: number): string {
 
   const value = sec < 60 ? `${sec}s` : min < 60 ? `${min}m` : hr < 24 ? `${hr}h` : `${day}d`;
 
-  return diffMs >= 0 ? `in ${value}` : `expired ${value} ago`;
+  return diffMs >= 0 ? `in ${value}` : `${value} ago`;
 }
 
 /**
@@ -123,9 +124,12 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
   let authedTooltip: React.ReactNode;
   if (expiresAt) {
     const date = new Date(expiresAt);
+    const verb = expiresAt - Date.now() >= 0 ? 'Expires' : 'Expired';
     authedTooltip = (
       <>
-        <div>Expires {formatExpiresIn(expiresAt)}</div>
+        <div>
+          {verb} {formatExpiresIn(expiresAt)}
+        </div>
         <div style={{ opacity: 0.75, fontSize: 12 }}>{formatAbsoluteTime(date)}</div>
         <div style={{ opacity: 0.75, fontSize: 12, marginTop: 4 }}>Click to refresh now</div>
       </>
