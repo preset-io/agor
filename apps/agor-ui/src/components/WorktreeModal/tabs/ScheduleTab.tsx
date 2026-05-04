@@ -96,10 +96,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   const handleAgenticToolChange = (newTool: string) => {
     if (newTool === agenticTool) return;
     setAgenticTool(newTool);
-    form.setFieldValue(
-      'permissionMode',
-      getDefaultPermissionMode(newTool as AgenticToolName)
-    );
+    form.setFieldValue('permissionMode', getDefaultPermissionMode(newTool as AgenticToolName));
   };
 
   // Update human-readable cron description
