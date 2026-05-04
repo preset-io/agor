@@ -88,15 +88,19 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
     }
   }, [isInitialized, worktree.schedule_enabled, worktree.schedule_cron, worktree.schedule, form]);
 
-  // Update permission mode when agent changes
-  useEffect(() => {
-    if (agenticTool) {
-      form.setFieldValue(
-        'permissionMode',
-        getDefaultPermissionMode(agenticTool as AgenticToolName)
-      );
-    }
-  }, [agenticTool, form]);
+  // Reset permission mode when the user picks a different agent tool.
+  // NOTE: This must NOT run on mount or remount — doing so would clobber the
+  // saved permission_mode that the initialize effect above just loaded into
+  // the form, causing the field to silently revert to the tool default on
+  // every save round-trip.
+  const handleAgenticToolChange = (newTool: string) => {
+    if (newTool === agenticTool) return;
+    setAgenticTool(newTool);
+    form.setFieldValue(
+      'permissionMode',
+      getDefaultPermissionMode(newTool as AgenticToolName)
+    );
+  };
 
   // Update human-readable cron description
   useEffect(() => {
@@ -243,7 +247,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
             <AgentSelectionGrid
               agents={AVAILABLE_AGENTS}
               selectedAgentId={agenticTool}
-              onSelect={setAgenticTool}
+              onSelect={handleAgenticToolChange}
               columns={2}
               showComparisonLink={true}
             />
