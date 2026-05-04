@@ -1284,10 +1284,28 @@ async function registerMCPServices(
             mcp_server_id: pendingFlow.mcpServerId,
             oauth_mode: pendingFlow.oauthMode || 'per_user',
           };
+          // Targeting precedence:
+          //   1. Originating socket — narrowest, used when the flow was started
+          //      from a live tab.
+          //   2. Per-user room (`user:<userId>`) — every tab owned by the user
+          //      who initiated the flow. Sockets auto-join this room on
+          //      connect/login (see `apps/agor-daemon/src/setup/socketio.ts`).
+          //   3. Global broadcast — only safe for `shared` oauth_mode, where
+          //      tokens live on the server record itself and every tab needs
+          //      to refetch. Never used for `per_user` flows: doing so would
+          //      let the event reach OTHER users and incorrectly mark their
+          //      `userAuthenticatedMcpServerIds` set as authed for a server
+          //      they don't own a token for.
           if (pendingFlow.socketId) {
             app.io.to(pendingFlow.socketId).emit('oauth:completed', oauthEvent);
-          } else {
+          } else if (oauthEvent.oauth_mode === 'per_user' && pendingFlow.userId) {
+            app.io.to(`user:${pendingFlow.userId}`).emit('oauth:completed', oauthEvent);
+          } else if (oauthEvent.oauth_mode === 'shared') {
             app.io.emit('oauth:completed', oauthEvent);
+          } else {
+            console.warn(
+              `[OAuth Callback] per_user flow ${state} has no socketId or userId — skipping oauth:completed emit (UI will catch up on next mcp-servers find)`
+            );
           }
         }
 

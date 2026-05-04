@@ -840,8 +840,10 @@ export function useAgorData(
     // Listen for OAuth completion events to update per-user token state in real-time.
     // Only update the per-user set when oauth_mode is 'per_user' (or unset, which defaults
     // to per_user). Shared-mode completions update the server record itself and don't need
-    // per-user tracking. This also prevents stale data when the event is broadcast globally
-    // (fallback path when socketId is absent).
+    // per-user tracking — and shared events ARE broadcast to all sockets on purpose, since
+    // every tab needs to refetch. Per-user events are scoped to the originating socket or
+    // the user's per-user room on the daemon side (see register-services.ts oauth callback),
+    // so we never receive another user's per_user completion here.
     const handleOAuthCompleted = async (event: {
       state: string;
       success: boolean;
