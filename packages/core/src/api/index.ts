@@ -625,6 +625,40 @@ function extendFindAllOnService(service: AgorService<unknown>): void {
   findAllService[SERVICE_FIND_ALL_EXTENDED] = true;
 }
 
+/**
+ * Custom RPC methods exposed by the daemon that aren't part of the Feathers
+ * standard CRUD interface. The Socket.io client only wires the default
+ * methods at construction time, so each path that has custom methods on the
+ * server must be registered here too — otherwise calling them on the client
+ * proxy throws "client.service(...).<method> is not a function".
+ *
+ * Keep this in sync with the `methods:` arrays in
+ * `apps/agor-daemon/src/register-services.ts`.
+ */
+const CLIENT_CUSTOM_METHODS: Record<string, readonly string[]> = {
+  users: ['getGitEnvironment'],
+  repos: ['initializeUnixGroup'],
+  worktrees: ['initializeUnixGroup'],
+};
+
+function registerClientCustomMethods(path: string, service: unknown): void {
+  // Strip leading slash to match the keys above (paths can come in as either form).
+  const normalized = path.replace(/^\/+/, '');
+  const customMethods = CLIENT_CUSTOM_METHODS[normalized];
+  if (!customMethods || customMethods.length === 0) {
+    return;
+  }
+
+  const candidate = service as { methods?: (...names: string[]) => unknown };
+  if (typeof candidate.methods !== 'function') {
+    return;
+  }
+
+  // Idempotent: SocketService.methods() just (re)defines the named functions
+  // on the instance; calling it twice with the same names is harmless.
+  candidate.methods(...customMethods);
+}
+
 function extendServiceFactory(client: AgorClient): void {
   const augmentedClient = client as AgorClient & {
     [CLIENT_SERVICE_FACTORY_EXTENDED]?: boolean;
@@ -639,6 +673,7 @@ function extendServiceFactory(client: AgorClient): void {
   augmentedClient.service = ((path: string) => {
     const service = rawService(path);
     extendFindAllOnService(service);
+    registerClientCustomMethods(path, service);
     return service;
   }) as AgorClient['service'];
 

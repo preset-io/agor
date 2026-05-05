@@ -503,6 +503,45 @@ describe('createClient', () => {
       });
     });
 
+    // Regression: PR #1088 added users.getGitEnvironment + repos/worktrees.initializeUnixGroup
+    // server-side via `app.use(path, service, { methods })`, but the Feathers Socket.io
+    // client only wires standard CRUD at construction time. Without an explicit
+    // service.methods(...) call on the client, calling these threw
+    // "client.service(...).<method> is not a function" — observed during prod worktree
+    // creation. These assertions guard the client-side mirror of the daemon's methods list.
+    it('registers users.getGitEnvironment custom method on client', () => {
+      const client = createClient();
+      const usersService = client.service('users') as unknown as {
+        methods: MockedFunction<(...names: string[]) => unknown>;
+      };
+      expect(usersService.methods).toHaveBeenCalledWith('getGitEnvironment');
+    });
+
+    it('registers repos.initializeUnixGroup custom method on client', () => {
+      const client = createClient();
+      const reposService = client.service('repos') as unknown as {
+        methods: MockedFunction<(...names: string[]) => unknown>;
+      };
+      expect(reposService.methods).toHaveBeenCalledWith('initializeUnixGroup');
+    });
+
+    it('registers worktrees.initializeUnixGroup custom method on client', () => {
+      const client = createClient();
+      const worktreesService = client.service('worktrees') as unknown as {
+        methods: MockedFunction<(...names: string[]) => unknown>;
+      };
+      expect(worktreesService.methods).toHaveBeenCalledWith('initializeUnixGroup');
+    });
+
+    it('does not register custom methods on services without any', () => {
+      const client = createClient();
+      const sessionsService = client.service('sessions') as unknown as {
+        methods: MockedFunction<(...names: string[]) => unknown>;
+      };
+      // sessions has no entry in CLIENT_CUSTOM_METHODS, so .methods() should not be called
+      expect(sessionsService.methods).not.toHaveBeenCalled();
+    });
+
     it('should expose sessions.prompt helper that calls /sessions/:id/prompt route', async () => {
       const client = createClient();
       const routeService = client.service('sessions/session-123/prompt');
