@@ -36,9 +36,13 @@ PR #1069 added an HTTPS→SSH fallback inside `cloneRepo()`. Two problems:
 
 Three things change together:
 
-### 1. `git.clone` is impersonated like `git.worktree.add`
+### 1. `git.clone` runs through the same impersonation helper as `git.worktree.add`
 
 Pass `asUser = resolveGitImpersonationForUser(db, userId)` to the `spawnExecutorFireAndForget` call at `repos.ts:213`. Same shape as the existing call at line 715.
+
+**Why "process identity stays daemon user" is intentional:** the impersonation helper currently always returns `getDaemonUser()` (see `apps/agor-daemon/src/utils/git-impersonation.ts`). This is *not* a stub — it's a deliberate constraint introduced by commit 38c80184. Parent dirs like `/home/agorpg/.agor/worktrees/` are owned by `agorpg:agorpg` 0755; running git as another Unix user can't create subdirectories there. The reason we still route through `sudo -u <daemon>` is to force a fresh `initgroups()` so newly created `agor_wt_*` groups become visible — the daemon process itself has stale group memberships from startup.
+
+**What strict-mode actually buys:** the credential identity (the GitHub token, env vars, etc.) is per-user via the Feathers RPC below; the process identity stays daemon-user out of necessity. That decouples auth from impersonation in a way that's safe regardless of the parent-dir ownership situation. If we ever flip the parent dirs to be world-writable or per-user-owned, the helper can start returning the real user — no other code has to change.
 
 ### 2. Privileged Unix work moves out of the executor and into the daemon
 
@@ -60,6 +64,10 @@ Why pass everything (not whitelist): the long tail of git-relevant env is too lo
 Executor calls this just before invoking `cloneRepo` / `createWorktree`, applies the returned values to `options.env` for that single call (NOT to `process.env` globally). The merged env reaches simple-git via the spawn config in `createGit` (`packages/core/src/git/index.ts:266-271`); git ignores keys it doesn't recognize, so passing the full user env is harmless.
 
 **Logging discipline:** the existing `[git.clone] Credentials: ...` log line only emits *which keys* were resolved, never values. Keep that discipline — passing arbitrary user env in means we must not dump values anywhere.
+
+**Failure mode is intentionally loud.** `fetchUserGitEnvironment` does *not* swallow RPC errors. If we returned `{}` on RPC failure, the daemon user's ambient credentials (e.g. `gh auth login` configured globally for `agorpg`) would silently authenticate the clone as the daemon's identity — the exact cross-user leak this PR is built to prevent. Prefer a clean failure that surfaces "credentials not configured" over a silent fallback.
+
+**Inherited credential helpers are reset.** `createGit` prepends `-c credential.helper=` whenever per-user env is supplied. Without that reset, git would still consult helpers from the daemon user's `~/.gitconfig` after our token-based helper, leaking daemon-user identity for any user who hasn't configured their own `GITHUB_TOKEN`. The empty assignment clears the helper list before we add ours.
 
 `payload.env` is no longer the cred channel. Drop the `env: userEnv` from the spawn payloads.
 

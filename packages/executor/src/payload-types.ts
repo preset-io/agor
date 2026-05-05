@@ -188,12 +188,6 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
 
     /** Initialize Unix group for repo isolation (default: false, requires RBAC enabled) */
     initUnixGroup: z.boolean().optional().default(false),
-
-    /** Daemon Unix user to add to the repo group (for daemon access) */
-    daemonUser: z.string().optional(),
-
-    /** Creator's Unix username to add to the repo group (for owner access) */
-    creatorUnixUsername: z.string().optional(),
   }),
 });
 
@@ -254,15 +248,6 @@ export const GitWorktreeAddPayloadSchema = BasePayloadSchema.extend({
 
     /** Access level for non-owners ('none' | 'read' | 'write') */
     othersAccess: z.enum(['none', 'read', 'write']).optional().default('read'),
-
-    /** Daemon Unix user to add to the worktree group (for daemon access) */
-    daemonUser: z.string().optional(),
-
-    /** Repo Unix group name (for fixing .git/worktrees permissions) */
-    repoUnixGroup: z.string().optional(),
-
-    /** Creator's Unix username to add to the worktree group (initial owner) */
-    creatorUnixUsername: z.string().optional(),
 
     /** User ID of the requesting user (for per-user credential resolution) */
     userId: z.string().uuid().optional(),
