@@ -7,6 +7,7 @@
  * - Unauthenticated callers are rejected
  */
 
+import { Forbidden } from '@agor/core/feathers';
 import type { AuthenticatedParams, UserID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
@@ -72,6 +73,10 @@ describe('UsersService.getGitEnvironment — permission checks', () => {
       },
     };
 
+    // Service throws a Feathers `Forbidden` (which the HTTP/WS layer maps to 403)
+    // with a human-readable message — assert both class and message so a future
+    // change to either is caught.
+    await expect(service.getGitEnvironment({ userId: userB }, params)).rejects.toThrow(Forbidden);
     await expect(service.getGitEnvironment({ userId: userB }, params)).rejects.toThrow(
       /Cannot access another user's git environment/
     );
