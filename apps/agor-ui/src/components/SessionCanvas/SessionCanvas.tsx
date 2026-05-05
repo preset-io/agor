@@ -54,6 +54,12 @@ import {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import './SessionCanvas.css';
+// Use the shared renderer so we render against the same Handlebars instance
+// where `initializeHandlebarsHelpers()` registered helpers (the bundled copy
+// inside @agor-live/client). Importing `handlebars` directly gives a separate
+// instance with no helpers, which causes templates using helpers like {{add}}
+// or {{eq}} to throw and silently fail.
+import { renderTemplate } from '@/utils/handlebars-helpers';
 import { mapToArray } from '@/utils/mapHelpers';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
 import { useMutationGate } from '../../contexts/ConnectionContext';
@@ -1625,8 +1631,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                               context: {},
                             },
                           };
-                          const template = Handlebars.compile(trigger.template);
-                          const renderedPrompt = template(context);
+                          const renderedPrompt = renderTemplate(trigger.template, context);
 
                           // Create new root session.
                           //
