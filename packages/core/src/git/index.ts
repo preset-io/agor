@@ -233,6 +233,17 @@ function createGit(
     'core.sshCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null',
   ];
 
+  // When per-user env is provided, reset the inherited credential.helper list
+  // before adding our own. Without this, git would also consult helpers
+  // configured in the daemon user's ~/.gitconfig (e.g. `gh auth login`),
+  // silently falling back to the daemon user's GitHub identity for any user
+  // who hasn't configured their own GITHUB_TOKEN. The empty `credential.helper=`
+  // resets the list; subsequent entries (e.g. our token-based store helper)
+  // are then the only helpers git considers.
+  if (env) {
+    config.push('credential.helper=');
+  }
+
   let credPath: string | undefined;
 
   // Configure credential helper for GitHub tokens via a tempfile (NOT via

@@ -10,7 +10,9 @@
  * The executor handles the complete transaction:
  * 1. Filesystem operations (git clone, git worktree add/remove)
  * 2. Database record creation via Feathers services
- * 3. Unix group/ACL setup (when RBAC is enabled)
+ * 3. Privileged Unix group/ACL setup is delegated to the daemon via Feathers RPC
+ *    (`repos.initializeUnixGroup`, `worktrees.initializeUnixGroup`) so it runs
+ *    with daemon sudo privileges regardless of executor impersonation mode.
  *
  * Feathers hooks handle WebSocket broadcasts automatically when records are created/updated.
  */
@@ -44,24 +46,22 @@ import { fixWorktreeGitDirPermissionsBasic } from './unix.js';
  * Fetch the requesting user's git environment via Feathers RPC.
  *
  * Calls `users.getGitEnvironment` on the daemon, which decrypts the user's
- * stored env vars (GITHUB_TOKEN, etc.) and returns them. Falls back to an
- * empty object when no userId is provided (e.g. local-path repos that skip
+ * stored env vars (GITHUB_TOKEN, etc.) and returns them. Returns an empty
+ * object only when no userId is provided (e.g. local-path repos that skip
  * credentials entirely).
+ *
+ * RPC failures are intentionally NOT swallowed: this is the channel through
+ * which per-user credentials reach git ops in strict mode. If we returned `{}`
+ * on failure, git would silently fall back to the daemon user's ambient
+ * credentials (e.g. `gh auth login`), which is exactly the cross-user leak
+ * this whole flow is designed to prevent.
  */
 async function fetchUserGitEnvironment(
   client: AgorClient,
   userId: string | undefined
 ): Promise<Record<string, string>> {
   if (!userId) return {};
-  try {
-    return await client.service('users').getGitEnvironment({ userId });
-  } catch (error) {
-    console.warn(
-      '[git] Failed to fetch user git environment:',
-      error instanceof Error ? error.message : String(error)
-    );
-    return {};
-  }
+  return client.service('users').getGitEnvironment({ userId });
 }
 
 /**
