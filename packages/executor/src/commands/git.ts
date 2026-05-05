@@ -46,25 +46,27 @@ import {
 } from './unix.js';
 
 /**
- * Resolve git credentials (GITHUB_TOKEN, GH_TOKEN)
+ * Fetch the requesting user's git environment via Feathers RPC.
  *
- * Checks environment variables for git authentication tokens.
- * These tokens are used to authenticate with GitHub/GitLab for private repos.
+ * Calls `users.getGitEnvironment` on the daemon, which decrypts the user's
+ * stored env vars (GITHUB_TOKEN, etc.) and returns them. Falls back to an
+ * empty object when no userId is provided (e.g. local-path repos that skip
+ * credentials entirely).
  */
-function resolveGitCredentials(): Record<string, string> {
-  const env: Record<string, string> = {};
-
-  // Check for GITHUB_TOKEN in environment
-  if (process.env.GITHUB_TOKEN) {
-    env.GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+async function fetchUserGitEnvironment(
+  client: AgorClient,
+  userId: string | undefined
+): Promise<Record<string, string>> {
+  if (!userId) return {};
+  try {
+    return await client.service('users').getGitEnvironment({ userId });
+  } catch (error) {
+    console.warn(
+      '[git] Failed to fetch user git environment:',
+      error instanceof Error ? error.message : String(error)
+    );
+    return {};
   }
-
-  // Check for GH_TOKEN as fallback (GitHub CLI uses this)
-  if (!env.GITHUB_TOKEN && process.env.GH_TOKEN) {
-    env.GH_TOKEN = process.env.GH_TOKEN;
-  }
-
-  return env;
 }
 
 /**
@@ -137,8 +139,8 @@ export async function handleGitClone(
     client = await createExecutorClient(daemonUrl, payload.sessionToken);
     console.log('[git.clone] Connected to daemon');
 
-    // Resolve git credentials from environment
-    const env = resolveGitCredentials();
+    // Fetch per-user git credentials via Feathers RPC
+    const env = await fetchUserGitEnvironment(client, payload.params.userId);
     if (Object.keys(env).length > 0) {
       console.log('[git.clone] Resolved credentials:', Object.keys(env));
     }
@@ -389,8 +391,8 @@ export async function handleGitWorktreeAdd(
     client = await createExecutorClient(daemonUrl, payload.sessionToken);
     console.log('[git.worktree.add] Connected to daemon');
 
-    // Resolve git credentials from environment (needed for fetch operations)
-    const env = resolveGitCredentials();
+    // Fetch per-user git credentials via Feathers RPC
+    const env = await fetchUserGitEnvironment(client, payload.params.userId);
 
     // Get parameters
     const repoId = payload.params.repoId;

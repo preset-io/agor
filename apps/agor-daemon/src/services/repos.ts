@@ -20,7 +20,6 @@ import {
   normalizeRepoUrl,
   PAGINATION,
   parseAgorYml,
-  resolveUserEnvironment,
   writeAgorYml,
 } from '@agor/core/config';
 import { type Database, RepoRepository, WorktreeRepository } from '@agor/core/db';
@@ -169,20 +168,15 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       return { status: 'exists', slug };
     }
 
-    // Resolve user environment for git credentials
-    let userEnv: Record<string, string> = {};
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
-
-    if (userId) {
-      userEnv = (await resolveUserEnvironment(userId, this.db)) || {};
-    }
 
     // Generate service JWT for executor authentication. The executor talks back
     // to the daemon to create the repo record (which may include
     // environment_config from .agor.yml) and patch status — operations that
     // materialize admin-defined templates rather than user edits. Using a
     // service token ensures hooks like requireAdminForEnvConfig bypass via
-    // _isServiceAccount, while user git credentials still flow via `env`.
+    // _isServiceAccount. Executor fetches per-user credentials via Feathers
+    // RPC (users.getGitEnvironment) using the same service JWT.
     const sessionToken = generateSessionToken(
       this.app as unknown as { settings: { authentication?: { secret?: string } } }
     );
@@ -209,17 +203,18 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
     // Fire and forget - spawn executor and return immediately
     // Executor handles EVERYTHING: git clone, .agor.yml parsing, DB record, Unix group
+    // Executor fetches per-user credentials via Feathers RPC (users.getGitEnvironment)
     const app = this.app;
     spawnExecutorFireAndForget(
       {
         command: 'git.clone',
         sessionToken,
         daemonUrl: getDaemonUrl(),
-        env: userEnv,
         params: {
           url: data.url,
           slug,
           createDbRecord: true,
+          userId: userId as string | undefined,
           initUnixGroup: rbacEnabled, // Only initialize Unix groups when RBAC is enabled
           daemonUser, // Daemon user needs access to .git for operations
           creatorUnixUsername, // Creator will be added to repo group
@@ -525,13 +520,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       repoLocalPath: repo.local_path,
     });
 
-    // Resolve user environment for git credentials
-    let userEnv: Record<string, string> = {};
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
-
-    if (userId) {
-      userEnv = (await resolveUserEnvironment(userId, this.db)) || {};
-    }
 
     // Get ALL used unique IDs (including archived worktrees) to avoid collisions.
     // Previously this queried via Feathers which excluded archived worktrees by default,
@@ -697,8 +686,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // (start_command, stop_command, etc.) onto the worktree. Those fields
     // trip the requireAdminForEnvConfig hook on patch, so we authenticate
     // the executor with a service JWT to bypass admin checks for internal
-    // materialization of admin-defined templates. User git credentials still
-    // flow via the `env` field (userEnv) independently of the JWT.
+    // materialization of admin-defined templates. Executor fetches per-user
+    // credentials via Feathers RPC (users.getGitEnvironment).
     try {
       const sessionToken = generateSessionToken(
         this.app as unknown as { settings: { authentication?: { secret?: string } } }
@@ -717,7 +706,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           command: 'git.worktree.add',
           sessionToken,
           daemonUrl: getDaemonUrl(),
-          env: userEnv,
           params: {
             worktreeId: worktree.worktree_id,
             repoId: repo.repo_id,
@@ -728,6 +716,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             sourceBranch: data.sourceBranch,
             createBranch: data.createBranch,
             refType: data.refType,
+            userId: userId as string | undefined,
             // Unix group isolation (only when RBAC is enabled)
             initUnixGroup: rbacEnabled,
             othersAccess: data.others_fs_access || worktree.others_fs_access || 'read', // Default to read access

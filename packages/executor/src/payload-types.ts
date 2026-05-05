@@ -183,6 +183,9 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
     /** Create DB record after clone (default: true) */
     createDbRecord: z.boolean().optional().default(true),
 
+    /** User ID of the requesting user (for per-user credential resolution) */
+    userId: z.string().uuid().optional(),
+
     /** Initialize Unix group for repo isolation (default: false, requires RBAC enabled) */
     initUnixGroup: z.boolean().optional().default(false),
 
@@ -260,6 +263,9 @@ export const GitWorktreeAddPayloadSchema = BasePayloadSchema.extend({
 
     /** Creator's Unix username to add to the worktree group (initial owner) */
     creatorUnixUsername: z.string().optional(),
+
+    /** User ID of the requesting user (for per-user credential resolution) */
+    userId: z.string().uuid().optional(),
   }),
 });
 
