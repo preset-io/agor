@@ -1,6 +1,6 @@
 # Per-user git auth & impersonated clone
 
-**Status:** Plan / draft for review
+**Status:** Implemented (PR #1088)
 **Branch:** `feat/per-user-impersonated-clone`
 **Supersedes:** #1069 (the HTTPS→SSH fallback approach — see "Why not fallback" below)
 
@@ -68,43 +68,50 @@ Executor calls this just before invoking `cloneRepo` / `createWorktree`, applies
 ### Daemon
 
 - `apps/agor-daemon/src/services/repos.ts`
-  - Line 213-247 (`cloneRemoteRepository`): pass `asUser`. Remove `env: userEnv` from payload.
-  - Line 715-743 (`createWorktree`): remove `env: userEnv` from payload. Already passes `asUser`.
-  - Add hook on `repos.create` (or `finalizeClone` custom method) that calls daemon-side `initializeRepoGroup` when RBAC enabled.
-  - Add hook on `worktrees.patch({ filesystem_status: 'ready' })` (or `finalize` method) that calls daemon-side `initializeWorktreeGroup` when RBAC enabled.
+  - **Done** — `cloneRepository`: pass `asUser`, remove `env: userEnv`, add `userId` to params, add `initializeUnixGroup` custom method.
+  - **Done** — `createWorktree`: remove `env: userEnv`, add `userId` to params, remove `daemonUser`/`creatorUnixUsername`/`repoUnixGroup` (daemon resolves internally).
 
-- `apps/agor-daemon/src/services/users.ts` (or new `creds` service)
-  - New custom method `getGitEnvironment({ userId })` → returns the user's full resolved env post-`filterEnv`. Auth: requesting executor's session JWT must match `userId`, OR be a service-account JWT. Use existing `resolveUserEnvironment` internally.
+- `apps/agor-daemon/src/services/worktrees.ts`
+  - **Done** — added `initializeUnixGroup` custom method for daemon-side group init.
+
+- `apps/agor-daemon/src/services/users.ts`
+  - **Done** — `getGitEnvironment({ userId })` custom method. Auth: service-account JWTs can fetch any user's env; user JWTs can only fetch their own.
+
+- `apps/agor-daemon/src/register-services.ts`
+  - **Done** — registered `getGitEnvironment`, `initializeUnixGroup` in methods arrays for users, repos, and worktrees services.
+
+- `apps/agor-daemon/src/utils/unix-group-init.ts` (new file)
+  - **Done** — daemon-side `initializeRepoUnixGroup` and `initializeWorktreeUnixGroup` using `@agor/core/unix` utilities.
 
 - `apps/agor-daemon/src/utils/spawn-executor.ts`
-  - No required changes; the `asUser` path already works. Optionally tighten the impersonation whitelist (line 270-285) to drop `GITHUB_TOKEN` since we're not relying on that path anymore.
-
-- `apps/agor-daemon/src/services/worktree-groups.ts` (or wherever the helpers live)
-  - Move `initializeRepoGroup` / `initializeWorktreeGroup` callers from executor to daemon. The helpers themselves stay in `@agor/core/unix` — just the *call sites* move.
+  - No changes needed — `asUser` path already works, `GITHUB_TOKEN` already not in whitelist.
 
 ### Executor
 
 - `packages/executor/src/commands/git.ts`
-  - `resolveGitCredentials()`: replace with `fetchUserGitEnvironment(client, userId)` — Feathers RPC. Falls back to empty env if call fails (logs warning).
-  - `handleGitClone`: remove direct `initializeRepoGroup` call (it's daemon-side now). Repo create call stays. Add a `finalizeClone` RPC at the end if the privileged work needs an explicit trigger.
-  - `handleGitWorktreeAdd`: remove direct `initializeWorktreeGroup` call. Patch-to-ready stays — daemon hook does the privileged work.
-  - Drop the HTTPS→SSH fallback logic from `cloneRepo` (see core changes).
+  - `resolveGitCredentials()`: **Done** — replaced with `fetchUserGitEnvironment(client, userId)` Feathers RPC.
+  - `handleGitClone`: **Done** — calls `repos.initializeUnixGroup` RPC instead of direct shell commands.
+  - `handleGitWorktreeAdd`: **Done** — calls `worktrees.initializeUnixGroup` RPC instead of direct shell commands.
+  - HTTPS→SSH fallback: N/A — PR #1069 was never merged, code doesn't exist in this branch.
 
 - `packages/executor/src/cli.ts`
-  - Optional: keep the `payload.env → process.env` apply gated to prompt only (current behavior). Don't generalize it — we want creds to flow via Feathers, not env, going forward.
+  - `payload.env → process.env` stays gated to prompt only (unchanged).
+
+- `packages/executor/src/payload-types.ts`
+  - **Done** — added `userId` to both `GitClonePayloadSchema` and `GitWorktreeAddPayloadSchema`.
 
 ### Core
 
+- `packages/core/src/api/index.ts`
+  - **Done** — added `UsersService.getGitEnvironment`, `ReposService.initializeUnixGroup`, `WorktreesService.initializeUnixGroup` to `AgorClient` types.
+
 - `packages/core/src/git/index.ts`
-  - Remove `isAuthRelatedGitError` and the HTTPS→SSH fallback block in `cloneRepo`.
-  - Keep token URL injection (still used).
-  - Keep `createGit` / `writeGitCredentialsFile` (still used).
+  - No changes needed — PR #1069 HTTPS→SSH fallback was never merged.
 
 ### Tests
 
-- Delete `packages/core/src/git/clone-fallback.test.ts` (covers behavior we're removing).
-- Add: integration test that exercises `git.clone` impersonated end-to-end against a real local fixture repo (no network). Verify file ownership ends up correct after daemon-side group init.
-- Add: unit test for `users.getGitEnvironment` permission check (executor with user A's JWT cannot fetch user B's env).
+- `clone-fallback.test.ts`: N/A — doesn't exist in this branch.
+- **Done** — unit tests for `users.getGitEnvironment` permission checks (`users.git-env.test.ts`): service-account access, self-access, cross-user denial, unauthenticated rejection, internal bypass, decrypted env var retrieval, nonexistent user handling.
 
 ### Docs
 
@@ -129,16 +136,13 @@ Executor calls this just before invoking `cloneRepo` / `createWorktree`, applies
 
 ## PR composition
 
-Suggested commit shape, layered for review:
+Actual commit shape (layered for review):
 
-1. **Add `users.getGitEnvironment` Feathers method.** Auth check, unit tests.
-2. **Plumb env fetch into executor `git.clone` and `git.worktree.add`.** Drop `payload.env` creds from daemon → executor.
-3. **Move `initializeRepoGroup` / `initializeWorktreeGroup` to daemon-side hooks.** Drop direct calls from executor.
-4. **Pass `asUser` to `git.clone` spawn.**
-5. **Docs updates.**
-
-PR title: `fix(git): per-user impersonated clone & cred plumbing in strict mode`
-PR body: explain the credential-leak issue this fixes, the model after the change, and migration notes.
+1. `feat(users): add getGitEnvironment Feathers method` — Auth check, unit tests (7 test cases).
+2. `feat(executor): fetch per-user git credentials via Feathers RPC` — Replace `resolveGitCredentials()` with `fetchUserGitEnvironment()`, drop `payload.env` creds.
+3. `refactor(unix): move group init from executor to daemon-side RPC` — New `repos.initializeUnixGroup` and `worktrees.initializeUnixGroup` custom methods.
+4. `feat(clone): pass asUser to git.clone executor spawn` — Same impersonation pattern as `git.worktree.add`.
+5. `docs: update clone-redesign exploration with implementation status` — This doc.
 
 ## Out of scope (future work)
 
