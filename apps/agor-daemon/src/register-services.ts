@@ -469,7 +469,9 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // ============================================================================
 
   const usersService = createUsersService(db);
-  app.use('/users', usersService);
+  app.use('/users', usersService, {
+    methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'getGitEnvironment'],
+  });
 
   // Bootstrap superadmin users
   await bootstrapSuperadminUsers(config, usersService, allowSuperadmin);

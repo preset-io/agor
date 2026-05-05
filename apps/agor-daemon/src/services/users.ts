@@ -11,6 +11,7 @@ import {
   getEnvVarBlockReason,
   isEnvVarAllowed,
   normalizeStoredEnvMap,
+  resolveUserEnvironment,
   type StoredEnvVar,
   validateEnvVar,
 } from '@agor/core/config';
@@ -498,6 +499,39 @@ export class UsersService {
     }
 
     return decryptedVars;
+  }
+
+  /**
+   * Get the full resolved git environment for a user.
+   *
+   * Returns all user env vars (global scope) post-filterEnv, suitable for
+   * passing to git operations via `options.env`. The executor calls this via
+   * Feathers RPC so per-user credentials flow through the daemon's auth
+   * boundary instead of being baked into spawn payloads.
+   *
+   * Auth: service-account JWTs may fetch any user's env (executor is trusted).
+   * User JWTs may only fetch their own env.
+   */
+  async getGitEnvironment(
+    data: { userId: string },
+    params?: Params
+  ): Promise<Record<string, string>> {
+    const userId = data.userId as UserID;
+    const caller = (params as AuthenticatedParams | undefined)?.user;
+
+    // Auth check: service accounts can fetch any user's env;
+    // regular users can only fetch their own.
+    if (params?.provider) {
+      if (!caller) {
+        throw new Error('Authentication required');
+      }
+      const isService = !!(caller as { _isServiceAccount?: boolean })._isServiceAccount;
+      if (!isService && caller.user_id !== userId) {
+        throw new Error("Forbidden: cannot access another user's git environment");
+      }
+    }
+
+    return resolveUserEnvironment(userId, this.db);
   }
 
   /**

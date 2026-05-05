@@ -289,6 +289,18 @@ export interface BoardsService extends AgorService<Board> {
 }
 
 /**
+ * Users service with git environment support
+ */
+export interface UsersService extends AgorService<User> {
+  /**
+   * Get the full resolved git environment for a user.
+   * Auth: service-account JWTs may fetch any user's env;
+   * regular users may only fetch their own.
+   */
+  getGitEnvironment(data: { userId: string }, params?: Params): Promise<Record<string, string>>;
+}
+
+/**
  * Worktrees service with environment management
  */
 export interface WorktreesService extends AgorService<Worktree> {
@@ -387,7 +399,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   // Standard services (CRUD only)
   service(path: 'cards'): AgorService<CardWithType>;
   service(path: 'card-types'): AgorService<CardType>;
-  service(path: 'users'): AgorService<User>;
+  service(path: 'users'): UsersService;
   service(path: 'mcp-servers'): AgorService<MCPServer>;
   service(path: 'context'): AgorService<ContextFileListItem | ContextFileDetail>;
 
