@@ -150,7 +150,7 @@ jobs:
           path: .turbo/cache
           key: ${{ env.TURBO_CACHE_KEY }}
 
-      - run: pnpm turbo run test --filter=agor-ui --filter=@agor/daemon
+      - run: pnpm turbo run test --filter=agor-ui --filter=@agor/daemon --filter=@agor/core
 
   audit:
     name: Security Audit
