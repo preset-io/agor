@@ -18,9 +18,14 @@ import type {
 
 import { DownOutlined } from '@ant-design/icons';
 import { Alert, Collapse, Form, Input, Modal, Radio, Select, Space, Typography } from 'antd';
-import Handlebars from 'handlebars';
 import { useEffect, useMemo, useState } from 'react';
 import type { AgenticToolOption } from '../../../types';
+// Use the shared renderer so we render against the same Handlebars instance
+// where `initializeHandlebarsHelpers()` registered helpers (the bundled copy
+// inside @agor-live/client). Importing `handlebars` directly gives a separate
+// instance with no helpers, which causes templates using helpers like {{add}}
+// or {{eq}} to throw and fall back to the raw template string.
+import { renderTemplate } from '../../../utils/handlebars-helpers';
 import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
 import { AgenticToolConfigForm } from '../../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../../AgentSelectionGrid';
@@ -232,8 +237,7 @@ export const ZoneTriggerModal = ({
               },
       };
 
-      const template = Handlebars.compile(trigger.template);
-      return template(context);
+      return renderTemplate(trigger.template, context);
     } catch (error) {
       console.error('Handlebars template error:', error);
       return trigger.template; // Fallback to raw template
