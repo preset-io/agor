@@ -12,8 +12,23 @@ JIT refresh is wired into both the read hook and the executor's auth-header
 service, refreshes are mutexed per `(user, server)` to survive rotating refresh
 tokens, and `invalid_grant` cleanly surfaces "please re-auth".
 
-For **unattended / scheduled agents** there are three gaps:
+For **unattended / scheduled agents** there are four gaps, one of which is
+a real bug:
 
+0. **🔴 The 1-hour default lies to the DB on initial auth, then disappears on
+   refresh.** `apps/agor-daemon/src/oauth-cache.ts:89` (`persistOAuthToken`)
+   does `const expiresIn = tokenResponse.expires_in ?? 3600;` and writes that
+   default into `user_mcp_oauth_tokens.oauth_token_expires_at`. The
+   refresh-time persist (`refreshAndPersistToken` in
+   `packages/core/src/tools/mcp/oauth-refresh.ts`) does **not** apply the
+   same default — it passes `result.expires_in` (undefined for Notion) through
+   to `saveToken`, which writes `expires_at = NULL`. Same row, same provider,
+   two different defaults at two stages of the same lifecycle. Net effect for
+   Notion: Agor declares the initial token expired at +1h *whether or not the
+   MCP server would still accept it*, then after the auto-refresh forgets to
+   set any expiry at all and `needsRefresh(null) === false` keeps the row
+   stuck on whatever access_token was last written until something 401s. See
+   "🔴 The 1-hour default bug" in the audit.
 1. **No retry-on-401 at the MCP transport.** A token that expires *mid-call*
    (after the JIT preflight) just fails the tool call. Explicitly listed as a
    known follow-up in `packages/core/src/tools/mcp/oauth-refresh.ts`.
@@ -21,8 +36,7 @@ For **unattended / scheduled agents** there are three gaps:
    spawns → JIT refresh runs. Fine when refresh succeeds; silent failure when
    it doesn't (revoked grant, network blip).
 3. **Provider-specific failure modes.** Notion's refresh response omits
-   `expires_in`, so `needsRefresh(undefined) === false` — JIT will never
-   proactively refresh a Notion token. Slack's MCP server requires user-token
+   `expires_in` (compounds gap 0). Slack's MCP server requires user-token
    rotation (12h TTL) but the rotation toggle is one-way and easy to forget.
    Atlassian needs `offline_access` in scopes or no refresh_token is issued.
 
@@ -125,14 +139,81 @@ reusable across users.
   hard-failing the agent).
 - ✅ 60s safety buffer in `needsRefresh`.
 
-### What the audit flags
+### 🔴 The 1-hour default bug (asymmetric defaulting between persist paths)
+
+Two callsites write to `user_mcp_oauth_tokens.oauth_token_expires_at` and they
+disagree on what to do when the provider omits `expires_in`:
+
+**Initial-auth path** — `apps/agor-daemon/src/oauth-cache.ts:73-118`
+(`persistOAuthToken`, called from the OAuth callback handlers in
+`register-services.ts`):
+
+```ts
+const expiresIn = tokenResponse.expires_in ?? 3600;   // ← defaults to 1h
+cacheOAuth21Token(cacheKey, tokenResponse.access_token, expiresIn);
+...
+await userTokenRepo.saveToken(tokenUserId, ..., {
+  accessToken: tokenResponse.access_token,
+  expiresInSeconds: expiresIn,                        // ← 3600 lands in DB
+  ...
+});
+```
+
+**Refresh path** — `packages/core/src/tools/mcp/oauth-refresh.ts:300-306`
+(`refreshAndPersistToken`):
+
+```ts
+await userTokenRepo.saveToken(deps.userId, deps.mcpServerId, {
+  accessToken: result.access_token,
+  expiresInSeconds: result.expires_in,                // ← undefined → NULL in DB
+  refreshToken: result.refresh_token,
+});
+```
+
+Repository (`saveToken`,
+`packages/core/src/db/repositories/user-mcp-oauth-tokens.ts:146-148`):
+
+```ts
+const expiresAt = input.expiresInSeconds
+  ? new Date(Date.now() + input.expiresInSeconds * 1000)
+  : undefined;                                        // ← becomes NULL
+```
+
+For a provider like **Notion** (which returns no `expires_in` on either grant
+or refresh) the resulting row evolves as:
+
+| Phase | `expires_at` | `needsRefresh()` returns | Net behavior |
+|---|---|---|---|
+| Right after first auth | `now + 1h` (fake) | `false` (until 1h elapses) | Agor *thinks* token is good for 1h regardless of provider truth |
+| ~59 min later | `now + 1h` minus ~59 min | `true` (within 60s buffer) | JIT refresh fires |
+| Right after first refresh | `NULL` | **`false` forever** | Stale token returned indefinitely until 401 — and there's no retry-on-401 |
+
+So your suspicion is exactly right: the 1H comes from
+`oauth-cache.ts:89` and **Agor may incorrectly mark the token as expired
+even though the MCP server would still accept it**. Notion in particular
+suffers because the asymmetry between the two persist paths means the row
+oscillates between a fake-1h expiry and a NULL expiry, never matching the
+provider's actual lifetime.
+
+Two follow-ups suggested (out of scope here):
+
+- Move both persist sites to a single helper that applies one consistent
+  policy. Two reasonable choices:
+  - **Always store NULL when the provider omits `expires_in`**, and treat
+    NULL as "trust the token until the provider says otherwise" (i.e. rely
+    on retry-on-401 for these). Faithful to provider truth; needs gap (1)
+    fixed first.
+  - **Always default to a per-provider hint** (config-driven, see option G)
+    rather than the hardcoded 3600. Lets us encode "Notion ≈ 1h" without
+    lying about Slack non-rotating tokens.
+- Adopt a per-provider `default_access_ttl_seconds` config (option G).
+
+### Other audit flags
 
 - ⚠️ **No retry-on-401 shim** at the MCP HTTP transport. Listed in
-  `oauth-refresh.ts` header as known follow-up.
-- ⚠️ **`needsRefresh(null) === false`** — for providers that don't return
-  `expires_in` (Notion), proactive refresh never fires. Combined with no
-  retry-on-401, the first call after the silent provider-side rotation
-  hard-fails.
+  `oauth-refresh.ts` header as known follow-up. Combined with the 1-hour
+  default bug above, the failure mode for Notion is silent stale-token use
+  until the provider rejects.
 - ⚠️ **In-memory `authCodeTokenCache`** in `oauth-mcp-transport.ts` is
   vestigial in daemon mode (the DB-backed path is authoritative). Worth
   pruning to one cache to avoid drift. `getCachedOAuth21Token` is referenced
@@ -522,6 +603,12 @@ Don't build it speculatively — the maintenance cost is double.
 
 ## Quick wins / follow-up bugs noted (not to be fixed in this PR)
 
+- 🔴 **The 1-hour default in `persistOAuthToken` (`oauth-cache.ts:89`) is the
+  source of "Agor thinks this token expired after exactly 1 hour" reports.**
+  And it's asymmetric — `refreshAndPersistToken` doesn't apply the same
+  default, so the row oscillates between fake-1h expiry and NULL expiry over
+  the lifetime of a single grant. Unify both persist sites and pick one
+  consistent policy (see "🔴 The 1-hour default bug" above).
 - `inferOAuthTokenUrl` is a fallback used by `refreshAndPersistToken` — should
   be replaced by a persisted `oauth_token_url` written at DCR completion.
 - `needsRefresh(undefined) === false` — quietly correct in spirit (we don't
