@@ -184,6 +184,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Check if Unix group isolation should be initialized
     const rbacEnabled = isWorktreeRbacEnabled();
 
+    // Resolve Unix user for impersonation (handles simple/insulated/strict modes)
+    const asUser = userId ? await resolveGitImpersonationForUser(this.db, userId) : undefined;
+
     // Fire and forget - spawn executor and return immediately.
     // Executor handles: git clone, .agor.yml parsing, DB record creation.
     // Executor fetches per-user credentials via Feathers RPC (users.getGitEnvironment).
@@ -204,6 +207,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       },
       {
         logPrefix: `[clone ${slug}]`,
+        asUser, // Run as resolved user (fresh groups via sudo -u)
         onExit: (code) => {
           if (code !== 0 && code !== null) {
             // Broadcast clone failure to all connected clients
