@@ -89,7 +89,9 @@ The proxy:
 4. **Forwards everything else as-is** — including arbitrary `Authorization`
    and vendor-specific tokens (`Shortcut-Token`, `X-Linear-Api-Key`, etc.)
    that the artifact set intentionally.
-5. **Rate-limits per (user, vendor)** at 60 req/min by default.
+5. **Rate-limits per (user, vendor)** at 600 req/min by default — sized as
+   a daemon-protection cap, not a workload tuner. Hits return `429`
+   immediately (no queueing).
 6. **Caps response bodies at 5 MB** to keep a misbehaving upstream from
    exhausting daemon memory.
 7. **Times out at 30 seconds** for the entire upstream round-trip.

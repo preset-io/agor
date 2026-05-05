@@ -31,8 +31,17 @@ import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
 
-/** Default per-(user, vendor) rate limit. In-memory bucket; no redis. */
-const RATE_LIMIT_PER_MINUTE = 60;
+/**
+ * Default per-(user, vendor) rate limit. In-memory bucket; no redis.
+ *
+ * Sized as a "don't take the daemon down" cap, not a workload tuner: at
+ * 10 req/s a normal artifact (dashboard with parallel chart loads, polling
+ * UI, fan-out fetches) never notices it, while a runaway `while(true) fetch()`
+ * loop is held to a level the daemon's event loop and the upstream's quota
+ * can both absorb. Hits return HTTP 429 immediately — no queueing — so
+ * setting this aggressively low surfaces as broken UI rather than slow UI.
+ */
+const RATE_LIMIT_PER_MINUTE = 600;
 
 /** Maximum response body size we'll relay back. Cap is conservative on purpose. */
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
