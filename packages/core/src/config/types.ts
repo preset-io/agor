@@ -712,6 +712,42 @@ export interface AgorWorktreesSettings {
 }
 
 /**
+ * Per-vendor HTTP proxy configuration.
+ *
+ * Mounts a thin pass-through proxy at `/proxies/<vendor>/...` that forwards
+ * bytes to `upstream/...`. Designed to let Sandpack artifacts call third-party
+ * REST APIs that don't return CORS headers (Shortcut, Linear, Jira, etc.).
+ *
+ * Hard rules:
+ *  - Pass-through bytes only — no transformation, no caching, no auth injection.
+ *  - Read-only by default — `allowed_methods` defaults to `['GET']`.
+ *  - Off by default — when no `proxies:` block is configured, the route is
+ *    not mounted at all.
+ */
+export interface AgorProxyConfig {
+  /**
+   * Bare scheme+host of the upstream API (no path prefix).
+   *
+   * Convention: `https://api.app.shortcut.com`, NOT
+   * `https://api.app.shortcut.com/api/v3`. The caller specifies the path
+   * tail. Must be `https://` — `http://` upstreams are rejected at startup.
+   */
+  upstream: string;
+
+  /** Optional human-readable label, surfaced in MCP discovery and docs. */
+  description?: string;
+
+  /** Optional link to the upstream's developer documentation. */
+  docs_url?: string;
+
+  /**
+   * HTTP methods the proxy will accept for this vendor. Defaults to `['GET']`
+   * (read-only-by-default rule). Operators opt into writes per vendor.
+   */
+  allowed_methods?: Array<'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD'>;
+}
+
+/**
  * Complete Agor configuration
  */
 export interface AgorConfig {
@@ -753,6 +789,16 @@ export interface AgorConfig {
 
   /** Onboarding settings (CLI init → UI wizard) */
   onboarding?: AgorOnboardingSettings;
+
+  /**
+   * HTTP proxy passthroughs for third-party APIs that don't return CORS
+   * headers (Shortcut, Linear, Jira, etc.). Keyed by vendor slug used in
+   * the route path: `/proxies/<vendor>/...`.
+   *
+   * Off by default: omit this block to disable the feature entirely.
+   * See `apps/agor-docs/pages/guide/api-proxies.mdx`.
+   */
+  proxies?: Record<string, AgorProxyConfig>;
 
   /** Declarative resource definitions for headless/k8s deployments */
   resources?: DaemonResourcesConfig;

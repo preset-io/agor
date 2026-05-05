@@ -15,7 +15,7 @@ import * as fs from 'node:fs';
 import { mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { generateId } from '@agor/core';
-import { PAGINATION } from '@agor/core/config';
+import { loadConfig, PAGINATION, resolveProxies } from '@agor/core/config';
 import {
   ArtifactRepository,
   BoardRepository,
@@ -905,9 +905,32 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     // Resolve board slug for template context
     const board = await this.boardRepo.findById(artifact.board_id);
 
+    // Resolve configured HTTP proxies so artifacts can reference
+    // {{ agor.proxies.<vendor>.url }} without hardcoding the daemon host.
+    // Failure here must not break artifact rendering — fall back to an empty
+    // map so missing-proxy lookups render as "" the same way missing env
+    // vars do.
+    const proxiesContext: Record<
+      string,
+      { url: string; upstream: string; allowed_methods: string[] }
+    > = {};
+    try {
+      const config = await loadConfig();
+      const proxies = resolveProxies(config);
+      for (const p of proxies) {
+        proxiesContext[p.vendor] = {
+          url: `${daemonUrl.replace(/\/$/, '')}/proxies/${p.vendor}`,
+          upstream: p.upstream,
+          allowed_methods: [...p.allowed_methods],
+        };
+      }
+    } catch (err) {
+      console.warn('[artifacts] failed to resolve proxies for template context:', err);
+    }
+
     const context: Record<string, unknown> = {
       artifact: { id: artifact.artifact_id, boardId: artifact.board_id },
-      agor: { apiUrl: daemonUrl },
+      agor: { apiUrl: daemonUrl, proxies: proxiesContext },
       board: { id: artifact.board_id, slug: board?.slug ?? '' },
     };
 

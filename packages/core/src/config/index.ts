@@ -13,6 +13,8 @@ export * from './env-resolver';
 export * from './env-validation';
 export * from './env-vars';
 export * from './key-resolver';
+export type { ProxyMethod, ResolvedProxy } from './proxies-resolver';
+export { resolveProxies } from './proxies-resolver';
 export * from './repo-list';
 export * from './repo-reference';
 export * from './resource-schemas';

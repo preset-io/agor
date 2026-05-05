@@ -34,6 +34,7 @@ import { registerCardTools } from './tools/cards.js';
 import { registerEnvironmentTools } from './tools/environment.js';
 import { registerMcpServerTools } from './tools/mcp-servers.js';
 import { registerMessageTools } from './tools/messages.js';
+import { registerProxyTools } from './tools/proxies.js';
 import { registerRepoTools } from './tools/repos.js';
 import { registerSearchTools } from './tools/search.js';
 import { registerSessionTools } from './tools/sessions.js';
@@ -242,6 +243,14 @@ function buildRegistry(servicesConfig?: DaemonServicesConfig): ToolRegistry {
     registerArtifactTools(tempServer, dummyCtx);
   }
 
+  // 'proxies' is always registered when 'artifacts' domain is on — the two
+  // are tightly coupled (proxies exist to serve artifacts). Read-only by
+  // construction, so registering them here is safe regardless of tier.
+  if (isDomainEnabled('artifacts', servicesConfig)) {
+    registry.setCurrentDomain('proxies');
+    registerProxyTools(tempServer, dummyCtx);
+  }
+
   if (isDomainEnabled('users', servicesConfig)) {
     registry.setCurrentDomain('users');
     registerUserTools(tempServer, dummyCtx);
@@ -384,7 +393,10 @@ function createMcpServer(
     registerCardTools(s, c);
     registerCardTypeTools(s, c);
   });
-  domainRegister('artifacts', registerArtifactTools);
+  domainRegister('artifacts', (s, c) => {
+    registerArtifactTools(s, c);
+    registerProxyTools(s, c);
+  });
   domainRegister('users', registerUserTools);
   domainRegister('analytics', registerAnalyticsTools);
   domainRegister('mcp-servers', registerMcpServerTools);

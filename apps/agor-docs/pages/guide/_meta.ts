@@ -18,6 +18,7 @@ export default {
   scheduler: 'Scheduler',
   cards: 'Cards (Beta)',
   artifacts: 'Artifacts',
+  'api-proxies': 'API Proxies (CORS bypass)',
   'message-gateway': 'Message Gateway',
   '--- Reference': {
     type: 'separator',

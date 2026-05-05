@@ -50,6 +50,7 @@ const DOMAIN_DESCRIPTIONS: Record<string, string> = {
   users: 'User accounts, profiles, preferences, and administration',
   analytics: 'Usage and cost tracking leaderboard',
   'mcp-servers': 'External MCP server configuration and OAuth management',
+  proxies: 'Configured HTTP proxies for third-party APIs (Shortcut, Linear, Jira, etc.)',
 };
 
 /** Tools always visible in `tools/list` even when search mode is enabled. */
