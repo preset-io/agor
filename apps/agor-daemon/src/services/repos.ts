@@ -183,27 +183,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
     // Check if Unix group isolation should be initialized
     const rbacEnabled = isWorktreeRbacEnabled();
-    const { getDaemonUser } = await import('@agor/core/config');
-    const daemonUser = getDaemonUser();
 
-    // Fetch creator's Unix username for repo group assignment
-    let creatorUnixUsername: string | undefined;
-    if (userId) {
-      try {
-        const usersService = this.app.service('users');
-        const creator = await usersService.get(userId);
-        creatorUnixUsername = creator.unix_username || undefined;
-        if (creatorUnixUsername) {
-          console.log(`✓ Creator Unix username for repo: ${creatorUnixUsername}`);
-        }
-      } catch (_error) {
-        console.warn(`⚠️  Could not fetch Unix username for user ${userId.substring(0, 8)}`);
-      }
-    }
-
-    // Fire and forget - spawn executor and return immediately
-    // Executor handles EVERYTHING: git clone, .agor.yml parsing, DB record, Unix group
-    // Executor fetches per-user credentials via Feathers RPC (users.getGitEnvironment)
+    // Fire and forget - spawn executor and return immediately.
+    // Executor handles: git clone, .agor.yml parsing, DB record creation.
+    // Executor fetches per-user credentials via Feathers RPC (users.getGitEnvironment).
+    // Unix group init (groupadd/chgrp/setfacl) runs daemon-side via repos.initializeUnixGroup RPC.
     const app = this.app;
     spawnExecutorFireAndForget(
       {
@@ -215,9 +199,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           slug,
           createDbRecord: true,
           userId: userId as string | undefined,
-          initUnixGroup: rbacEnabled, // Only initialize Unix groups when RBAC is enabled
-          daemonUser, // Daemon user needs access to .git for operations
-          creatorUnixUsername, // Creator will be added to repo group
+          initUnixGroup: rbacEnabled,
         },
       },
       {
@@ -244,6 +226,22 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
     // Return immediately - client will receive WebSocket event when repo is created
     return { status: 'pending', slug };
+  }
+
+  /**
+   * Custom method: Initialize Unix group for a repo (daemon-side privileged operation).
+   *
+   * Called by the executor via Feathers RPC after cloning a repo, so that
+   * groupadd/chgrp/setfacl run with daemon sudo privileges regardless of
+   * executor impersonation mode.
+   */
+  async initializeUnixGroup(
+    data: { repoId: string; userId?: string },
+    _params?: RepoParams
+  ): Promise<{ unixGroup: string }> {
+    const { initializeRepoUnixGroup } = await import('../utils/unix-group-init.js');
+    const unixGroup = await initializeRepoUnixGroup(this.db, this.app, data.repoId, data.userId);
+    return { unixGroup };
   }
 
   /**
@@ -567,23 +565,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     )) as Worktree;
 
     // Add creating user as owner of the worktree
-    let creatorUnixUsername: string | undefined;
     if (userId) {
       const worktreeRepo = new WorktreeRepository(this.db);
       await worktreeRepo.addOwner(worktree.worktree_id, userId);
       console.log(`✓ Added user ${userId.substring(0, 8)} as owner of worktree ${worktree.name}`);
-
-      // Fetch creator's Unix username for group assignment
-      try {
-        const usersService = this.app.service('users');
-        const creator = await usersService.get(userId);
-        creatorUnixUsername = creator.unix_username || undefined;
-        if (creatorUnixUsername) {
-          console.log(`✓ Creator Unix username: ${creatorUnixUsername}`);
-        }
-      } catch (_error) {
-        console.warn(`⚠️  Could not fetch Unix username for user ${userId.substring(0, 8)}`);
-      }
     }
 
     if (data.boardId) {
@@ -686,8 +671,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // (start_command, stop_command, etc.) onto the worktree. Those fields
     // trip the requireAdminForEnvConfig hook on patch, so we authenticate
     // the executor with a service JWT to bypass admin checks for internal
-    // materialization of admin-defined templates. Executor fetches per-user
-    // credentials via Feathers RPC (users.getGitEnvironment).
+    // materialization of admin-defined templates.
+    //
+    // Per-user credentials: Feathers RPC (users.getGitEnvironment)
+    // Unix group init: Feathers RPC (worktrees.initializeUnixGroup) — runs daemon-side
     try {
       const sessionToken = generateSessionToken(
         this.app as unknown as { settings: { authentication?: { secret?: string } } }
@@ -695,8 +682,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
       // Check if Unix group isolation should be initialized
       const rbacEnabled = isWorktreeRbacEnabled();
-      const { getDaemonUser } = await import('@agor/core/config');
-      const daemonUser = getDaemonUser();
 
       // Resolve Unix user for impersonation (handles simple/insulated/strict modes)
       const asUser = userId ? await resolveGitImpersonationForUser(this.db, userId) : undefined;
@@ -719,10 +704,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             userId: userId as string | undefined,
             // Unix group isolation (only when RBAC is enabled)
             initUnixGroup: rbacEnabled,
-            othersAccess: data.others_fs_access || worktree.others_fs_access || 'read', // Default to read access
-            daemonUser,
-            repoUnixGroup: repo.unix_group,
-            creatorUnixUsername, // Creator will be added to worktree group
+            othersAccess: data.others_fs_access || worktree.others_fs_access || 'read',
           },
         },
         {

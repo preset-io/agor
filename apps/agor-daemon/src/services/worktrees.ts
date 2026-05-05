@@ -245,6 +245,27 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   }
 
   /**
+   * Custom method: Initialize Unix group for a worktree (daemon-side privileged operation).
+   *
+   * Called by the executor via Feathers RPC after creating the git worktree on
+   * disk, so that groupadd/chgrp/setfacl run with daemon sudo privileges
+   * regardless of executor impersonation mode.
+   */
+  async initializeUnixGroup(
+    data: { worktreeId: string; othersAccess?: 'none' | 'read' | 'write' },
+    _params?: WorktreeParams
+  ): Promise<{ unixGroup: string }> {
+    const { initializeWorktreeUnixGroup } = await import('../utils/unix-group-init.js');
+    const unixGroup = await initializeWorktreeUnixGroup(
+      this.db,
+      this.app,
+      data.worktreeId,
+      data.othersAccess || 'read'
+    );
+    return { unixGroup };
+  }
+
+  /**
    * Override create to inject config-driven worktree defaults.
    */
   async create(

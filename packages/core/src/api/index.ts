@@ -227,6 +227,15 @@ export interface ReposService extends AgorService<Repo> {
   clone(data: { url: string; name?: string; slug?: string }, params?: Params): Promise<Repo>;
 
   /**
+   * Initialize Unix group for a repo (daemon-side privileged operation).
+   * Called by executor after cloning.
+   */
+  initializeUnixGroup(
+    data: { repoId: string; userId?: string },
+    params?: Params
+  ): Promise<{ unixGroup: string }>;
+
+  /**
    * Create a git worktree for a repository
    */
   createWorktree(
@@ -304,6 +313,15 @@ export interface UsersService extends AgorService<User> {
  * Worktrees service with environment management
  */
 export interface WorktreesService extends AgorService<Worktree> {
+  /**
+   * Initialize Unix group for a worktree (daemon-side privileged operation).
+   * Called by executor after creating the git worktree.
+   */
+  initializeUnixGroup(
+    data: { worktreeId: string; othersAccess?: 'none' | 'read' | 'write' },
+    params?: Params
+  ): Promise<{ unixGroup: string }>;
+
   /**
    * Find worktree by repo_id and name
    */

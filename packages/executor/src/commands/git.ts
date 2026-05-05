@@ -38,12 +38,7 @@ import type {
 import type { AgorClient } from '../services/feathers-client.js';
 import { createExecutorClient } from '../services/feathers-client.js';
 import type { CommandOptions } from './index.js';
-import {
-  fixWorktreeGitDirPermissions,
-  fixWorktreeGitDirPermissionsBasic,
-  initializeRepoGroup,
-  initializeWorktreeGroup,
-} from './unix.js';
+import { fixWorktreeGitDirPermissionsBasic } from './unix.js';
 
 /**
  * Fetch the requesting user's git environment via Feathers RPC.
@@ -205,17 +200,16 @@ export async function handleGitClone(
       repoId = repoRecord.repo_id;
       console.log(`[git.clone] Repo record created: ${repoId}`);
 
-      // Initialize Unix group for repo isolation (if requested)
+      // Initialize Unix group for repo isolation via daemon RPC (if requested).
+      // Runs daemon-side so that groupadd/chgrp/setfacl execute with daemon
+      // sudo privileges regardless of executor impersonation mode.
       if (payload.params.initUnixGroup && repoId) {
         try {
           console.log(`[git.clone] Initializing Unix group for repo ${repoId.substring(0, 8)}`);
-          unixGroup = await initializeRepoGroup(
-            repoId,
-            cloneResult.path,
-            client,
-            payload.params.daemonUser,
-            payload.params.creatorUnixUsername
-          );
+          const result = await client
+            .service('repos')
+            .initializeUnixGroup({ repoId, userId: payload.params.userId });
+          unixGroup = result.unixGroup;
           console.log(`[git.clone] Unix group initialized: ${unixGroup}`);
         } catch (error) {
           // Log but don't fail the entire operation
@@ -444,8 +438,9 @@ export async function handleGitWorktreeAdd(
 
     console.log(`[git.worktree.add] Worktree created at ${worktreePath}`);
 
-    // Initialize Unix group for worktree isolation (if requested)
-    // Note: initUnixGroup is explicitly set by daemon based on isWorktreeRbacEnabled()
+    // Initialize Unix group for worktree isolation via daemon RPC (if requested).
+    // Runs daemon-side so that groupadd/chgrp/setfacl execute with daemon
+    // sudo privileges regardless of executor impersonation mode.
     let unixGroup: string | undefined;
     if (payload.params.initUnixGroup && worktreeId) {
       try {
@@ -453,26 +448,11 @@ export async function handleGitWorktreeAdd(
         console.log(
           `[git.worktree.add] Initializing Unix group for worktree ${worktreeId.substring(0, 8)}`
         );
-        unixGroup = await initializeWorktreeGroup(
-          worktreeId,
-          worktreePath,
-          othersAccess,
-          client,
-          payload.params.daemonUser,
-          payload.params.creatorUnixUsername,
-          payload.params.repoUnixGroup
-        );
+        const result = await client
+          .service('worktrees')
+          .initializeUnixGroup({ worktreeId, othersAccess });
+        unixGroup = result.unixGroup;
         console.log(`[git.worktree.add] Unix group initialized: ${unixGroup}`);
-
-        // Also fix permissions on the repo's .git/worktrees/<name>/ directory
-        if (payload.params.repoUnixGroup) {
-          await fixWorktreeGitDirPermissions(
-            repoPath,
-            worktreeName,
-            payload.params.repoUnixGroup,
-            payload.params.daemonUser
-          );
-        }
       } catch (error) {
         // Log but don't fail the entire operation
         console.error(
@@ -578,19 +558,11 @@ export async function handleGitWorktreeAdd(
         }
       }
 
-      // Step 2: Apply perms/ACLs (runs even if dir already existed from a prior attempt)
+      // Step 2: Apply perms/ACLs via daemon RPC (runs even if dir already existed from a prior attempt)
       if (existsSync(fallbackPath) && payload.params.initUnixGroup && worktreeId && client) {
         try {
           const othersAccess = payload.params.othersAccess || 'read';
-          await initializeWorktreeGroup(
-            worktreeId,
-            fallbackPath,
-            othersAccess,
-            client,
-            payload.params.daemonUser,
-            payload.params.creatorUnixUsername,
-            payload.params.repoUnixGroup
-          );
+          await client.service('worktrees').initializeUnixGroup({ worktreeId, othersAccess });
           console.log(`[git.worktree.add] Fallback: applied Unix group permissions`);
           fallbackPermissionsApplied = true;
         } catch (permError) {

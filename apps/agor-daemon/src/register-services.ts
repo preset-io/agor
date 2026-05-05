@@ -306,7 +306,9 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Worktrees, repos
   // ============================================================================
 
-  app.use('/worktrees', createWorktreesService(db, app));
+  app.use('/worktrees', createWorktreesService(db, app), {
+    methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'initializeUnixGroup'],
+  });
 
   console.log(`[RBAC] Worktree RBAC ${worktreeRbacEnabled ? 'Enabled' : 'Disabled'}`);
   console.log(`[RBAC] Superadmin bypass ${allowSuperadmin ? 'Enabled' : 'Disabled'}`);
@@ -329,7 +331,9 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     console.log(`[Unix Integration] Executor-based sync enabled (daemon user: ${daemonUser})`);
   }
 
-  app.use('/repos', createReposService(db, app));
+  app.use('/repos', createReposService(db, app), {
+    methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'initializeUnixGroup'],
+  });
 
   // ============================================================================
   // MCP Servers (conditionally registered)
