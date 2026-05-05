@@ -24,7 +24,7 @@ import {
 } from '@agor/core/config';
 import { type Database, RepoRepository, WorktreeRepository } from '@agor/core/db';
 import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
-import type { Application } from '@agor/core/feathers';
+import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
   getDefaultBranch,
   getRemoteUrl,
@@ -238,11 +238,25 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
    * Called by the executor via Feathers RPC after cloning a repo, so that
    * groupadd/chgrp/setfacl run with daemon sudo privileges regardless of
    * executor impersonation mode.
+   *
+   * Auth: only service accounts (executor JWTs) may invoke this externally.
+   * Internal calls (no `provider`) pass through.
    */
   async initializeUnixGroup(
     data: { repoId: string; userId?: string },
-    _params?: RepoParams
+    params?: RepoParams
   ): Promise<{ unixGroup: string }> {
+    if (params?.provider) {
+      const caller = (params as AuthenticatedParams | undefined)?.user;
+      if (!caller) {
+        throw new NotAuthenticated('Authentication required');
+      }
+      const isService = !!(caller as { _isServiceAccount?: boolean })._isServiceAccount;
+      if (!isService) {
+        throw new Forbidden('Only the executor service account may initialize Unix groups');
+      }
+    }
+
     const { initializeRepoUnixGroup } = await import('../utils/unix-group-init.js');
     const unixGroup = await initializeRepoUnixGroup(this.db, this.app, data.repoId, data.userId);
     return { unixGroup };

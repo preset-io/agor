@@ -28,6 +28,7 @@ import {
   update,
   users,
 } from '@agor/core/db';
+import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import { isLikelyGitToken } from '@agor/core/git';
 import type {
   AgenticToolName,
@@ -523,11 +524,11 @@ export class UsersService {
     // regular users can only fetch their own.
     if (params?.provider) {
       if (!caller) {
-        throw new Error('Authentication required');
+        throw new NotAuthenticated('Authentication required');
       }
       const isService = !!(caller as { _isServiceAccount?: boolean })._isServiceAccount;
       if (!isService && caller.user_id !== userId) {
-        throw new Error("Forbidden: cannot access another user's git environment");
+        throw new Forbidden("Cannot access another user's git environment");
       }
     }
 

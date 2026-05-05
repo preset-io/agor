@@ -13,7 +13,7 @@ import { dirname, join } from 'node:path';
 import { ENVIRONMENT, isWorktreeRbacEnabled, loadConfig, PAGINATION } from '@agor/core/config';
 import { type Database, WorktreeRepository, type WorktreeWithZoneAndSessions } from '@agor/core/db';
 import { renderWorktreeSnapshot } from '@agor/core/environment/render-snapshot';
-import type { Application } from '@agor/core/feathers';
+import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   BoardID,
@@ -250,11 +250,25 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
    * Called by the executor via Feathers RPC after creating the git worktree on
    * disk, so that groupadd/chgrp/setfacl run with daemon sudo privileges
    * regardless of executor impersonation mode.
+   *
+   * Auth: only service accounts (executor JWTs) may invoke this externally.
+   * Internal calls (no `provider`) pass through.
    */
   async initializeUnixGroup(
     data: { worktreeId: string; othersAccess?: 'none' | 'read' | 'write' },
-    _params?: WorktreeParams
+    params?: WorktreeParams
   ): Promise<{ unixGroup: string }> {
+    if (params?.provider) {
+      const caller = (params as AuthenticatedParams | undefined)?.user;
+      if (!caller) {
+        throw new NotAuthenticated('Authentication required');
+      }
+      const isService = !!(caller as { _isServiceAccount?: boolean })._isServiceAccount;
+      if (!isService) {
+        throw new Forbidden('Only the executor service account may initialize Unix groups');
+      }
+    }
+
     const { initializeWorktreeUnixGroup } = await import('../utils/unix-group-init.js');
     const unixGroup = await initializeWorktreeUnixGroup(
       this.db,
