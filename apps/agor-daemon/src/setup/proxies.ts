@@ -26,6 +26,7 @@
 import type { AgorConfig } from '@agor/core/config';
 import { type ResolvedProxy, resolveProxies } from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
+import type { UUID } from '@agor/core/types';
 import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
@@ -67,26 +68,45 @@ interface AuthedUser {
 }
 
 /**
- * Verify the Bearer JWT on the incoming request. Mirrors the verification
- * already done by FeathersJS for service-mounted routes (and by socketio.ts
- * for WebSocket connections) — kept inline here because the proxy is raw
- * Express middleware, not a Feathers service, so the `requireAuth` hook
- * doesn't apply.
+ * Verify the Bearer JWT on the incoming request and load the user entity.
+ *
+ * Mirrors the WebSocket auth pattern at
+ * `apps/agor-daemon/src/setup/socketio.ts:286-329` — verify the token, then
+ * fetch the user from `app.service('users')`. Skipping the user load (i.e.
+ * trusting `decoded.sub` blindly) would let tokens for deleted/disabled users
+ * keep working until expiry, which diverges from the rest of the daemon's
+ * auth surface and was caught in code review.
+ *
+ * Service tokens are explicitly rejected — the proxy exists to serve
+ * browser-side artifacts, not the executor process.
  */
-function authenticateRequest(req: Request, jwtSecret: string): AuthedUser | null {
+async function authenticateRequest(
+  req: Request,
+  app: Application,
+  jwtSecret: string
+): Promise<AuthedUser | null> {
   const header = req.headers.authorization;
   if (!header || typeof header !== 'string') return null;
   const match = header.match(/^Bearer\s+(.+)$/i);
   if (!match) return null;
+  let decoded: { sub?: string; type?: string };
   try {
-    const decoded = jwt.verify(match[1], jwtSecret, {
+    decoded = jwt.verify(match[1], jwtSecret, {
       issuer: 'agor',
       audience: 'https://agor.dev',
     }) as { sub?: string; type?: string };
-    if (decoded.type !== undefined && decoded.type !== 'access') return null;
-    if (!decoded.sub) return null;
+  } catch {
+    return null;
+  }
+  // Reject service tokens; only end-user access tokens are accepted here.
+  if (decoded.type !== undefined && decoded.type !== 'access') return null;
+  if (!decoded.sub) return null;
+  try {
+    const user = await app.service('users').get(decoded.sub as UUID);
+    if (!user) return null;
     return { user_id: decoded.sub };
   } catch {
+    // User not found / lookup error → reject the request.
     return null;
   }
 }
@@ -198,18 +218,24 @@ export function registerProxies(
 
   const handler = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     // Path tail (relative to the `/proxies` mount): e.g. `/shortcut/api/v3/projects?x=1`.
-    // Express 5 strips the mount path from `req.url`. The first segment is
-    // the vendor slug.
+    // Express strips the mount path from `req.url`. Split the pathname from
+    // the querystring up-front so a root-vendor request like
+    // `/proxies/shortcut?foo=1` correctly forwards `?foo=1` (the previous
+    // string-slicing approach dropped it; caught in code review).
     const url = req.url;
-    const slashIdx = url.indexOf('/', 1);
-    const vendor = slashIdx === -1 ? url.slice(1).split('?')[0] : url.slice(1, slashIdx);
-    const tail = slashIdx === -1 ? '' : url.slice(slashIdx);
+    const qIdx = url.indexOf('?');
+    const pathname = qIdx === -1 ? url : url.slice(0, qIdx);
+    const search = qIdx === -1 ? '' : url.slice(qIdx);
+    const slashIdx = pathname.indexOf('/', 1);
+    const vendor = slashIdx === -1 ? pathname.slice(1) : pathname.slice(1, slashIdx);
+    const tailPath = slashIdx === -1 ? '' : pathname.slice(slashIdx);
+    const tail = `${tailPath}${search}`;
 
     // Authenticate first — keeps the proxy from leaking vendor existence
     // to anonymous probes and matches the brief's "mount with requireAuth"
     // contract. The proxy is never an open relay regardless of vendor
     // dispatch ordering.
-    const user = authenticateRequest(req, jwtSecret);
+    const user = await authenticateRequest(req, app, jwtSecret);
     if (!user) {
       res.status(401).json({ error: 'unauthorized' });
       return;
@@ -273,29 +299,19 @@ export function registerProxies(
     const hasBody = method !== 'GET' && method !== 'HEAD';
     const upstreamUrl = buildUpstreamUrl(proxy.upstream, tail);
 
-    // The daemon mounts `express.json()` and `express.urlencoded()` BEFORE
-    // registerRoutes runs (see apps/agor-daemon/src/index.ts:388-389), so
-    // by the time we get here `req.body` may already be a parsed object,
-    // a Buffer (from a raw parser elsewhere), a string, or `undefined`.
-    // Re-serialize it so the upstream sees bytes that match the caller's
-    // intent. The "pass-through bytes only" rule is best-effort: any JSON
-    // body has already been re-encoded once by express.json, so the bytes
-    // we send may differ in whitespace from what the artifact wrote — but
-    // semantic content is preserved.
-    let outboundBody: string | Buffer | undefined;
+    // The proxy mount is wired BEFORE `express.json()` / `express.urlencoded()`
+    // (see apps/agor-daemon/src/index.ts) by attaching `express.raw()` to
+    // `/proxies`, so `req.body` is always a Buffer (or empty) here. This is
+    // what the "pass-through bytes only" rule requires: the upstream sees
+    // exactly the bytes the artifact wrote, with no JSON / form re-encoding
+    // happening in between.
+    let outboundBody: Buffer | undefined;
     if (hasBody) {
       const parsed = (req as Request & { body?: unknown }).body;
-      if (parsed instanceof Buffer) {
+      if (parsed instanceof Buffer && parsed.byteLength > 0) {
         outboundBody = parsed;
-      } else if (typeof parsed === 'string') {
-        outboundBody = parsed;
-      } else if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
-        outboundBody = JSON.stringify(parsed);
-        if (!upstreamHeaders['content-type']) {
-          upstreamHeaders['content-type'] = 'application/json';
-        }
       }
-      // No body / empty parsed object → leave outboundBody undefined.
+      // No body / empty Buffer → leave outboundBody undefined.
     }
 
     let upstreamRes: globalThis.Response;

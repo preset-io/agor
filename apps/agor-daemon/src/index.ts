@@ -378,6 +378,16 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     );
   }
 
+  // HTTP proxies need raw bytes (no JSON/urlencoded reserialization) so the
+  // configured upstream sees exactly what the artifact wrote. Mount raw-body
+  // capture for `/proxies` BEFORE the global parsers below — once `req._body`
+  // is set, downstream parsers skip the request. Only mounted when at least
+  // one proxy is configured (matches the rest of the feature's "off by
+  // default" posture).
+  if (config.proxies && Object.keys(config.proxies).length > 0) {
+    app.use('/proxies', express.raw({ type: '*/*', limit: '10mb' }));
+  }
+
   // Default to a 10MB JSON body. The previous 10MB pre-hardening default was
   // unbounded enough to allow trivial memory-pressure DoS, and a 1MB ceiling
   // turned out to break legitimate flows (large prompts, /messages/bulk

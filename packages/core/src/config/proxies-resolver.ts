@@ -91,11 +91,23 @@ export function resolveProxies(config: AgorConfig): ResolvedProxy[] {
       );
     }
 
-    // Strip trailing slash so request URLs concatenate cleanly. We keep any
-    // path the operator wrote so the convention violation is easy to spot
-    // ("upstream is bare host" is documented), but normalize the trailing
-    // slash either way so `<upstream>/foo` doesn't accidentally become `//foo`.
-    const upstream = `${parsed.origin}${parsed.pathname.replace(/\/$/, '')}${parsed.search}`;
+    // Reject path / query / fragment on the upstream. The convention is
+    // bare-origin only ("https://api.app.shortcut.com"), and the caller
+    // appends the path on its end of the proxy mount
+    // ("/proxies/shortcut/api/v3/..."). Allowing path prefixes here just
+    // means two callers produce different upstream URLs for the same vendor
+    // depending on where they slice the path — the resulting drift was
+    // flagged in code review.
+    const hasNonRootPath = parsed.pathname !== '' && parsed.pathname !== '/';
+    if (hasNonRootPath || parsed.search || parsed.hash) {
+      throw new Error(
+        `proxies.${vendor}.upstream must be a bare origin without path, query, or ` +
+          `fragment (got "${trimmedUpstream}"). The caller appends the path on the ` +
+          `proxy mount, e.g. "/proxies/${vendor}/api/v3/...". Set upstream to ` +
+          `"${parsed.origin}".`
+      );
+    }
+    const upstream = parsed.origin;
 
     if (raw.description !== undefined && typeof raw.description !== 'string') {
       throw new Error(`proxies.${vendor}.description must be a string when set.`);

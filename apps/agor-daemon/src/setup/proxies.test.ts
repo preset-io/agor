@@ -30,11 +30,29 @@ const VALID_TOKEN = jwt.sign({ sub: 'user-abc', type: 'access' }, JWT_SECRET, {
   audience: 'https://agor.dev',
 });
 
-function makeProxyApp(config: AgorConfig): Express {
-  const app = express();
+/**
+ * Build a test app with a stub `app.service('users').get()` so the proxy's
+ * auth check (which now loads the user entity to mirror socketio.ts) doesn't
+ * fail. `userExists: false` makes the service throw, exercising the
+ * "token-for-deleted-user" path that the real Feathers users service would
+ * take.
+ */
+function makeProxyApp(config: AgorConfig, userExists = true): Express {
+  const app = express() as Express & {
+    service: (name: string) => { get: (id: string) => Promise<unknown> };
+  };
   app.use(express.raw({ type: '*/*', limit: '10mb' }));
+  app.service = (name: string) => {
+    if (name !== 'users') throw new Error(`unexpected service: ${name}`);
+    return {
+      get: async (id: string) => {
+        if (!userExists) throw new Error('user not found');
+        return { user_id: id };
+      },
+    };
+  };
   // Cast: registerProxies types the first arg as Feathers Application but
-  // only ever calls (app as any).use(...) on it, so an Express app works.
+  // only calls .service('users').get() and .use(...) on it, both stubbed above.
   registerProxies(app as never, config, JWT_SECRET, { rateLimitPerMinute: 0 });
   return app;
 }
@@ -120,6 +138,20 @@ describe('registerProxies — request gating', () => {
     });
     const r = await call(app, 'GET', '/proxies/shortcut/x', {
       Authorization: 'Bearer not-a-real-jwt',
+    });
+    expect(r.status).toBe(401);
+  });
+
+  it('returns 401 when the token decodes but the user no longer exists', async () => {
+    // Mirrors socketio.ts: a token for a deleted/disabled user is rejected
+    // even before its expiry. Verifies the proxy doesn't trust decoded.sub
+    // blindly (would let stale tokens keep working).
+    const app = makeProxyApp(
+      { proxies: { shortcut: { upstream: 'https://api.app.shortcut.com' } } },
+      false
+    );
+    const r = await call(app, 'GET', '/proxies/shortcut/x', {
+      Authorization: `Bearer ${VALID_TOKEN}`,
     });
     expect(r.status).toBe(401);
   });

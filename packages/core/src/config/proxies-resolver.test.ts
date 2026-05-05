@@ -103,4 +103,28 @@ describe('resolveProxies', () => {
       })
     ).toThrow(/CONNECT/);
   });
+
+  it('rejects upstreams with a non-root path', () => {
+    expect(() =>
+      resolveProxies({
+        proxies: { shortcut: { upstream: 'https://api.app.shortcut.com/api/v3' } },
+      })
+    ).toThrow(/bare origin without path/);
+  });
+
+  it('rejects upstreams with a query string', () => {
+    expect(() =>
+      resolveProxies({
+        proxies: { shortcut: { upstream: 'https://api.app.shortcut.com?foo=1' } },
+      })
+    ).toThrow(/bare origin without path/);
+  });
+
+  it('rejects upstreams with a fragment', () => {
+    expect(() =>
+      resolveProxies({
+        proxies: { shortcut: { upstream: 'https://api.app.shortcut.com#frag' } },
+      })
+    ).toThrow(/bare origin without path/);
+  });
 });

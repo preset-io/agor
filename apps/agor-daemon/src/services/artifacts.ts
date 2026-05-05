@@ -15,7 +15,7 @@ import * as fs from 'node:fs';
 import { mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { generateId } from '@agor/core';
-import { loadConfig, PAGINATION, resolveProxies } from '@agor/core/config';
+import { getBaseUrl, loadConfig, PAGINATION, resolveProxies } from '@agor/core/config';
 import {
   ArtifactRepository,
   BoardRepository,
@@ -898,9 +898,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     // Extract all user.env.* references from the template AST
     const requiredEnvVars = this.extractUserEnvPaths(rawTemplate);
 
-    // Build template context
-    const daemonUrl =
-      process.env.VITE_DAEMON_URL || `http://localhost:${process.env.PORT || '3030'}`;
+    // Build template context. Use the canonical base URL resolver so the
+    // proxy URLs surfaced to artifacts (`agor.proxies.<vendor>.url`) match
+    // what `agor_proxies_list` returns and respect AGOR_BASE_URL /
+    // daemon.base_url overrides for deployed instances.
+    const daemonUrl = await getBaseUrl();
 
     // Resolve board slug for template context
     const board = await this.boardRepo.findById(artifact.board_id);
