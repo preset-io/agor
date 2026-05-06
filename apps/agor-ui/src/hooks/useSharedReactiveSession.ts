@@ -6,7 +6,7 @@ import {
   releaseReactiveSession,
   retainReactiveSession,
 } from '@agor-live/client';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 
 interface UseSharedReactiveSessionOptions {
@@ -69,34 +69,28 @@ export function useSharedReactiveSession(
   // Without these listeners, a transient 401 surfaced during a previous
   // `resync()` (e.g. socket reconnected before the access-token refresh
   // landed) leaves the panel stuck on a "jwt expired" banner indefinitely.
-  // We only retry while `state.error` is set, so a healthy panel doesn't
-  // re-fetch on every focus change.
   //
-  // The inflight ref guards against concurrent re-triggers when both events
-  // fire close together (visibilitychange often coincides with token refresh
-  // on tab wake-up). The around-hook on the socket client already
-  // single-flights the auth refresh itself; this just avoids redundant
-  // state churn.
-  const inflightRef = useRef(false);
+  // We retry while `state.error` is set but skip `state.terminal` errors —
+  // session-removed and similar non-recoverable conditions. Otherwise a tab
+  // returning from background after a session was deleted would refetch on
+  // every focus change forever.
+  //
+  // No local inflight guard is needed — `ReactiveSessionHandle.resync()` is
+  // single-flighted, so duplicate calls collapse onto the same promise.
   useEffect(() => {
     if (!handle) return;
 
-    const tryResync = async () => {
-      if (inflightRef.current) return;
-      if (!handle.state.error) return;
-      inflightRef.current = true;
-      try {
-        await handle.resync();
-      } finally {
-        inflightRef.current = false;
-      }
+    const tryResync = () => {
+      const s = handle.state;
+      if (!s.error || s.terminal) return;
+      void handle.resync();
     };
 
     const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') void tryResync();
+      if (document.visibilityState === 'visible') tryResync();
     };
     const onTokensRefreshed = () => {
-      void tryResync();
+      tryResync();
     };
 
     document.addEventListener('visibilitychange', onVisibilityChange);

@@ -64,6 +64,17 @@ export interface ReactiveSessionState {
   connected: boolean;
   loading: boolean;
   error: string | null;
+  /**
+   * `true` when `error` represents a non-recoverable condition for this
+   * session — e.g. the session row was removed on the server, or the user
+   * lost access. Callers driving auto-retry (visibilitychange, token refresh)
+   * MUST check this flag before calling `resync()` again, otherwise they will
+   * hammer a doomed endpoint on every focus change.
+   *
+   * Errors thrown from the network (transient 401, refresh races, 5xx) leave
+   * this `false` so the standard retry paths can heal them.
+   */
+  terminal: boolean;
   lastSyncedAt: string | null;
 }
 
@@ -156,6 +167,7 @@ export class ReactiveSessionHandle {
       connected: !!client.io?.connected,
       loading: true,
       error: null,
+      terminal: false,
       lastSyncedAt: null,
     };
 
@@ -385,6 +397,7 @@ export class ReactiveSessionHandle {
         ...prev,
         session: null,
         error: 'Session was removed',
+        terminal: true,
         lastSyncedAt: new Date().toISOString(),
       }));
     };
@@ -808,21 +821,45 @@ export class ReactiveSessionHandle {
   }
 
   /**
+   * In-flight `resync()` promise, if any. Used to single-flight overlapping
+   * callers (socket `connect`, visibilitychange, manual Reload) so a slow
+   * failure cannot stomp on a later success and re-stamp a stale error.
+   */
+  private resyncInflight: Promise<void> | null = null;
+
+  /**
    * Re-fetch session/tasks/queue (and loaded message buckets) from the daemon.
    *
-   * Called automatically on socket `connect` events (line ~363) so a reconnect
-   * after sleep / network drop pulls fresh DB state. Also exposed publicly so
-   * the UI can re-trigger hydration manually — e.g. a "Reload" button on the
-   * conversation panel's error banner, or a `visibilitychange` / token-refresh
-   * listener that wants to recover from a sticky error without forcing the
-   * user to refresh the tab.
+   * Called automatically on socket `connect` events (see {@link attachListeners})
+   * so a reconnect after sleep / network drop pulls fresh DB state. Also
+   * exposed publicly so the UI can re-trigger hydration manually — e.g. a
+   * "Reload" button on the conversation panel's error banner, or a
+   * `visibilitychange` / token-refresh listener that wants to recover from a
+   * sticky error without forcing the user to refresh the tab.
    *
-   * Errors land in `state.error`; success clears it. Safe to call concurrently
-   * — the underlying service calls are idempotent reads, and the around-hook
-   * on the socket client single-flights the auth refresh.
+   * Errors land in `state.error`; success clears it.
+   *
+   * Single-flighted: concurrent callers join the same in-flight promise rather
+   * than racing one another. Without this, a slow failing fetch could land
+   * after a faster successful fetch and overwrite the cleared error with a
+   * stale one. Callers should still check `state.terminal` before re-calling
+   * after a failure — see {@link ReactiveSessionState.terminal}.
    */
   async resync(): Promise<void> {
     if (this.disposed) return;
+    if (this.resyncInflight) return this.resyncInflight;
+    const promise = this.doResync();
+    this.resyncInflight = promise;
+    try {
+      await promise;
+    } finally {
+      if (this.resyncInflight === promise) {
+        this.resyncInflight = null;
+      }
+    }
+  }
+
+  private async doResync(): Promise<void> {
     try {
       const [session, tasks, queueResult] = await Promise.all([
         this.client.service('sessions').get(this.sessionId),
@@ -865,6 +902,7 @@ export class ReactiveSessionHandle {
         loadedTaskIds = new Set(refreshedByTask.keys());
       }
 
+      if (this.disposed) return;
       this.updateState((prev) => ({
         ...prev,
         session,
@@ -873,9 +911,11 @@ export class ReactiveSessionHandle {
         messagesByTask,
         loadedTaskIds,
         error: null,
+        terminal: false,
         lastSyncedAt: new Date().toISOString(),
       }));
     } catch (error) {
+      if (this.disposed) return;
       this.updateState((prev) => ({
         ...prev,
         error: error instanceof Error ? error.message : 'Failed to resync reactive session',

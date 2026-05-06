@@ -488,25 +488,33 @@ The recommendation in §6 was implemented along with a parallel fix for the
 
 ### Conversation panel (the original symptom)
 
-- `packages/client/src/reactive-session.ts` — `resync()` made public so the
-  UI can re-trigger hydration without spoofing a socket event. Behavior
-  unchanged; only the access modifier and JSDoc.
+- `packages/client/src/reactive-session.ts` —
+  - `resync()` made public so the UI can re-trigger hydration without
+    spoofing a socket event.
+  - Now **single-flighted** inside the handle: overlapping callers (socket
+    `connect`, visibilitychange, manual Reload) join the same in-flight
+    promise, so a slow failure cannot land after a faster success and
+    re-stamp a stale error. Internal `disposed` checks before the post-
+    fetch state writes.
+  - New `state.terminal: boolean` discriminates non-recoverable errors
+    (server emitted `removed` for this session) from transient ones.
+    Auto-retry callers MUST skip when `terminal === true`.
 - `apps/agor-ui/src/hooks/useSharedReactiveSession.ts` — added a second
-  `useEffect` that, while `state.error` is non-null, calls `handle.resync()`
-  in response to:
+  `useEffect` that, while `state.error` is non-null **and not terminal**,
+  calls `handle.resync()` in response to:
   - `document` `visibilitychange` → `visible` (tab refocus after long
     background)
   - `window` `TOKENS_REFRESHED_EVENT` (proactive refresh in `useAuth`
     succeeded — clear any stale error that a prior `resync()` had latched)
 
-  Inflight ref guards against re-entrancy when both events fire close
-  together (typical on tab wake).
+  No local inflight ref needed — single-flight lives in the handle.
 - `apps/agor-ui/src/components/ConversationView/ConversationView.tsx` —
   the static error `<Alert>` now exposes a "Reload" action button that
-  calls `reactiveSession.resync()`. Deterministic escape hatch for
-  cases where automatic recovery doesn't fire (e.g. user returns hours
-  later and the only signal we'd otherwise act on was the `connect`
-  event that already happened with stale auth).
+  calls `reactiveSession.resync()`. Hidden when `state.terminal` so the
+  user isn't offered a useless retry on a deleted session. Deterministic
+  escape hatch for cases where automatic recovery doesn't fire (e.g. user
+  returns hours later and the only signal we'd otherwise act on was the
+  `connect` event that already happened with stale auth).
 
 ### Global byId state (parallel fix in the same PR)
 
@@ -516,11 +524,18 @@ an explicit comment (`// WebSocket events keep data synchronized in
 real-time`) that was wrong on reconnect: events fired while disconnected
 are not replayable.
 
-- `apps/agor-ui/src/hooks/useAgorData.ts` — added a
-  `client.io.on('connect', handleReconnect)` inside the existing event-
-  listener `useEffect`. After the initial fetch, every reconnect re-runs
-  `fetchData()` (the same 14-service `Promise.all` page-load uses).
-  Single-flighted via a ref so a flapping socket doesn't stampede.
+- `apps/agor-ui/src/hooks/useAgorData.ts` —
+  - Added a `client.io.on('connect', handleReconnect)` inside the existing
+    event-listener `useEffect`. After the initial fetch, every reconnect
+    re-runs `fetchData()` (the same 14-service `Promise.all` page-load
+    uses). Single-flighted via a ref so a flapping socket doesn't
+    stampede.
+  - `fetchData()` now accepts `{ silent }`; the reconnect path uses
+    `silent: true` so a transient failure (e.g. racing the re-auth handler
+    in `useAgorClient`, hitting a 401 once before the around-hook refresh
+    lands) doesn't escalate to App.tsx's fullscreen "Failed to load data"
+    overlay. Silent failures log + no-op; the next reconnect/token refresh
+    gets another shot.
 
 ### Pitfalls flagged but deliberately not addressed
 

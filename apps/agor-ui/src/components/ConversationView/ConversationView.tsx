@@ -214,6 +214,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     const allStreamingMessages = reactiveState?.streamingMessages || EMPTY_STREAMING_MESSAGES;
     const loading = reactiveState ? reactiveState.loading : !!sessionId;
     const error = reactiveState?.error || null;
+    const isTerminalError = !!reactiveState?.terminal;
     const [isReloading, setIsReloading] = useState(false);
 
     // Store previous task maps to maintain stable references
@@ -329,7 +330,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
           description={error}
           showIcon
           action={
-            reactiveSession ? (
+            reactiveSession && !isTerminalError ? (
               <Button
                 size="small"
                 loading={isReloading}
