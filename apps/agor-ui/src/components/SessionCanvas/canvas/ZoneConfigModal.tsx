@@ -19,9 +19,17 @@ interface ZoneConfigModalProps {
 
 interface ZoneFormValues {
   name: string;
-  triggerBehavior: ZoneTriggerBehavior | undefined;
+  triggerBehavior: ZoneTriggerBehavior;
   triggerTemplate: string;
 }
+
+// Sensible default so that a freshly-created zone always has a behavior
+// selected — previously the field came up blank, the Select allowed clearing,
+// and any template the user typed got silently discarded on save unless they
+// also remembered to pick a behavior. With a default of 'show_picker', the
+// template is preserved by default and users only need to opt OUT (by leaving
+// the template empty) for an organizational-only zone.
+const DEFAULT_TRIGGER_BEHAVIOR: ZoneTriggerBehavior = 'show_picker';
 
 export const ZoneConfigModal = ({
   open,
@@ -37,7 +45,6 @@ export const ZoneConfigModal = ({
   const mutationGate = useMutationGate();
 
   const triggerBehavior = Form.useWatch('triggerBehavior', form);
-  const triggerTemplate = Form.useWatch('triggerTemplate', form);
 
   // Reset form when modal opens (prevent WebSocket updates from erasing user input)
   useEffect(() => {
@@ -53,7 +60,7 @@ export const ZoneConfigModal = ({
       } else {
         form.setFieldsValue({
           name: zoneName,
-          triggerBehavior: undefined,
+          triggerBehavior: DEFAULT_TRIGGER_BEHAVIOR,
           triggerTemplate: '',
         });
         setTriggerAgent('claude-code');
@@ -105,10 +112,7 @@ export const ZoneConfigModal = ({
       onOk={handleSave}
       okText="Save"
       okButtonProps={{
-        disabled:
-          !mutationGate.canMutate ||
-          // Warn: trigger behavior set but no template (incomplete trigger config)
-          (!!triggerBehavior && !triggerTemplate?.trim()),
+        disabled: !mutationGate.canMutate,
       }}
       cancelText="Cancel"
       width={600}
@@ -119,10 +123,12 @@ export const ZoneConfigModal = ({
         </Form.Item>
 
         <Form.Item name="triggerBehavior" label="Trigger Behavior">
+          {/* No allowClear / no placeholder: the field always has a value
+              (DEFAULT_TRIGGER_BEHAVIOR for new zones), so there is no
+              "unset" state to represent. To make a zone organizational
+              only, leave the template empty. */}
           <Select
             style={{ width: '100%' }}
-            allowClear
-            placeholder="None (organizational zone only)"
             options={[
               {
                 value: 'show_picker',
@@ -152,20 +158,10 @@ export const ZoneConfigModal = ({
         <Form.Item
           name="triggerTemplate"
           label="Trigger Template"
-          rules={[
-            {
-              required: !!triggerBehavior,
-              whitespace: true,
-              message: 'Please enter a prompt template when a trigger behavior is set',
-            },
-          ]}
+          help="Leave empty for an organizational-only zone (no trigger fires on drop)."
         >
           <Input.TextArea
-            placeholder={
-              triggerBehavior
-                ? 'Enter the prompt template that will be triggered when a worktree is dropped here...'
-                : 'Optional — add a template to enable zone triggers'
-            }
+            placeholder="Enter the prompt template that will be triggered when a worktree is dropped here..."
             rows={6}
           />
         </Form.Item>
