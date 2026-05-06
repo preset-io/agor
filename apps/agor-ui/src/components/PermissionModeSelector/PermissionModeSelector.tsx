@@ -22,6 +22,14 @@ export interface PermissionModeSelectorProps {
   agentic_tool?: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot';
   /** If true, renders as a compact Select dropdown instead of Radio buttons */
   compact?: boolean;
+  /**
+   * When in Select (compact) mode, render only the icon in the trigger.
+   * Defaults to `false` — trigger shows icon + label so users in roomy
+   * contexts (e.g. session settings dropdown) can read the mode name.
+   * Set `true` for tight surfaces like the conversation footer where
+   * only the icon fits. The tooltip preserves the label either way.
+   */
+  iconOnly?: boolean;
   /** Size for compact mode */
   size?: 'small' | 'middle' | 'large';
   /** Codex-specific: sandbox mode value */
@@ -248,6 +256,7 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   onChange,
   agentic_tool = 'claude-code',
   compact = false,
+  iconOnly = false,
   size = 'middle',
   codexSandboxMode = 'workspace-write',
   codexApprovalPolicy = 'on-request',
@@ -329,7 +338,14 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
           popupMatchSelectWidth={false}
           optionLabelProp="label"
           options={modes.map(({ mode, label, description, icon, color }) => ({
-            label: <span style={{ color, fontSize: token.fontSizeSM }}>{icon}</span>,
+            label: iconOnly ? (
+              <span style={{ color, fontSize: token.fontSizeSM }}>{icon}</span>
+            ) : (
+              <Space size={4} style={{ fontSize: token.fontSizeSM }}>
+                <span style={{ color }}>{icon}</span>
+                <span>{label}</span>
+              </Space>
+            ),
             value: mode,
             title: description,
             icon,

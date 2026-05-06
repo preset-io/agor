@@ -868,6 +868,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               codexApprovalPolicy={codexApprovalPolicy}
               onCodexChange={handleCodexPermissionChange}
               compact
+              iconOnly
               size="small"
             />
             {isRunning && <Spin size="small" />}
