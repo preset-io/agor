@@ -10,6 +10,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  __dynamicClientCacheSizeForTests,
+  __seedAuthCodeTokenCacheForTests,
+  __seedDynamicClientCacheForTests,
   clearAuthCodeTokenCache,
   discoverAuthorizationServerFromMcpOrigin,
   discoverResourceMetadataUrl,
@@ -18,9 +21,6 @@ import {
   resolveMCPOAuthDiscovery,
   resolveResourceMetadataUrl,
   startMCPOAuthFlow,
-  __dynamicClientCacheSizeForTests,
-  __seedAuthCodeTokenCacheForTests,
-  __seedDynamicClientCacheForTests,
 } from './oauth-mcp-transport';
 
 // ---------------------------------------------------------------------------

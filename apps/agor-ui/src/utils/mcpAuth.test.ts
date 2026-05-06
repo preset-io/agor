@@ -1,13 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { mcpServerNeedsAuth } from './mcpAuth';
 import type { MCPServer } from '@agor-live/client';
+import { describe, expect, it } from 'vitest';
+
+import { mcpServerNeedsAuth } from './mcpAuth';
 
 /** Helper: build a minimal MCPServer with OAuth auth fields. */
 function makeOAuthServer(
-  overrides: {
-    oauth_access_token?: string;
-    oauth_token_expires_at?: number;
-  } = {}
+  overrides: { oauth_access_token?: string; oauth_token_expires_at?: number } = {}
 ): MCPServer {
   return {
     mcp_server_id: 'test-server-id',
