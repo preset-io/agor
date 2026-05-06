@@ -538,7 +538,7 @@ describe('createClient', () => {
       const sessionsService = client.service('sessions') as unknown as {
         methods: MockedFunction<(...names: string[]) => unknown>;
       };
-      // sessions has no entry in CLIENT_CUSTOM_METHODS, so .methods() should not be called
+      // sessions has no extend*Service helper, so .methods() should not be called
       expect(sessionsService.methods).not.toHaveBeenCalled();
     });
 

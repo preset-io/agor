@@ -40,6 +40,9 @@ const DEFAULT_DAEMON_URL = `http://${DAEMON.DEFAULT_HOST}:${DAEMON.DEFAULT_PORT}
  * Using a symbol avoids clashing with existing service properties.
  */
 const BOARDS_SERVICE_EXTENDED = Symbol('agor.boardsServiceExtended');
+const USERS_SERVICE_EXTENDED = Symbol('agor.usersServiceExtended');
+const REPOS_SERVICE_EXTENDED = Symbol('agor.reposServiceExtended');
+const WORKTREES_SERVICE_EXTENDED = Symbol('agor.worktreesServiceExtended');
 const SERVICE_FIND_ALL_EXTENDED = Symbol('agor.serviceFindAllExtended');
 const CLIENT_SERVICE_FACTORY_EXTENDED = Symbol('agor.clientServiceFactoryExtended');
 const CLIENT_SESSIONS_HELPERS_EXTENDED = Symbol('agor.clientSessionsHelpersExtended');
@@ -626,37 +629,48 @@ function extendFindAllOnService(service: AgorService<unknown>): void {
 }
 
 /**
- * Custom RPC methods exposed by the daemon that aren't part of the Feathers
- * standard CRUD interface. The Socket.io client only wires the default
- * methods at construction time, so each path that has custom methods on the
- * server must be registered here too — otherwise calling them on the client
- * proxy throws "client.service(...).<method> is not a function".
- *
- * Keep this in sync with the `methods:` arrays in
+ * Wire client-side custom methods for services that expose RPCs beyond the
+ * standard Feathers CRUD interface. The Socket.io client only wires the
+ * default methods at construction time, so each path that has custom methods
+ * on the server must call `service.methods(...)` here too — otherwise calling
+ * them on the client proxy throws "client.service(...).<method> is not a
+ * function". Keep these in sync with the `methods:` arrays in
  * `apps/agor-daemon/src/register-services.ts`.
  */
-const CLIENT_CUSTOM_METHODS: Record<string, readonly string[]> = {
-  users: ['getGitEnvironment'],
-  repos: ['initializeUnixGroup'],
-  worktrees: ['initializeUnixGroup'],
-};
-
-function registerClientCustomMethods(path: string, service: unknown): void {
-  // Strip leading slash to match the keys above (paths can come in as either form).
-  const normalized = path.replace(/^\/+/, '');
-  const customMethods = CLIENT_CUSTOM_METHODS[normalized];
-  if (!customMethods || customMethods.length === 0) {
-    return;
+function extendUsersService(client: AgorClient): void {
+  const usersService = client.service('users') as AgorService<User> & {
+    [USERS_SERVICE_EXTENDED]?: boolean;
+    methods?: (...names: string[]) => unknown;
+  };
+  if (usersService[USERS_SERVICE_EXTENDED]) return;
+  if (typeof usersService.methods === 'function') {
+    usersService.methods('getGitEnvironment');
   }
+  usersService[USERS_SERVICE_EXTENDED] = true;
+}
 
-  const candidate = service as { methods?: (...names: string[]) => unknown };
-  if (typeof candidate.methods !== 'function') {
-    return;
+function extendReposService(client: AgorClient): void {
+  const reposService = client.service('repos') as AgorService<Repo> & {
+    [REPOS_SERVICE_EXTENDED]?: boolean;
+    methods?: (...names: string[]) => unknown;
+  };
+  if (reposService[REPOS_SERVICE_EXTENDED]) return;
+  if (typeof reposService.methods === 'function') {
+    reposService.methods('initializeUnixGroup');
   }
+  reposService[REPOS_SERVICE_EXTENDED] = true;
+}
 
-  // Idempotent: SocketService.methods() just (re)defines the named functions
-  // on the instance; calling it twice with the same names is harmless.
-  candidate.methods(...customMethods);
+function extendWorktreesService(client: AgorClient): void {
+  const worktreesService = client.service('worktrees') as AgorService<Worktree> & {
+    [WORKTREES_SERVICE_EXTENDED]?: boolean;
+    methods?: (...names: string[]) => unknown;
+  };
+  if (worktreesService[WORKTREES_SERVICE_EXTENDED]) return;
+  if (typeof worktreesService.methods === 'function') {
+    worktreesService.methods('initializeUnixGroup');
+  }
+  worktreesService[WORKTREES_SERVICE_EXTENDED] = true;
 }
 
 function extendServiceFactory(client: AgorClient): void {
@@ -673,7 +687,6 @@ function extendServiceFactory(client: AgorClient): void {
   augmentedClient.service = ((path: string) => {
     const service = rawService(path);
     extendFindAllOnService(service);
-    registerClientCustomMethods(path, service);
     return service;
   }) as AgorClient['service'];
 
@@ -765,6 +778,9 @@ export async function createRestClient(
 
   extendServiceFactory(client);
   extendBoardsService(client);
+  extendUsersService(client);
+  extendReposService(client);
+  extendWorktreesService(client);
   extendSessionsHelpers(client);
 
   return client;
@@ -840,6 +856,9 @@ export function createClient(
 
   extendServiceFactory(client);
   extendBoardsService(client);
+  extendUsersService(client);
+  extendReposService(client);
+  extendWorktreesService(client);
   extendSessionsHelpers(client);
 
   return client;
