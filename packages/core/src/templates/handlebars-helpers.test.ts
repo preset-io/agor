@@ -995,9 +995,11 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
       expect(result).toContain('HIGH');
     });
 
-    it('should not throw on invalid template syntax; returns empty string and logs', () => {
+    it('should not throw on invalid template syntax; returns raw template and logs', () => {
+      // Returning the raw template (rather than '') preserves visible feedback
+      // for UI surfaces like the zone trigger dialog — see #1090 / v2 fix.
       const result = renderTemplate('{{#if unclosed', {});
-      expect(result).toBe('');
+      expect(result).toBe('{{#if unclosed');
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining('Handlebars template error'),
         expect.anything()
@@ -1262,6 +1264,75 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
     it('should allow re-registration without errors', () => {
       registerHandlebarsHelpers();
       expect(() => registerHandlebarsHelpers()).not.toThrow();
+    });
+  });
+
+  // Regression test for the zone trigger dialog rendering bug (PR #1090 + v2).
+  //
+  // PR #1090 swapped a direct `Handlebars.compile()` call (which used a UI-
+  // local Handlebars instance with no helpers registered) for the shared
+  // `renderTemplate()`. The intent was that `initializeHandlebarsHelpers()`
+  // at app startup would populate helpers on the *same* instance that
+  // `renderTemplate()` compiles against. That works when both modules
+  // resolve to the same physical Handlebars instance, but in tsup-bundled
+  // environments the bundle can capture a *separate* Handlebars instance —
+  // helpers register on the host-app instance, while renderTemplate compiles
+  // against the bundled instance. Templates using helpers like {{add}} then
+  // throw at render time, which renderTemplate's catch-all swallowed into
+  // an empty string — producing the v1 symptom of an empty modal.
+  //
+  // The v2 fix makes renderTemplate self-register helpers on the same
+  // instance it compiles against, eliminating the dual-instance hazard.
+  describe('regression: renderTemplate is self-sufficient (no prior register call)', () => {
+    it('renders a helper-using template without an explicit registerHandlebarsHelpers() call', () => {
+      // Simulate "first call from a freshly-loaded module" — we can't truly
+      // reset Handlebars' internal state here (helpers persist across tests
+      // by design), but the assertion is the contract: callers must not be
+      // required to register helpers before invoking renderTemplate.
+      const result = renderTemplate(
+        'Open issue #{{add 1000 worktree.unique_id}} for {{uppercase worktree.name}}',
+        { worktree: { unique_id: 90, name: 'feature-x' } }
+      );
+      expect(result).toBe('Open issue #1090 for FEATURE-X');
+    });
+
+    it('renders the zone-trigger-style template the modal actually feeds in', () => {
+      // Mirrors the context shape the ZoneTriggerModal builds in
+      // apps/agor-ui/src/components/SessionCanvas/canvas/ZoneTriggerModal.tsx
+      const template =
+        'Worktree: {{worktree.name}} ({{worktree.ref}})\n' +
+        'Issue: {{worktree.issue_url}}\n' +
+        'Notes: {{worktree.notes}}\n' +
+        'Board: {{board.name}}';
+      const context = {
+        worktree: {
+          name: 'fix-zone-trigger',
+          ref: 'fix-zone-trigger',
+          issue_url: 'https://example.com/issues/123',
+          pull_request_url: '',
+          notes: 'render the interpolated template',
+          path: '/tmp/wt',
+          context: {},
+        },
+        board: { name: 'main', description: '', context: {} },
+        session: { description: '', context: {} },
+      };
+      const result = renderTemplate(template, context);
+      expect(result).toContain('Worktree: fix-zone-trigger (fix-zone-trigger)');
+      expect(result).toContain('Issue: https://example.com/issues/123');
+      expect(result).toContain('Notes: render the interpolated template');
+      expect(result).toContain('Board: main');
+      // Crucially, it must NOT be empty (v1 symptom) or the raw template (pre-v1).
+      expect(result).not.toBe('');
+      expect(result).not.toBe(template);
+    });
+
+    it('falls back to the raw template (not empty) on render error so users see something', () => {
+      // Unknown helpers are a runtime error — verify we surface the template
+      // rather than swallowing into ''.
+      const raw = '{{nonExistentHelper foo bar}}';
+      const result = renderTemplate(raw, { foo: 1, bar: 2 });
+      expect(result).toBe(raw);
     });
   });
 
