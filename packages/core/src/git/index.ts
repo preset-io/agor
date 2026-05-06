@@ -9,10 +9,8 @@
  */
 
 import type { SpawnOptions } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
-import { existsSync, unlinkSync, writeFileSync } from 'node:fs';
-import { mkdir, stat, unlink } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { existsSync } from 'node:fs';
+import { mkdir, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { simpleGit } from 'simple-git';
 import { getReposDir, getWorktreesDir } from '../config/config-manager';
@@ -144,81 +142,120 @@ export function buildWorktreeAddArgs(params: {
 }
 
 /**
- * Track temp credential files so a process-exit handler can best-effort
- * clean them up if a caller forgot to (or a synchronous crash happened).
+ * Default host used for `http.<URL>.extraheader` scope when an auth header
+ * is being injected. The full set of token-aware code paths in this module
+ * (URL injection in {@link cloneRepo}, this auth-header builder) only
+ * recognises GitHub HTTPS, so scoping the header to github.com matches the
+ * existing trust boundary and prevents the token from leaking to submodule
+ * URLs at attacker-controlled hosts.
  */
-const _activeCredFiles = new Set<string>();
-let _credCleanupRegistered = false;
-function _registerCredCleanup(): void {
-  if (_credCleanupRegistered) return;
-  _credCleanupRegistered = true;
-  const cleanup = () => {
-    for (const p of _activeCredFiles) {
-      try {
-        unlinkSync(p);
-      } catch {
-        // best-effort
-      }
-    }
-    _activeCredFiles.clear();
+const DEFAULT_AUTH_HEADER_HOST = 'github.com';
+
+/**
+ * Build the `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>`
+ * env-var trio that git treats as ad-hoc config — equivalent to `-c key=value`
+ * but without the value ever appearing on the process argv.
+ *
+ * Returns an empty object when there are no entries so callers can spread it
+ * unconditionally.
+ *
+ * @see https://git-scm.com/docs/git-config#ENVIRONMENT
+ */
+export function buildGitConfigEnv(entries: [string, string][]): Record<string, string> {
+  if (entries.length === 0) return {};
+  const out: Record<string, string> = {
+    GIT_CONFIG_COUNT: String(entries.length),
   };
-  process.once('exit', cleanup);
-  process.once('SIGINT', cleanup);
-  process.once('SIGTERM', cleanup);
-}
-
-/**
- * Write a git-credentials-format file for GitHub HTTPS access.
- *
- * The token is URL-encoded — it has also been shape-checked upstream. This
- * replaces the previous inline shell credential helper, which interpolated
- * the token directly into a shell function body: a token containing `;`,
- * backticks, `$()`, `}`, or newlines would have escaped the function and
- * executed as shell.
- */
-function writeGitCredentialsFile(token: string): string {
-  _registerCredCleanup();
-  const credPath = join(
-    tmpdir(),
-    `agor-git-creds-${process.pid}-${randomBytes(8).toString('hex')}`
-  );
-  const encodedToken = encodeURIComponent(token);
-  const line = `https://x-access-token:${encodedToken}@github.com\n`;
-  // mode 0600 — only our uid can read the credential.
-  writeFileSync(credPath, line, { mode: 0o600 });
-  _activeCredFiles.add(credPath);
-  return credPath;
-}
-
-/**
- * Best-effort unlink of a temp credentials file created by
- * writeGitCredentialsFile. Safe to call multiple times.
- */
-async function removeGitCredentialsFile(credPath: string | undefined): Promise<void> {
-  if (!credPath) return;
-  _activeCredFiles.delete(credPath);
-  try {
-    await unlink(credPath);
-  } catch {
-    // best-effort
+  for (let i = 0; i < entries.length; i++) {
+    const [key, value] = entries[i];
+    out[`GIT_CONFIG_KEY_${i}`] = key;
+    out[`GIT_CONFIG_VALUE_${i}`] = value;
   }
+  return out;
 }
 
 /**
- * Create a configured simple-git instance with user environment variables.
+ * Build the `http.<scope>.extraheader=Authorization: Basic <b64>` config entry
+ * for HTTPS git auth.
  *
- * IMPORTANT: This function does NOT handle user impersonation.
+ * GitHub accepts `Authorization: Basic base64("x-access-token:" + PAT)` for
+ * HTTPS git operations. We scope per-host so the token is never sent to a
+ * different origin (e.g. a malicious submodule pointing at attacker.com).
+ *
+ * Returns an empty array when no token is supplied or the token fails the
+ * shape check, so callers can spread the result unconditionally.
+ */
+export function buildAuthHeaderEnv(
+  token: string | undefined,
+  host: string = DEFAULT_AUTH_HEADER_HOST
+): [string, string][] {
+  if (!token) return [];
+  if (!isLikelyGitToken(token)) {
+    // Don't embed unknown-shape tokens — log + fall back to URL-injected creds
+    // (cloneRepo handles that path) rather than risk passing a malformed value
+    // to git via an env var.
+    console.warn(
+      '🔑 Skipping http.extraheader: token does not match expected shape. ' +
+        'Tokens must match /^[A-Za-z0-9_-]{20,255}$/. ' +
+        'Re-save the token to enable the auth header.'
+    );
+    return [];
+  }
+  const credential = Buffer.from(`x-access-token:${token}`, 'utf8').toString('base64');
+  // Per-host scope: the header is only attached to requests against the
+  // configured host. Submodule fetches at any other host get nothing.
+  const key = `http.https://${host}/.extraheader`;
+  return [[key, `Authorization: Basic ${credential}`]];
+}
+
+/**
+ * Mask any env entry that looks like a `GIT_CONFIG_VALUE_<n>` carrying an
+ * `Authorization:` header. Use before serialising spawnOptions.env into logs,
+ * error reports, or telemetry.
+ *
+ * The shape check is deliberately loose: any value containing `Authorization:`
+ * (case-insensitive) is replaced. False positives (e.g. a user-set env var
+ * literally named `Authorization:`) are an acceptable price for never leaking
+ * the token via a stray log line.
+ */
+export function redactGitEnv(env: Record<string, string | undefined>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(env)) {
+    if (raw === undefined) continue;
+    const isConfigValue = /^GIT_CONFIG_VALUE_\d+$/.test(key);
+    const looksLikeAuth = /authorization:/i.test(raw);
+    out[key] = isConfigValue && looksLikeAuth ? '<redacted>' : raw;
+  }
+  return out;
+}
+
+/**
+ * Create a configured simple-git instance.
+ *
+ * IMPORTANT: This function does NOT handle Unix-user impersonation.
  * Impersonation is handled upstream when spawning the executor process.
- * When git operations run inside the executor, they inherit the executor's
- * user context automatically (no sudo needed).
+ * Per-user credentials reach this function via the `env` argument
+ * (e.g. `users.getGitEnvironment` in the executor flow).
  *
- * When a GitHub / GitLab PAT is supplied via `env.GITHUB_TOKEN` or
- * `env.GH_TOKEN`, a temporary 0600-mode credentials file is written and
- * referenced via `credential.helper=store --file=<path>`. The token value
- * is URL-encoded into the file and never ends up in a shell string. The
- * second return value, `credPath`, is the tempfile path (if any) and MUST
- * be passed to `removeGitCredentialsFile()` once all git operations for
- * this invocation complete.
+ * Auth strategy. When a GitHub / GitLab PAT is supplied via
+ * `env.GITHUB_TOKEN` or `env.GH_TOKEN`, the token is fed to git as
+ * `http.https://github.com/.extraheader=Authorization: Basic <b64>` —
+ * but **via the `GIT_CONFIG_COUNT/KEY/VALUE` env trio**, not via
+ * simple-git's `config: [...]` array. The latter would translate to
+ * `git -c key=value`, putting the auth header on argv where it can leak via
+ * `ps`, audit logs, error reports, etc. The env-var path keeps the value
+ * off argv entirely.
+ *
+ * Inheritance kill. We do NOT want git to read the daemon user's
+ * `~/.gitconfig` (which may have an ambient `credential.helper = !gh auth
+ * git-credential` from `gh auth login`, silently leaking the daemon's GitHub
+ * identity to every Agor user). Per `git-impersonation.ts`, git operations
+ * always run as the daemon user (no `sudo -u` uid switch — `sudo -u` is used
+ * only to refresh group memberships), so HOME is the daemon's. We therefore
+ * pin `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`. If the
+ * impersonation model ever switches to a true uid switch (so HOME points at
+ * the impersonated user), `GIT_CONFIG_GLOBAL` must be removed so git can
+ * read that user's own gitconfig.
  *
  * @param baseDir - Working directory for git operations
  * @param env - Environment variables (GITHUB_TOKEN, GH_TOKEN, etc.)
@@ -226,45 +263,46 @@ async function removeGitCredentialsFile(credPath: string | undefined): Promise<v
 function createGit(
   baseDir?: string,
   env?: Record<string, string>
-): { git: ReturnType<typeof simpleGit>; credPath?: string } {
+): { git: ReturnType<typeof simpleGit> } {
   const gitBinary = getGitBinary();
 
+  // Non-secret config stays in `config:` (becomes `-c key=value` on argv,
+  // which is fine for these values).
   const config = [
     'core.sshCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null',
   ];
 
-  // When per-user env is provided, reset the inherited credential.helper list
-  // before adding our own. Without this, git would also consult helpers
-  // configured in the daemon user's ~/.gitconfig (e.g. `gh auth login`),
-  // silently falling back to the daemon user's GitHub identity for any user
-  // who hasn't configured their own GITHUB_TOKEN. The empty `credential.helper=`
-  // resets the list; subsequent entries (e.g. our token-based store helper)
-  // are then the only helpers git considers.
-  if (env) {
-    config.push('credential.helper=');
+  // Auth header config goes through env vars so the token never lands on
+  // argv. buildAuthHeaderEnv returns [] if there's no usable token; in that
+  // case spawnOptions.env still gets the inheritance-kill vars when env is
+  // set, which is the path that fixes the "daemon's gh auth leaks to user X"
+  // bug.
+  const rawToken = env?.GITHUB_TOKEN ?? env?.GH_TOKEN;
+  const authConfigEntries = buildAuthHeaderEnv(rawToken);
+  if (authConfigEntries.length > 0) {
+    console.debug('🔑 Configured http.extraheader auth via GIT_CONFIG_* env vars');
   }
 
-  let credPath: string | undefined;
-
-  // Configure credential helper for GitHub tokens via a tempfile (NOT via
-  // an inline shell helper — which would let a token containing `;`,
-  // backticks, `$()`, or newlines escape the shell function body).
-  const rawToken = env?.GITHUB_TOKEN ?? env?.GH_TOKEN;
-  if (rawToken) {
-    if (isLikelyGitToken(rawToken)) {
-      credPath = writeGitCredentialsFile(rawToken);
-      config.push(`credential.helper=store --file=${credPath}`);
-      console.debug('🔑 Configured credential helper via temp credentials file');
-    } else {
-      // Don't block — existing stored tokens may pre-date the validation
-      // rule. Log and fall back to URL-embedded tokens (cloneRepo also
-      // injects the token into the URL for HTTPS).
-      console.warn(
-        '🔑 Skipping git credential helper: token does not match expected shape. ' +
-          'Tokens must match /^[A-Za-z0-9_-]{20,255}$/. ' +
-          'Re-save the token to enable the credential helper.'
-      );
-    }
+  // Build git env vars. Always set the isolation knobs when we are passing a
+  // user env (i.e. doing per-user git work) — otherwise leave the daemon
+  // user's environment untouched so commands that don't need credentials
+  // (e.g. listWorktrees) keep working as before.
+  let spawnEnv: Record<string, string> | undefined;
+  if (env || authConfigEntries.length > 0) {
+    spawnEnv = {
+      ...process.env,
+      ...(env ?? {}),
+      // Inheritance kill: ignore /etc/gitconfig and the daemon user's
+      // ~/.gitconfig. See block comment above re: impersonation model.
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      // Fail fast instead of blocking on an interactive credential prompt
+      // (which would hang the daemon).
+      GIT_TERMINAL_PROMPT: '0',
+      // Inject http.extraheader (and any future server-constructed config)
+      // via the env-var protocol so it never lands on argv.
+      ...buildGitConfigEnv(authConfigEntries),
+    } as Record<string, string>;
   }
 
   const git = simpleGit({
@@ -273,24 +311,15 @@ function createGit(
     config,
     unsafe: {
       allowUnsafeSshCommand: true,
-      // Required because we set credential.helper in `config` above
-      // (empty-reset on the inheritance line, store-with-tempfile when a
-      // token is present). simple-git's guard exists to block shell-
-      // injection via untrusted helper values; ours are server-constructed
-      // (credPath comes from writeGitCredentialsFile, never user input).
-      // TODO: drop both credential.helper lines, switch to env-var-based
-      // http.extraheader (GIT_CONFIG_COUNT/KEY/VALUE), then this flag and
-      // the on-disk tempfile can both go.
-      allowUnsafeCredentialHelper: true,
     },
-    spawnOptions: env
+    spawnOptions: spawnEnv
       ? ({
-          env: { ...process.env, ...env } as NodeJS.ProcessEnv,
+          env: spawnEnv as NodeJS.ProcessEnv,
         } as unknown as Pick<SpawnOptions, 'uid' | 'gid'>)
       : undefined,
   });
 
-  return { git, credPath };
+  return { git };
 }
 
 export interface CloneOptions {
@@ -397,32 +426,28 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
   }
 
   // Create git instance with user env vars (SSH host key checking is always disabled)
-  const { git, credPath } = createGit(undefined, options.env);
+  const { git } = createGit(undefined, options.env);
 
-  try {
-    if (options.onProgress) {
-      git.outputHandler((_command, _stdout, _stderr) => {
-        // Note: Progress tracking through outputHandler is limited
-        // This is a simplified version - simple-git's progress callback
-        // in constructor works better, but we need the binary path too
-      });
-    }
-
-    // Clone the repo using the URL (potentially with injected token)
-    console.log(`Cloning ${options.url} to ${targetPath}...`);
-    await git.clone(cloneUrl, targetPath, options.bare ? ['--bare'] : []);
-
-    // Get default branch from remote HEAD
-    const defaultBranch = await getDefaultBranch(targetPath);
-
-    return {
-      path: targetPath,
-      repoName,
-      defaultBranch,
-    };
-  } finally {
-    await removeGitCredentialsFile(credPath);
+  if (options.onProgress) {
+    git.outputHandler((_command, _stdout, _stderr) => {
+      // Note: Progress tracking through outputHandler is limited
+      // This is a simplified version - simple-git's progress callback
+      // in constructor works better, but we need the binary path too
+    });
   }
+
+  // Clone the repo using the URL (potentially with injected token)
+  console.log(`Cloning ${options.url} to ${targetPath}...`);
+  await git.clone(cloneUrl, targetPath, options.bare ? ['--bare'] : []);
+
+  // Get default branch from remote HEAD
+  const defaultBranch = await getDefaultBranch(targetPath);
+
+  return {
+    path: targetPath,
+    repoName,
+    defaultBranch,
+  };
 }
 
 /**
@@ -582,124 +607,116 @@ export async function createWorktree(
     await validateGitRef(sourceBranch);
   }
 
-  const { git, credPath } = createGit(repoPath, env);
+  const { git } = createGit(repoPath, env);
 
   let fetchSucceeded = false;
 
-  try {
-    // Pull latest from remote if requested
-    if (pullLatest) {
-      try {
-        // Fetch branches, and tags only if working with a tag
-        const fetchArgs = refType === 'tag' ? ['origin', '--tags'] : ['origin'];
-        await git.fetch(fetchArgs);
-        fetchSucceeded = true;
-        console.log('✅ Fetched latest from origin');
-
-        // If not creating a new branch and this is a branch (not a tag), update local branch to match remote
-        // Tags don't need this update - they're immutable and don't have origin/ prefix
-        if (!createBranch && refType !== 'tag') {
-          try {
-            // Check if local branch exists
-            const branches = await git.branch();
-            const localBranchExists = branches.all.includes(ref);
-
-            if (localBranchExists) {
-              // Update local branch to match remote (if remote exists)
-              const remoteBranches = await git.branch(['-r']);
-              const remoteBranchExists = remoteBranches.all.includes(`origin/${ref}`);
-
-              if (remoteBranchExists) {
-                // Reset local branch to match remote.
-                // `--` separator not supported by `git branch`; ref has already
-                // been validated by validateGitRef above.
-                await git.raw(['branch', '-f', ref, `origin/${ref}`]);
-                console.log(`✅ Updated local ${ref} to match origin/${ref}`);
-              }
-            }
-          } catch (error) {
-            console.warn(
-              `⚠️  Failed to update local ${ref} branch:`,
-              error instanceof Error ? error.message : String(error)
-            );
-          }
-        }
-      } catch (error) {
-        console.warn(
-          '⚠️  Failed to fetch from origin (will use local refs):',
-          error instanceof Error ? error.message : String(error)
-        );
-      }
-    }
-
-    const worktreeAddArgs = buildWorktreeAddArgs({
-      worktreePath,
-      ref,
-      createBranch,
-      sourceBranch,
-      refType,
-      fetchSucceeded,
-    });
-
-    if (createBranch && sourceBranch && refType === 'tag') {
-      console.log(`📌 Creating branch '${ref}' from tag '${sourceBranch}'`);
-    }
-
+  // Pull latest from remote if requested
+  if (pullLatest) {
     try {
-      await git.raw(worktreeAddArgs);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      // Fetch branches, and tags only if working with a tag
+      const fetchArgs = refType === 'tag' ? ['origin', '--tags'] : ['origin'];
+      await git.fetch(fetchArgs);
+      fetchSucceeded = true;
+      console.log('✅ Fetched latest from origin');
 
-      // Handle stale branch from previously deleted worktree
-      if (createBranch && errorMessage.includes('already exists')) {
-        console.warn(
-          `⚠️  Branch '${ref}' already exists. Checking if it's orphaned (stale from a deleted worktree)...`
-        );
+      // If not creating a new branch and this is a branch (not a tag), update local branch to match remote
+      // Tags don't need this update - they're immutable and don't have origin/ prefix
+      if (!createBranch && refType !== 'tag') {
+        try {
+          // Check if local branch exists
+          const branches = await git.branch();
+          const localBranchExists = branches.all.includes(ref);
 
-        // Check if the branch is in use by another worktree
-        const worktrees = await listWorktrees(repoPath);
-        const branchInUse = worktrees.some((wt) => wt.ref === ref);
+          if (localBranchExists) {
+            // Update local branch to match remote (if remote exists)
+            const remoteBranches = await git.branch(['-r']);
+            const remoteBranchExists = remoteBranches.all.includes(`origin/${ref}`);
 
-        if (branchInUse) {
-          throw new Error(
-            `A branch named '${ref}' already exists and is in use by another worktree. ` +
-              `Please choose a different name.`
+            if (remoteBranchExists) {
+              // Reset local branch to match remote.
+              // `--` separator not supported by `git branch`; ref has already
+              // been validated by validateGitRef above.
+              await git.raw(['branch', '-f', ref, `origin/${ref}`]);
+              console.log(`✅ Updated local ${ref} to match origin/${ref}`);
+            }
+          }
+        } catch (error) {
+          console.warn(
+            `⚠️  Failed to update local ${ref} branch:`,
+            error instanceof Error ? error.message : String(error)
           );
         }
-
-        // Branch exists but is orphaned — delete it and retry.
-        // `git branch -D` doesn't support `--`; ref was validated above.
-        console.log(`🧹 Deleting orphaned branch '${ref}' and retrying worktree creation...`);
-        await git.raw(['branch', '-D', ref]);
-
-        // Retry the worktree creation
-        await git.raw(worktreeAddArgs);
-        console.log(`✅ Successfully created worktree after cleaning up stale branch '${ref}'`);
-      } else {
-        throw error;
       }
-    }
-
-    // Add worktree to safe.directory to prevent "dubious ownership" errors
-    // This is needed when worktrees are owned by a different user (e.g., daemon user)
-    // but accessed by other users (e.g., in multi-user Linux environments)
-    let safeDirCredPath: string | undefined;
-    try {
-      const result = createGit(worktreePath, env);
-      safeDirCredPath = result.credPath;
-      await result.git.addConfig('safe.directory', worktreePath, true, 'global');
-      console.log(`✅ Added ${worktreePath} to git safe.directory`);
     } catch (error) {
-      // Non-fatal - log warning and continue
       console.warn(
-        `⚠️  Failed to add ${worktreePath} to safe.directory:`,
+        '⚠️  Failed to fetch from origin (will use local refs):',
         error instanceof Error ? error.message : String(error)
       );
-    } finally {
-      await removeGitCredentialsFile(safeDirCredPath);
     }
-  } finally {
-    await removeGitCredentialsFile(credPath);
+  }
+
+  const worktreeAddArgs = buildWorktreeAddArgs({
+    worktreePath,
+    ref,
+    createBranch,
+    sourceBranch,
+    refType,
+    fetchSucceeded,
+  });
+
+  if (createBranch && sourceBranch && refType === 'tag') {
+    console.log(`📌 Creating branch '${ref}' from tag '${sourceBranch}'`);
+  }
+
+  try {
+    await git.raw(worktreeAddArgs);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    // Handle stale branch from previously deleted worktree
+    if (createBranch && errorMessage.includes('already exists')) {
+      console.warn(
+        `⚠️  Branch '${ref}' already exists. Checking if it's orphaned (stale from a deleted worktree)...`
+      );
+
+      // Check if the branch is in use by another worktree
+      const worktrees = await listWorktrees(repoPath);
+      const branchInUse = worktrees.some((wt) => wt.ref === ref);
+
+      if (branchInUse) {
+        throw new Error(
+          `A branch named '${ref}' already exists and is in use by another worktree. ` +
+            `Please choose a different name.`
+        );
+      }
+
+      // Branch exists but is orphaned — delete it and retry.
+      // `git branch -D` doesn't support `--`; ref was validated above.
+      console.log(`🧹 Deleting orphaned branch '${ref}' and retrying worktree creation...`);
+      await git.raw(['branch', '-D', ref]);
+
+      // Retry the worktree creation
+      await git.raw(worktreeAddArgs);
+      console.log(`✅ Successfully created worktree after cleaning up stale branch '${ref}'`);
+    } else {
+      throw error;
+    }
+  }
+
+  // Add worktree to safe.directory to prevent "dubious ownership" errors
+  // This is needed when worktrees are owned by a different user (e.g., daemon user)
+  // but accessed by other users (e.g., in multi-user Linux environments)
+  try {
+    const { git: safeDirGit } = createGit(worktreePath, env);
+    await safeDirGit.addConfig('safe.directory', worktreePath, true, 'global');
+    console.log(`✅ Added ${worktreePath} to git safe.directory`);
+  } catch (error) {
+    // Non-fatal - log warning and continue
+    console.warn(
+      `⚠️  Failed to add ${worktreePath} to safe.directory:`,
+      error instanceof Error ? error.message : String(error)
+    );
   }
 }
 
@@ -749,62 +766,56 @@ export async function restoreWorktreeFilesystem(
   await validateGitRef(ref);
   await validateGitRef(baseRef);
 
-  const { git, credPath } = createGit(repoPath, env);
+  const { git } = createGit(repoPath, env);
 
+  // Step 1: Fetch from remote
   try {
-    // Step 1: Fetch from remote
-    try {
-      await git.fetch(['origin']);
-      console.log(`[restoreWorktree] Fetched latest from origin`);
-    } catch (error) {
-      console.warn(
-        `[restoreWorktree] Failed to fetch from origin (will use local refs):`,
-        error instanceof Error ? error.message : String(error)
-      );
-    }
+    await git.fetch(['origin']);
+    console.log(`[restoreWorktree] Fetched latest from origin`);
+  } catch (error) {
+    console.warn(
+      `[restoreWorktree] Failed to fetch from origin (will use local refs):`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
 
-    // Step 2: Check if branch exists on remote via ls-remote
-    // Using ls-remote instead of local branch list to get authoritative remote state
-    let branchExistsOnRemote = false;
+  // Step 2: Check if branch exists on remote via ls-remote
+  // Using ls-remote instead of local branch list to get authoritative remote state
+  let branchExistsOnRemote = false;
+  try {
+    const lsRemoteOutput = await git.listRemote(['--heads', 'origin', ref]);
+    branchExistsOnRemote = lsRemoteOutput.trim().length > 0;
+  } catch {
+    // ls-remote failed, fall through to local branch check
     try {
-      const lsRemoteOutput = await git.listRemote(['--heads', 'origin', ref]);
-      branchExistsOnRemote = lsRemoteOutput.trim().length > 0;
+      const branches = await git.branch(['-r']);
+      branchExistsOnRemote = branches.all.includes(`origin/${ref}`);
     } catch {
-      // ls-remote failed, fall through to local branch check
-      try {
-        const branches = await git.branch(['-r']);
-        branchExistsOnRemote = branches.all.includes(`origin/${ref}`);
-      } catch {
-        // Can't determine remote state
-      }
+      // Can't determine remote state
+    }
+  }
+
+  // Step 3/4: Create worktree with appropriate strategy
+  try {
+    if (branchExistsOnRemote) {
+      // Branch exists on remote — checkout it directly
+      console.log(`[restoreWorktree] Branch '${ref}' found on remote, checking out`);
+      await createWorktree(repoPath, worktreePath, ref, false, true, undefined, env);
+      return { success: true, strategy: 'checkout' };
     }
 
-    // Step 3/4: Create worktree with appropriate strategy
-    try {
-      if (branchExistsOnRemote) {
-        // Branch exists on remote — checkout it directly
-        console.log(`[restoreWorktree] Branch '${ref}' found on remote, checking out`);
-        await createWorktree(repoPath, worktreePath, ref, false, true, undefined, env);
-        return { success: true, strategy: 'checkout' };
-      }
-
-      // Branch doesn't exist on remote — create new branch from base ref
-      console.log(
-        `[restoreWorktree] Branch '${ref}' not on remote, creating from base '${baseRef}'`
-      );
-      await createWorktree(repoPath, worktreePath, ref, true, true, baseRef, env);
-      return { success: true, strategy: 'create' };
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error(`[restoreWorktree] Failed to restore worktree: ${msg}`);
-      return {
-        success: false,
-        strategy: branchExistsOnRemote ? 'checkout' : 'create',
-        error: msg,
-      };
-    }
-  } finally {
-    await removeGitCredentialsFile(credPath);
+    // Branch doesn't exist on remote — create new branch from base ref
+    console.log(`[restoreWorktree] Branch '${ref}' not on remote, creating from base '${baseRef}'`);
+    await createWorktree(repoPath, worktreePath, ref, true, true, baseRef, env);
+    return { success: true, strategy: 'create' };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[restoreWorktree] Failed to restore worktree: ${msg}`);
+    return {
+      success: false,
+      strategy: branchExistsOnRemote ? 'checkout' : 'create',
+      error: msg,
+    };
   }
 }
 
