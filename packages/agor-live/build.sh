@@ -131,37 +131,26 @@ rm -rf "$CLIENT_DIR/dist"
 mkdir -p "$DIST_STAGE"
 
 # ── Build all components ─────────────────────────────────────────────────────
+#
+# Use turbo to build everything in workspace-dependency order. turbo.json
+# declares `"dependsOn": ["^build"]`, so e.g. @agor/cli (which imports types
+# from @agor/daemon) waits for daemon's dist/index.d.ts before its own DTS
+# step runs. Hand-ordering this sequence is fragile — every time someone
+# adds a new cross-package import the wrong order silently passes locally
+# (because of stale dist/) and explodes on a clean CI checkout.
+#
+# Excludes @agor/docs (Nextra docs site, not part of the published artifact).
+# NODE_ENV=production matters for the UI's vite build; harmless for the rest.
 
 echo ""
-echo "📦 Building @agor/core..."
-cd "$REPO_ROOT/packages/core"
-pnpm build
+echo "📦 Building all workspace packages (turbo, dep-ordered)..."
+cd "$REPO_ROOT"
+NODE_ENV=production pnpm exec turbo run build --filter='!@agor/docs'
 
 echo ""
-echo "📦 Building @agor-live/client..."
+echo "🔍 Verifying @agor-live/client pack..."
 cd "$CLIENT_DIR"
-pnpm build
 pnpm check:pack
-
-echo ""
-echo "🖥️  Building CLI..."
-cd "$REPO_ROOT/apps/agor-cli"
-pnpm build
-
-echo ""
-echo "⚙️  Building Daemon..."
-cd "$REPO_ROOT/apps/agor-daemon"
-pnpm build
-
-echo ""
-echo "🔧 Building Executor..."
-cd "$REPO_ROOT/packages/executor"
-pnpm build
-
-echo ""
-echo "🎨 Building UI..."
-cd "$REPO_ROOT/apps/agor-ui"
-NODE_ENV=production pnpm build
 
 # ── Build self-hosted Sandpack bundler (optional) ────────────────────────────
 
