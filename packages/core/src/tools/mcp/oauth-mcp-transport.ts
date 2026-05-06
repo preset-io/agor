@@ -27,6 +27,17 @@ interface CachedAuthCodeToken {
 // Key is the resource metadata URL to avoid cross-tenant leakage
 const authCodeTokenCache = new Map<string, CachedAuthCodeToken>();
 
+/**
+ * Test-only hook: seed the auth-code token cache so tests can verify
+ * clearing behavior without performing a real OAuth flow.
+ */
+export function __seedAuthCodeTokenCacheForTests(
+  metadataUrl: string,
+  entry: { token: string; expiresAt: number; fetchedAt: number }
+): void {
+  authCodeTokenCache.set(metadataUrl, entry);
+}
+
 // In-memory cache TTL fallback when `resolveTokenExpiry` cannot determine an
 // expiry from the token response. This bounds the lifetime of THIS module's
 // `authCodeTokenCache` map only — local-cache hygiene, not a persisted DB
@@ -346,6 +357,26 @@ const dynamicClientCache = new Map<
   string,
   { client_id: string; client_secret?: string; redirect_uri: string }
 >();
+
+/**
+ * Test-only hook: snapshot the DCR client cache size. Used to verify that
+ * `clearAuthCodeTokenCache` clears DCR registrations on blanket clears.
+ * Do NOT call from production code.
+ */
+export function __dynamicClientCacheSizeForTests(): number {
+  return dynamicClientCache.size;
+}
+
+/**
+ * Test-only hook: seed the DCR cache with a fake entry so tests can verify
+ * clearing behavior without performing a real HTTP registration.
+ */
+export function __seedDynamicClientCacheForTests(
+  registrationEndpoint: string,
+  entry: { client_id: string; client_secret?: string; redirect_uri: string }
+): void {
+  dynamicClientCache.set(registrationEndpoint, entry);
+}
 
 /**
  * Perform Dynamic Client Registration (RFC 7591)
@@ -1007,6 +1038,12 @@ export function clearAuthCodeTokenCache(metadataUrl?: string): void {
     authCodeTokenCache.delete(metadataUrl);
   } else {
     authCodeTokenCache.clear();
+    // Also clear the DCR client cache on blanket clears (disconnect flow).
+    // Stale DCR registrations cause "client_id not found" errors on re-auth
+    // when the provider has evicted the registration (e.g. Birdsai).
+    // Only on the blanket path — per-key callers clearing a single authCode
+    // entry should not nuke unrelated DCR registrations.
+    dynamicClientCache.clear();
   }
 }
 

@@ -947,9 +947,28 @@ export function useAgorData(
         return next;
       });
 
-      // Refetch so `server.auth.oauth_access_token` is cleared in mcpServerById
-      // — without this, `mcpServerNeedsAuth` may still see the stale token and
-      // return false.
+      // Optimistically strip the token from the local server object so
+      // `mcpServerNeedsAuth` flips to true immediately. Without this, the
+      // stale `oauth_access_token` in mcpServerById short-circuits the
+      // `userAuthenticatedMcpServerIds` check — and for tokens with no
+      // expiry (e.g. Notion), `isExpired` is always false, so the pill
+      // stays purple forever even though the Set was updated above.
+      setMcpServerById((prev) => {
+        const existing = prev.get(event.mcp_server_id);
+        if (!existing?.auth?.oauth_access_token) return prev;
+        const next = new Map(prev);
+        next.set(event.mcp_server_id, {
+          ...existing,
+          auth: {
+            ...existing.auth,
+            oauth_access_token: undefined,
+            oauth_token_expires_at: undefined,
+          },
+        });
+        return next;
+      });
+
+      // Still refetch to get the canonical server state from the daemon.
       try {
         const fresh = (await client.service('mcp-servers').get(event.mcp_server_id)) as MCPServer;
         setMcpServerById((prev) => {

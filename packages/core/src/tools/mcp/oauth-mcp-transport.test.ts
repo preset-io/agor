@@ -10,13 +10,93 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  clearAuthCodeTokenCache,
   discoverAuthorizationServerFromMcpOrigin,
   discoverResourceMetadataUrl,
+  getAuthCodeTokenCacheStats,
   isOAuthRequired,
   resolveMCPOAuthDiscovery,
   resolveResourceMetadataUrl,
   startMCPOAuthFlow,
+  __dynamicClientCacheSizeForTests,
+  __seedAuthCodeTokenCacheForTests,
+  __seedDynamicClientCacheForTests,
 } from './oauth-mcp-transport';
+
+// ---------------------------------------------------------------------------
+// clearAuthCodeTokenCache — cache clearing semantics
+// ---------------------------------------------------------------------------
+
+describe('clearAuthCodeTokenCache', () => {
+  beforeEach(() => {
+    // Start each test with a clean slate
+    clearAuthCodeTokenCache();
+  });
+
+  it('blanket clear removes all authCode entries', () => {
+    __seedAuthCodeTokenCacheForTests('https://a.example/.well-known/oauth', {
+      token: 'tok-a',
+      expiresAt: Date.now() + 60_000,
+      fetchedAt: Date.now(),
+    });
+    __seedAuthCodeTokenCacheForTests('https://b.example/.well-known/oauth', {
+      token: 'tok-b',
+      expiresAt: Date.now() + 60_000,
+      fetchedAt: Date.now(),
+    });
+
+    expect(getAuthCodeTokenCacheStats().totalEntries).toBe(2);
+    clearAuthCodeTokenCache();
+    expect(getAuthCodeTokenCacheStats().totalEntries).toBe(0);
+  });
+
+  it('blanket clear also clears the DCR client cache', () => {
+    __seedDynamicClientCacheForTests('https://a.example/register', {
+      client_id: 'client-a',
+      redirect_uri: 'https://agor.dev/callback',
+    });
+    __seedDynamicClientCacheForTests('https://b.example/register', {
+      client_id: 'client-b',
+      redirect_uri: 'https://agor.dev/callback',
+    });
+
+    expect(__dynamicClientCacheSizeForTests()).toBe(2);
+    clearAuthCodeTokenCache();
+    expect(__dynamicClientCacheSizeForTests()).toBe(0);
+  });
+
+  it('per-key clear removes only the specified authCode entry', () => {
+    __seedAuthCodeTokenCacheForTests('https://a.example/.well-known/oauth', {
+      token: 'tok-a',
+      expiresAt: Date.now() + 60_000,
+      fetchedAt: Date.now(),
+    });
+    __seedAuthCodeTokenCacheForTests('https://b.example/.well-known/oauth', {
+      token: 'tok-b',
+      expiresAt: Date.now() + 60_000,
+      fetchedAt: Date.now(),
+    });
+
+    clearAuthCodeTokenCache('https://a.example/.well-known/oauth');
+    expect(getAuthCodeTokenCacheStats().totalEntries).toBe(1);
+  });
+
+  it('per-key clear does NOT clear the DCR client cache', () => {
+    __seedAuthCodeTokenCacheForTests('https://a.example/.well-known/oauth', {
+      token: 'tok-a',
+      expiresAt: Date.now() + 60_000,
+      fetchedAt: Date.now(),
+    });
+    __seedDynamicClientCacheForTests('https://a.example/register', {
+      client_id: 'client-a',
+      redirect_uri: 'https://agor.dev/callback',
+    });
+
+    clearAuthCodeTokenCache('https://a.example/.well-known/oauth');
+    // DCR cache should be untouched on per-key clears
+    expect(__dynamicClientCacheSizeForTests()).toBe(1);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // isOAuthRequired — pure function, no mocking
