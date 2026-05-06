@@ -200,6 +200,11 @@
       "import": "./dist/tools/mcp/oauth-refresh.js",
       "require": "./dist/tools/mcp/oauth-refresh.cjs"
     },
+    "./tools/mcp/oauth-token-expiry": {
+      "types": "./dist/tools/mcp/oauth-token-expiry.d.ts",
+      "import": "./dist/tools/mcp/oauth-token-expiry.js",
+      "require": "./dist/tools/mcp/oauth-token-expiry.cjs"
+    },
     "./unix": {
       "types": "./dist/unix/index.d.ts",
       "import": "./dist/unix/index.js",

@@ -28,6 +28,7 @@ import type { Database } from '../../db/client';
 import { MCPServerRepository, UserMCPOAuthTokenRepository } from '../../db/repositories';
 import type { MCPServerID, UserID } from '../../types';
 import { inferOAuthTokenUrl } from './oauth-auth';
+import { resolveTokenExpiry } from './oauth-token-expiry';
 
 /** 60s safety window before hard expiry. */
 export const REFRESH_BUFFER_MS = 60_000;
@@ -294,19 +295,31 @@ export async function refreshAndPersistToken(deps: RefreshAndPersistDeps): Promi
         clientSecret,
       });
 
+      // Resolve expiry via the shared cascade so this site behaves
+      // identically to `persistOAuthToken` (initial-auth path). For providers
+      // that omit `expires_in` on refresh (e.g. Notion), `expiry.seconds`
+      // will be `null`, which `saveToken` writes as a literal `NULL` to
+      // `oauth_token_expires_at` — surfaced in the UI as
+      // "expires in: unknown" rather than the previous silent oscillation
+      // between fake-1h and stale-NULL values. See Phase 3.5 in
+      // `context/explorations/mcp-oauth-token-lifecycle.md`.
+      const expiry = resolveTokenExpiry(result, result.access_token);
+
       // Persist atomically. Per RFC 6749 §6, an omitted refresh_token in the
       // response means the old one is still valid — keep it. When present,
       // the rotation replaces the old value.
       await userTokenRepo.saveToken(deps.userId, deps.mcpServerId, {
         accessToken: result.access_token,
-        expiresInSeconds: result.expires_in,
+        expiresInSeconds: expiry.seconds, // number | null — null means "unknown"
         refreshToken: result.refresh_token, // undefined = keep existing
         // Don't touch client_id / client_secret — same grant, same client.
       });
 
       console.log(
         `[MCP OAuth Refresh] ✓ Refreshed token for user=${deps.userId ?? '<shared>'} ` +
-          `server=${deps.mcpServerId}${result.refresh_token ? ' (with rotated refresh_token)' : ''}`
+          `server=${deps.mcpServerId} (expiry source: ${expiry.source}` +
+          `${expiry.seconds !== null ? `, ttl=${expiry.seconds}s` : ', ttl=unknown'})` +
+          `${result.refresh_token ? ' (with rotated refresh_token)' : ''}`
       );
 
       return result.access_token;

@@ -424,6 +424,100 @@ Three distinct token types — pick deliberately for unattended:
 
 ---
 
+## Phase 3.5 — Empirical probing & a TTL-discovery precedence cascade
+
+This section was added after the rest of Phase 3 to act on the audit. Before
+designing remediation, we curl-probed the actual MCP servers to confirm what
+discovery paths are realistically available.
+
+### Empirical findings (curl probes, 2026-05-05)
+
+Probed each MCP server's RFC 8414 / RFC 9728 metadata + bearer-challenge:
+
+| Server | `authorization_endpoint` | `token_endpoint` | `registration_endpoint` (DCR) | `introspection_endpoint` | `revocation_endpoint` |
+|---|---|---|---|---|---|
+| `mcp.slack.com` | ✅ | ✅ (`/api/oauth.v2.user.access`) | ✅ | ❌ **not advertised** | ❌ |
+| `mcp.notion.com` | ✅ | ✅ (`/v1/oauth/token`) | ✅ | ❌ **not advertised** | ✅ |
+| `mcp.linear.app` | ✅ | ✅ | ✅ | ❌ **not advertised** | ✅ |
+| `api.githubcopilot.com/mcp` | ✅ (via `WWW-Authenticate: resource_metadata=`) | ✅ | varies | ❌ | varies |
+
+**Decisive finding**: **none of the MCP servers we care about advertise an
+`introspection_endpoint`** in their AS metadata. RFC 7662 token introspection
+is therefore not a viable runtime discovery path for our actual targets.
+(Notion does expose a private `/v1/oauth/introspect` endpoint, but it requires
+HTTP Basic with `client_id:client_secret` and — per upstream docs — returns
+no `exp` field anyway. So even if we hit it, it doesn't tell us when the
+token expires.)
+
+This kills "introspect on every refresh to learn the real TTL" as a strategy.
+We're stuck with whatever the token-endpoint response gives us, plus whatever
+we can read off the access token if it happens to be a JWT.
+
+### Precedence cascade for resolving `expires_in`
+
+Replace the current `tokenResponse.expires_in ?? 3600` with a small resolver
+that walks a deterministic list, returning the first hit (or `null` =
+"unknown"):
+
+```
+resolveTokenExpiry(tokenResponse, accessToken, serverConfig) → seconds | null
+```
+
+Order, with rationale for each:
+
+| # | Source | Rationale |
+|---|---|---|
+| 1 | `tokenResponse.expires_in` | RFC 6749 §5.1 standard — the canonical answer when present. |
+| 2 | `tokenResponse.expires_at` (absolute → relative) | Some Auth0 / Spotify configs return absolute Unix timestamps instead. Convert to relative. |
+| 3 | `tokenResponse.exp` (top-level, JWT-style) | A handful of providers leak a top-level `exp` claim. Cheap to check. |
+| 4 | `tokenResponse.ext_expires_in` | Microsoft / Azure AD's "extended expiry" field used during outages. Better than nothing. |
+| 5 | JWT-decode `accessToken` and read `exp` claim | Only if the token has the JWT shape (`header.payload.sig` with valid base64url segments). Skip for opaque tokens. **No signature verification needed** — we're reading our own token, not validating it. |
+| 6 | `serverConfig.auth.lifecycle.default_access_ttl_seconds` | Per-server config hint (option G). Lets an admin encode "Notion ≈ 1h" without lying about other providers. |
+| 7 | **`null`** ("unknown") | Surface as "expires in: unknown" in the UI tooltip; rely on retry-on-401 (gap 1) for actual lifecycle handling. |
+
+Notes on the cascade:
+
+- **No hardcoded global default** anywhere in the chain. `?? 3600` was the
+  bug; we don't reintroduce it under a different name.
+- **Symmetric**: same resolver runs at `persistOAuthToken` (initial auth) and
+  `refreshAndPersistToken` (refresh persist). One source of truth.
+- **JWT decode is shape-gated**: we never attempt to decode opaque tokens
+  (Slack `xoxe.`, Notion `secret_`, etc.) — the JWT step is a fast `if
+  isJwtShape(token) { peek payload }` and is a no-op otherwise.
+- **Step 6 is config-only, not provider-detection**. We resist the urge to
+  hardcode `if (origin === 'mcp.notion.com') return 3600` — that's a
+  maintenance hazard. Either the server config carries a hint or it doesn't.
+- **`null` is a first-class state**, not an error. `needsRefresh(null)`
+  remains `false` (we don't speculate); the UI shows "unknown"; the
+  retry-on-401 shim from gap 1 catches actual expiry.
+
+### What "expires in: unknown" looks like in the UI
+
+The tooltip text already lives near `apps/agor-ui/src/components/MCPServerPill.tsx`
+(token expiry display) and `apps/agor-ui/src/utils/mcpAuth.ts`
+(`describeOAuthExpiry` / equivalent). When `oauth_token_expires_at` is null,
+swap the existing "expires in 47 min" copy for "expires in: unknown — relies
+on retry-on-401" (or similar). Keeps the green pill green; the explanatory
+hover is what changes.
+
+### Why not introspection?
+
+Worth being explicit about the rejected option, so a future contributor
+doesn't re-litigate it:
+
+- **None of our target MCP providers advertise it** (table above).
+- **Even where it exists privately (Notion)**, the response omits `exp`.
+- **It doubles every refresh cost** (token call + introspect call) without a
+  payoff, and serializes us behind a second provider RTT on the JIT path.
+- **DPoP would obviate the need** (sender-constrained tokens carry their own
+  proof), but no provider in our matrix supports DPoP.
+
+If a future MCP provider *does* advertise introspection AND returns `exp`, it
+slots in as step 1.5 of the cascade as a per-server opt-in (config flag
+`auth.lifecycle.use_introspection: true`). Don't enable it by default.
+
+---
+
 ## Phase 4 — Options
 
 ### A. Improve the existing JIT refresh path *(recommended baseline)*
@@ -542,6 +636,13 @@ config rather than provider-detection logic. Pair with A and F.
 
 ### Ship first (the 80/20)
 
+**0. Replace `?? 3600` with the TTL precedence cascade (Phase 3.5).**
+Smallest possible diff with the largest correctness payoff: kill the
+asymmetric defaulting that makes Notion oscillate between fake-1h and NULL,
+and make "unknown" a real state surfaced as such in the UI. Pairs naturally
+with item 1 below — once the cascade can return `null`, retry-on-401 becomes
+the safety net for the unknown case.
+
 **1. Retry-on-401 shim in MCP transport.** Single biggest leverage. Closes
 the mid-call expiry race for every provider in the matrix. Implementation
 is small: detect 401 + Bearer challenge in the executor's MCP HTTP client,
@@ -607,8 +708,9 @@ Don't build it speculatively — the maintenance cost is double.
   source of "Agor thinks this token expired after exactly 1 hour" reports.**
   And it's asymmetric — `refreshAndPersistToken` doesn't apply the same
   default, so the row oscillates between fake-1h expiry and NULL expiry over
-  the lifetime of a single grant. Unify both persist sites and pick one
-  consistent policy (see "🔴 The 1-hour default bug" above).
+  the lifetime of a single grant. Prescribed fix: the precedence cascade in
+  Phase 3.5 (resolver shared by both persist sites; `null` becomes a
+  first-class state surfaced as "expires in: unknown" in the UI).
 - `inferOAuthTokenUrl` is a fallback used by `refreshAndPersistToken` — should
   be replaced by a persisted `oauth_token_url` written at DCR completion.
 - `needsRefresh(undefined) === false` — quietly correct in spirit (we don't

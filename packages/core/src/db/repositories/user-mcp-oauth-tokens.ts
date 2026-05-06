@@ -39,8 +39,20 @@ export interface UserMCPOAuthToken {
 /** Input shape for `saveToken`. */
 export interface SaveTokenInput {
   accessToken: string;
-  /** Seconds until expiry, matching the OAuth token response. */
-  expiresInSeconds?: number;
+  /**
+   * Seconds until expiry, as resolved by `resolveTokenExpiry`. Three states:
+   *   - `number` → write `now + N seconds` to `oauth_token_expires_at`
+   *   - `null`   → explicitly write `NULL` ("expiry unknown — provider gave no
+   *                 hint we could decode"). Surfaces as "expires in: unknown"
+   *                 in the UI; relies on retry-on-401 for lifecycle handling.
+   *   - omitted  → preserve any existing value on update; absent on insert
+   *
+   * The `null` vs `undefined` distinction matters: the previous code used a
+   * truthy check that conflated the two, which produced asymmetric defaulting
+   * between the initial-auth and refresh persist sites. See
+   * `context/explorations/mcp-oauth-token-lifecycle.md` (Phase 3.5).
+   */
+  expiresInSeconds?: number | null;
   /** If absent on update, the existing refresh_token is kept. */
   refreshToken?: string;
   /** If absent on update, the existing client_id is kept. */
@@ -143,9 +155,20 @@ export class UserMCPOAuthTokenRepository {
       // Store the EXACT expiry the provider returned. The proactive-refresh
       // buffer lives in `needsRefresh` (REFRESH_BUFFER_MS) so we don't apply
       // it twice.
-      const expiresAt = input.expiresInSeconds
-        ? new Date(Date.now() + input.expiresInSeconds * 1000)
-        : undefined;
+      //
+      // Three-state handling of `expiresInSeconds`:
+      //   - number → set to (now + N seconds)
+      //   - null   → explicitly write NULL (provider gave no hint; surfaces
+      //              as "expires in: unknown" in UI)
+      //   - undef  → preserve existing value on update; absent on insert
+      // `expiresAtField` reflects this: `Date` / `null` / `undefined` map
+      // straight onto Drizzle's `.set()` semantics.
+      const expiresAtField: Date | null | undefined =
+        typeof input.expiresInSeconds === 'number'
+          ? new Date(Date.now() + input.expiresInSeconds * 1000)
+          : input.expiresInSeconds === null
+            ? null
+            : undefined;
 
       const existing = await this.getToken(userId, serverId);
 
@@ -153,7 +176,8 @@ export class UserMCPOAuthTokenRepository {
         await update(this.db, userMcpOauthTokens)
           .set({
             oauth_access_token: input.accessToken,
-            oauth_token_expires_at: expiresAt,
+            // Spread so `undefined` ⇒ omit field (preserve), but `null` ⇒ write NULL.
+            ...(expiresAtField !== undefined ? { oauth_token_expires_at: expiresAtField } : {}),
             ...(input.refreshToken != null ? { oauth_refresh_token: input.refreshToken } : {}),
             ...(input.clientId != null ? { oauth_client_id: input.clientId } : {}),
             ...(input.clientSecret != null ? { oauth_client_secret: input.clientSecret } : {}),
@@ -170,7 +194,11 @@ export class UserMCPOAuthTokenRepository {
           user_id: userId,
           mcp_server_id: serverId,
           oauth_access_token: input.accessToken,
-          oauth_token_expires_at: expiresAt,
+          // On insert, `null` and `undefined` both write a missing column
+          // (Drizzle treats `undefined` on insert as "use default", which for
+          // a nullable column is NULL). Coerce to `undefined` to keep the
+          // insert payload uniform regardless of which the caller passed.
+          oauth_token_expires_at: expiresAtField ?? undefined,
           oauth_refresh_token: input.refreshToken,
           oauth_client_id: input.clientId,
           oauth_client_secret: input.clientSecret,
