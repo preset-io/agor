@@ -72,7 +72,9 @@ describe('UsersService.getGitEnvironment — permission checks', () => {
       },
     };
 
-    await expect(service.getGitEnvironment({ userId: userB }, params)).rejects.toThrow(/Forbidden/);
+    await expect(service.getGitEnvironment({ userId: userB }, params)).rejects.toThrow(
+      /Cannot access another user's git environment/
+    );
   });
 
   dbTest('unauthenticated caller is rejected', async ({ db }) => {
