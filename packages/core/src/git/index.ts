@@ -273,6 +273,15 @@ function createGit(
     config,
     unsafe: {
       allowUnsafeSshCommand: true,
+      // Required because we set credential.helper in `config` above
+      // (empty-reset on the inheritance line, store-with-tempfile when a
+      // token is present). simple-git's guard exists to block shell-
+      // injection via untrusted helper values; ours are server-constructed
+      // (credPath comes from writeGitCredentialsFile, never user input).
+      // TODO: drop both credential.helper lines, switch to env-var-based
+      // http.extraheader (GIT_CONFIG_COUNT/KEY/VALUE), then this flag and
+      // the on-disk tempfile can both go.
+      allowUnsafeCredentialHelper: true,
     },
     spawnOptions: env
       ? ({
