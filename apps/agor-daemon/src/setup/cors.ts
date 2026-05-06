@@ -29,8 +29,16 @@ import type { CorsOptions } from 'cors';
 export type CorsOrigin = CorsOptions['origin'];
 
 export interface CorsConfigOptions {
-  /** UI port for localhost origins */
+  /** UI port for localhost origins (Vite dev server) */
   uiPort: number;
+  /**
+   * Daemon port. Must be in the localhost allow-list because in npm-installed
+   * deployments the daemon serves the UI from its own origin (e.g.
+   * `http://localhost:3030/ui/`), so same-origin XHR / Socket.io requests
+   * carry `Origin: http://localhost:<daemonPort>` and would otherwise be
+   * rejected by the cors() callback. Bug surfaced in 0.17.3 — see PR #1106.
+   */
+  daemonPort: number;
   /** Whether running in GitHub Codespaces */
   isCodespaces: boolean;
   /** Resolved CORS config (from `@agor/core/config` `resolveSecurity()`). */
@@ -106,10 +114,13 @@ function parseRegexPattern(entry: string): RegExp | null {
  * PNA, credential stripping, etc.
  */
 export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
-  const { uiPort, isCodespaces, resolved } = options;
+  const { uiPort, daemonPort, isCodespaces, resolved } = options;
 
-  // Support UI port and 3 additional ports (for parallel dev servers)
+  // Localhost allow-list:
+  //   - daemon port (npm-installed mode serves the UI from the daemon origin)
+  //   - UI port + 3 successors (Vite + parallel dev servers)
   const localhostOrigins = [
+    `http://localhost:${daemonPort}`,
     `http://localhost:${uiPort}`,
     `http://localhost:${uiPort + 1}`,
     `http://localhost:${uiPort + 2}`,
@@ -166,11 +177,11 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
   const exactOrigins = new Set(localhostOrigins);
   const patterns: RegExp[] = [];
 
-  // Tightened localhost regex: only the configured UI port range, not "any port".
-  // We accept both http and https for localhost so that operators terminating
-  // TLS in front of a local UI dev server still work.
-  const uiPortRange = [uiPort, uiPort + 1, uiPort + 2, uiPort + 3].join('|');
-  patterns.push(new RegExp(`^https?:\\/\\/localhost:(${uiPortRange})$`));
+  // Tightened localhost regex: only the daemon port + configured UI port range,
+  // not "any port". We accept both http and https for localhost so that
+  // operators terminating TLS in front of a local UI dev server still work.
+  const localhostPortRange = [daemonPort, uiPort, uiPort + 1, uiPort + 2, uiPort + 3].join('|');
+  patterns.push(new RegExp(`^https?:\\/\\/localhost:(${localhostPortRange})$`));
 
   // Sandpack/CodeSandbox bundler (on by default, configurable).
   if (resolved.allowSandpack) {

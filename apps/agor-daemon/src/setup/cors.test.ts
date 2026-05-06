@@ -26,6 +26,7 @@ describe('buildCorsConfig', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const result = buildCorsConfig({
       uiPort: 5173,
+      daemonPort: 3030,
       isCodespaces: false,
       resolved: resolve({}, { corsOriginEnv: '*' }),
     });
@@ -43,6 +44,7 @@ describe('buildCorsConfig', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const result = buildCorsConfig({
       uiPort: 5173,
+      daemonPort: 3030,
       isCodespaces: false,
       resolved: resolve({ security: { cors: { mode: 'wildcard', credentials: false } } }),
     });
@@ -57,6 +59,7 @@ describe('buildCorsConfig', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const result = buildCorsConfig({
       uiPort: 5173,
+      daemonPort: 3030,
       isCodespaces: false,
       resolved: resolve({ security: { cors: { mode: 'reflect', credentials: false } } }),
     });
@@ -68,6 +71,7 @@ describe('buildCorsConfig', () => {
   it('only allows the configured UI port range on localhost', () => {
     const result = buildCorsConfig({
       uiPort: 5173,
+      daemonPort: 3030,
       isCodespaces: false,
       resolved: resolve(),
     });
@@ -78,9 +82,32 @@ describe('buildCorsConfig', () => {
     expect(result.isAllowedOrigin('http://localhost:80')).toBe(false);
   });
 
+  // Regression: 0.17.3 npm-installed users got "Reconnecting to daemon" with
+  // a WS connection failure because the daemon serves the UI from its own
+  // port (3030) but only 5173-5176 were in the allow-list. PR #1106.
+  it('allows the daemon port itself on localhost (UI served from daemon origin)', () => {
+    const result = buildCorsConfig({
+      uiPort: 5173,
+      daemonPort: 3030,
+      isCodespaces: false,
+      resolved: resolve(),
+    });
+    expect(result.isAllowedOrigin('http://localhost:3030')).toBe(true);
+    // Honour a non-default daemon port too — operators routinely rebind.
+    const custom = buildCorsConfig({
+      uiPort: 5173,
+      daemonPort: 4040,
+      isCodespaces: false,
+      resolved: resolve(),
+    });
+    expect(custom.isAllowedOrigin('http://localhost:4040')).toBe(true);
+    expect(custom.isAllowedOrigin('http://localhost:3030')).toBe(false);
+  });
+
   it('treats Sandpack origins as accepted but not "allowed" for credentials', () => {
     const result = buildCorsConfig({
       uiPort: 5173,
+      daemonPort: 3030,
       isCodespaces: false,
       resolved: resolve({ security: { cors: { allow_sandpack: true } } }),
     });
@@ -93,6 +120,7 @@ describe('buildCorsConfig', () => {
   it('honours security.cors.origins with exact strings and regex patterns', () => {
     const result = buildCorsConfig({
       uiPort: 5173,
+      daemonPort: 3030,
       isCodespaces: false,
       resolved: resolve({
         security: {
@@ -110,6 +138,7 @@ describe('buildCorsConfig', () => {
   it('passes methods/allowedHeaders/maxAge through to cors() extraOptions', () => {
     const result = buildCorsConfig({
       uiPort: 5173,
+      daemonPort: 3030,
       isCodespaces: false,
       resolved: resolve({
         security: {
@@ -130,6 +159,7 @@ describe('buildCorsConfig', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const result = buildCorsConfig({
       uiPort: 5173,
+      daemonPort: 3030,
       isCodespaces: false,
       resolved: resolve({ security: { cors: { mode: 'null-origin' } } }),
     });

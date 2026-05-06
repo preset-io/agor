@@ -1,6 +1,6 @@
 {
   "name": "agor-live",
-  "version": "0.17.3",
+  "version": "0.17.4",
   "description": "Team command center for all things agentic — shared canvas for coding agents and assistants on isolated git worktrees, with real-time multiplayer and an MCP surface agents drive themselves.",
   "type": "module",
   "bin": {

@@ -281,6 +281,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     extraOptions: corsExtraOptions,
   } = buildCorsConfig({
     uiPort: UI_PORT,
+    daemonPort: DAEMON_PORT,
     isCodespaces: process.env.CODESPACES === 'true',
     resolved: resolvedSecurity.cors,
   });
