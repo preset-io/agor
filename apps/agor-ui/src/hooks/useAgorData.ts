@@ -934,6 +934,35 @@ export function useAgorData(
     };
     client.io.on('oauth:completed', handleOAuthCompleted);
 
+    // Mirror of `oauth:completed`: when a user disconnects OAuth from Settings,
+    // the daemon emits `oauth:disconnected` so every tab flips the pill to
+    // "needs auth" immediately instead of staying purple until the next page
+    // reload.
+    const handleOAuthDisconnected = async (event: { mcp_server_id: string }) => {
+      if (!event.mcp_server_id) return;
+      setUserAuthenticatedMcpServerIds((prev) => {
+        if (!prev.has(event.mcp_server_id)) return prev;
+        const next = new Set(prev);
+        next.delete(event.mcp_server_id);
+        return next;
+      });
+
+      // Refetch so `server.auth.oauth_access_token` is cleared in mcpServerById
+      // — without this, `mcpServerNeedsAuth` may still see the stale token and
+      // return false.
+      try {
+        const fresh = (await client.service('mcp-servers').get(event.mcp_server_id)) as MCPServer;
+        setMcpServerById((prev) => {
+          const next = new Map(prev);
+          next.set(fresh.mcp_server_id, fresh);
+          return next;
+        });
+      } catch (err) {
+        console.warn('[OAuth] Failed to refetch MCP server after disconnect:', err);
+      }
+    };
+    client.io.on('oauth:disconnected', handleOAuthDisconnected);
+
     // Re-fetch the global byId maps on every socket reconnect after the
     // initial mount. Feathers real-time events (`created`/`patched`/`removed`)
     // that fired while we were disconnected are gone — the daemon doesn't
@@ -976,6 +1005,7 @@ export function useAgorData(
     // Cleanup listeners on unmount
     return () => {
       client.io.off('oauth:completed', handleOAuthCompleted);
+      client.io.off('oauth:disconnected', handleOAuthDisconnected);
       client.io.off('connect', refetchSilently);
       window.removeEventListener(TOKENS_REFRESHED_EVENT, handleTokensRefreshed);
       sessionsService.removeListener('created', handleSessionCreated);

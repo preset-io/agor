@@ -1878,7 +1878,7 @@ async function registerMCPServices(
   app.use('/mcp-servers/oauth-disconnect', {
     async create(data: { mcp_server_id: string }, params?: AuthenticatedParams) {
       const { clearAuthCodeTokenCache } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
-      return performOAuthDisconnect({
+      const result = await performOAuthDisconnect({
         userId: params?.user?.user_id,
         mcpServerId: data.mcp_server_id,
         userTokenRepo: new UserMCPOAuthTokenRepository(db),
@@ -1886,6 +1886,16 @@ async function registerMCPServices(
         oauthTokenCache: oauth21TokenCache,
         clearCoreTokenCache: clearAuthCodeTokenCache,
       });
+
+      // Notify all of the user's tabs so the UI can flip pills to "needs auth"
+      // immediately — mirrors the additive `oauth:completed` event.
+      if (result.success && params?.user?.user_id) {
+        app.io
+          .to(userRoomName(params.user.user_id))
+          .emit('oauth:disconnected', { mcp_server_id: data.mcp_server_id });
+      }
+
+      return result;
     },
   });
   app.service('mcp-servers/oauth-disconnect').hooks({ before: { create: [ctx.requireAuth] } });
