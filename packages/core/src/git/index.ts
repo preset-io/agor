@@ -8,7 +8,6 @@
  * fresh Unix group memberships (groups are cached at login time).
  */
 
-import type { SpawnOptions } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
@@ -273,10 +272,7 @@ function createGit(
   ];
 
   // Auth header config goes through env vars so the token never lands on
-  // argv. buildAuthHeaderEnv returns [] if there's no usable token; in that
-  // case spawnOptions.env still gets the inheritance-kill vars when env is
-  // set, which is the path that fixes the "daemon's gh auth leaks to user X"
-  // bug.
+  // argv. buildAuthHeaderEnv returns [] when no usable token is supplied.
   const rawToken = env?.GITHUB_TOKEN ?? env?.GH_TOKEN;
   const authConfigEntries = buildAuthHeaderEnv(rawToken);
   if (authConfigEntries.length > 0) {
@@ -311,13 +307,28 @@ function createGit(
     config,
     unsafe: {
       allowUnsafeSshCommand: true,
+      // simple-git's vulnerability scanner blocks `GIT_CONFIG_GLOBAL` and
+      // `GIT_CONFIG_COUNT` env vars unless we opt in. Both are intentional
+      // here:
+      //   • GIT_CONFIG_GLOBAL=/dev/null kills inheritance from the daemon
+      //     user's ~/.gitconfig (the impersonation-model fix).
+      //   • GIT_CONFIG_COUNT/KEY_n/VALUE_n carries the http.extraheader auth
+      //     header off-argv (the whole point of this refactor).
+      // Without these flags simple-git refuses the spawn with a generic
+      // "use of GIT_CONFIG_* not permitted" error and our env path is dead.
+      allowUnsafeConfigPaths: true,
+      allowUnsafeConfigEnvCount: true,
     },
-    spawnOptions: spawnEnv
-      ? ({
-          env: spawnEnv as NodeJS.ProcessEnv,
-        } as unknown as Pick<SpawnOptions, 'uid' | 'gid'>)
-      : undefined,
   });
+
+  // simple-git's constructor `spawnOptions` is `Pick<SpawnOptions, 'uid' | 'gid'>`
+  // — it does NOT honour an `env` field there (silently ignored). The supported
+  // way to set env vars for the spawned git process is `git.env({...})`, which
+  // *replaces* the child's environment. We replace, not merge, so we keep full
+  // control over what reaches git (inheritance kill is the whole point).
+  if (spawnEnv) {
+    git.env(spawnEnv);
+  }
 
   return { git };
 }
