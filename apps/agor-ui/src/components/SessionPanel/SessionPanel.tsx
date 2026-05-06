@@ -1101,4 +1101,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   );
 };
 
-export default SessionPanel;
+// SessionPanel reads only entity-context data (users, MCP servers) and receives
+// session/worktree as props. Wrapping with React.memo (default shallow compare)
+// lets it bail out of re-renders triggered by App's live-context updates as
+// long as its props are referentially stable. Callers MUST pass stable
+// `onClose` and `sessionMcpServerIds` (use EMPTY_STRING_ARRAY for empty).
+export default React.memo(SessionPanel);

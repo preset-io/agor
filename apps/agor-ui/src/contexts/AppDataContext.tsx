@@ -1,33 +1,30 @@
-import type {
-  Board,
-  BoardComment,
-  BoardEntityObject,
-  MCPServer,
-  Repo,
-  Session,
-  User,
-  Worktree,
-} from '@agor-live/client';
+import type { MCPServer, Repo, Session, User, Worktree } from '@agor-live/client';
 import type React from 'react';
 import { createContext, useContext } from 'react';
 
 /**
  * App data is split into TWO contexts so that high-frequency mutations
- * (sessions / worktrees / boards / board-objects / comments) don't force
- * re-renders of consumers that only care about slow-moving entity data
- * (users, repos, MCP servers, OAuth status).
+ * (sessions / worktrees) don't force re-renders of consumers that only
+ * care about slow-moving entity data (users, repos, MCP servers, OAuth
+ * status).
  *
  * Before the split, a single `session:patched` event would mutate
  * `sessionById`, change the merged `appDataValue` reference, and cascade
  * a re-render through every `useAppData()` consumer — including
- * SessionPanel, which doesn't read sessions/worktrees/boards from context
- * at all. With the split, SessionPanel subscribes only to the entity
- * context and is insulated from streaming-driven session/board churn.
+ * SessionPanel, which doesn't read sessions/worktrees from context at all.
+ * With the split, SessionPanel subscribes only to the entity context and
+ * is insulated from streaming-driven session churn.
  *
  * - **AppEntityDataContext**: low-frequency, mostly user/admin-driven
- *   changes (users, repos, MCP servers, per-user OAuth state).
+ *   changes (users, repos, MCP servers).
  * - **AppLiveDataContext**: high-frequency, socket-driven changes
- *   (sessions, worktrees, boards, board-objects, comments).
+ *   (sessions, worktrees).
+ *
+ * Other live slices (boards/board-objects/comments, session-MCP links,
+ * cards, ...) are still threaded through props from the outer App.
+ * They're added here when an actual consumer needs them — kept tight on
+ * purpose so this file stays an honest description of what each context
+ * exposes (per code review feedback: don't ship unused fields).
  */
 
 export interface AppEntityDataContextValue {
@@ -39,7 +36,6 @@ export interface AppEntityDataContextValue {
 
   // MCP servers + per-user auth state (admin / OAuth flows)
   mcpServerById: Map<string, MCPServer>;
-  sessionMcpServerIds: Map<string, string[]>; // Session ID -> MCP server IDs
   userAuthenticatedMcpServerIds: Set<string>; // MCP server IDs where current user has valid per-user OAuth tokens
 }
 
@@ -48,11 +44,6 @@ export interface AppLiveDataContextValue {
   sessionById: Map<string, Session>;
   worktreeById: Map<string, Worktree>;
   sessionsByWorktree: Map<string, Session[]>; // Indexed for quick filtering
-
-  // Boards and spatial objects — patched on every drag / pin / comment
-  boardById: Map<string, Board>;
-  boardObjectById: Map<string, BoardEntityObject>;
-  commentById: Map<string, BoardComment>;
 }
 
 const AppEntityDataContext = createContext<AppEntityDataContextValue | undefined>(undefined);

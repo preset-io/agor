@@ -164,6 +164,11 @@ export interface AppProps {
   webTerminalEnabled?: boolean;
 }
 
+// Stable empty-array sentinel: keeps prop refs equal across renders for the
+// common no-MCP case so that downstream React.memo bailouts are not defeated.
+// Frozen at runtime; the consuming components only read it.
+const EMPTY_STRING_ARRAY: string[] = Object.freeze([] as string[]) as string[];
+
 export const App: React.FC<AppProps> = ({
   client,
   user,
@@ -441,6 +446,12 @@ export const App: React.FC<AppProps> = ({
     setSelectedCommentId((prev) => (prev === commentId ? null : commentId));
   }, []);
 
+  // Stable handler so SessionPanel's React.memo bailout isn't defeated by a
+  // fresh inline arrow on every App render (App re-renders on every live patch).
+  const handleCloseSessionPanel = useCallback(() => {
+    setSelectedSessionId(null);
+  }, []);
+
   const handleCloseTerminal = () => {
     setTerminalOpen(false);
     setTerminalCommands([]);
@@ -688,10 +699,9 @@ export const App: React.FC<AppProps> = ({
       repoById,
       userById,
       mcpServerById,
-      sessionMcpServerIds,
       userAuthenticatedMcpServerIds,
     }),
-    [repoById, userById, mcpServerById, sessionMcpServerIds, userAuthenticatedMcpServerIds]
+    [repoById, userById, mcpServerById, userAuthenticatedMcpServerIds]
   );
 
   const appLiveDataValue = useMemo(
@@ -699,11 +709,8 @@ export const App: React.FC<AppProps> = ({
       sessionById,
       worktreeById,
       sessionsByWorktree,
-      boardById,
-      boardObjectById,
-      commentById,
     }),
-    [sessionById, worktreeById, sessionsByWorktree, boardById, boardObjectById, commentById]
+    [sessionById, worktreeById, sessionsByWorktree]
   );
 
   // Web terminal is gated by both the instance-level feature flag and the
@@ -977,14 +984,11 @@ export const App: React.FC<AppProps> = ({
                               worktree={selectedSessionWorktree}
                               currentUserId={user?.user_id}
                               sessionMcpServerIds={
-                                effectiveSelectedSessionId
-                                  ? sessionMcpServerIds.get(effectiveSelectedSessionId) || []
-                                  : []
+                                sessionMcpServerIds.get(effectiveSelectedSessionId) ??
+                                EMPTY_STRING_ARRAY
                               }
                               open={!!effectiveSelectedSessionId}
-                              onClose={() => {
-                                setSelectedSessionId(null);
-                              }}
+                              onClose={handleCloseSessionPanel}
                             />
                           ) : (
                             <EventStreamPanel
