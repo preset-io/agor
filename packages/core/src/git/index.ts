@@ -141,6 +141,39 @@ export function buildWorktreeAddArgs(params: {
 }
 
 /**
+ * Env-var names that simple-git's vulnerability scanner refuses to spawn
+ * git with unless we explicitly opt in (and that we never legitimately
+ * need for clone / fetch / worktree-add / config read-write operations).
+ *
+ * Stripped before we hand `spawnEnv` to git so that whatever happens to be
+ * in the daemon's (or impersonated user's) `process.env` — `EDITOR=vim`
+ * inherited from a login shell, a stray `GIT_PAGER` from `.bashrc`, etc. —
+ * doesn't blow up the spawn with "Use of GIT_EDITOR is not permitted".
+ *
+ * The list mirrors `@simple-git/argv-parser`'s env-var → unsafe-flag map at
+ * `dist/index.mjs:389-408`. We intentionally do **not** strip:
+ *   - `GIT_SSH` / `GIT_SSH_COMMAND` — enterprise SSH wrappers (kerberos,
+ *     certificate-based auth) legitimately set these. We already opt in via
+ *     `allowUnsafeSshCommand` for our own `core.sshCommand` override.
+ *   - `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_SYSTEM` / `GIT_CONFIG_COUNT` /
+ *     `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n` — these are how we *inject*
+ *     config (ours, not the user's). Allowed via `allowUnsafeConfigPaths`
+ *     and `allowUnsafeConfigEnvCount`.
+ */
+const UNSAFE_ENV_VARS_TO_STRIP = [
+  'EDITOR',
+  'PAGER',
+  'GIT_EDITOR',
+  'GIT_PAGER',
+  'GIT_SEQUENCE_EDITOR',
+  'GIT_ASKPASS',
+  'SSH_ASKPASS',
+  'GIT_EXTERNAL_DIFF',
+  'GIT_TEMPLATE_DIR',
+  'GIT_PROXY_COMMAND',
+];
+
+/**
  * Default host used for `http.<URL>.extraheader` scope when an auth header
  * is being injected and a more specific host can't be derived (e.g. when a
  * caller doesn't supply a URL or repo path). github.com is the most common
@@ -148,7 +181,14 @@ export function buildWorktreeAddArgs(params: {
  *
  * In practice callers should always pass an explicit host derived from the
  * remote URL via {@link parseHostFromGitUrl} or {@link resolveAuthHost}, so
- * GitHub Enterprise / self-hosted GitLab / Bitbucket etc. work transparently.
+ * GitHub Enterprise and self-hosted GitLab work transparently.
+ *
+ * NOTE on Bitbucket Cloud: the auth-header *shape* this module emits
+ * (`Basic base64("x-access-token:<token>")`) is the GitHub/GitLab-compatible
+ * shape. Bitbucket Cloud expects a different username (`x-bitbucket-api-
+ * token-auth` for API tokens), so Bitbucket would need a per-host username
+ * mapping in {@link buildAuthHeaderEnv} to be fully supported. Tracking that
+ * as a separate enhancement rather than blocking this refactor.
  */
 const DEFAULT_AUTH_HEADER_HOST = 'github.com';
 
@@ -162,8 +202,8 @@ const DEFAULT_AUTH_HEADER_HOST = 'github.com';
  *
  * Returns the hostname (no port, no userinfo), or `undefined` when the URL
  * doesn't match any recognised shape. Used to scope `http.<URL>.extraheader`
- * to the right host so a GitHub Enterprise / GitLab / Bitbucket token isn't
- * silently widened to github.com (or vice versa).
+ * to the right host so a GitHub Enterprise / GitLab token isn't silently
+ * widened to github.com (or vice versa).
  */
 export function parseHostFromGitUrl(url: string): string | undefined {
   if (typeof url !== 'string' || url.length === 0) return undefined;
@@ -225,9 +265,20 @@ export function buildGitConfigEnv(entries: [string, string][]): Record<string, s
  * Build the `http.<scope>.extraheader=Authorization: Basic <b64>` config entry
  * for HTTPS git auth.
  *
- * GitHub accepts `Authorization: Basic base64("x-access-token:" + PAT)` for
- * HTTPS git operations. We scope per-host so the token is never sent to a
- * different origin (e.g. a malicious submodule pointing at attacker.com).
+ * Provider compatibility. The header shape is `Basic base64("x-access-token:"
+ * + PAT)`:
+ *   - **GitHub / GitHub Enterprise**: any username works with a PAT, so
+ *     `x-access-token` is fine.
+ *   - **GitLab (cloud + self-hosted)**: any non-blank username works with a
+ *     PAT, so `x-access-token` is fine.
+ *   - **Bitbucket Cloud**: requires the username `x-bitbucket-api-token-auth`
+ *     for API tokens (or the user's actual Bitbucket username for app
+ *     passwords). Not currently supported — would need a per-host username
+ *     map plumbed through here.
+ *
+ * Per-host scoping (via the `host` arg) prevents the token from reaching any
+ * origin other than the one it's bound to (e.g. a malicious submodule URL at
+ * attacker.com gets nothing).
  *
  * Returns an empty array when no token is supplied or the token fails the
  * shape check, so callers can spread the result unconditionally.
@@ -322,7 +373,7 @@ export function redactGitEnv(env: Record<string, string | undefined>): Record<st
  *                   or origin remote should derive this via
  *                   {@link parseHostFromGitUrl} or {@link resolveAuthHost}.
  */
-function createGit(
+export function createGit(
   baseDir?: string,
   env?: Record<string, string>,
   authHost?: string
@@ -365,6 +416,13 @@ function createGit(
       // via the env-var protocol so it never lands on argv.
       ...buildGitConfigEnv(authConfigEntries),
     } as Record<string, string>;
+
+    // Strip env vars simple-git's vulnerability scanner blocks and that
+    // we never need for non-interactive git ops. See
+    // UNSAFE_ENV_VARS_TO_STRIP for the rationale.
+    for (const name of UNSAFE_ENV_VARS_TO_STRIP) {
+      delete spawnEnv[name];
+    }
   }
 
   const git = simpleGit({
@@ -484,8 +542,9 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
   }
 
   // Create git instance with user env vars (SSH host key checking is always disabled).
-  // Derive the auth-header host from the clone URL so GitHub Enterprise / GitLab /
-  // self-hosted Bitbucket etc. work without per-deployment configuration.
+  // Derive the auth-header host from the clone URL so GitHub Enterprise and
+  // self-hosted GitLab work without per-deployment configuration. (Bitbucket
+  // Cloud needs a different username shape — see buildAuthHeaderEnv comments.)
   const authHost = parseHostFromGitUrl(cloneUrl);
   const { git } = createGit(undefined, options.env, authHost);
 

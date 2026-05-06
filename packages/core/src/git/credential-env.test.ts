@@ -11,10 +11,17 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { buildAuthHeaderEnv, buildGitConfigEnv, parseHostFromGitUrl, redactGitEnv } from './index';
+import {
+  buildAuthHeaderEnv,
+  buildGitConfigEnv,
+  createGit,
+  parseHostFromGitUrl,
+  redactGitEnv,
+} from './index';
 
 describe('buildGitConfigEnv', () => {
   it('returns an empty object for no entries (so callers can spread unconditionally)', () => {
@@ -245,5 +252,126 @@ describe('GIT_CONFIG_* env-var integration with real git', () => {
     // global config was effectively /dev/null.
     expect(result.status).toBe(1);
     expect(result.stdout.trim()).toBe('');
+  });
+});
+
+describe('createGit() end-to-end env propagation', () => {
+  // Regression test for the simple-git "spawnOptions.env silently dropped"
+  // footgun fixed in 88c7b0e6: simple-git's constructor `spawnOptions` is
+  // typed `Pick<SpawnOptions, 'uid' | 'gid'>` and quietly ignores any `env`
+  // field — so an earlier version of createGit() *thought* it was passing
+  // env vars to the spawned git, but git never received them, and clones
+  // hung on the "Username for 'https://github.com':" interactive prompt.
+  //
+  // Unlike the spawnSync-based tests above (which only prove that *raw* git
+  // honours GIT_CONFIG_*), this suite drives the real createGit() →
+  // simpleGit() → spawned git path and asserts the env-injected config is
+  // visible inside that spawned process. If the env path ever silently
+  // breaks again, these tests fail loudly instead of waiting for prod hangs.
+
+  // 30-char fake token shaped like a GitHub PAT — passes isLikelyGitToken's
+  // /^[A-Za-z0-9_-]{20,255}$/ check so buildAuthHeaderEnv emits a real
+  // header. Not a real credential.
+  const FAKE_TOKEN = 'ghp_AAAAAAAAAAAAAAAAAAAAAAAAAA';
+
+  function withTempRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
+    const repoPath = mkdtempSync(join(tmpdir(), 'agor-git-env-it-'));
+    const init = spawnSync('git', ['init', '-q', repoPath], { stdio: 'pipe' });
+    if (init.status !== 0) {
+      rmSync(repoPath, { recursive: true, force: true });
+      throw new Error(`git init failed: ${init.stderr?.toString()}`);
+    }
+    return fn(repoPath).finally(() => {
+      rmSync(repoPath, { recursive: true, force: true });
+    });
+  }
+
+  it('makes http.<host>.extraheader readable from the spawned git child (default github.com host)', async () => {
+    await withTempRepo(async (repoPath) => {
+      const { git } = createGit(repoPath, { GITHUB_TOKEN: FAKE_TOKEN });
+
+      // `git config --get` reads from the merged config view, which includes
+      // the GIT_CONFIG_COUNT/KEY_n/VALUE_n env vars. If createGit() failed
+      // to push those vars into the child, this returns empty.
+      const value = (
+        await git.raw(['config', '--get', 'http.https://github.com/.extraheader'])
+      ).trim();
+
+      const expectedB64 = Buffer.from(`x-access-token:${FAKE_TOKEN}`, 'utf8').toString('base64');
+      expect(value).toBe(`Authorization: Basic ${expectedB64}`);
+    });
+  });
+
+  it('honours an explicit authHost arg (GitHub Enterprise scoping)', async () => {
+    await withTempRepo(async (repoPath) => {
+      const { git } = createGit(repoPath, { GITHUB_TOKEN: FAKE_TOKEN }, 'github.acme.corp');
+
+      // The header lands on the enterprise host…
+      const enterprise = (
+        await git.raw(['config', '--get', 'http.https://github.acme.corp/.extraheader'])
+      ).trim();
+      expect(enterprise).toMatch(/^Authorization: Basic /);
+
+      // …and crucially does NOT also leak to github.com. `git config --get`
+      // of a missing key exits 1; simple-git surfaces that as an empty
+      // resolved value here.
+      const githubCom = (
+        await git.raw(['config', '--get', 'http.https://github.com/.extraheader'])
+      ).trim();
+      expect(githubCom).toBe('');
+    });
+  });
+
+  it('does not set any extraheader when no token is supplied', async () => {
+    await withTempRepo(async (repoPath) => {
+      // Pass an env (so the isolation block activates) but no token. The
+      // auth header must not appear — otherwise we'd be silently scoping a
+      // header that carries no credential.
+      const { git } = createGit(repoPath, { SOME_OTHER_VAR: 'x' });
+      const value = (
+        await git.raw(['config', '--get', 'http.https://github.com/.extraheader'])
+      ).trim();
+      expect(value).toBe('');
+    });
+  });
+
+  it('strips GIT_EDITOR (and similar) from spawnEnv so simple-git scanner does not reject', async () => {
+    // Regression test: simple-git's vulnerability scanner refuses to spawn
+    // git when env vars like GIT_EDITOR / GIT_PAGER / GIT_ASKPASS are set
+    // unless we opt in via `allowUnsafe*`. We chose to strip those from
+    // spawnEnv instead — which means a daemon process inheriting `EDITOR=
+    // vim` from a login shell must not break clones.
+    //
+    // Force GIT_EDITOR into process.env for this test, then confirm
+    // createGit() can still produce a working git that runs to completion.
+    const prev = process.env.GIT_EDITOR;
+    process.env.GIT_EDITOR = '/bin/false'; // would be lethal if it leaked through
+    try {
+      await withTempRepo(async (repoPath) => {
+        const { git } = createGit(repoPath, { GITHUB_TOKEN: FAKE_TOKEN });
+        // If GIT_EDITOR weren't stripped, simple-git's scanner would throw
+        // before spawn ("Use of GIT_EDITOR is not permitted...").
+        const value = (
+          await git.raw(['config', '--get', 'http.https://github.com/.extraheader'])
+        ).trim();
+        expect(value).toMatch(/^Authorization: Basic /);
+      });
+    } finally {
+      if (prev === undefined) delete process.env.GIT_EDITOR;
+      else process.env.GIT_EDITOR = prev;
+    }
+  });
+
+  it('GIT_CONFIG_GLOBAL=/dev/null isolation reaches the spawned git', async () => {
+    // Sanity check the inheritance kill survives the simple-git pipeline:
+    // anything in the daemon user's ~/.gitconfig must not appear via
+    // `git config --global --get`.
+    await withTempRepo(async (repoPath) => {
+      const { git } = createGit(repoPath, { GITHUB_TOKEN: FAKE_TOKEN });
+      // user.email is the canonical thing a daemon user is likely to have
+      // set globally; confirm it's invisible here.
+      const value = (await git.raw(['config', '--global', '--get', 'user.email'])).trim();
+      expect(value).toBe('');
+    });
   });
 });
