@@ -21,7 +21,7 @@ import type {
   Worktree,
 } from '@agor-live/client';
 import { PAGINATION } from '@agor-live/client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 interface UseAgorDataResult {
   sessionById: Map<string, Session>; // O(1) lookups by session_id - efficient, stable references
@@ -80,9 +80,19 @@ export function useAgorData(
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Track if we've done initial fetch - prevents refetch on reconnection
-  // WebSocket events keep data synchronized in real-time
+  // Track if we've done initial fetch. The initial fetch happens once on mount;
+  // socket reconnects after that re-trigger fetchData() to recover any events
+  // that fired while disconnected (Feathers real-time events are fire-and-forget
+  // — there's no replay log, so a reconnect with no re-fetch leaves the byId
+  // maps stale until manual page refresh).
   const [hasInitiallyFetched, setHasInitiallyFetched] = useState(false);
+
+  // Single-flight guard for reconnect-triggered refetches. Prevents stampedes
+  // when the socket flaps (e.g. waking from sleep on a flaky network) — the
+  // around-hook on the socket client already single-flights the underlying
+  // auth refresh, but we also don't want to issue 14 parallel service calls
+  // multiple times in a row.
+  const refetchInflightRef = useRef(false);
 
   // Fetch all data
   const fetchData = useCallback(async () => {
@@ -881,9 +891,32 @@ export function useAgorData(
     };
     client.io.on('oauth:completed', handleOAuthCompleted);
 
+    // Re-fetch the global byId maps on every socket reconnect after the
+    // initial mount. Feathers real-time events (`created`/`patched`/`removed`)
+    // that fired while we were disconnected are gone — the daemon doesn't
+    // keep a per-subscriber replay log — so without this, the app keeps
+    // showing stale state (vanished worktrees still on the board, missed new
+    // sessions, etc.) until the user refreshes the page.
+    //
+    // We skip the very first connect: the initial fetch above (gated on
+    // `hasInitiallyFetched`) is already running or has just completed, and
+    // re-running it would just be wasted bandwidth at startup.
+    const handleReconnect = async () => {
+      if (!hasInitiallyFetched) return;
+      if (refetchInflightRef.current) return;
+      refetchInflightRef.current = true;
+      try {
+        await fetchData();
+      } finally {
+        refetchInflightRef.current = false;
+      }
+    };
+    client.io.on('connect', handleReconnect);
+
     // Cleanup listeners on unmount
     return () => {
       client.io.off('oauth:completed', handleOAuthCompleted);
+      client.io.off('connect', handleReconnect);
       sessionsService.removeListener('created', handleSessionCreated);
       sessionsService.removeListener('patched', handleSessionPatched);
       sessionsService.removeListener('updated', handleSessionPatched);

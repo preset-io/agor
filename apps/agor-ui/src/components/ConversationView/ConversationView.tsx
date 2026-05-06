@@ -20,7 +20,7 @@ import type {
 } from '@agor-live/client';
 import { TaskStatus } from '@agor-live/client';
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
-import { Alert, Spin, Typography, theme } from 'antd';
+import { Alert, Button, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useCopyToClipboard } from '../../utils/clipboard';
@@ -214,6 +214,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     const allStreamingMessages = reactiveState?.streamingMessages || EMPTY_STREAMING_MESSAGES;
     const loading = reactiveState ? reactiveState.loading : !!sessionId;
     const error = reactiveState?.error || null;
+    const [isReloading, setIsReloading] = useState(false);
 
     // Store previous task maps to maintain stable references
     const prevTaskMapsRef = useRef<Map<string, Map<MessageID, StreamingMessageState>>>(new Map());
@@ -316,8 +317,36 @@ export const ConversationView = React.memo<ConversationViewProps>(
     }, [allStreamingMessages, tasks]);
 
     if (error) {
+      // Deterministic escape hatch when auto-recovery (socket-reconnect resync,
+      // TOKENS_REFRESHED_EVENT listener, visibility-change listener in
+      // useSharedReactiveSession) didn't catch the error — e.g. the user
+      // returns hours later and the only signal we'd otherwise act on was the
+      // socket `connect` event that already happened with stale auth.
       return (
-        <Alert type="error" message="Failed to load conversation" description={error} showIcon />
+        <Alert
+          type="error"
+          message="Failed to load conversation"
+          description={error}
+          showIcon
+          action={
+            reactiveSession ? (
+              <Button
+                size="small"
+                loading={isReloading}
+                onClick={async () => {
+                  setIsReloading(true);
+                  try {
+                    await reactiveSession.resync();
+                  } finally {
+                    setIsReloading(false);
+                  }
+                }}
+              >
+                Reload
+              </Button>
+            ) : undefined
+          }
+        />
       );
     }
 

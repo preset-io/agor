@@ -807,7 +807,21 @@ export class ReactiveSessionHandle {
     );
   }
 
-  private async resync(): Promise<void> {
+  /**
+   * Re-fetch session/tasks/queue (and loaded message buckets) from the daemon.
+   *
+   * Called automatically on socket `connect` events (line ~363) so a reconnect
+   * after sleep / network drop pulls fresh DB state. Also exposed publicly so
+   * the UI can re-trigger hydration manually — e.g. a "Reload" button on the
+   * conversation panel's error banner, or a `visibilitychange` / token-refresh
+   * listener that wants to recover from a sticky error without forcing the
+   * user to refresh the tab.
+   *
+   * Errors land in `state.error`; success clears it. Safe to call concurrently
+   * — the underlying service calls are idempotent reads, and the around-hook
+   * on the socket client single-flights the auth refresh.
+   */
+  async resync(): Promise<void> {
     if (this.disposed) return;
     try {
       const [session, tasks, queueResult] = await Promise.all([

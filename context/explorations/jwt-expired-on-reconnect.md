@@ -1,6 +1,6 @@
 # `Failed to load conversation: jwt expired` after disconnect/reconnect
 
-**Status:** analysis only — no code changes in this PR.
+**Status:** **implemented in this PR** (commits on `analyze-jwt-expired-on-reconnect`). The doc below was the analysis that motivated the fix; §9 records what shipped.
 
 After the laptop sleeps, the network drops, or the tab is backgrounded long
 enough for the access token to expire, the conversation panel sometimes
@@ -477,6 +477,70 @@ These were noticed during investigation but are out of scope:
   presence.** If `accessTokenRef` is null on first mount, `bootstrap()`
   runs anyway and 401s. Probably safe today (panel is gated on auth
   upstream), but worth verifying with an `enabled: !!token` predicate.
+
+---
+
+## 9. What shipped in this PR
+
+The recommendation in §6 was implemented along with a parallel fix for the
+*global* byId state (the `useAgorData` hub), which had the same kind of
+"events fired while disconnected are gone" problem at app scope.
+
+### Conversation panel (the original symptom)
+
+- `packages/client/src/reactive-session.ts` — `resync()` made public so the
+  UI can re-trigger hydration without spoofing a socket event. Behavior
+  unchanged; only the access modifier and JSDoc.
+- `apps/agor-ui/src/hooks/useSharedReactiveSession.ts` — added a second
+  `useEffect` that, while `state.error` is non-null, calls `handle.resync()`
+  in response to:
+  - `document` `visibilitychange` → `visible` (tab refocus after long
+    background)
+  - `window` `TOKENS_REFRESHED_EVENT` (proactive refresh in `useAuth`
+    succeeded — clear any stale error that a prior `resync()` had latched)
+
+  Inflight ref guards against re-entrancy when both events fire close
+  together (typical on tab wake).
+- `apps/agor-ui/src/components/ConversationView/ConversationView.tsx` —
+  the static error `<Alert>` now exposes a "Reload" action button that
+  calls `reactiveSession.resync()`. Deterministic escape hatch for
+  cases where automatic recovery doesn't fire (e.g. user returns hours
+  later and the only signal we'd otherwise act on was the `connect`
+  event that already happened with stale auth).
+
+### Global byId state (parallel fix in the same PR)
+
+`useAgorData` was the obvious "global state" surface the user identified —
+15 byId Maps centralized in one hook, exposed via `AppDataContext`. It had
+an explicit comment (`// WebSocket events keep data synchronized in
+real-time`) that was wrong on reconnect: events fired while disconnected
+are not replayable.
+
+- `apps/agor-ui/src/hooks/useAgorData.ts` — added a
+  `client.io.on('connect', handleReconnect)` inside the existing event-
+  listener `useEffect`. After the initial fetch, every reconnect re-runs
+  `fetchData()` (the same 14-service `Promise.all` page-load uses).
+  Single-flighted via a ref so a flapping socket doesn't stampede.
+
+### Pitfalls flagged but deliberately not addressed
+
+- `Promise.all` in `fetchData()` and `resync()` is fail-fast. If one
+  service genuinely fails (auth-retry exhausted, daemon partial failure)
+  the whole rehydrate is aborted and existing maps are preserved. This
+  matches today's *page-load* failure mode, so we're not regressing —
+  but a partial failure on reconnect is more likely than at page load.
+  `Promise.allSettled` + per-Map error handling is a worthwhile follow-up
+  if it becomes painful in practice.
+- Cross-tab refresh-token rotation race in `singleFlightRefresh.ts`
+  (per-tab single-flight, not cross-tab) is unchanged. Use a
+  `BroadcastChannel('agor-auth')` if multi-tab users start hitting it.
+- The transient-error retry inside `resync()` was *not* added — doing so
+  would have required moving `isTransientConnectionError` from
+  `apps/agor-ui` into `packages/client`, a cross-layer dependency we'd
+  rather not introduce. The visibility / tokens-refreshed listeners
+  cover most of the same cases without that import.
+- REST-client around-hook is still socket-only. Acceptable; the
+  conversation panel and `useAgorData` both use the socket client.
 
 ---
 

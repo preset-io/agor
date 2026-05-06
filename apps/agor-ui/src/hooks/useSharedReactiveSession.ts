@@ -6,7 +6,8 @@ import {
   releaseReactiveSession,
   retainReactiveSession,
 } from '@agor-live/client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 
 interface UseSharedReactiveSessionOptions {
   enabled?: boolean;
@@ -55,6 +56,57 @@ export function useSharedReactiveSession(
       releaseReactiveSession(client, sessionId, { taskHydration });
     };
   }, [client, sessionId, enabled, taskHydration]);
+
+  // Re-trigger resync() when an external signal suggests our error state may
+  // be stale. The reactive session itself only resyncs on socket `connect`
+  // events — but auth-recovery happens on other channels too:
+  //
+  // - The proactive token-refresh timer in useAuth fires `TOKENS_REFRESHED_EVENT`
+  //   after a successful refresh that the panel didn't trigger.
+  // - When a tab regains focus after a long background, useAuth's
+  //   visibilitychange handler may have refreshed tokens silently.
+  //
+  // Without these listeners, a transient 401 surfaced during a previous
+  // `resync()` (e.g. socket reconnected before the access-token refresh
+  // landed) leaves the panel stuck on a "jwt expired" banner indefinitely.
+  // We only retry while `state.error` is set, so a healthy panel doesn't
+  // re-fetch on every focus change.
+  //
+  // The inflight ref guards against concurrent re-triggers when both events
+  // fire close together (visibilitychange often coincides with token refresh
+  // on tab wake-up). The around-hook on the socket client already
+  // single-flights the auth refresh itself; this just avoids redundant
+  // state churn.
+  const inflightRef = useRef(false);
+  useEffect(() => {
+    if (!handle) return;
+
+    const tryResync = async () => {
+      if (inflightRef.current) return;
+      if (!handle.state.error) return;
+      inflightRef.current = true;
+      try {
+        await handle.resync();
+      } finally {
+        inflightRef.current = false;
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void tryResync();
+    };
+    const onTokensRefreshed = () => {
+      void tryResync();
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener(TOKENS_REFRESHED_EVENT, onTokensRefreshed);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener(TOKENS_REFRESHED_EVENT, onTokensRefreshed);
+    };
+  }, [handle]);
 
   return { handle, state };
 }
