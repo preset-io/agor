@@ -143,11 +143,10 @@ export function buildWorktreeAddArgs(params: {
 
 /**
  * Default host used for `http.<URL>.extraheader` scope when an auth header
- * is being injected. The full set of token-aware code paths in this module
- * (URL injection in {@link cloneRepo}, this auth-header builder) only
- * recognises GitHub HTTPS, so scoping the header to github.com matches the
- * existing trust boundary and prevents the token from leaking to submodule
- * URLs at attacker-controlled hosts.
+ * is being injected. Token-aware code in this module only recognises GitHub
+ * HTTPS today, so scoping the header to github.com matches the existing
+ * trust boundary and prevents the token from leaking to submodule URLs at
+ * attacker-controlled hosts.
  */
 const DEFAULT_AUTH_HEADER_HOST = 'github.com';
 
@@ -191,9 +190,10 @@ export function buildAuthHeaderEnv(
 ): [string, string][] {
   if (!token) return [];
   if (!isLikelyGitToken(token)) {
-    // Don't embed unknown-shape tokens — log + fall back to URL-injected creds
-    // (cloneRepo handles that path) rather than risk passing a malformed value
-    // to git via an env var.
+    // Don't embed unknown-shape tokens — refuse rather than risk passing a
+    // malformed value to git via an env var. Without an auth header, the clone
+    // will fail loudly for private repos, which is preferable to silently
+    // emitting a corrupted credential.
     console.warn(
       '🔑 Skipping http.extraheader: token does not match expected shape. ' +
         'Tokens must match /^[A-Za-z0-9_-]{20,255}$/. ' +
@@ -366,36 +366,17 @@ export function extractRepoName(url: string): string {
  * Clone a Git repository to ~/.agor/repos/<name>
  */
 export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
-  let cloneUrl = options.url;
+  const cloneUrl = options.url;
 
   const repoName = extractRepoName(cloneUrl);
   const reposDir = getReposDir();
   const targetPath = options.targetDir || join(reposDir, repoName);
 
-  // Inject token into URL for reliability (credential helper is also configured as backup).
-  //
-  // SECURITY: the token is interpolated into a URL's userinfo component. Any
-  // `@`, `/`, `:`, `#`, `?`, whitespace, or control character in the token
-  // would either change which host git connects to or break the URL parser.
-  // We also shape-check the token with `isLikelyGitToken` so we never emit a
-  // URL containing attacker-shaped bytes — and we percent-encode the value as
-  // belt-and-braces.
-  const rawToken = options.env?.GITHUB_TOKEN || options.env?.GH_TOKEN;
-  const tokenSource = options.env?.GITHUB_TOKEN ? 'GITHUB_TOKEN' : 'GH_TOKEN';
-  if (rawToken && cloneUrl.startsWith('https://github.com/')) {
-    if (!isLikelyGitToken(rawToken)) {
-      console.warn(
-        `🔑 Skipping ${tokenSource} URL injection: value does not match expected token shape`
-      );
-    } else {
-      const encodedToken = encodeURIComponent(rawToken);
-      cloneUrl = cloneUrl.replace(
-        'https://github.com/',
-        `https://x-access-token:${encodedToken}@github.com/`
-      );
-      console.debug(`🔑 Injected ${tokenSource} into URL`);
-    }
-  }
+  // Auth is delivered exclusively via the `http.<host>.extraheader` env-var
+  // path configured by `createGit`. We deliberately do NOT splice the token
+  // into the clone URL: doing so puts the credential on the child process's
+  // argv (visible via `ps` / `/proc/<pid>/cmdline` to anyone on the host),
+  // which is exactly the leak this refactor exists to close. See PR #1103.
 
   // Ensure repos directory exists
   await mkdir(reposDir, { recursive: true });
@@ -436,7 +417,7 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
     });
   }
 
-  // Clone the repo using the URL (potentially with injected token)
+  // Clone using the original URL — auth is supplied via http.extraheader env vars.
   console.log(`Cloning ${options.url} to ${targetPath}...`);
   await git.clone(cloneUrl, targetPath, options.bare ? ['--bare'] : []);
 
@@ -706,9 +687,16 @@ export async function createWorktree(
 
   // Add worktree to safe.directory to prevent "dubious ownership" errors
   // This is needed when worktrees are owned by a different user (e.g., daemon user)
-  // but accessed by other users (e.g., in multi-user Linux environments)
+  // but accessed by other users (e.g., in multi-user Linux environments).
+  //
+  // IMPORTANT: do NOT pass the user `env` here. `createGit(_, env)` activates
+  // the impersonation isolation block (`GIT_CONFIG_GLOBAL=/dev/null`), and
+  // `addConfig(..., 'global')` writes to whatever `GIT_CONFIG_GLOBAL` points
+  // at — git would try to lock `/dev/null` and fail with permission denied.
+  // The safe.directory entry belongs in the daemon user's real `~/.gitconfig`
+  // so daemon-side git ops (which do not load /dev/null) can find it.
   try {
-    const { git: safeDirGit } = createGit(worktreePath, env);
+    const { git: safeDirGit } = createGit(worktreePath);
     await safeDirGit.addConfig('safe.directory', worktreePath, true, 'global');
     console.log(`✅ Added ${worktreePath} to git safe.directory`);
   } catch (error) {

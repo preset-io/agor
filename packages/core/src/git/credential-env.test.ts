@@ -11,6 +11,8 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { buildAuthHeaderEnv, buildGitConfigEnv, redactGitEnv } from './index';
 
@@ -49,7 +51,7 @@ describe('buildAuthHeaderEnv', () => {
     expect(buildAuthHeaderEnv('')).toEqual([]);
   });
 
-  it('returns [] for malformed tokens — fall back to URL-injected creds path', () => {
+  it('returns [] for malformed tokens (fail loud rather than emit a corrupt header)', () => {
     // Quiet the warn so vitest output stays clean
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     expect(buildAuthHeaderEnv('not a token; rm -rf /')).toEqual([]);
@@ -148,6 +150,27 @@ describe('GIT_CONFIG_* env-var integration with real git', () => {
     });
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe('Authorization: Basic dG9wOnNlY3JldA==');
+  });
+
+  it('cloneRepo source contains no token-in-URL splicing (argv leak tripwire)', () => {
+    // The whole point of the env-var refactor (PR #1103) is to keep tokens
+    // off argv. The legacy approach interpolated the PAT into the clone URL
+    // as `https://x-access-token:<PAT>@github.com/...`, which leaks via
+    // `ps` / `/proc/<pid>/cmdline` for any user on the host while git is
+    // running.
+    //
+    // This is a source-level tripwire: if a future commit re-introduces the
+    // URL-rewrite path, this assertion fires and the author has to either
+    // pick a non-argv-leaking mechanism (env vars, stdin, credential helper
+    // pointing at a temp file) OR explicitly delete this assertion with a
+    // justification in the diff. Either way, the change becomes visible.
+    const src = readFileSync(join(__dirname, 'index.ts'), 'utf8');
+    expect(src).not.toMatch(/x-access-token:[^@\s]*@/);
+    // Defence-in-depth: also forbid any string assembly producing
+    // `<userinfo>@github.com/...` from a token variable. This is a coarser
+    // grep — it's fine for it to flag false positives because the right
+    // answer is then to use env-var-based auth and remove the construction.
+    expect(src).not.toMatch(/`https:\/\/\$\{[^}]*token[^}]*\}@/i);
   });
 
   it('GIT_CONFIG_GLOBAL=/dev/null hides the daemon user gitconfig from git', () => {
