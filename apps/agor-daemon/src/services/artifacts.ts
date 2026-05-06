@@ -902,7 +902,14 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     // proxy URLs surfaced to artifacts (`agor.proxies.<vendor>.url`) match
     // what `agor_proxies_list` returns and respect AGOR_BASE_URL /
     // daemon.base_url overrides for deployed instances.
+    //
+    // Take the .origin only (scheme + host + port) — the proxy mount lives
+    // at /proxies/<vendor> on the daemon root, NOT under whatever path the
+    // configured base URL points at (e.g. AGOR_BASE_URL=https://host/ui
+    // would otherwise produce https://host/ui/proxies/<vendor>, which hits
+    // the SPA shell instead of the proxy). Mirrors mcp/tools/proxies.ts.
     const daemonUrl = await getBaseUrl();
+    const daemonOrigin = new URL(daemonUrl).origin;
 
     // Resolve board slug for template context
     const board = await this.boardRepo.findById(artifact.board_id);
@@ -921,7 +928,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       const proxies = resolveProxies(config);
       for (const p of proxies) {
         proxiesContext[p.vendor] = {
-          url: `${daemonUrl.replace(/\/$/, '')}/proxies/${p.vendor}`,
+          url: `${daemonOrigin}/proxies/${p.vendor}`,
           upstream: p.upstream,
           allowed_methods: [...p.allowed_methods],
         };
