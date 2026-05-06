@@ -72,19 +72,31 @@ jobs:
 
       # Use `pnpm pack` (not `npm pack`) so workspace:* refs are rewritten
       # to concrete semver — same transform `pnpm publish` does.
-      - name: Pack tarball
+      #
+      # We pack BOTH agor-live and its sibling @agor-live/client. agor-live's
+      # manifest declares "@agor-live/client": "<exact version>", and that
+      # version doesn't exist on the npm registry yet (the whole point of
+      # this smoke test is to validate before publishing). Installing both
+      # tarballs in a single `npm install` lets npm satisfy the sibling
+      # dep locally — zero registry hits.
+      - name: Pack tarballs (agor-live + @agor-live/client)
         id: pack
         run: |
           set -euo pipefail
-          cd packages/agor-live
-          pnpm pack --pack-destination "$RUNNER_TEMP" 2>&1 | tee pack.log
-          TARBALL=$(ls "$RUNNER_TEMP"/agor-live-*.tgz | head -1)
-          if [ -z "$TARBALL" ]; then
-            echo "::error::pnpm pack produced no tarball"
+          pnpm pack -C packages/client    --pack-destination "$RUNNER_TEMP"
+          pnpm pack -C packages/agor-live --pack-destination "$RUNNER_TEMP"
+          CLIENT=$(ls "$RUNNER_TEMP"/agor-live-client-*.tgz | head -1)
+          LIVE=$(ls "$RUNNER_TEMP"/agor-live-[0-9]*.tgz | head -1)
+          if [ -z "$CLIENT" ] || [ -z "$LIVE" ]; then
+            echo "::error::pnpm pack produced incomplete tarballs"
+            ls "$RUNNER_TEMP"
             exit 1
           fi
-          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
-          echo "Packed: $TARBALL"
+          echo "client=$CLIENT" >> "$GITHUB_OUTPUT"
+          echo "live=$LIVE" >> "$GITHUB_OUTPUT"
+          echo "Packed:"
+          echo "  client: $CLIENT"
+          echo "  live:   $LIVE"
 
       # The single grep that would have caught agor-live@0.17.1.
       # If this ever fails, someone packed/published with a tool that
@@ -93,7 +105,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/inspect"
-          tar -xzf "${{ steps.pack.outputs.tarball }}" -C "$RUNNER_TEMP/inspect"
+          tar -xzf "${{ steps.pack.outputs.live }}" -C "$RUNNER_TEMP/inspect"
           MANIFEST="$RUNNER_TEMP/inspect/package/package.json"
           echo "=== Packed manifest deps ==="
           node -e "const p=require('$MANIFEST'); console.log(JSON.stringify({d:p.dependencies,pd:p.peerDependencies,od:p.optionalDependencies},null,2))"
@@ -105,14 +117,19 @@ jobs:
           fi
           echo "✓ No workspace:* refs in packed manifest"
 
-      - name: Install tarball in a clean project
+      # Install BOTH tarballs together. List the client first so npm registers
+      # it before resolving agor-live's "@agor-live/client" dep — guarantees
+      # the local file: source wins over the (non-existent) registry version.
+      - name: Install tarballs in a clean project
         id: install
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/smoke-install"
           cd "$RUNNER_TEMP/smoke-install"
           npm init -y >/dev/null
-          npm install --no-fund --no-audit "${{ steps.pack.outputs.tarball }}"
+          npm install --no-fund --no-audit \
+            "${{ steps.pack.outputs.client }}" \
+            "${{ steps.pack.outputs.live }}"
           echo "=== Installed dist/ ==="
           ls node_modules/agor-live/dist
           echo "=== Postinstall artifact (@agor/core symlink) ==="
