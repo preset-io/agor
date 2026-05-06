@@ -29,7 +29,6 @@ import {
   ZoomInOutlined,
 } from '@ant-design/icons';
 import { Button, Input, Modal, Popover, Slider, Tooltip, Typography, theme } from 'antd';
-import Handlebars from 'handlebars';
 import React, {
   forwardRef,
   useCallback,
@@ -91,8 +90,6 @@ import {
   relativeToAbsolute,
 } from './canvas/utils/coordinateTransforms';
 import { ZoneTriggerModal } from './canvas/ZoneTriggerModal';
-
-const { Paragraph } = Typography;
 
 interface SessionCanvasProps {
   board: Board | null;
@@ -417,14 +414,6 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     } | null>(null);
     const [markdownContent, setMarkdownContent] = useState('');
     const [markdownWidth, setMarkdownWidth] = useState(500); // Default width
-
-    // Trigger confirmation modal state
-    const [triggerModal, setTriggerModal] = useState<{
-      sessionId: string;
-      zoneName: string;
-      trigger: ZoneTrigger;
-      pinData: { x: number; y: number; parentId: string };
-    } | null>(null);
 
     // Worktree zone trigger modal state
     const [worktreeTriggerModal, setWorktreeTriggerModal] = useState<{
@@ -2560,168 +2549,6 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             />
           </Popover>
         )}
-
-        {/* Trigger confirmation modal */}
-        {triggerModal &&
-          (() => {
-            // Pre-render the template for display in modal
-            const session = sessionById.get(triggerModal.sessionId);
-            let renderedPromptPreview = triggerModal.trigger.template;
-
-            if (session) {
-              try {
-                // Lookup worktree data for this session
-                const worktree = worktrees.find((wt) => wt.worktree_id === session.worktree_id);
-
-                const context = {
-                  session: {
-                    description: session.description || '',
-                    context: session.custom_context || {},
-                  },
-                  board: {
-                    name: board?.name || '',
-                    description: board?.description || '',
-                    context: board?.custom_context || {},
-                  },
-                  worktree: worktree
-                    ? {
-                        name: worktree.name || '',
-                        ref: worktree.ref || '',
-                        issue_url: worktree.issue_url || '',
-                        pull_request_url: worktree.pull_request_url || '',
-                        notes: worktree.notes || '',
-                        path: worktree.path || '',
-                        context: worktree.custom_context || {},
-                      }
-                    : {
-                        name: '',
-                        ref: '',
-                        issue_url: '',
-                        pull_request_url: '',
-                        notes: '',
-                        path: '',
-                        context: {},
-                      },
-                };
-                const template = Handlebars.compile(triggerModal.trigger.template);
-                renderedPromptPreview = template(context);
-              } catch (error) {
-                console.error('Template render error for preview:', error);
-                // Fall back to raw text
-              }
-            }
-
-            return (
-              <Modal
-                title={`Execute Trigger for "${triggerModal.zoneName}"?`}
-                open={true}
-                onOk={async () => {
-                  if (!client) {
-                    console.error('❌ Cannot execute trigger: client not available');
-                    setTriggerModal(null);
-                    return;
-                  }
-
-                  try {
-                    const { sessionId, trigger } = triggerModal;
-
-                    // Find the session to get its data for Handlebars context
-                    const session = sessionById.get(sessionId);
-                    if (!session) {
-                      console.error('❌ Session not found:', sessionId);
-                      setTriggerModal(null);
-                      return;
-                    }
-
-                    // Lookup worktree data for this session
-                    const worktree = worktrees.find((wt) => wt.worktree_id === session.worktree_id);
-
-                    // Build Handlebars context from session, board, and worktree data
-                    const context = {
-                      session: {
-                        description: session.description || '',
-                        // User-defined custom context
-                        context: session.custom_context || {},
-                      },
-                      board: {
-                        name: board?.name || '',
-                        description: board?.description || '',
-                        context: board?.custom_context || {},
-                      },
-                      worktree: worktree
-                        ? {
-                            name: worktree.name || '',
-                            ref: worktree.ref || '',
-                            issue_url: worktree.issue_url || '',
-                            pull_request_url: worktree.pull_request_url || '',
-                            notes: worktree.notes || '',
-                            path: worktree.path || '',
-                            context: worktree.custom_context || {},
-                          }
-                        : {
-                            name: '',
-                            ref: '',
-                            issue_url: '',
-                            pull_request_url: '',
-                            notes: '',
-                            path: '',
-                            context: {},
-                          },
-                    };
-
-                    // Render template with Handlebars
-                    let renderedPrompt: string;
-                    try {
-                      const template = Handlebars.compile(trigger.template);
-                      renderedPrompt = template(context);
-                    } catch (templateError) {
-                      console.error('❌ Handlebars template error:', templateError);
-                      // Fallback to raw template if template fails
-                      renderedPrompt = trigger.template;
-                    }
-
-                    // Send rendered prompt to session
-                    await client.sessions.prompt(sessionId, renderedPrompt, {
-                      messageSource: 'agor',
-                    });
-                  } catch (error) {
-                    console.error('❌ Failed to execute trigger:', error);
-                  } finally {
-                    setTriggerModal(null);
-                  }
-                }}
-                onCancel={() => {
-                  setTriggerModal(null);
-                }}
-                okText="Yes, Execute"
-                cancelText="No, Skip"
-              >
-                <Paragraph>
-                  The session has been pinned to{' '}
-                  <Typography.Text strong>{triggerModal.zoneName}</Typography.Text>.
-                </Paragraph>
-                <Paragraph>
-                  This zone has a{' '}
-                  <Typography.Text strong>{triggerModal.trigger.behavior}</Typography.Text> trigger
-                  configured:
-                </Paragraph>
-                <Paragraph
-                  code
-                  style={{
-                    whiteSpace: 'pre-wrap',
-                    background: '#1f1f1f',
-                    padding: '12px',
-                    borderRadius: '4px',
-                  }}
-                >
-                  {renderedPromptPreview}
-                </Paragraph>
-                <Paragraph type="secondary">
-                  Would you like to execute this trigger for the session now?
-                </Paragraph>
-              </Modal>
-            );
-          })()}
 
         {/* Markdown note creation/edit modal */}
         {markdownModal && (
