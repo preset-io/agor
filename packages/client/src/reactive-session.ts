@@ -363,10 +363,18 @@ export class ReactiveSessionHandle {
         lastSyncedAt: new Date().toISOString(),
       }));
     } catch (error) {
+      // Mirror doResync()'s terminal classification — a 403/404 on the
+      // initial mount is just as "doomed to retry" as on reconnect, and
+      // without this the UI's auto-retry loop would keep poking a deleted/
+      // forbidden session on every focus change until the component
+      // remounts.
+      const status = errorStatusCode(error);
+      const terminal = status === 403 || status === 404;
       this.updateState((prev) => ({
         ...prev,
         loading: false,
         error: error instanceof Error ? error.message : 'Failed to bootstrap reactive session',
+        terminal: prev.terminal || terminal,
       }));
     }
   }

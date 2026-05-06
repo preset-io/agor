@@ -498,9 +498,10 @@ The recommendation in §6 was implemented along with a parallel fix for the
     fetch state writes.
   - New `state.terminal: boolean` discriminates non-recoverable errors
     from transient ones. Set when the server emits `removed` for this
-    session, OR when a `resync()` fails with HTTP **403**/**404** (an
-    inline `errorStatusCode()` helper inside the package handles this
-    without taking a UI cross-package dependency on `apps/agor-ui`'s
+    session, OR when **either** the initial `bootstrap()` **or** a later
+    `resync()` fails with HTTP **403**/**404** (an inline
+    `errorStatusCode()` helper inside the package handles this without
+    taking a UI cross-package dependency on `apps/agor-ui`'s
     `authErrors.ts`). 401 stays non-terminal so the around-hook + token
     refresh can heal. Auto-retry callers MUST skip when `terminal === true`.
 - `apps/agor-ui/src/hooks/useSharedReactiveSession.ts` — added a second
