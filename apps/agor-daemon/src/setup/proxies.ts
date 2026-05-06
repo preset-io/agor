@@ -55,8 +55,22 @@ const UPSTREAM_TIMEOUT_MS = 30_000;
  * - `cookie`: Agor auth cookies must not leak to third parties.
  * - `host`: must reflect the upstream, not the daemon.
  * - `connection`, `content-length`: hop-by-hop / recomputed by `fetch`.
+ * - `accept-encoding`: Node's undici fetch transparently decompresses gzip/br,
+ *   so we always receive raw bytes from upstream regardless of what we ask
+ *   for. Forwarding the browser's `accept-encoding: gzip, br` causes upstream
+ *   to compress, undici to silently decompress, and us to relay the
+ *   decompressed bytes — but the upstream `content-encoding: gzip` header
+ *   leaks through to the caller, who then tries to gunzip raw JSON and hangs
+ *   the body stream forever. Asking upstream for `identity` sidesteps the
+ *   whole double-handling problem.
  */
-const REQUEST_HEADER_STRIP = new Set(['cookie', 'host', 'connection', 'content-length']);
+const REQUEST_HEADER_STRIP = new Set([
+  'cookie',
+  'host',
+  'connection',
+  'content-length',
+  'accept-encoding',
+]);
 
 /**
  * Headers stripped from the upstream response before relaying to the caller.
@@ -64,12 +78,18 @@ const REQUEST_HEADER_STRIP = new Set(['cookie', 'host', 'connection', 'content-l
  * - `set-cookie`: never let upstream set cookies on the daemon's domain.
  * - `transfer-encoding`, `connection`: hop-by-hop.
  * - `content-length`: we may truncate or re-encode and don't want a stale value.
+ * - `content-encoding`: defense-in-depth pair to the `accept-encoding` strip
+ *   above. Even if upstream ignores `accept-encoding: identity` and sends
+ *   compressed bytes, undici has already decompressed them by the time we
+ *   read `body` — so the original `content-encoding` value is a lie that
+ *   makes browsers fail to decode the relayed body.
  */
 const RESPONSE_HEADER_STRIP = new Set([
   'set-cookie',
   'transfer-encoding',
   'connection',
   'content-length',
+  'content-encoding',
 ]);
 
 interface AuthedUser {
@@ -304,6 +324,11 @@ export function registerProxies(
         upstreamHeaders[lower] = value;
       }
     }
+    // Force `identity` so upstream sends uncompressed bytes. undici defaults
+    // to `gzip, br` if not specified, and silently decompresses — leaving us
+    // serving raw bytes under a stale `content-encoding: gzip` header that
+    // hangs the browser's body decoder. See the comment on REQUEST_HEADER_STRIP.
+    upstreamHeaders['accept-encoding'] = 'identity';
 
     const hasBody = method !== 'GET' && method !== 'HEAD';
     const upstreamUrl = buildUpstreamUrl(proxy.upstream, tail);
