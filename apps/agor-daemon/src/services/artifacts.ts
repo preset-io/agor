@@ -39,6 +39,7 @@ import type {
   WorktreeID,
 } from '@agor/core/types';
 import Handlebars from 'handlebars';
+import jwt from 'jsonwebtoken';
 import { DrizzleService } from '../adapters/drizzle.js';
 import type { UsersService } from './users.js';
 
@@ -47,7 +48,13 @@ import type { UsersService } from './users.js';
  * the backend treats it as a Handlebars template and renders it per-user
  * at payload fetch time. Template variables:
  *   {{ user.env.VAR_NAME }} - User's encrypted env var
- *   {{ agor.token }}        - Scoped artifact API token (future)
+ *   {{ agor.token }}        - Short-lived (15m) daemon JWT for the viewing
+ *                              user. Same shape as a regular access token —
+ *                              attach as `Authorization: Bearer ...` to
+ *                              authenticate against the daemon (e.g. when
+ *                              calling `/proxies/<vendor>/...`). Trust model
+ *                              matches `user.env.X`: rendered into artifact
+ *                              JS at view time, never enters LLM context.
  *   {{ agor.apiUrl }}       - Daemon URL
  *   {{ artifact.id }}       - Artifact ID
  *   {{ artifact.boardId }}  - Board ID
@@ -937,9 +944,34 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       console.warn('[artifacts] failed to resolve proxies for template context:', err);
     }
 
+    // Mint a short-lived daemon JWT for the viewing user so artifacts can
+    // authenticate to the daemon's own routes (notably `/proxies/<vendor>`).
+    // Shape matches the regular access token issued at login — `sub`,
+    // `type:'access'`, `iss:'agor'`, `aud:'https://agor.dev'` — so the same
+    // verification path accepts it. 15-minute TTL is intentional: the
+    // payload is re-rendered on every viewer load, so a fresh token is
+    // always within reach. No new token type/scope is introduced —
+    // exposing this is the same trust decision as exposing
+    // `{{ user.env.SHORTCUT_API_TOKEN }}` (rendered into artifact JS, never
+    // enters LLM context, scoped to the viewing user only).
+    let agorToken = '';
+    if (userId) {
+      const authConfig = this.app.get('authentication') as { secret?: string } | undefined;
+      const jwtSecret = authConfig?.secret;
+      if (jwtSecret) {
+        agorToken = jwt.sign({ sub: userId, type: 'access' }, jwtSecret, {
+          expiresIn: '15m',
+          issuer: 'agor',
+          audience: 'https://agor.dev',
+        });
+      } else {
+        console.warn('[artifacts] no auth.secret set — {{ agor.token }} will render empty');
+      }
+    }
+
     const context: Record<string, unknown> = {
       artifact: { id: artifact.artifact_id, boardId: artifact.board_id },
-      agor: { apiUrl: daemonUrl, proxies: proxiesContext },
+      agor: { apiUrl: daemonUrl, proxies: proxiesContext, token: agorToken },
       board: { id: artifact.board_id, slug: board?.slug ?? '' },
     };
 
