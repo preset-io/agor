@@ -5,6 +5,7 @@ export default defineConfig({
     index: 'src/index.ts',
     config: 'src/config.ts',
     yaml: 'src/yaml.ts',
+    jwt: 'src/jwt.ts',
   },
   format: ['cjs', 'esm'],
   dts: true,

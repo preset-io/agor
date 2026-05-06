@@ -6,12 +6,12 @@
  * three-segment shape check and short-circuit cleanly with `null`.
  *
  * Browser-safe: uses `Buffer` when available (Node), `atob` otherwise (browser).
- * Consumed by `packages/core/src/tools/mcp/oauth-token-expiry.ts` (cascade
- * step 5).
  *
- * ⚠ KEEP IN SYNC with `apps/agor-ui/src/utils/jwtExpiry.ts`. The UI
- * intentionally duplicates these helpers rather than importing them, because
- * `agor-ui` does not depend on `@agor/core`. If the API drifts, update both.
+ * Consumers:
+ *   - `packages/core/src/tools/mcp/oauth-token-expiry.ts` (cascade step 5)
+ *   - `packages/client/src/jwt.ts` (re-export → `@agor-live/client/jwt`),
+ *     which is what the UI's `apps/agor-ui/src/utils/jwtExpiry.ts` uses.
+ *     One implementation, no drift between server and browser.
  */
 
 /**

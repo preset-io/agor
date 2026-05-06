@@ -20,6 +20,11 @@
       "types": "./dist/yaml.d.ts",
       "import": "./dist/yaml.js",
       "require": "./dist/yaml.cjs"
+    },
+    "./jwt": {
+      "types": "./dist/jwt.d.ts",
+      "import": "./dist/jwt.js",
+      "require": "./dist/jwt.cjs"
     }
   },
   "files": [
