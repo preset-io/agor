@@ -66,13 +66,20 @@ export interface ReactiveSessionState {
   error: string | null;
   /**
    * `true` when `error` represents a non-recoverable condition for this
-   * session — e.g. the session row was removed on the server, or the user
-   * lost access. Callers driving auto-retry (visibilitychange, token refresh)
-   * MUST check this flag before calling `resync()` again, otherwise they will
-   * hammer a doomed endpoint on every focus change.
+   * session. Set when:
    *
-   * Errors thrown from the network (transient 401, refresh races, 5xx) leave
-   * this `false` so the standard retry paths can heal them.
+   * - The server emits a `removed` event for this session (deleted /
+   *   archived out of view).
+   * - `resync()` fails with an HTTP **403** (forbidden — the user lost
+   *   access) or **404** (not found — session no longer exists from this
+   *   user's perspective).
+   *
+   * Callers driving auto-retry (visibilitychange, token refresh, manual
+   * Reload) MUST check this flag before calling `resync()` again,
+   * otherwise they will hammer a doomed endpoint on every focus change.
+   *
+   * Other failures — transient 401 (around-hook will refresh), 5xx, network
+   * drops — leave this `false` so the standard retry paths can heal them.
    */
   terminal: boolean;
   lastSyncedAt: string | null;
@@ -916,12 +923,35 @@ export class ReactiveSessionHandle {
       }));
     } catch (error) {
       if (this.disposed) return;
+      const status = errorStatusCode(error);
+      // 403 (forbidden) and 404 (not found) mean this session is gone
+      // from the user's perspective — retrying will keep failing. Mark
+      // terminal so the UI stops auto-refetching on every focus change.
+      // 401 is intentionally NOT terminal: the around-hook on the socket
+      // client will refresh and the next retry can succeed.
+      const terminal = status === 403 || status === 404;
       this.updateState((prev) => ({
         ...prev,
         error: error instanceof Error ? error.message : 'Failed to resync reactive session',
+        terminal: prev.terminal || terminal,
       }));
     }
   }
+}
+
+/**
+ * Best-effort HTTP status extraction for arbitrary errors thrown by the
+ * Feathers client / fetch / socket transport. Mirrors the field-soup that
+ * `apps/agor-ui`'s `authErrors.ts` walks, but inlined here to avoid a UI →
+ * client cross-package dependency for what is just three property reads.
+ */
+function errorStatusCode(err: unknown): number | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+  const e = err as { code?: unknown; statusCode?: unknown; status?: unknown };
+  if (typeof e.code === 'number') return e.code;
+  if (typeof e.statusCode === 'number') return e.statusCode;
+  if (typeof e.status === 'number') return e.status;
+  return undefined;
 }
 
 export interface ReactiveAgorClient extends AgorClient {

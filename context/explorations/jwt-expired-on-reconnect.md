@@ -497,8 +497,12 @@ The recommendation in §6 was implemented along with a parallel fix for the
     re-stamp a stale error. Internal `disposed` checks before the post-
     fetch state writes.
   - New `state.terminal: boolean` discriminates non-recoverable errors
-    (server emitted `removed` for this session) from transient ones.
-    Auto-retry callers MUST skip when `terminal === true`.
+    from transient ones. Set when the server emits `removed` for this
+    session, OR when a `resync()` fails with HTTP **403**/**404** (an
+    inline `errorStatusCode()` helper inside the package handles this
+    without taking a UI cross-package dependency on `apps/agor-ui`'s
+    `authErrors.ts`). 401 stays non-terminal so the around-hook + token
+    refresh can heal. Auto-retry callers MUST skip when `terminal === true`.
 - `apps/agor-ui/src/hooks/useSharedReactiveSession.ts` — added a second
   `useEffect` that, while `state.error` is non-null **and not terminal**,
   calls `handle.resync()` in response to:
@@ -534,8 +538,13 @@ are not replayable.
     `silent: true` so a transient failure (e.g. racing the re-auth handler
     in `useAgorClient`, hitting a 401 once before the around-hook refresh
     lands) doesn't escalate to App.tsx's fullscreen "Failed to load data"
-    overlay. Silent failures log + no-op; the next reconnect/token refresh
-    gets another shot.
+    overlay.
+  - Silent failures latch a `lastSilentFetchFailedRef` flag. A
+    `TOKENS_REFRESHED_EVENT` listener retries the silent refetch only when
+    the latch is set, so byId state recovers as soon as the next access-
+    token refresh lands — without forcing a wasted 14-service refetch on
+    every routine token rotation. The latch clears on a successful silent
+    refetch.
 
 ### Pitfalls flagged but deliberately not addressed
 

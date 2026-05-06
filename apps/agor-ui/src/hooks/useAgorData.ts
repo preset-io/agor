@@ -22,6 +22,7 @@ import type {
 } from '@agor-live/client';
 import { PAGINATION } from '@agor-live/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 
 interface UseAgorDataResult {
   sessionById: Map<string, Session>; // O(1) lookups by session_id - efficient, stable references
@@ -93,6 +94,15 @@ export function useAgorData(
   // auth refresh, but we also don't want to issue 14 parallel service calls
   // multiple times in a row.
   const refetchInflightRef = useRef(false);
+
+  // Tracks whether the most recent silent refetch failed. Set by the silent
+  // catch branch in `fetchData`, cleared on success. Read by the
+  // TOKENS_REFRESHED_EVENT listener below so a token refresh that lands AFTER
+  // a failed reconnect refetch (auth race during socket re-auth) gets to
+  // retry — without this, the byId maps would stay stale until the next
+  // physical reconnect or page refresh. We use a ref rather than state since
+  // we only consume it in event handlers, never in render.
+  const lastSilentFetchFailedRef = useRef(false);
 
   // Fetch all data
   //
@@ -270,13 +280,20 @@ export function useAgorData(
         // Set per-user OAuth auth status
         const oauthStatus = oauthStatusResult as { authenticated_server_ids?: string[] };
         setUserAuthenticatedMcpServerIds(new Set(oauthStatus?.authenticated_server_ids ?? []));
+
+        // Silent refetch succeeded — clear the retry flag so future token
+        // refreshes don't trigger another wasted re-fetch.
+        if (silent) {
+          lastSilentFetchFailedRef.current = false;
+        }
       } catch (err) {
         if (silent) {
           // Background refetch failed (e.g. transient 401 racing the socket
           // re-auth, or a 5xx). Don't escalate to the fullscreen error overlay —
-          // we still have last-known good byId state on screen, and the next
-          // reconnect / token refresh will retry.
+          // we still have last-known good byId state on screen. Latch the
+          // failure so the next TOKENS_REFRESHED_EVENT (or reconnect) retries.
           console.warn('[useAgorData] silent refetch failed:', err);
+          lastSilentFetchFailedRef.current = true;
         } else {
           setError(err instanceof Error ? err.message : 'Failed to fetch data');
         }
@@ -932,7 +949,7 @@ export function useAgorData(
     // in useAgorClient on reconnect, then 401-ing once before the around-hook
     // refresh lands) doesn't blank the whole app via App.tsx's `dataError`
     // path — see the silent branch in `fetchData`.
-    const handleReconnect = async () => {
+    const refetchSilently = async () => {
       if (!hasInitiallyFetched) return;
       if (refetchInflightRef.current) return;
       refetchInflightRef.current = true;
@@ -942,12 +959,25 @@ export function useAgorData(
         refetchInflightRef.current = false;
       }
     };
-    client.io.on('connect', handleReconnect);
+    client.io.on('connect', refetchSilently);
+
+    // If the prior reconnect refetch failed silently — typical scenario: the
+    // socket reconnected, the around-hook hadn't refreshed the access token
+    // yet, fetchData hit a 401 that bubbled up — retry once a token refresh
+    // lands. Without this, byId state stays stale until the next physical
+    // reconnect or a page refresh. We gate on the latch so we don't refetch
+    // 14 services on every routine token rotation.
+    const handleTokensRefreshed = () => {
+      if (!lastSilentFetchFailedRef.current) return;
+      void refetchSilently();
+    };
+    window.addEventListener(TOKENS_REFRESHED_EVENT, handleTokensRefreshed);
 
     // Cleanup listeners on unmount
     return () => {
       client.io.off('oauth:completed', handleOAuthCompleted);
-      client.io.off('connect', handleReconnect);
+      client.io.off('connect', refetchSilently);
+      window.removeEventListener(TOKENS_REFRESHED_EVENT, handleTokensRefreshed);
       sessionsService.removeListener('created', handleSessionCreated);
       sessionsService.removeListener('patched', handleSessionPatched);
       sessionsService.removeListener('updated', handleSessionPatched);
