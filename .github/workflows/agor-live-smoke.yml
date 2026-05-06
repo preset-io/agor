@@ -1,0 +1,201 @@
+# Smoke-test the agor-live npm publish artifact.
+#
+# Purpose: catch broken releases (e.g. 0.17.1's `workspace:*` leak, or
+# 0.17.3's blank-page/500) BEFORE they ship to npm.
+#
+# Strategy:
+#   1. Build the package the same way `./build.sh` does (no --publish).
+#   2. `pnpm pack` (this resolves `workspace:*` refs the same way `pnpm publish`
+#      does — so the tarball matches what would actually get pushed to npm).
+#   3. Defense-in-depth grep: assert the packed manifest has no `workspace:*`
+#      strings. This is the single check that would have caught the 0.17.1
+#      regression even if someone bypassed `pnpm publish` and used `npm publish`.
+#   4. Install the tarball into a clean project with plain `npm install`.
+#   5. Run migrations, boot the daemon (background → NODE_ENV=production), and
+#      curl `/health`, `/ui/`, and a JS asset. Assert real HTML + a non-trivial
+#      JS bundle come back.
+#
+# This is the minimum viable "does the published artifact even start?" check.
+# A tag-triggered auto-publish workflow can build on top of this later (see
+# the PR description for the spec).
+
+name: agor-live publish smoke-test
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/agor-live/**'
+      - 'packages/client/**'
+      - 'packages/core/**'
+      - 'packages/executor/**'
+      - 'apps/agor-daemon/**'
+      - 'apps/agor-cli/**'
+      - 'apps/agor-ui/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/agor-live-smoke.yml'
+  workflow_dispatch:
+
+env:
+  PNPM_VERSION: '9.15.1'
+  NODE_VERSION: '22'
+
+jobs:
+  smoke:
+    name: Pack + boot + curl
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      # Build dist/ in packages/agor-live the same way `./build.sh` does
+      # (no --publish, no --bump). This stages cli/core/daemon/executor/ui
+      # under packages/agor-live/dist.
+      - name: Build agor-live
+        run: |
+          cd packages/agor-live
+          ./build.sh --skip-install
+        env:
+          # Match build.sh's heap ceiling so DTS / vite bundle steps don't OOM.
+          NODE_OPTIONS: --max-old-space-size=4096
+
+      # Use `pnpm pack` (not `npm pack`) so workspace:* refs are rewritten
+      # to concrete semver — same transform `pnpm publish` does.
+      - name: Pack tarball
+        id: pack
+        run: |
+          set -euo pipefail
+          cd packages/agor-live
+          pnpm pack --pack-destination "$RUNNER_TEMP" 2>&1 | tee pack.log
+          TARBALL=$(ls "$RUNNER_TEMP"/agor-live-*.tgz | head -1)
+          if [ -z "$TARBALL" ]; then
+            echo "::error::pnpm pack produced no tarball"
+            exit 1
+          fi
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          echo "Packed: $TARBALL"
+
+      # The single grep that would have caught agor-live@0.17.1.
+      # If this ever fails, someone packed/published with a tool that
+      # doesn't rewrite `workspace:` (e.g. plain `npm publish`).
+      - name: Assert no workspace:* refs in packed manifest
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/inspect"
+          tar -xzf "${{ steps.pack.outputs.tarball }}" -C "$RUNNER_TEMP/inspect"
+          MANIFEST="$RUNNER_TEMP/inspect/package/package.json"
+          echo "=== Packed manifest deps ==="
+          node -e "const p=require('$MANIFEST'); console.log(JSON.stringify({d:p.dependencies,pd:p.peerDependencies,od:p.optionalDependencies},null,2))"
+          if grep -nE '"workspace:' "$MANIFEST"; then
+            echo "::error::workspace:* leaked into the published manifest. \
+              The tarball would break `npm install agor-live` once published. \
+              Use `pnpm publish` (not `npm publish`) — see packages/agor-live/build.sh."
+            exit 1
+          fi
+          echo "✓ No workspace:* refs in packed manifest"
+
+      - name: Install tarball in a clean project
+        id: install
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/smoke-install"
+          cd "$RUNNER_TEMP/smoke-install"
+          npm init -y >/dev/null
+          npm install --no-fund --no-audit "${{ steps.pack.outputs.tarball }}"
+          echo "=== Installed dist/ ==="
+          ls node_modules/agor-live/dist
+          echo "=== Postinstall artifact (@agor/core symlink) ==="
+          ls -la node_modules/agor-live/node_modules/@agor/core
+          # Confirm the UI bundle index.html is present and references a JS asset.
+          if [ ! -f node_modules/agor-live/dist/ui/index.html ]; then
+            echo "::error::dist/ui/index.html missing from installed package"
+            exit 1
+          fi
+
+      - name: Boot daemon and curl /ui/
+        run: |
+          set -euo pipefail
+          export HOME="$RUNNER_TEMP/smoke-home"
+          mkdir -p "$HOME/.agor"
+          cat > "$HOME/.agor/config.yaml" <<'EOF'
+          daemon:
+            port: 3030
+          EOF
+          BIN="$RUNNER_TEMP/smoke-install/node_modules/agor-live/bin"
+          cd "$RUNNER_TEMP/smoke-install"
+
+          # `agor db migrate` prompts "press any key to continue" — feed it a newline.
+          echo "" | node "$BIN/agor.js" db migrate
+
+          # Background start sets NODE_ENV=production (see dist/cli/commands/daemon/start.js).
+          node "$BIN/agor.js" daemon start
+
+          # Wait for /health (max 45s).
+          for i in $(seq 1 45); do
+            if curl -fsS -o /dev/null http://localhost:3030/health; then
+              echo "daemon ready after ${i}s"
+              break
+            fi
+            if [ "$i" = "45" ]; then
+              echo "::error::daemon never became healthy"
+              tail -200 "$HOME/.agor/logs/daemon.log" || true
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # /ui/ should serve the SPA shell.
+          echo "=== GET /ui/ ==="
+          curl -fsS -o /tmp/ui.html -w "HTTP=%{http_code} bytes=%{size_download} ctype=%{content_type}\n" \
+            http://localhost:3030/ui/
+          if ! grep -q '<div id="root">' /tmp/ui.html; then
+            echo "::error::/ui/ response is missing <div id=\"root\"> — UI shell not being served"
+            head -80 /tmp/ui.html
+            tail -200 "$HOME/.agor/logs/daemon.log" || true
+            exit 1
+          fi
+          if ! grep -qE '/ui/assets/index-[A-Za-z0-9_-]+\.js' /tmp/ui.html; then
+            echo "::error::/ui/ response is missing a JS asset reference — index.html not stamped"
+            head -80 /tmp/ui.html
+            exit 1
+          fi
+
+          # Actually fetch the JS asset to confirm static-file serving works end-to-end.
+          ASSET_PATH=$(grep -oE '/ui/assets/index-[A-Za-z0-9_-]+\.js' /tmp/ui.html | head -1)
+          echo "=== GET $ASSET_PATH ==="
+          SIZE=$(curl -fsS -o /dev/null -w "%{size_download}" "http://localhost:3030$ASSET_PATH")
+          echo "JS asset size: $SIZE bytes"
+          # The UI bundle is multi-MB. <100KB means we're getting an error page or empty body.
+          if [ "$SIZE" -lt 100000 ]; then
+            echo "::error::/ui/ JS asset is suspiciously small (${SIZE} bytes) — static serving broken"
+            exit 1
+          fi
+          echo "✓ Smoke test passed"
+
+      - name: Stop daemon
+        if: always()
+        run: |
+          export HOME="$RUNNER_TEMP/smoke-home"
+          BIN="$RUNNER_TEMP/smoke-install/node_modules/agor-live/bin"
+          if [ -d "$BIN" ]; then
+            node "$BIN/agor.js" daemon stop || true
+          fi
+
+      - name: Upload daemon log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-log
+          path: ${{ runner.temp }}/smoke-home/.agor/logs/
+          if-no-files-found: warn
