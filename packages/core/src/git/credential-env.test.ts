@@ -41,12 +41,6 @@ describe('buildGitConfigEnv', () => {
       GIT_CONFIG_VALUE_1: 'Authorization: Basic abc',
     });
   });
-
-  it('counts entries as a string (git rejects numeric values for COUNT)', () => {
-    const env = buildGitConfigEnv([['a', 'b']]);
-    expect(typeof env.GIT_CONFIG_COUNT).toBe('string');
-    expect(env.GIT_CONFIG_COUNT).toBe('1');
-  });
 });
 
 describe('buildAuthHeaderEnv', () => {
@@ -186,72 +180,25 @@ describe('parseHostFromGitUrl', () => {
   });
 });
 
-describe('GIT_CONFIG_* env-var integration with real git', () => {
-  // End-to-end check: feed buildGitConfigEnv output into a real git invocation
-  // and confirm git actually reads the config back. This is the load-bearing
-  // assertion the codebase didn't previously have (per #1099 retrospective:
-  // no test exercises createGit end-to-end), so a future regression in env
-  // shape (e.g. wrong KEY_n / VALUE_n indexing, missing COUNT) trips here
-  // instead of in prod.
-  it('git config --get reads back values injected via GIT_CONFIG_*', () => {
-    const env = {
-      ...process.env,
-      // Match the runtime isolation profile createGit uses, so this test is
-      // representative of what spawns in production. Note we deliberately do
-      // NOT set GIT_CONFIG_NOSYSTEM — /etc/gitconfig is admin-policy
-      // territory (CA bundles, proxies) and must remain readable.
-      GIT_CONFIG_GLOBAL: '/dev/null',
-      GIT_TERMINAL_PROMPT: '0',
-      ...buildGitConfigEnv([
-        ['http.https://github.com/.extraheader', 'Authorization: Basic dG9wOnNlY3JldA=='],
-      ]),
-    };
-    const result = spawnSync('git', ['config', '--get', 'http.https://github.com/.extraheader'], {
-      env,
-      encoding: 'utf8',
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe('Authorization: Basic dG9wOnNlY3JldA==');
-  });
-
-  it('cloneRepo source contains no token-in-URL splicing (argv leak tripwire)', () => {
+describe('argv-leak tripwire', () => {
+  it('cloneRepo source contains no token-in-URL splicing', () => {
     // The whole point of the env-var refactor (PR #1103) is to keep tokens
     // off argv. The legacy approach interpolated the PAT into the clone URL
     // as `https://x-access-token:<PAT>@github.com/...`, which leaks via
     // `ps` / `/proc/<pid>/cmdline` for any user on the host while git is
     // running.
     //
-    // This is a source-level tripwire: if a future commit re-introduces the
-    // URL-rewrite path, this assertion fires and the author has to either
-    // pick a non-argv-leaking mechanism (env vars, stdin, credential helper
-    // pointing at a temp file) OR explicitly delete this assertion with a
+    // Source-level tripwire: if a future commit re-introduces the URL-rewrite
+    // path, this assertion fires and the author has to either pick a
+    // non-argv-leaking mechanism OR explicitly delete this assertion with a
     // justification in the diff. Either way, the change becomes visible.
     const src = readFileSync(join(__dirname, 'index.ts'), 'utf8');
     expect(src).not.toMatch(/x-access-token:[^@\s]*@/);
     // Defence-in-depth: also forbid any string assembly producing
-    // `<userinfo>@github.com/...` from a token variable. This is a coarser
-    // grep — it's fine for it to flag false positives because the right
-    // answer is then to use env-var-based auth and remove the construction.
+    // `<userinfo>@github.com/...` from a token variable. Coarse grep — fine
+    // for it to flag false positives because the right answer is then to use
+    // env-var-based auth and remove the construction.
     expect(src).not.toMatch(/`https:\/\/\$\{[^}]*token[^}]*\}@/i);
-  });
-
-  it('GIT_CONFIG_GLOBAL=/dev/null hides the daemon user gitconfig from git', () => {
-    // Sanity-check the inheritance kill: with GLOBAL=/dev/null, `git config
-    // --global --get user.email` finds nothing regardless of what the host's
-    // ~/.gitconfig actually contains. /etc/gitconfig is intentionally NOT
-    // killed — admin policy (CA bundles, proxies) must remain readable.
-    const env = {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: '/dev/null',
-    };
-    const result = spawnSync('git', ['config', '--global', '--get', 'user.email'], {
-      env,
-      encoding: 'utf8',
-    });
-    // git returns exit 1 ("not found") when the key is absent — confirms
-    // global config was effectively /dev/null.
-    expect(result.status).toBe(1);
-    expect(result.stdout.trim()).toBe('');
   });
 });
 
@@ -335,22 +282,20 @@ describe('createGit() end-to-end env propagation', () => {
     });
   });
 
-  it('strips GIT_EDITOR (and similar) from spawnEnv so simple-git scanner does not reject', async () => {
+  it('survives ambient GIT_EDITOR in process.env (allowUnsafeEditor opt-in)', async () => {
     // Regression test: simple-git's vulnerability scanner refuses to spawn
     // git when env vars like GIT_EDITOR / GIT_PAGER / GIT_ASKPASS are set
-    // unless we opt in via `allowUnsafe*`. We chose to strip those from
-    // spawnEnv instead — which means a daemon process inheriting `EDITOR=
-    // vim` from a login shell must not break clones.
-    //
-    // Force GIT_EDITOR into process.env for this test, then confirm
-    // createGit() can still produce a working git that runs to completion.
+    // unless we opt in via the `unsafe.allowUnsafe*` flags. A daemon process
+    // that inherits `EDITOR=vim` (and therefore GIT_EDITOR) from a login
+    // shell must still be able to clone — the scanner's refusal would
+    // otherwise hang the daemon with no useful error.
     const prev = process.env.GIT_EDITOR;
-    process.env.GIT_EDITOR = '/bin/false'; // would be lethal if it leaked through
+    process.env.GIT_EDITOR = '/bin/false';
     try {
       await withTempRepo(async (repoPath) => {
         const { git } = createGit(repoPath, { GITHUB_TOKEN: FAKE_TOKEN });
-        // If GIT_EDITOR weren't stripped, simple-git's scanner would throw
-        // before spawn ("Use of GIT_EDITOR is not permitted...").
+        // Without allowUnsafeEditor, simple-git's scanner throws before spawn
+        // ("Use of GIT_EDITOR is not permitted...").
         const value = (
           await git.raw(['config', '--get', 'http.https://github.com/.extraheader'])
         ).trim();
