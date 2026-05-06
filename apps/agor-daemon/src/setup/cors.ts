@@ -16,6 +16,8 @@ export type CorsOrigin =
 export interface CorsConfigOptions {
   /** UI port for localhost origins */
   uiPort: number;
+  /** Daemon port (UI may be served from here too) */
+  daemonPort: number;
   /** Whether running in GitHub Codespaces */
   isCodespaces: boolean;
   /** Explicit CORS_ORIGIN environment variable override */
@@ -41,10 +43,11 @@ export interface CorsConfigResult {
  * @returns CORS origin configuration ready for express cors middleware
  */
 export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
-  const { uiPort, isCodespaces, corsOriginOverride } = options;
+  const { uiPort, daemonPort, isCodespaces, corsOriginOverride } = options;
 
-  // Support UI port and 3 additional ports (for parallel dev servers)
+  // Support UI port, daemon port (serves UI in production), and 3 additional ports (for parallel dev servers)
   const localhostOrigins = [
+    `http://localhost:${daemonPort}`,
     `http://localhost:${uiPort}`,
     `http://localhost:${uiPort + 1}`,
     `http://localhost:${uiPort + 2}`,

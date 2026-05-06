@@ -531,6 +531,7 @@ async function main() {
   // Configure CORS based on deployment environment (extracted to setup/cors.ts)
   const { origin: corsOrigin } = buildCorsConfig({
     uiPort: UI_PORT,
+    daemonPort: DAEMON_PORT,
     isCodespaces: process.env.CODESPACES === 'true',
     corsOriginOverride: process.env.CORS_ORIGIN,
   });
