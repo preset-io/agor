@@ -14,7 +14,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { buildAuthHeaderEnv, buildGitConfigEnv, redactGitEnv } from './index';
+import { buildAuthHeaderEnv, buildGitConfigEnv, parseHostFromGitUrl, redactGitEnv } from './index';
 
 describe('buildGitConfigEnv', () => {
   it('returns an empty object for no entries (so callers can spread unconditionally)', () => {
@@ -125,6 +125,60 @@ describe('redactGitEnv', () => {
   });
 });
 
+describe('parseHostFromGitUrl', () => {
+  // Per-host scoping is the whole reason this helper exists: a token bound to
+  // github.acme.corp must not be sent to github.com, and vice versa. Each
+  // shape git accepts as a clone URL needs to round-trip to the right host.
+  it('extracts host from https URLs', () => {
+    expect(parseHostFromGitUrl('https://github.com/foo/bar.git')).toBe('github.com');
+    expect(parseHostFromGitUrl('https://github.com/foo/bar')).toBe('github.com');
+    expect(parseHostFromGitUrl('http://gitlab.example.com/foo/bar.git')).toBe('gitlab.example.com');
+  });
+
+  it('strips userinfo from https URLs (e.g. legacy x-access-token: prefix)', () => {
+    // Defence-in-depth: even if a stale URL still has userinfo splicing, we
+    // must scope the header to the host, not to "user@host".
+    expect(parseHostFromGitUrl('https://x-access-token:ghp_xxx@github.com/foo/bar.git')).toBe(
+      'github.com'
+    );
+  });
+
+  it('strips ports from https URLs', () => {
+    // GitHub Enterprise is sometimes deployed on a non-default port.
+    expect(parseHostFromGitUrl('https://github.acme.corp:8443/foo/bar.git')).toBe(
+      'github.acme.corp'
+    );
+  });
+
+  it('extracts host from ssh:// URLs', () => {
+    expect(parseHostFromGitUrl('ssh://git@github.com/foo/bar.git')).toBe('github.com');
+    expect(parseHostFromGitUrl('ssh://git@github.com:22/foo/bar.git')).toBe('github.com');
+    expect(parseHostFromGitUrl('ssh://github.com/foo/bar')).toBe('github.com');
+  });
+
+  it('extracts host from SCP-like URLs (git@host:path)', () => {
+    expect(parseHostFromGitUrl('git@github.com:foo/bar.git')).toBe('github.com');
+    expect(parseHostFromGitUrl('git@github.acme.corp:foo/bar')).toBe('github.acme.corp');
+  });
+
+  it('returns undefined for local paths (no remote host)', () => {
+    // A local path has no host to scope to; the caller should fall back to
+    // the default (which is fine — local fs operations don't use auth).
+    expect(parseHostFromGitUrl('/var/repos/foo')).toBeUndefined();
+    expect(parseHostFromGitUrl('./foo/bar')).toBeUndefined();
+    expect(parseHostFromGitUrl('file:///var/repos/foo')).toBeUndefined();
+  });
+
+  it('returns undefined for malformed input', () => {
+    expect(parseHostFromGitUrl('')).toBeUndefined();
+    expect(parseHostFromGitUrl('not a url')).toBeUndefined();
+    // Defensive against non-string inputs slipping through type erosion at
+    // module boundaries (e.g. JSON config). Cast is only to satisfy the test.
+    expect(parseHostFromGitUrl(undefined as unknown as string)).toBeUndefined();
+    expect(parseHostFromGitUrl(null as unknown as string)).toBeUndefined();
+  });
+});
+
 describe('GIT_CONFIG_* env-var integration with real git', () => {
   // End-to-end check: feed buildGitConfigEnv output into a real git invocation
   // and confirm git actually reads the config back. This is the load-bearing
@@ -135,9 +189,10 @@ describe('GIT_CONFIG_* env-var integration with real git', () => {
   it('git config --get reads back values injected via GIT_CONFIG_*', () => {
     const env = {
       ...process.env,
-      // Match the full isolation profile createGit uses, so this test is
-      // representative of what spawns at runtime.
-      GIT_CONFIG_NOSYSTEM: '1',
+      // Match the runtime isolation profile createGit uses, so this test is
+      // representative of what spawns in production. Note we deliberately do
+      // NOT set GIT_CONFIG_NOSYSTEM — /etc/gitconfig is admin-policy
+      // territory (CA bundles, proxies) and must remain readable.
       GIT_CONFIG_GLOBAL: '/dev/null',
       GIT_TERMINAL_PROMPT: '0',
       ...buildGitConfigEnv([
@@ -176,10 +231,10 @@ describe('GIT_CONFIG_* env-var integration with real git', () => {
   it('GIT_CONFIG_GLOBAL=/dev/null hides the daemon user gitconfig from git', () => {
     // Sanity-check the inheritance kill: with GLOBAL=/dev/null, `git config
     // --global --get user.email` finds nothing regardless of what the host's
-    // ~/.gitconfig actually contains.
+    // ~/.gitconfig actually contains. /etc/gitconfig is intentionally NOT
+    // killed — admin policy (CA bundles, proxies) must remain readable.
     const env = {
       ...process.env,
-      GIT_CONFIG_NOSYSTEM: '1',
       GIT_CONFIG_GLOBAL: '/dev/null',
     };
     const result = spawnSync('git', ['config', '--global', '--get', 'user.email'], {

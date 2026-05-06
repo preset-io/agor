@@ -142,12 +142,61 @@ export function buildWorktreeAddArgs(params: {
 
 /**
  * Default host used for `http.<URL>.extraheader` scope when an auth header
- * is being injected. Token-aware code in this module only recognises GitHub
- * HTTPS today, so scoping the header to github.com matches the existing
- * trust boundary and prevents the token from leaking to submodule URLs at
- * attacker-controlled hosts.
+ * is being injected and a more specific host can't be derived (e.g. when a
+ * caller doesn't supply a URL or repo path). github.com is the most common
+ * hosting target, so this matches existing behaviour for the default case.
+ *
+ * In practice callers should always pass an explicit host derived from the
+ * remote URL via {@link parseHostFromGitUrl} or {@link resolveAuthHost}, so
+ * GitHub Enterprise / self-hosted GitLab / Bitbucket etc. work transparently.
  */
 const DEFAULT_AUTH_HEADER_HOST = 'github.com';
+
+/**
+ * Extract the hostname from a git remote URL.
+ *
+ * Accepts the three common forms:
+ *   - HTTPS:    `https://host[:port]/owner/repo(.git)?`
+ *   - SSH:      `ssh://[user@]host[:port]/owner/repo(.git)?`
+ *   - SCP-like: `user@host:owner/repo(.git)?` (e.g. `git@github.com:foo/bar`)
+ *
+ * Returns the hostname (no port, no userinfo), or `undefined` when the URL
+ * doesn't match any recognised shape. Used to scope `http.<URL>.extraheader`
+ * to the right host so a GitHub Enterprise / GitLab / Bitbucket token isn't
+ * silently widened to github.com (or vice versa).
+ */
+export function parseHostFromGitUrl(url: string): string | undefined {
+  if (typeof url !== 'string' || url.length === 0) return undefined;
+
+  // ssh://[user@]host[:port]/...   and   http(s)://[user@]host[:port]/...
+  const urlLike = url.match(/^(?:ssh|https?):\/\/(?:[^@/]+@)?([^/:\s]+)(?::\d+)?(?:\/|$)/);
+  if (urlLike?.[1]) return urlLike[1];
+
+  // SCP-like:  [user@]host:path  (e.g. git@github.com:foo/bar.git)
+  // Reject paths starting with `/` — that's a local filesystem path, not a remote.
+  const scpLike = url.match(/^(?:[^@\s:]+@)?([^/:\s]+):(?!\/)/);
+  if (scpLike?.[1]) return scpLike[1];
+
+  return undefined;
+}
+
+/**
+ * Resolve the auth-header host for an existing repo by reading its origin
+ * remote. Falls back to {@link DEFAULT_AUTH_HEADER_HOST} when the remote
+ * can't be read or parsed.
+ */
+async function resolveAuthHost(repoPath: string): Promise<string> {
+  try {
+    const origin = await getRemoteUrl(repoPath, 'origin');
+    if (origin) {
+      const host = parseHostFromGitUrl(origin);
+      if (host) return host;
+    }
+  } catch {
+    // fall through to default
+  }
+  return DEFAULT_AUTH_HEADER_HOST;
+}
 
 /**
  * Build the `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>`
@@ -238,12 +287,13 @@ export function redactGitEnv(env: Record<string, string | undefined>): Record<st
  *
  * Auth strategy. When a GitHub / GitLab PAT is supplied via
  * `env.GITHUB_TOKEN` or `env.GH_TOKEN`, the token is fed to git as
- * `http.https://github.com/.extraheader=Authorization: Basic <b64>` —
+ * `http.https://<authHost>/.extraheader=Authorization: Basic <b64>` —
  * but **via the `GIT_CONFIG_COUNT/KEY/VALUE` env trio**, not via
  * simple-git's `config: [...]` array. The latter would translate to
  * `git -c key=value`, putting the auth header on argv where it can leak via
  * `ps`, audit logs, error reports, etc. The env-var path keeps the value
- * off argv entirely.
+ * off argv entirely. Per-host scoping prevents a token bound to e.g. a
+ * GitHub Enterprise host from being sent to github.com (and vice versa).
  *
  * Inheritance kill. We do NOT want git to read the daemon user's
  * `~/.gitconfig` (which may have an ambient `credential.helper = !gh auth
@@ -251,17 +301,31 @@ export function redactGitEnv(env: Record<string, string | undefined>): Record<st
  * identity to every Agor user). Per `git-impersonation.ts`, git operations
  * always run as the daemon user (no `sudo -u` uid switch — `sudo -u` is used
  * only to refresh group memberships), so HOME is the daemon's. We therefore
- * pin `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`. If the
- * impersonation model ever switches to a true uid switch (so HOME points at
- * the impersonated user), `GIT_CONFIG_GLOBAL` must be removed so git can
- * read that user's own gitconfig.
+ * pin `GIT_CONFIG_GLOBAL=/dev/null`. If the impersonation model ever switches
+ * to a true uid switch (so HOME points at the impersonated user),
+ * `GIT_CONFIG_GLOBAL` must be removed so git can read that user's own
+ * gitconfig.
+ *
+ * We deliberately do **not** set `GIT_CONFIG_NOSYSTEM=1`. The threat is
+ * inheritance from the *daemon user's* personal config; `/etc/gitconfig` is
+ * an admin-managed policy file that legitimately carries enterprise CA
+ * bundles, HTTP proxies, and `safe.directory` entries. Killing it would
+ * silently break corporate / enterprise deployments without improving the
+ * threat model — anyone who can write to `/etc/gitconfig` already owns the
+ * box.
  *
  * @param baseDir - Working directory for git operations
  * @param env - Environment variables (GITHUB_TOKEN, GH_TOKEN, etc.)
+ * @param authHost - Hostname to scope the http.extraheader auth header to
+ *                   (e.g. "github.com", "github.acme.corp"). Defaults to
+ *                   github.com when not supplied; callers with a clone URL
+ *                   or origin remote should derive this via
+ *                   {@link parseHostFromGitUrl} or {@link resolveAuthHost}.
  */
 function createGit(
   baseDir?: string,
-  env?: Record<string, string>
+  env?: Record<string, string>,
+  authHost?: string
 ): { git: ReturnType<typeof simpleGit> } {
   const gitBinary = getGitBinary();
 
@@ -274,9 +338,11 @@ function createGit(
   // Auth header config goes through env vars so the token never lands on
   // argv. buildAuthHeaderEnv returns [] when no usable token is supplied.
   const rawToken = env?.GITHUB_TOKEN ?? env?.GH_TOKEN;
-  const authConfigEntries = buildAuthHeaderEnv(rawToken);
+  const authConfigEntries = buildAuthHeaderEnv(rawToken, authHost ?? DEFAULT_AUTH_HEADER_HOST);
   if (authConfigEntries.length > 0) {
-    console.debug('🔑 Configured http.extraheader auth via GIT_CONFIG_* env vars');
+    console.debug(
+      `🔑 Configured http.extraheader auth via GIT_CONFIG_* env vars (host: ${authHost ?? DEFAULT_AUTH_HEADER_HOST})`
+    );
   }
 
   // Build git env vars. Always set the isolation knobs when we are passing a
@@ -288,9 +354,9 @@ function createGit(
     spawnEnv = {
       ...process.env,
       ...(env ?? {}),
-      // Inheritance kill: ignore /etc/gitconfig and the daemon user's
-      // ~/.gitconfig. See block comment above re: impersonation model.
-      GIT_CONFIG_NOSYSTEM: '1',
+      // Inheritance kill (GLOBAL only): ignore the daemon user's
+      // ~/.gitconfig. /etc/gitconfig is intentionally NOT killed — it is
+      // admin-policy territory (CA bundles, proxies). See block comment.
       GIT_CONFIG_GLOBAL: '/dev/null',
       // Fail fast instead of blocking on an interactive credential prompt
       // (which would hang the daemon).
@@ -417,8 +483,11 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
     }
   }
 
-  // Create git instance with user env vars (SSH host key checking is always disabled)
-  const { git } = createGit(undefined, options.env);
+  // Create git instance with user env vars (SSH host key checking is always disabled).
+  // Derive the auth-header host from the clone URL so GitHub Enterprise / GitLab /
+  // self-hosted Bitbucket etc. work without per-deployment configuration.
+  const authHost = parseHostFromGitUrl(cloneUrl);
+  const { git } = createGit(undefined, options.env, authHost);
 
   if (options.onProgress) {
     git.outputHandler((_command, _stdout, _stderr) => {
@@ -599,7 +668,11 @@ export async function createWorktree(
     await validateGitRef(sourceBranch);
   }
 
-  const { git } = createGit(repoPath, env);
+  // Derive the auth-header host from the repo's origin remote so the same
+  // refactor works against GitHub Enterprise / self-hosted forges without
+  // per-deployment config.
+  const authHost = await resolveAuthHost(repoPath);
+  const { git } = createGit(repoPath, env, authHost);
 
   let fetchSucceeded = false;
 
@@ -765,7 +838,8 @@ export async function restoreWorktreeFilesystem(
   await validateGitRef(ref);
   await validateGitRef(baseRef);
 
-  const { git } = createGit(repoPath, env);
+  const authHost = await resolveAuthHost(repoPath);
+  const { git } = createGit(repoPath, env, authHost);
 
   // Step 1: Fetch from remote
   try {
