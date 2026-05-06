@@ -33,7 +33,7 @@ import Handlebars from 'handlebars';
 import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
-import { useAppData } from '../../contexts/AppDataContext';
+import { useAppEntityData } from '../../contexts/AppDataContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import spawnSubsessionTemplate from '../../templates/spawn_subsession.hbs?raw';
@@ -256,8 +256,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const { modal, message } = App.useApp();
   const connectionDisabled = useConnectionDisabled();
 
-  // Get data from context
-  const { userById, mcpServerById, userAuthenticatedMcpServerIds } = useAppData();
+  // Get data from entity context only — SessionPanel intentionally does NOT
+  // subscribe to live (sessions / worktrees / boards) data here, so streaming
+  // session patches don't trigger re-renders of this panel through context.
+  const { userById, mcpServerById, userAuthenticatedMcpServerIds } = useAppEntityData();
 
   // Get actions from context
   const {

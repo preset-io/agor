@@ -15,7 +15,7 @@ import {
 import { Badge, Button, Checkbox, Empty, Select, Space, Typography, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
-import { useAppData } from '../../contexts/AppDataContext';
+import { useAppEntityData, useAppLiveData } from '../../contexts/AppDataContext';
 import type { SocketEvent } from '../../hooks/useEventStream';
 import { Tag } from '../Tag';
 import { EventItem, type WorktreeActions } from './EventItem';
@@ -49,8 +49,12 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
 }) => {
   const { token } = theme.useToken();
 
-  // Get data from context
-  const { worktreeById, sessionById, sessionsByWorktree, repoById, userById } = useAppData();
+  // EventStreamPanel inherently shows live socket activity, so subscribing
+  // to AppLiveDataContext is correct — we *want* re-renders on session /
+  // worktree mutations. Entity data is split off so user/repo edits alone
+  // don't cause unnecessary churn.
+  const { worktreeById, sessionById, sessionsByWorktree } = useAppLiveData();
+  const { repoById, userById } = useAppEntityData();
   const repos = useMemo(() => Array.from(repoById.values()), [repoById]);
 
   // Get actions from context

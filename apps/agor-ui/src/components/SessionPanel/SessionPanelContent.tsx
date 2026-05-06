@@ -9,7 +9,7 @@ import {
 import { App, Button, Divider, Space, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
-import { useAppData } from '../../contexts/AppDataContext';
+import { useAppEntityData } from '../../contexts/AppDataContext';
 import { copyToClipboard } from '../../utils/clipboard';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { ConversationView } from '../ConversationView';
@@ -59,8 +59,9 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     const { token } = theme.useToken();
     const { message } = App.useApp();
 
-    // Get data from context
-    const { userById, repoById, mcpServerById, userAuthenticatedMcpServerIds } = useAppData();
+    // Get data from entity context only — keeps this panel insulated from
+    // session/worktree/board patches flowing through AppLiveDataContext.
+    const { userById, repoById, mcpServerById, userAuthenticatedMcpServerIds } = useAppEntityData();
 
     // Get actions from context
     const {

@@ -159,6 +159,12 @@ interface SessionNodeData {
   zoneColor?: string;
 }
 
+// Shared empty array for worktrees that have no sessions. Without this,
+// `sessionsByWorktree.get(id) || []` produces a new `[]` on every render,
+// breaking referential equality and forcing memoized children to re-render
+// on every unrelated socket event.
+const EMPTY_SESSIONS: Session[] = [];
+
 // Custom node component that renders SessionCard (memoized to prevent re-renders on unrelated node changes)
 const SessionNode = React.memo(({ data }: { data: SessionNodeData }) => {
   return (
@@ -225,40 +231,88 @@ const CardNodeWrapper = React.memo(({ data }: { data: CardNodeData }) => {
   );
 });
 
-// Custom node component that renders WorktreeCard (memoized to prevent re-renders on unrelated node changes)
-const WorktreeNode = React.memo(({ data }: { data: WorktreeNodeData }) => {
-  return (
-    <div className="worktree-node">
-      <WorktreeCard
-        worktree={data.worktree}
-        repo={data.repo}
-        sessions={data.sessions}
-        userById={data.userById}
-        currentUserId={data.currentUserId}
-        selectedSessionId={data.selectedSessionId}
-        onTaskClick={data.onTaskClick}
-        onSessionClick={data.onSessionClick}
-        onCreateSession={data.onCreateSession}
-        onForkSession={data.onForkSession}
-        onSpawnSession={data.onSpawnSession}
-        onArchiveOrDelete={data.onArchiveOrDelete}
-        onOpenSettings={data.onOpenSettings}
-        onOpenSessionSettings={data.onOpenSessionSettings}
-        onOpenTerminal={data.onOpenTerminal}
-        onStartEnvironment={data.onStartEnvironment}
-        onStopEnvironment={data.onStopEnvironment}
-        onViewLogs={data.onViewLogs}
-        onExecuteScheduleNow={data.onExecuteScheduleNow}
-        onUnpin={data.onUnpin}
-        isPinned={data.isPinned}
-        zoneName={data.zoneName}
-        client={data.client}
-        zoneColor={data.zoneColor}
-        defaultExpanded={!data.compact}
-      />
-    </div>
-  );
-});
+// Custom node component that renders WorktreeCard.
+//
+// React.memo's default shallow compare runs against the wrapper `{ data }`
+// prop. The `initialNodes` useMemo above rebuilds a fresh `data` object for
+// every worktree on every recomputation, so the default memo always fails
+// and every WorktreeCard re-renders on any session / worktree / board patch
+// — even unrelated ones. We supply a custom areEqual that compares the
+// individual fields of `data` shallowly so unrelated socket events don't
+// invalidate this node. This is the primary fix for board jank during
+// streaming socket traffic. (The empty-sessions array is stabilized in
+// `initialNodes` via EMPTY_SESSIONS so unrelated patches keep
+// `data.sessions` referentially equal too.)
+const WorktreeNode = React.memo(
+  ({ data }: { data: WorktreeNodeData }) => {
+    return (
+      <div className="worktree-node">
+        <WorktreeCard
+          worktree={data.worktree}
+          repo={data.repo}
+          sessions={data.sessions}
+          userById={data.userById}
+          currentUserId={data.currentUserId}
+          selectedSessionId={data.selectedSessionId}
+          onTaskClick={data.onTaskClick}
+          onSessionClick={data.onSessionClick}
+          onCreateSession={data.onCreateSession}
+          onForkSession={data.onForkSession}
+          onSpawnSession={data.onSpawnSession}
+          onArchiveOrDelete={data.onArchiveOrDelete}
+          onOpenSettings={data.onOpenSettings}
+          onOpenSessionSettings={data.onOpenSessionSettings}
+          onOpenTerminal={data.onOpenTerminal}
+          onStartEnvironment={data.onStartEnvironment}
+          onStopEnvironment={data.onStopEnvironment}
+          onViewLogs={data.onViewLogs}
+          onExecuteScheduleNow={data.onExecuteScheduleNow}
+          onUnpin={data.onUnpin}
+          isPinned={data.isPinned}
+          zoneName={data.zoneName}
+          client={data.client}
+          zoneColor={data.zoneColor}
+          defaultExpanded={!data.compact}
+        />
+      </div>
+    );
+  },
+  (prev, next) => {
+    // Shallow-compare the fields of `data` we actually pass down to
+    // WorktreeCard. If the parent rebuilt `data` but every relevant field
+    // is referentially equal, skip re-rendering this card. The fields here
+    // must match the props read from `data` above.
+    const p = prev.data;
+    const n = next.data;
+    return (
+      p.worktree === n.worktree &&
+      p.repo === n.repo &&
+      p.sessions === n.sessions &&
+      p.userById === n.userById &&
+      p.currentUserId === n.currentUserId &&
+      p.selectedSessionId === n.selectedSessionId &&
+      p.isPinned === n.isPinned &&
+      p.zoneName === n.zoneName &&
+      p.zoneColor === n.zoneColor &&
+      p.compact === n.compact &&
+      p.client === n.client &&
+      p.onTaskClick === n.onTaskClick &&
+      p.onSessionClick === n.onSessionClick &&
+      p.onCreateSession === n.onCreateSession &&
+      p.onForkSession === n.onForkSession &&
+      p.onSpawnSession === n.onSpawnSession &&
+      p.onArchiveOrDelete === n.onArchiveOrDelete &&
+      p.onOpenSettings === n.onOpenSettings &&
+      p.onOpenSessionSettings === n.onOpenSessionSettings &&
+      p.onOpenTerminal === n.onOpenTerminal &&
+      p.onStartEnvironment === n.onStartEnvironment &&
+      p.onStopEnvironment === n.onStopEnvironment &&
+      p.onViewLogs === n.onViewLogs &&
+      p.onExecuteScheduleNow === n.onExecuteScheduleNow &&
+      p.onUnpin === n.onUnpin
+    );
+  }
+);
 
 // Define nodeTypes outside component to avoid recreation on every render
 const nodeTypes = {
@@ -609,8 +663,10 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             ? zoneObj.borderColor || zoneObj.color // Backwards compat: borderColor first, then fall back to deprecated color
             : undefined;
 
-        // Get sessions for this worktree
-        const worktreeSessions = sessionsByWorktree.get(worktree.worktree_id) || [];
+        // Get sessions for this worktree. Use EMPTY_SESSIONS (shared
+        // constant) instead of inline `|| []` so worktrees without sessions
+        // keep a referentially stable `sessions` prop across renders.
+        const worktreeSessions = sessionsByWorktree.get(worktree.worktree_id) || EMPTY_SESSIONS;
 
         // Get repo for this worktree
         const repo = repoById.get(worktree.repo_id);
