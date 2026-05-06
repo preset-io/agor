@@ -956,9 +956,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       }
     }
 
-    // Render template using shared core helper (missing values become "")
+    // Render template using shared core helper (missing values become "").
+    // renderTemplate returns "" on render error (default onError behavior);
+    // fall back to the raw template so the user sees something rather than
+    // a silently-empty artifact body.
     const rendered = renderTemplate(rawTemplate, context);
-    // renderTemplate returns "" on error; fall back to raw template so the user sees something
     return { rendered: rendered || rawTemplate, missingEnvVars };
   }
 

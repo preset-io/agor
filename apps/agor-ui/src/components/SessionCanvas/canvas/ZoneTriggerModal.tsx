@@ -237,10 +237,12 @@ export const ZoneTriggerModal = ({
               },
       };
 
-      return renderTemplate(trigger.template, context);
+      // For the user-facing preview we want to see the raw template (with
+      // unresolved {{...}}) on failure rather than a silently-blank textarea.
+      return renderTemplate(trigger.template, context, { onError: 'raw' });
     } catch (error) {
       console.error('Handlebars template error:', error);
-      return trigger.template; // Fallback to raw template
+      return trigger.template; // Defensive: renderTemplate itself never throws
     }
   }, [
     trigger.template,

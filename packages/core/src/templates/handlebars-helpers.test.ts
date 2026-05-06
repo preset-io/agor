@@ -995,11 +995,11 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
       expect(result).toContain('HIGH');
     });
 
-    it('should not throw on invalid template syntax; returns raw template and logs', () => {
-      // Returning the raw template (rather than '') preserves visible feedback
-      // for UI surfaces like the zone trigger dialog — see #1090 / v2 fix.
+    it('should not throw on invalid template syntax; returns "" by default and logs', () => {
+      // Default fallback is '' (safe for command/env/prompt callers); UI
+      // surfaces opt into raw-template fallback via { onError: 'raw' }.
       const result = renderTemplate('{{#if unclosed', {});
-      expect(result).toBe('{{#if unclosed');
+      expect(result).toBe('');
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining('Handlebars template error'),
         expect.anything()
@@ -1284,16 +1284,58 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
   // The v2 fix makes renderTemplate self-register helpers on the same
   // instance it compiles against, eliminating the dual-instance hazard.
   describe('regression: renderTemplate is self-sufficient (no prior register call)', () => {
-    it('renders a helper-using template without an explicit registerHandlebarsHelpers() call', () => {
-      // Simulate "first call from a freshly-loaded module" — we can't truly
-      // reset Handlebars' internal state here (helpers persist across tests
-      // by design), but the assertion is the contract: callers must not be
-      // required to register helpers before invoking renderTemplate.
-      const result = renderTemplate(
-        'Open issue #{{add 1000 worktree.unique_id}} for {{uppercase worktree.name}}',
-        { worktree: { unique_id: 90, name: 'feature-x' } }
-      );
-      expect(result).toBe('Open issue #1090 for FEATURE-X');
+    it('renders a helper-using template even when our helpers are absent from Handlebars at call time', async () => {
+      // Reproduce the production failure mode: in the tsup-bundled
+      // @agor-live/client, the Handlebars singleton renderTemplate compiles
+      // against has *no* Agor helpers registered (because the host app
+      // registered them on a different physical instance). Simulate that
+      // here by stripping our helpers off the Handlebars singleton AND
+      // re-importing the module so its `helpersRegistered` flag resets.
+      const ourHelpers = [
+        'add',
+        'sub',
+        'mul',
+        'div',
+        'eq',
+        'ne',
+        'lt',
+        'lte',
+        'gt',
+        'gte',
+        'and',
+        'or',
+        'not',
+        'concat',
+        'uppercase',
+        'lowercase',
+        'replace',
+        'trim',
+        'default',
+        'json',
+      ];
+      const saved: Record<string, unknown> = {};
+      for (const name of ourHelpers) {
+        saved[name] = Handlebars.helpers[name];
+        Handlebars.unregisterHelper(name);
+      }
+      try {
+        vi.resetModules();
+        const fresh = await import('./handlebars-helpers');
+        const result = fresh.renderTemplate(
+          'Open issue #{{add 1000 worktree.unique_id}} for {{uppercase worktree.name}}',
+          { worktree: { unique_id: 90, name: 'feature-x' } }
+        );
+        expect(result).toBe('Open issue #1090 for FEATURE-X');
+      } finally {
+        // Restore helpers for downstream tests in this file (which reuse
+        // the global Handlebars singleton via the top-level beforeEach).
+        for (const [name, helper] of Object.entries(saved)) {
+          if (helper) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            Handlebars.registerHelper(name, helper as any);
+          }
+        }
+      }
     });
 
     it('renders the zone-trigger-style template the modal actually feeds in', () => {
@@ -1327,11 +1369,18 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
       expect(result).not.toBe(template);
     });
 
-    it('falls back to the raw template (not empty) on render error so users see something', () => {
-      // Unknown helpers are a runtime error — verify we surface the template
-      // rather than swallowing into ''.
+    it('returns "" by default on render error (safe for command/env/prompt callers)', () => {
+      // Unknown helpers are a runtime error. Default fallback is '' so
+      // callers that compose the result into shell commands, env vars, or
+      // system prompts don't leak literal {{...}} placeholders.
       const raw = '{{nonExistentHelper foo bar}}';
       const result = renderTemplate(raw, { foo: 1, bar: 2 });
+      expect(result).toBe('');
+    });
+
+    it('returns the raw template on render error when onError: "raw" is set (UI preview surfaces)', () => {
+      const raw = '{{nonExistentHelper foo bar}}';
+      const result = renderTemplate(raw, { foo: 1, bar: 2 }, { onError: 'raw' });
       expect(result).toBe(raw);
     });
   });

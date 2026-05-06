@@ -216,22 +216,44 @@ export function registerHandlebarsHelpers(): void {
 }
 
 /**
+ * Behavior when a template fails to render.
+ *
+ * - `'empty'` (default): return `''`. Safe for callers that compose the
+ *   result into shell commands, env vars, system prompts, etc., where
+ *   leaking unresolved `{{...}}` placeholders is worse than emptiness.
+ * - `'raw'`: return the raw template string so users see *something*
+ *   (the unrendered placeholders). Use for UI surfaces like the zone
+ *   trigger preview dialog where a blank textarea hides the bug.
+ */
+export type RenderTemplateOnError = 'empty' | 'raw';
+
+export interface RenderTemplateOptions {
+  /** Behavior when rendering throws. Default: `'empty'`. */
+  onError?: RenderTemplateOnError;
+}
+
+/**
  * Render a Handlebars template with given context
  *
  * Automatically registers helpers on the same Handlebars instance this
  * function compiles against — see the `helpersRegistered` doc above for
  * why caller-side registration is not enough in bundled environments.
  *
- * Never throws. On error, returns the raw template string so callers
- * (especially UI surfaces like the zone trigger dialog) get *visible*
- * feedback instead of a silently-blank textarea. Empty/non-string input
- * still returns an empty string.
+ * Never throws. On error, returns `''` by default (safe for command/env/
+ * prompt composition); pass `{ onError: 'raw' }` to surface the raw
+ * template string instead (preferred for user-facing previews). Empty/
+ * non-string input always returns `''`.
  *
  * @param templateString - Handlebars template string
  * @param context - Template context variables
- * @returns Rendered string, or the raw template if rendering fails
+ * @param options - Render options (see `RenderTemplateOptions`)
+ * @returns Rendered string, or the configured fallback on failure
  */
-export function renderTemplate(templateString: string, context: Record<string, unknown>): string {
+export function renderTemplate(
+  templateString: string,
+  context: Record<string, unknown>,
+  options: RenderTemplateOptions = {}
+): string {
   if (!templateString || typeof templateString !== 'string') {
     return '';
   }
@@ -245,10 +267,13 @@ export function renderTemplate(templateString: string, context: Record<string, u
     console.error('❌ Handlebars template error:', error);
     console.error('Template:', templateString);
     console.error('Context keys:', Object.keys(context));
-    // Return the raw template so the user sees *something* (the unrendered
-    // placeholders) rather than a silently-blank result. Better to surface
-    // the failure than to hide it.
-    return templateString;
+    if (options.onError === 'raw') {
+      // Return the raw template so the user sees *something* (the unrendered
+      // placeholders) rather than a silently-blank result. Used by UI
+      // previews where a silent blank textarea hides the bug.
+      return templateString;
+    }
+    return '';
   }
 }
 
