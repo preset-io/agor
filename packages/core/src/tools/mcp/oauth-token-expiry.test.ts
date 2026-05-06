@@ -24,37 +24,42 @@ function makeJwt(payload: object): string {
   return [b64('{"alg":"none"}'), b64(JSON.stringify(payload)), 'sig'].join('.');
 }
 
+/** Convert seconds-from-NOW_MS to the absolute Date the resolver should produce. */
+function expectedDate(secondsFromNow: number): Date {
+  return new Date(NOW_MS + secondsFromNow * 1000);
+}
+
 describe('resolveTokenExpiry', () => {
   describe('cascade order', () => {
     it('1. uses tokenResponse.expires_in when present', () => {
       const r = resolveTokenExpiry({ expires_in: 3600 }, undefined, NOW_MS);
-      expect(r).toEqual({ seconds: 3600, source: 'expires_in' });
+      expect(r).toEqual({ expiresAt: expectedDate(3600), source: 'expires_in' });
     });
 
     it('2. falls through to expires_at when expires_in is missing', () => {
       const r = resolveTokenExpiry({ expires_at: NOW_SEC + 7200 }, undefined, NOW_MS);
-      expect(r).toEqual({ seconds: 7200, source: 'expires_at' });
+      expect(r).toEqual({ expiresAt: expectedDate(7200), source: 'expires_at' });
     });
 
     it('3. falls through to top-level exp when expires_in/at missing', () => {
       const r = resolveTokenExpiry({ exp: NOW_SEC + 1800 }, undefined, NOW_MS);
-      expect(r).toEqual({ seconds: 1800, source: 'exp' });
+      expect(r).toEqual({ expiresAt: expectedDate(1800), source: 'exp' });
     });
 
     it('4. falls through to ext_expires_in (Microsoft style)', () => {
       const r = resolveTokenExpiry({ ext_expires_in: 5400 }, undefined, NOW_MS);
-      expect(r).toEqual({ seconds: 5400, source: 'ext_expires_in' });
+      expect(r).toEqual({ expiresAt: expectedDate(5400), source: 'ext_expires_in' });
     });
 
     it('5. JWT-decodes the access_token when nothing else works', () => {
       const jwt = makeJwt({ exp: NOW_SEC + 900 });
       const r = resolveTokenExpiry({}, jwt, NOW_MS);
-      expect(r).toEqual({ seconds: 900, source: 'jwt_exp' });
+      expect(r).toEqual({ expiresAt: expectedDate(900), source: 'jwt_exp' });
     });
 
     it('7. returns null/unknown when no source can supply a TTL', () => {
       const r = resolveTokenExpiry({}, 'opaque-secret_abc', NOW_MS);
-      expect(r).toEqual({ seconds: null, source: 'unknown' });
+      expect(r).toEqual({ expiresAt: null, source: 'unknown' });
     });
   });
 
@@ -62,7 +67,7 @@ describe('resolveTokenExpiry', () => {
     it('expires_in wins over a JWT exp claim that disagrees', () => {
       const jwt = makeJwt({ exp: NOW_SEC + 9999 });
       const r = resolveTokenExpiry({ expires_in: 60 }, jwt, NOW_MS);
-      expect(r.seconds).toBe(60);
+      expect(r.expiresAt).toEqual(expectedDate(60));
       expect(r.source).toBe('expires_in');
     });
 
@@ -72,7 +77,7 @@ describe('resolveTokenExpiry', () => {
         undefined,
         NOW_MS
       );
-      expect(r.seconds).toBe(100);
+      expect(r.expiresAt).toEqual(expectedDate(100));
       expect(r.source).toBe('expires_at');
     });
   });
@@ -112,6 +117,17 @@ describe('resolveTokenExpiry', () => {
       const pastExp = makeJwt({ exp: NOW_SEC - 1 });
       expect(resolveTokenExpiry({}, pastExp, NOW_MS).source).toBe('unknown');
     });
+
+    it('rejects absolute timestamps beyond the sanity horizon (likely ms-vs-seconds bug)', () => {
+      // A provider returning epoch *milliseconds* in `expires_at` (instead of
+      // seconds) would resolve to year ~+58k. Reject silently and let the
+      // cascade fall through rather than persist a thousand-year expiry.
+      const tooFar = NOW_MS; // i.e. NOW_SEC * 1000 — used as if it were seconds
+      expect(resolveTokenExpiry({ expires_at: tooFar }, undefined, NOW_MS).source).toBe('unknown');
+      expect(resolveTokenExpiry({ exp: tooFar }, undefined, NOW_MS).source).toBe('unknown');
+      const jwtMsExp = makeJwt({ exp: tooFar });
+      expect(resolveTokenExpiry({}, jwtMsExp, NOW_MS).source).toBe('unknown');
+    });
   });
 
   describe('the bug we are fixing', () => {
@@ -126,7 +142,7 @@ describe('resolveTokenExpiry', () => {
         // no expires_in, no expires_at, no exp, no ext_expires_in
       };
       const r = resolveTokenExpiry(notionLike, notionLike.access_token, NOW_MS);
-      expect(r).toEqual({ seconds: null, source: 'unknown' });
+      expect(r).toEqual({ expiresAt: null, source: 'unknown' });
     });
   });
 });

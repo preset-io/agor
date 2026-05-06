@@ -57,11 +57,16 @@ export interface OAuthDebugInfo {
   tokenExpiresAt?: Date;
 }
 
+import { resolveTokenExpiry } from './oauth-token-expiry';
+
 // Cache tokens per unique credential set to avoid cross-tenant leakage
 const oauthTokenCache = new Map<string, CachedToken>();
 
-// Default token validity: 15 minutes if not specified by OAuth server
-const DEFAULT_TOKEN_TTL_SECONDS = 900;
+// In-memory cache TTL fallback when `resolveTokenExpiry` cannot determine an
+// expiry from the token response. This bounds the lifetime of THIS module's
+// `oauthTokenCache` map only — there is no DB persistence for client-credentials
+// tokens, so this is purely local-cache hygiene.
+const UNKNOWN_EXPIRY_CACHE_TTL_SECONDS = 900;
 
 // Buffer before expiry to avoid using soon-to-expire tokens
 const EXPIRY_BUFFER_SECONDS = 30;
@@ -292,10 +297,18 @@ export async function fetchOAuthToken(
     throw new Error('OAuth response missing access_token field');
   }
 
-  // Step 7: Cache token
-  const expiresInSeconds = data.expires_in || DEFAULT_TOKEN_TTL_SECONDS;
-  const expiresAt = Date.now() + (expiresInSeconds - EXPIRY_BUFFER_SECONDS) * 1000;
+  // Step 7: Cache token. Walk the shared cascade so this client-credentials
+  // path agrees with the MCP user-grant paths on TTL resolution. When the
+  // cascade returns null (provider gave no hint we could decode), fall back
+  // to UNKNOWN_EXPIRY_CACHE_TTL_SECONDS — local-cache hygiene only.
   const fetchedAt = Date.now();
+  const resolved = resolveTokenExpiry(data, data.access_token, fetchedAt);
+  const ttlSeconds =
+    resolved.expiresAt !== null
+      ? Math.max(1, Math.floor((resolved.expiresAt.getTime() - fetchedAt) / 1000))
+      : UNKNOWN_EXPIRY_CACHE_TTL_SECONDS;
+  const expiresInSeconds = ttlSeconds;
+  const expiresAt = fetchedAt + (ttlSeconds - EXPIRY_BUFFER_SECONDS) * 1000;
 
   oauthTokenCache.set(cacheKey, {
     token: data.access_token,

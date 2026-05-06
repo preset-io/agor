@@ -142,14 +142,14 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
     // is now an honest "we couldn't determine a TTL from anything the
     // provider returned" — Notion is the canonical example (omits expires_in
     // on both initial grant and refresh). The token is still usable; the
-    // daemon falls back to retrying on 401 when the provider eventually
-    // rejects it. See `context/explorations/mcp-oauth-token-lifecycle.md`
-    // (Phase 3.5) for the cascade and the reasoning.
+    // operator can force a refresh from this pill if it stops working.
+    // (A retry-on-401 transport shim is tracked as a follow-up — see
+    // `context/explorations/mcp-oauth-token-lifecycle.md` Phase 5.)
     authedTooltip = (
       <>
         <div>Expires in: unknown</div>
         <div style={{ opacity: 0.75, fontSize: 12 }}>
-          Provider returned no expiry — token will be refreshed on demand.
+          Provider returned no expiry. Token is used until it stops working.
         </div>
         <div style={{ opacity: 0.75, fontSize: 12, marginTop: 4 }}>Click to refresh now</div>
       </>

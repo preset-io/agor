@@ -9,6 +9,7 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
 import type { OAuthTokenResponse } from './oauth-auth.js';
+import { resolveTokenExpiry } from './oauth-token-expiry.js';
 
 export interface OAuthMetadata {
   authorization_servers: string[];
@@ -26,8 +27,12 @@ interface CachedAuthCodeToken {
 // Key is the resource metadata URL to avoid cross-tenant leakage
 const authCodeTokenCache = new Map<string, CachedAuthCodeToken>();
 
-// Default token validity: 1 hour if not specified by OAuth server
-const DEFAULT_AUTHCODE_TOKEN_TTL_SECONDS = 3600;
+// In-memory cache TTL fallback when `resolveTokenExpiry` cannot determine an
+// expiry from the token response. This bounds the lifetime of THIS module's
+// `authCodeTokenCache` map only — local-cache hygiene, not a persisted DB
+// value. The persisted lifecycle is handled in `oauth-cache.ts` (initial
+// auth) and `oauth-refresh.ts` (refresh) which both use the resolver.
+const UNKNOWN_EXPIRY_CACHE_TTL_SECONDS = 3600;
 
 /**
  * Raw OAuth 2.0 token response shape.
@@ -889,10 +894,15 @@ export async function performMCPOAuthFlow(
 
     console.log('[MCP OAuth] Access token received successfully');
 
-    // Step 10: Cache token
-    const expiresInSeconds = tokenResponse.expires_in ?? DEFAULT_AUTHCODE_TOKEN_TTL_SECONDS;
-    const expiresAt = Date.now() + (expiresInSeconds - EXPIRY_BUFFER_SECONDS) * 1000;
+    // Step 10: Cache token. Walk the shared cascade so this site agrees with
+    // the persisted-token paths on TTL resolution.
     const fetchedAt = Date.now();
+    const resolved = resolveTokenExpiry(tokenResponse, tokenResponse.access_token, fetchedAt);
+    const expiresInSeconds =
+      resolved.expiresAt !== null
+        ? Math.max(1, Math.floor((resolved.expiresAt.getTime() - fetchedAt) / 1000))
+        : UNKNOWN_EXPIRY_CACHE_TTL_SECONDS;
+    const expiresAt = fetchedAt + (expiresInSeconds - EXPIRY_BUFFER_SECONDS) * 1000;
 
     authCodeTokenCache.set(metadataUrl, {
       token: tokenResponse.access_token,
@@ -1384,10 +1394,15 @@ export async function completeMCPOAuthFlow(
 
   console.log('[MCP OAuth] Access token received successfully');
 
-  // Cache token
-  const expiresInSeconds = tokenResponse.expires_in ?? DEFAULT_AUTHCODE_TOKEN_TTL_SECONDS;
-  const expiresAt = Date.now() + (expiresInSeconds - EXPIRY_BUFFER_SECONDS) * 1000;
+  // Cache token. Walk the shared cascade so this site agrees with the
+  // persisted-token paths on TTL resolution.
   const fetchedAt = Date.now();
+  const resolved = resolveTokenExpiry(tokenResponse, tokenResponse.access_token, fetchedAt);
+  const expiresInSeconds =
+    resolved.expiresAt !== null
+      ? Math.max(1, Math.floor((resolved.expiresAt.getTime() - fetchedAt) / 1000))
+      : UNKNOWN_EXPIRY_CACHE_TTL_SECONDS;
+  const expiresAt = fetchedAt + (expiresInSeconds - EXPIRY_BUFFER_SECONDS) * 1000;
 
   authCodeTokenCache.set(context.metadataUrl, {
     token: tokenResponse.access_token,

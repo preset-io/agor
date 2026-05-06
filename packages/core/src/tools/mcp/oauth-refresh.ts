@@ -297,7 +297,7 @@ export async function refreshAndPersistToken(deps: RefreshAndPersistDeps): Promi
 
       // Resolve expiry via the shared cascade so this site behaves
       // identically to `persistOAuthToken` (initial-auth path). For providers
-      // that omit `expires_in` on refresh (e.g. Notion), `expiry.seconds`
+      // that omit `expires_in` on refresh (e.g. Notion), `expiry.expiresAt`
       // will be `null`, which `saveToken` writes as a literal `NULL` to
       // `oauth_token_expires_at` — surfaced in the UI as
       // "expires in: unknown" rather than the previous silent oscillation
@@ -310,7 +310,7 @@ export async function refreshAndPersistToken(deps: RefreshAndPersistDeps): Promi
       // the rotation replaces the old value.
       await userTokenRepo.saveToken(deps.userId, deps.mcpServerId, {
         accessToken: result.access_token,
-        expiresInSeconds: expiry.seconds, // number | null — null means "unknown"
+        expiresAt: expiry.expiresAt, // Date | null — null means "unknown"
         refreshToken: result.refresh_token, // undefined = keep existing
         // Don't touch client_id / client_secret — same grant, same client.
       });
@@ -318,7 +318,7 @@ export async function refreshAndPersistToken(deps: RefreshAndPersistDeps): Promi
       console.log(
         `[MCP OAuth Refresh] ✓ Refreshed token for user=${deps.userId ?? '<shared>'} ` +
           `server=${deps.mcpServerId} (expiry source: ${expiry.source}` +
-          `${expiry.seconds !== null ? `, ttl=${expiry.seconds}s` : ', ttl=unknown'})` +
+          `${expiry.expiresAt !== null ? `, expires=${expiry.expiresAt.toISOString()}` : ', expires=unknown'})` +
           `${result.refresh_token ? ' (with rotated refresh_token)' : ''}`
       );
 

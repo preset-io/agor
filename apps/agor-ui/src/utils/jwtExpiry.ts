@@ -4,6 +4,12 @@
  * We decode (NOT verify) the payload purely to learn when the token will be
  * rejected by the server, so we can schedule a proactive refresh. The server
  * is still the only party that validates signatures.
+ *
+ * ⚠ KEEP IN SYNC with `packages/core/src/utils/jwt.ts` (used daemon-side by
+ * `resolveTokenExpiry`). The implementations are intentionally identical;
+ * we duplicate rather than import because `apps/agor-ui` does not depend on
+ * `@agor/core` (and adding it would pull Node-only deps into the browser
+ * bundle). If the API drifts, update both files.
  */
 
 /**

@@ -273,9 +273,14 @@ describe('refreshAndPersistToken', () => {
     expect(token).toBe('new-a');
     expect(mockSaveToken).toHaveBeenCalledWith(USER_ID, SERVER_ID, {
       accessToken: 'new-a',
-      expiresInSeconds: 3600,
+      expiresAt: expect.any(Date), // resolved from expires_in: 3600 → ~now+1h
       refreshToken: undefined, // provider omitted — repo preserves existing
     });
+    // Spot-check the resolved expiry is roughly +1h from now (within 5s slop).
+    const call = mockSaveToken.mock.calls[0]?.[2] as { expiresAt: Date };
+    const deltaSec = (call.expiresAt.getTime() - Date.now()) / 1000;
+    expect(deltaSec).toBeGreaterThan(3595);
+    expect(deltaSec).toBeLessThanOrEqual(3600);
   });
 
   it('writes rotated refresh_token when provider returns one', async () => {
