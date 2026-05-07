@@ -21,20 +21,19 @@ interface WorktreeListDrawerProps {
 }
 
 /**
- * Maps every SessionStatus to an Ant Badge status color.
- * Today's drawer only colored 3 of 8 statuses; this covers the full set so
- * the dot is glanceable for awaiting_permission, awaiting_input, timed_out,
- * stopping, and idle as well.
+ * Maps a SessionStatus to a corner-badge status, or `null` for "no badge".
+ *
+ * We only badge "interesting" states. `idle` (the common case) and `completed`
+ * (terminal, no signal value in a list view) render no badge — the avatar
+ * stands alone and the absence of a badge becomes its own signal: "nothing to
+ * see here". `running`/`stopping` use Ant's `processing` status which has a
+ * built-in pulsing animation, so it doubles as a live activity indicator.
  */
-const getStatusColor = (
-  status: Session['status']
-): 'success' | 'processing' | 'error' | 'warning' | 'default' => {
+const getBadgeStatus = (status: Session['status']): 'processing' | 'error' | 'warning' | null => {
   switch (status) {
     case 'running':
     case 'stopping':
       return 'processing';
-    case 'completed':
-      return 'success';
     case 'failed':
       return 'error';
     case 'awaiting_permission':
@@ -42,7 +41,7 @@ const getStatusColor = (
     case 'timed_out':
       return 'warning';
     default:
-      return 'default';
+      return null;
   }
 };
 
@@ -171,7 +170,7 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
                   onClose();
                 }}
               >
-                {/* Line 1: status dot · tool icon · title · genealogy */}
+                {/* Line 1: tool icon (with corner status badge) · title · genealogy */}
                 <div
                   style={{
                     display: 'flex',
@@ -180,11 +179,17 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
                     minWidth: 0,
                   }}
                 >
-                  <Badge
-                    status={getStatusColor(session.status)}
-                    style={{ marginTop: 6, flexShrink: 0 }}
-                  />
-                  <ToolIcon tool={session.agentic_tool} size={14} />
+                  {(() => {
+                    const badgeStatus = getBadgeStatus(session.status);
+                    const icon = <ToolIcon tool={session.agentic_tool} size={18} />;
+                    return badgeStatus ? (
+                      <Badge dot status={badgeStatus} offset={[-3, 3]} style={{ flexShrink: 0 }}>
+                        {icon}
+                      </Badge>
+                    ) : (
+                      icon
+                    );
+                  })()}
                   <Typography.Text
                     strong
                     style={{ ...getSessionTitleStyles(2), flex: 1, minWidth: 0 }}
@@ -202,7 +207,7 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
                     justifyContent: 'space-between',
                     gap: 8,
                     marginTop: 6,
-                    marginLeft: 22, // align under title (badge 6 + gap 8 + icon 14 - approx)
+                    marginLeft: 26, // align under title (icon 18 + gap 8)
                     minWidth: 0,
                   }}
                 >
