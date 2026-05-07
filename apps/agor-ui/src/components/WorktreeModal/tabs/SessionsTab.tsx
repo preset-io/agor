@@ -4,6 +4,7 @@ import { Badge, Input, Space, Switch, Table, Tag, Tooltip, Typography, theme } f
 import type { ColumnsType } from 'antd/es/table';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
+import { getSessionStatusTone } from '../../../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
 import { ArchiveToggleButton } from '../../ArchiveToggleButton';
 import { TaskStatusIcon } from '../../TaskStatusIcon';
@@ -15,17 +16,6 @@ interface SessionsTabProps {
   client: AgorClient | null;
   onSessionClick?: (sessionId: string) => void;
 }
-
-const statusColorMap: Record<string, string> = {
-  idle: 'default',
-  running: 'processing',
-  stopping: 'warning',
-  awaiting_permission: 'warning',
-  awaiting_input: 'processing',
-  timed_out: 'warning',
-  completed: 'success',
-  failed: 'error',
-};
 
 const SessionsTabInner: React.FC<SessionsTabProps> = ({
   worktree,
@@ -310,10 +300,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
       render: (_, session) => (
         <Space size={4}>
           <TaskStatusIcon status={session.status} size={14} />
-          <Tag
-            color={statusColorMap[session.status] || 'default'}
-            style={{ margin: 0, fontSize: 11 }}
-          >
+          <Tag color={getSessionStatusTone(session.status)} style={{ margin: 0, fontSize: 11 }}>
             {session.status}
           </Tag>
         </Space>

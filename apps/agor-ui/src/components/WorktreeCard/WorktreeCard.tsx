@@ -59,6 +59,7 @@ import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
 import { ChannelPill, IssuePill, PullRequestPill } from '../Pill';
+import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
 import { ToolIcon } from '../ToolIcon';
 import { buildSessionTree, type SessionTreeNode } from './buildSessionTree';
 
@@ -366,32 +367,6 @@ const WorktreeCardComponent = ({
   const renderSessionNode = (node: SessionTreeNode) => {
     const session = node.session;
 
-    // Get relationship icon based on type
-    const getRelationshipIcon = () => {
-      if (node.relationshipType === 'fork') {
-        if (session.fork_origin === 'btw') {
-          return (
-            <Typography.Text
-              style={{
-                fontSize: 9,
-                color: token.colorWarning,
-                fontWeight: 'bold',
-                whiteSpace: 'nowrap',
-                flexShrink: 0,
-              }}
-            >
-              btw
-            </Typography.Text>
-          );
-        }
-        return <ForkOutlined style={{ fontSize: 10, color: token.colorWarning }} />;
-      }
-      if (node.relationshipType === 'spawn') {
-        return <SubnodeOutlined style={{ fontSize: 10, color: token.colorInfo }} />;
-      }
-      return null;
-    };
-
     // Dropdown menu items for session actions
     const _sessionMenuItems: MenuProps['items'] = [
       {
@@ -462,7 +437,7 @@ const WorktreeCardComponent = ({
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
             {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
-            {getRelationshipIcon()}
+            <SessionRelationshipIcon session={session} size={10} />
             <Typography.Text
               strong
               style={{

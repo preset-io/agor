@@ -1,11 +1,13 @@
 import type { Board, Repo, Session, Worktree } from '@agor-live/client';
-import { ForkOutlined, SearchOutlined, SubnodeOutlined } from '@ant-design/icons';
+import { SearchOutlined } from '@ant-design/icons';
 import { Badge, Drawer, Input, List, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useMemo, useState } from 'react';
+import { getSessionStatusTone, type StatusTone } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime, formatTimestampWithRelative } from '../../utils/time';
 import { RepoPill } from '../Pill';
+import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
 import { ToolIcon } from '../ToolIcon';
 
 interface WorktreeListDrawerProps {
@@ -21,55 +23,16 @@ interface WorktreeListDrawerProps {
 }
 
 /**
- * Maps a SessionStatus to a corner-badge status, or `null` for "no badge".
- *
- * We only badge "interesting" states. `idle` (the common case) and `completed`
- * (terminal, no signal value in a list view) render no badge — the avatar
- * stands alone and the absence of a badge becomes its own signal: "nothing to
- * see here". `running`/`stopping` use Ant's `processing` status which has a
- * built-in pulsing animation, so it doubles as a live activity indicator.
+ * Drawer suppresses badges for the "boring" tones (`success`/`default`) so
+ * idle and completed rows show a clean avatar with no decoration. The absence
+ * of a badge becomes its own signal: "nothing to see here". `processing` uses
+ * Ant's pulsing animation so it doubles as a live-activity indicator.
  */
-const getBadgeStatus = (status: Session['status']): 'processing' | 'error' | 'warning' | null => {
-  switch (status) {
-    case 'running':
-    case 'stopping':
-      return 'processing';
-    case 'failed':
-      return 'error';
-    case 'awaiting_permission':
-    case 'awaiting_input':
-    case 'timed_out':
-      return 'warning';
-    default:
-      return null;
-  }
-};
-
-/**
- * Small inline relationship icon when a session was forked from a sibling or
- * spawned from a parent. Visual grammar matches WorktreeCard.tsx so the same
- * icon means the same thing wherever sessions appear.
- */
-const GenealogyIndicator: React.FC<{ session: Session }> = ({ session }) => {
-  const { token } = theme.useToken();
-  const parentId = session.genealogy?.parent_session_id;
-  const forkedFromId = session.genealogy?.forked_from_session_id;
-
-  if (parentId) {
-    return (
-      <Tooltip title={`Spawned from ${parentId.substring(0, 8)}`}>
-        <SubnodeOutlined style={{ fontSize: 11, color: token.colorInfo, flexShrink: 0 }} />
-      </Tooltip>
-    );
-  }
-  if (forkedFromId) {
-    return (
-      <Tooltip title={`Forked from ${forkedFromId.substring(0, 8)}`}>
-        <ForkOutlined style={{ fontSize: 11, color: token.colorWarning, flexShrink: 0 }} />
-      </Tooltip>
-    );
-  }
-  return null;
+const getBadgeTone = (
+  status: Session['status']
+): Exclude<StatusTone, 'success' | 'default'> | null => {
+  const tone = getSessionStatusTone(status);
+  return tone === 'success' || tone === 'default' ? null : tone;
 };
 
 export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
@@ -179,17 +142,19 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
                     minWidth: 0,
                   }}
                 >
-                  {(() => {
-                    const badgeStatus = getBadgeStatus(session.status);
-                    const icon = <ToolIcon tool={session.agentic_tool} size={18} />;
-                    return badgeStatus ? (
-                      <Badge dot status={badgeStatus} offset={[-3, 3]} style={{ flexShrink: 0 }}>
-                        {icon}
-                      </Badge>
-                    ) : (
-                      icon
-                    );
-                  })()}
+                  <span style={{ flexShrink: 0, display: 'inline-flex' }}>
+                    {(() => {
+                      const tone = getBadgeTone(session.status);
+                      const icon = <ToolIcon tool={session.agentic_tool} size={18} />;
+                      return tone ? (
+                        <Badge dot status={tone} offset={[-3, 3]}>
+                          {icon}
+                        </Badge>
+                      ) : (
+                        icon
+                      );
+                    })()}
+                  </span>
                   {(() => {
                     const titleText = getSessionDisplayTitle(session, {
                       includeAgentFallback: true,
@@ -203,7 +168,7 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
                       </Typography.Text>
                     );
                   })()}
-                  <GenealogyIndicator session={session} />
+                  <SessionRelationshipIcon session={session} />
                 </div>
 
                 {/* Line 2: repo+worktree pill · relative timestamp */}

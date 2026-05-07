@@ -1,0 +1,1 @@
+export { SessionRelationshipIcon } from './SessionRelationshipIcon';
