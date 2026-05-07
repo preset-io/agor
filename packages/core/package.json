@@ -80,6 +80,11 @@
       "import": "./dist/templates/session-context.js",
       "require": "./dist/templates/session-context.cjs"
     },
+    "./templates/spawn-subsession-template": {
+      "types": "./dist/templates/spawn-subsession-template.d.ts",
+      "import": "./dist/templates/spawn-subsession-template.js",
+      "require": "./dist/templates/spawn-subsession-template.cjs"
+    },
     "./environment/variable-resolver": {
       "types": "./dist/environment/variable-resolver.d.ts",
       "import": "./dist/environment/variable-resolver.js",

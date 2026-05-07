@@ -3,7 +3,7 @@
  * Used by both WorktreesTable and AssistantsTable to avoid duplication.
  */
 
-import type { AgorClient, Repo, Worktree } from '@agor-live/client';
+import type { Repo, Worktree } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -17,7 +17,6 @@ import {
 import type { GlobalToken } from 'antd';
 import { Badge, Button, Space, Tooltip } from 'antd';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
-import { renderTemplate } from '../../utils/templates';
 
 /** Render environment status icon for a worktree */
 export function renderEnvStatusIcon(worktree: Worktree, token: GlobalToken) {
@@ -85,8 +84,7 @@ export function renderEnvCell(
   callbacks: {
     onStartEnvironment?: (worktreeId: string) => void;
     onStopEnvironment?: (worktreeId: string) => void;
-  },
-  client: AgorClient | null
+  }
 ) {
   const status = worktree.environment_instance?.status;
   const healthStatus = worktree.environment_instance?.last_health_check?.status;
@@ -95,6 +93,12 @@ export function renderEnvCell(
 
   const isRunningOrHealthy =
     status === 'running' || status === 'starting' || healthStatus === 'healthy';
+
+  // The "open health URL" button uses the worktree's own `health_check_url`
+  // (rendered at worktree creation, then user-editable via the worktree
+  // modal) rather than re-rendering the repo template at click time. This
+  // honours user edits and avoids a daemon round-trip.
+  const healthUrl = worktree.health_check_url;
 
   return (
     <Space size={4}>
@@ -122,25 +126,14 @@ export function renderEnvCell(
             }}
             style={{ padding: '0 4px' }}
           />
-          {effectiveEnv?.health && (
+          {healthUrl && (
             <Button
               type="text"
               size="small"
               icon={<GlobalOutlined />}
-              onClick={async (e) => {
+              onClick={(e) => {
                 e.stopPropagation();
-                if (!client) return;
-                const url = await renderTemplate(client, effectiveEnv.health ?? '', {
-                  worktree: {
-                    unique_id: worktree.worktree_unique_id,
-                    name: worktree.name,
-                    path: worktree.path,
-                  },
-                  repo: { slug: repo.slug },
-                });
-                if (url) {
-                  window.open(url, '_blank');
-                }
+                window.open(healthUrl, '_blank');
               }}
               style={{ padding: '0 4px' }}
             />

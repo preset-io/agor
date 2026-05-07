@@ -35,11 +35,9 @@ import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAppEntityData } from '../../contexts/AppDataContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
-import spawnSubsessionTemplate from '../../templates/spawn_subsession.hbs?raw';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
-import { renderTemplate } from '../../utils/templates';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { EffortSelector } from '../EffortSelector';
 import { FileUpload, FileUploadButton } from '../FileUpload';
@@ -52,26 +50,6 @@ import { SessionPanelContent } from './SessionPanelContent';
 
 // Re-export PermissionMode from SDK for convenience
 export type { PermissionMode };
-
-/** Context shape for the spawn subsession Handlebars template */
-interface SpawnTemplateContext {
-  userPrompt: string;
-  hasConfig?: boolean;
-  agenticTool?: string;
-  permissionMode?: PermissionMode;
-  modelConfig?: SpawnConfig['modelConfig'];
-  codexSandboxMode?: CodexSandboxMode;
-  codexApprovalPolicy?: CodexApprovalPolicy;
-  codexNetworkAccess?: boolean;
-  mcpServerIds?: string[];
-  hasCallbackConfig?: boolean;
-  callbackConfig?: {
-    enableCallback?: boolean;
-    includeLastMessage?: boolean;
-    includeOriginalPrompt?: boolean;
-  };
-  extraInstructions?: string;
-}
 
 // ---------------------------------------------------------------------------
 // PromptInput — thin wrapper around AutocompleteTextarea that keeps the typed
@@ -591,52 +569,30 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const handleSpawnModalConfirm = async (config: string | Partial<SpawnConfig>) => {
     if (!session || !client) return;
 
-    let templateContext: SpawnTemplateContext;
-    if (typeof config === 'string') {
-      templateContext = { userPrompt: config };
-    } else {
-      const hasConfig =
-        config.agent !== undefined ||
-        config.permissionMode !== undefined ||
-        config.modelConfig !== undefined ||
-        config.codexSandboxMode !== undefined ||
-        config.codexApprovalPolicy !== undefined ||
-        config.codexNetworkAccess !== undefined ||
-        (config.mcpServerIds?.length ?? 0) > 0 ||
-        config.enableCallback !== undefined ||
-        config.includeLastMessage !== undefined ||
-        config.includeOriginalPrompt !== undefined ||
-        config.extraInstructions !== undefined;
+    // Daemon owns the spawn-subsession meta-prompt template. The UI sends raw
+    // `{userPrompt, config}` to /sessions/:id/spawn-prompt, which renders the
+    // meta-prompt and forwards it to /sessions/:id/prompt in one round trip.
+    const spawnContext =
+      typeof config === 'string'
+        ? { userPrompt: config, permissionMode }
+        : {
+            userPrompt: config.prompt || '',
+            agenticTool: config.agent,
+            permissionMode: config.permissionMode ?? permissionMode,
+            modelConfig: config.modelConfig,
+            codexSandboxMode: config.codexSandboxMode,
+            codexApprovalPolicy: config.codexApprovalPolicy,
+            codexNetworkAccess: config.codexNetworkAccess,
+            mcpServerIds: config.mcpServerIds,
+            callbackConfig: {
+              enableCallback: config.enableCallback,
+              includeLastMessage: config.includeLastMessage,
+              includeOriginalPrompt: config.includeOriginalPrompt,
+            },
+            extraInstructions: config.extraInstructions,
+          };
 
-      templateContext = {
-        userPrompt: config.prompt || '',
-        hasConfig,
-        agenticTool: config.agent,
-        permissionMode: config.permissionMode,
-        modelConfig: config.modelConfig,
-        codexSandboxMode: config.codexSandboxMode,
-        codexApprovalPolicy: config.codexApprovalPolicy,
-        codexNetworkAccess: config.codexNetworkAccess,
-        mcpServerIds: config.mcpServerIds,
-        hasCallbackConfig:
-          config.enableCallback !== undefined ||
-          config.includeLastMessage !== undefined ||
-          config.includeOriginalPrompt !== undefined,
-        callbackConfig: {
-          enableCallback: config.enableCallback,
-          includeLastMessage: config.includeLastMessage,
-          includeOriginalPrompt: config.includeOriginalPrompt,
-        },
-        extraInstructions: config.extraInstructions,
-      };
-    }
-
-    const metaPrompt = await renderTemplate(
-      client,
-      spawnSubsessionTemplate,
-      templateContext as unknown as Record<string, unknown>
-    );
-    await onSendPrompt?.(session.session_id, metaPrompt, permissionMode);
+    await client.service(`sessions/${session.session_id}/spawn-prompt`).create(spawnContext);
 
     setSpawnModalOpen(false);
     promptRef.current?.clear();

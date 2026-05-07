@@ -1,4 +1,43 @@
-INSTRUCTION: The user is requesting a subsession to handle a delegated task. You MUST use the Agor
+/**
+ * Spawn-subsession meta-prompt.
+ *
+ * Wraps the user's intent + agent config in instructions that tell the
+ * *parent* session's LLM to call the `agor_sessions_spawn` MCP tool with an
+ * enriched prompt. The output of this template is sent as a chat message to
+ * the parent session — it's not a side-effecting daemon action; it's a
+ * prompt envelope.
+ *
+ * Lives in core (not the UI) so the daemon can render it server-side via
+ * `/sessions/:id/spawn-prompt`, sparing the browser bundle Handlebars and a
+ * round-trip.
+ */
+
+import { renderTemplate } from './handlebars-helpers';
+
+export interface SpawnSubsessionContext {
+  userPrompt: string;
+  hasConfig?: boolean;
+  agenticTool?: string;
+  permissionMode?: string;
+  modelConfig?: {
+    mode?: string;
+    model?: string;
+    effort?: string;
+  };
+  codexSandboxMode?: string;
+  codexApprovalPolicy?: string;
+  codexNetworkAccess?: boolean;
+  mcpServerIds?: string[];
+  hasCallbackConfig?: boolean;
+  callbackConfig?: {
+    enableCallback?: boolean;
+    includeLastMessage?: boolean;
+    includeOriginalPrompt?: boolean;
+  };
+  extraInstructions?: string;
+}
+
+const SPAWN_SUBSESSION_TEMPLATE = `INSTRUCTION: The user is requesting a subsession to handle a delegated task. You MUST use the Agor
 MCP tool 'agor_sessions_spawn' to create a child session that will handle this request. USER
 REQUEST: """
 {{userPrompt}}
@@ -130,4 +169,37 @@ session will do YOUR EXACT TOOL CALL MUST BE: agor_sessions_spawn({ "prompt": "{
   "includeOriginalPrompt":
   {{callbackConfig.includeOriginalPrompt}},{{/if}}{{#if extraInstructions}}
   "extraInstructions": """{{extraInstructions}}"""{{/if}}
-}) Proceed now by calling agor_sessions_spawn with the exact parameters shown above.
+}) Proceed now by calling agor_sessions_spawn with the exact parameters shown above.`;
+
+/**
+ * Render the spawn-subsession meta-prompt for a parent session's LLM.
+ * Internally derives the `hasConfig` / `hasCallbackConfig` flags from the
+ * supplied context so callers don't have to.
+ */
+export function renderSpawnSubsessionPrompt(context: SpawnSubsessionContext): string {
+  const hasConfig =
+    context.hasConfig ??
+    (context.agenticTool !== undefined ||
+      context.permissionMode !== undefined ||
+      context.modelConfig !== undefined ||
+      context.codexSandboxMode !== undefined ||
+      context.codexApprovalPolicy !== undefined ||
+      context.codexNetworkAccess !== undefined ||
+      (context.mcpServerIds?.length ?? 0) > 0 ||
+      context.callbackConfig?.enableCallback !== undefined ||
+      context.callbackConfig?.includeLastMessage !== undefined ||
+      context.callbackConfig?.includeOriginalPrompt !== undefined ||
+      context.extraInstructions !== undefined);
+
+  const hasCallbackConfig =
+    context.hasCallbackConfig ??
+    (context.callbackConfig?.enableCallback !== undefined ||
+      context.callbackConfig?.includeLastMessage !== undefined ||
+      context.callbackConfig?.includeOriginalPrompt !== undefined);
+
+  return renderTemplate(SPAWN_SUBSESSION_TEMPLATE, {
+    ...context,
+    hasConfig,
+    hasCallbackConfig,
+  } as unknown as Record<string, unknown>);
+}

@@ -1177,6 +1177,140 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   );
 
   // ============================================================================
+  // Spawn-subsession prompt endpoint
+  //
+  // Renders the bundled spawn-subsession meta-prompt server-side and forwards
+  // it to /sessions/:id/prompt in a single round-trip. Clients send raw
+  // `{userPrompt, config}` instead of doing the render-then-prompt dance.
+  // The daemon owns the meta-prompt template, so the UI bundle stays
+  // Handlebars-free.
+  // ============================================================================
+
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/spawn-prompt',
+    {
+      async create(
+        data: {
+          userPrompt?: string;
+          permissionMode?: import('@agor/core/types').PermissionMode;
+          // Spawn-subsession context passes through verbatim — see
+          // `SpawnSubsessionContext` in @agor/core for the shape.
+          [key: string]: unknown;
+        },
+        params: RouteParams
+      ) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Session ID required');
+        if (typeof data?.userPrompt !== 'string') {
+          throw new Error('userPrompt (string) is required');
+        }
+
+        const { renderSpawnSubsessionPrompt } = await import(
+          '@agor/core/templates/spawn-subsession-template'
+        );
+        const metaPrompt = renderSpawnSubsessionPrompt(
+          data as unknown as import('@agor/core/templates/spawn-subsession-template').SpawnSubsessionContext
+        );
+
+        const promptService = app.service('/sessions/:id/prompt');
+        return promptService.create(
+          { prompt: metaPrompt, permissionMode: data.permissionMode, messageSource: 'agor' },
+          { ...params, route: { id } }
+        );
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'send spawn-subsession prompts' },
+    },
+    requireAuth
+  );
+
+  // ============================================================================
+  // Zone-trigger fire endpoint (always_new behaviour)
+  //
+  // Replaces the UI's three-step render→create-session→prompt dance with one
+  // round-trip. Mirrors the `agor_worktrees_set_zone(triggerTemplate: true)`
+  // MCP path, scoped to the always_new branch the UI uses.
+  // ============================================================================
+
+  registerAuthenticatedRoute(
+    app,
+    '/worktrees/:id/fire-zone-trigger',
+    {
+      async create(
+        data: {
+          template?: string;
+          agent?: import('@agor/core/types').AgenticToolName;
+          zoneLabel?: string;
+        },
+        params: RouteParams
+      ) {
+        const worktreeId = params.route?.id;
+        if (!worktreeId) throw new Error('Worktree ID required');
+        if (typeof data?.template !== 'string') {
+          throw new Error('template (string) is required');
+        }
+
+        const worktree = await app.service('worktrees').get(worktreeId, params);
+
+        // Best-effort board lookup — not all worktrees are placed on a board,
+        // and the template may not need board.* fields anyway.
+        let board: { name?: string; description?: string; custom_context?: unknown } | null = null;
+        if (worktree.board_id) {
+          try {
+            board = await app.service('boards').get(worktree.board_id, params);
+          } catch {
+            board = null;
+          }
+        }
+
+        const { renderTemplate } = await import('@agor/core/templates/handlebars-helpers');
+        const renderedPrompt = renderTemplate(data.template, {
+          worktree: {
+            name: worktree.name || '',
+            ref: worktree.ref || '',
+            issue_url: worktree.issue_url || '',
+            pull_request_url: worktree.pull_request_url || '',
+            notes: worktree.notes || '',
+            path: worktree.path || '',
+            context: worktree.custom_context || {},
+          },
+          board: {
+            name: board?.name || '',
+            description: board?.description || '',
+            context: board?.custom_context || {},
+          },
+          session: { description: '', context: {} },
+        });
+
+        const newSession = await app.service('sessions').create(
+          {
+            worktree_id: worktreeId,
+            description: `Session from zone "${data.zoneLabel ?? ''}"`,
+            status: 'idle',
+            agentic_tool: data.agent ?? 'claude-code',
+          },
+          params
+        );
+
+        const task = await app
+          .service('/sessions/:id/prompt')
+          .create(
+            { prompt: renderedPrompt, messageSource: 'agor' },
+            { ...params, route: { id: newSession.session_id } }
+          );
+
+        return { session: newSession, task };
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'fire zone triggers' },
+    },
+    requireAuth
+  );
+
+  // ============================================================================
   // File upload endpoint
   // ============================================================================
 
