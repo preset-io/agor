@@ -1,8 +1,10 @@
 import type { AgorClient, MCPServer } from '@agor-live/client';
-import { ApiOutlined, LoginOutlined, ReloadOutlined } from '@ant-design/icons';
+import { ApiOutlined, EditOutlined, LoginOutlined, ReloadOutlined } from '@ant-design/icons';
 import { App, Tooltip } from 'antd';
 import { useState } from 'react';
+import { usePermissions } from '@/hooks/usePermissions';
 import { formatAbsoluteTime } from '../utils/time';
+import { MCPServerEditModal } from './MCPServerEditModal';
 import { Tag } from './Tag';
 
 interface MCPServerPillProps {
@@ -40,10 +42,14 @@ function formatExpiresIn(expiresAtMs: number): { verb: 'Expires' | 'Expired'; ph
  *   - Authenticated:   purple + API icon, tooltip shows human-readable expiry,
  *                      click force-refreshes the token (even before it's due)
  *                      so operators can probe per-provider refresh policy.
+ *   - Admin only: a small pencil icon at the end opens the MCP edit modal
+ *                 so operators can fix config without leaving the session view.
  */
 export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth, client }) => {
   const { message } = App.useApp();
+  const { isAdmin } = usePermissions();
   const [refreshing, setRefreshing] = useState(false);
+  const [editModalOpen, setEditModalOpen] = useState(false);
   // Local override so the tooltip reflects a just-refreshed expiry without
   // waiting for a full MCPServer re-fetch from the parent.
   const [expiresAtOverride, setExpiresAtOverride] = useState<number | undefined>(undefined);
@@ -157,17 +163,49 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
   }
 
   return (
-    <Tooltip title={needsAuth ? 'Click to authenticate' : authedTooltip}>
-      <Tag
-        color={needsAuth ? 'orange' : 'purple'}
-        icon={
-          needsAuth ? <LoginOutlined /> : refreshing ? <ReloadOutlined spin /> : <ApiOutlined />
-        }
-        style={{ cursor: refreshing ? 'wait' : 'pointer' }}
-        onClick={needsAuth ? handleOAuthClick : handleRefreshClick}
-      >
-        {server.display_name || server.name}
-      </Tag>
-    </Tooltip>
+    <>
+      <Tooltip title={needsAuth ? 'Click to authenticate' : authedTooltip}>
+        <Tag
+          color={needsAuth ? 'orange' : 'purple'}
+          icon={
+            needsAuth ? <LoginOutlined /> : refreshing ? <ReloadOutlined spin /> : <ApiOutlined />
+          }
+          style={{ cursor: refreshing ? 'wait' : 'pointer' }}
+          onClick={needsAuth ? handleOAuthClick : handleRefreshClick}
+        >
+          {server.display_name || server.name}
+          {isAdmin && (
+            <Tooltip title="Edit MCP server">
+              <EditOutlined
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditModalOpen(true);
+                }}
+                style={{
+                  marginLeft: 8,
+                  fontSize: 11,
+                  opacity: 0.55,
+                  cursor: 'pointer',
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLElement).style.opacity = '1';
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLElement).style.opacity = '0.55';
+                }}
+              />
+            </Tooltip>
+          )}
+        </Tag>
+      </Tooltip>
+      {isAdmin && (
+        <MCPServerEditModal
+          server={server}
+          open={editModalOpen}
+          client={client}
+          onClose={() => setEditModalOpen(false)}
+        />
+      )}
+    </>
   );
 };
