@@ -100,17 +100,26 @@ work. Operators rarely need to override them:
 
 ```
 default-src        'self'
-script-src         'self'
-style-src          'self' 'unsafe-inline'           # Ant Design injects inline styles
+script-src         'self' 'unsafe-eval'                          # Handlebars compiles via new Function
+style-src          'self' 'unsafe-inline' https://fonts.bunny.net # Ant Design inline + Inter font CSS
 img-src            'self' data: blob: https://*.codesandbox.io
-font-src           'self' data:
+font-src           'self' data: https://fonts.bunny.net           # Inter font files
 connect-src        'self' ws: wss: <daemon-url>
-frame-src          'self' https://*.codesandbox.io  # Sandpack iframes
-worker-src         'self' blob:                     # Sandpack workers
+frame-src          'self' https://*.codesandbox.io               # Sandpack iframes
+worker-src         'self' blob:                                  # Sandpack workers
 frame-ancestors    'none'
 object-src         'none'
 base-uri           'self'
 ```
+
+`'unsafe-eval'` is required because the UI uses Handlebars at runtime (zone
+triggers, env health URL templates, the spawn-subsession prompt) and
+`Handlebars.compile()` calls `new Function(...)` on its parser-generated JS.
+Rendered template output is never injected as HTML/script (no
+`dangerouslySetInnerHTML` in the UI), so the only `new Function` argument is
+parser output, not user template content.
+
+`fonts.bunny.net` hosts the Inter font CSS imported by `apps/agor-ui/src/index.css`.
 
 The Sandpack origins (`https://*.codesandbox.io` + `blob:` for workers) are
 the load-bearing piece — without them the hosted bundler iframe renders but

@@ -47,6 +47,17 @@ describe('resolveSecurity — CSP defaults', () => {
     expect(csp.directives['connect-src']).toContain('ws:');
     expect(csp.directives['connect-src']).toContain('wss:');
   });
+
+  it("script-src includes 'unsafe-eval' (Handlebars compiles templates via new Function)", () => {
+    const { csp } = resolveSecurity(EMPTY);
+    expect(csp.directives['script-src']).toContain("'unsafe-eval'");
+  });
+
+  it('style-src and font-src include fonts.bunny.net for the Inter font import', () => {
+    const { csp } = resolveSecurity(EMPTY);
+    expect(csp.directives['style-src']).toContain('https://fonts.bunny.net');
+    expect(csp.directives['font-src']).toContain('https://fonts.bunny.net');
+  });
 });
 
 describe('resolveSecurity — CSP extras/override', () => {
@@ -64,7 +75,11 @@ describe('resolveSecurity — CSP extras/override', () => {
       },
       { daemonUrl: 'http://localhost:3030' }
     );
-    expect(csp.directives['script-src']).toEqual(["'self'", 'https://plausible.io']);
+    expect(csp.directives['script-src']).toEqual([
+      "'self'",
+      "'unsafe-eval'",
+      'https://plausible.io',
+    ]);
     expect(csp.directives['connect-src']).toContain('https://api.anthropic.com');
   });
 

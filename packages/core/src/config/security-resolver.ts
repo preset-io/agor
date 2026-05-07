@@ -94,11 +94,18 @@ function buildDefaultDirectives(opts: {
 
   return {
     'default-src': ["'self'"],
-    'script-src': ["'self'"],
+    // 'unsafe-eval' is required by Handlebars' runtime template compiler
+    // (`new Function(...)`), used in the UI for zone triggers, env health
+    // URL templates, and the spawn-subsession prompt. Rendered output is
+    // never injected as HTML/script (no dangerouslySetInnerHTML in the UI),
+    // so the only `new Function` argument is parser-generated JS, not user
+    // template content.
+    'script-src': ["'self'", "'unsafe-eval'"],
     // TODO: drop 'unsafe-inline' once Ant Design supports CSP nonces.
-    'style-src': ["'self'", "'unsafe-inline'"],
+    // fonts.bunny.net hosts the Inter font CSS imported by index.css.
+    'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.bunny.net'],
     'img-src': imgSrc,
-    'font-src': ["'self'", 'data:'],
+    'font-src': ["'self'", 'data:', 'https://fonts.bunny.net'],
     'connect-src': connectSrc,
     'frame-src': frameSrc,
     'worker-src': workerSrc,
