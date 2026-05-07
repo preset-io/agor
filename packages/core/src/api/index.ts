@@ -19,6 +19,8 @@ import type {
   Repo,
   Session,
   Task,
+  TemplateRenderRequest,
+  TemplateRenderResponse,
   User,
   UUID,
   Worktree,
@@ -110,17 +112,11 @@ export interface SessionsClientHelpers {
  * `client.service('templates').create(...)`; daemon returns `{rendered}`.
  * Used so the browser bundle doesn't need Handlebars (avoids CSP
  * `script-src 'unsafe-eval'`).
+ *
+ * Transport DTOs live in `@agor/core/types/template.ts` so the daemon
+ * service and this client typing share one shape.
  */
-export interface TemplateRenderRequest {
-  template: string;
-  context?: Record<string, unknown>;
-  /** `'empty'` (default) returns '' on render error; `'raw'` returns the unrendered template. */
-  onError?: 'empty' | 'raw';
-}
-
-export interface TemplateRenderResponse {
-  rendered: string;
-}
+export type { TemplateRenderRequest, TemplateRenderResponse };
 
 export interface TemplatesService {
   create(data: TemplateRenderRequest, params?: Params): Promise<TemplateRenderResponse>;

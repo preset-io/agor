@@ -1193,29 +1193,39 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async create(
         data: {
           userPrompt?: string;
-          permissionMode?: import('@agor/core/types').PermissionMode;
-          // Spawn-subsession context passes through verbatim — see
+          /**
+           * Permission mode for the *parent* session's prompt. The spawn
+           * config's `permissionMode` (child's intended mode) is rendered into
+           * the meta-prompt; this field governs how the parent prompt is sent.
+           */
+          parentPermissionMode?: import('@agor/core/types').PermissionMode;
+          // Remaining fields are spawn-subsession context (incl. the *child*
+          // session's permissionMode/modelConfig/etc) — see
           // `SpawnSubsessionContext` in @agor/core for the shape.
           [key: string]: unknown;
         },
         params: RouteParams
       ) {
         const id = params.route?.id;
-        if (!id) throw new Error('Session ID required');
+        if (!id) throw new BadRequest('Session ID required');
         if (typeof data?.userPrompt !== 'string') {
-          throw new Error('userPrompt (string) is required');
+          throw new BadRequest('userPrompt (string) is required');
         }
 
         const { renderSpawnSubsessionPrompt } = await import(
           '@agor/core/templates/spawn-subsession-template'
         );
+        // Render the meta-prompt against the child-session config (the rest
+        // of `data`). `parentPermissionMode` is intentionally excluded — it's
+        // the parent's send-mode, not part of the template.
+        const { parentPermissionMode, ...spawnContext } = data;
         const metaPrompt = renderSpawnSubsessionPrompt(
-          data as unknown as import('@agor/core/templates/spawn-subsession-template').SpawnSubsessionContext
+          spawnContext as unknown as import('@agor/core/templates/spawn-subsession-template').SpawnSubsessionContext
         );
 
         const promptService = app.service('/sessions/:id/prompt');
         return promptService.create(
-          { prompt: metaPrompt, permissionMode: data.permissionMode, messageSource: 'agor' },
+          { prompt: metaPrompt, permissionMode: parentPermissionMode, messageSource: 'agor' },
           { ...params, route: { id } }
         );
       },
@@ -1247,9 +1257,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         params: RouteParams
       ) {
         const worktreeId = params.route?.id;
-        if (!worktreeId) throw new Error('Worktree ID required');
+        if (!worktreeId) throw new BadRequest('Worktree ID required');
         if (typeof data?.template !== 'string') {
-          throw new Error('template (string) is required');
+          throw new BadRequest('template (string) is required');
         }
 
         const worktree = await app.service('worktrees').get(worktreeId, params);
@@ -1283,6 +1293,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           },
           session: { description: '', context: {} },
         });
+
+        // Render must produce a non-empty prompt before we create a session.
+        // `renderTemplate` returns '' on Handlebars errors (default onError),
+        // and `/sessions/:id/prompt` rejects empty prompts — without this
+        // guard we'd leak a half-created session on render failure.
+        if (!renderedPrompt.trim()) {
+          throw new BadRequest(
+            'Zone trigger template rendered to an empty prompt; not creating session'
+          );
+        }
 
         const newSession = await app.service('sessions').create(
           {

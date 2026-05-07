@@ -1,7 +1,6 @@
-import Handlebars from 'handlebars';
-
 /**
- * Default template for child session completion callback
+ * Child-session completion callback template.
+ *
  * Variables available:
  * - childSessionId: Short ID of completed child session
  * - childSessionFullId: Full UUIDv7 of child session
@@ -14,7 +13,15 @@ import Handlebars from 'handlebars';
  * - messageCount: Number of messages in completed task
  * - toolUseCount: Number of tools used
  * - lastAssistantMessage: Child's final assistant message content (optional)
+ *
+ * Renders via the shared `renderTemplate` helper in
+ * `@agor/core/templates/handlebars-helpers` — no separate Handlebars
+ * instance, no per-module helper registration. The `eq` helper is part of
+ * the shared registry.
  */
+
+import { renderTemplate } from '../templates/handlebars-helpers';
+
 const DEFAULT_TEMPLATE = `[Agor] Child session {{childSessionId}} has {{#if (eq status "completed")}}completed{{else}}failed{{/if}}.
 
 {{#if spawnPrompt}}**Task:** {{spawnPrompt}}
@@ -44,29 +51,20 @@ export interface ChildCompletionContext {
 }
 
 /**
- * Register custom Handlebars helpers for templates
- * Note: Check if 'eq' helper already exists in packages/core/src/templates/handlebars-helpers.ts
- */
-// biome-ignore lint/suspicious/noExplicitAny: Handlebars helper accepts any comparable value
-Handlebars.registerHelper('eq', (a: any, b: any) => a === b);
-
-/**
- * Render callback message for parent session
+ * Render callback message for parent session.
+ *
+ * If `customTemplate` is supplied and renders to empty (e.g. helper error),
+ * falls back to the default template so the callback never sends an empty
+ * message.
  */
 export function renderChildCompletionCallback(
   context: ChildCompletionContext,
   customTemplate?: string
 ): string {
-  try {
-    const template = Handlebars.compile(customTemplate || DEFAULT_TEMPLATE);
-    return template(context);
-  } catch (error) {
-    console.error('❌ Template rendering failed, using default:', error);
-    // Fallback to default template if custom template fails
-    if (customTemplate) {
-      const defaultTemplate = Handlebars.compile(DEFAULT_TEMPLATE);
-      return defaultTemplate(context);
-    }
-    throw error;
+  const ctx = context as unknown as Record<string, unknown>;
+  if (customTemplate) {
+    const rendered = renderTemplate(customTemplate, ctx);
+    if (rendered) return rendered;
   }
+  return renderTemplate(DEFAULT_TEMPLATE, ctx);
 }

@@ -394,6 +394,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // bundle can stay free of Handlebars (which uses `new Function` and would
   // require CSP `script-src 'unsafe-eval'`).
   app.use('/templates', createTemplatesService());
+  app.service('/templates').hooks({ before: { create: [ctx.requireAuth] } });
 
   const terminalsService = svcEnabled('terminals') ? new TerminalsService(app, db) : null;
   if (terminalsService) {

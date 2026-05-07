@@ -14,30 +14,17 @@
  * Endpoint: POST /templates  body: { template, context, onError? } → { rendered }
  */
 
-import {
-  type RenderTemplateOnError,
-  renderTemplate,
-} from '@agor/core/templates/handlebars-helpers';
-import type { AuthenticatedParams } from '@agor/core/types';
+import { BadRequest } from '@agor/core/feathers';
+import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
+import type {
+  AuthenticatedParams,
+  TemplateRenderRequest,
+  TemplateRenderResponse,
+} from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { ensureMinimumRole } from '../utils/authorization';
 
-export interface TemplateRenderRequest {
-  /** Handlebars template source. */
-  template: string;
-  /** Context object passed to the template. */
-  context?: Record<string, unknown>;
-  /**
-   * Behaviour when render fails: `'empty'` (default) returns `''`, `'raw'`
-   * returns the unrendered template string. See `renderTemplate` in
-   * @agor/core for the semantics.
-   */
-  onError?: RenderTemplateOnError;
-}
-
-export interface TemplateRenderResponse {
-  rendered: string;
-}
+export type { TemplateRenderRequest, TemplateRenderResponse };
 
 export class TemplatesService {
   async create(
@@ -47,7 +34,7 @@ export class TemplatesService {
     ensureMinimumRole(params, ROLES.MEMBER, 'render templates');
 
     if (typeof data?.template !== 'string') {
-      throw new Error('template (string) is required');
+      throw new BadRequest('template (string) is required');
     }
     const context = data.context && typeof data.context === 'object' ? data.context : {};
     const rendered = renderTemplate(data.template, context, { onError: data.onError ?? 'empty' });

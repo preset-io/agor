@@ -572,13 +572,18 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     // Daemon owns the spawn-subsession meta-prompt template. The UI sends raw
     // `{userPrompt, config}` to /sessions/:id/spawn-prompt, which renders the
     // meta-prompt and forwards it to /sessions/:id/prompt in one round trip.
-    const spawnContext =
+    //
+    // `parentPermissionMode` is the *parent* session's permission mode for the
+    // forwarding prompt; the spawn config's `permissionMode` is rendered into
+    // the meta-prompt as the *child* session's intended mode. They're distinct
+    // — don't reuse one for the other.
+    const spawnConfig =
       typeof config === 'string'
-        ? { userPrompt: config, permissionMode }
+        ? { userPrompt: config }
         : {
             userPrompt: config.prompt || '',
             agenticTool: config.agent,
-            permissionMode: config.permissionMode ?? permissionMode,
+            permissionMode: config.permissionMode,
             modelConfig: config.modelConfig,
             codexSandboxMode: config.codexSandboxMode,
             codexApprovalPolicy: config.codexApprovalPolicy,
@@ -592,7 +597,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             extraInstructions: config.extraInstructions,
           };
 
-    await client.service(`sessions/${session.session_id}/spawn-prompt`).create(spawnContext);
+    await client
+      .service(`sessions/${session.session_id}/spawn-prompt`)
+      .create({ ...spawnConfig, parentPermissionMode: permissionMode });
 
     setSpawnModalOpen(false);
     promptRef.current?.clear();
