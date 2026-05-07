@@ -683,6 +683,13 @@ export class SDKMessageProcessor {
       ];
     }
 
+    // Suppress status='requesting' — pure API-call lifecycle telemetry, fires on every request.
+    // Other status subtype variants (null, permissionMode change, compact_result/error) still flow
+    // through and get surfaced as generic sdk_event messages below.
+    if ('status' in msg && msg.status === 'requesting') {
+      return [];
+    }
+
     if ('subtype' in msg && msg.subtype === 'init') {
       const initMsg = msg as SDKSystemMessage;
       console.debug(`ℹ️  SDK system init:`, {
