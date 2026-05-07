@@ -185,7 +185,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Security: block anonymous in public deployments
   // --------------------------------------------------------------------------
   const isPublicDeployment =
-    process.env.CODESPACES === 'true' ||
     process.env.NODE_ENV === 'production' ||
     process.env.RAILWAY_ENVIRONMENT !== undefined ||
     process.env.RENDER !== undefined;
@@ -282,7 +281,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   } = buildCorsConfig({
     uiPort: UI_PORT,
     daemonPort: DAEMON_PORT,
-    isCodespaces: process.env.CODESPACES === 'true',
     resolved: resolvedSecurity.cors,
   });
 

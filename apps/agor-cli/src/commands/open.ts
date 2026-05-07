@@ -8,7 +8,7 @@ import { isDaemonRunning } from '@agor-live/client';
 import { getDaemonUrl } from '@agor-live/client/config';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
-import { getUIUrl, isCodespaces } from '../lib/context.js';
+import { getUIUrl } from '../lib/context.js';
 
 const execAsync = promisify(exec);
 
@@ -33,20 +33,8 @@ export default class Open extends Command {
       this.exit(1);
     }
 
-    // Get UI URL (context-aware: dev/prod/codespaces)
+    // Get UI URL (context-aware: dev/prod)
     const uiUrl = getUIUrl();
-
-    // In Codespaces: can't open browser, just print URL
-    if (isCodespaces()) {
-      this.log(chalk.green('✓ Agor UI is ready'));
-      this.log('');
-      this.log('Open this URL in your browser:');
-      this.log(`  ${chalk.cyan(uiUrl)}`);
-      this.log('');
-      this.log(chalk.dim('(GitHub Codespaces will automatically forward the port)'));
-      this.log('');
-      return;
-    }
 
     // Local environment: try to open browser
     try {

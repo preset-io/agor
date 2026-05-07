@@ -18,7 +18,7 @@ interface WindowWithAgorConfig extends Window {
 
 export function getDaemonUrl(): string {
   // 1. Explicit config (env var or runtime injection)
-  // Handles: Codespaces, production, any special setup
+  // Handles: production and any special setup
   if (typeof window !== 'undefined') {
     const injectedUrl = (window as WindowWithAgorConfig).AGOR_DAEMON_URL;
     if (injectedUrl) return injectedUrl;
@@ -33,7 +33,7 @@ export function getDaemonUrl(): string {
 
   if (typeof window !== 'undefined') {
     // If served from /ui path, we're on the same host as daemon
-    // Use origin directly (handles Codespaces forwarded URLs correctly)
+    // Use origin directly (handles forwarded URLs correctly)
     if (window.location.pathname.startsWith('/ui')) {
       return window.location.origin;
     }

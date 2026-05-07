@@ -82,7 +82,7 @@ security:
 
 | Mode          | Behaviour                                                         | Credentials |
 | ------------- | ----------------------------------------------------------------- | ----------- |
-| `list`        | Only origins in `origins[]` + built-ins (localhost, Sandpack, Codespaces) | Allowed (default) |
+| `list`        | Only origins in `origins[]` + built-ins (localhost, Sandpack)     | Allowed (default) |
 | `wildcard`    | Accept any origin (returns `Access-Control-Allow-Origin: *`)      | Forced off  |
 | `reflect`     | Echo the request's `Origin` header back                           | Forced off  |
 | `null-origin` | Accept `Origin: null` (sandboxed iframes, `file://` docs) plus no-origin non-browser clients (curl, server-to-server) | Allowed     |

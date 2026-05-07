@@ -506,7 +506,7 @@ export async function setupQuery(
     const mcpToken = session.mcp_token;
 
     if (mcpToken) {
-      // Get daemon URL from config (supports Codespaces auto-detection)
+      // Get daemon URL from config
       const daemonUrl = await getDaemonUrl();
 
       console.log(`🔌 Configuring Agor MCP server at ${daemonUrl}/mcp`);

@@ -27,7 +27,6 @@ import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal'
 import { LoginPage } from './components/LoginPage';
 import { MobileApp } from './components/mobile/MobileApp';
 import { OnboardingWizard } from './components/OnboardingWizard';
-import { SandboxBanner } from './components/SandboxBanner';
 import type { WorktreeUpdate } from './components/WorktreeModal/tabs/GeneralTab';
 import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ServicesConfigContext } from './contexts/ServicesConfigContext';
@@ -1325,7 +1324,6 @@ function AppContent() {
             path="/b/:boardParam/:sessionParam/"
             element={
               <>
-                <SandboxBanner />
                 <AgorApp
                   client={client}
                   user={currentUser}
@@ -1411,7 +1409,6 @@ function AppContent() {
             path="/b/:boardParam/"
             element={
               <>
-                <SandboxBanner />
                 <AgorApp
                   client={client}
                   user={currentUser}
@@ -1497,7 +1494,6 @@ function AppContent() {
             path="/*"
             element={
               <>
-                <SandboxBanner />
                 <AgorApp
                   client={client}
                   user={currentUser}

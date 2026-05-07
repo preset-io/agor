@@ -27,7 +27,6 @@ describe('buildCorsConfig', () => {
     const result = buildCorsConfig({
       uiPort: 5173,
       daemonPort: 3030,
-      isCodespaces: false,
       resolved: resolve({}, { corsOriginEnv: '*' }),
     });
     expect(result.isWildcard).toBe(true);
@@ -45,7 +44,6 @@ describe('buildCorsConfig', () => {
     const result = buildCorsConfig({
       uiPort: 5173,
       daemonPort: 3030,
-      isCodespaces: false,
       resolved: resolve({ security: { cors: { mode: 'wildcard', credentials: false } } }),
     });
     // `origin: '*'` makes cors() emit Access-Control-Allow-Origin: *, which is
@@ -60,7 +58,6 @@ describe('buildCorsConfig', () => {
     const result = buildCorsConfig({
       uiPort: 5173,
       daemonPort: 3030,
-      isCodespaces: false,
       resolved: resolve({ security: { cors: { mode: 'reflect', credentials: false } } }),
     });
     // `origin: true` in cors() echoes the request's Origin header back — this
@@ -72,7 +69,6 @@ describe('buildCorsConfig', () => {
     const result = buildCorsConfig({
       uiPort: 5173,
       daemonPort: 3030,
-      isCodespaces: false,
       resolved: resolve(),
     });
     expect(result.isAllowedOrigin('http://localhost:5173')).toBe(true);
@@ -89,7 +85,6 @@ describe('buildCorsConfig', () => {
     const result = buildCorsConfig({
       uiPort: 5173,
       daemonPort: 3030,
-      isCodespaces: false,
       resolved: resolve(),
     });
     expect(result.isAllowedOrigin('http://localhost:3030')).toBe(true);
@@ -97,7 +92,6 @@ describe('buildCorsConfig', () => {
     const custom = buildCorsConfig({
       uiPort: 5173,
       daemonPort: 4040,
-      isCodespaces: false,
       resolved: resolve(),
     });
     expect(custom.isAllowedOrigin('http://localhost:4040')).toBe(true);
@@ -108,7 +102,6 @@ describe('buildCorsConfig', () => {
     const result = buildCorsConfig({
       uiPort: 5173,
       daemonPort: 3030,
-      isCodespaces: false,
       resolved: resolve({ security: { cors: { allow_sandpack: true } } }),
     });
     // The actual cors origin callback would still permit the request through,
@@ -121,7 +114,6 @@ describe('buildCorsConfig', () => {
     const result = buildCorsConfig({
       uiPort: 5173,
       daemonPort: 3030,
-      isCodespaces: false,
       resolved: resolve({
         security: {
           cors: {
@@ -139,7 +131,6 @@ describe('buildCorsConfig', () => {
     const result = buildCorsConfig({
       uiPort: 5173,
       daemonPort: 3030,
-      isCodespaces: false,
       resolved: resolve({
         security: {
           cors: {
@@ -160,7 +151,6 @@ describe('buildCorsConfig', () => {
     const result = buildCorsConfig({
       uiPort: 5173,
       daemonPort: 3030,
-      isCodespaces: false,
       resolved: resolve({ security: { cors: { mode: 'null-origin' } } }),
     });
     const cb = vi.fn();

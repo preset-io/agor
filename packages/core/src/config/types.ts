@@ -525,7 +525,7 @@ export interface AgorCspSettings {
  * How CORS origins are resolved.
  *
  * - `list` (default): only origins in `origins` are allowed (plus built-ins:
- *   localhost, Sandpack if enabled, GitHub Codespaces if detected).
+ *   localhost, Sandpack if enabled).
  * - `wildcard`: reflect ANY origin. Forces `credentials: false`. Dangerous
  *   outside of local dev; the daemon refuses to boot in hardened deployment
  *   modes when this is set.

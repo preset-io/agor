@@ -15,7 +15,6 @@
  *
  * Environment-derived inputs (not part of the config block) remain here:
  *   - UI port (for the localhost allow-list)
- *   - Codespaces detection (`*.github.dev`, `*.githubpreview.dev`)
  *
  * Backcompat: the legacy `daemon.cors_origins`, `daemon.cors_allow_sandpack`,
  * and `CORS_ORIGIN` env var continue to work via `resolveSecurity()` — by the
@@ -39,8 +38,6 @@ export interface CorsConfigOptions {
    * rejected by the cors() callback. Bug surfaced in 0.17.3 — see PR #1106.
    */
   daemonPort: number;
-  /** Whether running in GitHub Codespaces */
-  isCodespaces: boolean;
   /** Resolved CORS config (from `@agor/core/config` `resolveSecurity()`). */
   resolved: ResolvedCors;
 }
@@ -114,7 +111,7 @@ function parseRegexPattern(entry: string): RegExp | null {
  * PNA, credential stripping, etc.
  */
 export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
-  const { uiPort, daemonPort, isCodespaces, resolved } = options;
+  const { uiPort, daemonPort, resolved } = options;
 
   // Localhost allow-list:
   //   - daemon port (npm-installed mode serves the UI from the daemon origin)
@@ -173,7 +170,7 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
     };
   }
 
-  // --- List mode: localhost + codespaces + sandpack + user-provided. ------
+  // --- List mode: localhost + sandpack + user-provided. ------
   const exactOrigins = new Set(localhostOrigins);
   const patterns: RegExp[] = [];
 
@@ -186,12 +183,6 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
   // Sandpack/CodeSandbox bundler (on by default, configurable).
   if (resolved.allowSandpack) {
     patterns.push(SANDPACK_ORIGIN_PATTERN);
-  }
-
-  // GitHub Codespaces
-  if (isCodespaces) {
-    patterns.push(/\.github\.dev$/, /\.githubpreview\.dev$/, /\.preview\.app\.github\.dev$/);
-    console.log('🔒 CORS configured for GitHub Codespaces (*.github.dev, *.githubpreview.dev)');
   }
 
   // Additional origins from resolved config (security.cors.origins merged

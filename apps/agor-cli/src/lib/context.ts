@@ -88,35 +88,11 @@ export function getDaemonModulePath(): string | null {
 }
 
 /**
- * Check if running in GitHub Codespaces
- *
- * @returns true if running in Codespaces
- */
-export function isCodespaces(): boolean {
-  return !!process.env.CODESPACE_NAME && !!process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN;
-}
-
-/**
  * Get appropriate UI URL based on context
  *
  * @returns UI URL for current context
  */
 export function getUIUrl(): string {
-  // Codespaces: use port forwarding URL
-  if (isCodespaces()) {
-    const codespaceName = process.env.CODESPACE_NAME;
-    const domain = process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN;
-
-    if (isInstalledPackage()) {
-      // Production in Codespaces: daemon serves UI at /ui
-      return `https://${codespaceName}-3030.${domain}/ui`;
-    } else {
-      // Development in Codespaces: Vite dev server
-      return `https://${codespaceName}-5173.${domain}`;
-    }
-  }
-
-  // Local environment
   if (isInstalledPackage()) {
     // Production: UI served by daemon at /ui
     return 'http://localhost:3030/ui';

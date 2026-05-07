@@ -77,8 +77,7 @@ Real-time events for sessions, tasks, messages, and multiplayer presence updates
 ## Deployment Options
 
 - **Local**: npm install, single command startup
-- **Docker**: Docker Compose with devcontainer support
-- **GitHub Codespaces**: One-click setup
+- **Docker**: Docker Compose
 - **Kubernetes**: Containerized execution with shared storage
 - **Multiplayer Mode**: RBAC + Unix-level isolation for teams
 

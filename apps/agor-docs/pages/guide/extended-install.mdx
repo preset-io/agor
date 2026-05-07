@@ -1,6 +1,6 @@
 ---
 title: Extended Installation
-description: Alternative ways to install and run Agor — optional companions, GitHub Codespaces, authentication options, and custom config locations.
+description: Alternative ways to install and run Agor — optional companions, authentication options, and custom config locations.
 ---
 
 # Extended Installation
@@ -27,18 +27,6 @@ If you want the terminal:
 2. Restart the Agor daemon (`agor daemon restart`).
 
 The daemon detects Zellij at startup and logs whether it's available.
-
----
-
-## GitHub Codespaces
-
-> **Community-maintained.** Codespaces is supported on a best-effort basis and is not part of the regular test/release cycle. For day-to-day use, prefer the npm install path.
-
-Agor has a devcontainer that boots a Codespace pre-configured with Node, pnpm, and the running daemon:
-
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://github.com/codespaces/new?skip_quickstart=true&machine=basicLinux32gb&repo=1069864589&ref=main&devcontainer_path=.devcontainer%2Fdevcontainer.json&geo=UsWest)
-
-Useful for quick demos. See the [Security guide](/security#codespaces-notes) for trust-boundary notes before sharing a Codespace with collaborators.
 
 ---
 

@@ -120,13 +120,6 @@ export default class Init extends Command {
   }
 
   /**
-   * Detect if running in GitHub Codespaces
-   */
-  private isCodespaces(): boolean {
-    return process.env.CODESPACES === 'true' || process.env.CODESPACE_NAME !== undefined;
-  }
-
-  /**
    * Detect if running in dev mode (from source) vs agor-live (npm package)
    *
    * Dev mode = running from agor monorepo source
@@ -176,17 +169,6 @@ export default class Init extends Command {
 
       this.log(chalk.dim('Skipping initialization (use --force to re-initialize)\n'));
       return;
-    }
-
-    // Show Codespaces-specific welcome if detected
-    if (this.isCodespaces() && !flags.force) {
-      this.log(chalk.cyan.bold('🚀 GitHub Codespaces detected!\n'));
-      this.log(chalk.yellow('⚠️  Sandbox Mode:'));
-      this.log('   - Data persists only while Codespace is active');
-      this.log('   - Stopped Codespaces retain data for 30 days');
-      this.log('   - Rebuilt Codespaces lose all data\n');
-      this.log(chalk.dim('For production use, install Agor locally:'));
-      this.log(chalk.dim('  https://github.com/preset-io/agor#installation\n'));
     }
 
     try {
@@ -405,28 +387,6 @@ export default class Init extends Command {
     this.log(`   Concepts: ${chalk.cyan(join(baseDir, 'concepts'))}`);
     this.log(`   Logs: ${chalk.cyan(join(baseDir, 'logs'))}`);
     this.log('');
-
-    // Show API key guidance if in Codespaces
-    if (this.isCodespaces()) {
-      this.log(chalk.bold('📝 API Key Setup (Optional):'));
-      this.log('');
-      this.log('To use AI agents (Claude, Gemini, etc.), set API keys:');
-      this.log('');
-      this.log(chalk.cyan('1. Environment variables (recommended for Codespaces):'));
-      this.log('   export ANTHROPIC_API_KEY="sk-ant-..."');
-      this.log('   export OPENAI_API_KEY="sk-..."');
-      this.log('   export GOOGLE_AI_API_KEY="..."');
-      this.log('');
-      this.log(chalk.cyan('2. Codespaces Secrets (persistent across rebuilds):'));
-      this.log('   GitHub → Settings → Codespaces → Secrets');
-      this.log('   Add keys there and rebuild Codespace');
-      this.log('');
-      this.log(chalk.yellow('💡 Tip: To preserve your work:'));
-      this.log('   - Keep Codespace active (auto-stops after 30 min idle)');
-      this.log('   - Export important sessions before stopping');
-      this.log('   - Use git to commit session transcripts');
-      this.log('');
-    }
 
     // Check if daemon is running
     const config = await loadConfig();

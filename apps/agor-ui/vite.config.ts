@@ -56,7 +56,7 @@ export default defineConfig({
   },
 
   server: {
-    // Bind to 0.0.0.0 for Codespaces/Docker accessibility
+    // Bind to 0.0.0.0 for Docker accessibility
     host: '0.0.0.0',
     port: 5173,
     // Watch for changes in workspace packages

@@ -344,7 +344,7 @@ pnpm agor repo list
 `@agor/core` exports ~40 entry points and emits TypeScript declarations for
 both CJS and ESM. tsup's DTS pipeline peaks around **3 GB of memory**, which
 exceeds Node's default heap ceiling on smaller hosts (4 GB RAM containers,
-Raspberry Pis, low-tier Codespaces, etc.).
+Raspberry Pis, etc.).
 
 Agor's standard build paths already raise the ceiling to 4 GB. If you wrap
 the build in your own script (or invoke `tsup` directly) and hit the OOM, set

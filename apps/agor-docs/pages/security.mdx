@@ -232,10 +232,6 @@ Users with the `admin` role can manage other users, configure MCP servers, view 
 - **Audit `/var/log/auth.log`** in Unix isolation modes — sudo activity is the trail.
 - **Pilot before scaling** — run the first weeks of multi-user use with logs open.
 
-### Codespaces / Public Tunnels
-
-GitHub Codespaces only forwards ports to the Codespace owner by default. The moment those ports are made public, treat the environment as compromised — API keys, repo contents, and in-progress work can leak. If you need shared access, prefer a reverse proxy with auth, or switch to a server with `unix_user_mode: strict`.
-
 ---
 
 ## What's on the Roadmap
