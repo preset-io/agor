@@ -1639,20 +1639,16 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   const trigger = zoneData.trigger;
                   if (trigger && zoneChanged) {
                     if (trigger.behavior === 'always_new') {
-                      // always_new: daemon does render → create session → send
-                      // prompt in one round-trip via /worktrees/:id/fire-zone-trigger.
-                      //
-                      // Note: same notes apply about session-config defaults
-                      // and MCP attach as the explicit-create path —
-                      // `applySessionConfigDefaults` before:create hook fills
-                      // them; MCP attach for this path is still TODO (#1064).
+                      // always_new: daemon resolves the zone, renders, creates
+                      // a session, attaches inherited MCP servers, and sends
+                      // the prompt — all in one round-trip. UI just identifies
+                      // the zone; server is the source of truth for template,
+                      // agent, and label.
                       (async () => {
                         try {
-                          await client.service(`worktrees/${nodeId}/fire-zone-trigger`).create({
-                            template: trigger.template,
-                            agent: (trigger.agent || 'claude-code') as AgenticToolName,
-                            zoneLabel: zoneData.label,
-                          });
+                          await client
+                            .service(`worktrees/${nodeId}/fire-zone-trigger`)
+                            .create({ zoneId });
                         } catch (error) {
                           console.error('❌ Failed to execute always_new trigger:', error);
                         }

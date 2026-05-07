@@ -33,4 +33,10 @@ export {
 
 export * from '../config/browser.js';
 export type { AgorConfig } from '../config/types.js';
+// Browser-safe zone-trigger context builder (pure JS, no Handlebars). The
+// daemon and MCP path render against this shape too — keep them in sync.
+export {
+  type BuildZoneTriggerContextInput,
+  buildZoneTriggerContext,
+} from '../templates/zone-trigger-context.js';
 export * from '../types/index.js';

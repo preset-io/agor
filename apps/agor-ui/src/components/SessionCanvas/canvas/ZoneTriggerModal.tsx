@@ -16,7 +16,11 @@ import type {
   WorktreeID,
   ZoneTrigger,
 } from '@agor-live/client';
-
+// Canonical zone-trigger context shape (worktree.context / board.context /
+// zone / session). Shared with the daemon's fire-zone-trigger route and the
+// MCP `agor_worktrees_set_zone` path so all three render against the same
+// shape.
+import { buildZoneTriggerContext } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import { Alert, Collapse, Form, Input, Modal, Radio, Select, Space, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
@@ -204,45 +208,25 @@ export const ZoneTriggerModal = ({
       setEditableTemplate(trigger.template);
       return;
     }
-    const context = {
-      worktree: worktree
-        ? {
-            name: worktree.name || '',
-            ref: worktree.ref || '',
-            issue_url: worktree.issue_url || '',
-            pull_request_url: worktree.pull_request_url || '',
-            notes: worktree.notes || '',
-            path: worktree.path || '',
-            context: worktree.custom_context || {},
-          }
-        : {
-            name: '',
-            ref: '',
-            issue_url: '',
-            pull_request_url: '',
-            notes: '',
-            path: '',
-            context: {},
-          },
+    const selectedSessionForCtx =
+      mode === 'reuse_existing' && selectedSessionId
+        ? worktreeSessions.find((s) => s.session_id === selectedSessionId)
+        : undefined;
+    const context = buildZoneTriggerContext({
+      worktree,
       board: {
-        name: boardName || '',
-        description: boardDescription || '',
-        context: boardCustomContext || {},
+        name: boardName,
+        description: boardDescription,
+        custom_context: boardCustomContext,
       },
-      session:
-        mode === 'reuse_existing' && selectedSessionId
-          ? {
-              description:
-                worktreeSessions.find((s) => s.session_id === selectedSessionId)?.description || '',
-              context:
-                worktreeSessions.find((s) => s.session_id === selectedSessionId)?.custom_context ||
-                {},
-            }
-          : {
-              description: '',
-              context: {},
-            },
-    };
+      zone: { label: zoneName },
+      session: selectedSessionForCtx
+        ? {
+            description: selectedSessionForCtx.description,
+            custom_context: selectedSessionForCtx.custom_context,
+          }
+        : undefined,
+    });
 
     renderTemplate(client, trigger.template, context, 'raw').then((rendered) => {
       if (!cancelled) setEditableTemplate(rendered);
@@ -258,6 +242,7 @@ export const ZoneTriggerModal = ({
     boardName,
     boardDescription,
     boardCustomContext,
+    zoneName,
     mode,
     selectedSessionId,
     worktreeSessions,

@@ -85,6 +85,11 @@
       "import": "./dist/templates/spawn-subsession-template.js",
       "require": "./dist/templates/spawn-subsession-template.cjs"
     },
+    "./templates/zone-trigger-context": {
+      "types": "./dist/templates/zone-trigger-context.d.ts",
+      "import": "./dist/templates/zone-trigger-context.js",
+      "require": "./dist/templates/zone-trigger-context.cjs"
+    },
     "./environment/variable-resolver": {
       "types": "./dist/environment/variable-resolver.d.ts",
       "import": "./dist/environment/variable-resolver.js",

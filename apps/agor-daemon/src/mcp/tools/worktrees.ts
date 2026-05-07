@@ -679,24 +679,14 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         );
 
         const { renderTemplate } = await import('@agor/core/templates/handlebars-helpers');
-        const templateContext = {
-          worktree: {
-            name: worktree.name,
-            ref: worktree.ref,
-            issue_url: worktree.issue_url,
-            pull_request_url: worktree.pull_request_url,
-            notes: worktree.notes,
-            custom_context: worktree.custom_context,
-          },
-          board: {
-            name: board.name,
-            custom_context: board.custom_context,
-          },
-          zone: {
-            label: zone.label,
-            status: zone.status,
-          },
-        };
+        const { buildZoneTriggerContext } = await import(
+          '@agor/core/templates/zone-trigger-context'
+        );
+        const templateContext = buildZoneTriggerContext({
+          worktree,
+          board,
+          zone: { label: zone.label, status: zone.status },
+        });
 
         const renderedPrompt = renderTemplate(zone.trigger!.template, templateContext);
 
@@ -740,24 +730,14 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         );
 
         const { renderTemplate } = await import('@agor/core/templates/handlebars-helpers');
-        const templateContext = {
-          worktree: {
-            name: worktree.name,
-            ref: worktree.ref,
-            issue_url: worktree.issue_url,
-            pull_request_url: worktree.pull_request_url,
-            notes: worktree.notes,
-            custom_context: worktree.custom_context,
-          },
-          board: {
-            name: board.name,
-            custom_context: board.custom_context,
-          },
-          zone: {
-            label: zone.label,
-            status: zone.status,
-          },
-        };
+        const { buildZoneTriggerContext } = await import(
+          '@agor/core/templates/zone-trigger-context'
+        );
+        const templateContext = buildZoneTriggerContext({
+          worktree,
+          board,
+          zone: { label: zone.label, status: zone.status },
+        });
 
         const renderedPrompt = renderTemplate(zone.trigger!.template, templateContext);
 
