@@ -7,7 +7,8 @@
  * - MCP server attachments
  * - Codex-specific fields (sandbox, approval, network) — only in full mode
  *
- * Used in both NewSessionModal (full mode) and SessionSettingsModal (compact mode).
+ * Used by session creation, settings, defaults, schedules, gateway channels,
+ * forks/spawns, and zone triggers.
  *
  * In compact mode:
  * - PermissionModeSelector renders as a dropdown instead of radio group

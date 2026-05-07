@@ -7,8 +7,6 @@ import { MCPServerSelect } from './MCPServerSelect';
 export interface SessionMcpServersFieldProps {
   mcpServerById: Map<string, MCPServer>;
   showHelpText?: boolean;
-  /** Form field name. Defaults to 'mcpServerIds'. */
-  name?: string;
 }
 
 /**
@@ -22,14 +20,13 @@ export interface SessionMcpServersFieldProps {
 export const SessionMcpServersField: React.FC<SessionMcpServersFieldProps> = ({
   mcpServerById,
   showHelpText = false,
-  name = 'mcpServerIds',
 }) => {
   const mcpReadable = useServiceReadable('mcp_servers');
   if (!mcpReadable) return null;
 
   return (
     <Form.Item
-      name={name}
+      name="mcpServerIds"
       label="MCP Servers"
       help={showHelpText ? 'Select MCP servers to make available in this session' : undefined}
     >
