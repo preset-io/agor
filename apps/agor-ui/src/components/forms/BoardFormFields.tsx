@@ -247,7 +247,7 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
             label: 'CSS Background',
             children: (
               <>
-                <Space direction="vertical" style={{ width: '100%', marginBottom: 16 }}>
+                <Space orientation="vertical" style={{ width: '100%', marginBottom: 16 }}>
                   <Checkbox
                     checked={useCustomCSS}
                     onChange={(e) => {
@@ -303,7 +303,7 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
                 </Space>
 
                 {useCustomCSS && (
-                  <Space direction="vertical" style={{ width: '100%' }}>
+                  <Space orientation="vertical" style={{ width: '100%' }}>
                     <Typography.Text strong style={{ fontSize: '13px' }}>
                       Animation CSS
                     </Typography.Text>

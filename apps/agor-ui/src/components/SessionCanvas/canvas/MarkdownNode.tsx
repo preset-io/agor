@@ -56,7 +56,7 @@ export const MarkdownNode = ({ data }: { data: MarkdownNodeData }) => {
           />
         </div>
       }
-      bodyStyle={{ padding: token.sizeUnit * 8 }}
+      styles={{ body: { padding: token.sizeUnit * 8 } }}
     >
       <div
         className="markdown-content"

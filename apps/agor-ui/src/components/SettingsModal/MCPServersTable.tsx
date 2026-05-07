@@ -433,7 +433,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       children: (
         <>
           <Alert
-            message={
+            title={
               <>
                 Use <Typography.Text code>{'{{ user.env.VAR }}'}</Typography.Text> to inject your
                 environment variables.
@@ -665,7 +665,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   </Form.Item>
 
                   <Alert
-                    message="OAuth Configuration"
+                    title="OAuth Configuration"
                     description={
                       <ul style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
                         <li>
@@ -747,7 +747,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <div style={{ marginTop: 8 }}>
                     <Alert
                       type="success"
-                      message={`Connected: ${testResult.toolCount} tools, ${testResult.resourceCount} resources, ${testResult.promptCount} prompts`}
+                      title={`Connected: ${testResult.toolCount} tools, ${testResult.resourceCount} resources, ${testResult.promptCount} prompts`}
                       showIcon
                       style={{ marginBottom: 8 }}
                     />
@@ -835,7 +835,7 @@ const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                 {testResult && !testResult.success && (
                   <Alert
                     type="error"
-                    message="Connection failed"
+                    title="Connection failed"
                     description={testResult.error}
                     showIcon
                     style={{ marginTop: 8 }}

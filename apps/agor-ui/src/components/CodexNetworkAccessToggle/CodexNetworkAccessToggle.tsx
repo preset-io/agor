@@ -45,7 +45,7 @@ export const CodexNetworkAccessToggle: React.FC<CodexNetworkAccessToggleProps> =
 
       {showWarning && isEnabled && (
         <Alert
-          message="Security Warning"
+          title="Security Warning"
           description={
             <div>
               Enabling network access exposes your environment to:

@@ -979,7 +979,7 @@ export function OnboardingWizard({
         <>
           <Alert
             type="error"
-            message="Clone failed"
+            title="Clone failed"
             description={error}
             showIcon
             style={{ marginBottom: 16, textAlign: 'left' }}
@@ -1021,7 +1021,7 @@ export function OnboardingWizard({
         <>
           <Alert
             type="error"
-            message={error}
+            title={error}
             showIcon
             style={{ marginBottom: 16, textAlign: 'left' }}
           />
@@ -1085,7 +1085,7 @@ export function OnboardingWizard({
         </Form.Item>
       </Form>
 
-      {error && <Alert type="error" message={error} showIcon style={{ marginBottom: 16 }} />}
+      {error && <Alert type="error" title={error} showIcon style={{ marginBottom: 16 }} />}
 
       <Button
         type="primary"
@@ -1141,7 +1141,7 @@ export function OnboardingWizard({
               type="info"
               showIcon
               style={{ marginBottom: 16, textAlign: 'left' }}
-              message="Using a Claude Max or Pro plan?"
+              title="Using a Claude Max or Pro plan?"
               description={
                 <span>
                   If the system user running Agor is already authenticated with the{' '}
@@ -1182,7 +1182,7 @@ export function OnboardingWizard({
             </Form.Item>
           </Form>
 
-          {error && <Alert type="error" message={error} showIcon style={{ marginBottom: 16 }} />}
+          {error && <Alert type="error" title={error} showIcon style={{ marginBottom: 16 }} />}
 
           <Space>
             <Button
@@ -1217,7 +1217,7 @@ export function OnboardingWizard({
           {error && (
             <Alert
               type="error"
-              message={error}
+              title={error}
               showIcon
               style={{ marginBottom: 16, textAlign: 'left' }}
             />

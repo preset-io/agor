@@ -36,7 +36,7 @@ export const DeleteWorktreePopconfirm: React.FC<DeleteWorktreePopconfirmProps> =
           <p>Are you sure you want to delete worktree "{worktree.name}"?</p>
           {sessionCount > 0 && (
             <Alert
-              message={`Note: This will also delete ${sessionCount} related session(s)`}
+              title={`Note: This will also delete ${sessionCount} related session(s)`}
               type="warning"
               showIcon
               style={{ marginBottom: 12 }}

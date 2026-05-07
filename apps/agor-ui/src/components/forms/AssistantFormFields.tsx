@@ -101,7 +101,7 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
         type="info"
         showIcon={false}
         style={{ marginBottom: 16 }}
-        message={
+        title={
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             While assistants can act across boards, we recommend giving each assistant its own
             board.

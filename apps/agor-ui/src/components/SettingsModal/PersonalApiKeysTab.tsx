@@ -215,7 +215,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
         <Alert
           type="warning"
           showIcon
-          message="Copy your API key now"
+          title="Copy your API key now"
           description="This is the only time the full key will be shown. Store it securely."
           style={{ marginBottom: 16 }}
         />

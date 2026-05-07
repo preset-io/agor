@@ -92,7 +92,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
       dataIndex: 'name',
       key: 'name',
       render: (name: string, artifact: Artifact) => (
-        <Space direction="vertical" size={0}>
+        <Space orientation="vertical" size={0}>
           <Typography.Text strong>{name}</Typography.Text>
           {artifact.description && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>

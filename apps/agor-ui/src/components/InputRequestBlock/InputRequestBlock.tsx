@@ -143,7 +143,7 @@ export const InputRequestBlock: React.FC<InputRequestBlockProps> = ({
         },
       }}
     >
-      <Space direction="vertical" size={token.sizeUnit * 1.5} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={token.sizeUnit * 1.5} style={{ width: '100%' }}>
         {/* Header */}
         <Space size={token.sizeUnit}>
           {getIcon()}
@@ -224,7 +224,7 @@ export const InputRequestBlock: React.FC<InputRequestBlockProps> = ({
                       style={{ width: '100%' }}
                     >
                       <Space
-                        direction="vertical"
+                        orientation="vertical"
                         size={token.sizeUnit / 2}
                         style={{ width: '100%' }}
                       >
@@ -294,7 +294,7 @@ export const InputRequestBlock: React.FC<InputRequestBlockProps> = ({
                       style={{ width: '100%' }}
                     >
                       <Space
-                        direction="vertical"
+                        orientation="vertical"
                         size={token.sizeUnit / 2}
                         style={{ width: '100%' }}
                       >

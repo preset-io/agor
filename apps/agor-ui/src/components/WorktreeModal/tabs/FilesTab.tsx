@@ -154,7 +154,7 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
         {isTruncated && (
           <Alert
             type="warning"
-            message="Woah! Big repo alert!"
+            title="Woah! Big repo alert!"
             description={`Only ${MAX_FILES.toLocaleString()} files were loaded to prevent your browser from crashing. Use git/IDE for full repo browsing.`}
             showIcon
           />
@@ -163,13 +163,13 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
         {!isTruncated && files.length > 10000 && (
           <Alert
             type="info"
-            message={`Large repository: ${files.length.toLocaleString()} files loaded.`}
+            title={`Large repository: ${files.length.toLocaleString()} files loaded.`}
             description="Use search to find files quickly."
             showIcon
           />
         )}
 
-        {error && <Alert message="Error" description={error} type="error" showIcon />}
+        {error && <Alert title="Error" description={error} type="error" showIcon />}
 
         <FileCollection
           files={files}

@@ -326,7 +326,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
       return (
         <Alert
           type="error"
-          message="Failed to load conversation"
+          title="Failed to load conversation"
           description={error}
           showIcon
           action={

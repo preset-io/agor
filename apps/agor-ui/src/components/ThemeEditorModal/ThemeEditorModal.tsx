@@ -65,7 +65,7 @@ export const ThemeEditorModal: React.FC<ThemeEditorModalProps> = ({ open, onClos
       }
     >
       <Alert
-        message="Edit your custom theme configuration"
+        title="Edit your custom theme configuration"
         description={
           <Text>
             Modify the JSON below to customize your Ant Design theme. See the{' '}

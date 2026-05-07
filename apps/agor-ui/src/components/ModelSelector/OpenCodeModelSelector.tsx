@@ -122,7 +122,7 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   if (error) {
     return (
       <Alert
-        message="OpenCode Unavailable"
+        title="OpenCode Unavailable"
         description={error}
         type="warning"
         showIcon
@@ -139,7 +139,7 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   if (providers.length === 0) {
     return (
       <Alert
-        message="No Providers Available"
+        title="No Providers Available"
         description="OpenCode server returned no providers. Check your OpenCode installation."
         type="info"
         showIcon

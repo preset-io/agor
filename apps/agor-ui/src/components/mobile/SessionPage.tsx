@@ -48,7 +48,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   if (!sessionId) {
     return (
       <div style={{ padding: 16 }}>
-        <Alert type="error" message="No session ID provided" />
+        <Alert type="error" title="No session ID provided" />
       </div>
     );
   }

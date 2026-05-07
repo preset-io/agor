@@ -86,7 +86,7 @@ export const SessionEnvVarsSelector: React.FC<SessionEnvVarsSelectorProps> = ({
   }, [loaded]);
 
   if (error) {
-    return <Alert type="error" message={error} />;
+    return <Alert type="error" title={error} />;
   }
 
   if (!loading && sessionScopedNames.length === 0) {
@@ -100,7 +100,7 @@ export const SessionEnvVarsSelector: React.FC<SessionEnvVarsSelectorProps> = ({
   }
 
   return (
-    <Space direction="vertical" size="small" style={{ width: '100%' }}>
+    <Space orientation="vertical" size="small" style={{ width: '100%' }}>
       <Select<string[]>
         mode="multiple"
         value={value}

@@ -159,7 +159,7 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
             </Text>
             {logs.truncated && (
               <Alert
-                message="Logs truncated (showing last 500 lines)"
+                title="Logs truncated (showing last 500 lines)"
                 type="warning"
                 showIcon
                 style={{ marginTop: 8 }}
@@ -172,7 +172,7 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
         {/* Error state */}
         {logs?.error && (
           <Alert
-            message="Error fetching logs"
+            title="Error fetching logs"
             description={
               <div>
                 <div>{logs.error}</div>

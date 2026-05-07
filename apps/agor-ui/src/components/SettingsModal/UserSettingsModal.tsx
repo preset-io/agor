@@ -617,7 +617,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               type="info"
               showIcon
               style={{ marginBottom: 16 }}
-              message="Looking for SDK credentials?"
+              title="Looking for SDK credentials?"
               description={
                 <span>
                   API keys and SDK config (Anthropic, OpenAI, Gemini, Copilot) live under each

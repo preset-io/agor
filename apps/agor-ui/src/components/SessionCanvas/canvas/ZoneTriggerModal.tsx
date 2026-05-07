@@ -313,7 +313,7 @@ export const ZoneTriggerModal = ({
           </Radio.Group>
           {worktreeSessions.length === 0 && (
             <Alert
-              message="No existing sessions in this worktree"
+              title="No existing sessions in this worktree"
               type="info"
               showIcon
               style={{ marginTop: 12 }}
@@ -413,7 +413,7 @@ export const ZoneTriggerModal = ({
                   <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
                     {mode === 'reuse_existing' && (
                       <Alert
-                        message="Showing current configuration. These settings are for reference."
+                        title="Showing current configuration. These settings are for reference."
                         type="info"
                         showIcon
                       />

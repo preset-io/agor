@@ -298,7 +298,7 @@ function AppContent() {
       >
         <Alert
           type="warning"
-          message="Could not fetch daemon configuration"
+          title="Could not fetch daemon configuration"
           description={
             <div>
               <p>{authConfigError.message}</p>
@@ -387,7 +387,7 @@ function AppContent() {
       >
         <Alert
           type="error"
-          message="Failed to connect to Agor daemon"
+          title="Failed to connect to Agor daemon"
           description={
             <div>
               <p>{connectionError}</p>
@@ -436,7 +436,7 @@ function AppContent() {
           padding: '2rem',
         }}
       >
-        <Alert type="error" message="Failed to load data" description={dataError} showIcon />
+        <Alert type="error" title="Failed to load data" description={dataError} showIcon />
       </div>
     );
   }

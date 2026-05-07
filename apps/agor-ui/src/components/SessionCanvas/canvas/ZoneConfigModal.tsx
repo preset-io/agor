@@ -167,7 +167,7 @@ export const ZoneConfigModal = ({
         </Form.Item>
 
         <Alert
-          message="Handlebars Template Support"
+          title="Handlebars Template Support"
           description={
             <div>
               <p style={{ marginBottom: 8 }}>

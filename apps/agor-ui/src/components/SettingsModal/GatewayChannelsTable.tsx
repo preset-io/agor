@@ -385,7 +385,7 @@ const ChannelFormFields: React.FC<{
 
       {channelType !== 'slack' && channelType !== 'github' && (
         <Alert
-          message={`${channelType.charAt(0).toUpperCase() + channelType.slice(1)} support coming soon`}
+          title={`${channelType.charAt(0).toUpperCase() + channelType.slice(1)} support coming soon`}
           description="This platform integration is not yet available. Slack and GitHub are currently supported."
           type="info"
           showIcon
@@ -416,7 +416,7 @@ const ChannelFormFields: React.FC<{
             <Alert
               type="error"
               showIcon
-              message="GitHub Setup Error"
+              title="GitHub Setup Error"
               description={githubError}
               style={{ marginBottom: 16 }}
             />
@@ -518,7 +518,7 @@ const ChannelFormFields: React.FC<{
               <Alert
                 type="info"
                 showIcon
-                message="Enter your GitHub App credentials"
+                title="Enter your GitHub App credentials"
                 description={
                   <span>
                     On your GitHub App&apos;s settings page:
@@ -563,7 +563,7 @@ const ChannelFormFields: React.FC<{
               </Form.Item>
 
               {githubError && (
-                <Alert type="error" showIcon message={githubError} style={{ marginBottom: 12 }} />
+                <Alert type="error" showIcon title={githubError} style={{ marginBottom: 12 }} />
               )}
 
               <Button
@@ -899,7 +899,7 @@ const ChannelFormFields: React.FC<{
                   <Alert
                     type="info"
                     showIcon
-                    message="Socket Mode Required"
+                    title="Socket Mode Required"
                     description="Enable Socket Mode in your Slack app settings and generate an app-level token with connections:write scope."
                     style={{ fontSize: 12 }}
                   />
@@ -970,7 +970,7 @@ const ChannelFormFields: React.FC<{
                     <Alert
                       type="warning"
                       showIcon
-                      message="Bot will respond to ALL messages in enabled channels. This can be noisy and expensive."
+                      title="Bot will respond to ALL messages in enabled channels. This can be noisy and expensive."
                       style={{ marginBottom: 12 }}
                     />
                   )}
@@ -979,7 +979,7 @@ const ChannelFormFields: React.FC<{
                     <Alert
                       type="info"
                       showIcon
-                      message="Required Slack Scopes & Events"
+                      title="Required Slack Scopes & Events"
                       description={
                         <ul style={{ margin: '8px 0 0 0', paddingLeft: 20, fontSize: 12 }}>
                           <li>
@@ -1047,7 +1047,7 @@ const ChannelFormFields: React.FC<{
                     <Alert
                       type="info"
                       showIcon
-                      message="Requires users:read.email scope"
+                      title="Requires users:read.email scope"
                       description={
                         <span>
                           Add <code>users:read.email</code> to your Slack app to look up user
@@ -1650,7 +1650,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         type="warning"
         showIcon
         style={{ marginBottom: 16 }}
-        message="Beta Feature — Security Notice"
+        title="Beta Feature — Security Notice"
         description={
           <>
             The Message Gateway is a <strong>beta feature</strong>. Connecting external messaging
@@ -1801,7 +1801,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         {createdChannelKey && createdChannelKey !== 'pending' && (
           <div style={{ padding: '0 24px 16px' }}>
             <Alert
-              message="Channel Key"
+              title="Channel Key"
               description={
                 <Space orientation="vertical" style={{ width: '100%' }}>
                   <Input.Search
@@ -1822,7 +1822,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             />
             {createdChannelType === 'slack' && (
               <Alert
-                message="Slack Setup"
+                title="Slack Setup"
                 description={
                   <ol style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
                     <li>Install the Slack app to your workspace</li>
@@ -1844,7 +1844,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             )}
             {createdChannelType === 'github' && (
               <Alert
-                message="GitHub Channel Ready"
+                title="GitHub Channel Ready"
                 description={
                   <ol style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
                     <li>The GitHub App is connected and polling will begin automatically</li>
@@ -1869,7 +1869,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         {createdChannelKey === 'pending' && (
           <div style={{ padding: '0 24px 16px' }}>
             <Alert
-              message="Channel key will appear here after the server processes the request."
+              title="Channel key will appear here after the server processes the request."
               type="info"
               showIcon
             />

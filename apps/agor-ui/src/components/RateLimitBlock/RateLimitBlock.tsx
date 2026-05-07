@@ -72,7 +72,7 @@ export const RateLimitBlock: React.FC<RateLimitBlockProps> = ({ message, agentic
   );
 
   const formattedContent = (
-    <Space direction="vertical" size="small" style={{ width: '100%' }}>
+    <Space orientation="vertical" size="small" style={{ width: '100%' }}>
       <Space>
         {icon}
         <Text type="secondary">{text}</Text>

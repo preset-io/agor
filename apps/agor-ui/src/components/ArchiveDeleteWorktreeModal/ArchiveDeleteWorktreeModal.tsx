@@ -61,7 +61,7 @@ export const ArchiveDeleteWorktreeModal: React.FC<ArchiveDeleteWorktreeModalProp
         {/* Environment Warning */}
         {environmentRunning && (
           <Alert
-            message="Environment is running and will be stopped"
+            title="Environment is running and will be stopped"
             type="warning"
             showIcon
             style={{ marginBottom: 0 }}
@@ -136,7 +136,7 @@ export const ArchiveDeleteWorktreeModal: React.FC<ArchiveDeleteWorktreeModalProp
         {/* Delete Warning */}
         {metadataAction === 'delete' && (
           <Alert
-            message="Warning"
+            title="Warning"
             description={
               <Space orientation="vertical" size="small" style={{ width: '100%' }}>
                 <Text>

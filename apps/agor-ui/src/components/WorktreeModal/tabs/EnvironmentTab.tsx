@@ -677,7 +677,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 style={{ marginTop: 12, fontSize: 11 }}
                 type="error"
                 showIcon
-                message={lastHealthCheck?.message || 'Environment Error'}
+                title={lastHealthCheck?.message || 'Environment Error'}
                 description={
                   lastError && (
                     <pre
@@ -704,7 +704,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
           <Alert
             type="info"
             showIcon
-            message="No environment variants configured"
+            title="No environment variants configured"
             description={
               <div>
                 <p style={{ marginBottom: 8 }}>
@@ -825,7 +825,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
               rows={14}
             />
             {repoYamlError && (
-              <Alert type="error" showIcon message={`Invalid repo environment: ${repoYamlError}`} />
+              <Alert type="error" showIcon title={`Invalid repo environment: ${repoYamlError}`} />
             )}
             {isEditingRepo && (
               <Space>
@@ -938,7 +938,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
               rows={10}
             />
             {snapshotYamlError && (
-              <Alert type="error" showIcon message={`Invalid snapshot: ${snapshotYamlError}`} />
+              <Alert type="error" showIcon title={`Invalid snapshot: ${snapshotYamlError}`} />
             )}
             {isEditingSnapshot && (
               <Space>

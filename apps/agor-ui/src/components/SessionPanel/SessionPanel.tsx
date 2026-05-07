@@ -705,7 +705,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           <Alert
             type="warning"
             showIcon
-            message={
+            title={
               <span>
                 {unauthedMcpServers.map((server) => (
                   <MCPServerPill

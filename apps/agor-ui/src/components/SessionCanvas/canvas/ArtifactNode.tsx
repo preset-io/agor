@@ -303,7 +303,7 @@ export const ArtifactNode = ({
           body: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' },
         }}
       >
-        <Spin indicator={<LoadingOutlined />} tip="Loading artifact..." />
+        <Spin indicator={<LoadingOutlined />} description="Loading artifact..." />
       </Card>
     );
   }

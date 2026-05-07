@@ -42,7 +42,7 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
   if (!boardId) {
     return (
       <div style={{ padding: 16 }}>
-        <Alert type="error" message="No board ID provided" />
+        <Alert type="error" title="No board ID provided" />
       </div>
     );
   }
@@ -50,7 +50,7 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
   if (!board) {
     return (
       <div style={{ padding: 16 }}>
-        <Alert type="error" message="Board not found" />
+        <Alert type="error" title="Board not found" />
       </div>
     );
   }

@@ -115,7 +115,7 @@ export function LoginPage({ onLogin, loading = false, error }: LoginPageProps) {
         {error && (
           <Alert
             type="error"
-            message="Login Failed"
+            title="Login Failed"
             description={
               <Space orientation="vertical" size="small" style={{ width: '100%' }}>
                 <div>{error}</div>

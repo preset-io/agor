@@ -117,7 +117,7 @@ export const OpenCodeTab: React.FC<OpenCodeTabProps> = ({ client }) => {
     <div style={{ padding: token.paddingMD }}>
       {/* Information Alert */}
       <Alert
-        message="OpenCode.ai Integration"
+        title="OpenCode.ai Integration"
         description={
           <div>
             <p style={{ marginBottom: token.marginXS }}>
@@ -194,7 +194,7 @@ export const OpenCodeTab: React.FC<OpenCodeTabProps> = ({ client }) => {
             {/* Connection Status */}
             {isConnected !== null && (
               <Alert
-                message={
+                title={
                   isConnected ? (
                     <Space>
                       <CheckCircleOutlined style={{ color: token.colorSuccess }} />
@@ -216,7 +216,7 @@ export const OpenCodeTab: React.FC<OpenCodeTabProps> = ({ client }) => {
             {/* Setup Instructions (shown if not connected) */}
             {isConnected === false && (
               <Alert
-                message="Server Not Running"
+                title="Server Not Running"
                 description={
                   <div>
                     <p style={{ marginBottom: token.marginXS }}>
@@ -252,7 +252,7 @@ export const OpenCodeTab: React.FC<OpenCodeTabProps> = ({ client }) => {
             {/* Success Status */}
             {isConnected === true && (
               <Alert
-                message="Ready to use!"
+                title="Ready to use!"
                 description="You can now create sessions with OpenCode as the agentic tool."
                 type="success"
                 showIcon

@@ -73,7 +73,7 @@ export function ForcePasswordChangeModal({
     >
       <Alert
         type="warning"
-        message="Your administrator requires you to change your password before continuing."
+        title="Your administrator requires you to change your password before continuing."
         style={{ marginBottom: 24 }}
         showIcon
       />
@@ -81,7 +81,7 @@ export function ForcePasswordChangeModal({
       {error && (
         <Alert
           type="error"
-          message={error}
+          title={error}
           style={{ marginBottom: 16 }}
           showIcon
           closable

@@ -807,7 +807,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
       >
         {loading ? (
           <div style={{ textAlign: 'center', padding: 32 }}>
-            <Spin tip="Loading comments..." />
+            <Spin description="Loading comments..." />
           </div>
         ) : Object.keys(groupedThreads).length === 0 ? (
           <div

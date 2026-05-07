@@ -69,7 +69,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         placement="left"
         onClose={() => setDrawerOpen(false)}
         open={drawerOpen}
-        width="85%"
+        size="85%"
         styles={{
           body: { padding: 0 },
         }}
