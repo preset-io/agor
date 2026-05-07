@@ -29,7 +29,6 @@ import {
   StopOutlined,
 } from '@ant-design/icons';
 import { Alert, App, Badge, Button, Space, Spin, Tooltip, Typography, theme } from 'antd';
-import Handlebars from 'handlebars';
 import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
@@ -40,7 +39,7 @@ import spawnSubsessionTemplate from '../../templates/spawn_subsession.hbs?raw';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
-import { compileTemplate } from '../../utils/templates';
+import { renderTemplate } from '../../utils/templates';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { EffortSelector } from '../EffortSelector';
 import { FileUpload, FileUploadButton } from '../FileUpload';
@@ -50,10 +49,6 @@ import { PermissionModeSelector } from '../PermissionModeSelector';
 import { ContextWindowPill, ModelPill, SessionIdPill, TimerPill, TokenCountPill } from '../Pill';
 import { ToolIcon } from '../ToolIcon';
 import { SessionPanelContent } from './SessionPanelContent';
-
-// Register helper to check if value is defined (not undefined)
-// This allows us to distinguish between false and undefined in templates
-Handlebars.registerHelper('isDefined', (value: unknown) => value !== undefined);
 
 // Re-export PermissionMode from SDK for convenience
 export type { PermissionMode };
@@ -77,10 +72,6 @@ interface SpawnTemplateContext {
   };
   extraInstructions?: string;
 }
-
-// Compile the spawn subsession template once at module level (after helper registration)
-const compiledSpawnSubsessionTemplate =
-  compileTemplate<SpawnTemplateContext>(spawnSubsessionTemplate);
 
 // ---------------------------------------------------------------------------
 // PromptInput — thin wrapper around AutocompleteTextarea that keeps the typed
@@ -598,11 +589,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   };
 
   const handleSpawnModalConfirm = async (config: string | Partial<SpawnConfig>) => {
-    if (!session) return;
+    if (!session || !client) return;
 
+    let templateContext: SpawnTemplateContext;
     if (typeof config === 'string') {
-      const metaPrompt = compiledSpawnSubsessionTemplate({ userPrompt: config });
-      await onSendPrompt?.(session.session_id, metaPrompt, permissionMode);
+      templateContext = { userPrompt: config };
     } else {
       const hasConfig =
         config.agent !== undefined ||
@@ -617,7 +608,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         config.includeOriginalPrompt !== undefined ||
         config.extraInstructions !== undefined;
 
-      const metaPrompt = compiledSpawnSubsessionTemplate({
+      templateContext = {
         userPrompt: config.prompt || '',
         hasConfig,
         agenticTool: config.agent,
@@ -637,10 +628,15 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           includeOriginalPrompt: config.includeOriginalPrompt,
         },
         extraInstructions: config.extraInstructions,
-      });
-
-      await onSendPrompt?.(session.session_id, metaPrompt, permissionMode);
+      };
     }
+
+    const metaPrompt = await renderTemplate(
+      client,
+      spawnSubsessionTemplate,
+      templateContext as unknown as Record<string, unknown>
+    );
+    await onSendPrompt?.(session.session_id, metaPrompt, permissionMode);
 
     setSpawnModalOpen(false);
     promptRef.current?.clear();

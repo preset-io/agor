@@ -53,13 +53,10 @@ import {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import './SessionCanvas.css';
-// Use the shared renderer so we render against the same Handlebars instance
-// where `initializeHandlebarsHelpers()` registered helpers (the bundled copy
-// inside @agor-live/client). Importing `handlebars` directly gives a separate
-// instance with no helpers, which causes templates using helpers like {{add}}
-// or {{eq}} to throw and silently fail.
-import { renderTemplate } from '@/utils/handlebars-helpers';
 import { mapToArray } from '@/utils/mapHelpers';
+// Async server-side renderer — keeps Handlebars out of the browser bundle so
+// the page doesn't need CSP `script-src 'unsafe-eval'`.
+import { renderTemplate } from '@/utils/templates';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
 import { useMutationGate } from '../../contexts/ConnectionContext';
 import { useCursorTracking } from '../../hooks/useCursorTracking';
@@ -1676,7 +1673,11 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                               context: {},
                             },
                           };
-                          const renderedPrompt = renderTemplate(trigger.template, context);
+                          const renderedPrompt = await renderTemplate(
+                            client,
+                            trigger.template,
+                            context
+                          );
 
                           // Create new root session.
                           //
@@ -2689,6 +2690,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           <ZoneTriggerModal
             open={true}
             onCancel={() => setWorktreeTriggerModal(null)}
+            client={client}
             worktreeId={worktreeTriggerModal.worktreeId}
             worktree={worktrees.find((wt) => wt.worktree_id === worktreeTriggerModal.worktreeId)}
             sessionsByWorktree={sessionsByWorktree}

@@ -48,9 +48,12 @@ describe('resolveSecurity — CSP defaults', () => {
     expect(csp.directives['connect-src']).toContain('wss:');
   });
 
-  it("script-src includes 'unsafe-eval' (Handlebars compiles templates via new Function)", () => {
+  it("script-src does NOT include 'unsafe-eval' (Handlebars rendering moved to daemon)", () => {
+    // Pins the contract: any browser code that triggers `new Function` /
+    // `eval` is a regression. If a future dep needs eval, prefer routing
+    // through the daemon's /templates service instead of relaxing this.
     const { csp } = resolveSecurity(EMPTY);
-    expect(csp.directives['script-src']).toContain("'unsafe-eval'");
+    expect(csp.directives['script-src']).not.toContain("'unsafe-eval'");
   });
 
   it('style-src and font-src include fonts.bunny.net for the Inter font import', () => {
@@ -75,11 +78,7 @@ describe('resolveSecurity — CSP extras/override', () => {
       },
       { daemonUrl: 'http://localhost:3030' }
     );
-    expect(csp.directives['script-src']).toEqual([
-      "'self'",
-      "'unsafe-eval'",
-      'https://plausible.io',
-    ]);
+    expect(csp.directives['script-src']).toEqual(["'self'", 'https://plausible.io']);
     expect(csp.directives['connect-src']).toContain('https://api.anthropic.com');
   });
 

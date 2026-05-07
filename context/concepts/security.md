@@ -100,7 +100,7 @@ work. Operators rarely need to override them:
 
 ```
 default-src        'self'
-script-src         'self' 'unsafe-eval'                          # Handlebars compiles via new Function
+script-src         'self'
 style-src          'self' 'unsafe-inline' https://fonts.bunny.net # Ant Design inline + Inter font CSS
 img-src            'self' data: blob: https://*.codesandbox.io
 font-src           'self' data: https://fonts.bunny.net           # Inter font files
@@ -112,12 +112,11 @@ object-src         'none'
 base-uri           'self'
 ```
 
-`'unsafe-eval'` is required because the UI uses Handlebars at runtime (zone
-triggers, env health URL templates, the spawn-subsession prompt) and
-`Handlebars.compile()` calls `new Function(...)` on its parser-generated JS.
-Rendered template output is never injected as HTML/script (no
-`dangerouslySetInnerHTML` in the UI), so the only `new Function` argument is
-parser output, not user template content.
+`script-src` deliberately does NOT include `'unsafe-eval'`. Handlebars
+template rendering — used for zone triggers, env health URLs, and the
+spawn-subsession prompt — runs server-side via the daemon's `/templates`
+service (`apps/agor-daemon/src/services/templates.ts`). The browser bundle
+ships no Handlebars and never calls `new Function` / `eval`.
 
 `fonts.bunny.net` hosts the Inter font CSS imported by `apps/agor-ui/src/index.css`.
 

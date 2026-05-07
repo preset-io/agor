@@ -3,7 +3,6 @@ import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 import { installClipboardPolyfill } from './utils/clipboard-polyfill';
-import { initializeHandlebarsHelpers } from './utils/handlebars-helpers';
 
 declare global {
   interface Window {
@@ -29,9 +28,6 @@ if (import.meta.hot) {
     }
   });
 }
-
-// Initialize Handlebars helpers
-initializeHandlebarsHelpers();
 
 createRoot(document.getElementById('root')!).render(
   // Temporarily disable StrictMode to avoid double socket connections in dev

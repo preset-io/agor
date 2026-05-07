@@ -72,6 +72,7 @@ import { createSessionEnvSelectionsService } from './services/session-env-select
 import { createSessionMCPServersService } from './services/session-mcp-servers.js';
 import { createSessionsService } from './services/sessions.js';
 import { createTasksService } from './services/tasks.js';
+import { createTemplatesService } from './services/templates.js';
 import { TerminalsService } from './services/terminals.js';
 import { createThreadSessionMapService } from './services/thread-session-map.js';
 import { createUsersService } from './services/users.js';
@@ -388,6 +389,11 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     app.use('/file', createFileService(worktreeRepository));
     app.use('/files', createFilesService(db));
   }
+
+  // Server-side Handlebars renderer. UI calls POST /templates so the browser
+  // bundle can stay free of Handlebars (which uses `new Function` and would
+  // require CSP `script-src 'unsafe-eval'`).
+  app.use('/templates', createTemplatesService());
 
   const terminalsService = svcEnabled('terminals') ? new TerminalsService(app, db) : null;
   if (terminalsService) {

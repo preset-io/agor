@@ -1,7 +1,10 @@
 /**
  * Client-safe @agor/core surface for browser/SDK consumers.
  *
- * This entrypoint must stay free of Node-only SDK/runtime imports.
+ * This entrypoint must stay free of Node-only SDK/runtime imports AND of
+ * Handlebars (which uses `new Function` and would force browsers to ship
+ * with CSP `script-src 'unsafe-eval'`). Server-side renderers should import
+ * directly from `@agor/core/templates/handlebars-helpers` instead.
  */
 
 export type {
@@ -16,6 +19,9 @@ export type {
   SessionPromptResult,
   SessionsService,
   TasksService,
+  TemplateRenderRequest,
+  TemplateRenderResponse,
+  TemplatesService,
   WorktreesService,
 } from '../api/index.js';
 export {
@@ -27,5 +33,4 @@ export {
 
 export * from '../config/browser.js';
 export type { AgorConfig } from '../config/types.js';
-export * from '../templates/handlebars-helpers.js';
 export * from '../types/index.js';

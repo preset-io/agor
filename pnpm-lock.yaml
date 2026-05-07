@@ -347,9 +347,6 @@ importers:
       emojibase-data:
         specifier: ^17.0.0
         version: 17.0.0(emojibase@17.0.0)
-      handlebars:
-        specifier: '>=4.7.9 <5'
-        version: 4.7.9
       react:
         specifier: ^18.3.1
         version: 18.3.1

@@ -194,7 +194,13 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
       align: 'center' as const,
       render: (_: unknown, record: Worktree) => {
         const repo = repos.find((r: Repo) => r.repo_id === record.repo_id);
-        return renderEnvCell(record, repo, token, { onStartEnvironment, onStopEnvironment });
+        return renderEnvCell(
+          record,
+          repo,
+          token,
+          { onStartEnvironment, onStopEnvironment },
+          client
+        );
       },
     },
     {

@@ -212,6 +212,15 @@ export function registerHandlebarsHelpers(): void {
     return JSON.stringify(obj, null, 2);
   });
 
+  /**
+   * True when the value is defined (i.e. not `undefined`). Distinguishes
+   * "explicitly false" from "absent" in `{{#if}}` blocks — used by the
+   * spawn-subsession template to render boolean callback flags only when
+   * the caller actually set them.
+   * Usage: {{#if (isDefined callbackConfig.enableCallback)}}...{{/if}}
+   */
+  Handlebars.registerHelper('isDefined', (value: unknown): boolean => value !== undefined);
+
   helpersRegistered = true;
 }
 

@@ -3,8 +3,7 @@
  * Used by both WorktreesTable and AssistantsTable to avoid duplication.
  */
 
-import type { Repo, Worktree } from '@agor-live/client';
-import { renderTemplate } from '@agor-live/client';
+import type { AgorClient, Repo, Worktree } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -18,6 +17,7 @@ import {
 import type { GlobalToken } from 'antd';
 import { Badge, Button, Space, Tooltip } from 'antd';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
+import { renderTemplate } from '../../utils/templates';
 
 /** Render environment status icon for a worktree */
 export function renderEnvStatusIcon(worktree: Worktree, token: GlobalToken) {
@@ -85,7 +85,8 @@ export function renderEnvCell(
   callbacks: {
     onStartEnvironment?: (worktreeId: string) => void;
     onStopEnvironment?: (worktreeId: string) => void;
-  }
+  },
+  client: AgorClient | null
 ) {
   const status = worktree.environment_instance?.status;
   const healthStatus = worktree.environment_instance?.last_health_check?.status;
@@ -126,17 +127,17 @@ export function renderEnvCell(
               type="text"
               size="small"
               icon={<GlobalOutlined />}
-              onClick={(e) => {
+              onClick={async (e) => {
                 e.stopPropagation();
-                const templateContext = {
+                if (!client) return;
+                const url = await renderTemplate(client, effectiveEnv.health ?? '', {
                   worktree: {
                     unique_id: worktree.worktree_unique_id,
                     name: worktree.name,
                     path: worktree.path,
                   },
                   repo: { slug: repo.slug },
-                };
-                const url = renderTemplate(effectiveEnv.health ?? '', templateContext);
+                });
                 if (url) {
                   window.open(url, '_blank');
                 }
