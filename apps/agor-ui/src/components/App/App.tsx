@@ -1143,6 +1143,7 @@ export const App: React.FC<AppProps> = ({
               onBoardChange={setCurrentBoardId}
               sessionsByWorktree={sessionsByWorktree}
               worktreeById={worktreeById}
+              repoById={repoById}
               onSessionClick={handleSessionClick}
             />
             <TerminalModal

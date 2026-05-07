@@ -1,12 +1,12 @@
-import type { Board, Session, Worktree } from '@agor-live/client';
-import { SearchOutlined } from '@ant-design/icons';
-import { Badge, Drawer, Input, List, Space, Typography, theme } from 'antd';
+import type { Board, Repo, Session, Worktree } from '@agor-live/client';
+import { ForkOutlined, SearchOutlined, SubnodeOutlined } from '@ant-design/icons';
+import { Badge, Drawer, Input, List, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useMemo, useState } from 'react';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
+import { formatRelativeTime, formatTimestampWithRelative } from '../../utils/time';
+import { RepoPill } from '../Pill';
 import { ToolIcon } from '../ToolIcon';
-
-const { useToken } = theme;
 
 interface WorktreeListDrawerProps {
   open: boolean;
@@ -15,9 +15,63 @@ interface WorktreeListDrawerProps {
   currentBoardId: string;
   onBoardChange: (boardId: string) => void;
   worktreeById: Map<string, Worktree>;
+  repoById: Map<string, Repo>;
   sessionsByWorktree: Map<string, Session[]>;
   onSessionClick: (sessionId: string) => void;
 }
+
+/**
+ * Maps every SessionStatus to an Ant Badge status color.
+ * Today's drawer only colored 3 of 8 statuses; this covers the full set so
+ * the dot is glanceable for awaiting_permission, awaiting_input, timed_out,
+ * stopping, and idle as well.
+ */
+const getStatusColor = (
+  status: Session['status']
+): 'success' | 'processing' | 'error' | 'warning' | 'default' => {
+  switch (status) {
+    case 'running':
+    case 'stopping':
+      return 'processing';
+    case 'completed':
+      return 'success';
+    case 'failed':
+      return 'error';
+    case 'awaiting_permission':
+    case 'awaiting_input':
+    case 'timed_out':
+      return 'warning';
+    default:
+      return 'default';
+  }
+};
+
+/**
+ * Small inline relationship icon when a session was forked from a sibling or
+ * spawned from a parent. Visual grammar matches WorktreeCard.tsx so the same
+ * icon means the same thing wherever sessions appear.
+ */
+const GenealogyIndicator: React.FC<{ session: Session }> = ({ session }) => {
+  const { token } = theme.useToken();
+  const parentId = session.genealogy?.parent_session_id;
+  const forkedFromId = session.genealogy?.forked_from_session_id;
+
+  if (parentId) {
+    return (
+      <Tooltip title={`Spawned from ${parentId.substring(0, 8)}`}>
+        <SubnodeOutlined style={{ fontSize: 11, color: token.colorInfo, flexShrink: 0 }} />
+      </Tooltip>
+    );
+  }
+  if (forkedFromId) {
+    return (
+      <Tooltip title={`Forked from ${forkedFromId.substring(0, 8)}`}>
+        <ForkOutlined style={{ fontSize: 11, color: token.colorWarning, flexShrink: 0 }} />
+      </Tooltip>
+    );
+  }
+  return null;
+};
 
 export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
   open,
@@ -26,10 +80,11 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
   currentBoardId,
   onBoardChange,
   worktreeById,
+  repoById,
   sessionsByWorktree,
   onSessionClick,
 }) => {
-  const { token } = useToken();
+  const { token } = theme.useToken();
   const [searchQuery, setSearchQuery] = useState('');
 
   // Get current board
@@ -58,24 +113,6 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
       session.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       session.agentic_tool.toLowerCase().includes(searchQuery.toLowerCase())
   );
-
-  const getStatusColor = (status: Session['status']) => {
-    switch (status) {
-      case 'running':
-        return 'processing';
-      case 'completed':
-        return 'success';
-      case 'failed':
-        return 'error';
-      default:
-        return 'default';
-    }
-  };
-
-  // Get worktree name for session
-  const getWorktreeName = (worktreeId: string) => {
-    return worktreeById.get(worktreeId)?.name || 'Unknown';
-  };
 
   return (
     <Drawer
@@ -109,49 +146,91 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
         <List
           dataSource={filteredSessions}
           locale={{ emptyText: 'No sessions in this board' }}
-          renderItem={(session) => (
-            <List.Item
-              style={{
-                cursor: 'pointer',
-                padding: '12px 24px',
-                transition: 'background 0.2s',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = token.colorBgTextHover;
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'transparent';
-              }}
-              onClick={() => {
-                onSessionClick(session.session_id);
-                onClose();
-              }}
-            >
-              <List.Item.Meta
-                avatar={<ToolIcon tool={session.agentic_tool} size={24} />}
-                title={
-                  <Space size={8}>
-                    <Typography.Text strong style={getSessionTitleStyles(2)}>
-                      {getSessionDisplayTitle(session, { includeAgentFallback: true })}
+          renderItem={(session) => {
+            const worktree = session.worktree_id
+              ? worktreeById.get(session.worktree_id)
+              : undefined;
+            const repo = worktree ? repoById.get(worktree.repo_id) : undefined;
+
+            return (
+              <List.Item
+                style={{
+                  cursor: 'pointer',
+                  padding: '10px 24px',
+                  transition: 'background 0.2s',
+                  display: 'block', // override List.Item flex so our 2-line layout owns the row
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = token.colorBgTextHover;
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'transparent';
+                }}
+                onClick={() => {
+                  onSessionClick(session.session_id);
+                  onClose();
+                }}
+              >
+                {/* Line 1: status dot · tool icon · title · genealogy */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 8,
+                    minWidth: 0,
+                  }}
+                >
+                  <Badge
+                    status={getStatusColor(session.status)}
+                    style={{ marginTop: 6, flexShrink: 0 }}
+                  />
+                  <ToolIcon tool={session.agentic_tool} size={14} />
+                  <Typography.Text
+                    strong
+                    style={{ ...getSessionTitleStyles(2), flex: 1, minWidth: 0 }}
+                  >
+                    {getSessionDisplayTitle(session, { includeAgentFallback: true })}
+                  </Typography.Text>
+                  <GenealogyIndicator session={session} />
+                </div>
+
+                {/* Line 2: repo+worktree pill · relative timestamp */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    marginTop: 6,
+                    marginLeft: 22, // align under title (badge 6 + gap 8 + icon 14 - approx)
+                    minWidth: 0,
+                  }}
+                >
+                  <div style={{ minWidth: 0, overflow: 'hidden' }}>
+                    {repo && worktree ? (
+                      <RepoPill repoName={repo.slug} worktreeName={worktree.name} />
+                    ) : worktree ? (
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        🌳 {worktree.name}
+                      </Typography.Text>
+                    ) : (
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        No worktree
+                      </Typography.Text>
+                    )}
+                  </div>
+                  <Tooltip title={formatTimestampWithRelative(session.last_updated)}>
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: 11, whiteSpace: 'nowrap', flexShrink: 0 }}
+                    >
+                      {formatRelativeTime(session.last_updated)}
                     </Typography.Text>
-                    <Badge status={getStatusColor(session.status)} />
-                  </Space>
-                }
-                description={
-                  <Space orientation="vertical" size={2} style={{ width: '100%' }}>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {session.agentic_tool} • {session.tasks.length}{' '}
-                      {session.tasks.length === 1 ? 'task' : 'tasks'}
-                    </Typography.Text>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      🌳{' '}
-                      {session.worktree_id ? getWorktreeName(session.worktree_id) : 'No worktree'}
-                    </Typography.Text>
-                  </Space>
-                }
-              />
-            </List.Item>
-          )}
+                  </Tooltip>
+                </div>
+              </List.Item>
+            );
+          }}
         />
       </div>
 
