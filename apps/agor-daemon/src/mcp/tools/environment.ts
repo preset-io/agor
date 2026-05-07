@@ -10,16 +10,51 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
   server.registerTool(
     'agor_environment_start',
     {
-      description: 'Start the environment for a worktree by running its configured start command',
-      annotations: { idempotentHint: true },
+      description:
+        'Start the environment for a worktree by running its configured start command. ' +
+        'Optionally pass a variant to re-render environment commands from the repo config before starting.',
       inputSchema: z.object({
         worktreeId: z.string().describe('Worktree ID (UUIDv7 or short ID)'),
+        variant: z
+          .string()
+          .optional()
+          .describe(
+            'Environment variant name to render before starting. ' +
+              'Re-renders the worktree environment commands (start/stop/nuke/etc.) from the repo config. ' +
+              'If the environment is already running with a different variant, you must stop it first.'
+          ),
       }),
     },
     async (args) => {
       const worktreeId = coerceString(args.worktreeId)!;
+      const variant = coerceString(args.variant);
       const worktreesService = ctx.app.service('worktrees') as unknown as WorktreesServiceImpl;
       try {
+        if (variant) {
+          const worktree = await worktreesService.get(
+            worktreeId as WorktreeID,
+            ctx.baseServiceParams
+          );
+
+          if (variant !== worktree.environment_variant) {
+            const envStatus = worktree.environment_instance?.status;
+            if (envStatus === 'running' || envStatus === 'starting') {
+              return textResult({
+                success: false,
+                error:
+                  `Environment is ${envStatus} with variant "${worktree.environment_variant || '(none)'}". ` +
+                  `Stop it first, then start with variant "${variant}".`,
+              });
+            }
+
+            await worktreesService.renderEnvironment(
+              worktreeId as WorktreeID,
+              { variant },
+              ctx.baseServiceParams
+            );
+          }
+        }
+
         const worktree = await worktreesService.startEnvironment(
           worktreeId as WorktreeID,
           ctx.baseServiceParams

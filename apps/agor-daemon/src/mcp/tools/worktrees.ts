@@ -196,6 +196,14 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
               'The creating user is always added as owner automatically. ' +
               'Owners have full access regardless of othersCan/othersFsAccess settings.'
           ),
+        variant: z
+          .string()
+          .optional()
+          .describe(
+            'Environment variant name to use for this worktree. ' +
+              'Must be a key in the repo environment config variants. ' +
+              'When omitted, the repo default variant is used.'
+          ),
       }),
     },
     async (args) => {
@@ -216,6 +224,21 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         repo = await reposService.get(repoId);
       } catch {
         throw new Error(`Repository ${repoId} not found`);
+      }
+
+      const variant = coerceString(args.variant);
+      if (variant) {
+        const repoEnv = (repo as { environment?: { variants?: Record<string, unknown> } })
+          .environment;
+        if (!repoEnv?.variants || !repoEnv.variants[variant]) {
+          const available = repoEnv?.variants ? Object.keys(repoEnv.variants) : [];
+          throw new Error(
+            `Invalid variant "${variant}". ` +
+              (available.length > 0
+                ? `Available variants: ${available.join(', ')}`
+                : 'This repo has no environment variants configured.')
+          );
+        }
       }
 
       // Auto-suffix: resolve name conflicts by appending -2, -3, etc.
@@ -287,6 +310,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           ...(zoneId ? { zoneId } : {}),
           ...(othersCan ? { others_can: othersCan } : {}),
           ...(othersFsAccess ? { others_fs_access: othersFsAccess } : {}),
+          ...(variant ? { environment_variant: variant } : {}),
         },
         ctx.baseServiceParams
       );
