@@ -323,7 +323,7 @@
     "@feathersjs/socketio": "^5.0.44",
     "@feathersjs/socketio-client": "^5.0.44",
     "@feathersjs/typebox": "^5.0.44",
-    "@google/gemini-cli-core": "^0.31.0",
+    "@google/gemini-cli-core": "^0.41.2",
     "@google/genai": "^1.43.0",
     "@iarna/toml": "^2.2.5",
     "@libsql/client": "^0.17.3",
