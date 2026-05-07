@@ -1,22 +1,21 @@
 /**
- * Canonical Handlebars context shape for zone-trigger templates.
+ * Handlebars context shape for zone-trigger templates.
  *
  * Three sites render zone-trigger templates: the UI's live preview
  * (`ZoneTriggerModal`), the daemon's `POST /worktrees/:id/fire-zone-trigger`
  * route, and the MCP `agor_worktrees_set_zone(triggerTemplate: true)` tool.
  * Pre-consolidation each built a slightly different context — same template
  * could render differently depending on caller, which silently broke
- * user-saved templates that worked from one path but not another.
+ * user-saved templates that worked from one path but not another. All
+ * three callers now build via this helper.
  *
- * The canonical shape uses `worktree.context` / `board.context` (mapping
- * the underlying `custom_context` field to a friendlier name in templates),
- * plus `zone` and `session` for completeness. All three callers now build
- * via this helper.
+ * **Both names are exposed on each scope** for backward compatibility:
+ *   - `worktree.context`  ← canonical (what UI templates use)
+ *   - `worktree.custom_context` ← alias (what MCP-fired templates used pre-PR)
  *
- * **Migration note:** the MCP path previously exposed
- * `worktree.custom_context` and `board.custom_context` directly. Templates
- * that referenced those paths from MCP firings need to migrate to
- * `worktree.context` / `board.context`.
+ * Same for `board` and `session`. Both keys point to the same object, so
+ * templates authored against either shape keep working. New templates
+ * should prefer `context`.
  */
 
 export interface ZoneTriggerWorktreeInput {
@@ -63,6 +62,11 @@ export function buildZoneTriggerContext(
   input: BuildZoneTriggerContextInput
 ): Record<string, unknown> {
   const { worktree, board, zone, session } = input;
+  // Same value bound to both `context` (canonical) and `custom_context`
+  // (legacy alias) so templates from either pre-PR shape render identically.
+  const worktreeCtx = worktree?.custom_context ?? {};
+  const boardCtx = board?.custom_context ?? {};
+  const sessionCtx = session?.custom_context ?? {};
   return {
     worktree: {
       name: worktree?.name ?? '',
@@ -71,12 +75,14 @@ export function buildZoneTriggerContext(
       pull_request_url: worktree?.pull_request_url ?? '',
       notes: worktree?.notes ?? '',
       path: worktree?.path ?? '',
-      context: worktree?.custom_context ?? {},
+      context: worktreeCtx,
+      custom_context: worktreeCtx,
     },
     board: {
       name: board?.name ?? '',
       description: board?.description ?? '',
-      context: board?.custom_context ?? {},
+      context: boardCtx,
+      custom_context: boardCtx,
     },
     zone: {
       label: zone?.label ?? '',
@@ -84,7 +90,8 @@ export function buildZoneTriggerContext(
     },
     session: {
       description: session?.description ?? '',
-      context: session?.custom_context ?? {},
+      context: sessionCtx,
+      custom_context: sessionCtx,
     },
   };
 }

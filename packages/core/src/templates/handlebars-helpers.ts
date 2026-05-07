@@ -10,6 +10,10 @@
  */
 
 import Handlebars from 'handlebars';
+// `RenderTemplateOnError` lives in core/types so the browser-facing client
+// types don't transitively pull in this Handlebars-coupled module. We
+// re-export below for back-compat with callers already importing it here.
+import type { RenderTemplateOnError } from '../types/template';
 
 /**
  * Track whether helpers have been registered on this Handlebars instance.
@@ -225,16 +229,10 @@ export function registerHandlebarsHelpers(): void {
 }
 
 /**
- * Behavior when a template fails to render.
- *
- * - `'empty'` (default): return `''`. Safe for callers that compose the
- *   result into shell commands, env vars, system prompts, etc., where
- *   leaking unresolved `{{...}}` placeholders is worse than emptiness.
- * - `'raw'`: return the raw template string so users see *something*
- *   (the unrendered placeholders). Use for UI surfaces like the zone
- *   trigger preview dialog where a blank textarea hides the bug.
+ * Re-export `RenderTemplateOnError` for back-compat. Canonical definition
+ * lives in `../types/template.ts`.
  */
-export type RenderTemplateOnError = 'empty' | 'raw';
+export type { RenderTemplateOnError } from '../types/template';
 
 export interface RenderTemplateOptions {
   /** Behavior when rendering throws. Default: `'empty'`. */

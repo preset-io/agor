@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildZoneTriggerContext } from './zone-trigger-context';
 
 describe('buildZoneTriggerContext', () => {
-  it('maps worktree.custom_context to worktree.context (canonical name)', () => {
+  it('exposes worktree custom_context as both `context` and `custom_context` (BC alias)', () => {
     const ctx = buildZoneTriggerContext({
       worktree: {
         name: 'wt',
@@ -14,24 +14,34 @@ describe('buildZoneTriggerContext', () => {
       name: 'wt',
       ref: 'main',
       context: { issue: 'PROJ-42' },
+      custom_context: { issue: 'PROJ-42' },
     });
-    // The `custom_context` key must NOT leak into the rendered context shape
-    // — it's the data field, not the template-facing alias.
-    expect((ctx.worktree as Record<string, unknown>).custom_context).toBeUndefined();
+    // Both keys reference the same object (templates can use either path).
+    const w = ctx.worktree as Record<string, unknown>;
+    expect(w.context).toBe(w.custom_context);
   });
 
-  it('maps board.custom_context to board.context', () => {
+  it('exposes board custom_context as both `context` and `custom_context`', () => {
     const ctx = buildZoneTriggerContext({
       board: { name: 'b', description: 'd', custom_context: { team: 'platform' } },
     });
-    expect(ctx.board).toEqual({ name: 'b', description: 'd', context: { team: 'platform' } });
+    expect(ctx.board).toEqual({
+      name: 'b',
+      description: 'd',
+      context: { team: 'platform' },
+      custom_context: { team: 'platform' },
+    });
   });
 
-  it('maps session.custom_context to session.context', () => {
+  it('exposes session custom_context as both `context` and `custom_context`', () => {
     const ctx = buildZoneTriggerContext({
       session: { description: 'foo', custom_context: { kind: 'review' } },
     });
-    expect(ctx.session).toEqual({ description: 'foo', context: { kind: 'review' } });
+    expect(ctx.session).toEqual({
+      description: 'foo',
+      context: { kind: 'review' },
+      custom_context: { kind: 'review' },
+    });
   });
 
   it('exposes zone.label and zone.status', () => {
@@ -51,9 +61,10 @@ describe('buildZoneTriggerContext', () => {
       notes: '',
       path: '',
       context: {},
+      custom_context: {},
     });
-    expect(ctx.board).toEqual({ name: '', description: '', context: {} });
+    expect(ctx.board).toEqual({ name: '', description: '', context: {}, custom_context: {} });
     expect(ctx.zone).toEqual({ label: '', status: '' });
-    expect(ctx.session).toEqual({ description: '', context: {} });
+    expect(ctx.session).toEqual({ description: '', context: {}, custom_context: {} });
   });
 });

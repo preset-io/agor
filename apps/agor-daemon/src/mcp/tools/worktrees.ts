@@ -1,8 +1,6 @@
 import { isWorktreeRbacEnabled } from '@agor/core/config';
 import { WorktreeRepository } from '@agor/core/db';
-import { resolveSessionDefaults } from '@agor/core/sessions';
 import type {
-  AgenticToolName,
   BoardID,
   UUID,
   Worktree,
@@ -682,10 +680,32 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         const { buildZoneTriggerContext } = await import(
           '@agor/core/templates/zone-trigger-context'
         );
+
+        // Pull the target session into the render context so templates can
+        // reference `{{session.description}}` / `{{session.context.foo}}` —
+        // matches what the UI's reuse-existing preview path does.
+        let targetSession:
+          | { description?: string; custom_context?: Record<string, unknown> }
+          | undefined;
+        try {
+          targetSession = await ctx.app
+            .service('sessions')
+            .get(targetSessionId, ctx.baseServiceParams);
+        } catch {
+          // Session lookup is best-effort; render context defaults are safe.
+          targetSession = undefined;
+        }
+
         const templateContext = buildZoneTriggerContext({
           worktree,
           board,
           zone: { label: zone.label, status: zone.status },
+          session: targetSession
+            ? {
+                description: targetSession.description,
+                custom_context: targetSession.custom_context,
+              }
+            : undefined,
         });
 
         const renderedPrompt = renderTemplate(zone.trigger!.template, templateContext);
@@ -724,115 +744,45 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           console.warn('⚠️  Zone trigger template rendered to empty string');
         }
       } else if (isAlwaysNew) {
-        // Case 2: always_new — auto-create session and execute trigger
+        // Case 2: always_new — delegate to the shared helper. Same code path
+        // the daemon's POST /worktrees/:id/fire-zone-trigger uses, so MCP-
+        // and UI-fired sessions stay in lockstep.
         console.log(
           `🎯 Zone has always_new trigger, auto-creating session for worktree ${worktreeId.substring(0, 8)}`
         );
 
-        const { renderTemplate } = await import('@agor/core/templates/handlebars-helpers');
-        const { buildZoneTriggerContext } = await import(
-          '@agor/core/templates/zone-trigger-context'
-        );
-        const templateContext = buildZoneTriggerContext({
-          worktree,
-          board,
-          zone: { label: zone.label, status: zone.status },
-        });
-
-        const renderedPrompt = renderTemplate(zone.trigger!.template, templateContext);
-
-        if (renderedPrompt) {
-          // Determine agent from trigger config
-          const validAgents: AgenticToolName[] = ['claude-code', 'codex', 'gemini', 'opencode'];
-          const rawAgent = zone.trigger!.agent;
-          const agenticTool: AgenticToolName =
-            rawAgent && validAgents.includes(rawAgent) ? rawAgent : 'claude-code';
-
-          // Fetch user data for session creation context
+        try {
           const user = await ctx.app.service('users').get(ctx.userId, ctx.baseServiceParams);
-
-          // Get current git state
-          const { getGitState, getCurrentBranch } = await import('@agor/core/git');
-          const currentSha = await getGitState(worktree.path);
-          const currentRef = await getCurrentBranch(worktree.path);
-
-          // Resolve permission_config / model_config / inherited mcp_server_ids
-          // from the user's defaults via the shared helper. Same logic the
-          // sessions `before:create` hook applies to UI/REST callers, kept
-          // explicit here so the rest of this handler can pass full sessionData.
-          const {
-            permission_config: permissionConfig,
-            model_config: modelConfig,
-            mcp_server_ids: mcpServerIds,
-          } = resolveSessionDefaults({ agenticTool, user, worktree });
-
-          // Create new session
-          const sessionData: Record<string, unknown> = {
-            worktree_id: worktreeId,
-            agentic_tool: agenticTool,
-            status: 'idle',
-            description: `Session from zone "${zone.label}"`,
-            created_by: ctx.userId,
-            unix_username: user.unix_username,
-            permission_config: permissionConfig,
-            ...(modelConfig && { model_config: modelConfig }),
-            git_state: {
-              ref: currentRef,
-              base_sha: currentSha,
-              current_sha: currentSha,
-            },
-            genealogy: { children: [] },
-            tasks: [],
-          };
-
-          const newSession = await ctx.app
-            .service('sessions')
-            .create(sessionData, ctx.baseServiceParams);
+          const { fireAlwaysNewZoneTrigger } = await import('../../services/zone-trigger.js');
+          const { session: newSession, task } = await fireAlwaysNewZoneTrigger({
+            app: ctx.app,
+            params: ctx.baseServiceParams,
+            worktree,
+            board,
+            zone,
+            user,
+            userId: ctx.userId,
+          });
+          const agenticTool = newSession.agentic_tool;
           console.log(
             `✅ Auto-created session ${newSession.session_id.substring(0, 8)} (${agenticTool})`
           );
-
-          // Attach MCP servers (inherited from worktree or user defaults)
-          if (mcpServerIds.length > 0) {
-            for (const mcpServerId of mcpServerIds) {
-              try {
-                // Attach via the session-scoped REST surface — `session-mcp-servers`
-                // (flat) is read-only here; the create handler lives on
-                // `/sessions/:id/mcp-servers` with `{ mcpServerId }` (camelCase).
-                await ctx.app
-                  .service('/sessions/:id/mcp-servers')
-                  .create(
-                    { mcpServerId },
-                    { ...ctx.baseServiceParams, route: { id: newSession.session_id } }
-                  );
-              } catch (error) {
-                console.warn(
-                  `Skipped MCP server ${mcpServerId} for session ${newSession.session_id}: ${error instanceof Error ? error.message : String(error)}`
-                );
-              }
-            }
-            console.log(`✅ Attached ${mcpServerIds.length} MCP servers`);
-          }
-
-          // Send rendered prompt to new session
-          const task = await ctx.app
-            .service('/sessions/:id/prompt')
-            .create(
-              { prompt: renderedPrompt, stream: true },
-              { ...ctx.baseServiceParams, route: { id: newSession.session_id } }
-            );
-
           promptResult = {
             taskId: task.task_id,
             sessionId: newSession.session_id,
             note: `always_new trigger: created session ${newSession.session_id.substring(0, 8)} (${agenticTool}) and sent prompt`,
           };
           console.log(`✅ Zone trigger executed: task ${task.task_id.substring(0, 8)}`);
-        } else {
-          promptResult = {
-            note: 'Zone trigger template rendered to empty string (check template syntax)',
-          };
-          console.warn('⚠️  Zone trigger template rendered to empty string');
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.includes('rendered to an empty prompt')) {
+            promptResult = {
+              note: 'Zone trigger template rendered to empty string (check template syntax)',
+            };
+            console.warn('⚠️  Zone trigger template rendered to empty string');
+          } else {
+            throw error;
+          }
         }
       } else if (triggerTemplate && !hasZoneTrigger) {
         // Case 3: triggerTemplate requested but zone has no template configured

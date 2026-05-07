@@ -1240,10 +1240,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Zone-trigger fire endpoint (always_new behaviour)
   //
   // Daemon is the source of truth for the zone's trigger template / agent /
-  // label — the UI only sends the zone id. Performs render → validate →
-  // create-session → attach MCPs → prompt in one round-trip. Mirrors the
-  // `agor_worktrees_set_zone(triggerTemplate: true)` MCP path, scoped to the
-  // always_new branch the UI uses.
+  // label — the UI only sends the zone id. The shared
+  // `fireAlwaysNewZoneTrigger` helper (also used by the MCP
+  // `agor_worktrees_set_zone(triggerTemplate: true)` always_new branch)
+  // does render → validate → resolve defaults → create session → attach MCPs
+  // → prompt in one round-trip.
   // ============================================================================
 
   registerAuthenticatedRoute(
@@ -1261,7 +1262,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (!worktree.board_id) {
           throw new BadRequest('Worktree is not on a board; cannot resolve zone');
         }
-
         const board = await app.service('boards').get(worktree.board_id, params);
 
         // Zones live on `board.objects` keyed by zone id; type === 'zone'.
@@ -1280,79 +1280,35 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (!zoneObj || zoneObj.type !== 'zone') {
           throw new BadRequest(`Zone ${data.zoneId} not found on board ${worktree.board_id}`);
         }
-        const trigger = zoneObj.trigger;
-        if (!trigger?.template || !trigger.template.trim()) {
-          throw new BadRequest(`Zone "${zoneObj.label}" has no trigger template configured`);
-        }
-
-        const { renderTemplate } = await import('@agor/core/templates/handlebars-helpers');
-        const { buildZoneTriggerContext } = await import(
-          '@agor/core/templates/zone-trigger-context'
-        );
-        const templateContext = buildZoneTriggerContext({
-          worktree,
-          board,
-          zone: { label: zoneObj.label, status: zoneObj.status },
-        });
-        const renderedPrompt = renderTemplate(trigger.template, templateContext);
-
-        // Render must produce a non-empty prompt before we create a session.
-        // `renderTemplate` returns '' on Handlebars errors (default onError),
-        // and `/sessions/:id/prompt` rejects empty prompts — without this
-        // guard we'd leak a half-created session on render failure.
-        if (!renderedPrompt.trim()) {
+        if (zoneObj.trigger?.behavior !== 'always_new') {
+          // This endpoint is the always_new server-side action. show_picker
+          // zones flow through the modal-driven explicit-target path, not this
+          // route — refuse instead of silently creating a session.
           throw new BadRequest(
-            `Zone "${zoneObj.label}" trigger rendered to an empty prompt; not creating session`
+            `Zone "${zoneObj.label}" trigger behaviour is "${zoneObj.trigger?.behavior}", expected "always_new"`
           );
         }
 
-        const validAgents: import('@agor/core/types').AgenticToolName[] = [
-          'claude-code',
-          'codex',
-          'gemini',
-          'opencode',
-        ];
-        const agenticTool: import('@agor/core/types').AgenticToolName =
-          trigger.agent && validAgents.includes(trigger.agent) ? trigger.agent : 'claude-code';
+        const userId = params.user?.user_id;
+        if (!userId) throw new BadRequest('Authenticated user required');
+        const user = await app.service('users').get(userId, params);
 
-        const newSession = await app.service('sessions').create(
-          {
-            worktree_id: worktreeId,
-            description: `Session from zone "${zoneObj.label ?? ''}"`,
-            status: 'idle',
-            agentic_tool: agenticTool,
-          },
-          params
-        );
-
-        // Attach inherited MCP servers (worktree-level → user-default fallback).
-        // Mirrors what the MCP `agor_worktrees_set_zone` always_new path does so
-        // UI-fired and MCP-fired sessions end up with the same MCP attachments.
-        // Best-effort: failure to attach one server logs and continues.
-        const inheritedMcpIds = (worktree as { mcp_server_ids?: string[] }).mcp_server_ids ?? [];
-        for (const mcpServerId of inheritedMcpIds) {
-          try {
-            await app
-              .service('/sessions/:id/mcp-servers')
-              .create(
-                { mcpServerId },
-                { ...params, route: { id: newSession.session_id } as Record<string, string> }
-              );
-          } catch (error) {
-            console.warn(
-              `[fire-zone-trigger] Skipped MCP server ${mcpServerId} for session ${newSession.session_id}: ${error instanceof Error ? error.message : String(error)}`
-            );
-          }
+        const { fireAlwaysNewZoneTrigger } = await import('./services/zone-trigger.js');
+        try {
+          return await fireAlwaysNewZoneTrigger({
+            app,
+            params,
+            worktree,
+            board,
+            zone: zoneObj,
+            user,
+            userId: userId as string,
+          });
+        } catch (err) {
+          // Surface helper validation errors as BadRequest for HTTP semantics.
+          const message = err instanceof Error ? err.message : String(err);
+          throw new BadRequest(message);
         }
-
-        const task = await app
-          .service('/sessions/:id/prompt')
-          .create(
-            { prompt: renderedPrompt, messageSource: 'agor' },
-            { ...params, route: { id: newSession.session_id } }
-          );
-
-        return { session: newSession, task };
       },
     },
     {
