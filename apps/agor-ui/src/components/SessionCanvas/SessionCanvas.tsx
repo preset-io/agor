@@ -1154,16 +1154,21 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       [sanitizeOrphanedParents]
     );
 
-    // Sync ZONE, MARKDOWN, APP, and ARTIFACT nodes from board objects
+    // Sync board-derived nodes in a single state update. Zones, markdown,
+    // apps, and artifacts come from `boardObjectNodes`; pinned worktrees and
+    // cards reference those zones via `parentId`. Merging them in one
+    // setNodes ensures `sanitizeOrphanedParents` (inside `applyZOrder`) sees
+    // the full parent set on the first paint — splitting the merge let
+    // pinned worktrees lose their parentId and render relative-to-zone
+    // positions as absolute (the "pile near origin" on board load).
     useEffect(() => {
       if (isDraggingRef.current) return;
 
       const boardObjectNodes = getBoardObjectNodes();
 
       setNodes((currentNodes) => {
-        const { worktrees, cards, comments, cursors } = partitionNodesByType(currentNodes);
+        const { cursors, comments } = partitionNodesByType(currentNodes);
 
-        // Separate board object node types
         const zones = boardObjectNodes
           .filter((n) => n.type === 'zone' && !deletedObjectsRef.current.has(n.id))
           .map((newZone) => {
@@ -1189,48 +1194,28 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             return { ...newApp, selected: existingApp?.selected };
           });
 
-        return applyZOrder(zones, markdown, worktrees, cards, comments, cursors, apps);
-      });
-    }, [getBoardObjectNodes, setNodes, applyZOrder, partitionNodesByType]);
+        const updatedWorktrees = applyLocalPositions(initialNodes, currentNodes, zones);
+        const updatedCards = applyLocalPositions(cardNodes, currentNodes, zones);
 
-    // Sync WORKTREE and CARD nodes (don't trigger on zone changes).
-    //
-    // Order matters: this effect must declare AFTER the zone-sync effect above.
-    // On initial board load both effects fire in the same commit; React 18
-    // batches the setNodes calls, and updater functions chain — so this
-    // updater receives the zone-sync's pending state. That means
-    // `existingZones` is populated, and `sanitizeOrphanedParents` won't strip
-    // pinned worktrees' parentId. Without that ordering, pinned worktrees lose
-    // their parentId on first paint, get rendered with their relative-to-zone
-    // positions interpreted as absolute (clustered near origin), and only snap
-    // to their real positions on a later re-render — the "pile then scatter"
-    // visible on board load.
-    useEffect(() => {
-      if (isDraggingRef.current) return;
-
-      setNodes((currentNodes) => {
-        const existingZones = currentNodes.filter((n) => n.type === 'zone');
-        const existingMarkdown = currentNodes.filter((n) => n.type === 'markdown');
-        const existingApps = currentNodes.filter(
-          (n) => n.type === 'appNode' || n.type === 'artifactNode'
+        return applyZOrder(
+          zones,
+          markdown,
+          updatedWorktrees,
+          updatedCards,
+          comments,
+          cursors,
+          apps
         );
-        const existingCursors = currentNodes.filter((n) => n.type === 'cursor');
-        const existingComments = currentNodes.filter((n) => n.type === 'comment');
-
-        const updatedWorktrees = applyLocalPositions(initialNodes, currentNodes, existingZones);
-        const updatedCards = applyLocalPositions(cardNodes, currentNodes, existingZones);
-
-        return sanitizeOrphanedParents([
-          ...existingZones,
-          ...updatedWorktrees,
-          ...updatedCards,
-          ...existingApps,
-          ...existingMarkdown,
-          ...existingCursors,
-          ...existingComments,
-        ]);
       });
-    }, [initialNodes, cardNodes, setNodes, sanitizeOrphanedParents, applyLocalPositions]);
+    }, [
+      initialNodes,
+      cardNodes,
+      getBoardObjectNodes,
+      setNodes,
+      applyZOrder,
+      applyLocalPositions,
+      partitionNodesByType,
+    ]);
 
     // Sync CURSOR nodes separately - optimized to avoid re-partitioning all nodes
     useEffect(() => {
