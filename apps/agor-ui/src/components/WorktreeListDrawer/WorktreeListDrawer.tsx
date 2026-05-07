@@ -3,7 +3,7 @@ import { ForkOutlined, SearchOutlined, SubnodeOutlined } from '@ant-design/icons
 import { Badge, Drawer, Input, List, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useMemo, useState } from 'react';
-import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
+import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime, formatTimestampWithRelative } from '../../utils/time';
 import { RepoPill } from '../Pill';
 import { ToolIcon } from '../ToolIcon';
@@ -117,7 +117,7 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
     <Drawer
       title={null}
       placement="left"
-      size={400}
+      width={480}
       open={open}
       onClose={onClose}
       styles={{
@@ -190,12 +190,19 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
                       icon
                     );
                   })()}
-                  <Typography.Text
-                    strong
-                    style={{ ...getSessionTitleStyles(2), flex: 1, minWidth: 0 }}
-                  >
-                    {getSessionDisplayTitle(session, { includeAgentFallback: true })}
-                  </Typography.Text>
+                  {(() => {
+                    const titleText = getSessionDisplayTitle(session, {
+                      includeAgentFallback: true,
+                    });
+                    return (
+                      <Typography.Text
+                        ellipsis={{ tooltip: titleText }}
+                        style={{ flex: 1, minWidth: 0 }}
+                      >
+                        {titleText}
+                      </Typography.Text>
+                    );
+                  })()}
                   <GenealogyIndicator session={session} />
                 </div>
 
@@ -213,7 +220,7 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
                 >
                   <div style={{ minWidth: 0, overflow: 'hidden' }}>
                     {repo && worktree ? (
-                      <RepoPill repoName={repo.slug} worktreeName={worktree.name} />
+                      <RepoPill repoName={repo.slug} worktreeName={worktree.name} color="default" />
                     ) : worktree ? (
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                         🌳 {worktree.name}

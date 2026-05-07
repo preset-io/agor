@@ -911,12 +911,15 @@ interface RepoPillProps extends BasePillProps {
   repoName: string;
   worktreeName?: string;
   onClick?: () => void;
+  /** Tag color. Defaults to 'cyan'; pass 'default' for a muted theme-neutral tag. */
+  color?: string;
 }
 
 export const RepoPill: React.FC<RepoPillProps> = ({
   repoName,
   worktreeName,
   onClick,
+  color = 'cyan',
   size,
   style,
 }) => {
@@ -925,7 +928,7 @@ export const RepoPill: React.FC<RepoPillProps> = ({
   return (
     <Tag
       icon={<BranchesOutlined />}
-      color="cyan"
+      color={color}
       style={{ ...style, cursor: onClick ? 'pointer' : 'default' }}
       onClick={onClick}
     >
