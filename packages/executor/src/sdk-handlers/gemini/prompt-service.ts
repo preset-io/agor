@@ -37,6 +37,7 @@ import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { convertConversationToHistory } from './conversation-converter.js';
 import { DEFAULT_GEMINI_MODEL, type GeminiModel } from './models.js';
 import { mapPermissionMode } from './permission-mapper.js';
+import { completedCallsToResponseParts } from './tool-result-converter.js';
 import { extractGeminiTokenUsage } from './usage.js';
 
 /**
@@ -363,26 +364,15 @@ export class GeminiPromptService {
         // Get config for Scheduler
         const config = (client as unknown as GeminiClientWithConfig).config;
 
-        // Create Scheduler instance (SDK 0.41+ takes an AgentLoopContext)
-        // The Scheduler needs a MessageBus and PolicyEngine for approval workflows
-        const policyEngine = new Gemini.PolicyEngine({
-          approvalMode: mapPermissionMode(permissionMode), // Convert our permission mode to Gemini's ApprovalMode
-          nonInteractive: false,
-        });
-        const messageBus = new Gemini.MessageBus(policyEngine);
-        const agentContext: Gemini.AgentLoopContext = {
-          config,
-          promptId,
-          toolRegistry: config.getToolRegistry(),
-          promptRegistry: config.getPromptRegistry(),
-          resourceRegistry: config.getResourceRegistry(),
-          messageBus,
-          geminiClient: config.getGeminiClient(),
-          sandboxManager: config.sandboxManager,
-        };
+        // Create Scheduler instance (SDK 0.41+ takes an AgentLoopContext).
+        // `Config` implements `AgentLoopContext` directly, and the config-bound
+        // `policyEngine` / `messageBus` are already synced with the desired
+        // approval mode (see ensureSessionClient: setApprovalMode on reuse and
+        // approvalMode at construction). Passing `context: config` reuses the
+        // canonical bus instead of a hand-rolled one — avoiding registry/bus
+        // drift between the scheduler and the rest of the SDK.
         const scheduler = new Gemini.Scheduler({
-          context: agentContext,
-          messageBus,
+          context: config,
           getPreferredEditor: () => undefined,
           schedulerId: `scheduler-${promptId}`,
         });
@@ -404,58 +394,24 @@ export class GeminiPromptService {
         const completedCalls = await scheduler.schedule(toolCallRequests, abortController.signal);
         console.debug(`[Gemini Loop] Scheduler completed ${completedCalls.length} tool calls`);
 
-        // Convert completed calls to function response parts for Gemini
-        const functionResponseParts: Part[] = [];
-
+        // Convert completed calls to function response parts for Gemini.
+        // Conversion is extracted into `tool-result-converter` so the migrated
+        // Scheduler path has a unit-testable seam.
         for (const completedCall of completedCalls) {
-          try {
-            console.debug(
-              `[Gemini Loop] Processing completed tool: ${completedCall.request.name}`,
-              completedCall.status
+          console.debug(
+            `[Gemini Loop] Processing completed tool: ${completedCall.request.name}`,
+            completedCall.status
+          );
+          if (
+            !completedCall.response?.responseParts ||
+            completedCall.response.responseParts.length === 0
+          ) {
+            console.warn(
+              `[Gemini Loop] Tool ${completedCall.request.name} returned no response parts, status: ${completedCall.status}`
             );
-
-            // Extract response parts from the completed call
-            // The response.responseParts contains the Gemini-formatted Parts array
-            // We need to append these parts directly, as they're already in the correct format
-            // Use optional chaining to safely handle cases where response is undefined
-            if (
-              completedCall.response?.responseParts &&
-              completedCall.response.responseParts.length > 0
-            ) {
-              functionResponseParts.push(...completedCall.response.responseParts);
-            } else {
-              // Fallback: If no response parts, create a generic error response
-              // Include callId to ensure Gemini correlates the response to the request
-              console.warn(
-                `[Gemini Loop] Tool ${completedCall.request.name} returned no response parts, status: ${completedCall.status}`
-              );
-              functionResponseParts.push({
-                functionResponse: {
-                  name: completedCall.request.name,
-                  response: {
-                    error:
-                      completedCall.status === 'error'
-                        ? completedCall.response?.error?.message || 'Tool execution failed'
-                        : 'Tool execution returned no response',
-                  },
-                },
-              } as Part);
-            }
-          } catch (error) {
-            console.error(
-              `[Gemini Loop] Error processing completed tool ${completedCall.request.name}:`,
-              error
-            );
-            // On error, create a function response part with the error
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            functionResponseParts.push({
-              functionResponse: {
-                name: completedCall.request.name,
-                response: { error: errorMessage },
-              },
-            } as Part);
           }
         }
+        const functionResponseParts: Part[] = completedCallsToResponseParts(completedCalls);
 
         // Prepare next message with tool results
         // Send the function responses back to the model to get its response
