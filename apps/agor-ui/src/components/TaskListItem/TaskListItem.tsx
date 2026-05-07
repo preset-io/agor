@@ -6,7 +6,7 @@ import {
   MessageOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
-import { List, Space, Tooltip, Typography, theme } from 'antd';
+import { Space, Tooltip, Typography, theme } from 'antd';
 import { Tag } from '../Tag';
 import { TaskStatusIcon } from '../TaskStatusIcon';
 
@@ -44,7 +44,7 @@ const TaskListItem = ({ task, onClick, compact = false }: TaskListItemProps) => 
     : description;
 
   return (
-    <List.Item
+    <div
       onClick={onClick}
       style={{
         cursor: 'pointer',
@@ -105,7 +105,7 @@ const TaskListItem = ({ task, onClick, compact = false }: TaskListItemProps) => 
           </Space>
         </div>
       </div>
-    </List.Item>
+    </div>
   );
 };
 

@@ -1,6 +1,6 @@
 import type { Board, Repo, Session, Worktree } from '@agor-live/client';
 import { SearchOutlined } from '@ant-design/icons';
-import { Badge, Drawer, Input, List, Tooltip, Typography, theme } from 'antd';
+import { Badge, Drawer, Empty, Input, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useMemo, useState } from 'react';
 import { getSessionStatusTone, type StatusTone } from '../../utils/sessionStatus';
@@ -80,7 +80,7 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
     <Drawer
       title={null}
       placement="left"
-      width={480}
+      size={480}
       open={open}
       onClose={onClose}
       styles={{
@@ -105,22 +105,26 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
 
       {/* Session List */}
       <div style={{ padding: '8px 0' }}>
-        <List
-          dataSource={filteredSessions}
-          locale={{ emptyText: 'No sessions in this board' }}
-          renderItem={(session) => {
+        {filteredSessions.length === 0 ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="No sessions in this board"
+            style={{ padding: '24px 0' }}
+          />
+        ) : (
+          filteredSessions.map((session) => {
             const worktree = session.worktree_id
               ? worktreeById.get(session.worktree_id)
               : undefined;
             const repo = worktree ? repoById.get(worktree.repo_id) : undefined;
 
             return (
-              <List.Item
+              <div
+                key={session.session_id}
                 style={{
                   cursor: 'pointer',
                   padding: '10px 24px',
                   transition: 'background 0.2s',
-                  display: 'block', // override List.Item flex so our 2-line layout owns the row
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background = token.colorBgTextHover;
@@ -205,10 +209,10 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
                     </Typography.Text>
                   </Tooltip>
                 </div>
-              </List.Item>
+              </div>
             );
-          }}
-        />
+          })
+        )}
       </div>
 
       {/* Board Info Footer */}

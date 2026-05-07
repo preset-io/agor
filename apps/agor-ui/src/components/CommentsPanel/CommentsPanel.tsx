@@ -23,7 +23,6 @@ import {
   Badge,
   Button,
   Collapse,
-  List,
   Popover,
   Space,
   Spin,
@@ -38,6 +37,7 @@ import { AgorAvatar } from '../AgorAvatar';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { AgorEmojiPicker } from '../EmojiPickerInput';
 import { MarkdownRenderer } from '../MarkdownRenderer';
+import { MetaRow } from '../MetaRow';
 import { ZONE_CONTENT_OPACITY } from '../SessionCanvas/canvas/BoardObjectNodes';
 
 const { Text, Title } = Typography;
@@ -178,9 +178,8 @@ const ReplyItem: React.FC<{
   const isReplyCurrentUser = reply.created_by === currentUserId;
 
   return (
-    <List.Item
+    <div
       style={{
-        borderBottom: 'none',
         padding: '4px 0',
       }}
     >
@@ -189,7 +188,7 @@ const ReplyItem: React.FC<{
         onMouseEnter={() => setReplyHovered(true)}
         onMouseLeave={() => setReplyHovered(false)}
       >
-        <List.Item.Meta
+        <MetaRow
           avatar={<AgorAvatar>{replyUser?.emoji || '👤'}</AgorAvatar>}
           title={
             <Space size={4}>
@@ -255,7 +254,7 @@ const ReplyItem: React.FC<{
           </div>
         )}
       </div>
-    </List.Item>
+    </div>
   );
 };
 
@@ -295,7 +294,7 @@ const CommentThread: React.FC<{
   const isCurrentUser = comment.created_by === currentUserId;
 
   return (
-    <List.Item
+    <div
       ref={scrollRef}
       style={{
         borderBottom: `1px solid ${token.colorBorder}`,
@@ -312,7 +311,7 @@ const CommentThread: React.FC<{
         onMouseLeave={() => setIsHovered(false)}
       >
         {/* Thread Root */}
-        <List.Item.Meta
+        <MetaRow
           avatar={<AgorAvatar>{user?.emoji || '👤'}</AgorAvatar>}
           title={
             <Space size={4}>
@@ -434,18 +433,16 @@ const CommentThread: React.FC<{
               paddingLeft: 8,
             }}
           >
-            <List
-              dataSource={replies}
-              renderItem={(reply) => (
-                <ReplyItem
-                  reply={reply}
-                  userById={userById}
-                  currentUserId={currentUserId}
-                  onToggleReaction={onToggleReaction}
-                  onDelete={onDelete}
-                />
-              )}
-            />
+            {replies.map((reply) => (
+              <ReplyItem
+                key={reply.comment_id}
+                reply={reply}
+                userById={userById}
+                currentUserId={currentUserId}
+                onToggleReaction={onToggleReaction}
+                onDelete={onDelete}
+              />
+            ))}
           </div>
         )}
 
@@ -496,7 +493,7 @@ const CommentThread: React.FC<{
           </div>
         )}
       </div>
-    </List.Item>
+    </div>
   );
 };
 
@@ -865,9 +862,8 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
                 </div>
               ),
               children: (
-                <List
-                  dataSource={group.threads}
-                  renderItem={(thread) => {
+                <>
+                  {group.threads.map((thread) => {
                     // Create or get ref for this thread
                     if (!commentRefs.current[thread.comment_id]) {
                       commentRefs.current[thread.comment_id] = React.createRef<HTMLDivElement>();
@@ -879,6 +875,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
 
                     return (
                       <CommentThread
+                        key={thread.comment_id}
                         comment={thread}
                         replies={repliesByParent[thread.comment_id] || []}
                         userById={userById}
@@ -892,8 +889,8 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
                         client={client}
                       />
                     );
-                  }}
-                />
+                  })}
+                </>
               ),
             }))}
           />

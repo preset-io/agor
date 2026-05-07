@@ -1,6 +1,6 @@
 import type { Board, BoardComment, Session, Worktree } from '@agor-live/client';
 import { CommentOutlined, DownOutlined } from '@ant-design/icons';
-import { Badge, Button, Collapse, List, Space, Typography, theme } from 'antd';
+import { Badge, Button, Collapse, Space, Typography, theme } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
 import { getSessionDisplayTitle } from '@/utils/sessionTitle';
@@ -188,10 +188,10 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                               No sessions yet
                             </Text>
                           ) : (
-                            <List
-                              dataSource={worktreeSessions}
-                              renderItem={(session) => (
-                                <List.Item
+                            <div>
+                              {worktreeSessions.map((session) => (
+                                <div
+                                  key={session.session_id}
                                   onClick={() => handleSessionClick(session.session_id)}
                                   style={{
                                     cursor: 'pointer',
@@ -228,9 +228,9 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                                         ` • ${session.model_config.model}`}
                                     </Text>
                                   </div>
-                                </List.Item>
-                              )}
-                            />
+                                </div>
+                              ))}
+                            </div>
                           ),
                       };
                     })}

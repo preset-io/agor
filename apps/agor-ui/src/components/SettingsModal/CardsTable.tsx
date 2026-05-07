@@ -14,7 +14,6 @@ import {
   Form,
   Input,
   Layout,
-  List,
   Modal,
   Popconfirm,
   Space,
@@ -28,6 +27,7 @@ import { useThemedMessage } from '@/utils/message';
 import CardModal from '../CardModal/CardModal';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { JSONEditor, validateJSON } from '../JSONEditor';
+import { MetaRow } from '../MetaRow';
 
 const { Sider, Content } = Layout;
 
@@ -323,65 +323,62 @@ export const CardsTable: React.FC<CardsTableProps> = ({
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No card types yet" />
             </div>
           ) : (
-            <List
-              dataSource={cardTypes}
-              split={false}
-              renderItem={(ct) => (
-                <List.Item
-                  key={ct.card_type_id}
-                  onClick={() => setSelectedTypeId(ct.card_type_id)}
-                  style={{
-                    padding: '8px 16px',
-                    cursor: 'pointer',
-                    background:
-                      selectedTypeId === ct.card_type_id ? token.colorBgTextHover : 'transparent',
-                    borderLeft:
-                      selectedTypeId === ct.card_type_id
-                        ? `3px solid ${ct.color || token.colorPrimary}`
-                        : '3px solid transparent',
-                  }}
-                  actions={[
+            cardTypes.map((ct) => (
+              <div
+                key={ct.card_type_id}
+                onClick={() => setSelectedTypeId(ct.card_type_id)}
+                style={{
+                  padding: '8px 16px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 16,
+                  background:
+                    selectedTypeId === ct.card_type_id ? token.colorBgTextHover : 'transparent',
+                  borderLeft:
+                    selectedTypeId === ct.card_type_id
+                      ? `3px solid ${ct.color || token.colorPrimary}`
+                      : '3px solid transparent',
+                }}
+              >
+                <MetaRow
+                  avatar={<span style={{ fontSize: 18 }}>{ct.emoji || '📋'}</span>}
+                  title={
+                    <Typography.Text style={{ fontSize: 13 }} ellipsis>
+                      {ct.name}
+                    </Typography.Text>
+                  }
+                />
+                <Space size="small" onClick={(e) => e.stopPropagation()}>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<EditOutlined />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openEditType(ct);
+                    }}
+                  />
+                  <Popconfirm
+                    title="Delete card type?"
+                    description="Cards using this type will become untyped."
+                    onConfirm={(e) => {
+                      e?.stopPropagation();
+                      handleDeleteType(ct.card_type_id);
+                    }}
+                    onCancel={(e) => e?.stopPropagation()}
+                  >
                     <Button
-                      key="edit"
                       type="text"
                       size="small"
-                      icon={<EditOutlined />}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openEditType(ct);
-                      }}
-                    />,
-                    <Popconfirm
-                      key="delete"
-                      title="Delete card type?"
-                      description="Cards using this type will become untyped."
-                      onConfirm={(e) => {
-                        e?.stopPropagation();
-                        handleDeleteType(ct.card_type_id);
-                      }}
-                      onCancel={(e) => e?.stopPropagation()}
-                    >
-                      <Button
-                        type="text"
-                        size="small"
-                        icon={<DeleteOutlined />}
-                        danger
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                    </Popconfirm>,
-                  ]}
-                >
-                  <List.Item.Meta
-                    avatar={<span style={{ fontSize: 18 }}>{ct.emoji || '📋'}</span>}
-                    title={
-                      <Typography.Text style={{ fontSize: 13 }} ellipsis>
-                        {ct.name}
-                      </Typography.Text>
-                    }
-                  />
-                </List.Item>
-              )}
-            />
+                      icon={<DeleteOutlined />}
+                      danger
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </Popconfirm>
+                </Space>
+              </div>
+            ))
           )}
         </Sider>
 
