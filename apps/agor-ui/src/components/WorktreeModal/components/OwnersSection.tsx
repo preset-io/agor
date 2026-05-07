@@ -294,7 +294,7 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
               type="warning"
               showIcon
               icon={<WarningOutlined />}
-              message="Unix identity risk"
+              title="Unix identity risk"
               description="Allows users to send prompts to sessions they didn't create. Those sessions execute under the original creator's OS identity and filesystem permissions. Only use with fully trusted collaborators."
             />
           </Form.Item>
@@ -344,7 +344,7 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
               type="error"
               showIcon
               icon={<WarningOutlined />}
-              message="Dangerous: identity borrowing on spawn/fork"
+              title="Dangerous: identity borrowing on spawn/fork"
               description="With this enabled, sessions spawned or forked by other users in this worktree run under the original creator's OS identity, credentials, and environment variables. A collaborator can effectively execute code as you. Only enable for fully trusted collaborators or legacy automation that depends on the old behavior."
             />
           </Form.Item>

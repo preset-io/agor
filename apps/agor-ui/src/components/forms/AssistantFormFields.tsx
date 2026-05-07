@@ -115,7 +115,7 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
           showIcon
           icon={<LoadingOutlined />}
           style={{ marginBottom: 16 }}
-          message="Setting up framework repository"
+          title="Setting up framework repository"
           description={
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               Cloning preset-io/agor-assistant. This usually takes 10-30 seconds.
@@ -169,7 +169,7 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
                     showIcon
                     icon={<InfoCircleOutlined />}
                     style={{ marginBottom: 16 }}
-                    message="Custom repository selected"
+                    title="Custom repository selected"
                     description={
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                         The repository should be preset-io/agor-assistant or a fork/derivative. It

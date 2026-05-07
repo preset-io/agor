@@ -105,7 +105,7 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }
           type="warning"
           showIcon
           icon={<InfoCircleOutlined />}
-          message="Browser Audio Permissions Required"
+          title="Browser Audio Permissions Required"
           description={
             <div>
               <p style={{ marginBottom: 8 }}>
