@@ -363,15 +363,25 @@ export class GeminiPromptService {
         // Get config for Scheduler
         const config = (client as unknown as GeminiClientWithConfig).config;
 
-        // Create Scheduler instance (SDK 0.27.2+ uses event-driven scheduler)
+        // Create Scheduler instance (SDK 0.41+ takes an AgentLoopContext)
         // The Scheduler needs a MessageBus and PolicyEngine for approval workflows
         const policyEngine = new Gemini.PolicyEngine({
           approvalMode: mapPermissionMode(permissionMode), // Convert our permission mode to Gemini's ApprovalMode
           nonInteractive: false,
         });
         const messageBus = new Gemini.MessageBus(policyEngine);
-        const scheduler = new Gemini.Scheduler({
+        const agentContext: Gemini.AgentLoopContext = {
           config,
+          promptId,
+          toolRegistry: config.getToolRegistry(),
+          promptRegistry: config.getPromptRegistry(),
+          resourceRegistry: config.getResourceRegistry(),
+          messageBus,
+          geminiClient: config.getGeminiClient(),
+          sandboxManager: config.sandboxManager,
+        };
+        const scheduler = new Gemini.Scheduler({
+          context: agentContext,
           messageBus,
           getPreferredEditor: () => undefined,
           schedulerId: `scheduler-${promptId}`,
