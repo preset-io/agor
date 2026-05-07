@@ -19,6 +19,7 @@ import {
   AgentSelectionGrid,
 } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import { SessionMcpServersField } from '../MCPServerSelect';
 import type { ModelConfig } from '../ModelSelector';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 
@@ -242,6 +243,9 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           />
         </Form.Item>
 
+        {/* MCP Servers — first-class field, mirrors SessionSettingsModal */}
+        <SessionMcpServersField mcpServerById={mcpServerById} />
+
         {/* Advanced Configuration (Collapsible) */}
         <Collapse
           ghost
@@ -256,6 +260,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
                   agenticTool={(selectedAgent as AgenticToolName) || 'claude-code'}
                   mcpServerById={mcpServerById}
                   showHelpText={true}
+                  hideMcpServers
                 />
               ),
             },
