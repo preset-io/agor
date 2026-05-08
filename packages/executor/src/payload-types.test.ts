@@ -190,6 +190,36 @@ describe('GitClonePayloadSchema', () => {
 
     expect(() => GitClonePayloadSchema.parse(payload)).toThrow();
   });
+
+  // Regression: the "Add Repository" form lets the operator pin a non-default
+  // base branch (e.g. a long-lived feature branch); the schema must accept it
+  // so the route → service → executor chain doesn't drop the field on the wire.
+  it('should accept default_branch in params', () => {
+    const payload = {
+      command: 'git.clone',
+      sessionToken: 'jwt-token-here',
+      params: {
+        url: 'https://github.com/user/repo.git',
+        default_branch: 'release/2024-q1',
+      },
+    };
+
+    const result = GitClonePayloadSchema.parse(payload);
+    expect(result.params.default_branch).toBe('release/2024-q1');
+  });
+
+  it('should treat default_branch as optional', () => {
+    const payload = {
+      command: 'git.clone',
+      sessionToken: 'jwt-token-here',
+      params: {
+        url: 'https://github.com/user/repo.git',
+      },
+    };
+
+    const result = GitClonePayloadSchema.parse(payload);
+    expect(result.params.default_branch).toBeUndefined();
+  });
 });
 
 describe('GitWorktreeAddPayloadSchema', () => {

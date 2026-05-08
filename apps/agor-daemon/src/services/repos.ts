@@ -144,7 +144,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
    * Client receives 'repos.created' WebSocket event when complete.
    */
   async cloneRepository(
-    data: { url: string; slug?: string; name?: string },
+    data: { url: string; slug?: string; name?: string; default_branch?: string },
     params?: RepoParams
   ): Promise<{ status: 'pending' | 'exists'; slug: string }> {
     // Note: `||` (not `??`) is intentional — we want an empty `data.slug`
@@ -200,6 +200,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         params: {
           url: data.url,
           slug,
+          // Forward the user-supplied default_branch so the executor
+          // persists what the operator typed in "Add Repository" instead
+          // of silently overwriting it with origin/HEAD.
+          ...(data.default_branch ? { default_branch: data.default_branch } : {}),
           createDbRecord: true,
           userId: userId as string | undefined,
           initUnixGroup: rbacEnabled,

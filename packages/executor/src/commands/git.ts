@@ -121,6 +121,9 @@ export async function handleGitClone(
         outputPath: payload.params.outputPath,
         branch: payload.params.branch,
         bare: payload.params.bare,
+        // Surface user-pinned default_branch in the dry-run trace so callers
+        // (and tests) can verify the field threaded through from the schema.
+        default_branch: payload.params.default_branch,
         createDbRecord,
       },
     };
@@ -145,12 +148,21 @@ export async function handleGitClone(
     const outputPath = payload.params.outputPath;
     const reposDir = getReposDir();
 
-    // Clone the repository
-    console.log(`[git.clone] Cloning ${payload.params.url} to ${outputPath || reposDir}...`);
+    // Clone the repository. If the caller pinned a default_branch, forward
+    // it as `branch` so the working tree lands on that branch — otherwise
+    // `.agor.yml` on a non-default branch wouldn't be visible at parse time
+    // below.
+    const pinnedBranch = payload.params.default_branch?.trim() || undefined;
+    console.log(
+      `[git.clone] Cloning ${payload.params.url} to ${outputPath || reposDir}` +
+        (pinnedBranch ? ` (branch: ${pinnedBranch})` : '') +
+        '...'
+    );
     const cloneResult = await cloneRepo({
       url: payload.params.url,
       targetDir: outputPath, // undefined = let cloneRepo compute path
       bare: payload.params.bare,
+      branch: pinnedBranch,
       env,
     });
 
@@ -183,7 +195,16 @@ export async function handleGitClone(
         );
       }
 
-      console.log(`[git.clone] Creating repo record: slug=${slug}`);
+      // User-supplied default_branch wins over the auto-detected origin/HEAD.
+      // Only fall back to the auto-detected value when the caller didn't
+      // pin one. This is what makes "Add Repository → Default Branch =
+      // some-feature-branch" actually persist into the DB record instead
+      // of being silently overwritten by whatever GitHub's HEAD points at.
+      const defaultBranch = payload.params.default_branch?.trim() || cloneResult.defaultBranch;
+      console.log(
+        `[git.clone] Creating repo record: slug=${slug} default_branch=${defaultBranch}` +
+          (payload.params.default_branch ? ' (user-supplied)' : ' (auto-detected)')
+      );
 
       // Create repo via Feathers service
       // The daemon's repos service handles validation and hooks
@@ -193,7 +214,7 @@ export async function handleGitClone(
         name: repoName,
         remote_url: payload.params.url,
         local_path: cloneResult.path,
-        default_branch: cloneResult.defaultBranch,
+        default_branch: defaultBranch,
         ...(environment ? { environment } : {}),
       });
 

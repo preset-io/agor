@@ -180,6 +180,14 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
     /** Slug for the repo (computed from URL if not provided) */
     slug: z.string().optional(),
 
+    /**
+     * User-supplied default branch for the repo record. When provided, this
+     * overrides the auto-detected `origin/HEAD`. Used by the UI's "Add
+     * Repository" form so the operator can pin a non-default base branch
+     * for new worktrees (e.g. a long-lived feature branch).
+     */
+    default_branch: z.string().optional(),
+
     /** Create DB record after clone (default: true) */
     createDbRecord: z.boolean().optional().default(true),
 

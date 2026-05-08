@@ -116,6 +116,27 @@ describe('executeCommand - git.clone', () => {
     });
   });
 
+  // Regression: the dry-run response must echo `default_branch` so callers
+  // can verify the field actually reached the handler — that is the symptom
+  // we hit when "Add Repository → Default Branch = X" silently fell back to
+  // origin/HEAD because the field was being dropped on the wire upstream.
+  it('should echo user-supplied default_branch in dry-run response', async () => {
+    const payloadWithDefaultBranch: GitClonePayload = {
+      ...gitClonePayload,
+      params: {
+        ...gitClonePayload.params,
+        default_branch: 'release/2024-q1',
+      },
+    };
+
+    const result = await executeCommand(payloadWithDefaultBranch, { dryRun: true });
+
+    expect(result.success).toBe(true);
+    expect(result.data).toMatchObject({
+      default_branch: 'release/2024-q1',
+    });
+  });
+
   // Note: Non-dry-run tests require a running daemon and are skipped in unit tests
   // Integration tests should cover the full git.clone flow
 });

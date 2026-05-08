@@ -375,6 +375,13 @@ export interface CloneOptions {
   url: string;
   targetDir?: string;
   bare?: boolean;
+  /**
+   * Pin the working tree to a specific branch instead of the remote's HEAD.
+   * Forwarded as `git clone --branch <name>`. Used when the operator wants
+   * the repo's effective base to be a non-default branch — e.g. so `.agor.yml`
+   * on a feature branch is what the daemon reads at clone time.
+   */
+  branch?: string;
   onProgress?: (progress: CloneProgress) => void;
   env?: Record<string, string>; // User environment variables (e.g., from resolveUserEnvironment)
 }
@@ -471,11 +478,22 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
   }
 
   // Clone using the original URL — auth is supplied via http.extraheader env vars.
-  console.log(`Cloning ${options.url} to ${targetPath}...`);
-  await git.clone(cloneUrl, targetPath, options.bare ? ['--bare'] : []);
+  // If the caller pinned a branch, pass `--branch <name>` so the working tree
+  // lands on that branch (instead of remote HEAD). Without this, repos whose
+  // `.agor.yml` lives on a non-default branch would clone with the file
+  // missing on disk and the daemon would log "No environment variants
+  // configured" even though the user picked the right branch.
+  const cloneArgs: string[] = [];
+  if (options.bare) cloneArgs.push('--bare');
+  if (options.branch) cloneArgs.push('--branch', options.branch);
+  console.log(
+    `Cloning ${options.url} to ${targetPath}${options.branch ? ` (branch: ${options.branch})` : ''}...`
+  );
+  await git.clone(cloneUrl, targetPath, cloneArgs);
 
-  // Get default branch from remote HEAD
-  const defaultBranch = await getDefaultBranch(targetPath);
+  // Default branch: prefer the explicit pin (so the DB record matches what's
+  // on disk); fall back to the remote's HEAD when the caller didn't pin one.
+  const defaultBranch = options.branch ?? (await getDefaultBranch(targetPath));
 
   return {
     path: targetPath,
