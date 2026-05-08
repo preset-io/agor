@@ -699,6 +699,28 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
               ),
               children: (
                 <>
+                  <Alert
+                    title="OAuth defaults are usually fine"
+                    description={
+                      <ul style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
+                        <li>
+                          Modern OAuth 2.1 servers support discovery (RFC 8414 / RFC 9728) and
+                          Dynamic Client Registration — leave everything here blank.
+                        </li>
+                        <li>
+                          Set Client ID / Client Secret only for servers that require a
+                          pre-registered OAuth app (e.g. Figma, GitHub).
+                        </li>
+                        <li>
+                          Override the URLs only if the server doesn't expose a discovery document
+                          or you need a non-default endpoint.
+                        </li>
+                      </ul>
+                    }
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 16 }}
+                  />
                   <Form.Item
                     label="Client ID"
                     name="oauth_client_id"
@@ -765,27 +787,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                       <Select.Option value="client_credentials">Client Credentials</Select.Option>
                     </Select>
                   </Form.Item>
-                  <Alert
-                    title="OAuth defaults are usually fine"
-                    description={
-                      <ul style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
-                        <li>
-                          Modern OAuth 2.1 servers support discovery (RFC 8414 / RFC 9728) and
-                          Dynamic Client Registration — leave everything here blank.
-                        </li>
-                        <li>
-                          Set Client ID / Client Secret only for servers that require a
-                          pre-registered OAuth app (e.g. Figma, GitHub).
-                        </li>
-                        <li>
-                          Override the URLs only if the server doesn't expose a discovery document
-                          or you need a non-default endpoint.
-                        </li>
-                      </ul>
-                    }
-                    type="info"
-                    showIcon
-                  />
                 </>
               ),
             },
