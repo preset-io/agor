@@ -15,7 +15,7 @@
  * - Codex-specific fields are omitted (rendered separately via CodexSettingsForm)
  */
 
-import type { AgenticToolName, MCPServer } from '@agor-live/client';
+import type { AgenticToolName, AgorClient, MCPServer } from '@agor-live/client';
 import { Form, Select } from 'antd';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
 import { EffortSelector } from '../EffortSelector';
@@ -48,6 +48,13 @@ export interface AgenticToolConfigFormProps {
    * Form.Items in the same Form.
    */
   hideMcpServers?: boolean;
+  /**
+   * Optional Feathers client. When set, the embedded ModelSelector can fetch
+   * dynamic Copilot models via `/copilot-models`. Without it, the picker
+   * silently uses the static fallback — fine for forms that don't need
+   * dynamic discovery (e.g., default-settings preview, schedule editor).
+   */
+  client?: AgorClient | null;
 }
 
 const MODEL_LABELS: Record<string, string> = {
@@ -63,6 +70,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
   showHelpText = true,
   compact = false,
   hideMcpServers = false,
+  client,
 }) => {
   const modelLabel = MODEL_LABELS[agenticTool] ?? 'Claude Model';
   const showCodexFields = agenticTool === 'codex' && !compact;
@@ -78,7 +86,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
             : undefined
         }
       >
-        <ModelSelector agentic_tool={agenticTool} />
+        <ModelSelector agentic_tool={agenticTool} client={client} />
       </Form.Item>
 
       <Form.Item

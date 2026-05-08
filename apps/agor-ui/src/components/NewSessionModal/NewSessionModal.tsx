@@ -261,6 +261,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
                   mcpServerById={mcpServerById}
                   showHelpText={true}
                   hideMcpServers
+                  client={client}
                 />
               ),
             },

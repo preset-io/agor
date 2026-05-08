@@ -135,6 +135,9 @@ importers:
       '@agor/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@github/copilot-sdk':
+        specifier: ^0.2.2
+        version: 0.2.2
       '@modelcontextprotocol/sdk':
         specifier: '>=1.27.1 <2'
         version: 1.27.1(zod@4.3.6)

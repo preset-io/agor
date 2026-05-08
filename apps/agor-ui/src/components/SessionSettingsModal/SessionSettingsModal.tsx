@@ -340,6 +340,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
           mcpServerById={mcpServerById}
           showHelpText={false}
           compact
+          client={client}
         />
 
         {/* SECONDARY ZONE — niche settings, collapsed by default */}
