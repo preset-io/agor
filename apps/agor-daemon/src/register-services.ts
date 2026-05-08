@@ -909,7 +909,7 @@ function createExecuteHandler(
             try {
               let filePath: string;
               if (freshSession.agentic_tool === 'codex') {
-                const codexHome = getCodexHome(sessionId);
+                const codexHome = getCodexHome(executorHomeDir);
                 const found = await findCodexSessionFile(codexHome, freshSession.sdk_session_id);
                 filePath = found || '';
               } else {

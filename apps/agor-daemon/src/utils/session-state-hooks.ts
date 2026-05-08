@@ -61,10 +61,15 @@ interface PushContext {
 export async function pullIfNeeded(ctx: PullContext): Promise<void> {
   const repo = new SerializedSessionRepository(ctx.db);
 
-  // For Codex, pass the per-session CODEX_HOME as homeOverride
-  const homeOverride = ctx.tool === 'codex' ? getCodexHome(ctx.sessionId) : ctx.executorHomeDir;
-
-  const filePath = getSessionFilePath(ctx.tool, ctx.worktreePath, ctx.sdkSessionId, homeOverride);
+  // Both claude-code and codex now resolve transcripts under the executor
+  // user's HOME (~/.claude or ~/.codex). For simple mode executorHomeDir is
+  // undefined and the helpers fall back to os.homedir().
+  const filePath = getSessionFilePath(
+    ctx.tool,
+    ctx.worktreePath,
+    ctx.sdkSessionId,
+    ctx.executorHomeDir
+  );
 
   // Check latest row (any status)
   let latest = await repo.findLatest(ctx.sessionId);
@@ -141,7 +146,7 @@ async function doPush(ctx: PushContext): Promise<void> {
   // For Codex, find the actual session file (may be in a date-based subdirectory)
   let filePath: string;
   if (ctx.tool === 'codex') {
-    const codexHome = getCodexHome(ctx.sessionId);
+    const codexHome = getCodexHome(ctx.executorHomeDir);
     const found = await findCodexSessionFile(codexHome, ctx.sdkSessionId);
     if (!found) {
       // No session file found — Codex may not have written one (e.g. error before first turn)
@@ -149,8 +154,12 @@ async function doPush(ctx: PushContext): Promise<void> {
     }
     filePath = found;
   } else {
-    const homeOverride = ctx.executorHomeDir;
-    filePath = getSessionFilePath(ctx.tool, ctx.worktreePath, ctx.sdkSessionId, homeOverride);
+    filePath = getSessionFilePath(
+      ctx.tool,
+      ctx.worktreePath,
+      ctx.sdkSessionId,
+      ctx.executorHomeDir
+    );
   }
 
   // Compute current hash

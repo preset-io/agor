@@ -19,11 +19,20 @@ import { getTranscriptPath } from '@agor/core/claude';
 import type { AgenticToolName } from '@agor/core/types';
 
 /**
- * Get the CODEX_HOME directory for a given Agor session.
- * Mirrors the logic in executor's prompt-service.ts ensureCodexSessionContext().
+ * Resolve the Codex home directory (where `auth.json`, `sessions/`, and
+ * any user-authored `config.toml` live).
+ *
+ * Defaults to `$HOME/.codex`. In strict / insulated unix-user modes the
+ * caller passes the impersonated user's home dir; in simple mode it is
+ * undefined and we fall back to the daemon process's `os.homedir()`.
+ *
+ * NOTE: this used to return a per-session `/tmp/agor-codex-<sessionId>`
+ * directory back when Agor overrode `$CODEX_HOME`. The executor no longer
+ * does that — Codex CLI is invoked with its default `$CODEX_HOME` so its
+ * subscription auth + user config keep working.
  */
-export function getCodexHome(agorSessionId: string): string {
-  return path.join(os.tmpdir(), `agor-codex-${agorSessionId}`);
+export function getCodexHome(executorHomeDir?: string): string {
+  return path.join(executorHomeDir || os.homedir(), '.codex');
 }
 
 export function getSessionFilePath(
@@ -44,10 +53,10 @@ export function getSessionFilePath(
       return getTranscriptPath(sdkSessionId, worktreePath);
     }
     case 'codex': {
-      // For Codex, homeOverride is the CODEX_HOME directory (per-session /tmp/ dir).
-      // Canonical restore path: $CODEX_HOME/sessions/<threadId>.jsonl
-      // The Codex CLI searches for threads by ID, so a flat path works.
-      const codexHome = homeOverride || getCodexHome('unknown');
+      // homeOverride here is the executor user's HOME dir (not CODEX_HOME).
+      // Codex stores threads at $CODEX_HOME/sessions, default $CODEX_HOME=$HOME/.codex.
+      // The Codex CLI searches for threads by ID, so a flat path works for restore.
+      const codexHome = getCodexHome(homeOverride);
       return path.join(codexHome, 'sessions', `${sdkSessionId}.jsonl`);
     }
     default:

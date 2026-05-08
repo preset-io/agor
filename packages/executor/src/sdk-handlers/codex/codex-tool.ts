@@ -83,7 +83,7 @@ export class CodexTool implements ITool {
     messagesService?: MessagesService,
     tasksService?: TasksService,
     tasksStreamingService?: TasksStreamingService,
-    _useNativeAuth?: boolean, // Codex doesn't have OAuth fallback, but accept for interface consistency
+    useNativeAuth?: boolean,
     mcpServerRepo?: MCPServerRepository,
     usersRepo?: UsersRepository
   ) {
@@ -103,7 +103,8 @@ export class CodexTool implements ITool {
         reposRepo,
         apiKey,
         mcpServerRepo,
-        usersRepo
+        usersRepo,
+        useNativeAuth ?? false
       );
     }
   }

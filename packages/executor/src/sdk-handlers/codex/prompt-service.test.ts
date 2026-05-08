@@ -319,8 +319,13 @@ describe('CodexPromptService - Todo normalization', () => {
 
     // Avoid filesystem/config setup noise in this focused stream test
     const serviceWithPrivates = service as any;
-    serviceWithPrivates.ensureCodexSessionContext = vi.fn().mockResolvedValue('/tmp');
-    serviceWithPrivates.ensureCodexConfig = vi.fn().mockResolvedValue(0);
+    serviceWithPrivates.ensureCodexInstructionsFile = vi
+      .fn()
+      .mockResolvedValue('/tmp/agor-codex-instructions-mock.md');
+    serviceWithPrivates.buildMcpServersConfig = vi
+      .fn()
+      .mockResolvedValue({ servers: {}, total: 0 });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
     serviceWithPrivates.refreshClient = vi.fn();
 
     mockSessionsRepo.findById.mockResolvedValue({
@@ -390,8 +395,13 @@ describe('CodexPromptService - tool payload mapping', () => {
     );
 
     const serviceWithPrivates = service as any;
-    serviceWithPrivates.ensureCodexSessionContext = vi.fn().mockResolvedValue('/tmp');
-    serviceWithPrivates.ensureCodexConfig = vi.fn().mockResolvedValue(0);
+    serviceWithPrivates.ensureCodexInstructionsFile = vi
+      .fn()
+      .mockResolvedValue('/tmp/agor-codex-instructions-mock.md');
+    serviceWithPrivates.buildMcpServersConfig = vi
+      .fn()
+      .mockResolvedValue({ servers: {}, total: 0 });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
     serviceWithPrivates.refreshClient = vi.fn();
 
     mockSessionsRepo.findById.mockResolvedValue({
@@ -596,8 +606,13 @@ describe('CodexPromptService - tool payload mapping', () => {
     );
 
     const serviceWithPrivates = service as any;
-    serviceWithPrivates.ensureCodexSessionContext = vi.fn().mockResolvedValue('/tmp');
-    serviceWithPrivates.ensureCodexConfig = vi.fn().mockResolvedValue(0);
+    serviceWithPrivates.ensureCodexInstructionsFile = vi
+      .fn()
+      .mockResolvedValue('/tmp/agor-codex-instructions-mock.md');
+    serviceWithPrivates.buildMcpServersConfig = vi
+      .fn()
+      .mockResolvedValue({ servers: {}, total: 0 });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
     serviceWithPrivates.refreshClient = vi.fn();
 
     mockSessionsRepo.findById.mockResolvedValue({
