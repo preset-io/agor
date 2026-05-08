@@ -8,22 +8,26 @@
  *
  * Design notes:
  *
- *   - Lazy-init a single `CopilotClient` on first request and keep it warm
- *     for the lifetime of the daemon. Spawning the underlying CLI binary on
- *     every UI mount would be wasteful — and the SDK already caches per
- *     connection.
- *   - We layer a daemon-side TTL on top so we don't pay even the round-trip
- *     cost on repeated picker opens.
- *   - On *any* failure (no token, SDK throws, CLI binary missing, timeout)
- *     we log and return the static fallback. The picker stays usable.
- *   - Auth: today we use the daemon-level `process.env.COPILOT_GITHUB_TOKEN`
- *     (loaded from config.yaml or env at startup). Per-user BYOK / token
- *     scoping is a follow-up — see context/explorations and the per-tool
- *     credential scoping work.
+ *   - **No cache, no warm client.** Each request spawns a fresh
+ *     `CopilotClient`, calls `listModels()`, and stops it. The picker is a
+ *     rare interactive event — paying ~1-2s of subprocess spawn per call is
+ *     acceptable, especially since the UI shows the static fallback
+ *     immediately and upgrades when the dynamic list arrives. Avoiding
+ *     persistent state also eliminates the cross-tenant cache-keying bug
+ *     class.
+ *   - **Per-user token resolution** via `resolveApiKey` — picks up the
+ *     calling user's `data.agentic_tools.copilot.COPILOT_GITHUB_TOKEN` first,
+ *     then falls back to config.yaml, then `process.env`. Each user sees
+ *     their own account's BYOK lineup; no leakage between users.
+ *   - **Static fallback on any failure.** No token, decrypt failure, SDK
+ *     throws, CLI binary missing — all degrade silently to the static list
+ *     the UI already has bundled. The picker stays usable.
  */
 
+import { resolveApiKey } from '@agor/core/config';
+import type { Database } from '@agor/core/db';
 import { COPILOT_MODEL_METADATA, DEFAULT_COPILOT_MODEL } from '@agor/core/models';
-import type { Params } from '@agor/core/types';
+import type { Params, UserID } from '@agor/core/types';
 import { CopilotClient, type ModelInfo } from '@github/copilot-sdk';
 
 export interface CopilotModelOption {
@@ -39,8 +43,8 @@ export interface CopilotModelsResult {
   default: string;
   models: CopilotModelOption[];
   /**
-   * 'dynamic' if every model came from listModels(); 'static' if we fell
-   * back. Useful for the UI to label the picker honestly.
+   * 'dynamic' if the list came from listModels(); 'static' if we fell back.
+   * Useful for the UI to label the picker honestly.
    */
   source: 'dynamic' | 'static';
 }
@@ -61,38 +65,44 @@ const STATIC_RESULT: CopilotModelsResult = {
   source: 'static',
 };
 
-/** Cache TTL for the dynamic list. SDK caches per-connection; this is on top. */
-const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+interface AuthenticatedParams extends Params {
+  user?: { user_id: UserID };
+}
 
 export class CopilotModelsService {
-  private client?: CopilotClient;
-  private cache?: { result: CopilotModelsResult; expiresAt: number };
+  constructor(private db: Database) {}
 
-  async find(_params?: Params): Promise<CopilotModelsResult> {
-    const now = Date.now();
-    if (this.cache && this.cache.expiresAt > now) {
-      return this.cache.result;
-    }
+  async find(params?: AuthenticatedParams): Promise<CopilotModelsResult> {
+    const userId = params?.user?.user_id;
 
-    const token =
-      process.env.COPILOT_GITHUB_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
-    if (!token) {
-      console.log('[Copilot Models] No GitHub token configured — returning static list');
+    // Resolve the GitHub token. Precedence: per-user > config.yaml > env.
+    // Falls through to static if nothing is configured anywhere.
+    const resolution = await resolveApiKey('COPILOT_GITHUB_TOKEN', {
+      userId,
+      db: this.db,
+      tool: 'copilot',
+    });
+
+    if (!resolution.apiKey) {
+      console.log(
+        `[Copilot Models] No GitHub token for user ${userId?.substring(0, 8) ?? 'anonymous'} — returning static list`
+      );
       return STATIC_RESULT;
     }
 
+    let client: CopilotClient | undefined;
     try {
-      if (!this.client) {
-        this.client = new CopilotClient({
-          useStdio: true,
-          githubToken: token,
-          env: { HOME: process.env.HOME || '' },
-        });
-        await this.client.start();
-      }
-
-      const dynamic: ModelInfo[] = await this.client.listModels();
-      const result: CopilotModelsResult = {
+      client = new CopilotClient({
+        useStdio: true,
+        githubToken: resolution.apiKey,
+        env: { HOME: process.env.HOME || '' },
+      });
+      await client.start();
+      const dynamic: ModelInfo[] = await client.listModels();
+      console.log(
+        `[Copilot Models] Fetched ${dynamic.length} models for user ${userId?.substring(0, 8) ?? 'anonymous'} (source: ${resolution.source})`
+      );
+      return {
         default: DEFAULT_COPILOT_MODEL,
         models: dynamic.map((m) => ({
           id: m.id,
@@ -101,18 +111,29 @@ export class CopilotModelsService {
         })),
         source: 'dynamic',
       };
-      this.cache = { result, expiresAt: now + CACHE_TTL_MS };
-      return result;
     } catch (err) {
       console.warn(
         '[Copilot Models] listModels() failed, falling back to static list:',
         err instanceof Error ? err.message : err
       );
       return STATIC_RESULT;
+    } finally {
+      // Always tear down the subprocess. SDK's `stop()` returns errors
+      // rather than throwing, so we just log them.
+      if (client) {
+        try {
+          const errors = await client.stop();
+          if (errors.length > 0) {
+            console.warn('[Copilot Models] Errors during client.stop():', errors);
+          }
+        } catch (err) {
+          console.warn('[Copilot Models] client.stop() threw:', err);
+        }
+      }
     }
   }
 }
 
-export function createCopilotModelsService(): CopilotModelsService {
-  return new CopilotModelsService();
+export function createCopilotModelsService(db: Database): CopilotModelsService {
+  return new CopilotModelsService(db);
 }
