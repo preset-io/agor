@@ -243,14 +243,6 @@ export interface AgorDatabaseSettings {
 }
 
 /**
- * Codex-specific configuration
- */
-export interface AgorCodexSettings {
-  /** Codex home directory (default: ~/.agor/codex) */
-  home?: string;
-}
-
-/**
  * Unix user isolation mode controlling how session processes get mapped to
  * OS identities.
  *
@@ -769,9 +761,6 @@ export interface AgorConfig {
   /** OpenCode.ai integration settings */
   opencode?: AgorOpenCodeSettings;
 
-  /** Codex-specific configuration */
-  codex?: AgorCodexSettings;
-
   /** Execution isolation settings */
   execution?: AgorExecutionSettings;
 
@@ -833,7 +822,6 @@ export type ConfigKey =
   | `ui.${keyof AgorUISettings}`
   | `database.${keyof AgorDatabaseSettings}`
   | `opencode.${keyof AgorOpenCodeSettings}`
-  | `codex.${keyof AgorCodexSettings}`
   | `execution.${keyof AgorExecutionSettings}`
   | `security.${keyof AgorSecuritySettings}`
   | `worktrees.${keyof AgorWorktreesSettings}`

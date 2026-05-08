@@ -260,10 +260,10 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - No manual injection needed
 - Agor sessions inherit project instructions automatically
 
-**Codex:** ✅ **AGENTS.md auto-loading**
+**Codex:** ✅ **Native instructions injection**
 
-- Codex automatically loads `AGENTS.md` from the working directory
-- Agor generates a per-session `AGENTS.md` with project context at the worktree's `CODEX_HOME`
+- Codex automatically loads `AGENTS.md` from the working directory and the user's `~/.codex/`
+- Agor renders per-session project context to a temp file and passes it via the SDK's `model_instructions_file` config — never mutates the user's `~/.codex/` directory
 - No manual injection needed
 
 **Gemini:** ⚠️ **Manual injection**

@@ -29,9 +29,6 @@ export function getDefaultConfig(): AgorConfig {
       port: 5173,
       host: 'localhost',
     },
-    codex: {
-      home: '~/.agor/codex',
-    },
     execution: {
       session_token_expiration_ms: 86400000,
       session_token_max_uses: 1,

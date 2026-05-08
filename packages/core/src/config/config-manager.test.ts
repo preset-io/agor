@@ -8,7 +8,6 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  ensureCodexHome,
   expandHomePath,
   getAgorHome,
   getConfigPath,
@@ -23,7 +22,6 @@ import {
   loadConfig,
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
-  resolveCodexHome,
   saveConfig,
   setConfigValue,
   unsetConfigValue,
@@ -257,61 +255,6 @@ describe('requirePublicBaseUrl', () => {
   it('rejects a base URL without an http(s) scheme', async () => {
     process.env.AGOR_BASE_URL = 'agor.example.com';
     await expect(requirePublicBaseUrl()).rejects.toThrow(/must start with http/i);
-  });
-});
-
-describe('resolveCodexHome & ensureCodexHome', () => {
-  let tempDir: string;
-
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-config-'));
-    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
-  });
-
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
-    vi.restoreAllMocks();
-  });
-
-  it('should resolve to default Codex home when not configured', async () => {
-    const home = await resolveCodexHome();
-    expect(home).toBe(path.join(tempDir, '.agor', 'codex'));
-  });
-
-  it('should resolve a configured tilde path', async () => {
-    const agorDir = path.join(tempDir, '.agor');
-    await fs.mkdir(agorDir, { recursive: true });
-    await fs.writeFile(
-      path.join(agorDir, 'config.yaml'),
-      yaml.dump({ codex: { home: '~/.custom-codex' } }),
-      'utf-8'
-    );
-
-    const home = await resolveCodexHome();
-    expect(home).toBe(path.join(tempDir, '.custom-codex'));
-  });
-
-  it('should create the default Codex home directory when ensuring', async () => {
-    const codexHome = await ensureCodexHome();
-    expect(codexHome).toBe(path.join(tempDir, '.agor', 'codex'));
-    const stats = await fs.stat(codexHome);
-    expect(stats.isDirectory()).toBe(true);
-  });
-
-  it('should create a configured Codex home directory if missing', async () => {
-    const customHome = path.join(tempDir, 'codex-data');
-    const agorDir = path.join(tempDir, '.agor');
-    await fs.mkdir(agorDir, { recursive: true });
-    await fs.writeFile(
-      path.join(agorDir, 'config.yaml'),
-      yaml.dump({ codex: { home: customHome } }),
-      'utf-8'
-    );
-
-    const codexHome = await ensureCodexHome();
-    expect(codexHome).toBe(customHome);
-    const stats = await fs.stat(customHome);
-    expect(stats.isDirectory()).toBe(true);
   });
 });
 

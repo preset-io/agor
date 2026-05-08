@@ -136,9 +136,6 @@ export function getDefaultConfig(): AgorConfig {
       port: 5173,
       host: 'localhost',
     },
-    codex: {
-      home: '~/.agor/codex',
-    },
     execution: {
       session_token_expiration_ms: 86400000, // 24 hours
       session_token_max_uses: 1, // Single-use tokens
@@ -159,27 +156,6 @@ export function expandHomePath(input: string): string {
     return path.join(os.homedir(), input.slice(2));
   }
   return input;
-}
-
-/**
- * Resolve configured Codex home directory (expanded to absolute path)
- */
-export async function resolveCodexHome(): Promise<string> {
-  const config = await loadConfig();
-  const configured = config.codex?.home;
-  const defaultHome = getDefaultConfig().codex?.home ?? '~/.agor/codex';
-  const selected =
-    typeof configured === 'string' && configured.trim().length > 0 ? configured : defaultHome;
-  return expandHomePath(selected.trim());
-}
-
-/**
- * Ensure Codex home directory exists and return its absolute path.
- */
-export async function ensureCodexHome(): Promise<string> {
-  const home = await resolveCodexHome();
-  await fs.mkdir(home, { recursive: true });
-  return home;
 }
 
 /**
@@ -217,7 +193,6 @@ export async function getConfigValue(key: string): Promise<string | boolean | nu
     display: { ...defaults.display, ...config.display },
     daemon: { ...defaults.daemon, ...config.daemon },
     ui: { ...defaults.ui, ...config.ui },
-    codex: { ...defaults.codex, ...config.codex },
     execution: { ...defaults.execution, ...config.execution },
     paths: { ...defaults.paths, ...config.paths },
   };
