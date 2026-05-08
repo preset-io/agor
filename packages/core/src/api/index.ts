@@ -864,11 +864,15 @@ export function createClient(
 
   client.configure(socketio(socket));
 
-  // Configure authentication with localStorage if available (browser only)
-  const storage =
-    typeof globalThis !== 'undefined' && 'localStorage' in globalThis
-      ? (globalThis as typeof globalThis & { localStorage: Storage }).localStorage
-      : undefined;
+  // Configure authentication with localStorage if available (browser only).
+  // Node 25 exposes a `localStorage` global that is NOT a working Storage —
+  // it has no `setItem` method, so the Feathers auth client throws
+  // `_a.setItem is not a function` on first authenticate(). Guard against
+  // that by also requiring a callable setItem before treating it as Storage.
+  const _ls = (globalThis as { localStorage?: unknown }).localStorage as
+    | (Storage & { setItem?: unknown })
+    | undefined;
+  const storage = _ls && typeof _ls.setItem === 'function' ? (_ls as Storage) : undefined;
 
   client.configure(authentication({ storage }));
   client.io = socket;

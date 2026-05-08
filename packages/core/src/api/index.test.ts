@@ -359,6 +359,54 @@ describe('createClient', () => {
 
       expect(() => createClient()).not.toThrow();
     });
+
+    // Regression coverage for Node 25 compat: it exposes `globalThis.localStorage`
+    // but the object lacks `setItem`, so the Feathers auth client throws
+    // `_a.setItem is not a function` on first authenticate(). createClient()
+    // must treat that as "no storage" rather than passing it straight through.
+    it('should reject a localStorage stub without setItem (Node 25)', () => {
+      const brokenLocalStorage = {
+        getItem: vi.fn(),
+        // setItem intentionally absent — this is what Node 25 ships
+        removeItem: vi.fn(),
+        clear: vi.fn(),
+        length: 0,
+        key: vi.fn(),
+      };
+
+      (globalThis as any).localStorage = brokenLocalStorage;
+
+      const authMock = authClient as unknown as MockedFunction<any>;
+
+      createClient();
+
+      expect(authMock).toHaveBeenCalledWith({ storage: undefined });
+
+      delete (globalThis as any).localStorage;
+    });
+
+    it('should reject a localStorage stub whose setItem is not a function', () => {
+      // Defensive sibling case: anything truthy at .setItem that isn't
+      // callable would otherwise pass `'setItem' in storage` style checks.
+      const oddLocalStorage = {
+        getItem: vi.fn(),
+        setItem: 'not-a-function' as unknown as Storage['setItem'],
+        removeItem: vi.fn(),
+        clear: vi.fn(),
+        length: 0,
+        key: vi.fn(),
+      };
+
+      (globalThis as any).localStorage = oddLocalStorage;
+
+      const authMock = authClient as unknown as MockedFunction<any>;
+
+      createClient();
+
+      expect(authMock).toHaveBeenCalledWith({ storage: undefined });
+
+      delete (globalThis as any).localStorage;
+    });
   });
 
   describe('return value type', () => {
