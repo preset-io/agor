@@ -102,6 +102,8 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   const watchedClientId = Form.useWatch('oauth_client_id', form);
   const watchedClientSecret = Form.useWatch('oauth_client_secret', form);
   const watchedOauthMode = Form.useWatch('oauth_mode', form);
+  const watchedEnv = Form.useWatch('env', form);
+  const hasEnvConfigured = typeof watchedEnv === 'string' && watchedEnv.trim().length > 0;
   const hasCustomizedAdvanced =
     [
       watchedAuthorizationUrl,
@@ -330,7 +332,14 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         <Form.Item
           label="Name (Internal ID)"
           name="name"
-          rules={[{ required: true, message: 'Please enter a server name' }]}
+          rules={[
+            { required: true, message: 'Please enter a server name' },
+            {
+              pattern: /^[a-z][a-z0-9_-]*$/,
+              message: 'Lowercase letters, digits, _ or - only; must start with a letter',
+            },
+            { max: 64, message: 'Maximum 64 characters' },
+          ]}
           tooltip="Internal identifier - lowercase, no spaces (e.g., filesystem, sentry, context7)"
         >
           <Input placeholder="context7" />
@@ -667,16 +676,43 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         />
       )}
 
-      <Form.Item
-        label="Environment Variables"
-        name="env"
-        tooltip="JSON object of environment variables. Values support templates like {{ user.env.VAR_NAME }}"
-      >
-        <TextArea
-          placeholder='{"GITHUB_TOKEN": "{{ user.env.GITHUB_TOKEN }}", "ALLOWED_PATHS": "/path"}'
-          rows={3}
-        />
-      </Form.Item>
+      {/* Env vars in its own collapsed section so the Connection main flow
+          stays focused on transport + auth. Dot on the header flags when
+          something has been configured. */}
+      <Collapse
+        ghost
+        destroyOnHidden={false}
+        expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
+        items={[
+          {
+            key: 'env-vars',
+            label: (
+              <Space size={8}>
+                <Typography.Text strong>Environment variables</Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  (JSON, supports {`{{ user.env.VAR }}`} templates)
+                </Typography.Text>
+                {hasEnvConfigured && (
+                  <Tooltip title="One or more environment variables configured">
+                    <Badge color="orange" />
+                  </Tooltip>
+                )}
+              </Space>
+            ),
+            children: (
+              <Form.Item
+                name="env"
+                tooltip="JSON object of environment variables. Values support templates like {{ user.env.VAR_NAME }}"
+              >
+                <TextArea
+                  placeholder='{"GITHUB_TOKEN": "{{ user.env.GITHUB_TOKEN }}", "ALLOWED_PATHS": "/path"}'
+                  rows={3}
+                />
+              </Form.Item>
+            ),
+          },
+        ]}
+      />
 
       {/* Advanced — long tail of OAuth endpoints that are normally
           auto-discovered. Collapsed by default; a dot on the header
