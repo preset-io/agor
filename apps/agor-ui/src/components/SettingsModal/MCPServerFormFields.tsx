@@ -53,12 +53,13 @@ export interface MCPServerFormFieldsProps {
  * Reusable form fields for creating / editing an MCP server.
  *
  * Layout (top → bottom):
- *   1. Basic Information (open)
+ *   1. Basic Information (open)        — name, display name, scope, enabled, description
  *   2. Connection (open)
  *      a. Transport + URL/command + Auth type + auth-specific KEY fields
  *      b. Connection action buttons (Test Auth, Start OAuth, Disconnect, Test Connection)
- *      c. Environment variables
- *      d. Advanced (collapsed) — OAuth endpoints that are normally auto-discovered
+ *      c. Advanced (collapsed) — OAuth fields that are normally auto-discovered
+ *   3. Environment variables (collapsed) — server-scoped JSON, last because it's
+ *      orthogonal to "how I connect"
  */
 export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   mode,
@@ -670,44 +671,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         />
       )}
 
-      {/* Env vars in its own collapsed section so the Connection main flow
-          stays focused on transport + auth. Dot on the header flags when
-          something has been configured. */}
-      <Collapse
-        ghost
-        destroyOnHidden={false}
-        expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
-        items={[
-          {
-            key: 'env-vars',
-            label: (
-              <Space size={8}>
-                <Typography.Text strong>Environment variables</Typography.Text>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  (JSON, supports {`{{ user.env.VAR }}`} templates)
-                </Typography.Text>
-                {hasEnvConfigured && (
-                  <Tooltip title="One or more environment variables configured">
-                    <Badge color="orange" />
-                  </Tooltip>
-                )}
-              </Space>
-            ),
-            children: (
-              <Form.Item
-                name="env"
-                tooltip="JSON object of environment variables. Values support templates like {{ user.env.VAR_NAME }}"
-              >
-                <TextArea
-                  placeholder='{"GITHUB_TOKEN": "{{ user.env.GITHUB_TOKEN }}", "ALLOWED_PATHS": "/path"}'
-                  rows={3}
-                />
-              </Form.Item>
-            ),
-          },
-        ]}
-      />
-
       {/* Advanced — long tail of OAuth endpoints that are normally
           auto-discovered. Collapsed by default; a dot on the header
           signals that one or more values have been customized. */}
@@ -842,6 +805,33 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       key: 'connection',
       label: <Typography.Text strong>Connection</Typography.Text>,
       children: connectionChildren,
+    },
+    {
+      key: 'env-vars',
+      label: (
+        <Space size={8}>
+          <Typography.Text strong>Environment variables</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            (JSON, supports {`{{ user.env.VAR }}`} templates)
+          </Typography.Text>
+          {hasEnvConfigured && (
+            <Tooltip title="One or more environment variables configured">
+              <Badge color="orange" />
+            </Tooltip>
+          )}
+        </Space>
+      ),
+      children: (
+        <Form.Item
+          name="env"
+          tooltip="JSON object of environment variables. Values support templates like {{ user.env.VAR_NAME }}"
+        >
+          <TextArea
+            placeholder='{"GITHUB_TOKEN": "{{ user.env.GITHUB_TOKEN }}", "ALLOWED_PATHS": "/path"}'
+            rows={3}
+          />
+        </Form.Item>
+      ),
     },
   ];
 
