@@ -300,14 +300,17 @@ export class CopilotPromptService {
       const mcpServers = await this.buildMcpServers(sessionId, session.mcp_token);
       const systemMessage = await this.buildSystemMessage(sessionId);
 
-      // Read model from session config
+      // Read model from session config (settable per-prompt — picker changes
+      // re-emit a new model_config and we re-bind it to the SDK every turn).
       const resolvedModel = session.model_config?.model || DEFAULT_COPILOT_MODEL;
+      console.log(`🎯 [Copilot] Using model: ${resolvedModel}`);
 
       // Create or resume session
       let copilotSession: CopilotSession;
       const sessionConfig = {
         workingDirectory: worktree.path,
         streaming: true,
+        model: resolvedModel,
         onPermissionRequest: permissionHandler,
         mcpServers: mcpServers as Record<string, import('@github/copilot-sdk').MCPServerConfig>,
         systemMessage: { mode: 'append' as const, content: systemMessage },
@@ -340,6 +343,24 @@ export class CopilotPromptService {
           console.log(`🔑 Captured Copilot session ID: ${sdkSessionId}`);
           await this.sessionsRepo.update(sessionId, { sdk_session_id: sdkSessionId });
         }
+      }
+
+      // Belt-and-suspenders: explicitly bind the model on the session object
+      // after create/resume. The SDK accepts `model` in the session config
+      // above, but `setModel()` is the documented post-init API and guarantees
+      // mid-session picker changes take effect on the next prompt — even on a
+      // resumed session whose original model differs.
+      try {
+        await (
+          copilotSession as unknown as {
+            setModel: (m: string) => Promise<void>;
+          }
+        ).setModel(resolvedModel);
+      } catch (err) {
+        console.warn(
+          `⚠️  [Copilot] setModel("${resolvedModel}") failed; relying on session config:`,
+          err instanceof Error ? err.message : err
+        );
       }
 
       // Clear any stale stop flag

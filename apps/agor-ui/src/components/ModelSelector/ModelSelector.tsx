@@ -91,13 +91,18 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   // Determine which model list to use based on agentic_tool (with backwards compat for agent prop)
   const effectiveTool = agentic_tool || agent || 'claude-code';
 
-  // Dynamic Copilot models — fetched once when the picker opens for Copilot
-  // and a client is available. Errors silently fall back to static.
-  const [copilotDynamicOptions, setCopilotDynamicOptions] = useState<Array<{
+  // Copilot model list — fetched once when the picker opens for Copilot and
+  // a client is available. The daemon returns either the live `listModels()`
+  // result (source: 'dynamic') or the static fallback (source: 'static',
+  // typically when no GitHub token is configured). Either way we render
+  // whatever the server returns; the local static list is a last-resort
+  // fallback for when the call itself fails.
+  const [copilotServerOptions, setCopilotServerOptions] = useState<Array<{
     id: string;
     label: string;
     description?: string;
   }> | null>(null);
+  const [copilotSource, setCopilotSource] = useState<'dynamic' | 'static' | null>(null);
 
   useEffect(() => {
     if (effectiveTool !== 'copilot' || !client) return;
@@ -107,16 +112,16 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         const raw = await client.service('copilot-models').find();
         const response = raw as unknown as CopilotModelsResponse;
         if (cancelled || !response?.models?.length) return;
-        if (response.source !== 'dynamic') return; // server fell back to static; nothing new
-        setCopilotDynamicOptions(
+        setCopilotServerOptions(
           response.models.map((m) => ({
             id: m.id,
             label: m.displayName,
             description: m.description,
           }))
         );
+        setCopilotSource(response.source);
       } catch {
-        // Silent fallback to static — service is best-effort.
+        // Silent fallback to local static — best-effort.
       }
     })();
     return () => {
@@ -132,7 +137,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         : effectiveTool === 'opencode'
           ? [] // OpenCode doesn't use this list
           : effectiveTool === 'copilot'
-            ? (copilotDynamicOptions ?? COPILOT_STATIC_MODEL_OPTIONS)
+            ? (copilotServerOptions ?? COPILOT_STATIC_MODEL_OPTIONS)
             : AVAILABLE_CLAUDE_MODEL_ALIASES;
 
   // Determine initial mode based on whether the value is in the aliases list
@@ -225,6 +230,20 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                   label: m.id,
                 }))}
               />
+              {effectiveTool === 'copilot' && copilotSource && (
+                <div style={{ marginTop: 6, fontSize: 12, color: 'rgba(255, 255, 255, 0.45)' }}>
+                  {copilotSource === 'dynamic' ? (
+                    <>
+                      Live list from your Copilot account (via SDK <code>listModels()</code>).
+                    </>
+                  ) : (
+                    <>
+                      Showing static fallback. Set <code>COPILOT_GITHUB_TOKEN</code> on the daemon
+                      to see your account's live list (including BYOK models).
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
