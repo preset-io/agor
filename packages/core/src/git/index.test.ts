@@ -1179,4 +1179,57 @@ describe('cloneRepo', () => {
 
     await expect(cloneRepo({ url: remoteDir, branch: 'does-not-exist' })).rejects.toThrow();
   });
+
+  // Existing-repo early-return path: if the repo dir is already present
+  // (re-clone, half-broken first attempt, manual provisioning), the pinned
+  // branch was previously ignored — DB record claimed feat/x while disk
+  // stayed on whatever was checked out. Two regressions follow.
+  it('should switch the working tree when reusing an existing clone with a pinned branch', async () => {
+    const tmpRepoDir = path.join(tempDir, 'tmp-for-push');
+    await createTestRepo(tmpRepoDir);
+    const git = simpleGit(tmpRepoDir);
+    await git.checkoutLocalBranch('feature/x');
+    await fs.writeFile(path.join(tmpRepoDir, 'marker.txt'), 'on-feature', 'utf-8');
+    await git.add('marker.txt');
+    await git.commit('add feature marker');
+    await git.checkout('main');
+    await createBareRepo(remoteDir);
+    await git.addRemote('origin', remoteDir);
+    await git.push('origin', 'main');
+    await git.push('origin', 'feature/x');
+
+    // First clone unpinned — leaves the working tree on `main`.
+    const first = await cloneRepo({ url: remoteDir });
+    expect(first.defaultBranch).toBe('main');
+
+    // Second call to the SAME target with a pin — must check out the pin
+    // before returning.
+    const second = await cloneRepo({ url: remoteDir, branch: 'feature/x' });
+    expect(second.path).toBe(first.path);
+    expect(second.defaultBranch).toBe('feature/x');
+    const cloned = simpleGit(second.path);
+    const branches = await cloned.branch();
+    expect(branches.current).toBe('feature/x');
+    // marker file from feature/x is now in the working tree
+    const markerExists = await fs
+      .access(path.join(second.path, 'marker.txt'))
+      .then(() => true)
+      .catch(() => false);
+    expect(markerExists).toBe(true);
+  });
+
+  it('should reject reuse when the pinned branch cannot be checked out', async () => {
+    // Existing clone, pin a branch that doesn't exist on the remote — must
+    // fail rather than silently returning the wrong defaultBranch.
+    await createBareRepo(remoteDir);
+    const tmpRepoDir = path.join(tempDir, 'tmp-for-push');
+    await createTestRepo(tmpRepoDir);
+    const git = simpleGit(tmpRepoDir);
+    await git.addRemote('origin', remoteDir);
+    await git.push('origin', 'main');
+
+    await cloneRepo({ url: remoteDir });
+
+    await expect(cloneRepo({ url: remoteDir, branch: 'does-not-exist' })).rejects.toThrow();
+  });
 });

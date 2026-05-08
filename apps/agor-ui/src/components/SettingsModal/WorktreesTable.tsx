@@ -126,36 +126,47 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
     setIsFormValid(hasRepo && hasSourceBranch && hasName && hasBranchName);
   }, [form, useSameBranchName]);
 
-  // Set default values when modal opens
+  // Initialize form once per modal-open session. Without the useRef guard
+  // the effect re-fires whenever `repoById` / `boardById` get new Map
+  // references from any `repos.patched` / `boards.patched` WebSocket
+  // event, and `setFieldsValue({ sourceBranch })` silently overwrites
+  // whatever the user typed back to the repo's default branch. Same
+  // anti-pattern as the NewWorktreeModal / WorktreeTab fix in this PR;
+  // missed in the first pass because this surface lives in Settings.
+  const createInitialized = useRef(false);
   useEffect(() => {
-    if (createModalOpen && repos.length > 0) {
-      // Get last used values from localStorage or use first repo/board
-      const lastRepoId = localStorage.getItem('agor:lastUsedRepoId');
-      const lastBoardId = localStorage.getItem('agor:lastUsedBoardId');
-
-      const defaultRepoId =
-        lastRepoId && repos.find((r: Repo) => r.repo_id === lastRepoId)
-          ? lastRepoId
-          : repos[0].repo_id;
-
-      const defaultBoardId =
-        lastBoardId && boards.find((b: Board) => b.board_id === lastBoardId)
-          ? lastBoardId
-          : boards.length > 0
-            ? boards[0].board_id
-            : undefined;
-
-      // Set form initial values
-      form.setFieldsValue({
-        repoId: defaultRepoId,
-        boardId: defaultBoardId,
-        sourceBranch:
-          repos.find((r: Repo) => r.repo_id === defaultRepoId)?.default_branch || 'main',
-      });
-
-      setSelectedRepoId(defaultRepoId);
-      validateForm();
+    if (!createModalOpen) {
+      createInitialized.current = false;
+      return;
     }
+    if (createInitialized.current || repos.length === 0) return;
+    createInitialized.current = true;
+
+    // Get last used values from localStorage or use first repo/board
+    const lastRepoId = localStorage.getItem('agor:lastUsedRepoId');
+    const lastBoardId = localStorage.getItem('agor:lastUsedBoardId');
+
+    const defaultRepoId =
+      lastRepoId && repos.find((r: Repo) => r.repo_id === lastRepoId)
+        ? lastRepoId
+        : repos[0].repo_id;
+
+    const defaultBoardId =
+      lastBoardId && boards.find((b: Board) => b.board_id === lastBoardId)
+        ? lastBoardId
+        : boards.length > 0
+          ? boards[0].board_id
+          : undefined;
+
+    // Set form initial values
+    form.setFieldsValue({
+      repoId: defaultRepoId,
+      boardId: defaultBoardId,
+      sourceBranch: repos.find((r: Repo) => r.repo_id === defaultRepoId)?.default_branch || 'main',
+    });
+
+    setSelectedRepoId(defaultRepoId);
+    validateForm();
   }, [createModalOpen, repos, boards, form, validateForm]);
 
   // Helper to get repo name from repo_id

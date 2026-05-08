@@ -221,10 +221,20 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             const io = (app as unknown as { io?: { emit: (event: string, data: unknown) => void } })
               .io;
             if (io) {
+              // Include the pinned branch in the message so an operator who
+              // typo'd the Default Branch can self-diagnose. `git clone
+              // --branch <X>` failure is one of the most common reasons a
+              // clone exits non-zero, but the executor's stderr is consumed
+              // by spawnExecutorFireAndForget — without this hint the user
+              // sees only "Clone failed (exit code 128)" and has no idea
+              // the branch field is the cause.
+              const branchHint = data.default_branch
+                ? ` Default Branch was set to '${data.default_branch}' — verify it exists on the remote.`
+                : '';
               io.emit('repo:cloneError', {
                 slug,
                 url: data.url,
-                error: `Clone failed (exit code ${code}). Check that the repository URL is correct and accessible.`,
+                error: `Clone failed (exit code ${code}). Check that the repository URL is correct and accessible.${branchHint}`,
               });
             }
           }

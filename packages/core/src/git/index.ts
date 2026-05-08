@@ -443,8 +443,49 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
     const isValid = await isGitRepo(targetPath);
 
     if (isValid) {
-      // Repository already exists and is valid - just use it!
+      // Repository already exists and is valid — reuse it. If the caller
+      // pinned a branch, the working tree has to actually be on that branch
+      // before we return: skipping the checkout silently leaves disk on the
+      // previous branch while the caller writes the pin into the repo DB
+      // record, so `.agor.yml` parsed at the cached `path` would come from
+      // the wrong branch and the UI would log "no environment variants
+      // configured" even though the user picked the right branch.
       console.log(`Repository already exists at ${targetPath}, using existing clone`);
+
+      const existingGit = createGit(targetPath, options.env, parseHostFromGitUrl(cloneUrl)).git;
+
+      if (options.branch) {
+        const branches = await existingGit.branch();
+        if (branches.current !== options.branch) {
+          // Fetch from origin to make sure the pinned branch (and any
+          // updates to it) are visible locally before checkout.
+          try {
+            await existingGit.fetch(['origin', options.branch]);
+          } catch (err) {
+            throw new Error(
+              `Existing clone at ${targetPath} is on branch '${branches.current}'; ` +
+                `failed to fetch '${options.branch}' from origin: ${
+                  err instanceof Error ? err.message : String(err)
+                }`
+            );
+          }
+          try {
+            await existingGit.checkout(options.branch);
+          } catch (err) {
+            throw new Error(
+              `Existing clone at ${targetPath} is on branch '${branches.current}'; ` +
+                `failed to switch to pinned '${options.branch}': ${
+                  err instanceof Error ? err.message : String(err)
+                }`
+            );
+          }
+        }
+        return {
+          path: targetPath,
+          repoName,
+          defaultBranch: options.branch,
+        };
+      }
 
       const defaultBranch = await getDefaultBranch(targetPath);
 
