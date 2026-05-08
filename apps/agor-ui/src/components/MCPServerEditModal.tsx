@@ -108,6 +108,9 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
 
   const handleTestConnection = async () => {
     if (!client || !server) {
+      // Pre-flight failure — no inline result UI yet, so a toast is the
+      // only signal we have. Result-bearing failures below set testResult
+      // and rely on the inline alert (no duplicate toast).
       showError('Client not available');
       return;
     }
@@ -172,7 +175,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       };
 
       if (data.success && data.capabilities) {
-        const result: TestResult = {
+        setTestResult({
           success: true,
           toolCount: data.capabilities.tools,
           resourceCount: data.capabilities.resources,
@@ -180,21 +183,15 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
           tools: data.tools,
           resources: data.resources,
           prompts: data.prompts,
-        };
-        setTestResult(result);
-        showSuccess(
-          `Connection successful: ${result.toolCount} tools, ${result.resourceCount} resources, ${result.promptCount} prompts`
-        );
+        });
       } else {
-        const errorMsg = data.error || 'Connection test failed';
         setTestResult({
           success: false,
           toolCount: 0,
           resourceCount: 0,
           promptCount: 0,
-          error: errorMsg,
+          error: data.error || 'Connection test failed',
         });
-        showError(errorMsg);
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -205,7 +202,6 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
         promptCount: 0,
         error: errorMessage,
       });
-      showError(`Connection test failed: ${errorMessage}`);
     } finally {
       setTesting(false);
     }

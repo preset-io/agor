@@ -45,7 +45,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   onUpdate,
   onDelete,
 }) => {
-  const { showSuccess, showError } = useThemedMessage();
+  const { showError } = useThemedMessage();
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [viewModalOpen, setViewModalOpen] = useState(false);
@@ -221,7 +221,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       };
 
       if (data.success && data.capabilities) {
-        const result: TestResult = {
+        setTestResult({
           success: true,
           toolCount: data.capabilities.tools,
           resourceCount: data.capabilities.resources,
@@ -229,21 +229,15 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           tools: data.tools,
           resources: data.resources,
           prompts: data.prompts,
-        };
-        setTestResult(result);
-        showSuccess(
-          `Connection successful: ${result.toolCount} tools, ${result.resourceCount} resources, ${result.promptCount} prompts`
-        );
+        });
       } else {
-        const errorMsg = data.error || 'Connection test failed';
         setTestResult({
           success: false,
           toolCount: 0,
           resourceCount: 0,
           promptCount: 0,
-          error: errorMsg,
+          error: data.error || 'Connection test failed',
         });
-        showError(errorMsg);
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -254,7 +248,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         promptCount: 0,
         error: errorMessage,
       });
-      showError(`Connection test failed: ${errorMessage}`);
     } finally {
       setTesting(false);
     }
