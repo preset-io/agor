@@ -2296,14 +2296,13 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             panOnDrag={!drawingZone} // Always allow drag to pan (left mouse in select, any in other modes)
             selectionOnDrag={false} // Disable selection box - not useful for worktree cards
             className={`tool-mode-${activeTool}`}
-            // Disable React Flow's default keyboard shortcuts to prevent conflicts
-            // Note: React Flow keyboard shortcuts were causing Spatial Messages to appear
-            // undesirably when clicking/typing. Disabling all keyboard shortcuts for now.
+            // Disable React Flow's keyboard shortcuts that conflict with typing/spatial messages.
+            // Keep modifier-scroll zoom enabled so Command/Control + scroll behaves like Figma.
             deleteKeyCode={null}
             selectionKeyCode={null}
             multiSelectionKeyCode={null}
             panActivationKeyCode={null}
-            zoomActivationKeyCode={null}
+            zoomActivationKeyCode={['Meta', 'Control']}
             disableKeyboardA11y={true}
             style={{ background: 'transparent' }}
           >
