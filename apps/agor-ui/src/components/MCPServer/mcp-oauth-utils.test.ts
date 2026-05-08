@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildAuthFromValues,
   extractOAuthConfig,
   extractOAuthConfigForTesting,
   isTemplateValue,
+  parseEnvJSON,
 } from './mcp-oauth-utils';
 
 describe('isTemplateValue', () => {
@@ -56,13 +58,18 @@ describe('extractOAuthConfig', () => {
     expect(result.oauth_grant_type).toBe('client_credentials');
   });
 
-  it('defaults oauth_mode to shared', () => {
+  it('defaults oauth_mode to per_user', () => {
     const result = extractOAuthConfig({});
-    expect(result.oauth_mode).toBe('shared');
+    expect(result.oauth_mode).toBe('per_user');
   });
 
-  it('defaults oauth_mode to shared for non-per_user values', () => {
+  it('defaults oauth_mode to per_user for non-shared values', () => {
     const result = extractOAuthConfig({ oauth_mode: 'something_else' });
+    expect(result.oauth_mode).toBe('per_user');
+  });
+
+  it('preserves oauth_mode=shared when explicitly set', () => {
+    const result = extractOAuthConfig({ oauth_mode: 'shared' });
     expect(result.oauth_mode).toBe('shared');
   });
 
@@ -136,5 +143,69 @@ describe('extractOAuthConfigForTesting', () => {
 
     expect(result).not.toBeNull();
     expect(result!.token_url).toBe('{{ env.TOKEN_URL }}');
+  });
+});
+
+describe('buildAuthFromValues', () => {
+  it('returns undefined when auth_type is none / missing / unrecognized', () => {
+    expect(buildAuthFromValues({})).toBeUndefined();
+    expect(buildAuthFromValues({ auth_type: 'none' })).toBeUndefined();
+    expect(buildAuthFromValues({ auth_type: 'wat' })).toBeUndefined();
+  });
+
+  it('builds bearer auth from auth_token', () => {
+    const auth = buildAuthFromValues({ auth_type: 'bearer', auth_token: 'tok' });
+    expect(auth).toEqual({ type: 'bearer', token: 'tok' });
+  });
+
+  it('omits bearer token when not a string', () => {
+    const auth = buildAuthFromValues({ auth_type: 'bearer' });
+    expect(auth).toEqual({ type: 'bearer' });
+  });
+
+  it('builds JWT auth from jwt_* fields', () => {
+    const auth = buildAuthFromValues({
+      auth_type: 'jwt',
+      jwt_api_url: 'https://auth.example.com/jwt',
+      jwt_api_token: 'tok',
+      jwt_api_secret: 'sec',
+    });
+    expect(auth).toEqual({
+      type: 'jwt',
+      api_url: 'https://auth.example.com/jwt',
+      api_token: 'tok',
+      api_secret: 'sec',
+    });
+  });
+
+  it('builds OAuth auth via extractOAuthConfig (defaults applied)', () => {
+    const auth = buildAuthFromValues({
+      auth_type: 'oauth',
+      oauth_client_id: 'cid',
+    });
+    expect(auth).toMatchObject({
+      type: 'oauth',
+      oauth_client_id: 'cid',
+      oauth_grant_type: 'client_credentials',
+      oauth_mode: 'per_user',
+    });
+  });
+});
+
+describe('parseEnvJSON', () => {
+  it('returns undefined for non-strings, empty, or whitespace', () => {
+    expect(parseEnvJSON(undefined)).toBeUndefined();
+    expect(parseEnvJSON(123)).toBeUndefined();
+    expect(parseEnvJSON('')).toBeUndefined();
+    expect(parseEnvJSON('   ')).toBeUndefined();
+  });
+
+  it('parses valid JSON', () => {
+    const result = parseEnvJSON('{"GITHUB_TOKEN": "abc"}');
+    expect(result).toEqual({ GITHUB_TOKEN: 'abc' });
+  });
+
+  it('returns undefined for invalid JSON (silently)', () => {
+    expect(parseEnvJSON('{not json')).toBeUndefined();
   });
 });

@@ -11,7 +11,6 @@ import type {
   Session,
   SessionID,
   SpawnConfig,
-  UpdateMCPServerInput,
   UpdateUserInput,
   User,
   UUID,
@@ -1022,18 +1021,6 @@ function AppContent() {
     }
   };
 
-  const handleUpdateMCPServer = async (serverId: string, updates: UpdateMCPServerInput) => {
-    if (!client) return;
-    try {
-      await client.service('mcp-servers').patch(serverId, updates);
-      showSuccess('MCP server updated successfully!');
-    } catch (error) {
-      showError(
-        `Failed to update MCP server: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  };
-
   const handleDeleteMCPServer = async (serverId: string) => {
     if (!client) return;
     try {
@@ -1378,7 +1365,6 @@ function AppContent() {
                   onUpdateUser={handleUpdateUser}
                   onDeleteUser={handleDeleteUser}
                   onCreateMCPServer={handleCreateMCPServer}
-                  onUpdateMCPServer={handleUpdateMCPServer}
                   onDeleteMCPServer={handleDeleteMCPServer}
                   gatewayChannelById={gatewayChannelById}
                   onCreateGatewayChannel={handleCreateGatewayChannel}
@@ -1463,7 +1449,6 @@ function AppContent() {
                   onUpdateUser={handleUpdateUser}
                   onDeleteUser={handleDeleteUser}
                   onCreateMCPServer={handleCreateMCPServer}
-                  onUpdateMCPServer={handleUpdateMCPServer}
                   onDeleteMCPServer={handleDeleteMCPServer}
                   gatewayChannelById={gatewayChannelById}
                   onCreateGatewayChannel={handleCreateGatewayChannel}
@@ -1548,7 +1533,6 @@ function AppContent() {
                   onUpdateUser={handleUpdateUser}
                   onDeleteUser={handleDeleteUser}
                   onCreateMCPServer={handleCreateMCPServer}
-                  onUpdateMCPServer={handleUpdateMCPServer}
                   onDeleteMCPServer={handleDeleteMCPServer}
                   gatewayChannelById={gatewayChannelById}
                   onCreateGatewayChannel={handleCreateGatewayChannel}

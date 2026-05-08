@@ -3,9 +3,9 @@ import { ApiOutlined, EditOutlined, LoginOutlined, ReloadOutlined } from '@ant-d
 import { App, Tooltip } from 'antd';
 import { useState } from 'react';
 import { usePermissions } from '@/hooks/usePermissions';
-import { formatAbsoluteTime } from '../utils/time';
+import { formatAbsoluteTime } from '../../utils/time';
+import { Tag } from '../Tag';
 import { MCPServerEditModal } from './MCPServerEditModal';
-import { Tag } from './Tag';
 
 interface MCPServerPillProps {
   server: MCPServer;
@@ -175,9 +175,12 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
         >
           {server.display_name || server.name}
           {isAdmin && (
+            // Real <button> for keyboard focus + screen-reader semantics.
             // Native `title` (not <Tooltip>) so we don't stack a second
             // AntD tooltip on top of the parent expiry/auth tooltip.
-            <EditOutlined
+            <button
+              type="button"
+              aria-label="Edit MCP server"
               title="Edit MCP server"
               onClick={(e) => {
                 e.stopPropagation();
@@ -185,7 +188,12 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
               }}
               style={{
                 marginLeft: 8,
+                padding: 0,
+                background: 'transparent',
+                border: 'none',
+                color: 'inherit',
                 fontSize: 11,
+                lineHeight: 1,
                 opacity: 0.55,
                 cursor: 'pointer',
               }}
@@ -195,7 +203,15 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
               onMouseLeave={(e) => {
                 (e.currentTarget as HTMLElement).style.opacity = '0.55';
               }}
-            />
+              onFocus={(e) => {
+                (e.currentTarget as HTMLElement).style.opacity = '1';
+              }}
+              onBlur={(e) => {
+                (e.currentTarget as HTMLElement).style.opacity = '0.55';
+              }}
+            >
+              <EditOutlined />
+            </button>
           )}
         </Tag>
       </Tooltip>

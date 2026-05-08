@@ -59,8 +59,11 @@ export function extractOAuthConfig(values: Record<string, unknown>): OAuthConfig
   config.oauth_grant_type =
     typeof values.oauth_grant_type === 'string' ? values.oauth_grant_type : 'client_credentials';
 
-  // OAuth mode defaults to shared
-  config.oauth_mode = values.oauth_mode === 'per_user' ? 'per_user' : 'shared';
+  // OAuth mode defaults to per_user — matches the form's initialValue and
+  // the recommended behavior for multi-user instances. (The Advanced panel
+  // is collapsed by default; combined with forceRender on the panel so the
+  // initialValue actually applies, this default is a defensive fallback.)
+  config.oauth_mode = values.oauth_mode === 'shared' ? 'shared' : 'per_user';
 
   return config;
 }
@@ -120,4 +123,61 @@ export function extractOAuthConfigForTesting(values: Record<string, unknown>): T
   }
 
   return config;
+}
+
+/**
+ * Shape of the auth payload built from form values. A structural superset
+ * that fits CreateMCPServerInput.auth, UpdateMCPServerInput.auth, and the
+ * inline auth field on the `mcp-servers/discover` request.
+ */
+export interface BuiltAuth {
+  type: 'bearer' | 'jwt' | 'oauth';
+  token?: string;
+  api_url?: string;
+  api_token?: string;
+  api_secret?: string;
+  oauth_authorization_url?: string;
+  oauth_token_url?: string;
+  oauth_client_id?: string;
+  oauth_client_secret?: string;
+  oauth_scope?: string;
+  oauth_grant_type?: string;
+  oauth_mode?: 'per_user' | 'shared';
+}
+
+/**
+ * Build the `auth` payload from form values (auth_type + the relevant
+ * per-method fields). Returns `undefined` for "none" or unrecognized types
+ * so callers can do `payload.auth = buildAuthFromValues(values)` without
+ * an outer if/else.
+ */
+export function buildAuthFromValues(values: Record<string, unknown>): BuiltAuth | undefined {
+  const authType = values.auth_type;
+  if (authType !== 'bearer' && authType !== 'jwt' && authType !== 'oauth') return undefined;
+
+  const auth: BuiltAuth = { type: authType };
+  if (authType === 'bearer') {
+    if (typeof values.auth_token === 'string') auth.token = values.auth_token;
+  } else if (authType === 'jwt') {
+    if (typeof values.jwt_api_url === 'string') auth.api_url = values.jwt_api_url;
+    if (typeof values.jwt_api_token === 'string') auth.api_token = values.jwt_api_token;
+    if (typeof values.jwt_api_secret === 'string') auth.api_secret = values.jwt_api_secret;
+  } else {
+    Object.assign(auth, extractOAuthConfig(values));
+  }
+  return auth;
+}
+
+/**
+ * Parse the env-vars JSON textarea value. Returns undefined for empty / invalid
+ * input (matches the legacy "swallow JSON.parse errors" semantics — daemon-side
+ * validation is the source of truth).
+ */
+export function parseEnvJSON(envValue: unknown): Record<string, string> | undefined {
+  if (typeof envValue !== 'string' || !envValue.trim()) return undefined;
+  try {
+    return JSON.parse(envValue) as Record<string, string>;
+  } catch {
+    return undefined;
+  }
 }

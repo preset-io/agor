@@ -14,7 +14,7 @@ import { copyToClipboard } from '../../utils/clipboard';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { ConversationView } from '../ConversationView';
 import { ForkSpawnModal } from '../ForkSpawnModal';
-import { MCPServerPill } from '../MCPServerPill';
+import { MCPServerPill } from '../MCPServer';
 import { IssuePill, PullRequestPill } from '../Pill';
 import { WorktreeHeaderPill } from '../WorktreeHeaderPill';
 

@@ -1,4 +1,4 @@
-import type { CreateMCPServerInput, MCPServer, UpdateMCPServerInput } from '@agor-live/client';
+import type { CreateMCPServerInput, MCPServer } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined } from '@ant-design/icons';
 import {
   Badge,
@@ -15,15 +15,13 @@ import {
 import { useEffect, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
-import { MCPServerEditModal } from '../MCPServerEditModal';
-import { MCPServerFormFields } from './MCPServerFormFields';
-import { extractOAuthConfig } from './mcp-oauth-utils';
+import { MCPServerEditModal, MCPServerFormFields } from '../MCPServer';
+import { buildAuthFromValues, parseEnvJSON } from '../MCPServer/mcp-oauth-utils';
 
 interface MCPServersTableProps {
   mcpServerById: Map<string, MCPServer>;
   client: import('@agor-live/client').AgorClient | null;
   onCreate?: (data: CreateMCPServerInput) => void;
-  onUpdate?: (serverId: string, updates: UpdateMCPServerInput) => void;
   onDelete?: (serverId: string) => void;
 }
 
@@ -42,7 +40,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   mcpServerById,
   client,
   onCreate,
-  onUpdate,
   onDelete,
 }) => {
   const { showError } = useThemedMessage();
@@ -87,26 +84,11 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       data.url = values.url as string;
     }
 
-    if (values.auth_type && values.auth_type !== 'none') {
-      data.auth = { type: values.auth_type as 'bearer' | 'jwt' | 'oauth' };
-      if (values.auth_type === 'bearer') {
-        data.auth.token = values.auth_token as string;
-      } else if (values.auth_type === 'jwt') {
-        data.auth.api_url = values.jwt_api_url as string;
-        data.auth.api_token = values.jwt_api_token as string;
-        data.auth.api_secret = values.jwt_api_secret as string;
-      } else if (values.auth_type === 'oauth') {
-        Object.assign(data.auth, extractOAuthConfig(values));
-      }
-    }
+    const auth = buildAuthFromValues(values);
+    if (auth) data.auth = auth;
 
-    if (values.env) {
-      try {
-        data.env = JSON.parse(values.env as string);
-      } catch {
-        // Invalid JSON, skip
-      }
-    }
+    const env = parseEnvJSON(values.env);
+    if (env) data.env = env;
 
     return data;
   };
@@ -178,39 +160,10 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     setTestResult(null);
 
     try {
-      let auth:
-        | {
-            type: 'none' | 'bearer' | 'jwt' | 'oauth';
-            token?: string;
-            api_url?: string;
-            api_token?: string;
-            api_secret?: string;
-            oauth_token_url?: string;
-            oauth_client_id?: string;
-            oauth_client_secret?: string;
-            oauth_scope?: string;
-            oauth_grant_type?: string;
-            oauth_mode?: 'per_user' | 'shared';
-          }
-        | undefined;
-
-      if (values.auth_type && values.auth_type !== 'none') {
-        auth = { type: values.auth_type };
-        if (values.auth_type === 'bearer') {
-          auth.token = values.auth_token;
-        } else if (values.auth_type === 'jwt') {
-          auth.api_url = values.jwt_api_url;
-          auth.api_token = values.jwt_api_token;
-          auth.api_secret = values.jwt_api_secret;
-        } else if (values.auth_type === 'oauth') {
-          Object.assign(auth, extractOAuthConfig(values));
-        }
-      }
-
       const data = (await client.service('mcp-servers/discover').create({
         url: values.url,
         transport: values.transport || 'http',
-        auth,
+        auth: buildAuthFromValues(values),
       })) as {
         success: boolean;
         error?: string;
@@ -467,7 +420,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         open={editModalOpen}
         client={client}
         onClose={handleEditClose}
-        onUpdate={onUpdate}
       />
 
       {/* View MCP Server Modal */}

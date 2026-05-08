@@ -2,8 +2,8 @@ import type { AgorClient, MCPServer, UpdateMCPServerInput } from '@agor-live/cli
 import { Form, Modal } from 'antd';
 import { useEffect, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
-import { MCPServerFormFields } from './SettingsModal/MCPServerFormFields';
-import { extractOAuthConfig } from './SettingsModal/mcp-oauth-utils';
+import { MCPServerFormFields } from './MCPServerFormFields';
+import { buildAuthFromValues, parseEnvJSON } from './mcp-oauth-utils';
 
 export interface MCPServerEditModalProps {
   /** The server being edited. Modal opens when this is non-null and `open` is true. */
@@ -11,8 +11,6 @@ export interface MCPServerEditModalProps {
   open: boolean;
   client: AgorClient | null;
   onClose: () => void;
-  /** Optional parent state-management callback (mirrors what MCPServersTable used to do). */
-  onUpdate?: (serverId: string, updates: UpdateMCPServerInput) => void;
 }
 
 interface TestResult {
@@ -38,7 +36,6 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   open,
   client,
   onClose,
-  onUpdate,
 }) => {
   const { showSuccess, showError } = useThemedMessage();
   const [form] = Form.useForm();
@@ -75,7 +72,6 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       enabled: server.enabled,
       env: server.env ? JSON.stringify(server.env, null, 2) : undefined,
       auth_type: serverAuthType,
-      tool_permissions: server.tool_permissions || {},
     };
 
     // Only set fields for the active auth type to avoid AntD validating hidden fields.
@@ -130,41 +126,11 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     setTestResult(null);
 
     try {
-      let auth:
-        | {
-            type: 'none' | 'bearer' | 'jwt' | 'oauth';
-            token?: string;
-            api_url?: string;
-            api_token?: string;
-            api_secret?: string;
-            oauth_token_url?: string;
-            oauth_client_id?: string;
-            oauth_client_secret?: string;
-            oauth_scope?: string;
-            oauth_grant_type?: string;
-            oauth_mode?: 'per_user' | 'shared';
-          }
-        | undefined;
-
-      if (values.auth_type && values.auth_type !== 'none') {
-        auth = { type: values.auth_type };
-        if (values.auth_type === 'bearer') {
-          auth.token = values.auth_token;
-        } else if (values.auth_type === 'jwt') {
-          auth.api_url = values.jwt_api_url;
-          auth.api_token = values.jwt_api_token;
-          auth.api_secret = values.jwt_api_secret;
-        } else if (values.auth_type === 'oauth') {
-          const oauthConfig = extractOAuthConfig(values);
-          Object.assign(auth, oauthConfig);
-        }
-      }
-
       const data = (await client.service('mcp-servers/discover').create({
         mcp_server_id: server.mcp_server_id,
         url: values.url,
         transport: values.transport || 'http',
-        auth,
+        auth: buildAuthFromValues(values),
       })) as {
         success: boolean;
         error?: string;
@@ -229,32 +195,12 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
         updates.url = values.url;
       }
 
-      if (values.env) {
-        try {
-          updates.env = JSON.parse(values.env);
-        } catch {
-          // Invalid JSON, skip
-        }
-      }
+      const env = parseEnvJSON(values.env);
+      if (env) updates.env = env;
 
-      if (values.auth_type && values.auth_type !== 'none') {
-        updates.auth = { type: values.auth_type };
-        if (values.auth_type === 'bearer') {
-          updates.auth.token = values.auth_token;
-        } else if (values.auth_type === 'jwt') {
-          updates.auth.api_url = values.jwt_api_url;
-          updates.auth.api_token = values.jwt_api_token;
-          updates.auth.api_secret = values.jwt_api_secret;
-        } else if (values.auth_type === 'oauth') {
-          const oauthConfig = extractOAuthConfig(values);
-          Object.assign(updates.auth, oauthConfig);
-        }
-      } else {
-        updates.auth = undefined;
-      }
+      updates.auth = buildAuthFromValues(values);
 
       await client.service('mcp-servers').patch(server.mcp_server_id, updates);
-      onUpdate?.(server.mcp_server_id, updates);
 
       showSuccess('MCP server updated successfully');
       closeAndReset();

@@ -13,7 +13,6 @@ import type {
   MCPServer,
   Repo,
   Session,
-  UpdateMCPServerInput,
   UpdateUserInput,
   User,
   Worktree,
@@ -106,7 +105,6 @@ export interface SettingsModalProps {
   onUpdateUser?: (userId: string, updates: UpdateUserInput) => void;
   onDeleteUser?: (userId: string) => void;
   onCreateMCPServer?: (data: CreateMCPServerInput) => void;
-  onUpdateMCPServer?: (serverId: string, updates: UpdateMCPServerInput) => void;
   onDeleteMCPServer?: (serverId: string) => void;
   gatewayChannelById?: Map<string, GatewayChannel>;
   onCreateGatewayChannel?: (data: Partial<GatewayChannel>) => void;
@@ -152,7 +150,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onUpdateUser,
   onDeleteUser,
   onCreateMCPServer,
-  onUpdateMCPServer,
   onDeleteMCPServer,
   gatewayChannelById = new Map(),
   onCreateGatewayChannel,
@@ -420,7 +417,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             mcpServerById={mcpServerById}
             client={client}
             onCreate={onCreateMCPServer}
-            onUpdate={onUpdateMCPServer}
             onDelete={onDeleteMCPServer}
           />
         );

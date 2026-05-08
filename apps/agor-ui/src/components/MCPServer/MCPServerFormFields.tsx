@@ -684,6 +684,10 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           items={[
             {
               key: 'advanced-oauth',
+              // Force-render the panel so Form.Items inside (e.g. oauth_mode
+              // with initialValue="per_user") register and apply their
+              // defaults even when the user never expands the section.
+              forceRender: true,
               label: (
                 <Space size={8}>
                   <Typography.Text strong>Advanced — OAuth settings</Typography.Text>

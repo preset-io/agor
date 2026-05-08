@@ -138,7 +138,6 @@ export interface AppProps {
   onUpdateUser?: (userId: string, updates: UpdateUserInput) => void;
   onDeleteUser?: (userId: string) => void;
   onCreateMCPServer?: (data: CreateMCPServerInput) => void;
-  onUpdateMCPServer?: (mcpServerId: string, updates: Partial<MCPServer>) => void;
   onDeleteMCPServer?: (mcpServerId: string) => void;
   gatewayChannelById: Map<string, GatewayChannel>;
   onCreateGatewayChannel?: (data: Partial<GatewayChannel>) => void;
@@ -223,7 +222,6 @@ export const App: React.FC<AppProps> = ({
   onUpdateUser,
   onDeleteUser,
   onCreateMCPServer,
-  onUpdateMCPServer,
   onDeleteMCPServer,
   gatewayChannelById,
   onCreateGatewayChannel,
@@ -1085,7 +1083,6 @@ export const App: React.FC<AppProps> = ({
               onUpdateUser={onUpdateUser}
               onDeleteUser={onDeleteUser}
               onCreateMCPServer={onCreateMCPServer}
-              onUpdateMCPServer={onUpdateMCPServer}
               onDeleteMCPServer={onDeleteMCPServer}
               gatewayChannelById={gatewayChannelById}
               onCreateGatewayChannel={onCreateGatewayChannel}

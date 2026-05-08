@@ -41,7 +41,7 @@ import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessi
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { EffortSelector } from '../EffortSelector';
 import { FileUpload, FileUploadButton } from '../FileUpload';
-import { MCPServerPill } from '../MCPServerPill';
+import { MCPServerPill } from '../MCPServer';
 import { CreatedByTag } from '../metadata';
 import { PermissionModeSelector } from '../PermissionModeSelector';
 import { ContextWindowPill, ModelPill, SessionIdPill, TimerPill, TokenCountPill } from '../Pill';
