@@ -175,26 +175,27 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
         >
           {server.display_name || server.name}
           {isAdmin && (
-            <Tooltip title="Edit MCP server">
-              <EditOutlined
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setEditModalOpen(true);
-                }}
-                style={{
-                  marginLeft: 8,
-                  fontSize: 11,
-                  opacity: 0.55,
-                  cursor: 'pointer',
-                }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLElement).style.opacity = '1';
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLElement).style.opacity = '0.55';
-                }}
-              />
-            </Tooltip>
+            // Native `title` (not <Tooltip>) so we don't stack a second
+            // AntD tooltip on top of the parent expiry/auth tooltip.
+            <EditOutlined
+              title="Edit MCP server"
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditModalOpen(true);
+              }}
+              style={{
+                marginLeft: 8,
+                fontSize: 11,
+                opacity: 0.55,
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.opacity = '1';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.opacity = '0.55';
+              }}
+            />
           )}
         </Tag>
       </Tooltip>
