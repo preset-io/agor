@@ -95,13 +95,22 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   }, [serverId]);
 
   // Watch advanced OAuth field values so we can show a "customized" dot on
-  // the Advanced collapse header when any of them has a user-set value.
+  // the Advanced collapse header when any of them has a non-default value.
   const watchedAuthorizationUrl = Form.useWatch('oauth_authorization_url', form);
   const watchedTokenUrl = Form.useWatch('oauth_token_url', form);
   const watchedScope = Form.useWatch('oauth_scope', form);
-  const hasCustomizedAdvanced = [watchedAuthorizationUrl, watchedTokenUrl, watchedScope].some(
-    (v) => typeof v === 'string' && v.trim().length > 0
-  );
+  const watchedClientId = Form.useWatch('oauth_client_id', form);
+  const watchedClientSecret = Form.useWatch('oauth_client_secret', form);
+  const watchedOauthMode = Form.useWatch('oauth_mode', form);
+  const hasCustomizedAdvanced =
+    [
+      watchedAuthorizationUrl,
+      watchedTokenUrl,
+      watchedScope,
+      watchedClientId,
+      watchedClientSecret,
+    ].some((v) => typeof v === 'string' && v.trim().length > 0) ||
+    (typeof watchedOauthMode === 'string' && watchedOauthMode !== 'per_user');
 
   const handleStartOAuthFlow = async () => {
     if (!client) {
@@ -518,41 +527,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
               </Form.Item>
             </>
           )}
-
-          {authType === 'oauth' && (
-            <>
-              <Form.Item
-                label="Client ID"
-                name="oauth_client_id"
-                tooltip="Required for servers that don't support Dynamic Client Registration (e.g. Figma, GitHub). Register an OAuth app with the provider and paste the client ID here."
-              >
-                <Input placeholder="Enter client ID or {{ user.env.OAUTH_CLIENT_ID }}" allowClear />
-              </Form.Item>
-              <Form.Item
-                label="Client Secret"
-                name="oauth_client_secret"
-                tooltip="Required for servers that use confidential clients (e.g. Figma). The secret is sent via HTTP Basic Auth during token exchange."
-              >
-                <Input.Password
-                  placeholder="Enter client secret or {{ user.env.OAUTH_CLIENT_SECRET }}"
-                  allowClear
-                />
-              </Form.Item>
-              <Form.Item
-                label="OAuth Mode"
-                name="oauth_mode"
-                initialValue="per_user"
-                tooltip="Per User: Each user authenticates separately (recommended). Shared: One token for all users."
-              >
-                <Select>
-                  <Select.Option value="per_user">
-                    Per User (each user authenticates) - Recommended
-                  </Select.Option>
-                  <Select.Option value="shared">Shared (single token for all users)</Select.Option>
-                </Select>
-              </Form.Item>
-            </>
-          )}
         </>
       )}
 
@@ -717,12 +691,12 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
               key: 'advanced-oauth',
               label: (
                 <Space size={8}>
-                  <Typography.Text strong>Advanced — OAuth endpoints</Typography.Text>
+                  <Typography.Text strong>Advanced — OAuth settings</Typography.Text>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     (auto-discovered when blank)
                   </Typography.Text>
                   {hasCustomizedAdvanced && (
-                    <Tooltip title="Customized — one or more endpoints overridden">
+                    <Tooltip title="Customized — one or more values overridden">
                       <Badge color="orange" />
                     </Tooltip>
                   )}
@@ -730,6 +704,41 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
               ),
               children: (
                 <>
+                  <Form.Item
+                    label="Client ID"
+                    name="oauth_client_id"
+                    tooltip="Required for servers that don't support Dynamic Client Registration (e.g. Figma, GitHub). Register an OAuth app with the provider and paste the client ID here. Leave blank to use DCR."
+                  >
+                    <Input
+                      placeholder="Enter client ID or {{ user.env.OAUTH_CLIENT_ID }}"
+                      allowClear
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label="Client Secret"
+                    name="oauth_client_secret"
+                    tooltip="Required for servers that use confidential clients (e.g. Figma). The secret is sent via HTTP Basic Auth during token exchange."
+                  >
+                    <Input.Password
+                      placeholder="Enter client secret or {{ user.env.OAUTH_CLIENT_SECRET }}"
+                      allowClear
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label="OAuth Mode"
+                    name="oauth_mode"
+                    initialValue="per_user"
+                    tooltip="Per User: Each user authenticates separately (recommended). Shared: One token for all users."
+                  >
+                    <Select>
+                      <Select.Option value="per_user">
+                        Per User (each user authenticates) - Recommended
+                      </Select.Option>
+                      <Select.Option value="shared">
+                        Shared (single token for all users)
+                      </Select.Option>
+                    </Select>
+                  </Form.Item>
                   <Form.Item
                     label="Authorization URL"
                     name="oauth_authorization_url"
@@ -762,16 +771,20 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     </Select>
                   </Form.Item>
                   <Alert
-                    title="OAuth endpoints"
+                    title="OAuth defaults are usually fine"
                     description={
                       <ul style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
                         <li>
-                          OAuth 2.1 servers advertise endpoints automatically — leave fields blank
-                          to use discovery (RFC 8414 / RFC 9728).
+                          Modern OAuth 2.1 servers support discovery (RFC 8414 / RFC 9728) and
+                          Dynamic Client Registration — leave everything here blank.
                         </li>
                         <li>
-                          Override only if the server doesn't expose a discovery document or you
-                          need a non-default endpoint.
+                          Set Client ID / Client Secret only for servers that require a
+                          pre-registered OAuth app (e.g. Figma, GitHub).
+                        </li>
+                        <li>
+                          Override the URLs only if the server doesn't expose a discovery document
+                          or you need a non-default endpoint.
                         </li>
                       </ul>
                     }
