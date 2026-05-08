@@ -1,6 +1,6 @@
 import type { Repo } from '@agor-live/client';
 import { Form } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { WorktreeFormFields } from '../../WorktreeFormFields';
 
@@ -46,12 +46,19 @@ export const WorktreeTab: React.FC<WorktreeTabProps> = ({
     }, 0);
   }, [form, onValidityChange]);
 
-  // Remember last used repo
+  // Initialize form once per mount. Without this guard the effect re-fires
+  // on every `repos.patched` WebSocket event (which gives `repoById` a new
+  // Map reference), and `setFieldsValue({ sourceBranch })` silently
+  // overwrites whatever the user typed back to the repo's default branch.
+  // The user notices only after submitting that the worktree got created
+  // off `main` instead of their chosen branch.
+  const initialized = useRef(false);
   useEffect(() => {
-    if (repoById.size === 0) return;
+    if (initialized.current || repoById.size === 0) return;
 
     const lastRepoId = localStorage.getItem('agor-last-repo-id');
     if (lastRepoId && repoById.has(lastRepoId)) {
+      initialized.current = true;
       form.setFieldsValue({
         repoId: lastRepoId,
         sourceBranch: repoById.get(lastRepoId)?.default_branch,
@@ -59,6 +66,7 @@ export const WorktreeTab: React.FC<WorktreeTabProps> = ({
       setSelectedRepoId(lastRepoId);
       handleValuesChange();
     } else if (repoById.size > 0) {
+      initialized.current = true;
       const firstRepo = mapToArray(repoById)[0];
       form.setFieldsValue({
         repoId: firstRepo.repo_id,

@@ -1,6 +1,6 @@
 import type { Repo } from '@agor-live/client';
 import { Button, Form, Modal } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import type { WorktreeTabConfig } from '../CreateDialog/tabs/WorktreeTab';
 import { WorktreeFormFields } from '../WorktreeFormFields';
@@ -43,14 +43,25 @@ export const NewWorktreeModal: React.FC<NewWorktreeModalProps> = ({
     }, 0);
   }, [form]);
 
-  // Remember last used repo from localStorage
+  // Initialize form once per modal-open session. Without this guard the
+  // effect re-fires on every `repos.patched` WebSocket event (which gives
+  // `repoById` a new Map reference), and `setFieldsValue({ sourceBranch })`
+  // silently overwrites whatever the user typed back to the repo's default
+  // branch. The user notices only after submitting that the worktree got
+  // created off `main` instead of their chosen branch.
+  const initialized = useRef(false);
   useEffect(() => {
-    if (!open || repoById.size === 0) return;
+    if (!open) {
+      initialized.current = false;
+      return;
+    }
+    if (initialized.current || repoById.size === 0) return;
 
     const lastRepoId = localStorage.getItem('agor-last-repo-id');
 
     // If we have a last used repo and it still exists, use it
     if (lastRepoId && repoById.has(lastRepoId)) {
+      initialized.current = true;
       form.setFieldsValue({
         repoId: lastRepoId,
         sourceBranch: repoById.get(lastRepoId)?.default_branch,
@@ -60,6 +71,7 @@ export const NewWorktreeModal: React.FC<NewWorktreeModalProps> = ({
       handleValuesChange();
     } else if (repoById.size > 0) {
       // No last-repo-id or it doesn't exist anymore - auto-select first repo
+      initialized.current = true;
       const firstRepo = mapToArray(repoById)[0];
       form.setFieldsValue({
         repoId: firstRepo.repo_id,
