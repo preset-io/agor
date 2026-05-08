@@ -684,6 +684,8 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       {showAdvancedSection && (
         <Collapse
           ghost
+          // Keep panel children mounted when collapsed so Form.Items inside
+          // don't lose their values (and Form.useWatch keeps reporting them).
           destroyOnHidden={false}
           expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
           items={[
@@ -817,6 +819,8 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     <>
       <Collapse
         ghost
+        // Keep panel children mounted when collapsed so Form.Items inside
+        // don't lose their values (and Form.useWatch keeps reporting them).
         destroyOnHidden={false}
         defaultActiveKey={['basic', 'connection']}
         expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
