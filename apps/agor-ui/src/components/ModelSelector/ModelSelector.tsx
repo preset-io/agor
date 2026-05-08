@@ -1,7 +1,9 @@
 import {
   AVAILABLE_CLAUDE_MODEL_ALIASES,
   CODEX_MODEL_METADATA,
+  COPILOT_MODEL_METADATA,
   DEFAULT_CODEX_MODEL,
+  DEFAULT_COPILOT_MODEL,
   GEMINI_MODELS,
   type GeminiModel,
 } from '@agor-live/client';
@@ -38,6 +40,17 @@ const GEMINI_MODEL_OPTIONS = Object.entries(GEMINI_MODELS).map(([modelId, meta])
   description: meta.description,
 }));
 
+// Copilot model options (static fallback). The dynamic list from the SDK's
+// listModels() is fetched server-side and may include BYOK-configured models
+// not represented here.
+const COPILOT_STATIC_MODEL_OPTIONS = Object.entries(COPILOT_MODEL_METADATA).map(
+  ([modelId, meta]) => ({
+    id: modelId,
+    label: meta.name,
+    description: meta.description,
+  })
+);
+
 /**
  * Model Selector Component
  *
@@ -56,12 +69,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   // Determine which model list to use based on agentic_tool (with backwards compat for agent prop)
   const effectiveTool = agentic_tool || agent || 'claude-code';
 
-  // Calculate model list (needed for initial mode calculation)
-  // Copilot models are discovered dynamically via listModels() — use a placeholder
-  const COPILOT_MODEL_OPTIONS = [
-    { id: 'default', label: 'Default', description: 'Use Copilot default model' },
-  ];
-
   const modelList =
     effectiveTool === 'codex'
       ? CODEX_MODEL_OPTIONS
@@ -70,7 +77,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         : effectiveTool === 'opencode'
           ? [] // OpenCode doesn't use this list
           : effectiveTool === 'copilot'
-            ? COPILOT_MODEL_OPTIONS
+            ? COPILOT_STATIC_MODEL_OPTIONS
             : AVAILABLE_CLAUDE_MODEL_ALIASES;
 
   // Determine initial mode based on whether the value is in the aliases list
@@ -118,7 +125,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       } else if (effectiveTool === 'gemini') {
         defaultModel = 'gemini-2.5-flash';
       } else if (effectiveTool === 'copilot') {
-        defaultModel = 'default';
+        defaultModel = DEFAULT_COPILOT_MODEL;
       } else {
         // claude-code (opencode is handled earlier in the component)
         defaultModel = 'claude-sonnet-4-6';

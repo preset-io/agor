@@ -2,8 +2,10 @@ import { WorktreeRepository, type WorktreeWithZoneAndSessions } from '@agor/core
 import {
   AVAILABLE_CLAUDE_MODEL_ALIASES,
   CODEX_MODEL_METADATA,
+  COPILOT_MODEL_METADATA,
   DEFAULT_CLAUDE_MODEL,
   DEFAULT_CODEX_MODEL,
+  DEFAULT_COPILOT_MODEL,
   DEFAULT_GEMINI_MODEL,
   GEMINI_MODELS,
 } from '@agor/core/models';
@@ -1291,10 +1293,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   // ships and the registry is updated, this tool returns it on the very next
   // call — no MCP-tool-description redeploy needed.
   //
-  // Gemini and OpenCode aren't included here yet:
+  // Caveats:
   //   - Gemini's authoritative list is fetched live from the Google API per
-  //     user (fetchGeminiModels), so a static list would lie. The hardcoded
-  //     fallback IS exposed here as a best-effort starter list.
+  //     user (fetchGeminiModels). The hardcoded fallback IS exposed here as a
+  //     best-effort starter list.
+  //   - Copilot has dynamic discovery via `client.listModels()` exposed at
+  //     /copilot-models in the daemon. The static fallback is exposed here.
   //   - OpenCode is a provider+model matrix and doesn't have a single static
   //     list — it's exposed via the worktree config UI today.
   server.registerTool(
@@ -1305,7 +1309,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         agenticTool: z
-          .enum(['claude-code', 'codex', 'gemini'])
+          .enum(['claude-code', 'codex', 'copilot', 'gemini'])
           .optional()
           .describe('Filter to a single agentic tool. Omit to return all tools.'),
       }),
@@ -1322,6 +1326,13 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         id,
         displayName: meta.name,
         description: meta.description,
+      }));
+
+      const copilotModels = Object.entries(COPILOT_MODEL_METADATA).map(([id, meta]) => ({
+        id,
+        displayName: meta.name,
+        description: meta.description,
+        provider: meta.provider,
       }));
 
       // Note: Gemini's live list comes from the Google API (per-user API key).
@@ -1342,6 +1353,11 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         codex: {
           default: DEFAULT_CODEX_MODEL,
           models: codexModels,
+        },
+        copilot: {
+          default: DEFAULT_COPILOT_MODEL,
+          models: copilotModels,
+          note: "Copilot models are also fetched live via /copilot-models (uses the SDK's listModels()). This is the static fallback — BYOK-configured models may not appear here.",
         },
         gemini: {
           default: DEFAULT_GEMINI_MODEL,

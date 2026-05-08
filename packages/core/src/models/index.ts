@@ -11,6 +11,9 @@ export * from './claude.js';
 // Codex models
 export * from './codex.js';
 
+// Copilot models
+export * from './copilot.js';
+
 // Gemini models
 export * from './gemini.js';
 
