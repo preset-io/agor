@@ -108,7 +108,7 @@ A `<Popover>` (consistent with the existing `instanceDescription` popover at `Ap
 
 - **Sort:** strict `created_at DESC`. No grouping by type, no priority lanes — that's a category-error path that adds modes without adding clarity.
 - **Read state on open:** opening the panel does **not** auto-mark-read. Hovering an item for 1.5s, *or* clicking it, marks it read. (Pattern stolen from Linear.) This avoids the "blink and you lose your place" problem where opening to peek wipes the badge.
-- **Dismiss:** the `[×]` is explicit. Dismissed notifs disappear immediately.
+- **Dismiss:** the `[×]` is explicit and **hard-deletes the row**. There is no soft-delete state — dismissed = gone. Rationale in §5.3.
 - **Mark all read:** affordance in the header (resolves Max's open question — yes, ship it).
 - **Limit:** show the most recent 20 in the popover. "View all" link goes to `/notifications` if we want a full inbox view later (out of v1).
 
@@ -149,7 +149,7 @@ Some admin messages should be more in-your-face than a panel item. For those, re
 Rules:
 
 - Only **one** banner shown at a time. If two are active, the most recent wins; older ones live in the panel only.
-- Banner is dismissible (per-user `dismissed_at` on the notification row). Dismissing kills the banner *and* the corresponding panel item.
+- Banner is dismissible per-user — hard-deletes that user's row, killing both the banner and the panel item in one go.
 - Banner respects an optional `expires_at` on the notification — auto-removed when expired.
 - **Cap on length:** ~80 chars in the navbar. Longer content lives in the panel.
 
@@ -250,9 +250,10 @@ export const notifications = sqliteTable(
     preview: text('preview'),                      // ~160 chars, optional
     link_url: text('link_url'),                    // optional override; otherwise computed from source_*
 
-    // Source pointers — all optional, depend on type. set null on cascade so
-    // a deleted session/worktree leaves the notif row visible (with a "this
-    // session was deleted" fallback in the UI) rather than yanking history.
+    // Source pointers — all optional, depend on type. SET NULL on cascade so
+    // a deleted session/worktree leaves the notif row with a "this session
+    // was deleted" fallback in the UI rather than yanking history mid-render.
+    // (Archive is a separate sweep — see §6.2.)
     source_session_id: text('source_session_id', { length: 36 })
       .references(() => sessions.session_id, { onDelete: 'set null' }),
     source_worktree_id: text('source_worktree_id', { length: 36 })
@@ -265,9 +266,9 @@ export const notifications = sqliteTable(
     source_user_id: text('source_user_id', { length: 36 })  // who triggered (e.g. who tagged me)
       .references(() => users.user_id, { onDelete: 'set null' }),
 
-    // State
+    // State — only two: unread (read_at IS NULL) or read (read_at IS NOT NULL).
+    // Dismiss = hard-delete the row, no soft-delete column. See §5.3.
     read_at: t.timestamp('read_at'),               // null = unread
-    dismissed_at: t.timestamp('dismissed_at'),     // null = not dismissed
     expires_at: t.timestamp('expires_at'),         // optional auto-expiry (admin banners)
 
     // Scope — 'user' = recipient-only, 'global' = part of an admin broadcast
@@ -275,18 +276,20 @@ export const notifications = sqliteTable(
     scope: text('scope', { enum: ['user', 'global'] }).notNull().default('user'),
 
     // Type-specific extras: { banner?: bool, agentic_tool?: string,
-    //   message_count?: number, mention_excerpt?: string, ... }
+    //   message_count?: number, mention_excerpt?: string,
+    //   broadcast_group_id?: string, ... }
     data: t.json<NotificationData>('data').notNull().default(sql`'{}'`),
   },
   (table) => ({
-    // Primary read pattern: "give me this user's unread notifs, newest first"
-    recipientUnreadIdx: index('notifications_recipient_unread_idx')
-      .on(table.recipient_user_id, table.dismissed_at, table.created_at),
-    // For collapse-by-source (see §5.2)
+    // Panel-list query: "give me this user's notifs, newest first"
+    recipientCreatedIdx: index('notifications_recipient_created_idx')
+      .on(table.recipient_user_id, table.created_at),
+    // Unread count + mark-all-read sweep
+    recipientReadIdx: index('notifications_recipient_read_idx')
+      .on(table.recipient_user_id, table.read_at),
+    // Collapse upsert lookup (see §5.2)
     recipientSourceIdx: index('notifications_recipient_source_idx')
       .on(table.recipient_user_id, table.source_session_id, table.type),
-    // For mark-all-read sweeps
-    readIdx: index('notifications_read_idx').on(table.recipient_user_id, table.read_at),
   })
 );
 ```
@@ -295,29 +298,31 @@ export const notifications = sqliteTable(
 
 Open question Max raised: "if a session has 5 events in a row, do we get 5 notifs or 1?" **Position: 1, collapsed.**
 
-- For `type = session_returned`, the producer (the tasks patch hook) does a **conditional upsert** keyed on `(recipient_user_id, source_session_id, type) WHERE dismissed_at IS NULL`:
-  - If a non-dismissed row exists, **bump** `created_at` to now, refresh `title`/`preview`/`source_task_id`, set `read_at = NULL`. The existing row floats to the top, badge re-increments.
+- For `type = session_returned`, the producer (the tasks patch hook) does a **conditional upsert** keyed on `(recipient_user_id, source_session_id, type)`:
+  - If a row exists, **bump** `created_at` to now, refresh `title`/`preview`/`source_task_id`, set `read_at = NULL`. The existing row floats to the top, badge re-increments.
   - Otherwise, INSERT.
 - For `type = mention`, **don't collapse**. Each mention is a distinct fact; a teammate tagging you twice in the same comment thread is two separate things you want to see.
 - For `type = global_admin`, no collapse — distinct broadcasts are distinct.
 
-### 5.3 Read vs dismissed
+Note: there's no "non-dismissed" filter on the upsert because dismissed rows don't exist (§5.3). Once a user dismisses, the row is gone — and the next collapsed event will INSERT a fresh row.
 
-Max's guess in the brief: read = seen in panel, dismissed = explicitly cleared. **Confirmed.** They're separate columns:
+**Latest-task-only semantics.** A consequence of the collapse: if a session emits 5 task completions while you're away, you see *one* notification reflecting only the *latest* state. The previous 4 completions are not surfaced individually. This is intentional — the notification is an *invitation back to the session*, not a log of what happened. The session detail panel is the log. (Same constraint and same justification as `parent-session-callbacks.md`.)
 
-| State | `read_at` | `dismissed_at` | Counter? | Visible in panel? |
-|---|---|---|---|---|
-| New | NULL | NULL | yes (counted) | yes |
-| Read | set | NULL | no | yes |
-| Dismissed | (any) | set | no | no |
+### 5.3 Read vs dismissed — two states + delete
 
-Counter = `COUNT(*) WHERE recipient = me AND read_at IS NULL AND dismissed_at IS NULL`.
+Earlier draft had `read_at` and `dismissed_at` as separate columns. Simplified after Max's pushback: **dismiss is a hard-delete**. There's no use case for keeping dismissed rows (no "undo," no "show dismissed" affordance), and a soft-delete column adds queries-with-filters everywhere for no payoff.
 
-Dismissing is implicitly "I'm done with this" — we don't need a `read_at` for dismissed rows.
+| State | `read_at` | Counter? | Visible in panel? |
+|---|---|---|---|
+| New | NULL | yes (counted) | yes |
+| Read | set | no | yes |
+| Dismissed | (row deleted) | no | no |
+
+Counter = `COUNT(*) WHERE recipient = me AND read_at IS NULL`.
 
 ### 5.4 Indexes
 
-Three indexes cover all v1 access patterns (panel list, unread count, collapse upsert, mark-all-read). All are recipient-leading because every read scopes by user. Index sizes are bounded by *active* notifications per user — if growth is a concern long-term, add a retention sweep (see §10).
+Three indexes cover all v1 access patterns (panel list, unread count, collapse upsert, mark-all-read). All are recipient-leading because every read scopes by user. Index sizes are bounded by *active* notifications per user — and dismiss-as-hard-delete keeps the tail short. Retention sweep for aged read rows in v1.5 (§10 Q-D).
 
 ---
 
@@ -368,7 +373,21 @@ Notifications follow the user, not the browser tab. Two open tabs = same panel s
 
 - `worktree.archived = true` → no future `session_returned` notifs for any session in that worktree.
 - `session.archived = true` → no future `session_returned` notifs for that session.
-- **Pre-existing notifs** for the now-archived session: leave them. The user might still want to dismiss/click them. They just won't get new ones.
+- **Pre-existing notifs and mutes are swept on archive.** Two `DELETE` statements run inside the existing archive hook:
+  - `DELETE FROM notifications WHERE source_session_id = $sid` (or `source_worktree_id = $wid`). They're stale invitations — clicking one goes to a session the user has explicitly retired. Better to clear them than leave dead links.
+  - `DELETE FROM session_notification_mutes WHERE session_id = $sid` (v1.5). Mute is moot once archived; avoids zombie-mute rows hanging around if a session is later un-archived.
+
+### 6.3 Three layers of subscription — and which ones we ship
+
+Subscription has three plausible shapes; v1 ships layer 1 only, v1.5 adds layer 2, layer 3 is deferred indefinitely.
+
+| Layer | What it is | New schema? | When to ship |
+|---|---|---|---|
+| **1. Implicit** | Derived from `sessions.created_by` ∪ `tasks.created_by` (+ optionally mention recipients). Zero new state. Archive = unsub. | None | **v1** |
+| **2. Explicit mute** | A tiny *opt-out* table — `session_notification_mutes(recipient_user_id, session_id, muted_at)`. Producer becomes `(creators ∪ prompters) − mutes`. Lets users say "stop pinging me about this session" without archiving. | `session_notification_mutes` (composite PK, both FKs `ON DELETE CASCADE`) | **v1.5** |
+| **3. Full subscription primitive** | First-class entity: every (user, session) pair has an explicit `subscribed`/`muted` row, populated on first interaction. Lets you positively subscribe to sessions you never touched ("watch a teammate's run"). | `session_subscribers` table; producer hooks on every `tasks.create` | **v2 or never** — only worth building if "watch-without-interacting" becomes a real ask |
+
+The layer-2 shape is **negative-only state** — only people who *bother* to mute show up in the table — which keeps it small and avoids the layer-3 fanout cost. Most of the value of "real subscriptions" without paying schema-fanout for everyone.
 
 ---
 
@@ -535,11 +554,11 @@ Numbered to match the brief's open questions where applicable.
 | 1 | Notification entity schema | §5 — schema sketched, recipient-leading indexes |
 | 2 | Persistent table vs in-memory | **Persistent.** Durability across reload + cross-device sync requires it |
 | 3 | Delivery channel | **Socket primary, fetch on bell-open, refetch-on-reconnect fallback.** No polling steady-state |
-| 4 | Read vs dismissed | **Different states.** §5.3. Counter = unread-and-not-dismissed |
+| 4 | Read vs dismissed | **Two states, no soft-delete.** §5.3. `read_at` is the only state column; dismiss hard-deletes the row |
 | 5 | Click-through dismiss | **Don't auto-dismiss on click.** Click marks read, dismiss is explicit. Matches Max's lean |
 | 6 | Session vs task linking | **`source_session_id` is the link target. `source_task_id` is metadata.** Tasks are the unit of work; sessions are the place you go back to |
 | 7 | De-dup / collapse | **Collapse `session_returned` per `(user, session, type)`. Don't collapse `mention` or `global_admin`.** §5.2 |
-| 8 | Mute / snooze per session | **v1.5.** Add a `data.muted_at` flag at the session level, exclude muted sessions from producer logic |
+| 8 | Mute / snooze per session | **v1.5.** New `session_notification_mutes(recipient_user_id, session_id, muted_at)` table — tiny opt-out, see §6.3 |
 | 9 | Cross-device sync | **Free** — same backing table, same socket room, two tabs see the same state |
 | 10 | Permissions on global messages | **Admin role.** Authored from a new `SettingsModal` tab. §7 |
 | 11 | Ticker / streamer rules | **Cut from v1.** §3.5 |
@@ -550,7 +569,7 @@ Numbered to match the brief's open questions where applicable.
 - **Q-A:** Is the *interaction-based* subscription model (§6) acceptable, or does Max want literal "every session you can see, until archived"? My read: literal-everyone is too noisy in multi-user instances. But this is a product call.
 - **Q-B:** Mention detection today is **substring matching** in `App.tsx:678-689` — `@username` or `@email` in raw content. Phase 4 of board-comments adds an explicit `data.mentions: string[]`. Should the notification producer use the explicit field (more precise, requires the comment editor to populate it correctly) or fall back to substring (matches current detection, ships sooner)? **My recommendation: explicit field, populated by the comment editor at write time, which is a small additional task on the comments side.** But if we want notifications to ship before that lands, substring detection is fine as a stop-gap.
 - **Q-C:** "Assistant session" vs "worktree session" visual differentiation requires an `is_assistant` marker we don't have. v1 ships with one variant ("worktree session"); the assistant variant ships when persistent assistants get a schema marker. Confirm this is OK as a follow-up rather than a v1 prereq.
-- **Q-D:** Retention. Should old dismissed notifs be hard-deleted (e.g., `dismissed_at < now() - 30d`)? **Recommendation: yes, retention sweep at 30 days for dismissed, 90 days for read-not-dismissed.** Cheap cron job. Defer to v1.5 unless table size becomes a concern.
+- **Q-D:** Retention. With dismiss now hard-deleting (§5.3), the only growth tail is *aged read rows* — notifs the user saw but never explicitly dismissed. **Recommendation: nightly sweep, delete read rows older than 90 days.** Cheap cron. Could promote to v1 (~30 lines of code) if Max wants table size to be a non-thought from day one.
 - **Q-E:** Should `session_returned` fire on `FAILED` as well as `COMPLETED`? **Yes** — failures are exactly the kind of "you should look at this" event a notification system exists for. Mirrors the parent-callback design (`parent-session-callbacks.md` §1.2).
 
 ---
@@ -562,8 +581,9 @@ Numbered to match the brief's open questions where applicable.
 - Schema migration (`notifications` table, indexes).
 - `NotificationsService` (Feathers, `find`/`get`/`patch`/`remove` + custom `broadcast`).
 - Producers in `tasks.ts` (session_returned) and `board-comments.ts` (mention).
+- **Archive-time cleanup hook** — on `session.archived = true` or `worktree.archived = true`, run `DELETE FROM notifications WHERE source_session_id = …` (and worktree variant).
 - Bell + counter on `AppHeader` right side.
-- Panel with the three card variants, mark-read-on-click/hover, explicit dismiss, mark-all-read.
+- Panel with the three card variants, mark-read-on-click/hover, **dismiss = hard-delete**, mark-all-read.
 - Sticky admin banner in navbar center.
 - Settings → Announcements admin tab (compose, list, expire).
 - Socket push wired through existing `user/{user_id}` rooms.
@@ -571,9 +591,9 @@ Numbered to match the brief's open questions where applicable.
 
 ### v1.5 — quality of life
 
-- **Mute per session** — surface in the session settings panel.
+- **Mute per session** — new `session_notification_mutes` table (§6.3), surfaced from the session footer and from a "mute this session" action on `session_returned` notification cards. Archive-time hook also deletes mute rows for the archived session.
 - **Snooze for N hours** — per-notification action.
-- **Retention sweep** — delete dismissed notifs older than 30d.
+- **Retention sweep** — nightly delete of read notifs older than 90 days.
 - **Full inbox view** at `/notifications` — uses the same backing query, paginated, no popover.
 - **Assistant-session variant** — once persistent assistants land with a flag.
 
@@ -653,6 +673,7 @@ For the implementer:
 | Producer (session_returned) | `apps/agor-daemon/src/services/tasks.ts` patch hook (alongside existing `ready_for_prompt = true`) |
 | Producer (mention) | `apps/agor-daemon/src/services/board-comments.ts` create/patch hook |
 | Producer (admin broadcast) | `apps/agor-daemon/src/services/notifications.ts` `broadcast()` method |
+| Archive cleanup hook | `apps/agor-daemon/src/services/sessions.ts` and `worktrees.ts` archive paths — `DELETE` notifications (and v1.5 mutes) for the archived entity |
 | UI store / hook | `apps/agor-ui/src/hooks/useNotifications.ts` (new) |
 | Bell + Panel component | `apps/agor-ui/src/components/NotificationBell/` (new) |
 | Banner component | `apps/agor-ui/src/components/AppHeader/AnnouncementBanner.tsx` (new) |
