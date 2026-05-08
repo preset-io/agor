@@ -29,6 +29,8 @@ import * as path from 'node:path';
 import type { Thread, ThreadItem } from '@agor/core/sdk';
 import { Codex } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
+import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
+import type { EffortLevel } from '@agor/core/types';
 import { getDaemonUrl } from '../../config.js';
 import type {
   MCPServerRepository,
@@ -40,10 +42,25 @@ import type {
   WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { TokenUsage } from '../../types/token-usage.js';
-import type { PermissionMode, SessionID, TaskID } from '../../types.js';
+import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { DEFAULT_CODEX_MODEL } from './models.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
+
+/**
+ * Map Agor's effort level (`low`/`medium`/`high`/`max`) to Codex SDK's
+ * `ModelReasoningEffort` (`minimal`/`low`/`medium`/`high`/`xhigh`).
+ *
+ * Agor has no equivalent for `minimal`, and Codex has no equivalent for `max`
+ * — `max` is the user's "go as deep as possible" intent, which on Codex maps
+ * to `xhigh`.
+ */
+function toCodexReasoningEffort(
+  effort: EffortLevel | undefined
+): 'low' | 'medium' | 'high' | 'xhigh' | undefined {
+  if (!effort) return undefined;
+  return effort === 'max' ? 'xhigh' : effort;
+}
 
 /**
  * Mirrors the (unexported) `CodexConfigObject` shape from `@openai/codex-sdk`.
@@ -208,6 +225,49 @@ export class CodexPromptService {
     // MCP servers).
     this.codex = new Codex.Codex(this.buildCodexOptions(this.apiKey, baseUrl, undefined));
     this.lastClientFingerprint = null;
+
+    // Best-effort sweep of orphaned per-session instructions files in
+    // tmpdir. `closeSession()` removes a session's file when called, but
+    // the daemon currently has no terminal-state hook that invokes it
+    // (also true for Gemini/Copilot — broader gap). This sweep self-heals
+    // long-running daemons that accumulate stale `agor-codex-instructions-*`
+    // across crashes / unclean shutdowns / never-fired close hooks.
+    void this.sweepStaleInstructionsFiles().catch((err) => {
+      console.warn('⚠️  [Codex] Stale-instructions-file sweep failed:', err);
+    });
+  }
+
+  /**
+   * Delete `agor-codex-instructions-*.md` files in `os.tmpdir()` (and the
+   * `~/.agor/tmp` fallback dir) older than 24h. Bounds the disk leak from
+   * the missing close hook described in the constructor.
+   */
+  private async sweepStaleInstructionsFiles(): Promise<void> {
+    const cutoffMs = Date.now() - 24 * 60 * 60 * 1000;
+    const candidateDirs = [os.tmpdir(), path.join(os.homedir(), '.agor', 'tmp')];
+
+    for (const dir of candidateDirs) {
+      let entries: string[];
+      try {
+        entries = await fs.readdir(dir);
+      } catch {
+        continue;
+      }
+      for (const name of entries) {
+        if (!name.startsWith('agor-codex-instructions-') || !name.endsWith('.md')) continue;
+        const full = path.join(dir, name);
+        try {
+          const stat = await fs.stat(full);
+          if (stat.mtimeMs < cutoffMs) {
+            await fs.unlink(full);
+          }
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+            console.warn(`⚠️  [Codex] Failed to sweep ${full}:`, err);
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -276,9 +336,35 @@ export class CodexPromptService {
   }
 
   /**
+   * Snapshot the values of every `AGOR_MCP_*` env var (set by
+   * `buildMcpServersConfig` for built-in + per-server bearer tokens). Folded
+   * into the client fingerprint so a token rotation invalidates the cached
+   * Codex instance even when the config object's shape (server names,
+   * `bearer_token_env_var` keys) is unchanged.
+   *
+   * Without this, both subscription mode (where we pass `env` snapshot to
+   * `CodexOptions.env`) and API-key mode (where the SDK snapshots
+   * `process.env` at construction time) would keep spawning the cached Codex
+   * with a stale token after rotation.
+   */
+  private snapshotMcpEnvValues(): Record<string, string> {
+    const snapshot: Record<string, string> = {};
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith('AGOR_MCP_')) {
+        snapshot[key] = process.env[key] ?? '';
+      }
+    }
+    return snapshot;
+  }
+
+  /**
    * Recreate `this.codex` with the per-session `config` payload (instructions
    * file + MCP servers) only when the fingerprint changed. Prevents per-turn
    * SDK churn (issue #133) while still reflecting fresh per-session config.
+   *
+   * The fingerprint includes a snapshot of `AGOR_MCP_*` env values so that
+   * rotated MCP bearer tokens invalidate the cache even when the config
+   * shape stays the same — see `snapshotMcpEnvValues()`.
    */
   private ensureCodexClient(config: CodexConfigObject): void {
     const baseUrl = this.resolveBaseUrl();
@@ -287,6 +373,7 @@ export class CodexPromptService {
       baseUrl: baseUrl ?? '',
       useNativeAuth: this.useNativeAuth,
       config,
+      mcpEnv: this.snapshotMcpEnvValues(),
     });
 
     if (this.lastClientFingerprint === fingerprint) {
@@ -344,6 +431,41 @@ export class CodexPromptService {
   }
 
   /**
+   * Claim a unique sanitized server name within this session's mcp_servers
+   * map. Sanitization collapses non-`[a-z0-9_-]` chars to `_`, so distinct
+   * input names can collide (`Foo Bar` and `foo_bar` both become `foo_bar`)
+   * — without de-collision the second would silently overwrite the first.
+   *
+   * On collision we suffix `_2`, `_3`, ... and warn so operators can spot
+   * the underlying naming clash.
+   */
+  private claimMcpServerName(
+    rawName: string,
+    claimed: Set<string>,
+    reservedReason?: string
+  ): string {
+    let base = rawName.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+    if (reservedReason) {
+      base = `user_${base}`;
+      console.warn(
+        `   ⚠️  [Codex MCP] "${rawName}" ${reservedReason}, renamed to "${base}" to disambiguate`
+      );
+    }
+    if (!claimed.has(base)) {
+      claimed.add(base);
+      return base;
+    }
+    let suffix = 2;
+    while (claimed.has(`${base}_${suffix}`)) suffix++;
+    const final = `${base}_${suffix}`;
+    console.warn(
+      `   ⚠️  [Codex MCP] sanitized name "${base}" already claimed (raw="${rawName}"), using "${final}"`
+    );
+    claimed.add(final);
+    return final;
+  }
+
+  /**
    * Build the `mcp_servers` nested config object for `CodexOptions.config`.
    *
    * Includes the built-in Agor MCP server (when `mcpToken` is provided) plus
@@ -351,18 +473,26 @@ export class CodexPromptService {
    * SDK's `flattenConfigOverrides` turns this object into repeated
    * `--config mcp_servers.<name>.<field>=<value>` flags for the Codex CLI.
    *
-   * Bearer tokens are injected via env vars referenced by
-   * `bearer_token_env_var` (never inlined in the URL).
+   * Bearer tokens (whether plain bearer, JWT, or OAuth) are resolved via the
+   * shared `resolveMCPAuthHeaders` (matching Claude) and injected via env
+   * vars referenced by `bearer_token_env_var` (never inlined in the URL).
+   *
+   * `forUserId` is required for per-user OAuth token injection at the
+   * scoping layer — without it, OAuth-protected MCP servers won't pick up
+   * the requesting user's stored OAuth tokens.
    */
   private async buildMcpServersConfig(
     sessionId: SessionID,
-    mcpToken?: string
+    mcpToken: string | undefined,
+    forUserId: UserID | undefined
   ): Promise<{ servers: CodexConfigObject; total: number }> {
     console.log(`🔍 [Codex MCP] Fetching MCP servers for session ${sessionId.substring(0, 8)}...`);
+    console.log(`   [Codex MCP] forUserId: ${forUserId || 'NOT SET'}`);
 
     const serversWithSource = await getMcpServersForSession(sessionId, {
       sessionMCPRepo: this.sessionMCPServerRepo,
       mcpServerRepo: this.mcpServerRepo,
+      forUserId,
     });
 
     const mcpServers = serversWithSource.map((s) => s.server);
@@ -380,7 +510,7 @@ export class CodexPromptService {
     );
 
     const result: CodexConfigObject = {};
-    const managedNames = new Set<string>();
+    const claimedNames = new Set<string>();
 
     // Built-in Agor MCP server (streamable HTTP). Token travels via
     // bearer_token_env_var — never in the URL.
@@ -389,7 +519,7 @@ export class CodexPromptService {
       const agorBearerEnvVar = `AGOR_MCP_${sessionId.substring(0, 8)}_AGOR`;
       process.env[agorBearerEnvVar] = mcpToken;
 
-      managedNames.add('agor');
+      claimedNames.add('agor');
       result.agor = {
         url: `${daemonUrl}/mcp`,
         bearer_token_env_var: agorBearerEnvVar,
@@ -401,14 +531,11 @@ export class CodexPromptService {
     }
 
     for (const server of stdioServers) {
-      let serverName = server.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
-      if (serverName === 'agor') {
-        serverName = 'user_agor';
-        console.warn(
-          `   ⚠️  [Codex MCP] Server "${server.name}" conflicts with built-in Agor MCP server, renamed to "${serverName}"`
-        );
-      }
-      managedNames.add(serverName);
+      const serverName = this.claimMcpServerName(
+        server.name,
+        claimedNames,
+        server.name.toLowerCase() === 'agor' ? 'conflicts with built-in Agor MCP server' : undefined
+      );
 
       const serverConfig: CodexConfigObject = {};
       console.log(`   📝 [Codex MCP] Configuring STDIO server: ${server.name} -> ${serverName}`);
@@ -429,14 +556,11 @@ export class CodexPromptService {
     }
 
     for (const server of httpServers) {
-      let serverName = server.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
-      if (serverName === 'agor') {
-        serverName = 'user_agor';
-        console.warn(
-          `   ⚠️  [Codex MCP] Server "${server.name}" conflicts with built-in Agor MCP server, renamed to "${serverName}"`
-        );
-      }
-      managedNames.add(serverName);
+      const serverName = this.claimMcpServerName(
+        server.name,
+        claimedNames,
+        server.name.toLowerCase() === 'agor' ? 'conflicts with built-in Agor MCP server' : undefined
+      );
 
       const serverConfig: CodexConfigObject = {};
       console.log(`   📝 [Codex MCP] Configuring HTTP server: ${server.name} -> ${serverName}`);
@@ -445,11 +569,40 @@ export class CodexPromptService {
         console.log(`      url: ${server.url}`);
       }
 
-      if (server.auth?.type === 'bearer' && server.auth.token) {
-        const envVarName = `AGOR_MCP_${sessionId.substring(0, 8)}_${serverName.toUpperCase()}`;
-        process.env[envVarName] = server.auth.token;
-        serverConfig.bearer_token_env_var = envVarName;
-        console.log(`      auth: bearer token via ${envVarName}`);
+      // Resolve the Authorization header via the shared MCP auth helper —
+      // covers bearer / JWT (with token-mint) / OAuth (with cached & DB
+      // tokens). Codex passes the bearer through `bearer_token_env_var`,
+      // not a header map, so we extract the bearer token and route it via
+      // an env var. Non-bearer schemes log a warning since Codex's CLI
+      // only supports bearer auth.
+      try {
+        const headers = await resolveMCPAuthHeaders(server.auth, server.url);
+        const authHeader = headers?.Authorization;
+        if (authHeader) {
+          const bearerToken = /^Bearer\s+(.+)$/i.exec(authHeader)?.[1];
+          if (bearerToken) {
+            const envVarName = `AGOR_MCP_${sessionId.substring(0, 8)}_${serverName.toUpperCase()}`;
+            process.env[envVarName] = bearerToken;
+            serverConfig.bearer_token_env_var = envVarName;
+            console.log(`      auth: ${server.auth?.type ?? 'bearer'} token via ${envVarName}`);
+          } else {
+            console.warn(
+              `      ⚠️  auth: resolved Authorization header for "${server.name}" is not a Bearer scheme (Codex CLI only supports bearer); skipping injection`
+            );
+          }
+        } else if (server.auth?.type === 'oauth') {
+          console.warn(
+            `   ⚠️  [Codex MCP] Server "${server.name}" requires OAuth but no valid token found.`
+          );
+          console.warn(
+            `      💡 Go to Settings → MCP Servers → ${server.name} → Start OAuth Flow to authenticate.`
+          );
+        }
+      } catch (error) {
+        console.warn(
+          `   ⚠️  [Codex MCP] Failed to resolve auth headers for "${server.name}":`,
+          error instanceof Error ? error.message : String(error)
+        );
       }
 
       result[serverName] = serverConfig;
@@ -658,9 +811,14 @@ export class CodexPromptService {
       );
     }
 
+    // forUserId enables per-user OAuth token injection at the MCP scoping
+    // layer — mirrors Claude's contextUserId pattern so personal OAuth-
+    // protected MCP servers work for Codex too.
+    const forUserId = (session.created_by ?? undefined) as UserID | undefined;
     const { servers: mcpServersConfig, total: mcpServerCount } = await this.buildMcpServersConfig(
       sessionId,
-      mcpToken
+      mcpToken,
+      forUserId
     );
 
     const codexConfigPayload: CodexConfigObject = {
@@ -688,12 +846,18 @@ export class CodexPromptService {
 
     // Build thread options. approvalPolicy + networkAccessEnabled flow through
     // here (not config.toml); ThreadOptions override matching `--config` keys.
+    // model + modelReasoningEffort are passed through from session.model_config
+    // so the UI's per-session model picker actually controls what Codex runs.
+    const sessionModel = session.model_config?.model;
+    const sessionEffort = toCodexReasoningEffort(session.model_config?.effort);
     const threadOptions = {
       workingDirectory: worktree.path,
       skipGitRepoCheck: false,
       sandboxMode,
       approvalPolicy,
       networkAccessEnabled: networkAccess,
+      ...(sessionModel ? { model: sessionModel } : {}),
+      ...(sessionEffort ? { modelReasoningEffort: sessionEffort } : {}),
     };
 
     // Check if MCP servers were added after session creation
@@ -1166,6 +1330,13 @@ export class CodexPromptService {
    * Best-effort removal of the per-session instructions file. Both possible
    * paths (os.tmpdir + ~/.agor/tmp fallback) are attempted in case the
    * tmpdir base differs from the one we wrote to.
+   *
+   * NOTE: as of writing, no daemon code path actually invokes
+   * `closeSession()` for any tool (Codex/Gemini/Copilot all expose it; none
+   * are wired to a terminal-state hook). The constructor's
+   * `sweepStaleInstructionsFiles()` self-heals leaked files so this isn't
+   * load-bearing today — but the method stays in place so the fix becomes
+   * a one-line wire-up the day a real lifecycle hook lands.
    */
   async closeSession(sessionId: SessionID): Promise<void> {
     const fileName = `agor-codex-instructions-${sessionId}.md`;

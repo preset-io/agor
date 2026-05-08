@@ -2,6 +2,17 @@
  * CodexPromptService Tests
  *
  * Focused test: Verify SDK instance caching to prevent memory leak (issue #133)
+ *
+ * KNOWN GAP: the `MockCodexClient` below only captures `apiKey` + `baseUrl`,
+ * not `config` (model_instructions_file, mcp_servers) or `env` (subscription-
+ * mode scrubbing). The streaming tests stub out `ensureCodexInstructionsFile`,
+ * `buildMcpServersConfig`, and `ensureCodexClient` outright. So the
+ * load-bearing behaviors of the per-session-CODEX_HOME removal —
+ * `model_instructions_file` injection, MCP server flattening, subscription-
+ * mode env scrubbing, fingerprint-based cache invalidation on token rotation
+ * — are NOT exercised here. End-to-end coverage for those lives in the
+ * manual test matrix in PR #1136. A proper SDK-call-shape assertion suite
+ * is queued as a follow-up.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
