@@ -1,7 +1,7 @@
 import type { WorktreeID } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { WorktreesServiceImpl } from '../../declarations.js';
+import type { ReposServiceImpl, WorktreesServiceImpl } from '../../declarations.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
@@ -35,6 +35,21 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
             worktreeId as WorktreeID,
             ctx.baseServiceParams
           );
+
+          const reposService = ctx.app.service('repos') as unknown as ReposServiceImpl;
+          const repo = await reposService.get(worktree.repo_id);
+          const repoEnv = repo.environment;
+          if (!repoEnv?.variants || !repoEnv.variants[variant]) {
+            const available = repoEnv?.variants ? Object.keys(repoEnv.variants) : [];
+            return textResult({
+              success: false,
+              error:
+                `Invalid variant "${variant}". ` +
+                (available.length > 0
+                  ? `Available variants: ${available.join(', ')}`
+                  : 'This repo has no environment variants configured.'),
+            });
+          }
 
           if (variant !== worktree.environment_variant) {
             const envStatus = worktree.environment_instance?.status;

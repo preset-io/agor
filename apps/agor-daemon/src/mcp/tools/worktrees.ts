@@ -2,6 +2,7 @@ import { isWorktreeRbacEnabled } from '@agor/core/config';
 import { WorktreeRepository } from '@agor/core/db';
 import type {
   BoardID,
+  Repo,
   UUID,
   Worktree,
   WorktreeID,
@@ -219,7 +220,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       }
 
       const reposService = ctx.app.service('repos') as unknown as ReposServiceImpl;
-      let repo: unknown;
+      let repo: Repo;
       try {
         repo = await reposService.get(repoId);
       } catch {
@@ -228,8 +229,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
 
       const variant = coerceString(args.variant);
       if (variant) {
-        const repoEnv = (repo as { environment?: { variants?: Record<string, unknown> } })
-          .environment;
+        const repoEnv = repo.environment;
         if (!repoEnv?.variants || !repoEnv.variants[variant]) {
           const available = repoEnv?.variants ? Object.keys(repoEnv.variants) : [];
           throw new Error(
@@ -257,8 +257,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         }
       }
 
-      const defaultBranch =
-        coerceString((repo as { default_branch?: unknown }).default_branch) ?? 'main';
+      const defaultBranch = repo.default_branch ?? 'main';
       const refType = (coerceString(args.refType) as 'branch' | 'tag') || 'branch';
       let createBranch = typeof args.createBranch === 'boolean' ? args.createBranch : true;
       let ref = coerceString(args.ref);
