@@ -32,9 +32,10 @@ export async function executeClaudeCodeTask(params: {
   // Import base executor helper
   const { executeToolTask } = await import('./base-executor.js');
 
-  // Load config for permission timeout setting
+  // Load config for permission + input-request timeouts
   const config = await loadConfig();
   const permissionTimeoutMs = config.execution?.permission_timeout_ms ?? 600_000; // default: 10 minutes
+  const inputRequestTimeoutMs = config.execution?.input_request_timeout_ms ?? 1_800_000; // default: 30 minutes
 
   // Create PermissionService that emits via Feathers WebSocket
   const permissionService = new PermissionService(async (event, data) => {
@@ -42,10 +43,10 @@ export async function executeClaudeCodeTask(params: {
     client.service('sessions').emit(event, data);
   }, permissionTimeoutMs);
 
-  // Create InputRequestService that emits via Feathers WebSocket (5 min timeout)
+  // Create InputRequestService that emits via Feathers WebSocket
   const inputRequestService = new InputRequestService(async (event, data) => {
     client.service('sessions').emit(event, data);
-  }, 300_000);
+  }, inputRequestTimeoutMs);
 
   // Register with global managers
   globalPermissionManager.register(sessionId, permissionService);

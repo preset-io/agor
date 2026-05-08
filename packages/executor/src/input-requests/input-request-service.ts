@@ -39,8 +39,8 @@ export interface InputResponse {
   timedOut?: boolean;
 }
 
-/** Default input request timeout: 5 minutes */
-const DEFAULT_INPUT_TIMEOUT_MS = 300_000;
+/** Default input request timeout: 30 minutes. Override via `execution.input_request_timeout_ms`. */
+const DEFAULT_INPUT_TIMEOUT_MS = 1_800_000;
 
 /**
  * Executor version of InputRequestService
@@ -58,7 +58,7 @@ export class InputRequestService {
 
   /**
    * @param emitEvent - Function to emit events via IPC to daemon
-   * @param timeoutMs - Input request timeout in ms (default: 5 minutes)
+   * @param timeoutMs - Input request timeout in ms (default: 30 minutes)
    */
   constructor(
     private emitEvent: (event: string, data: unknown) => Promise<void>,
@@ -104,7 +104,7 @@ export class InputRequestService {
         });
       });
 
-      // Timeout (default 5 minutes)
+      // Timeout (default 30 minutes; configurable via execution.input_request_timeout_ms)
       const timeout = setTimeout(async () => {
         this.pendingRequests.delete(requestId);
         console.warn(`⏰ [executor] Input request timed out: ${requestId}`);
