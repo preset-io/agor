@@ -5,10 +5,12 @@ import {
   Alert,
   Badge,
   Button,
+  Col,
   Collapse,
   Form,
   Input,
   Modal,
+  Row,
   Select,
   Space,
   Switch,
@@ -326,80 +328,72 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   const showAdvancedSection = isRemoteTransport && authType === 'oauth';
 
   // ── Basic Information section ──────────────────────────────────────
-  const basicChildren =
-    mode === 'create' ? (
-      <>
-        <Form.Item
-          label="Name (Internal ID)"
-          name="name"
-          rules={[
-            { required: true, message: 'Please enter a server name' },
-            {
-              pattern: /^[a-z][a-z0-9_-]*$/,
-              message: 'Lowercase letters, digits, _ or - only; must start with a letter',
-            },
-            { max: 64, message: 'Maximum 64 characters' },
-          ]}
-          tooltip="Internal identifier - lowercase, no spaces (e.g., filesystem, sentry, context7)"
-        >
-          <Input placeholder="context7" />
-        </Form.Item>
-        <Form.Item
-          label="Scope"
-          name="scope"
-          initialValue="session"
-          tooltip="Where this server is available"
-        >
-          <Select>
-            <Select.Option value="global">Global (all sessions)</Select.Option>
-            <Select.Option value="session">Session</Select.Option>
-          </Select>
-        </Form.Item>
-        <Form.Item
-          label="Display Name (Optional)"
-          name="display_name"
-          tooltip="User-friendly name shown in UI (e.g., Context7 MCP)"
-        >
-          <Input placeholder="Context7 MCP" />
-        </Form.Item>
-        <Form.Item label="Enabled" name="enabled" valuePropName="checked" initialValue={true}>
-          <Switch />
-        </Form.Item>
-        <Form.Item label="Description" name="description">
-          <TextArea placeholder="Optional description..." rows={2} />
-        </Form.Item>
-      </>
-    ) : (
-      <>
-        <Form.Item
-          label="Name (Internal ID)"
-          name="name"
-          tooltip="Internal identifier - cannot be changed after creation"
-        >
-          <Input disabled />
-        </Form.Item>
-        <Form.Item
-          label="Scope"
-          name="scope"
-          initialValue="global"
-          tooltip="Where this server is available"
-        >
-          <Select>
-            <Select.Option value="global">Global (all sessions)</Select.Option>
-            <Select.Option value="session">Session</Select.Option>
-          </Select>
-        </Form.Item>
-        <Form.Item label="Display Name" name="display_name">
-          <Input placeholder="Filesystem Access" />
-        </Form.Item>
-        <Form.Item label="Enabled" name="enabled" valuePropName="checked" initialValue={true}>
-          <Switch />
-        </Form.Item>
-        <Form.Item label="Description" name="description">
-          <TextArea placeholder="Optional description..." rows={2} />
-        </Form.Item>
-      </>
-    );
+  const isCreate = mode === 'create';
+  const basicChildren = (
+    <>
+      <Row gutter={16}>
+        <Col span={12}>
+          {isCreate ? (
+            <Form.Item
+              label="Name (Internal ID)"
+              name="name"
+              rules={[
+                { required: true, message: 'Please enter a server name' },
+                {
+                  pattern: /^[a-z][a-z0-9_-]*$/,
+                  message: 'Lowercase letters, digits, _ or - only; must start with a letter',
+                },
+                { max: 64, message: 'Maximum 64 characters' },
+              ]}
+              tooltip="Internal identifier - lowercase, no spaces (e.g., filesystem, sentry, context7)"
+            >
+              <Input placeholder="context7" />
+            </Form.Item>
+          ) : (
+            <Form.Item
+              label="Name (Internal ID)"
+              name="name"
+              tooltip="Internal identifier - cannot be changed after creation"
+            >
+              <Input disabled />
+            </Form.Item>
+          )}
+        </Col>
+        <Col span={12}>
+          <Form.Item
+            label={isCreate ? 'Display Name (Optional)' : 'Display Name'}
+            name="display_name"
+            tooltip="User-friendly name shown in UI (e.g., Context7 MCP)"
+          >
+            <Input placeholder={isCreate ? 'Context7 MCP' : 'Filesystem Access'} />
+          </Form.Item>
+        </Col>
+      </Row>
+      <Row gutter={16}>
+        <Col span={12}>
+          <Form.Item
+            label="Scope"
+            name="scope"
+            initialValue={isCreate ? 'session' : 'global'}
+            tooltip="Where this server is available"
+          >
+            <Select>
+              <Select.Option value="global">Global (all sessions)</Select.Option>
+              <Select.Option value="session">Session</Select.Option>
+            </Select>
+          </Form.Item>
+        </Col>
+        <Col span={12}>
+          <Form.Item label="Enabled" name="enabled" valuePropName="checked" initialValue={true}>
+            <Switch />
+          </Form.Item>
+        </Col>
+      </Row>
+      <Form.Item label="Description" name="description">
+        <TextArea placeholder="Optional description..." rows={2} />
+      </Form.Item>
+    </>
+  );
 
   // ── Connection section ─────────────────────────────────────────────
   const connectionChildren = (
