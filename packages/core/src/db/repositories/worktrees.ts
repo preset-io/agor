@@ -7,7 +7,7 @@
 import type { AgenticToolName, SessionStatus, UUID, Worktree, WorktreeID } from '@agor/core/types';
 import { WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
 import { and, desc, eq, getTableColumns, inArray, isNotNull, like, or, sql } from 'drizzle-orm';
-import { formatShortId, generateId } from '../../lib/ids';
+import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
 import { type WorktreeInsert, type WorktreeRow, worktreeOwners, worktrees } from '../schema';
@@ -208,7 +208,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       throw new AmbiguousIdError(
         'Worktree',
         prefix,
-        matches.map((m: { worktree_id: string }) => formatShortId(m.worktree_id as UUID))
+        matches.map((m: { worktree_id: string }) => m.worktree_id)
       );
     }
 

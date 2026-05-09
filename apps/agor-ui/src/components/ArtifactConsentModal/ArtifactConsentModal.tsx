@@ -26,6 +26,7 @@ import { Alert, Button, Card, Modal, message, Radio, Space, Tag, Typography } fr
 import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 import { getDaemonUrl } from '@/config/daemon';
+import { useAuthConfig } from '@/hooks/useAuthConfig';
 import { FileCollection, type FileItem } from '../FileCollection/FileCollection';
 
 interface ArtifactConsentModalProps {
@@ -35,7 +36,11 @@ interface ArtifactConsentModalProps {
   files: Record<string, string>;
   requiredEnvVars: string[];
   grants: AgorGrants;
-  /** Hide the "instance-wide" scope option (default: hidden in multi-user mode). */
+  /**
+   * Force-hide the "instance-wide" scope option. Defaults to undefined; when
+   * left unset, the modal hides instance scope automatically on multi-user
+   * Unix isolation modes (read from `/health` features.multiUser).
+   */
   hideInstanceScope?: boolean;
   onClose: () => void;
   onGranted: () => void;
@@ -62,10 +67,14 @@ export function ArtifactConsentModal({
   onClose,
   onGranted,
 }: ArtifactConsentModalProps) {
+  const { featuresConfig } = useAuthConfig();
   const [scope, setScope] = useState<Exclude<ArtifactTrustScopeType, 'self'>>('artifact');
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const requestsAgorToken = !!grants.agor_token;
+  // Auto-hide the instance scope when the daemon is in multi-user Unix
+  // isolation mode, unless the caller explicitly forces a value via prop.
+  const effectivelyHideInstanceScope = hideInstanceScope ?? featuresConfig?.multiUser === true;
 
   const fileItems: FileItem[] = useMemo(
     () =>
@@ -87,11 +96,9 @@ export function ArtifactConsentModal({
       const res = await fetch(`${getDaemonUrl()}/artifacts/${artifactId}/trust`, {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({
-          scopeType: scope,
-          envVars: requiredEnvVars,
-          grants,
-        }),
+        // The server derives the consent surface (env vars + grants) from
+        // the artifact itself; the client only nominates the scope.
+        body: JSON.stringify({ scopeType: scope }),
       });
       if (!res.ok) {
         const detail = await res.text().catch(() => '');
@@ -208,7 +215,7 @@ export function ArtifactConsentModal({
               Anything published by this author
               {requestsAgorToken ? ' (disabled — agor_token requires artifact scope)' : ''}
             </Radio>
-            {!hideInstanceScope && (
+            {!effectivelyHideInstanceScope && (
               <Radio value="instance" disabled={requestsAgorToken}>
                 Anything on this Agor instance
                 {requestsAgorToken ? ' (disabled — agor_token requires artifact scope)' : ''}

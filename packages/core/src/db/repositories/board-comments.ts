@@ -7,7 +7,7 @@
 
 import type { BoardComment, CommentID, UUID } from '@agor/core/types';
 import { and, eq, isNull, like } from 'drizzle-orm';
-import { formatShortId, generateId } from '../../lib/ids';
+import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type BoardCommentInsert, type BoardCommentRow, boardComments } from '../schema';
@@ -130,7 +130,7 @@ export class BoardCommentsRepository
       throw new AmbiguousIdError(
         'BoardComment',
         id,
-        results.map((r: { comment_id: string }) => formatShortId(r.comment_id as UUID))
+        results.map((r: { comment_id: string }) => r.comment_id)
       );
     }
 

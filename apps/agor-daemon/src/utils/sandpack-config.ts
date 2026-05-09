@@ -169,32 +169,18 @@ function sanitizeStringMap(input: unknown): Record<string, string> {
   return out;
 }
 
-/**
- * Merge defaults underneath the author's config. Used at render time so the
- * artifact gets sensible Sandpack defaults without forcing every author to
- * spell them out.
- */
-export function mergeWithDefaults(config: SandpackConfig | undefined): SandpackConfig {
-  const merged: SandpackConfig = {
-    ...DEFAULT_SANDPACK_CONFIG,
-    ...(config ?? {}),
-  };
-  merged.options = { ...DEFAULT_SANDPACK_CONFIG.options, ...(config?.options ?? {}) };
-  if (config?.customSetup || DEFAULT_SANDPACK_CONFIG.customSetup) {
-    merged.customSetup = {
-      ...(DEFAULT_SANDPACK_CONFIG.customSetup ?? {}),
-      ...(config?.customSetup ?? {}),
-    };
-  }
-  return merged;
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Legacy format detection
 // ─────────────────────────────────────────────────────────────────────────────
 
 const HANDLEBARS_TOKEN_RE = /\{\{\s*agor\.(token|apiUrl|proxies\.([\w-]+)|user\w*)/g;
 const HANDLEBARS_USER_ENV_RE = /\{\{\s*user\.env\.([A-Z_][A-Z0-9_]*)/g;
+// Old format also rendered top-level `{{user.email}}` (note: NOT `agor.user…`)
+// and `{{artifact.id}}` / `{{artifact.boardId}}`. Presence-only — no /g flag
+// because we only care whether the variable appears, not where.
+const HANDLEBARS_USER_EMAIL_RE = /\{\{\s*user\.email\s*\}\}/;
+const HANDLEBARS_ARTIFACT_ID_RE = /\{\{\s*artifact\.id\s*\}\}/;
+const HANDLEBARS_ARTIFACT_BOARD_ID_RE = /\{\{\s*artifact\.boardId\s*\}\}/;
 
 /**
  * Inspect an artifact's file map + config columns and report which legacy-format
@@ -242,6 +228,18 @@ export function detectLegacyFormat(artifact: {
     for (const m of content.matchAll(HANDLEBARS_USER_ENV_RE)) {
       signals.add('has_handlebars_user_env');
       detectedEnvVars.add(m[1]);
+    }
+    if (HANDLEBARS_USER_EMAIL_RE.test(content)) {
+      signals.add('has_handlebars_user_email');
+      detectedGrants.add('agor_user_email');
+    }
+    if (HANDLEBARS_ARTIFACT_ID_RE.test(content)) {
+      signals.add('has_handlebars_artifact_ref');
+      detectedGrants.add('agor_artifact_id');
+    }
+    if (HANDLEBARS_ARTIFACT_BOARD_ID_RE.test(content)) {
+      signals.add('has_handlebars_artifact_ref');
+      detectedGrants.add('agor_board_id');
     }
   }
 
@@ -296,11 +294,11 @@ function renderUpgradeInstructions(input: {
   return [
     'Use the agor_artifacts_get tool to read the current artifact files.',
     'Then use agor_artifacts_publish to republish with the new format:',
-    '  - Drop these legacy files from the file map: ' + removalsLine,
+    `  - Drop these legacy files from the file map: ${removalsLine}`,
     '  - Set sandpack_config (template, customSetup.entry, customSetup.dependencies)',
     '    so the artifact still renders correctly.',
-    '  - Set required_env_vars: ' + envVarsLine,
-    '  - Set agor_grants: ' + grantsLine,
+    `  - Set required_env_vars: ${envVarsLine}`,
+    `  - Set agor_grants: ${grantsLine}`,
     '  - Update source files to read env vars via the bundler convention',
     '    (Vite: import.meta.env.VITE_*, CRA: process.env.REACT_APP_*,',
     '    Node: process.env.*) instead of {{ user.env.* }} or',

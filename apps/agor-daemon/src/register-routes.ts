@@ -3141,6 +3141,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // Value: 'none' | 'viewer' | 'member' | 'admin' | 'superadmin'.
           // Defaults to 'member' when unset.
           managedEnvsMinimumRole: config.execution?.managed_envs_minimum_role ?? 'member',
+          // True when the daemon runs in a multi-user Unix isolation mode
+          // (insulated/strict). UI hides "trust everyone on this instance"
+          // surfaces when true. Server-side gates (e.g. ArtifactsService.
+          // grantTrust) are the source of truth and reject regardless.
+          multiUser: (config.execution?.unix_user_mode ?? 'simple') !== 'simple',
         },
       };
 

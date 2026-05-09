@@ -319,7 +319,9 @@ export type ArtifactLegacySignal =
   | 'has_agor_config_js'
   | 'no_sandpack_config'
   | 'has_handlebars_token'
-  | 'has_handlebars_user_env';
+  | 'has_handlebars_user_env'
+  | 'has_handlebars_user_email'
+  | 'has_handlebars_artifact_ref';
 
 /**
  * Output of the one-shot artifact review LLM call. Surfaces inline as inline

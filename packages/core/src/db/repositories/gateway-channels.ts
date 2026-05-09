@@ -14,7 +14,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { eq, like } from 'drizzle-orm';
-import { formatShortId, generateId } from '../../lib/ids';
+import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { decryptApiKey, encryptApiKey } from '../encryption';
@@ -223,7 +223,7 @@ export class GatewayChannelRepository
       throw new AmbiguousIdError(
         'GatewayChannel',
         id,
-        results.map((r: { id: string }) => formatShortId(r.id as UUID))
+        results.map((r: { id: string }) => r.id)
       );
     }
 

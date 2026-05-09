@@ -196,8 +196,8 @@ describe('isLikelyGitToken — credential helper shape check', () => {
   });
 
   it('accepts well-formed GitHub-style PATs', () => {
-    expect(isLikelyGitToken('ghp_' + 'a'.repeat(36))).toBe(true);
-    expect(isLikelyGitToken('github_pat_' + 'A'.repeat(40))).toBe(true);
+    expect(isLikelyGitToken(`ghp_${'a'.repeat(36)}`)).toBe(true);
+    expect(isLikelyGitToken(`github_pat_${'A'.repeat(40)}`)).toBe(true);
     expect(isLikelyGitToken('a'.repeat(40))).toBe(true);
   });
 });

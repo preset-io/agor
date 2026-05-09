@@ -95,8 +95,18 @@ IMPORTANT:
 - For node.js / static templates without a dotenv path, env vars are NOT injected; the daemon emits a warning if you declared any.`,
       inputSchema: z.object({
         folderPath: z.string().describe('Absolute path to folder containing artifact files'),
-        boardId: z.string().describe('Board to place the artifact on'),
-        name: z.string().describe('Artifact display name'),
+        boardId: z
+          .string()
+          .optional()
+          .describe(
+            'Board to place the artifact on. REQUIRED when creating; on update (artifactId given) defaults to the artifact’s current board if omitted.'
+          ),
+        name: z
+          .string()
+          .optional()
+          .describe(
+            'Artifact display name. REQUIRED when creating; on update (artifactId given) defaults to the existing name if omitted. PASSING A DIFFERENT NAME ON UPDATE WILL RENAME THE ARTIFACT.'
+          ),
         artifactId: z
           .string()
           .optional()
@@ -137,7 +147,8 @@ IMPORTANT:
     },
     async (args) => {
       const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
-      const resolvedBoardId = await resolveBoardId(ctx, coerceString(args.boardId)!);
+      const boardIdRaw = coerceString(args.boardId);
+      const resolvedBoardId = boardIdRaw ? await resolveBoardId(ctx, boardIdRaw) : undefined;
       const resolvedArtifactId = coerceString(args.artifactId)
         ? await resolveArtifactId(ctx, coerceString(args.artifactId)!)
         : undefined;
@@ -145,7 +156,7 @@ IMPORTANT:
         {
           folderPath: coerceString(args.folderPath)!,
           board_id: resolvedBoardId,
-          name: coerceString(args.name)!,
+          name: coerceString(args.name),
           artifact_id: resolvedArtifactId,
           template: args.template,
           public: args.public,
@@ -185,7 +196,13 @@ IMPORTANT:
     async (args) => {
       const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
       const result = await service.checkBuildFromFolder(coerceString(args.folderPath)!);
-      return textResult(result);
+      // Mirror getStatus shape — `build_status` (not `status`) and `build_errors`
+      // (always an array, never undefined) so agents can parse one schema across
+      // both tools.
+      return textResult({
+        build_status: result.status,
+        build_errors: result.errors,
+      });
     }
   );
 
@@ -354,11 +371,11 @@ Caller must own the artifact (or be an admin).`,
 
 Use this when you want to tweak an artifact's code: land it into a worktree, edit the files locally, then call agor_artifacts_publish with the same artifactId to push the changes back.
 
-Writes a small \`agor.artifact.json\` sidecar alongside the source files. The sidecar carries metadata that doesn't fit in the file map (template, sandpack_config, required_env_vars, agor_grants) so a round-trip publish() can preserve it. Build tools (Vite/CRA/etc.) ignore the sidecar.
+Writes a small \`agor.artifact.json\` sidecar alongside the source files. The sidecar carries metadata that doesn't fit in the file map (template, sandpack_config, required_env_vars, agor_grants) so a round-trip publish() can preserve it. **Do not delete \`agor.artifact.json\`** — without it, a republish will reset \`required_env_vars\` and \`agor_grants\` to empty. Build tools (Vite/CRA/etc.) ignore the sidecar.
 
 Safety:
 - Destination must be inside the target worktree (cannot escape via ".." or absolute paths).
-- Default subpath is \`.agor/artifacts/<artifact-id>\` (inside the worktree). Pass a custom subpath if you want a different location.
+- Default subpath is \`.agor/artifacts/<slug>-<short-id>\` derived from the artifact's name (kebab-cased, ASCII-only). Pass a custom subpath if you want a different location.
 - Refuses to write to an existing destination unless overwrite=true is passed.
 - overwrite=true removes the destination directory first (symlinks are unlinked, not followed).
 
@@ -370,7 +387,7 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
           .string()
           .optional()
           .describe(
-            'Worktree-relative path for the destination folder. Default: .agor/artifacts/<artifact-id>. Must not be absolute or escape the worktree.'
+            'Worktree-relative path for the destination folder. Default: .agor/artifacts/<slug>-<short-id> derived from the artifact name. Must not be absolute or escape the worktree.'
           ),
         overwrite: z
           .boolean()
@@ -436,7 +453,7 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
         destinationPath: result.destinationPath,
         fileCount: result.fileCount,
         bytesWritten: result.bytesWritten,
-        instructions: `Artifact materialized to ${result.destinationPath}. Edit files there, then call agor_artifacts_publish with folderPath=${result.destinationPath} and artifactId=${artifactId} to push changes back.`,
+        instructions: `Artifact materialized to ${result.destinationPath}. The folder includes \`agor.artifact.json\` — keep it: it carries template/sandpack_config/required_env_vars/agor_grants for round-trip publishing. Edit source files there, then call agor_artifacts_publish with folderPath=${result.destinationPath} and artifactId=${artifactId} to push changes back.`,
       });
     }
   );
@@ -525,24 +542,51 @@ CAVEAT: daemon-supplied capabilities (\`AGOR_TOKEN\`, \`AGOR_PROXY_*\`, etc.) wo
         template: artifact.sandpack_config?.template ?? artifact.template,
       };
 
-      const res = await fetch('https://codesandbox.io/api/v1/sandboxes/define?json=1', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(definePayload),
-      });
-      if (!res.ok) {
-        const detail = await res.text();
+      let res: Response;
+      try {
+        res = await fetch('https://codesandbox.io/api/v1/sandboxes/define?json=1', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(definePayload),
+        });
+      } catch (err) {
         return textResult({
-          error: `CodeSandbox define API failed: ${res.status} ${res.statusText}`,
-          detail,
+          error: `CodeSandbox define API unreachable: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
-      const body = (await res.json()) as { sandbox_id?: string };
+      if (!res.ok) {
+        // Bodies on failure are typically Cloudflare HTML challenge pages —
+        // dumping them as a string blows up the agent's context window with
+        // no actionable signal. Collapse to a one-liner.
+        const ct = res.headers.get('content-type') ?? '';
+        const looksJson = ct.includes('application/json');
+        let hint = '';
+        if (looksJson) {
+          try {
+            const body = (await res.json()) as { error?: string; message?: string };
+            const msg = body.error ?? body.message;
+            if (typeof msg === 'string' && msg.length > 0) {
+              hint = `: ${msg.slice(0, 200)}`;
+            }
+          } catch {}
+        }
+        return textResult({
+          error: `CodeSandbox define API failed (${res.status} ${res.statusText})${hint}. The endpoint is sometimes throttled by Cloudflare; retry or use a different export channel.`,
+        });
+      }
+      let body: { sandbox_id?: string };
+      try {
+        body = (await res.json()) as { sandbox_id?: string };
+      } catch (err) {
+        return textResult({
+          error:
+            `CodeSandbox returned a non-JSON 200 response (likely a Cloudflare interstitial). Try again later. ${err instanceof Error ? err.message : ''}`.trim(),
+        });
+      }
       const sandboxId = body.sandbox_id;
       if (!sandboxId) {
         return textResult({
           error: 'CodeSandbox returned a 200 with no sandbox_id',
-          response: body,
         });
       }
       const url = `https://codesandbox.io/s/${sandboxId}`;

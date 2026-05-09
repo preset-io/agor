@@ -6,7 +6,7 @@
 
 import type { CardType, UUID } from '@agor/core/types';
 import { eq, like } from 'drizzle-orm';
-import { formatShortId, generateId } from '../../lib/ids';
+import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type CardTypeInsert, type CardTypeRow, cardTypes } from '../schema';
@@ -48,7 +48,7 @@ export class CardTypeRepository implements BaseRepository<CardType, Partial<Card
       throw new AmbiguousIdError(
         'CardType',
         id,
-        results.map((r: { card_type_id: string }) => formatShortId(r.card_type_id as UUID))
+        results.map((r: { card_type_id: string }) => r.card_type_id)
       );
     }
     return results[0].card_type_id;

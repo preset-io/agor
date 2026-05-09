@@ -14,7 +14,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { and, eq, like, lt } from 'drizzle-orm';
-import { formatShortId, generateId } from '../../lib/ids';
+import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type ThreadSessionMapInsert, type ThreadSessionMapRow, threadSessionMap } from '../schema';
@@ -94,7 +94,7 @@ export class ThreadSessionMapRepository
       throw new AmbiguousIdError(
         'ThreadSessionMap',
         id,
-        results.map((r: { id: string }) => formatShortId(r.id as UUID))
+        results.map((r: { id: string }) => r.id)
       );
     }
 

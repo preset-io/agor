@@ -565,11 +565,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       '/artifacts/:id/trust',
       {
         async create(
-          data: {
-            scopeType: import('@agor/core/types').ArtifactTrustScopeType;
-            envVars?: string[];
-            grants?: import('@agor/core/types').AgorGrants;
-          },
+          data: { scopeType: import('@agor/core/types').ArtifactTrustScopeType },
           _params: RouteParams
         ) {
           const artifactId = _params.route?.id;
@@ -577,12 +573,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           const userId = _params.user?.user_id;
           if (!userId) throw new Error('Authenticated user required');
           const artifactsService = app.service('artifacts') as unknown as ArtifactsService;
+          // The consent surface (env vars + grants) is derived server-side
+          // from the artifact's current request. The client only nominates
+          // the scope; the server decides what the grant covers. This stops
+          // a confused/malicious client from persisting a grant whose
+          // covered set diverges from what the server will actually inject.
           return artifactsService.grantTrust({
             userId,
             artifactId,
             scopeType: data.scopeType,
-            envVars: data.envVars ?? [],
-            grants: data.grants ?? {},
           });
         },
       },

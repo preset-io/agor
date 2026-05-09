@@ -17,7 +17,7 @@ import type {
   WorktreeID,
 } from '@agor/core/types';
 import { and, eq, like, or } from 'drizzle-orm';
-import { formatShortId, generateId } from '../../lib/ids';
+import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, isPostgresDatabase, select, update } from '../database-wrapper';
 import { type ArtifactInsert, type ArtifactRow, artifacts } from '../schema';
@@ -102,7 +102,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       throw new AmbiguousIdError(
         'Artifact',
         id,
-        results.map((r: { artifact_id: string }) => formatShortId(r.artifact_id as UUID))
+        results.map((r: { artifact_id: string }) => r.artifact_id)
       );
     }
     return results[0].artifact_id;

@@ -47,6 +47,13 @@ interface FeaturesConfig {
    * services/worktrees.ts is the source of truth. Defaults to 'member'.
    */
   managedEnvsMinimumRole?: 'none' | 'viewer' | 'member' | 'admin' | 'superadmin';
+  /**
+   * True when the daemon runs in a multi-user Unix isolation mode
+   * (insulated/strict). The UI uses this to hide "trust everyone on this
+   * instance" surfaces (e.g. the `instance` scope option in the artifact
+   * consent modal). Server-side gates are the source of truth.
+   */
+  multiUser?: boolean;
 }
 
 interface HealthResponse {

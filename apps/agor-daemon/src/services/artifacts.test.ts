@@ -582,13 +582,12 @@ describe('ArtifactsService.grantTrust', () => {
     const before = await service.getPayload(created.artifact_id, 'user-stranger' as never);
     expect(before.trust_state).toBe('untrusted');
 
-    // Grant session-scope trust.
+    // Grant session-scope trust. Server derives env vars + grants from the
+    // artifact's current request — caller only nominates the scope.
     const result = await service.grantTrust({
       userId: 'user-stranger',
       artifactId: created.artifact_id,
       scopeType: 'session',
-      envVars: ['OPENAI_KEY'],
-      grants: {},
     });
     expect(result.persisted).toBe(false);
 
@@ -616,8 +615,6 @@ describe('ArtifactsService.grantTrust', () => {
       userId: 'user-stranger',
       artifactId: created.artifact_id,
       scopeType: 'artifact',
-      envVars: ['OPENAI_KEY'],
-      grants: {},
     });
 
     const payload = await service.getPayload(created.artifact_id, 'user-stranger' as never);
@@ -626,7 +623,7 @@ describe('ArtifactsService.grantTrust', () => {
   });
 
   dbTest(
-    'strict subset: existing OPENAI_KEY grant does NOT cover OPENAI_KEY+STRIPE_KEY',
+    'strict subset: a grant predating an expansion of required_env_vars no longer covers',
     async ({ db }) => {
       const service = new ArtifactsService(db, makeFakeApp());
       const board = await seedBoard(db);
@@ -637,17 +634,23 @@ describe('ArtifactsService.grantTrust', () => {
         name: 'expanding-needs',
         template: 'react',
         files: { '/index.js': 'console.log("x")' },
-        required_env_vars: ['OPENAI_KEY', 'STRIPE_KEY'],
+        required_env_vars: ['OPENAI_KEY'],
         public: true,
         created_by: 'user-owner',
       });
 
+      // Grant covers the artifact at this point in time (just OPENAI_KEY).
       await service.grantTrust({
         userId: 'user-stranger',
         artifactId: created.artifact_id,
         scopeType: 'artifact',
-        envVars: ['OPENAI_KEY'], // narrower than the artifact now requests
-        grants: {},
+      });
+
+      // Author later expands the artifact's requested env vars. The grant is
+      // now strictly narrower than the request, so the user should be
+      // re-prompted on the next render.
+      await artifactRepo.update(created.artifact_id, {
+        required_env_vars: ['OPENAI_KEY', 'STRIPE_KEY'],
       });
 
       const payload = await service.getPayload(created.artifact_id, 'user-stranger' as never);
@@ -675,8 +678,6 @@ describe('ArtifactsService.grantTrust', () => {
         userId: 'user-stranger',
         artifactId: created.artifact_id,
         scopeType: 'author',
-        envVars: [],
-        grants: { agor_token: true },
       })
     ).rejects.toThrow(/agor_token/);
   });
@@ -711,8 +712,6 @@ describe('ArtifactsService.grantTrust', () => {
       userId: 'viewer-1',
       artifactId: a.artifact_id,
       scopeType: 'author',
-      envVars: ['OPENAI_KEY'],
-      grants: {},
     });
 
     // Artifact B (same author) should be trusted via the author grant.

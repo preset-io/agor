@@ -8,7 +8,7 @@ import type { Session, UUID } from '@agor/core/types';
 import { SessionStatus, WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
 import { and, desc, eq, inArray, isNotNull, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
-import { formatShortId, generateId } from '../../lib/ids';
+import { generateId } from '../../lib/ids';
 import { getSessionUrl } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
@@ -181,7 +181,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       throw new AmbiguousIdError(
         'Session',
         id,
-        results.map((r: { session_id: string }) => formatShortId(r.session_id as UUID))
+        results.map((r: { session_id: string }) => r.session_id)
       );
     }
 

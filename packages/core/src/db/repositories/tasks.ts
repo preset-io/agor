@@ -7,7 +7,7 @@
 import type { SessionID, Task, TaskMetadata, UUID } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { eq, like, sql } from 'drizzle-orm';
-import { formatShortId, generateId } from '../../lib/ids';
+import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
 import { type TaskInsert, type TaskRow, tasks } from '../schema';
@@ -114,7 +114,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       throw new AmbiguousIdError(
         'Task',
         id,
-        results.map((r: { task_id: string }) => formatShortId(r.task_id as UUID))
+        results.map((r: { task_id: string }) => r.task_id)
       );
     }
 

@@ -12,7 +12,6 @@ import { describe, expect, it } from 'vitest';
 import {
   detectLegacyFormat,
   envVarPrefixForTemplate,
-  mergeWithDefaults,
   sanitizeSandpackConfig,
 } from './sandpack-config';
 
@@ -88,20 +87,6 @@ describe('envVarPrefixForTemplate', () => {
   it('other templates default to no prefix (process.env.X)', () => {
     expect(envVarPrefixForTemplate('vue')).toBe('');
     expect(envVarPrefixForTemplate('angular')).toBe('');
-  });
-});
-
-describe('mergeWithDefaults', () => {
-  it('merges defaults under the author config', () => {
-    const merged = mergeWithDefaults({
-      template: 'react-ts',
-      options: { showInlineErrors: false, autorun: false },
-    });
-    // Default initMode survives when author didn't override it.
-    expect(merged.options?.initMode).toBe('user-visible');
-    // Author override wins.
-    expect(merged.options?.showInlineErrors).toBe(false);
-    expect(merged.options?.autorun).toBe(false);
   });
 });
 
