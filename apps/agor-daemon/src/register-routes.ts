@@ -1177,6 +1177,98 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   );
 
   // ============================================================================
+  // Task run endpoint
+  //
+  // Explicit executor trigger for an already-created task. Lets pure-REST
+  // harnesses (Python, Go, shell+curl — anything without an MCP client) drive
+  // the executor by POSTing a Task row first (`POST /tasks`) and then poking
+  // it awake here. Wraps `spawnTaskExecutor` — the same helper that
+  // `/sessions/:id/prompt` uses on its idle path — so the on-the-wire effect
+  // is identical to "create a task and run it now."
+  //
+  // Only CREATED / QUEUED tasks on IDLE sessions are accepted. If the session
+  // is busy, the caller should hit `POST /sessions/:id/prompt` instead — that
+  // route owns the create-task-and-queue path and assigns queue positions
+  // atomically. Splitting the two responsibilities keeps this endpoint a
+  // narrow "run this thing now" trigger and avoids re-implementing queue
+  // sequencing here.
+  // ============================================================================
+
+  registerAuthenticatedRoute(
+    app,
+    '/tasks/:id/run',
+    {
+      async create(
+        data: {
+          permissionMode?: import('@agor/core/types').PermissionMode;
+          stream?: boolean;
+          messageSource?: MessageSource;
+        },
+        params: RouteParams
+      ) {
+        const taskId = params.route?.id;
+        if (!taskId) throw new BadRequest('Task ID required');
+
+        const taskRepo = new TaskRepository(db);
+        const task = await taskRepo.findById(taskId);
+        if (!task) {
+          throw new NotFound(`Task ${taskId} not found`);
+        }
+
+        // Only CREATED and QUEUED tasks may be triggered. Terminal and
+        // in-flight states are rejected so the caller doesn't accidentally
+        // race the executor or try to revive a finished task.
+        if (task.status !== TaskStatus.CREATED && task.status !== TaskStatus.QUEUED) {
+          throw new Conflict(
+            `Task ${taskId.substring(0, 8)} cannot be run: status is '${task.status}' ` +
+              `(only 'created' or 'queued' tasks may be triggered).`
+          );
+        }
+
+        const session = await sessionsService.get(task.session_id, params);
+
+        if (session.status === SessionStatus.STOPPING) {
+          throw new BadRequest('Cannot run task: session is currently stopping');
+        }
+
+        if (session.status !== SessionStatus.IDLE) {
+          throw new Conflict(
+            `Cannot run task ${taskId.substring(0, 8)}: session is '${session.status}'. ` +
+              `To enqueue a prompt on a busy session, POST to /sessions/:id/prompt instead — ` +
+              `it creates and queues a task atomically.`
+          );
+        }
+
+        // Validate / normalize messageSource — same shape as the prompt route.
+        let messageSource: MessageSource | undefined = data.messageSource;
+        if (
+          messageSource !== undefined &&
+          messageSource !== 'gateway' &&
+          messageSource !== 'agor'
+        ) {
+          messageSource = params.provider ? 'agor' : undefined;
+        }
+
+        const runningTask = await spawnTaskExecutor(
+          task,
+          {
+            permissionMode: data.permissionMode,
+            stream: data.stream !== false,
+            messageSource,
+          },
+          params
+        );
+
+        return runningTask;
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'execute prompts' },
+    },
+    requireAuth
+  );
+
+  // ============================================================================
   // Spawn-subsession prompt endpoint
   //
   // Renders the bundled spawn-subsession meta-prompt server-side and forwards

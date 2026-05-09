@@ -622,6 +622,51 @@ describe('createClient', () => {
         streaming: true,
       });
     });
+
+    // The pure-REST counterpart to client.sessions.prompt() — a thin wrapper
+    // around POST /tasks/:id/run, the explicit executor-trigger route added
+    // for harnesses that don't speak MCP. See issue #1118.
+    it('should expose tasks.run helper that calls /tasks/:id/run route', async () => {
+      const client = createClient();
+      const routeService = client.service('tasks/task-456/run');
+      const createMock = routeService.create as unknown as MockedFunction<any>;
+
+      createMock.mockResolvedValue({
+        task_id: 'task-456',
+        session_id: 'session-123',
+        status: 'running',
+      });
+
+      const result = await client.tasks.run('task-456', {
+        permissionMode: 'auto',
+        stream: true,
+      });
+
+      expect(createMock).toHaveBeenCalledWith(
+        {
+          permissionMode: 'auto',
+          stream: true,
+        },
+        undefined
+      );
+      expect(result).toEqual({
+        task_id: 'task-456',
+        session_id: 'session-123',
+        status: 'running',
+      });
+    });
+
+    it('should call tasks.run with empty body when no options provided', async () => {
+      const client = createClient();
+      const routeService = client.service('tasks/task-789/run');
+      const createMock = routeService.create as unknown as MockedFunction<any>;
+
+      createMock.mockResolvedValue({ task_id: 'task-789', status: 'running' });
+
+      await client.tasks.run('task-789');
+
+      expect(createMock).toHaveBeenCalledWith({}, undefined);
+    });
   });
 });
 

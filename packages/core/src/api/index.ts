@@ -108,6 +108,33 @@ export interface SessionsClientHelpers {
 }
 
 /**
+ * Body shape for `POST /tasks/:id/run`. Matches the prompt route's options
+ * so the same defaults (`stream: true`, agor messageSource for socket
+ * callers) apply when explicitly triggering an already-created task.
+ */
+export interface TaskRunRequest {
+  permissionMode?: PermissionMode;
+  stream?: boolean;
+  messageSource?: 'gateway' | 'agor';
+}
+
+export interface TaskRunOptions extends TaskRunRequest {
+  params?: Params;
+}
+
+export interface TasksClientHelpers {
+  /**
+   * Trigger executor pickup for an already-created task. Pure-REST harnesses
+   * use this after `POST /tasks` to avoid needing an MCP client. Returns the
+   * Task with `status: 'running'`. Errors if the task is not in
+   * `'created'`/`'queued'` state, or if the session is not IDLE — busy
+   * sessions should be prompted via `client.sessions.prompt()` instead, which
+   * creates and queues the task atomically.
+   */
+  run(taskId: string, options?: TaskRunOptions): Promise<Task>;
+}
+
+/**
  * Server-side Handlebars renderer. UI sends `{template, context}` via
  * `client.service('templates').create(...)`; daemon returns `{rendered}`.
  * Used so the browser bundle doesn't need Handlebars (avoids CSP
@@ -421,6 +448,7 @@ export interface WorktreesService extends AgorService<Worktree> {
 export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   io: Socket;
   sessions: SessionsClientHelpers;
+  tasks: TasksClientHelpers;
 
   // Typed service overloads for services with custom methods
   service(path: 'sessions'): SessionsService;
@@ -728,6 +756,16 @@ function extendSessionsHelpers(client: AgorClient): void {
         .service(`sessions/${sessionId}/prompt`)
         .create({ prompt, ...requestOptions } as SessionPromptRequest, params);
       return response as SessionPromptResult;
+    },
+  };
+
+  client.tasks = {
+    run: async (taskId: string, options?: TaskRunOptions) => {
+      const { params, ...requestOptions } = options ?? {};
+      const response = await client
+        .service(`tasks/${taskId}/run`)
+        .create(requestOptions as TaskRunRequest, params);
+      return response as Task;
     },
   };
 

@@ -369,6 +369,29 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
         app.service('/tasks/:id/fail').create({}, { provider: 'rest' })
       ).rejects.toThrow();
     });
+
+    it('POST /tasks/:id/run rejects unauthenticated requests', async () => {
+      const tasksRunService = {
+        async create() {
+          return { task_id: 'test-id', status: 'running' };
+        },
+      };
+
+      app.use('/tasks/:id/run', tasksRunService);
+      app.service('/tasks/:id/run').hooks({
+        before: {
+          create: [
+            populateRouteParams,
+            requireAuth,
+            requireMinimumRole(ROLES.MEMBER, 'execute prompts'),
+          ],
+        },
+      });
+
+      await expect(
+        app.service('/tasks/:id/run').create({}, { provider: 'rest' })
+      ).rejects.toThrow();
+    });
   });
 
   describe('Repository Endpoints - Authentication Required', () => {

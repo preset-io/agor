@@ -46,6 +46,27 @@ console.log(`Session ${session.session_id} started`);
 
 REST clients exit cleanly without keeping a socket open — perfect for CLI tools and short-lived scripts.
 
+### Driving the executor without MCP
+
+Two equivalent ways to send work to a session — pick whichever fits your harness:
+
+```ts
+// One-shot: create the task and start execution in a single call.
+await client.sessions.prompt(session.session_id, 'Run the tests and summarize.', {
+  stream: true,
+});
+
+// Or do it in two steps if your orchestrator wants the task_id up-front.
+const task = await client.service('tasks').create({
+  session_id: session.session_id,
+  full_prompt: 'Run the tests and summarize.',
+  status: 'created',
+});
+await client.tasks.run(task.task_id, { stream: true });
+```
+
+`client.tasks.run()` calls `POST /tasks/:id/run` — the explicit "fire this task now" trigger. It's intended for `created`/`queued` tasks on idle sessions; busy sessions should be prompted via `client.sessions.prompt()` (which queues atomically).
+
 ## Quickstart — Real-time
 
 For UIs, live dashboards, or anything that needs to react to session events as they fire:
