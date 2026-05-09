@@ -31,10 +31,7 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
   const worktreeIdRef = useRef(worktree.worktree_id);
   worktreeIdRef.current = worktree.worktree_id;
 
-  // Themed message instance (held in a ref so download callback stays stable)
-  const themed = useThemedMessage();
-  const themedRef = useRef(themed);
-  themedRef.current = themed;
+  const { showLoading, showSuccess, showError } = useThemedMessage();
 
   // Fetch files when tab is opened
   useEffect(() => {
@@ -63,54 +60,57 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
     fetchFiles();
   }, [client, worktree.worktree_id]);
 
-  // Download file (handles both UTF-8 text and base64 binary) - stable callback
-  const downloadFile = useCallback(async (file: FileItem) => {
-    const currentClient = clientRef.current;
-    if (!currentClient) return;
+  // Download file (handles both UTF-8 text and base64 binary)
+  const downloadFile = useCallback(
+    async (file: FileItem) => {
+      const currentClient = clientRef.current;
+      if (!currentClient) return;
 
-    try {
-      themedRef.current.showLoading('Downloading file...', { key: 'download' });
+      try {
+        showLoading('Downloading file...', { key: 'download' });
 
-      const detail = (await currentClient.service('file').get(file.path, {
-        query: { worktree_id: worktreeIdRef.current },
-      })) as FileDetail;
+        const detail = (await currentClient.service('file').get(file.path, {
+          query: { worktree_id: worktreeIdRef.current },
+        })) as FileDetail;
 
-      // Decode content based on encoding
-      let blob: Blob;
-      const mimeType = 'mimeType' in file ? file.mimeType : undefined;
+        // Decode content based on encoding
+        let blob: Blob;
+        const mimeType = 'mimeType' in file ? file.mimeType : undefined;
 
-      if (detail.encoding === 'base64') {
-        // Binary file: decode base64 to binary
-        const binaryString = atob(detail.content);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
+        if (detail.encoding === 'base64') {
+          // Binary file: decode base64 to binary
+          const binaryString = atob(detail.content);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          blob = new Blob([bytes], {
+            type: mimeType || 'application/octet-stream',
+          });
+        } else {
+          // Text file: use UTF-8 string directly
+          blob = new Blob([detail.content], {
+            type: mimeType || 'text/plain',
+          });
         }
-        blob = new Blob([bytes], {
-          type: mimeType || 'application/octet-stream',
-        });
-      } else {
-        // Text file: use UTF-8 string directly
-        blob = new Blob([detail.content], {
-          type: mimeType || 'text/plain',
-        });
+
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = file.path.split('/').pop() || 'download';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        showSuccess('Downloaded!', { key: 'download' });
+      } catch (err) {
+        console.error('Failed to download file:', err);
+        showError('Failed to download file', { key: 'download' });
       }
-
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = file.path.split('/').pop() || 'download';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      themedRef.current.showSuccess('Downloaded!', { key: 'download' });
-    } catch (err) {
-      console.error('Failed to download file:', err);
-      themedRef.current.showError('Failed to download file', { key: 'download' });
-    }
-  }, []);
+    },
+    [showLoading, showSuccess, showError]
+  );
 
   // Handle file click - preview text files or download others - stable callback
   const handleFileClick = useCallback(
@@ -132,7 +132,7 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
           setSelectedFile(detail as FileDetail);
         } catch (err) {
           console.error('Failed to fetch file detail:', err);
-          themedRef.current.showError('Failed to load file');
+          showError('Failed to load file');
           setModalOpen(false);
         } finally {
           setLoadingDetail(false);
@@ -142,7 +142,7 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
         downloadFile(file);
       }
     },
-    [downloadFile]
+    [downloadFile, showError]
   );
 
   // Handle modal close - stable callback

@@ -29,31 +29,13 @@ It's the **static** message API. It mounts outside the React tree, so it does **
 - **Copy-to-clipboard on every toast.** A subtle copy icon appears at the right of the message. Clicking it copies the rendered text — handy for IDs, error traces, and anything else worth pasting into a bug report. No need to reach for a separate `<CopyButton>` inside the toast.
 - **Standardized durations.** Success/info: 3s. Warning: 4s. Error: 6s (longer so users can read and copy). Override per-call with `{ duration }` if you have a reason.
 - **Keyed loading→success/error.** Pass `{ key: 'download' }` to both `showLoading(...)` and the follow-up `showSuccess(...)` / `showError(...)`; antd replaces the toast in place instead of stacking. See `apps/agor-ui/src/components/WorktreeModal/tabs/FilesTab.tsx`.
-
----
-
-## Stable callbacks (rules-of-hooks gotcha)
-
-The wrapper returns fresh function references each render (the underlying antd `message` instance is stable, but the wrapper closures aren't memoized). If you need a `useCallback` with empty deps — e.g. a download handler kept stable for child memoization — store the result in a ref:
-
-```tsx
-const themed = useThemedMessage();
-const themedRef = useRef(themed);
-themedRef.current = themed;
-
-const downloadFile = useCallback(async (file) => {
-  themedRef.current.showLoading('Downloading…', { key: 'dl' });
-  // …
-}, []);
-```
-
-For ordinary handlers, just include `showSuccess`/`showError` in the dep array — the references change but the behavior is stable, so it's fine.
+- **Stable references.** The returned helpers (`showSuccess`, `showError`, etc.) are memoized over antd's stable `message` instance, so they're safe to put in `useCallback`/`useEffect` dep arrays without causing churn.
 
 ---
 
 ## Toast vs notification — the rule
 
-Mirrors `docs/notification-system-design.md` §3.6. Keep these in sync.
+Notifications aren't built yet. There's an in-flight design doc on the `design-notification-system` branch that codifies the split below; this file is the canonical source on the main branch until that lands.
 
 > **Use a toast (`useThemedMessage`) when:**
 > - The user just took an action and you're confirming it ("Saved", "Copied").
@@ -65,7 +47,7 @@ Mirrors `docs/notification-system-design.md` §3.6. Keep these in sync.
 > - The user might miss it because they're on another board / tab / device.
 > - It needs to be actionable later, not just acknowledged now.
 
-The notification system isn't built yet — see the design doc. Until then, **toast is the only option**, but flag durable-event toasts in PRs so they migrate later.
+Until the notification system lands, **toast is the only option**, but flag durable-event toasts in PRs so they migrate later.
 
 ---
 

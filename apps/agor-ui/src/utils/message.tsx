@@ -24,7 +24,7 @@
 import { CheckOutlined, CloseCircleOutlined, CopyOutlined } from '@ant-design/icons';
 import { App, Space, theme } from 'antd';
 import type { ArgsProps, ConfigOptions, MessageInstance } from 'antd/es/message/interface';
-import React from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { copyToClipboard } from './clipboard';
 
 /**
@@ -143,106 +143,89 @@ export interface ThemedMessageOptions {
 }
 
 /**
- * Hook that provides themed message functions with copy-to-clipboard
+ * Hook that provides themed message functions with copy-to-clipboard.
  *
- * @returns Object with message helper functions
+ * The returned helpers are stable across renders (memoized with `useCallback`
+ * over antd's stable `App.useApp().message` instance), so they're safe to put
+ * in `useCallback`/`useEffect` dep arrays without churn.
  */
 export function useThemedMessage() {
   const { message } = App.useApp();
 
-  /**
-   * Wrap message content with copy functionality
-   */
-  const wrapContent = (content: React.ReactNode, textContent: string) => {
-    return <MessageContent textContent={textContent}>{content}</MessageContent>;
-  };
+  const showSuccess = useCallback(
+    (content: React.ReactNode, options?: ThemedMessageOptions) =>
+      message.success({
+        content: (
+          <MessageContent textContent={extractTextContent(content)}>{content}</MessageContent>
+        ),
+        duration: options?.duration ?? 3,
+        key: options?.key,
+        onClose: options?.onClose,
+      }),
+    [message]
+  );
 
-  /**
-   * Show success message
-   */
-  const showSuccess = (content: React.ReactNode, options?: ThemedMessageOptions) => {
-    const textContent = extractTextContent(content);
-    return message.success({
-      content: wrapContent(content, textContent),
-      duration: options?.duration ?? 3,
-      key: options?.key,
-      onClose: options?.onClose,
-    });
-  };
+  // Errors get a longer default duration so users have time to read + copy.
+  const showError = useCallback(
+    (content: React.ReactNode, options?: ThemedMessageOptions) =>
+      message.error({
+        content: (
+          <MessageContent textContent={extractTextContent(content)}>{content}</MessageContent>
+        ),
+        duration: options?.duration ?? 6,
+        key: options?.key,
+        onClose: options?.onClose,
+      }),
+    [message]
+  );
 
-  /**
-   * Show error message (longer duration by default for copying)
-   */
-  const showError = (content: React.ReactNode, options?: ThemedMessageOptions) => {
-    const textContent = extractTextContent(content);
-    return message.error({
-      content: wrapContent(content, textContent),
-      duration: options?.duration ?? 6, // Longer for errors so users can copy
-      key: options?.key,
-      onClose: options?.onClose,
-    });
-  };
+  const showWarning = useCallback(
+    (content: React.ReactNode, options?: ThemedMessageOptions) =>
+      message.warning({
+        content: (
+          <MessageContent textContent={extractTextContent(content)}>{content}</MessageContent>
+        ),
+        duration: options?.duration ?? 4,
+        key: options?.key,
+        onClose: options?.onClose,
+      }),
+    [message]
+  );
 
-  /**
-   * Show warning message
-   */
-  const showWarning = (content: React.ReactNode, options?: ThemedMessageOptions) => {
-    const textContent = extractTextContent(content);
-    return message.warning({
-      content: wrapContent(content, textContent),
-      duration: options?.duration ?? 4,
-      key: options?.key,
-      onClose: options?.onClose,
-    });
-  };
+  const showInfo = useCallback(
+    (content: React.ReactNode, options?: ThemedMessageOptions) =>
+      message.info({
+        content: (
+          <MessageContent textContent={extractTextContent(content)}>{content}</MessageContent>
+        ),
+        duration: options?.duration ?? 3,
+        key: options?.key,
+        onClose: options?.onClose,
+      }),
+    [message]
+  );
 
-  /**
-   * Show info message
-   */
-  const showInfo = (content: React.ReactNode, options?: ThemedMessageOptions) => {
-    const textContent = extractTextContent(content);
-    return message.info({
-      content: wrapContent(content, textContent),
-      duration: options?.duration ?? 3,
-      key: options?.key,
-      onClose: options?.onClose,
-    });
-  };
+  // Loading messages don't auto-dismiss — pair with a `key` and a follow-up
+  // success/error using the same key so they replace in place.
+  const showLoading = useCallback(
+    (content: React.ReactNode, options?: ThemedMessageOptions) =>
+      message.loading({
+        content: (
+          <MessageContent textContent={extractTextContent(content)}>{content}</MessageContent>
+        ),
+        duration: options?.duration ?? 0,
+        key: options?.key,
+        onClose: options?.onClose,
+      }),
+    [message]
+  );
 
-  /**
-   * Show loading message (no auto-dismiss, requires manual dismiss)
-   */
-  const showLoading = (content: React.ReactNode, options?: ThemedMessageOptions) => {
-    const textContent = extractTextContent(content);
-    return message.loading({
-      content: wrapContent(content, textContent),
-      duration: options?.duration ?? 0, // 0 means no auto-dismiss
-      key: options?.key,
-      onClose: options?.onClose,
-    });
-  };
+  const destroy = useCallback((key?: string | number) => message.destroy(key), [message]);
 
-  /**
-   * Destroy a message by key
-   */
-  const destroy = (key?: string | number) => {
-    message.destroy(key);
-  };
-
-  /**
-   * Access to raw message instance for advanced usage
-   */
-  const raw: MessageInstance = message;
-
-  return {
-    showSuccess,
-    showError,
-    showWarning,
-    showInfo,
-    showLoading,
-    destroy,
-    raw,
-  };
+  return useMemo(
+    () => ({ showSuccess, showError, showWarning, showInfo, showLoading, destroy }),
+    [showSuccess, showError, showWarning, showInfo, showLoading, destroy]
+  );
 }
 
 /**

@@ -2,6 +2,7 @@ import type { AgorClient } from '@agor-live/client';
 import { CopyOutlined, DeleteOutlined, KeyOutlined, PlusOutlined } from '@ant-design/icons';
 import { Alert, Button, Input, Modal, Popconfirm, Space, Table, Typography, theme } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import { copyToClipboard } from '../../utils/clipboard';
 import { useThemedMessage } from '../../utils/message';
 
 interface ApiKeyEntry {
@@ -75,9 +76,13 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
     }
   };
 
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    showSuccess('Copied to clipboard');
+  const handleCopy = async (text: string) => {
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      showSuccess('Copied to clipboard');
+    } else {
+      showError('Failed to copy to clipboard');
+    }
   };
 
   const columns = [
