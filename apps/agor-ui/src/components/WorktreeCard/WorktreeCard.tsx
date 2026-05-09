@@ -38,7 +38,6 @@ import {
   Card,
   Collapse,
   ConfigProvider,
-  message,
   Space,
   Spin,
   Tooltip,
@@ -51,6 +50,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useServiceEnabled } from '../../hooks/useServicesConfig';
 import { useSessionActions } from '../../hooks/useSessionActions';
+import { useThemedMessage } from '../../utils/message';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
@@ -202,6 +202,7 @@ const WorktreeCardComponent = ({
 }: WorktreeCardProps) => {
   const { token } = theme.useToken();
   const { modal } = App.useApp();
+  const { showSuccess, showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
   const schedulerEnabled = useServiceEnabled('scheduler');
   const gatewayEnabled = useServiceEnabled('gateway');
@@ -259,9 +260,9 @@ const WorktreeCardComponent = ({
           try {
             const result = await archiveSession(sessionId as SessionID);
             if (result) {
-              message.success('Session archived');
+              showSuccess('Session archived');
             } else {
-              message.error('Failed to archive session');
+              showError('Failed to archive session');
             }
           } finally {
             setArchivingSessionIds((prev) => {
@@ -273,7 +274,7 @@ const WorktreeCardComponent = ({
         },
       });
     },
-    [archiveSession, modal]
+    [archiveSession, modal, showSuccess, showError]
   );
 
   // Gateway session helpers (delegating to @agor-live/client)
