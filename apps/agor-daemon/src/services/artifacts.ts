@@ -1,13 +1,15 @@
 /**
  * Artifacts Service
  *
- * Provides REST + WebSocket API for artifact management.
- * Artifacts are board-scoped, DB-backed Sandpack applications.
+ * REST + WebSocket API for artifact management. Artifacts are board-scoped,
+ * DB-backed Sandpack apps. The format is deliberately small: a file map +
+ * declarative metadata (`required_env_vars`, `agor_grants`, `sandpack_config`).
+ * The daemon handles secret/grant injection at render time and never persists
+ * the synthesized values.
  *
- * Key behavior:
- * - Publish reads a folder from the filesystem, serializes contents into the DB `files` column
- * - getPayload reads from DB (with legacy filesystem fallback for un-migrated artifacts)
- * - Console logs stored in-memory ring buffer for agent debugging
+ * No backwards compatibility with the legacy `sandpack.json`/`agor.config.js`
+ * sidecar format — `detectLegacyFormat` flags old artifacts so the UI can
+ * surface a self-service upgrade prompt.
  */
 
 import { createHash } from 'node:crypto';
@@ -18,58 +20,47 @@ import { generateId } from '@agor/core';
 import { getBaseUrl, loadConfig, PAGINATION, resolveProxies } from '@agor/core/config';
 import {
   ArtifactRepository,
+  ArtifactTrustGrantRepository,
   BoardRepository,
   type Database,
   WorktreeRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import type {
+  AgorGrants,
   Artifact,
   ArtifactBuildStatus,
   ArtifactConsoleEntry,
   ArtifactPayload,
   ArtifactStatus,
+  ArtifactTrustScopeType,
   BoardID,
   QueryParams,
+  SandpackConfig,
   SandpackError,
-  SandpackManifest,
   SandpackTemplate,
   UserID,
   WorktreeID,
 } from '@agor/core/types';
-import Handlebars from 'handlebars';
+import {
+  ARTIFACT_SCOPED_ONLY_GRANT_KEYS,
+  GRANT_ENV_VAR_NAMES,
+  proxyGrantEnvName,
+} from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { DrizzleService } from '../adapters/drizzle.js';
+import {
+  detectLegacyFormat,
+  envVarPrefixForTemplate,
+  sanitizeSandpackConfig,
+} from '../utils/sandpack-config.js';
 import type { UsersService } from './users.js';
-
-/**
- * Convention: if an artifact contains a file named /agor.config.js,
- * the backend treats it as a Handlebars template and renders it per-user
- * at payload fetch time. Template variables:
- *   {{ user.env.VAR_NAME }} - User's encrypted env var
- *   {{ agor.token }}        - Short-lived (15m) daemon JWT for the viewing
- *                              user. Same shape as a regular access token —
- *                              attach as `Authorization: Bearer ...` to
- *                              authenticate against the daemon (e.g. when
- *                              calling `/proxies/<vendor>/...`). Trust model
- *                              matches `user.env.X`: rendered into artifact
- *                              JS at view time, never enters LLM context.
- *   {{ agor.apiUrl }}       - Daemon URL
- *   {{ artifact.id }}       - Artifact ID
- *   {{ artifact.boardId }}  - Board ID
- */
-const AGOR_CONFIG_FILE = '/agor.config.js';
 
 /**
  * Resolve a destination path by canonicalizing the longest existing prefix via
  * `realpath` and re-joining the still-nonexistent tail. Used by `land()` to
  * detect symlinked ancestors that would otherwise defeat a lexical
  * containment check.
- *
- * Example: if `/wt/.agor` is a symlink to `/etc` and the caller passes
- * `.agor/artifacts/x`, the canonicalized destination is `/etc/artifacts/x`,
- * which fails the worktree-root containment check.
  */
 async function canonicalizeExistingPrefix(target: string): Promise<string> {
   const segments = target.split(path.sep);
@@ -94,8 +85,12 @@ export type ArtifactParams = QueryParams<{
 
 const MAX_CONSOLE_ENTRIES = 100;
 
+/** Path the synthesized .env file lands at in the file map. */
+const SYNTHESIZED_ENV_PATH = '/.env';
+
 export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>, ArtifactParams> {
   private artifactRepo: ArtifactRepository;
+  private trustRepo: ArtifactTrustGrantRepository;
   private worktreeRepo: WorktreeRepository;
   private boardRepo: BoardRepository;
   private app: Application;
@@ -109,8 +104,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   /** In-memory Sandpack status per artifact (from browser iframe) */
   private sandpackStatuses: Map<string, string> = new Map();
 
-  /** URL of self-hosted Sandpack bundler (detected at startup, null if not available) */
-  selfHostedBundlerURL: string | null = null;
+  /**
+   * Just-once / session-scope grants live here only — never persisted.
+   * Keyed by `${userId}:${artifactId}`. Cleared when the daemon restarts.
+   */
+  private sessionGrants: Map<string, { envVars: Set<string>; grants: AgorGrants }> = new Map();
 
   constructor(db: Database, app: Application) {
     const artifactRepo = new ArtifactRepository(db);
@@ -123,16 +121,14 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       },
     });
     this.artifactRepo = artifactRepo;
+    this.trustRepo = new ArtifactTrustGrantRepository(db);
     this.worktreeRepo = new WorktreeRepository(db);
     this.boardRepo = new BoardRepository(db);
     this.app = app;
   }
 
-  // Override Feathers CRUD to enforce lifecycle-safe operations.
-  // Artifacts require publish semantics (serializing folder → DB).
-  // Raw Feathers create would skip these, causing incomplete state.
-  // Use publish() or the agor_artifacts_publish MCP tool instead.
-
+  // Direct Feathers create is intentionally rejected — artifacts require
+  // the publish() lifecycle (folder → DB).
   async create(_data: Partial<Artifact>, _params?: unknown): Promise<Artifact> {
     throw new Error(
       'Direct artifact creation not supported. Use publish() or agor_artifacts_publish MCP tool.'
@@ -140,14 +136,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   /**
-   * Feathers patch override: route board_id and placement changes through
+   * Patch override: route board_id and placement changes through
    * updateMetadata so the board_objects entry is moved/resized alongside the
-   * row update. Plain metadata patches (name, description, public, archived,
-   * build state, etc.) fall through to the default DrizzleService patch.
-   *
-   * Ownership is enforced by Feathers hooks (creator-or-admin); this method
-   * additionally forwards the caller's user_id into updateMetadata as a
-   * defence-in-depth check for direct internal callers.
+   * row update. Plain metadata patches fall through to the default
+   * DrizzleService patch.
    */
   async patch(id: string | number, data: Partial<Artifact>, params?: unknown): Promise<Artifact> {
     const d = data as Partial<Artifact> & {
@@ -161,15 +153,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
     if (d.board_id !== undefined || placementFields) {
       const artifactId = String(id);
-      // Resolve short IDs to a full ID through the repository.
       const existing = await this.artifactRepo.findById(artifactId);
       if (!existing) throw new Error(`Artifact ${artifactId} not found`);
-
-      // Pass through the caller's user_id when available (external REST/MCP
-      // calls) so updateMetadata's owner check engages. Feathers hooks are
-      // the primary gate; this is defence-in-depth for internal callers that
-      // forward a user. Internal service-to-service calls without a user
-      // still bypass the inline check (matches existing publish() behavior).
       const callerUserId = (params as { user?: { user_id?: string } } | undefined)?.user?.user_id;
 
       return this.updateMetadata(
@@ -193,9 +178,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   /**
-   * Centralized visibility predicate.
-   * Private artifacts are only readable by their creator; public artifacts
-   * are readable by anyone. Used by MCP tools (get, land) to avoid drift.
+   * Centralized visibility predicate. Private artifacts are only readable
+   * by their creator; public artifacts are readable by anyone.
    */
   isVisibleTo(artifact: Pick<Artifact, 'public' | 'created_by'>, userId?: string): boolean {
     if (artifact.public) return true;
@@ -213,11 +197,9 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   /**
-   * Publish a folder as a live Sandpack artifact on a board.
-   *
-   * Reads all files from folderPath, serializes them into the DB `files` column.
-   * If artifactId is provided, updates an existing artifact (must be owned by userId).
-   * If artifactId is omitted, creates a new artifact and places it on the board.
+   * Publish a folder as a live Sandpack artifact on a board. Reads files from
+   * `folderPath`, serializes them into the DB, and places (or updates) the
+   * artifact on the board.
    */
   async publish(
     data: {
@@ -227,7 +209,9 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       artifact_id?: string;
       template?: SandpackTemplate;
       public?: boolean;
-      use_local_bundler?: boolean;
+      sandpack_config?: SandpackConfig;
+      required_env_vars?: string[];
+      agor_grants?: AgorGrants;
       x?: number;
       y?: number;
       width?: number;
@@ -236,66 +220,54 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     userId?: string
   ): Promise<Artifact> {
     const folderPath = path.resolve(data.folderPath);
-    const template = data.template ?? 'react';
     const isPublic = data.public ?? true;
 
-    // Path containment: only allow reading from worktree paths or temp directories
+    // Path containment: only allow reading from worktree paths or temp dirs.
     await this.validatePublishPath(folderPath);
 
     if (!fs.existsSync(folderPath)) {
       throw new Error(`Folder not found: ${folderPath}`);
     }
 
-    // Read all files from the folder
     const files = this.readFilesRecursive(folderPath, folderPath);
 
-    // Read sandpack.json manifest if present
-    const manifestPath = path.join(folderPath, 'sandpack.json');
-    let manifest: SandpackManifest = { template };
-    if (fs.existsSync(manifestPath)) {
-      manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-    }
+    // package.json#dependencies is the source of truth; cache it on the row
+    // for cheap list/list-friendly reads.
+    const cachedDeps = this.extractDependenciesFromPackageJson(files);
+    const sandpackConfig = sanitizeSandpackConfig(data.sandpack_config);
+    const template = (data.template ?? sandpackConfig.template ?? 'react') as SandpackTemplate;
+    if (!sandpackConfig.template) sandpackConfig.template = template;
+    const cachedEntry = sandpackConfig.customSetup?.entry;
+    const requiredEnvVars = sanitizeEnvVarNames(data.required_env_vars);
+    const agorGrants = sanitizeAgorGrants(data.agor_grants);
 
-    // Allow explicit parameter to override manifest
-    if (data.use_local_bundler !== undefined) {
-      manifest.use_local_bundler = data.use_local_bundler;
-    }
-
-    // Validate use_local_bundler opt-in
-    if (manifest.use_local_bundler && !this.selfHostedBundlerURL) {
-      throw new Error(
-        'Cannot publish artifact with use_local_bundler=true: this daemon was not built with --with-sandpack, so no self-hosted Sandpack bundler is available. Either rebuild the daemon with `./build.sh --with-sandpack`, or omit use_local_bundler to use the default CodeSandbox hosted bundler.'
-      );
-    }
-
-    // Compute content hash from serialized files
     const contentHash = this.computeHashFromFiles(files);
 
     if (data.artifact_id) {
-      // ── UPDATE existing artifact ──
       const existing = await this.artifactRepo.findById(data.artifact_id);
       if (!existing) throw new Error(`Artifact ${data.artifact_id} not found`);
       if (userId && existing.created_by && existing.created_by !== userId) {
         throw new Error('Cannot update artifact: not the owner');
       }
 
-      // Auto-check build status from the files we just read
       const buildResult = this.validateFiles(files);
 
       const updated = await this.artifactRepo.update(data.artifact_id, {
         name: data.name,
         files,
-        dependencies: manifest.dependencies,
-        entry: manifest.entry,
-        template: manifest.template ?? template,
+        dependencies: cachedDeps,
+        entry: cachedEntry,
+        template,
+        sandpack_config: sandpackConfig,
+        required_env_vars: requiredEnvVars,
+        agor_grants: agorGrants,
         content_hash: contentHash,
-        use_local_bundler: manifest.use_local_bundler,
         public: isPublic,
         build_status: buildResult.status,
         build_errors: buildResult.errors.length > 0 ? buildResult.errors : undefined,
       });
 
-      // Clear stale in-memory Sandpack state — new content will produce fresh state from the browser
+      // Stale Sandpack state — new content will produce fresh state from the browser.
       this.sandpackErrors.delete(data.artifact_id);
       this.sandpackStatuses.delete(data.artifact_id);
 
@@ -303,10 +275,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       return updated;
     }
 
-    // ── CREATE new artifact ──
     const artifactId = generateId();
-
-    // Auto-check build status from the files we just read
     const buildResult = this.validateFiles(files);
 
     const artifact = await this.artifactRepo.create({
@@ -314,11 +283,13 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       board_id: data.board_id as BoardID,
       name: data.name,
       path: folderPath,
-      template: manifest.template ?? template,
+      template,
       files,
-      dependencies: manifest.dependencies,
-      entry: manifest.entry,
-      use_local_bundler: manifest.use_local_bundler,
+      dependencies: cachedDeps,
+      entry: cachedEntry,
+      sandpack_config: sandpackConfig,
+      required_env_vars: requiredEnvVars,
+      agor_grants: agorGrants,
       content_hash: contentHash,
       build_status: buildResult.status,
       build_errors: buildResult.errors.length > 0 ? buildResult.errors : undefined,
@@ -326,7 +297,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       created_by: userId,
     });
 
-    // Place on board as a thin reference
     const objectId = `artifact-${artifactId}`;
     try {
       const updatedBoard = await this.boardRepo.upsertBoardObject(data.board_id, objectId, {
@@ -342,7 +312,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         this.app.service('boards').emit('patched', updatedBoard);
       }
     } catch (boardError) {
-      // Compensate: remove DB record if board placement fails
+      // Compensate: remove DB record if board placement fails.
       try {
         await this.artifactRepo.delete(artifactId);
       } catch (deleteError) {
@@ -359,17 +329,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   /**
-   * Update artifact metadata without touching file contents.
-   *
-   * Supports: name, description, public, archived flag, board move,
-   * and board placement (x/y/width/height).
-   *
-   * When moving between boards, the old board object is removed and a new one
-   * is created on the destination board. Placement (x/y/width/height) is
-   * preserved unless caller explicitly overrides — this makes cross-board
-   * moves layout-preserving by default.
-   *
-   * For file/content updates use publish() instead.
+   * Update artifact metadata without touching files.
+   * For file/content changes use publish().
    */
   async updateMetadata(
     artifactId: string,
@@ -383,6 +344,9 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       y?: number;
       width?: number;
       height?: number;
+      required_env_vars?: string[];
+      agor_grants?: AgorGrants;
+      sandpack_config?: SandpackConfig;
     },
     userId?: string
   ): Promise<Artifact> {
@@ -398,9 +362,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const newBoardId = updates.board_id ?? oldBoardId;
     const moving = newBoardId !== oldBoardId;
 
-    // Pre-validate destination board exists when moving. This avoids persisting
-    // a dangling `artifact.board_id` with no matching board_objects entry if
-    // the upsert would fail.
     if (moving) {
       const destBoard = await this.boardRepo.findById(newBoardId);
       if (!destBoard) {
@@ -408,8 +369,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       }
     }
 
-    // Read the current board object (if present) so we can preserve placement
-    // when moving or when only some placement fields are provided.
     let currentPlacement: { x: number; y: number; width: number; height: number } | null = null;
     try {
       const oldBoard = await this.boardRepo.findById(oldBoardId);
@@ -418,11 +377,9 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         currentPlacement = { x: obj.x, y: obj.y, width: obj.width, height: obj.height };
       }
     } catch {
-      // Board may have been deleted out from under the artifact — placement
-      // falls back to defaults below.
+      // Old board may have been deleted.
     }
 
-    // Apply DB updates (metadata + board_id).
     const dbUpdates: Partial<Artifact> = {};
     if (updates.name !== undefined) dbUpdates.name = updates.name;
     if (updates.description !== undefined) dbUpdates.description = updates.description;
@@ -432,13 +389,21 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       dbUpdates.archived_at = updates.archived ? new Date().toISOString() : undefined;
     }
     if (moving) dbUpdates.board_id = newBoardId;
+    if (updates.required_env_vars !== undefined) {
+      dbUpdates.required_env_vars = sanitizeEnvVarNames(updates.required_env_vars);
+    }
+    if (updates.agor_grants !== undefined) {
+      dbUpdates.agor_grants = sanitizeAgorGrants(updates.agor_grants);
+    }
+    if (updates.sandpack_config !== undefined) {
+      dbUpdates.sandpack_config = sanitizeSandpackConfig(updates.sandpack_config);
+    }
 
     let updated = existing;
     if (Object.keys(dbUpdates).length > 0) {
       updated = await this.artifactRepo.update(fullArtifactId, dbUpdates);
     }
 
-    // Sync board_objects if moving OR if placement fields were supplied.
     const placementChanged =
       updates.x !== undefined ||
       updates.y !== undefined ||
@@ -455,17 +420,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         height: updates.height ?? currentPlacement?.height ?? 400,
       };
 
-      // Upsert the destination board object FIRST. Only once the new placement
-      // is safely in place do we remove the old one — this way, a failing
-      // upsert leaves the old board object intact (we only have to roll back
-      // the DB row), rather than leaving the artifact orphaned on both boards.
       try {
         const targetBoard = await this.boardRepo.upsertBoardObject(newBoardId, objectId, placement);
         this.app.service('boards').emit('patched', targetBoard);
       } catch (upsertError) {
-        // Compensate: if we already updated the DB row (in particular, moved
-        // `board_id` to newBoardId), roll it back so the artifact row and
-        // board_objects stay consistent.
         if (Object.keys(dbUpdates).length > 0) {
           try {
             const rollback: Partial<Artifact> = {};
@@ -495,9 +453,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           const cleaned = await this.boardRepo.removeBoardObject(oldBoardId, objectId);
           this.app.service('boards').emit('patched', cleaned);
         } catch {
-          // Old board may not have this object (e.g. was already cleaned up),
-          // or the old board was deleted. The destination upsert already
-          // succeeded, so the artifact is reachable on its new board.
+          // Old board may not have this object.
         }
       }
     }
@@ -508,14 +464,14 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
   /**
    * Materialize an artifact's stored file map to a destination under a worktree.
-   * Inverse of publish().
+   * Inverse of publish(). Sandpack metadata is reconstructed as a sidecar
+   * `agor.artifact.json` so a round-trip via publish() round-trips the
+   * metadata that doesn't live in the file map.
    *
    * Security:
-   * - destination must resolve strictly inside the worktree (not equal to the
-   *   worktree root) — prevents overwriting random files via `subpath`.
-   * - per-file paths from the artifact's `files` map are re-validated to block
-   *   traversal keys like `../../etc/passwd` that could have been snuck into
-   *   the serialized file map.
+   * - destination must resolve strictly inside the worktree root.
+   * - per-file paths from the artifact's `files` map are re-validated to
+   *   block traversal keys.
    * - when overwriting, uses `fs.rm` which removes symlinks rather than
    *   following them.
    */
@@ -533,34 +489,20 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     if (!fs.existsSync(worktreePath)) {
       throw new Error(`Worktree path does not exist: ${worktreePath}`);
     }
-    // Canonicalize the worktree root so a symlinked root (e.g. a worktree
-    // whose `path` column is a symlink into $HOME) cannot be used to defeat
-    // the containment check below. Mirrors the pattern in
-    // apps/agor-daemon/src/services/file.ts and
-    // packages/core/src/git/index.ts.
     const worktreeRoot = await realpath(worktreePath);
 
-    // Default destination: .agor/artifacts/<artifact-id>
     const rawSubpath =
       options?.subpath && options.subpath.trim().length > 0
         ? options.subpath
         : path.join('.agor', 'artifacts', artifact.artifact_id);
 
-    // Absolute subpath is always rejected — caller must pass a worktree-relative path.
     if (path.isAbsolute(rawSubpath)) {
       throw new Error(`subpath must be relative to the worktree root: ${rawSubpath}`);
     }
 
     const destination = path.resolve(worktreeRoot, rawSubpath);
-
-    // Canonicalize any existing portion of the destination path (a
-    // pre-existing symlinked parent directory must not lift the write outside
-    // the worktree root).
     const canonicalDestination = await canonicalizeExistingPrefix(destination);
 
-    // Path-escape check: destination must be strictly inside the worktree.
-    // Equal to worktree root is refused — writing the artifact at the worktree
-    // root would stomp user code.
     const assertInsideRoot = (candidate: string, reason: string): void => {
       if (candidate === worktreeRoot) {
         throw new Error(`${reason}: must not resolve to the worktree root`);
@@ -573,9 +515,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     assertInsideRoot(destination, `subpath ${rawSubpath}`);
     assertInsideRoot(canonicalDestination, `subpath ${rawSubpath} (canonical)`);
 
-    // Validate file-map keys for traversal. Artifact file keys are stored as
-    // `/path/to/file` (leading slash, forward slashes). Strip leading slash,
-    // resolve inside destination, and verify containment.
     for (const filePath of Object.keys(artifact.files)) {
       const key = filePath.startsWith('/') ? filePath.slice(1) : filePath;
       if (path.isAbsolute(key)) {
@@ -588,20 +527,17 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       }
     }
 
-    // Handle existing destination.
     if (fs.existsSync(destination)) {
       if (!options?.overwrite) {
         throw new Error(
           `Destination already exists: ${destination} (pass overwrite=true to replace)`
         );
       }
-      // fs.rm with recursive unlinks symlinks rather than following them.
       await rm(destination, { recursive: true, force: true });
     }
 
     await mkdir(destination, { recursive: true });
 
-    // Write the file map.
     let bytesWritten = 0;
     let fileCount = 0;
     for (const [filePath, content] of Object.entries(artifact.files)) {
@@ -613,16 +549,24 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       fileCount += 1;
     }
 
-    // Reconstruct sandpack.json for round-trip with publish() (publish skips
-    // sandpack.json when reading, and reconstitutes manifest state from DB
-    // columns).
-    const manifest: SandpackManifest = { template: artifact.template };
-    if (artifact.dependencies) manifest.dependencies = artifact.dependencies;
-    if (artifact.entry) manifest.entry = artifact.entry;
-    if (artifact.use_local_bundler) manifest.use_local_bundler = artifact.use_local_bundler;
-    const manifestJson = `${JSON.stringify(manifest, null, 2)}\n`;
-    await writeFile(path.join(destination, 'sandpack.json'), manifestJson, 'utf-8');
-    bytesWritten += Buffer.byteLength(manifestJson, 'utf-8');
+    // Round-trip sidecar: persist artifact-level metadata that has no place in
+    // a normal file tree (template, sandpack_config, required_env_vars,
+    // agor_grants). publish() reads agor.artifact.json back if present;
+    // ordinary builds/Vite/CRA never look at it.
+    const sidecar: Record<string, unknown> = {
+      $schema: 'https://agor.live/schemas/artifact/2026-05-09.json',
+      template: artifact.template,
+    };
+    if (artifact.sandpack_config) sidecar.sandpack_config = artifact.sandpack_config;
+    if (artifact.required_env_vars && artifact.required_env_vars.length > 0) {
+      sidecar.required_env_vars = artifact.required_env_vars;
+    }
+    if (artifact.agor_grants && Object.keys(artifact.agor_grants).length > 0) {
+      sidecar.agor_grants = artifact.agor_grants;
+    }
+    const sidecarJson = `${JSON.stringify(sidecar, null, 2)}\n`;
+    await writeFile(path.join(destination, 'agor.artifact.json'), sidecarJson, 'utf-8');
+    bytesWritten += Buffer.byteLength(sidecarJson, 'utf-8');
     fileCount += 1;
 
     return { destinationPath: destination, fileCount, bytesWritten };
@@ -630,10 +574,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
   /**
    * Read artifact payload for the frontend.
-   * Primary path: reads from DB `files` column.
-   * Legacy fallback: reads from filesystem if `files` is null (un-migrated artifacts).
-   * If the artifact contains an /agor.config.js file, it is treated as a
-   * Handlebars template and rendered with the requesting user's context.
+   *
+   * Resolves trust state, synthesizes a per-viewer `.env` (when consent
+   * permits), runs legacy detection, and returns everything the renderer
+   * needs.
    */
   async getPayload(artifactId: string, userId?: UserID): Promise<ArtifactPayload> {
     const artifact = await this.artifactRepo.findById(artifactId);
@@ -650,68 +594,372 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       throw new Error(`Artifact ${artifactId} has no files in DB — cannot serve payload`);
     }
 
-    const files: Record<string, string> = { ...artifact.files };
-    const manifest: SandpackManifest = {
-      template: artifact.template as SandpackTemplate,
-      dependencies: artifact.dependencies,
-      entry: artifact.entry,
-      use_local_bundler: artifact.use_local_bundler,
-    };
+    const filesOut: Record<string, string> = { ...artifact.files };
+    const requiredEnvVars = artifact.required_env_vars ?? [];
+    const grants = artifact.agor_grants ?? {};
+    const consentRelevantGrants = pickConsentRelevantGrants(grants);
 
-    // Compute hash from files
-    const contentHash = this.computeHashFromFiles(files);
+    const needsConsent =
+      requiredEnvVars.length > 0 || Object.keys(consentRelevantGrants).length > 0;
 
-    // Render agor.config.js template if present
-    let missingEnvVars: string[] | undefined;
-    if (files[AGOR_CONFIG_FILE]) {
-      const result = await this.renderAgorConfig(files[AGOR_CONFIG_FILE], artifact, userId);
-      files[AGOR_CONFIG_FILE] = result.rendered;
-      if (result.missingEnvVars.length > 0) {
-        missingEnvVars = result.missingEnvVars;
+    let trustState: ArtifactPayload['trust_state'] = 'no_secrets_needed';
+    let trustScope: ArtifactPayload['trust_scope'] | undefined;
+    let envValues: Record<string, string> = {};
+
+    if (needsConsent) {
+      const decision = await this.resolveTrust({
+        artifact,
+        userId,
+        requiredEnvVars,
+        grants,
+      });
+      trustState = decision.state;
+      trustScope = decision.scope;
+      if (decision.state === 'self' || decision.state === 'trusted') {
+        envValues = await this.resolveEnvVarValues(userId, requiredEnvVars);
       }
     }
 
-    // Resolve bundlerURL
-    let bundlerURL: string | undefined;
-    if (manifest.use_local_bundler) {
-      if (this.selfHostedBundlerURL) {
-        bundlerURL = this.selfHostedBundlerURL;
-      } else {
-        console.warn(
-          `[artifacts] Artifact ${artifactId} opted into local bundler but no self-hosted bundler is available on this daemon. Falling back to CodeSandbox hosted bundler. Rebuild with --with-sandpack to restore local bundling.`
-        );
-      }
+    if (needsConsent) {
+      const envFile = await this.synthesizeEnvFile({
+        template: artifact.template,
+        requiredEnvVars,
+        envValues,
+        grants,
+        artifact,
+        userId,
+        injectGrants: trustState === 'self' || trustState === 'trusted',
+      });
+      // Only emit a .env if we have something meaningful to put in it OR if
+      // the artifact's bundler can read it. For vanilla/static templates the
+      // file is irrelevant.
+      if (envFile !== null) filesOut[SYNTHESIZED_ENV_PATH] = envFile;
     }
 
-    return {
+    const contentHash = this.computeHashFromFiles(filesOut);
+    const legacy = detectLegacyFormat(artifact);
+
+    const payload: ArtifactPayload = {
       artifact_id: artifact.artifact_id,
       name: artifact.name,
       description: artifact.description,
-      template: manifest.template ?? (artifact.template as SandpackTemplate),
-      files,
-      dependencies: manifest.dependencies,
-      entry: manifest.entry,
+      template: artifact.template,
+      files: filesOut,
+      sandpack_config: artifact.sandpack_config,
+      dependencies: artifact.dependencies,
+      entry: artifact.entry,
       content_hash: contentHash,
-      ...(missingEnvVars ? { missing_env_vars: missingEnvVars } : {}),
-      ...(bundlerURL ? { bundlerURL } : {}),
+      required_env_vars: requiredEnvVars.length > 0 ? requiredEnvVars : undefined,
+      agor_grants: Object.keys(grants).length > 0 ? grants : undefined,
+      trust_state: trustState,
+      ...(trustScope ? { trust_scope: trustScope } : {}),
+      ...(legacy.is_legacy ? { legacy } : {}),
     };
+    return payload;
   }
 
   /**
-   * Check build: verify artifact files exist and are non-empty.
-   * Reads from a folder path (pre-publish check) or from DB (post-publish check).
+   * Resolve consent for an artifact's requested env vars + grants.
+   * Returns the trust state and (when applicable) the scope of the matching grant.
+   *
+   * Resolution order matches the roadmap:
+   *   1. Author is the viewer → 'self'.
+   *   2. agor_token requested → ONLY artifact-scoped grants apply.
+   *   3. instance > author > artifact > session — first matching wins.
    */
+  private async resolveTrust(input: {
+    artifact: Artifact;
+    userId?: UserID;
+    requiredEnvVars: string[];
+    grants: AgorGrants;
+  }): Promise<{ state: ArtifactPayload['trust_state']; scope?: ArtifactTrustScopeType }> {
+    const { artifact, userId, requiredEnvVars, grants } = input;
+    if (userId && artifact.created_by && artifact.created_by === userId) {
+      return { state: 'self', scope: 'self' };
+    }
+    if (!userId) return { state: 'untrusted' };
+
+    const wantsAgorToken = !!grants.agor_token;
+    const consentRelevantGrants = pickConsentRelevantGrants(grants);
+
+    // agor_token is artifact-scoped only — author/instance grants do NOT cover it.
+    if (wantsAgorToken) {
+      const artifactGrants = await this.trustRepo.findActiveForScope({
+        userId,
+        scopeType: 'artifact',
+        scopeValue: artifact.artifact_id,
+      });
+      if (artifactGrants.some((g) => coversRequest(g, requiredEnvVars, consentRelevantGrants))) {
+        return { state: 'trusted', scope: 'artifact' };
+      }
+      // Even if a non-token grant covers, agor_token requires artifact scope.
+      // Fall through to untrusted unless a session grant matches (below).
+    } else {
+      const tryScopes: {
+        type: Exclude<ArtifactTrustScopeType, 'session' | 'self'>;
+        value: string | null;
+      }[] = [
+        { type: 'instance', value: null },
+        { type: 'author', value: artifact.created_by ?? null },
+        { type: 'artifact', value: artifact.artifact_id },
+      ];
+      for (const sc of tryScopes) {
+        if (sc.type === 'author' && !sc.value) continue;
+        const matches = await this.trustRepo.findActiveForScope({
+          userId,
+          scopeType: sc.type,
+          scopeValue: sc.value,
+        });
+        if (matches.some((g) => coversRequest(g, requiredEnvVars, consentRelevantGrants))) {
+          return { state: 'trusted', scope: sc.type };
+        }
+      }
+    }
+
+    const sessionKey = `${userId}:${artifact.artifact_id}`;
+    const sessionGrant = this.sessionGrants.get(sessionKey);
+    if (sessionGrant) {
+      const envCovered = requiredEnvVars.every((v) => sessionGrant.envVars.has(v));
+      const grantsCovered = grantsAreSubset(consentRelevantGrants, sessionGrant.grants);
+      // agor_token is artifact-scoped only; for the session-scope path we
+      // additionally require that the grant explicitly listed agor_token.
+      const tokenCovered = !wantsAgorToken || sessionGrant.grants.agor_token === true;
+      if (envCovered && grantsCovered && tokenCovered) {
+        return { state: 'trusted', scope: 'session' };
+      }
+    }
+
+    return { state: 'untrusted' };
+  }
+
+  /**
+   * Build the synthesized `.env` body. Returns null for templates without a
+   * dotenv path (vanilla/static), in which case nothing is injected.
+   */
+  private async synthesizeEnvFile(input: {
+    template: SandpackTemplate;
+    requiredEnvVars: string[];
+    envValues: Record<string, string>;
+    grants: AgorGrants;
+    artifact: Artifact;
+    userId?: UserID;
+    injectGrants: boolean;
+  }): Promise<string | null> {
+    const prefix = envVarPrefixForTemplate(input.template);
+    if (prefix === null) {
+      // No dotenv path. Warn loudly if the artifact wanted env vars or grants.
+      if (input.requiredEnvVars.length > 0 || Object.keys(input.grants).length > 0) {
+        console.warn(
+          `[artifacts] Artifact ${input.artifact.artifact_id} (template=${input.template}) requests env vars/grants but the template has no dotenv path. Nothing was injected.`
+        );
+      }
+      return null;
+    }
+
+    const lines: string[] = [];
+    for (const name of input.requiredEnvVars) {
+      const value = input.envValues[name] ?? '';
+      lines.push(`${prefix}${name}=${escapeEnvValue(value)}`);
+    }
+
+    if (input.injectGrants) {
+      const injectedGrants = await this.resolveGrantValues({
+        grants: input.grants,
+        artifact: input.artifact,
+        userId: input.userId,
+      });
+      for (const [name, value] of Object.entries(injectedGrants)) {
+        lines.push(`${prefix}${name}=${escapeEnvValue(value)}`);
+      }
+    } else {
+      // Empty values for grants — keeps the env keys present so the artifact
+      // can detect "untrusted" rather than "ReferenceError on missing key".
+      for (const [grantName, fixedEnvName] of Object.entries(GRANT_ENV_VAR_NAMES)) {
+        if ((input.grants as Record<string, unknown>)[grantName]) {
+          lines.push(`${prefix}${fixedEnvName}=`);
+        }
+      }
+      if (input.grants.agor_proxies) {
+        for (const vendor of input.grants.agor_proxies) {
+          lines.push(`${prefix}${proxyGrantEnvName(vendor)}=`);
+        }
+      }
+    }
+
+    return lines.length > 0 ? `${lines.join('\n')}\n` : null;
+  }
+
+  /**
+   * Resolve the runtime values for each granted capability. Mints a JWT for
+   * `agor_token`, looks up the daemon URL for `agor_api_url`, etc.
+   */
+  private async resolveGrantValues(input: {
+    grants: AgorGrants;
+    artifact: Artifact;
+    userId?: UserID;
+  }): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    const { grants, artifact, userId } = input;
+
+    if (grants.agor_token && userId) {
+      out[GRANT_ENV_VAR_NAMES.agor_token] = await this.mintViewerJwt(userId);
+    }
+    if (grants.agor_api_url) {
+      out[GRANT_ENV_VAR_NAMES.agor_api_url] = await getBaseUrl();
+    }
+    if (grants.agor_user_email && userId) {
+      try {
+        const usersService = this.app.service('users') as unknown as UsersService;
+        const user = await usersService.get(userId);
+        if (user?.email) out[GRANT_ENV_VAR_NAMES.agor_user_email] = user.email;
+      } catch {
+        // Fall through — leave the variable empty.
+      }
+    }
+    if (grants.agor_artifact_id) {
+      out[GRANT_ENV_VAR_NAMES.agor_artifact_id] = artifact.artifact_id;
+    }
+    if (grants.agor_board_id) {
+      out[GRANT_ENV_VAR_NAMES.agor_board_id] = artifact.board_id;
+    }
+
+    if (grants.agor_proxies && grants.agor_proxies.length > 0) {
+      try {
+        const config = await loadConfig();
+        const proxies = resolveProxies(config);
+        const baseUrl = await getBaseUrl();
+        const origin = new URL(baseUrl).origin;
+        const configuredVendors = new Set(proxies.map((p) => p.vendor));
+        for (const vendor of grants.agor_proxies) {
+          if (!configuredVendors.has(vendor)) continue;
+          out[proxyGrantEnvName(vendor)] = `${origin}/proxies/${vendor}`;
+        }
+      } catch (err) {
+        console.warn('[artifacts] failed to resolve proxy URLs for grant injection:', err);
+      }
+    }
+
+    return out;
+  }
+
+  private async mintViewerJwt(userId: string): Promise<string> {
+    const authConfig = this.app.get('authentication') as { secret?: string } | undefined;
+    const jwtSecret = authConfig?.secret;
+    if (!jwtSecret) {
+      console.warn('[artifacts] no auth.secret set — AGOR_TOKEN will render empty');
+      return '';
+    }
+    return jwt.sign({ sub: userId, type: 'access' }, jwtSecret, {
+      expiresIn: '15m',
+      issuer: 'agor',
+      audience: 'https://agor.dev',
+    });
+  }
+
+  private async resolveEnvVarValues(
+    userId: UserID | undefined,
+    names: string[]
+  ): Promise<Record<string, string>> {
+    if (!userId || names.length === 0) return {};
+    try {
+      const usersService = this.app.service('users') as unknown as UsersService;
+      const all = await usersService.getEnvironmentVariables(userId);
+      const out: Record<string, string> = {};
+      for (const n of names) {
+        if (all[n] !== undefined) out[n] = all[n];
+      }
+      return out;
+    } catch (err) {
+      console.error(`[artifacts] failed to resolve env vars for user ${userId}:`, err);
+      return {};
+    }
+  }
+
+  // ── Trust grants management (called from REST routes / consent modal) ──
+
+  /**
+   * Persist a trust grant for `(viewer, scope_type, scope_value)`. For
+   * `session`-scope grants the value lives in-process only.
+   */
+  async grantTrust(input: {
+    userId: string;
+    artifactId: string;
+    scopeType: ArtifactTrustScopeType;
+    envVars: string[];
+    grants: AgorGrants;
+  }): Promise<{ scope: ArtifactTrustScopeType; persisted: boolean }> {
+    const sanitizedEnv = sanitizeEnvVarNames(input.envVars);
+    const sanitizedGrants = sanitizeAgorGrants(input.grants);
+
+    if (input.scopeType === 'session') {
+      const key = `${input.userId}:${input.artifactId}`;
+      this.sessionGrants.set(key, {
+        envVars: new Set(sanitizedEnv),
+        grants: sanitizedGrants,
+      });
+      return { scope: 'session', persisted: false };
+    }
+
+    if (input.scopeType === 'self') {
+      throw new Error("'self' grants are implicit and cannot be persisted");
+    }
+
+    // Resolve scope_value from artifact when needed.
+    let scopeValue: string | null = null;
+    if (input.scopeType === 'artifact') {
+      scopeValue = input.artifactId;
+    } else if (input.scopeType === 'author') {
+      const artifact = await this.artifactRepo.findById(input.artifactId);
+      if (!artifact?.created_by) {
+        throw new Error('Cannot grant author-scope trust: artifact has no recorded author');
+      }
+      scopeValue = artifact.created_by;
+    } else if (input.scopeType === 'instance') {
+      scopeValue = null;
+    }
+
+    // agor_token must be artifact-scoped only.
+    const wantsAgorToken = !!sanitizedGrants.agor_token;
+    if (wantsAgorToken && input.scopeType !== 'artifact') {
+      throw new Error(
+        `Cannot grant agor_token at scope '${input.scopeType}' — agor_token requires artifact-scoped consent`
+      );
+    }
+
+    await this.trustRepo.create({
+      user_id: input.userId,
+      scope_type: input.scopeType,
+      scope_value: scopeValue,
+      env_vars_set: sanitizedEnv,
+      agor_grants_set: sanitizedGrants,
+    });
+    return { scope: input.scopeType, persisted: true };
+  }
+
+  async listTrustGrants(userId: string) {
+    return this.trustRepo.findActiveByUser(userId);
+  }
+
+  async revokeTrustGrant(userId: string, grantId: string): Promise<void> {
+    const grant = await this.trustRepo.findById(grantId);
+    if (!grant) throw new Error(`Trust grant ${grantId} not found`);
+    if (grant.user_id !== userId) {
+      throw new Error('Cannot revoke a trust grant owned by another user');
+    }
+    await this.trustRepo.revoke(grantId);
+  }
+
+  // ── Build / status / console / find helpers (mostly unchanged) ──
+
   async checkBuildFromFolder(folderPath: string): Promise<{
     status: ArtifactBuildStatus;
     errors: string[];
   }> {
     const resolved = path.resolve(folderPath);
     await this.validatePublishPath(resolved);
-
     if (!fs.existsSync(resolved)) {
       return { status: 'error', errors: [`Folder not found: ${folderPath}`] };
     }
-
     const files = this.readFilesRecursive(resolved, resolved);
     return this.validateFiles(files);
   }
@@ -722,25 +970,17 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }> {
     const payload = await this.getPayload(artifactId);
     const result = this.validateFiles(payload.files);
-
-    // Update DB
     await this.artifactRepo.updateBuildStatus(
       artifactId,
       result.status,
       result.errors.length > 0 ? result.errors : undefined
     );
-
     return result;
   }
 
-  /**
-   * Store console log entries from frontend
-   */
   appendConsoleLogs(artifactId: string, entries: ArtifactConsoleEntry[]): void {
     const existing = this.consoleLogs.get(artifactId) ?? [];
     const combined = [...existing, ...entries];
-
-    // Ring buffer: keep last MAX_CONSOLE_ENTRIES
     if (combined.length > MAX_CONSOLE_ENTRIES) {
       this.consoleLogs.set(artifactId, combined.slice(-MAX_CONSOLE_ENTRIES));
     } else {
@@ -748,10 +988,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     }
   }
 
-  /**
-   * Store Sandpack error state from the browser frontend.
-   * Called when useSandpack() reports an error change in the iframe.
-   */
   setSandpackError(artifactId: string, error: SandpackError | null, status?: string): void {
     this.sandpackErrors.set(artifactId, error);
     if (status !== undefined) {
@@ -759,12 +995,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     }
   }
 
-  /**
-   * Get artifact status (build + console logs + Sandpack state) for agent debugging.
-   *
-   * build_status reflects the worst state: if Sandpack reports an error,
-   * it overrides the file-validation status even if files are structurally valid.
-   */
   async getStatus(artifactId: string): Promise<ArtifactStatus> {
     const artifact = await this.artifactRepo.findById(artifactId);
     if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
@@ -772,13 +1002,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const sandpackError = this.sandpackErrors.get(artifactId) ?? null;
     const sandpackStatus = this.sandpackStatuses.get(artifactId);
 
-    // Override build_status if Sandpack reports an error
     let buildStatus = artifact.build_status;
     let buildErrors = artifact.build_errors;
 
     if (sandpackError) {
       buildStatus = 'error';
-      // Merge Sandpack error into build_errors so agents see it in one place
       const sandpackMsg = `[Sandpack] ${sandpackError.message}`;
       buildErrors = [...(buildErrors ?? []), sandpackMsg];
     }
@@ -794,15 +1022,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     };
   }
 
-  /**
-   * Delete artifact: remove board object and DB record.
-   * No filesystem cleanup — files aren't ours to manage.
-   */
   async deleteArtifact(artifactId: string): Promise<void> {
     const artifact = await this.artifactRepo.findById(artifactId);
     if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
 
-    // Remove board object reference
     const objectId = `artifact-${artifactId}`;
     try {
       const updatedBoard = await this.boardRepo.removeBoardObject(artifact.board_id, objectId);
@@ -810,31 +1033,20 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         this.app.service('boards').emit('patched', updatedBoard);
       }
     } catch {
-      // Board object may not exist or board may be deleted
+      // Board object may not exist or board may be deleted.
     }
 
-    // Clear in-memory state
     this.consoleLogs.delete(artifactId);
     this.sandpackErrors.delete(artifactId);
     this.sandpackStatuses.delete(artifactId);
 
-    // Delete DB record
     await this.artifactRepo.delete(artifactId);
   }
 
-  /**
-   * Find artifacts by board ID with visibility filtering.
-   * Always enforces visibility: public artifacts + private artifacts owned by userId.
-   * Anonymous callers (no userId) see only public artifacts.
-   */
   async findByBoardId(boardId: BoardID, userId?: string): Promise<Artifact[]> {
     return this.artifactRepo.findByBoardId(boardId, { userId: userId ?? '__anonymous__' });
   }
 
-  /**
-   * Find all visible artifacts (across boards) for a user.
-   * Anonymous callers see only public artifacts.
-   */
   async findVisible(userId?: string, options?: { limit?: number }): Promise<Artifact[]> {
     return this.artifactRepo.findVisible(userId ?? '__anonymous__', { limit: options?.limit });
   }
@@ -842,20 +1054,17 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   // ── Private helpers ──
 
   /**
-   * Validate that a publish folder path is inside an allowed root directory.
-   * Allowed roots: any registered worktree path, /tmp, /var/tmp.
-   * Prevents reading arbitrary filesystem paths through the publish API.
+   * Restrict publish folder paths to known-safe roots: any registered
+   * worktree path, or /tmp / /var/tmp.
    */
   private async validatePublishPath(folderPath: string): Promise<void> {
     const resolved = path.resolve(folderPath);
 
-    // Allow temp directories
     const allowedTempRoots = ['/tmp', '/var/tmp'];
     for (const root of allowedTempRoots) {
       if (resolved.startsWith(root + path.sep) || resolved === root) return;
     }
 
-    // Allow any registered worktree path
     const worktrees = await this.worktreeRepo.findAll();
     for (const wt of worktrees) {
       const wtPath = path.resolve(wt.path);
@@ -867,9 +1076,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     );
   }
 
-  /**
-   * Validate files: check that source files exist and are non-empty
-   */
   private validateFiles(files: Record<string, string>): {
     status: ArtifactBuildStatus;
     errors: string[];
@@ -893,169 +1099,27 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     return { status: errors.length > 0 ? 'error' : 'success', errors };
   }
 
-  /**
-   * Render an agor.config.js Handlebars template with user-specific context.
-   * Returns the rendered string and a list of user.env.* vars that are missing.
-   */
-  private async renderAgorConfig(
-    rawTemplate: string,
-    artifact: Artifact,
-    userId?: UserID
-  ): Promise<{ rendered: string; missingEnvVars: string[] }> {
-    // Extract all user.env.* references from the template AST
-    const requiredEnvVars = this.extractUserEnvPaths(rawTemplate);
-
-    // Build template context. Use the canonical base URL resolver so the
-    // proxy URLs surfaced to artifacts (`agor.proxies.<vendor>.url`) match
-    // what `agor_proxies_list` returns and respect AGOR_BASE_URL /
-    // daemon.base_url overrides for deployed instances.
-    //
-    // Take the .origin only (scheme + host + port) — the proxy mount lives
-    // at /proxies/<vendor> on the daemon root, NOT under whatever path the
-    // configured base URL points at (e.g. AGOR_BASE_URL=https://host/ui
-    // would otherwise produce https://host/ui/proxies/<vendor>, which hits
-    // the SPA shell instead of the proxy). Mirrors mcp/tools/proxies.ts.
-    const daemonUrl = await getBaseUrl();
-    const daemonOrigin = new URL(daemonUrl).origin;
-
-    // Resolve board slug for template context
-    const board = await this.boardRepo.findById(artifact.board_id);
-
-    // Resolve configured HTTP proxies so artifacts can reference
-    // {{ agor.proxies.<vendor>.url }} without hardcoding the daemon host.
-    // Failure here must not break artifact rendering — fall back to an empty
-    // map so missing-proxy lookups render as "" the same way missing env
-    // vars do.
-    const proxiesContext: Record<
-      string,
-      { url: string; upstream: string; allowed_methods: string[] }
-    > = {};
+  private extractDependenciesFromPackageJson(
+    files: Record<string, string>
+  ): Record<string, string> | undefined {
+    const pkg = files['/package.json'] ?? files['package.json'];
+    if (!pkg) return undefined;
     try {
-      const config = await loadConfig();
-      const proxies = resolveProxies(config);
-      for (const p of proxies) {
-        proxiesContext[p.vendor] = {
-          url: `${daemonOrigin}/proxies/${p.vendor}`,
-          upstream: p.upstream,
-          allowed_methods: [...p.allowed_methods],
-        };
-      }
-    } catch (err) {
-      console.warn('[artifacts] failed to resolve proxies for template context:', err);
-    }
-
-    // Mint a short-lived daemon JWT for the viewing user so artifacts can
-    // authenticate to the daemon's own routes (notably `/proxies/<vendor>`).
-    // Shape matches the regular access token issued at login — `sub`,
-    // `type:'access'`, `iss:'agor'`, `aud:'https://agor.dev'` — so the same
-    // verification path accepts it. 15-minute TTL is intentional: the
-    // payload is re-rendered on every viewer load, so a fresh token is
-    // always within reach. No new token type/scope is introduced —
-    // exposing this is the same trust decision as exposing
-    // `{{ user.env.SHORTCUT_API_TOKEN }}` (rendered into artifact JS, never
-    // enters LLM context, scoped to the viewing user only).
-    let agorToken = '';
-    if (userId) {
-      const authConfig = this.app.get('authentication') as { secret?: string } | undefined;
-      const jwtSecret = authConfig?.secret;
-      if (jwtSecret) {
-        agorToken = jwt.sign({ sub: userId, type: 'access' }, jwtSecret, {
-          expiresIn: '15m',
-          issuer: 'agor',
-          audience: 'https://agor.dev',
-        });
-      } else {
-        console.warn('[artifacts] no auth.secret set — {{ agor.token }} will render empty');
-      }
-    }
-
-    const context: Record<string, unknown> = {
-      artifact: { id: artifact.artifact_id, boardId: artifact.board_id },
-      agor: { apiUrl: daemonUrl, proxies: proxiesContext, token: agorToken },
-      board: { id: artifact.board_id, slug: board?.slug ?? '' },
-    };
-
-    let missingEnvVars: string[] = requiredEnvVars; // all missing if no user
-
-    if (userId) {
-      try {
-        const usersService = this.app.service('users') as unknown as UsersService;
-        const [envVars, user] = await Promise.all([
-          usersService.getEnvironmentVariables(userId),
-          usersService.get(userId),
-        ]);
-        context.user = { id: userId, name: user.name ?? '', email: user.email, env: envVars };
-        missingEnvVars = requiredEnvVars.filter((v) => !envVars[v]);
-      } catch (error) {
-        console.error(
-          `Failed to resolve env vars for artifact ${artifact.artifact_id}, user ${userId}:`,
-          error
-        );
-        context.user = { id: userId, env: {} };
-      }
-    }
-
-    // Render template using shared core helper (missing values become "").
-    // renderTemplate returns "" on render error (default onError behavior);
-    // fall back to the raw template so the user sees something rather than
-    // a silently-empty artifact body.
-    const rendered = renderTemplate(rawTemplate, context);
-    return { rendered: rendered || rawTemplate, missingEnvVars };
-  }
-
-  /**
-   * Parse a Handlebars template and extract all user.env.* variable names.
-   * Performs a full AST traversal to catch references in any position
-   * (mustache statements, block params, subexpressions, helpers, etc.).
-   */
-  private extractUserEnvPaths(templateString: string): string[] {
-    try {
-      const ast = Handlebars.parse(templateString);
-      const paths: string[] = [];
-
-      function collectPathExpression(node: Record<string, unknown>): void {
-        if (node.type === 'PathExpression' && typeof node.original === 'string') {
-          if (node.original.startsWith('user.env.')) {
-            paths.push(node.original.replace('user.env.', ''));
-          }
-        }
-      }
-
-      function walk(node: unknown): void {
-        if (!node || typeof node !== 'object') return;
-        const n = node as Record<string, unknown>;
-
-        // Check this node itself for PathExpression
-        collectPathExpression(n);
-
-        // Traverse all known AST child properties
-        for (const key of ['body', 'params', 'hash', 'pairs']) {
-          const child = n[key];
-          if (Array.isArray(child)) child.forEach(walk);
-        }
-        for (const key of ['path', 'program', 'inverse', 'value']) {
-          if (n[key] && typeof n[key] === 'object') walk(n[key]);
-        }
-      }
-
-      walk(ast);
-      return [...new Set(paths)];
+      const parsed = JSON.parse(pkg) as { dependencies?: Record<string, string> };
+      return parsed.dependencies && Object.keys(parsed.dependencies).length > 0
+        ? parsed.dependencies
+        : undefined;
     } catch {
-      return [];
+      return undefined;
     }
   }
 
-  /**
-   * Compute content hash from in-memory file map
-   */
   private computeHashFromFiles(files: Record<string, string>): string {
     const hash = createHash('md5');
     const sortedKeys = Object.keys(files).sort();
-
     for (const key of sortedKeys) {
       hash.update(`${key}:${files[key]}`);
     }
-
     return hash.digest('hex');
   }
 
@@ -1066,16 +1130,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
     for (const entry of entries) {
       const fullPath = path.join(dirPath, entry.name);
-
-      // Skip symlinks to prevent escape outside artifact directory
       if (entry.isSymbolicLink()) continue;
-
-      // Verify resolved path stays within root directory
       const resolved = path.resolve(fullPath);
       if (!resolved.startsWith(path.resolve(root) + path.sep) && resolved !== path.resolve(root)) {
         continue;
       }
-
       if (entry.isDirectory()) {
         if (entry.name !== 'node_modules' && entry.name !== '.git') {
           files.push(...this.getFileList(fullPath, root));
@@ -1094,15 +1153,109 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
     for (const file of fileList) {
       const relativePath = path.relative(rootDir, file);
-      // Skip sandpack.json (it's the manifest, not a source file)
-      if (relativePath === 'sandpack.json') continue;
-      // Use forward slashes and prefix with /
+      // The `agor.artifact.json` sidecar is land()'s round-trip carrier for
+      // metadata that doesn't fit in the file map. publish() consumes it
+      // separately (callers pass the parsed values via the publish args).
+      // Either way it doesn't belong in the served file map.
+      if (relativePath === 'agor.artifact.json') continue;
+      // Skip the synthesized .env so a round-trip via land() → publish()
+      // doesn't accidentally bake the viewer's secrets into the next publish.
+      if (relativePath === '.env') continue;
       const normalizedPath = `/${relativePath.replace(/\\/g, '/')}`;
       files[normalizedPath] = fs.readFileSync(file, 'utf-8');
     }
 
     return files;
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pure helpers (testable; no service state)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+
+export function sanitizeEnvVarNames(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set<string>();
+  for (const v of input) {
+    if (typeof v !== 'string') continue;
+    if (!ENV_VAR_NAME_RE.test(v)) continue;
+    seen.add(v);
+  }
+  return [...seen];
+}
+
+export function sanitizeAgorGrants(input: unknown): AgorGrants {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  const src = input as Record<string, unknown>;
+  const out: AgorGrants = {};
+  for (const key of Object.keys(GRANT_ENV_VAR_NAMES)) {
+    if (src[key] === true) (out as Record<string, unknown>)[key] = true;
+  }
+  if (Array.isArray(src.agor_proxies)) {
+    out.agor_proxies = (src.agor_proxies as unknown[])
+      .filter((v): v is string => typeof v === 'string' && v.length > 0)
+      .map((v) => v.toLowerCase().replace(/[^a-z0-9-_]+/g, ''));
+  }
+  return out;
+}
+
+/** Strip informational grants that don't need consent. */
+export function pickConsentRelevantGrants(grants: AgorGrants): AgorGrants {
+  const out: AgorGrants = { ...grants };
+  // agor_artifact_id and agor_board_id are pure metadata — no consent.
+  delete out.agor_artifact_id;
+  delete out.agor_board_id;
+  return out;
+}
+
+/**
+ * Strict subset check: the existing grant must cover every requested env var
+ * AND every requested non-informational grant.
+ */
+function coversRequest(
+  grant: { env_vars_set: string[]; agor_grants_set: AgorGrants },
+  requiredEnvVars: string[],
+  requestedGrants: AgorGrants
+): boolean {
+  const env = new Set(grant.env_vars_set);
+  for (const v of requiredEnvVars) {
+    if (!env.has(v)) return false;
+  }
+  if (!grantsAreSubset(requestedGrants, grant.agor_grants_set)) return false;
+  // agor_token specifically must already be in the existing grant if requested.
+  for (const k of ARTIFACT_SCOPED_ONLY_GRANT_KEYS) {
+    if (
+      (requestedGrants as Record<string, unknown>)[k] === true &&
+      (grant.agor_grants_set as Record<string, unknown>)[k] !== true
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function grantsAreSubset(needs: AgorGrants, has: AgorGrants): boolean {
+  for (const key of Object.keys(GRANT_ENV_VAR_NAMES) as (keyof typeof GRANT_ENV_VAR_NAMES)[]) {
+    if ((needs as Record<string, unknown>)[key] && !(has as Record<string, unknown>)[key]) {
+      return false;
+    }
+  }
+  if (needs.agor_proxies && needs.agor_proxies.length > 0) {
+    const hasSet = new Set(has.agor_proxies ?? []);
+    for (const v of needs.agor_proxies) {
+      if (!hasSet.has(v)) return false;
+    }
+  }
+  return true;
+}
+
+/** Escape a `.env` value: quote, escape backslashes/quotes/newlines. */
+function escapeEnvValue(value: string): string {
+  if (!value) return '';
+  // Always quote — covers spaces, `#`, `=` in the value, etc.
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
 }
 
 export function createArtifactsService(db: Database, app: Application): ArtifactsService {

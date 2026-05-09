@@ -3,10 +3,16 @@
  *
  * Agent-facing tools for publishing and managing Sandpack artifacts on boards.
  * Artifacts are DB-backed live web applications that render on the board canvas.
+ *
+ * The format is intentionally small: a file map plus declarative metadata
+ * (`required_env_vars`, `agor_grants`, `sandpack_config`). The daemon
+ * synthesizes a per-viewer `.env` and resolves daemon-supplied capabilities
+ * at render time. There is no Handlebars layer, no per-fetch JS rendering,
+ * and no `sandpack.json`/`agor.config.js` sidecar.
  */
 
 import { WorktreeRepository } from '@agor/core/db';
-import type { BoardID, UUID, WorktreeID } from '@agor/core/types';
+import type { AgorGrants, BoardID, SandpackConfig, UUID, WorktreeID } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -16,45 +22,77 @@ import { resolveArtifactId, resolveBoardId, resolveWorktreeId } from '../resolve
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
+const SANDPACK_TEMPLATES = [
+  'react',
+  'react-ts',
+  'vanilla',
+  'vanilla-ts',
+  'vue',
+  'vue3',
+  'svelte',
+  'solid',
+  'angular',
+] as const;
+
+const SandpackConfigSchema = z
+  .object({
+    template: z.enum(SANDPACK_TEMPLATES).optional(),
+    customSetup: z
+      .object({
+        dependencies: z.record(z.string(), z.string()).optional(),
+        devDependencies: z.record(z.string(), z.string()).optional(),
+        entry: z.string().optional(),
+        environment: z.string().optional(),
+      })
+      .optional(),
+    theme: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
+    options: z.record(z.string(), z.unknown()).optional(),
+  })
+  .passthrough()
+  .optional();
+
+const AgorGrantsSchema = z
+  .object({
+    agor_token: z.boolean().optional(),
+    agor_api_url: z.boolean().optional(),
+    agor_user_email: z.boolean().optional(),
+    agor_artifact_id: z.boolean().optional(),
+    agor_board_id: z.boolean().optional(),
+    agor_proxies: z.array(z.string()).optional(),
+  })
+  .optional();
+
 export function registerArtifactTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_artifacts_publish
   server.registerTool(
     'agor_artifacts_publish',
     {
-      description: `Publish a folder as a live Sandpack artifact on a board. Reads all files from the given folder path, serializes them to the database, and places (or updates) the artifact on the board.
+      description: `Publish a folder as a live Sandpack artifact on a board. Reads files from the given folder, serializes them to the database, and places (or updates) the artifact on the board.
 
-If artifact_id is omitted, creates a new artifact.
-If artifact_id is provided, updates the existing artifact (must be owned by you).
+If artifactId is omitted, creates a new artifact.
+If artifactId is provided, updates the existing artifact (must be owned by you).
 
-The folder should contain source files and optionally a sandpack.json manifest. The agent decides where to create the folder — inside the worktree, a temp directory, etc. The folder is only read at publish time; after that, the artifact lives in the database.
+The folder should contain ordinary source files (no \`sandpack.json\`, no \`agor.config.js\`). The agent decides where to create the folder — inside the worktree, a temp directory, etc. The folder is only read at publish time; after that, the artifact lives in the database.
 
 Recommended: create the folder inside your worktree so files can be version-controlled.
 
-CONFIG CONVENTION (agor.config.js):
-If you include a file named "/agor.config.js", it is treated as a Handlebars template and rendered per-user at view time. This lets artifacts access API credentials and Agor context without hardcoding secrets.
+DECLARATIVE CONFIG:
+- \`requiredEnvVars\`: array of env var NAMES the artifact needs (e.g. ["OPENAI_KEY", "STRIPE_KEY"]). The daemon synthesizes a per-viewer \`.env\` at render time using values from the viewer's stored env vars (Settings → Environment Variables). Names are stored without prefix; the daemon prefixes per template (Vite → \`VITE_\`, CRA → \`REACT_APP_\`, etc.). Reference these in your code via \`import.meta.env.VITE_X\` (Vite) or \`process.env.X\` (Node).
+- \`agorGrants\`: declarative daemon capabilities. Each grant maps to a fixed env var:
+    \`agor_token: true\`     → mints a 15-min daemon JWT for the viewer; injected as \`AGOR_TOKEN\`. ARTIFACT-SCOPED CONSENT ONLY — author/instance grants don't auto-cover this.
+    \`agor_api_url: true\`   → injects the daemon URL as \`AGOR_API_URL\`.
+    \`agor_user_email: true\` → injects viewer's email as \`AGOR_USER_EMAIL\`.
+    \`agor_artifact_id: true\` → \`AGOR_ARTIFACT_ID\` (informational, no consent).
+    \`agor_board_id: true\`   → \`AGOR_BOARD_ID\` (informational, no consent).
+    \`agor_proxies: ["openai", ...]\` → injects \`AGOR_PROXY_OPENAI\` etc. for HTTP proxy URLs.
+- \`sandpackConfig\`: author-controlled SandpackProvider config (template, customSetup, theme, options). Sanitized on write — UI-affecting / private-account props are stripped.
 
-Available template variables:
-  {{ user.env.VAR_NAME }} - User's environment variable (configured in Settings > Environment Variables)
-  {{ user.id }}           - Current user's ID
-  {{ user.name }}         - Current user's display name
-  {{ user.email }}        - Current user's email
-  {{ agor.apiUrl }}       - Agor daemon URL
-  {{ artifact.id }}       - This artifact's ID
-  {{ artifact.boardId }}  - Board ID
-  {{ board.id }}          - Board ID (same as artifact.boardId)
-  {{ board.slug }}        - Board slug (for URL construction)
+CONSENT MODEL (TOFU): when the viewer is NOT the artifact author, the daemon does NOT inject env vars or grants without an explicit trust grant. Untrusted artifacts render with empty env values and a "Trust to render with secrets" badge.
 
 IMPORTANT:
-- Use {{ user.env.X }} for secrets (API keys, tokens). NEVER hardcode sensitive values.
-- All users can see the raw template file, but each user's rendered values are private.
-- Rendered secrets are injected into the artifact JS at view time. Artifact code CAN access these values, so only use this for artifacts you trust. The security guarantee is that secrets never enter the LLM context or conversation history.
-- Missing env vars render as empty string "". Your app should check for empty values and show a helpful message (e.g. "Please configure OPENAI_API_KEY in Settings > Environment Variables") instead of making API calls with empty credentials.
-
-Example /agor.config.js:
-  export const apiKey = "{{ user.env.OPENAI_API_KEY }}";
-  export const apiUrl = "{{ agor.apiUrl }}";
-
-Then in your app: import { apiKey, apiUrl } from '/agor.config.js';`,
+- Secrets never enter the LLM context. Env values are only injected into the served \`.env\` at view time.
+- Missing user env vars render as "" — your app should detect that and surface a "configure SOMETHING in Settings" message rather than calling APIs with empty creds.
+- For node.js / static templates without a dotenv path, env vars are NOT injected; the daemon emits a warning if you declared any.`,
       inputSchema: z.object({
         folderPath: z.string().describe('Absolute path to folder containing artifact files'),
         boardId: z.string().describe('Board to place the artifact on'),
@@ -64,23 +102,27 @@ Then in your app: import { apiKey, apiUrl } from '/agor.config.js';`,
           .optional()
           .describe('If provided, update existing artifact (must be owned by you)'),
         template: z
-          .enum([
-            'react',
-            'react-ts',
-            'vanilla',
-            'vanilla-ts',
-            'vue',
-            'vue3',
-            'svelte',
-            'solid',
-            'angular',
-          ])
+          .enum(SANDPACK_TEMPLATES)
           .optional()
-          .describe('Sandpack template (default: react)'),
+          .describe(
+            'Sandpack template (default: react). Also settable via sandpackConfig.template.'
+          ),
         public: z
           .boolean()
           .optional()
           .describe('Whether the artifact is visible to all board viewers (default: true)'),
+        sandpackConfig: SandpackConfigSchema.describe(
+          'Author-controlled Sandpack provider config (sanitized on write).'
+        ),
+        requiredEnvVars: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Env var NAMES (no prefix) the artifact needs. Daemon synthesizes a per-viewer .env at render time.'
+          ),
+        agorGrants: AgorGrantsSchema.describe(
+          'Daemon capabilities to inject. See tool description for the full list.'
+        ),
         x: z.number().optional().describe('X position on board (default: 0, only used on create)'),
         y: z.number().optional().describe('Y position on board (default: 0, only used on create)'),
         width: z
@@ -91,24 +133,6 @@ Then in your app: import { apiKey, apiUrl } from '/agor.config.js';`,
           .number()
           .optional()
           .describe('Height in pixels (default: 400, only used on create)'),
-        useLocalBundler: z
-          .boolean()
-          .optional()
-          .describe(
-            `Use the daemon's self-hosted Sandpack bundler at /static/sandpack/ instead of the default CodeSandbox hosted bundler. Default: false.
-
-When to set true:
-- Daemon is on a private network / VPN with no egress to codesandbox.io
-- Air-gapped deployments, compliance constraints, or fully offline demos
-
-REQUIRES the daemon to have been built with \`./build.sh --with-sandpack\`. If the local bundler is not available, artifact creation fails with a clear error.
-
-KNOWN LIMITATIONS of the local bundler (upstream sandpack-bundler v2):
-- CommonJS npm packages fail to resolve. Popular examples that break: recharts, lodash (use lodash-es instead), moment. Stick to ESM-only packages when this flag is true.
-- Fewer features and slower updates than the hosted bundler. Upstream issues: https://github.com/codesandbox/sandpack-bundler
-
-When in doubt, leave unset — the hosted bundler supports the widest range of packages and is the recommended default.`
-          ),
       }),
     },
     async (args) => {
@@ -125,7 +149,9 @@ When in doubt, leave unset — the hosted bundler supports the widest range of p
           artifact_id: resolvedArtifactId,
           template: args.template,
           public: args.public,
-          use_local_bundler: args.useLocalBundler,
+          sandpack_config: args.sandpackConfig as SandpackConfig | undefined,
+          required_env_vars: args.requiredEnvVars,
+          agor_grants: args.agorGrants as AgorGrants | undefined,
           x: args.x,
           y: args.y,
           width: args.width,
@@ -134,7 +160,6 @@ When in doubt, leave unset — the hosted bundler supports the widest range of p
         ctx.userId
       );
 
-      // Omit files blob from response to avoid context bloat for agents
       const { files: _files, ...artifactSummary } = artifact;
       return textResult({
         artifact: artifactSummary,
@@ -207,7 +232,6 @@ NOTE: sandpack_error and console_logs require a browser to be viewing the artifa
       const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
       const artifactId = coerceString(args.artifactId)!;
 
-      // Get artifact before deletion for the emit
       const artifact = await service.get(artifactId, ctx.baseServiceParams);
       await service.deleteArtifact(artifactId);
       ctx.app.service('artifacts').emit('removed', artifact);
@@ -221,7 +245,7 @@ NOTE: sandpack_error and console_logs require a browser to be viewing the artifa
     'agor_artifacts_get',
     {
       description:
-        'Get a single artifact by ID, including its full file map (path → content). Use this to read artifact source code from another worktree without filesystem access. Respects visibility: public artifacts are readable by anyone; private artifacts are only readable by their creator.',
+        'Get a single artifact by ID, including its full file map (path → content) and declarative metadata (sandpack_config, required_env_vars, agor_grants). Use this to read artifact source code from another worktree without filesystem access. Respects visibility: public artifacts are readable by anyone; private artifacts are only readable by their creator.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         artifactId: z.string().describe('Artifact ID (full UUID or short prefix)'),
@@ -231,7 +255,6 @@ NOTE: sandpack_error and console_logs require a browser to be viewing the artifa
       const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
       const artifactId = coerceString(args.artifactId)!;
 
-      // Fetch the artifact via the Feathers get() method (inherited from DrizzleService)
       let artifact: Awaited<ReturnType<typeof service.get>>;
       try {
         artifact = await service.get(artifactId, ctx.baseServiceParams);
@@ -242,12 +265,10 @@ NOTE: sandpack_error and console_logs require a browser to be viewing the artifa
         throw err;
       }
 
-      // Visibility check: private artifacts are only visible to their creator
       if (!service.isVisibleTo(artifact, ctx.userId)) {
         return textResult({ error: `Artifact ${artifactId} not found` });
       }
 
-      // Return metadata (without files blob) + full file map separately
       const { files, ...metadata } = artifact;
       return textResult({
         artifact: metadata,
@@ -260,13 +281,11 @@ NOTE: sandpack_error and console_logs require a browser to be viewing the artifa
   server.registerTool(
     'agor_artifacts_update',
     {
-      description: `Update artifact metadata without re-reading files from disk. Use this to move an artifact to a different board, rename it, toggle visibility, archive it, or reposition its board placement.
-
-Primary use case: move an artifact to a different board via \`boardId\` when you no longer have the original source folder on disk.
+      description: `Update artifact metadata without re-reading files from disk. Use this to move an artifact to a different board, rename it, toggle visibility, archive it, reposition its board placement, or update its declarative config (requiredEnvVars / agorGrants / sandpackConfig).
 
 For file/content changes, use agor_artifacts_publish (which re-reads a folder and updates the stored files).
 
-Placement (x, y, width, height) is preserved across board moves unless you explicitly override it — so a cross-board move keeps the artifact in the same relative layout.
+Placement (x, y, width, height) is preserved across board moves unless you explicitly override it.
 
 Caller must own the artifact (or be an admin).`,
       inputSchema: z.object({
@@ -283,6 +302,14 @@ Caller must own the artifact (or be an admin).`,
         y: z.number().optional().describe('New Y position on board'),
         width: z.number().optional().describe('New width in pixels'),
         height: z.number().optional().describe('New height in pixels'),
+        sandpackConfig: SandpackConfigSchema.describe(
+          "Replace the artifact's sandpack_config (sanitized on write)."
+        ),
+        requiredEnvVars: z
+          .array(z.string())
+          .optional()
+          .describe("Replace the artifact's required_env_vars list."),
+        agorGrants: AgorGrantsSchema.describe("Replace the artifact's agor_grants object."),
       }),
     },
     async (args) => {
@@ -304,6 +331,9 @@ Caller must own the artifact (or be an admin).`,
           y: args.y,
           width: args.width,
           height: args.height,
+          sandpack_config: args.sandpackConfig as SandpackConfig | undefined,
+          required_env_vars: args.requiredEnvVars,
+          agor_grants: args.agorGrants as AgorGrants | undefined,
         },
         ctx.userId
       );
@@ -324,12 +354,12 @@ Caller must own the artifact (or be an admin).`,
 
 Use this when you want to tweak an artifact's code: land it into a worktree, edit the files locally, then call agor_artifacts_publish with the same artifactId to push the changes back.
 
-Writes a sandpack.json manifest alongside the files so agor_artifacts_publish can read the template/dependencies/entry back in a round-trip.
+Writes a small \`agor.artifact.json\` sidecar alongside the source files. The sidecar carries metadata that doesn't fit in the file map (template, sandpack_config, required_env_vars, agor_grants) so a round-trip publish() can preserve it. Build tools (Vite/CRA/etc.) ignore the sidecar.
 
 Safety:
 - Destination must be inside the target worktree (cannot escape via ".." or absolute paths).
 - Default subpath is \`.agor/artifacts/<artifact-id>\` (inside the worktree). Pass a custom subpath if you want a different location.
-- Refuses to write to an existing destination unless overwrite=true is passed (empty or not).
+- Refuses to write to an existing destination unless overwrite=true is passed.
 - overwrite=true removes the destination directory first (symlinks are unlinked, not followed).
 
 Visibility: public artifacts are readable by anyone; private artifacts are only landable by their owner.`,
@@ -353,7 +383,6 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
       const artifactId = await resolveArtifactId(ctx, coerceString(args.artifactId)!);
       const worktreeId = await resolveWorktreeId(ctx, coerceString(args.worktreeId)!);
 
-      // Fetch artifact for visibility check.
       let artifact: Awaited<ReturnType<typeof service.get>>;
       try {
         artifact = await service.get(artifactId, ctx.baseServiceParams);
@@ -367,10 +396,6 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
         return textResult({ error: `Artifact ${artifactId} not found` });
       }
 
-      // Resolve worktree through the service layer (enforces `view` via RBAC
-      // hooks). Landing an artifact writes to disk, so `view` is not enough —
-      // require at least `session` (the same tier that lets a user create
-      // sessions that could themselves write files in the worktree).
       const worktree = (await ctx.app
         .service('worktrees')
         .get(worktreeId, ctx.baseServiceParams)) as {
@@ -441,13 +466,97 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
         artifactsList = await service.findVisible(ctx.userId, { limit });
       }
 
-      // Omit files blob from list results to avoid context bloat
       const stripped = (artifactsList as Record<string, unknown>[]).map(
         ({ files: _f, ...rest }) => rest
       );
       return textResult({
         total: stripped.length,
         data: stripped,
+      });
+    }
+  );
+
+  // Tool 9: agor_artifacts_export_codesandbox
+  server.registerTool(
+    'agor_artifacts_export_codesandbox',
+    {
+      description: `Export an artifact to CodeSandbox via their "define API". Returns a sandbox URL and ID. Useful for sharing or demoing — the artifact runs in CodeSandbox's standard environment, not Agor.
+
+CAVEAT: daemon-supplied capabilities (\`AGOR_TOKEN\`, \`AGOR_PROXY_*\`, etc.) won't work on CodeSandbox. The exported sandbox can read \`required_env_vars\` from CodeSandbox's "Secret Keys" UI — the names match because both sides use the same prefix-per-template convention (Vite → \`VITE_\`, CRA → \`REACT_APP_\`, etc.).`,
+      inputSchema: z.object({
+        artifactId: z.string().describe('Artifact ID to export (full UUID or short prefix)'),
+      }),
+    },
+    async (args) => {
+      const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
+      const artifactId = await resolveArtifactId(ctx, coerceString(args.artifactId)!);
+
+      let artifact: Awaited<ReturnType<typeof service.get>>;
+      try {
+        artifact = await service.get(artifactId, ctx.baseServiceParams);
+      } catch (err) {
+        if (err instanceof NotFoundError) {
+          return textResult({ error: `Artifact ${artifactId} not found` });
+        }
+        throw err;
+      }
+      if (!service.isVisibleTo(artifact, ctx.userId)) {
+        return textResult({ error: `Artifact ${artifactId} not found` });
+      }
+      if (!artifact.files || Object.keys(artifact.files).length === 0) {
+        return textResult({ error: `Artifact ${artifactId} has no files to export` });
+      }
+
+      // Build the CodeSandbox "define" payload. Strip leading slashes from
+      // file keys (CodeSandbox expects "src/index.js", not "/src/index.js").
+      // The agor.config.js / agor.artifact.json sidecars (if any made it
+      // into the file map for any reason) are dropped — they'd be broken
+      // outside Agor.
+      const filesPayload: Record<string, { content: string }> = {};
+      for (const [filePath, content] of Object.entries(artifact.files)) {
+        const stripped = filePath.startsWith('/') ? filePath.slice(1) : filePath;
+        if (stripped === 'agor.config.js' || stripped === 'agor.artifact.json') continue;
+        if (stripped === '.env') continue;
+        filesPayload[stripped] = { content };
+      }
+
+      const definePayload = {
+        files: filesPayload,
+        template: artifact.sandpack_config?.template ?? artifact.template,
+      };
+
+      const res = await fetch('https://codesandbox.io/api/v1/sandboxes/define?json=1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(definePayload),
+      });
+      if (!res.ok) {
+        const detail = await res.text();
+        return textResult({
+          error: `CodeSandbox define API failed: ${res.status} ${res.statusText}`,
+          detail,
+        });
+      }
+      const body = (await res.json()) as { sandbox_id?: string };
+      const sandboxId = body.sandbox_id;
+      if (!sandboxId) {
+        return textResult({
+          error: 'CodeSandbox returned a 200 with no sandbox_id',
+          response: body,
+        });
+      }
+      const url = `https://codesandbox.io/s/${sandboxId}`;
+
+      const requiredVars = artifact.required_env_vars ?? [];
+      const note = requiredVars.length
+        ? `This artifact declares required_env_vars=${JSON.stringify(requiredVars)}. Set the prefixed names (VITE_${requiredVars[0]}, etc.) in CodeSandbox → Settings → Secret Keys to make them available at runtime.`
+        : 'No required env vars to configure.';
+
+      return textResult({
+        artifactId,
+        sandboxId,
+        url,
+        note,
       });
     }
   );

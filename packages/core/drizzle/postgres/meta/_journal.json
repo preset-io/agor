@@ -218,6 +218,13 @@
       "when": 1777300000000,
       "tag": "0031_restructure_agentic_tool_config",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1777400000000,
+      "tag": "0032_artifacts_format_refactor",
+      "breakpoints": true
     }
   ]
 }

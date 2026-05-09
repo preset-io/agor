@@ -39,18 +39,23 @@ import {
   DeleteOutlined,
   EyeOutlined,
   LoadingOutlined,
+  LockOutlined,
   ReloadOutlined,
+  SafetyOutlined,
+  WarningOutlined,
 } from '@ant-design/icons';
 import {
   SandpackPreview,
   SandpackProvider,
+  type SandpackSetup,
   useSandpack,
   useSandpackConsole,
 } from '@codesandbox/sandpack-react';
-import { Badge, Button, Card, Spin, Tooltip, Typography, theme } from 'antd';
+import { Alert, Badge, Button, Card, Spin, Tag, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NodeResizer } from 'reactflow';
 import { getDaemonUrl } from '@/config/daemon';
+import { ArtifactConsentModal } from '../../ArtifactConsentModal/ArtifactConsentModal';
 import { withBodyReset } from './utils/sandpackDefaults';
 
 interface ArtifactNodeData {
@@ -230,6 +235,7 @@ export const ArtifactNode = ({
   const [payload, setPayload] = useState<ArtifactPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [consentOpen, setConsentOpen] = useState(false);
   const lastHashRef = useRef<string | null>(null);
 
   // Fetch artifact payload from daemon
@@ -343,6 +349,24 @@ export const ArtifactNode = ({
 
   if (!payload) return null;
 
+  const sandpackConfig = payload.sandpack_config ?? {};
+  const sandpackOptions = sandpackConfig.options ?? {};
+  const customSetup = {
+    ...(sandpackConfig.customSetup ?? {}),
+    ...(payload.dependencies && !sandpackConfig.customSetup?.dependencies
+      ? { dependencies: payload.dependencies }
+      : {}),
+  };
+  const sandpackTemplate = (sandpackConfig.template ?? payload.template) as 'react';
+  const trustBadge = renderTrustBadge(payload);
+  const showConsentAffordance =
+    payload.trust_state === 'untrusted' &&
+    ((payload.required_env_vars && payload.required_env_vars.length > 0) ||
+      (payload.agor_grants && Object.keys(payload.agor_grants).length > 0));
+  const legacyBanner = payload.legacy?.is_legacy
+    ? renderLegacyBanner(payload.legacy.upgrade_instructions, token)
+    : null;
+
   return (
     <>
       <NodeResizer
@@ -377,19 +401,33 @@ export const ArtifactNode = ({
         size="small"
         title={
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
               <Badge
                 status={loading ? 'processing' : 'success'}
                 title={loading ? 'Reloading...' : 'Live'}
               />
               <Typography.Text
-                style={{ fontSize: 12, fontWeight: 600, maxWidth: data.width - 160 }}
+                style={{ fontSize: 12, fontWeight: 600, maxWidth: data.width - 200 }}
                 ellipsis
               >
                 {payload.name}
               </Typography.Text>
+              {trustBadge}
             </div>
             <div style={{ display: 'flex', gap: 2 }}>
+              {showConsentAffordance && (
+                <Tooltip title="Trust this artifact to inject secrets">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<LockOutlined />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setConsentOpen(true);
+                    }}
+                  />
+                </Tooltip>
+              )}
               <Tooltip title="Reload">
                 <Button
                   type="text"
@@ -443,8 +481,11 @@ export const ArtifactNode = ({
           style={{
             flex: 1,
             position: 'relative',
+            display: 'flex',
+            flexDirection: 'column',
           }}
         >
+          {legacyBanner}
           {/* Transparent overlay blocks iframe from capturing mouse events (zoom/pan/drag)
               when not in interact mode. Iframes ignore pointer-events:none on ancestors. */}
           {!interactMode && (
@@ -458,13 +499,18 @@ export const ArtifactNode = ({
           )}
           <SandpackProvider
             key={payload.content_hash}
-            template={payload.template as 'react'}
+            template={sandpackTemplate}
             files={withBodyReset(payload.files)}
-            customSetup={payload.dependencies ? { dependencies: payload.dependencies } : undefined}
+            customSetup={
+              Object.keys(customSetup).length > 0 ? (customSetup as SandpackSetup) : undefined
+            }
+            theme={sandpackConfig.theme as never}
             options={{
               initMode: 'user-visible',
-              ...(payload.entry ? { activeFile: payload.entry } : {}),
-              ...(payload.bundlerURL ? { bundlerURL: payload.bundlerURL } : {}),
+              ...sandpackOptions,
+              ...(payload.entry && !sandpackOptions.activeFile
+                ? { activeFile: payload.entry }
+                : {}),
             }}
           >
             <SandpackPreview
@@ -475,21 +521,100 @@ export const ArtifactNode = ({
               showNavigator={false}
               showOpenInCodeSandbox={false}
               showRefreshButton={interactMode}
-              // When self-hosting the bundler at a subpath (e.g. /static/sandpack/),
-              // Sandpack's default startRoute "/" resolves via `new URL("/", bundlerURL)`
-              // to the origin root per the WHATWG URL spec, wiping out the subpath and
-              // loading the wrong page into the iframe. Use "./" so it resolves to the
-              // bundler's own directory. NOTE: this MUST be passed as a prop directly
-              // on SandpackPreview — setting it via SandpackProvider.options is silently
-              // overridden because SandpackPreview's own prop default ("/") is always
-              // forwarded as clientPropsOverride, which wins over options.startRoute.
-              {...(payload.bundlerURL ? { startRoute: './' } : {})}
             />
             <ConsoleReporter artifactId={data.artifactId} />
             <SandpackErrorReporter artifactId={data.artifactId} />
           </SandpackProvider>
         </div>
       </Card>
+      {consentOpen && (
+        <ArtifactConsentModal
+          open={consentOpen}
+          artifactId={payload.artifact_id}
+          name={payload.name}
+          files={payload.files}
+          requiredEnvVars={payload.required_env_vars ?? []}
+          grants={payload.agor_grants ?? {}}
+          onClose={() => setConsentOpen(false)}
+          onGranted={() => {
+            setConsentOpen(false);
+            fetchPayload();
+          }}
+        />
+      )}
     </>
   );
 };
+
+function renderTrustBadge(payload: ArtifactPayload) {
+  const state = payload.trust_state;
+  if (state === 'no_secrets_needed') return null;
+  if (state === 'self') {
+    return (
+      <Tag color="blue" icon={<SafetyOutlined />} style={{ fontSize: 10, marginLeft: 4 }}>
+        Yours
+      </Tag>
+    );
+  }
+  if (state === 'trusted') {
+    const scopeLabel =
+      payload.trust_scope === 'instance'
+        ? 'instance-wide'
+        : payload.trust_scope === 'author'
+          ? 'this author'
+          : payload.trust_scope === 'session'
+            ? 'just-once'
+            : 'this artifact';
+    return (
+      <Tooltip title={`Secrets injected — trust granted for ${scopeLabel}`}>
+        <Tag color="green" icon={<SafetyOutlined />} style={{ fontSize: 10, marginLeft: 4 }}>
+          Trusted
+        </Tag>
+      </Tooltip>
+    );
+  }
+  // 'untrusted'
+  return (
+    <Tooltip title="Render is missing secrets — click the lock icon to grant trust">
+      <Tag color="orange" icon={<LockOutlined />} style={{ fontSize: 10, marginLeft: 4 }}>
+        Untrusted
+      </Tag>
+    </Tooltip>
+  );
+}
+
+function renderLegacyBanner(
+  upgradeInstructions: string,
+  token: ReturnType<typeof theme.useToken>['token']
+) {
+  return (
+    <Alert
+      type="warning"
+      showIcon
+      icon={<WarningOutlined />}
+      style={{ borderRadius: 0, fontSize: 11, padding: '4px 12px' }}
+      message="Legacy artifact — won't render correctly"
+      description={
+        <details style={{ marginTop: 4 }}>
+          <summary style={{ cursor: 'pointer', color: token.colorTextSecondary }}>
+            Show upgrade prompt for an agent
+          </summary>
+          <pre
+            style={{
+              whiteSpace: 'pre-wrap',
+              fontSize: 10,
+              marginTop: 6,
+              padding: 8,
+              background: token.colorFillTertiary,
+              borderRadius: 4,
+              maxHeight: 180,
+              overflow: 'auto',
+            }}
+          >
+            {upgradeInstructions}
+          </pre>
+        </details>
+      }
+    />
+  );
+}

@@ -555,6 +555,69 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       },
       requireAuth
     );
+
+    // ── Trust grants (TOFU consent flow) ───────────────────────────────────
+    // Per-artifact: POST creates a grant covering the artifact's currently-
+    // requested env vars and grants. Caller MUST be authenticated; the grant
+    // is attributed to the calling user.
+    registerAuthenticatedRoute(
+      app,
+      '/artifacts/:id/trust',
+      {
+        async create(
+          data: {
+            scopeType: import('@agor/core/types').ArtifactTrustScopeType;
+            envVars?: string[];
+            grants?: import('@agor/core/types').AgorGrants;
+          },
+          _params: RouteParams
+        ) {
+          const artifactId = _params.route?.id;
+          if (!artifactId) throw new Error('Artifact ID required');
+          const userId = _params.user?.user_id;
+          if (!userId) throw new Error('Authenticated user required');
+          const artifactsService = app.service('artifacts') as unknown as ArtifactsService;
+          return artifactsService.grantTrust({
+            userId,
+            artifactId,
+            scopeType: data.scopeType,
+            envVars: data.envVars ?? [],
+            grants: data.grants ?? {},
+          });
+        },
+      },
+      {
+        create: { role: ROLES.MEMBER, action: 'create artifact trust grant' },
+      },
+      requireAuth
+    );
+
+    // List the calling user's active trust grants. Used by the settings page.
+    registerAuthenticatedRoute(
+      app,
+      '/me/artifact-trust-grants',
+      {
+        async find(params: RouteParams) {
+          const userId = params.user?.user_id;
+          if (!userId) throw new Error('Authenticated user required');
+          const artifactsService = app.service('artifacts') as unknown as ArtifactsService;
+          return artifactsService.listTrustGrants(userId);
+        },
+        async remove(id: unknown, params: RouteParams) {
+          const userId = params.user?.user_id;
+          if (!userId) throw new Error('Authenticated user required');
+          const grantId = String(id);
+          const artifactsService = app.service('artifacts') as unknown as ArtifactsService;
+          await artifactsService.revokeTrustGrant(userId, grantId);
+          return { revoked: true, grantId };
+        },
+      },
+      {
+        find: { role: ROLES.VIEWER, action: 'list artifact trust grants' },
+        remove: { role: ROLES.MEMBER, action: 'revoke artifact trust grant' },
+      },
+      requireAuth
+    );
   }
 
   // ============================================================================

@@ -1048,9 +1048,11 @@ export const artifacts = sqliteTable(
     build_errors: text('build_errors'), // JSON array of error strings
     content_hash: text('content_hash'),
     files: text('files'), // JSON: Record<string, string> — serialized file contents
-    dependencies: text('dependencies'), // JSON: Record<string, string> — npm deps
-    entry: text('entry'), // entry file from manifest
-    use_local_bundler: t.bool('use_local_bundler').notNull().default(false),
+    dependencies: text('dependencies'), // JSON: Record<string, string> — denormalized cache of package.json
+    entry: text('entry'), // denormalized cache of the Sandpack entry file
+    sandpack_config: text('sandpack_config'), // JSON: SandpackConfig (author-controlled, sanitized on write)
+    required_env_vars: text('required_env_vars'), // JSON: string[] of env var NAMES (no prefix)
+    agor_grants: text('agor_grants'), // JSON: AgorGrants (declarative daemon capabilities)
     public: t.bool('public').notNull().default(true),
     created_by: text('created_by', { length: 36 }),
     created_at: t.timestamp('created_at').notNull(),
@@ -1068,6 +1070,35 @@ export const artifacts = sqliteTable(
 
 export type ArtifactRow = typeof artifacts.$inferSelect;
 export type ArtifactInsert = typeof artifacts.$inferInsert;
+
+/**
+ * Per-viewer trust grants for artifact secret/grant injection. The viewer
+ * (`user_id`) consented to inject the listed `env_vars_set` and
+ * `agor_grants_set` into one or more artifacts matching `scope_type` +
+ * `scope_value`. Soft-deleted via `revoked_at` for audit history.
+ */
+export const artifactTrustGrants = sqliteTable(
+  'artifact_trust_grants',
+  {
+    grant_id: text('grant_id', { length: 36 }).primaryKey(),
+    user_id: text('user_id', { length: 36 }).notNull(),
+    // CHECK constraint omitted — service-layer enforcement only, so adding new
+    // scope_types in the future doesn't require a SQLite table-recreate.
+    scope_type: text('scope_type').notNull(),
+    scope_value: text('scope_value'),
+    env_vars_set: text('env_vars_set').notNull(),
+    agor_grants_set: text('agor_grants_set').notNull(),
+    granted_at: t.timestamp('granted_at').notNull(),
+    revoked_at: t.timestamp('revoked_at'),
+  },
+  (table) => ({
+    userIdx: index('artifact_trust_grants_user_idx').on(table.user_id),
+    scopeIdx: index('artifact_trust_grants_scope_idx').on(table.scope_type, table.scope_value),
+  })
+);
+
+export type ArtifactTrustGrantRow = typeof artifactTrustGrants.$inferSelect;
+export type ArtifactTrustGrantInsert = typeof artifactTrustGrants.$inferInsert;
 
 /**
  * Board Objects table - Positioned entities (worktrees and cards) on boards

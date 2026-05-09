@@ -300,7 +300,7 @@ describe('ArtifactsService.land', () => {
     }
   });
 
-  dbTest('writes all files plus sandpack.json to default subpath', async ({ db }) => {
+  dbTest('writes all files plus agor.artifact.json to default subpath', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
     const board = await seedBoard(db);
     const artifact = await seedArtifact(db, board.board_id, {
@@ -311,13 +311,15 @@ describe('ArtifactsService.land', () => {
 
     const expectedDest = path.join(tmpRoot, '.agor', 'artifacts', artifact.artifact_id);
     expect(result.destinationPath).toBe(expectedDest);
-    expect(result.fileCount).toBe(3); // 2 source files + sandpack.json
+    expect(result.fileCount).toBe(3); // 2 source files + agor.artifact.json sidecar
     expect(readFileSync(path.join(expectedDest, 'app.js'), 'utf-8')).toBe('export const x = 1');
     expect(readFileSync(path.join(expectedDest, 'nested', 'deep.js'), 'utf-8')).toBe(
       'export const y = 2'
     );
 
-    const manifest = JSON.parse(readFileSync(path.join(expectedDest, 'sandpack.json'), 'utf-8'));
+    const manifest = JSON.parse(
+      readFileSync(path.join(expectedDest, 'agor.artifact.json'), 'utf-8')
+    );
     expect(manifest.template).toBe('react');
   });
 
@@ -416,7 +418,7 @@ describe('ArtifactsService.land', () => {
 
     const result = await service.land(artifact.artifact_id, tmpRoot, { overwrite: true });
 
-    expect(result.fileCount).toBe(2); // /only.js + sandpack.json
+    expect(result.fileCount).toBe(2); // /only.js + agor.artifact.json sidecar
     expect(readFileSync(path.join(dest, 'only.js'), 'utf-8')).toBe('fresh');
     // Stale file is gone.
     const fsSync = await import('node:fs');
@@ -485,5 +487,237 @@ describe('ArtifactsService.land', () => {
     });
 
     await expect(service.land(created.artifact_id, tmpRoot)).rejects.toThrow(/no stored files/i);
+  });
+});
+
+describe('ArtifactsService.getPayload trust + .env synthesis', () => {
+  // Seed an artifact whose `created_by` is the author. The payload's trust
+  // resolution should treat the author as 'self' and skip consent.
+  dbTest('viewer-is-author → trust_state=self, .env injected', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'self-render',
+      template: 'react',
+      files: { '/index.js': 'console.log("self")', '/package.json': '{}' },
+      required_env_vars: ['OPENAI_KEY'],
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    const payload = await service.getPayload(created.artifact_id, 'user-owner' as never);
+    expect(payload.trust_state).toBe('self');
+    expect(payload.trust_scope).toBe('self');
+    // .env is synthesized even though the user has no env var stored — value is empty.
+    expect(payload.files['/.env']).toMatch(/VITE_OPENAI_KEY=/);
+  });
+
+  dbTest(
+    'untrusted viewer → trust_state=untrusted, .env keys present with empty values',
+    async ({ db }) => {
+      const service = new ArtifactsService(db, makeFakeApp());
+      const board = await seedBoard(db);
+      const artifactRepo = new ArtifactRepository(db);
+      const created = await artifactRepo.create({
+        artifact_id: generateId(),
+        board_id: board.board_id,
+        name: 'untrusted-render',
+        template: 'react',
+        files: { '/index.js': 'console.log("x")' },
+        required_env_vars: ['OPENAI_KEY', 'STRIPE_KEY'],
+        agor_grants: { agor_token: true },
+        public: true,
+        created_by: 'user-owner',
+      });
+
+      const payload = await service.getPayload(created.artifact_id, 'user-stranger' as never);
+      expect(payload.trust_state).toBe('untrusted');
+      // Empty values, but keys are present so the artifact can detect the state.
+      expect(payload.files['/.env']).toMatch(/VITE_OPENAI_KEY=/);
+      expect(payload.files['/.env']).toMatch(/VITE_STRIPE_KEY=/);
+      expect(payload.files['/.env']).toMatch(/VITE_AGOR_TOKEN=/);
+    }
+  );
+
+  dbTest('vanilla template skips .env synthesis entirely', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'vanilla',
+      template: 'vanilla',
+      files: { '/index.html': '<h1>hi</h1>' },
+      required_env_vars: ['SOMETHING'],
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    const payload = await service.getPayload(created.artifact_id, 'user-owner' as never);
+    expect(payload.files['/.env']).toBeUndefined();
+  });
+});
+
+describe('ArtifactsService.grantTrust', () => {
+  dbTest('session-scope grant is in-memory only and authorizes the next render', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'session-trust',
+      template: 'react',
+      files: { '/index.js': 'console.log("x")' },
+      required_env_vars: ['OPENAI_KEY'],
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    // First render — untrusted.
+    const before = await service.getPayload(created.artifact_id, 'user-stranger' as never);
+    expect(before.trust_state).toBe('untrusted');
+
+    // Grant session-scope trust.
+    const result = await service.grantTrust({
+      userId: 'user-stranger',
+      artifactId: created.artifact_id,
+      scopeType: 'session',
+      envVars: ['OPENAI_KEY'],
+      grants: {},
+    });
+    expect(result.persisted).toBe(false);
+
+    const after = await service.getPayload(created.artifact_id, 'user-stranger' as never);
+    expect(after.trust_state).toBe('trusted');
+    expect(after.trust_scope).toBe('session');
+  });
+
+  dbTest('artifact-scope grant persists and authorizes future renders', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'artifact-trust',
+      template: 'react',
+      files: { '/index.js': 'console.log("x")' },
+      required_env_vars: ['OPENAI_KEY'],
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    await service.grantTrust({
+      userId: 'user-stranger',
+      artifactId: created.artifact_id,
+      scopeType: 'artifact',
+      envVars: ['OPENAI_KEY'],
+      grants: {},
+    });
+
+    const payload = await service.getPayload(created.artifact_id, 'user-stranger' as never);
+    expect(payload.trust_state).toBe('trusted');
+    expect(payload.trust_scope).toBe('artifact');
+  });
+
+  dbTest(
+    'strict subset: existing OPENAI_KEY grant does NOT cover OPENAI_KEY+STRIPE_KEY',
+    async ({ db }) => {
+      const service = new ArtifactsService(db, makeFakeApp());
+      const board = await seedBoard(db);
+      const artifactRepo = new ArtifactRepository(db);
+      const created = await artifactRepo.create({
+        artifact_id: generateId(),
+        board_id: board.board_id,
+        name: 'expanding-needs',
+        template: 'react',
+        files: { '/index.js': 'console.log("x")' },
+        required_env_vars: ['OPENAI_KEY', 'STRIPE_KEY'],
+        public: true,
+        created_by: 'user-owner',
+      });
+
+      await service.grantTrust({
+        userId: 'user-stranger',
+        artifactId: created.artifact_id,
+        scopeType: 'artifact',
+        envVars: ['OPENAI_KEY'], // narrower than the artifact now requests
+        grants: {},
+      });
+
+      const payload = await service.getPayload(created.artifact_id, 'user-stranger' as never);
+      expect(payload.trust_state).toBe('untrusted');
+    }
+  );
+
+  dbTest('agor_token at author scope is rejected (artifact scope only)', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'token-author',
+      template: 'react',
+      files: { '/index.js': 'console.log("x")' },
+      agor_grants: { agor_token: true },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    await expect(
+      service.grantTrust({
+        userId: 'user-stranger',
+        artifactId: created.artifact_id,
+        scopeType: 'author',
+        envVars: [],
+        grants: { agor_token: true },
+      })
+    ).rejects.toThrow(/agor_token/);
+  });
+
+  dbTest('author-scope grant covers a different artifact by the same author', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const a = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'a',
+      template: 'react',
+      files: { '/index.js': 'a' },
+      required_env_vars: ['OPENAI_KEY'],
+      public: true,
+      created_by: 'author-1',
+    });
+    const b = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'b',
+      template: 'react',
+      files: { '/index.js': 'b' },
+      required_env_vars: ['OPENAI_KEY'],
+      public: true,
+      created_by: 'author-1',
+    });
+
+    // Grant on artifact A at author scope.
+    await service.grantTrust({
+      userId: 'viewer-1',
+      artifactId: a.artifact_id,
+      scopeType: 'author',
+      envVars: ['OPENAI_KEY'],
+      grants: {},
+    });
+
+    // Artifact B (same author) should be trusted via the author grant.
+    const payload = await service.getPayload(b.artifact_id, 'viewer-1' as never);
+    expect(payload.trust_state).toBe('trusted');
+    expect(payload.trust_scope).toBe('author');
   });
 });

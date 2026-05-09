@@ -1046,9 +1046,11 @@ export const artifacts = pgTable(
     build_errors: text('build_errors'), // JSON array of error strings
     content_hash: text('content_hash'),
     files: text('files'), // JSON: Record<string, string> — serialized file contents
-    dependencies: text('dependencies'), // JSON: Record<string, string> — npm deps
-    entry: text('entry'), // entry file from manifest
-    use_local_bundler: t.bool('use_local_bundler').notNull().default(false),
+    dependencies: text('dependencies'), // JSON: Record<string, string> — denormalized cache of package.json
+    entry: text('entry'), // denormalized cache of the Sandpack entry file
+    sandpack_config: jsonb('sandpack_config'),
+    required_env_vars: jsonb('required_env_vars'),
+    agor_grants: jsonb('agor_grants'),
     public: t.bool('public').notNull().default(true),
     created_by: varchar('created_by', { length: 36 }),
     created_at: t.timestamp('created_at').notNull(),
@@ -1066,6 +1068,31 @@ export const artifacts = pgTable(
 
 export type ArtifactRow = typeof artifacts.$inferSelect;
 export type ArtifactInsert = typeof artifacts.$inferInsert;
+
+/**
+ * Per-viewer trust grants for artifact secret/grant injection.
+ * See the matching SQLite definition for full docs.
+ */
+export const artifactTrustGrants = pgTable(
+  'artifact_trust_grants',
+  {
+    grant_id: varchar('grant_id', { length: 36 }).primaryKey(),
+    user_id: varchar('user_id', { length: 36 }).notNull(),
+    scope_type: text('scope_type').notNull(),
+    scope_value: text('scope_value'),
+    env_vars_set: jsonb('env_vars_set').notNull(),
+    agor_grants_set: jsonb('agor_grants_set').notNull(),
+    granted_at: t.timestamp('granted_at').notNull(),
+    revoked_at: t.timestamp('revoked_at'),
+  },
+  (table) => ({
+    userIdx: index('artifact_trust_grants_user_idx').on(table.user_id),
+    scopeIdx: index('artifact_trust_grants_scope_idx').on(table.scope_type, table.scope_value),
+  })
+);
+
+export type ArtifactTrustGrantRow = typeof artifactTrustGrants.$inferSelect;
+export type ArtifactTrustGrantInsert = typeof artifactTrustGrants.$inferInsert;
 
 /**
  * Board Objects table - Positioned entities (worktrees and cards) on boards
