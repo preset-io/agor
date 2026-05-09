@@ -1,14 +1,15 @@
 /**
  * Git Impersonation Utilities
  *
- * Git operations (clone, worktree add/remove/clean) always run as the daemon user
- * to avoid permission issues with shared directories under /home/agorpg/.agor/.
+ * Git operations (clone, worktree add/remove/clean) always run as the daemon
+ * user. We may wrap them in `sudo -u` to force a fresh group membership read
+ * via `initgroups()` so the daemon can see `agor_wt_*` groups added at
+ * runtime — but only when supplemental groups actually exist.
  *
- * We still use sudo -u to force a fresh group membership read via initgroups(),
- * which ensures the executor process has current worktree groups (agor_wt_*).
- *
- * The daemon process has stale group memberships from startup, so without sudo -u,
- * git operations can't access worktree-owned files.
+ * In the open-access default (`worktree_rbac: false`, `unix_user_mode:
+ * simple`) no supplemental groups are ever created, so wrapping in sudo is
+ * pure overhead AND breaks for users who never configured passwordless
+ * sudoers (#1140). Return undefined in that case so callers spawn directly.
  */
 
 import type { Database } from '@agor/core/db';
@@ -16,42 +17,39 @@ import type { UserID, Worktree } from '@agor/core/types';
 import { validateResolvedUnixUser } from '@agor/core/unix';
 
 /**
- * Resolve Unix user for git operations
+ * Resolve Unix user for git operations.
  *
- * Git operations always run as the daemon user (agorpg) because:
- * 1. Parent directories (/home/agorpg/.agor/worktrees/) are owned by agorpg
- * 2. Running as another user causes permission errors when creating directories
- * 3. We still use sudo -u to get fresh group memberships via initgroups()
+ * Returns the daemon user when group refresh via `sudo -u` is needed
+ * (RBAC enabled or non-simple unix_user_mode). Returns `undefined` when
+ * no supplemental groups exist, signalling callers to skip sudo entirely.
  *
  * @param db - Database instance (unused, kept for API compatibility)
  * @param userId - User ID (unused, kept for API compatibility)
- * @returns Daemon username to force fresh group lookup via sudo -u
+ * @returns Daemon username when sudo wrap is needed, otherwise undefined
  */
 export async function resolveGitImpersonationForUser(
-  db: Database,
-  userId: UserID
+  _db: Database,
+  _userId: UserID
 ): Promise<string | undefined> {
-  const { getDaemonUser } = await import('@agor/core/config');
+  const { getDaemonUser, isUnixGroupRefreshNeeded } = await import('@agor/core/config');
 
-  // Always use daemon user for git operations
+  // No supplemental groups → no need for sudo. Avoids requiring sudoers
+  // for users on the default open-access setup. (#1140)
+  if (!isUnixGroupRefreshNeeded()) {
+    return undefined;
+  }
+
   const daemonUser = getDaemonUser();
-
-  // Validate user exists
   if (daemonUser) {
     validateResolvedUnixUser('simple', daemonUser);
   }
-
   return daemonUser;
 }
 
 /**
- * Resolve Unix user for git operations on a worktree
+ * Resolve Unix user for git operations on a worktree.
  *
- * Git operations always run as the daemon user (see resolveGitImpersonationForUser).
- *
- * @param db - Database instance (unused, kept for API compatibility)
- * @param worktree - Worktree (unused, kept for API compatibility)
- * @returns Daemon username to force fresh group lookup via sudo -u
+ * @see resolveGitImpersonationForUser
  */
 export async function resolveGitImpersonationForWorktree(
   db: Database,

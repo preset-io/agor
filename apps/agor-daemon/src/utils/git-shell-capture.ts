@@ -19,13 +19,18 @@ import { runAsUser, validateResolvedUnixUser } from '@agor/core/unix';
 /**
  * Resolve and validate the daemon user for sudo -u impersonation.
  *
- * Uses getDaemonUser() from config and validates via validateResolvedUnixUser()
- * to prevent unvalidated strings from reaching shell commands.
+ * Returns `undefined` when no supplemental groups exist (no RBAC, simple
+ * unix mode), so `runAsUser` runs the command directly without sudo. This
+ * matches the gating in {@link ../utils/git-impersonation.ts} and avoids
+ * the "user not in sudoers" failure on default open-access setups (#1140).
  *
- * @returns Validated daemon username, or undefined if not configured
+ * @returns Validated daemon username, or undefined if no group refresh is needed
  */
 async function resolveValidatedDaemonUser(): Promise<string | undefined> {
-  const { getDaemonUser } = await import('@agor/core/config');
+  const { getDaemonUser, isUnixGroupRefreshNeeded } = await import('@agor/core/config');
+  if (!isUnixGroupRefreshNeeded()) {
+    return undefined;
+  }
   const daemonUser = getDaemonUser();
   if (daemonUser) {
     validateResolvedUnixUser('simple', daemonUser);
