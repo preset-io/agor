@@ -37,6 +37,7 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   DeleteOutlined,
+  ExportOutlined,
   EyeOutlined,
   LoadingOutlined,
   LockOutlined,
@@ -51,7 +52,7 @@ import {
   useSandpack,
   useSandpackConsole,
 } from '@codesandbox/sandpack-react';
-import { Alert, Badge, Button, Card, Spin, Tag, Tooltip, Typography, theme } from 'antd';
+import { Alert, Badge, Button, Card, message, Spin, Tag, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NodeResizer } from 'reactflow';
 import { getDaemonUrl } from '@/config/daemon';
@@ -291,6 +292,34 @@ export const ArtifactNode = ({
     [data]
   );
 
+  // Eject the artifact to a fresh CodeSandbox sandbox in a new tab.
+  // Open the tab synchronously on click, then redirect it after the daemon
+  // returns the URL — async window.open() is blocked by most popup blockers.
+  const handleOpenInCodeSandbox = useCallback(() => {
+    const newTab = window.open('about:blank', '_blank');
+    void (async () => {
+      try {
+        const res = await fetch(
+          `${getDaemonUrl()}/artifacts/${data.artifactId}/export/codesandbox`,
+          { method: 'POST', headers: getAuthHeaders() }
+        );
+        const body = (await res.json()) as { url?: string; error?: string };
+        if (!res.ok || body.error || !body.url) {
+          newTab?.close();
+          message.error(`Open in CodeSandbox failed: ${body.error ?? res.statusText}`);
+          return;
+        }
+        if (newTab) newTab.location.href = body.url;
+        else window.open(body.url, '_blank');
+      } catch (err) {
+        newTab?.close();
+        message.error(
+          `Open in CodeSandbox failed: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    })();
+  }, [data.artifactId]);
+
   // Loading state
   if (loading && !payload) {
     return (
@@ -428,6 +457,17 @@ export const ArtifactNode = ({
                   />
                 </Tooltip>
               )}
+              <Tooltip title="Open in CodeSandbox (eject — daemon-injected env vars/AGOR_TOKEN won't carry over)">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<ExportOutlined />}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleOpenInCodeSandbox();
+                  }}
+                />
+              </Tooltip>
               <Tooltip title="Reload">
                 <Button
                   type="text"

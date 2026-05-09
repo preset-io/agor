@@ -507,101 +507,14 @@ CAVEAT: daemon-supplied capabilities (\`AGOR_TOKEN\`, \`AGOR_PROXY_*\`, etc.) wo
     async (args) => {
       const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
       const artifactId = await resolveArtifactId(ctx, coerceString(args.artifactId)!);
-
-      let artifact: Awaited<ReturnType<typeof service.get>>;
       try {
-        artifact = await service.get(artifactId, ctx.baseServiceParams);
-      } catch (err) {
-        if (err instanceof NotFoundError) {
-          return textResult({ error: `Artifact ${artifactId} not found` });
-        }
-        throw err;
-      }
-      if (!service.isVisibleTo(artifact, ctx.userId)) {
-        return textResult({ error: `Artifact ${artifactId} not found` });
-      }
-      if (!artifact.files || Object.keys(artifact.files).length === 0) {
-        return textResult({ error: `Artifact ${artifactId} has no files to export` });
-      }
-
-      // Build the CodeSandbox "define" payload. Strip leading slashes from
-      // file keys (CodeSandbox expects "src/index.js", not "/src/index.js").
-      // The agor.config.js / agor.artifact.json sidecars (if any made it
-      // into the file map for any reason) are dropped — they'd be broken
-      // outside Agor.
-      const filesPayload: Record<string, { content: string }> = {};
-      for (const [filePath, content] of Object.entries(artifact.files)) {
-        const stripped = filePath.startsWith('/') ? filePath.slice(1) : filePath;
-        if (stripped === 'agor.config.js' || stripped === 'agor.artifact.json') continue;
-        if (stripped === '.env') continue;
-        filesPayload[stripped] = { content };
-      }
-
-      const definePayload = {
-        files: filesPayload,
-        template: artifact.sandpack_config?.template ?? artifact.template,
-      };
-
-      let res: Response;
-      try {
-        res = await fetch('https://codesandbox.io/api/v1/sandboxes/define?json=1', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(definePayload),
-        });
+        const result = await service.exportToCodeSandbox(artifactId, ctx.userId);
+        return textResult(result);
       } catch (err) {
         return textResult({
-          error: `CodeSandbox define API unreachable: ${err instanceof Error ? err.message : String(err)}`,
+          error: err instanceof Error ? err.message : String(err),
         });
       }
-      if (!res.ok) {
-        // Bodies on failure are typically Cloudflare HTML challenge pages —
-        // dumping them as a string blows up the agent's context window with
-        // no actionable signal. Collapse to a one-liner.
-        const ct = res.headers.get('content-type') ?? '';
-        const looksJson = ct.includes('application/json');
-        let hint = '';
-        if (looksJson) {
-          try {
-            const body = (await res.json()) as { error?: string; message?: string };
-            const msg = body.error ?? body.message;
-            if (typeof msg === 'string' && msg.length > 0) {
-              hint = `: ${msg.slice(0, 200)}`;
-            }
-          } catch {}
-        }
-        return textResult({
-          error: `CodeSandbox define API failed (${res.status} ${res.statusText})${hint}. The endpoint is sometimes throttled by Cloudflare; retry or use a different export channel.`,
-        });
-      }
-      let body: { sandbox_id?: string };
-      try {
-        body = (await res.json()) as { sandbox_id?: string };
-      } catch (err) {
-        return textResult({
-          error:
-            `CodeSandbox returned a non-JSON 200 response (likely a Cloudflare interstitial). Try again later. ${err instanceof Error ? err.message : ''}`.trim(),
-        });
-      }
-      const sandboxId = body.sandbox_id;
-      if (!sandboxId) {
-        return textResult({
-          error: 'CodeSandbox returned a 200 with no sandbox_id',
-        });
-      }
-      const url = `https://codesandbox.io/s/${sandboxId}`;
-
-      const requiredVars = artifact.required_env_vars ?? [];
-      const note = requiredVars.length
-        ? `This artifact declares required_env_vars=${JSON.stringify(requiredVars)}. Set the prefixed names (VITE_${requiredVars[0]}, etc.) in CodeSandbox → Settings → Secret Keys to make them available at runtime.`
-        : 'No required env vars to configure.';
-
-      return textResult({
-        artifactId,
-        sandboxId,
-        url,
-        note,
-      });
     }
   );
 }

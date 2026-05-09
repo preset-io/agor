@@ -1106,6 +1106,107 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     await this.trustRepo.revoke(grantId);
   }
 
+  // ── External "open in" / export ────────────────────────────────────────
+
+  /**
+   * Build a CodeSandbox define-API payload from the artifact's stored files
+   * and POST it. Returns the resulting sandbox URL on success.
+   *
+   * Caveats inherent to the eject path (caller should surface to users):
+   *  - daemon-supplied capabilities (AGOR_TOKEN / AGOR_PROXY_*) are stripped
+   *    server-side anyway and won't function on CodeSandbox;
+   *  - the synthesized `.env` and round-trip sidecars are dropped — they're
+   *    Agor-only artifacts;
+   *  - CodeSandbox's define endpoint is sometimes Cloudflare-throttled.
+   *
+   * Throws `Error` on every failure (visibility, missing files, network,
+   * non-JSON 200 — typically a Cloudflare interstitial). Callers should
+   * catch and present a friendly message.
+   */
+  async exportToCodeSandbox(
+    artifactId: string,
+    userId?: UserID
+  ): Promise<{ artifactId: string; sandboxId: string; url: string; note: string }> {
+    const artifact = await this.artifactRepo.findById(artifactId);
+    if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
+    if (!this.isVisibleTo(artifact, userId)) {
+      // Same shape as a hard-not-found — don't leak existence of private artifacts.
+      throw new Error(`Artifact ${artifactId} not found`);
+    }
+    if (!artifact.files || Object.keys(artifact.files).length === 0) {
+      throw new Error(`Artifact ${artifactId} has no files to export`);
+    }
+
+    // Strip Agor-only sidecars + the synthesized .env. CodeSandbox expects
+    // `src/index.js` keys, not `/src/index.js` (no leading slash).
+    const filesPayload: Record<string, { content: string }> = {};
+    for (const [filePath, content] of Object.entries(artifact.files)) {
+      const stripped = filePath.startsWith('/') ? filePath.slice(1) : filePath;
+      if (
+        stripped === 'agor.config.js' ||
+        stripped === 'agor.artifact.json' ||
+        stripped === '.env'
+      ) {
+        continue;
+      }
+      filesPayload[stripped] = { content };
+    }
+
+    const definePayload = {
+      files: filesPayload,
+      template: artifact.sandpack_config?.template ?? artifact.template,
+    };
+
+    let res: Response;
+    try {
+      res = await fetch('https://codesandbox.io/api/v1/sandboxes/define?json=1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(definePayload),
+      });
+    } catch (err) {
+      throw new Error(
+        `CodeSandbox define API unreachable: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+    if (!res.ok) {
+      // Failure bodies are typically Cloudflare HTML interstitials. Don't
+      // dump them — they bloat logs/UIs without adding signal.
+      const ct = res.headers.get('content-type') ?? '';
+      let hint = '';
+      if (ct.includes('application/json')) {
+        try {
+          const body = (await res.json()) as { error?: string; message?: string };
+          const msg = body.error ?? body.message;
+          if (typeof msg === 'string' && msg.length > 0) hint = `: ${msg.slice(0, 200)}`;
+        } catch {}
+      }
+      throw new Error(
+        `CodeSandbox define API failed (${res.status} ${res.statusText})${hint}. The endpoint is sometimes throttled by Cloudflare; retry in a moment.`
+      );
+    }
+    let body: { sandbox_id?: string };
+    try {
+      body = (await res.json()) as { sandbox_id?: string };
+    } catch (err) {
+      throw new Error(
+        `CodeSandbox returned a non-JSON 200 response (likely a Cloudflare interstitial). Try again later. ${err instanceof Error ? err.message : ''}`.trim()
+      );
+    }
+    const sandboxId = body.sandbox_id;
+    if (!sandboxId) {
+      throw new Error('CodeSandbox returned a 200 with no sandbox_id');
+    }
+
+    const url = `https://codesandbox.io/s/${sandboxId}`;
+    const requiredVars = artifact.required_env_vars ?? [];
+    const note = requiredVars.length
+      ? `This artifact declares required_env_vars=${JSON.stringify(requiredVars)}. Set the prefixed names (e.g. VITE_${requiredVars[0]}) in CodeSandbox → Settings → Secret Keys to make them available at runtime.`
+      : 'No required env vars to configure.';
+
+    return { artifactId, sandboxId, url, note };
+  }
+
   // ── Build / status / console / find helpers (mostly unchanged) ──
 
   async checkBuildFromFolder(folderPath: string): Promise<{
