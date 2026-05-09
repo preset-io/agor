@@ -702,7 +702,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       const rbacEnabled = isWorktreeRbacEnabled();
 
       // Resolve Unix user for impersonation (handles simple/insulated/strict modes)
-      const asUser = userId ? await resolveGitImpersonationForUser(this.db, userId) : undefined;
+      const asUser = rbacEnabled && userId ? await resolveGitImpersonationForUser(this.db, userId) : undefined;
 
       spawnExecutorFireAndForget(
         {
