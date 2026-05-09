@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { ReposServiceImpl, WorktreesServiceImpl } from '../../declarations.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
+import { assertValidVariant } from './_environment-helpers.js';
 
 export function registerEnvironmentTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_environment_start
@@ -207,43 +208,39 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
           ctx.baseServiceParams
         );
 
-        // Validate variant up front so the error lists the available variants
-        // (the service layer also validates, but with a less helpful message).
+        // Resolve the target variant: caller-supplied wins, otherwise re-render
+        // with the worktree's current variant. We only fall through to
+        // `undefined` (which lets the service apply the repo default) when the
+        // worktree has no variant set at all — the legacy first-render case.
+        // Without this fallback, omitting `variant` would silently flip a
+        // worktree from a non-default variant back to the repo default.
+        const targetVariant = variant ?? worktree.environment_variant ?? undefined;
+
         if (variant) {
           const reposService = ctx.app.service('repos') as unknown as ReposServiceImpl;
           const repo = await reposService.get(worktree.repo_id);
-          const repoEnv = repo.environment;
-          if (!repoEnv?.variants || !repoEnv.variants[variant]) {
-            const available = repoEnv?.variants ? Object.keys(repoEnv.variants) : [];
+          assertValidVariant(repo, variant);
+        }
+
+        // Switching variant out from under a live env would replace the
+        // command strings the running process was started with. Force an
+        // explicit stop first. Only relevant when the resolved variant
+        // actually differs from what's persisted.
+        if (targetVariant && targetVariant !== worktree.environment_variant) {
+          const envStatus = worktree.environment_instance?.status;
+          if (envStatus === 'running' || envStatus === 'starting') {
             return textResult({
               success: false,
               error:
-                `Invalid variant "${variant}". ` +
-                (available.length > 0
-                  ? `Available variants: ${available.join(', ')}`
-                  : 'This repo has no environment variants configured.'),
+                `Environment is ${envStatus} with variant "${worktree.environment_variant || '(none)'}". ` +
+                `Stop it first, then set variant to "${targetVariant}".`,
             });
-          }
-
-          // Switching variant out from under a live env would replace the
-          // command strings the running process was started with. Force an
-          // explicit stop first.
-          if (variant !== worktree.environment_variant) {
-            const envStatus = worktree.environment_instance?.status;
-            if (envStatus === 'running' || envStatus === 'starting') {
-              return textResult({
-                success: false,
-                error:
-                  `Environment is ${envStatus} with variant "${worktree.environment_variant || '(none)'}". ` +
-                  `Stop it first, then set variant to "${variant}".`,
-              });
-            }
           }
         }
 
         const updated = await worktreesService.renderEnvironment(
           worktreeId as WorktreeID,
-          variant ? { variant } : undefined,
+          targetVariant ? { variant: targetVariant } : undefined,
           ctx.baseServiceParams
         );
 
@@ -255,15 +252,32 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
           });
         }
 
-        const started = await worktreesService.startEnvironment(
-          worktreeId as WorktreeID,
-          ctx.baseServiceParams
-        );
-        return textResult({
-          success: true,
-          worktree: started,
-          message: `Environment variant set to "${updated.environment_variant}" and started.`,
-        });
+        // The variant has now been persisted. If start fails, surface that
+        // distinctly so callers know the configuration change DID land.
+        try {
+          const started = await worktreesService.startEnvironment(
+            worktreeId as WorktreeID,
+            ctx.baseServiceParams
+          );
+          return textResult({
+            success: true,
+            worktree: started,
+            message: `Environment variant set to "${updated.environment_variant}" and started.`,
+          });
+        } catch (startError) {
+          const startMessage = startError instanceof Error ? startError.message : 'Unknown error';
+          const commandOutput =
+            startError instanceof Error
+              ? (startError as Error & { commandOutput?: string }).commandOutput
+              : undefined;
+          return textResult({
+            success: false,
+            variant_set: true,
+            worktree: updated,
+            error: `Variant was set to "${updated.environment_variant}", but start failed: ${startMessage}`,
+            ...(commandOutput ? { output: commandOutput } : {}),
+          });
+        }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         const commandOutput =

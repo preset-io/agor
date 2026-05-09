@@ -305,7 +305,12 @@ describe('agor_environment_set', () => {
     expect(renderCalls).toHaveLength(0);
   });
 
-  it('renders without a variant arg (re-applies current/default for template_overrides updates)', async () => {
+  it("omitting variant re-renders with the worktree's CURRENT variant (regression: not the repo default)", async () => {
+    // Regression for the bug where the handler passed undefined to
+    // renderEnvironment, which the service silently resolved to env.default —
+    // flipping a non-default-variant worktree back to default on a re-render.
+    // The worktree below is on 'e2e' (not the 'dev' default); omitting the
+    // variant arg must re-render with 'e2e', not 'dev'.
     const renderCalls: unknown[][] = [];
 
     const ctx = makeCtx({
@@ -313,7 +318,34 @@ describe('agor_environment_set', () => {
         get: async () => ({
           worktree_id: 'wt-1',
           repo_id: 'repo-1',
-          environment_variant: 'dev',
+          environment_variant: 'e2e',
+          environment_instance: { status: 'stopped' },
+        }),
+        renderEnvironment: async (...args: unknown[]) => {
+          renderCalls.push(args);
+          return { worktree_id: 'wt-1', environment_variant: 'e2e' };
+        },
+      },
+    });
+
+    const handler = await captureEnvironmentTool(ctx, 'agor_environment_set');
+    const result = await handler({ worktreeId: 'wt-1' });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.success).toBe(true);
+    expect(renderCalls).toHaveLength(1);
+    expect(renderCalls[0][1]).toEqual({ variant: 'e2e' });
+  });
+
+  it('omitting variant on a legacy worktree (environment_variant=null) lets the service apply the repo default', async () => {
+    const renderCalls: unknown[][] = [];
+
+    const ctx = makeCtx({
+      worktrees: {
+        get: async () => ({
+          worktree_id: 'wt-1',
+          repo_id: 'repo-1',
+          environment_variant: null,
           environment_instance: { status: 'stopped' },
         }),
         renderEnvironment: async (...args: unknown[]) => {
@@ -330,6 +362,42 @@ describe('agor_environment_set', () => {
     expect(parsed.success).toBe(true);
     expect(renderCalls).toHaveLength(1);
     expect(renderCalls[0][1]).toBeUndefined();
+  });
+
+  it('andStart=true: when render succeeds but start fails, returns variant_set:true and a clear error', async () => {
+    const renderCalls: unknown[][] = [];
+    const startCalls: unknown[][] = [];
+
+    const ctx = makeCtx({
+      repos: { get: async () => fakeRepo },
+      worktrees: {
+        get: async () => ({
+          worktree_id: 'wt-1',
+          repo_id: 'repo-1',
+          environment_variant: 'dev',
+          environment_instance: { status: 'stopped' },
+        }),
+        renderEnvironment: async (...args: unknown[]) => {
+          renderCalls.push(args);
+          return { worktree_id: 'wt-1', environment_variant: 'e2e' };
+        },
+        startEnvironment: async (...args: unknown[]) => {
+          startCalls.push(args);
+          throw new Error('docker compose returned 137');
+        },
+      },
+    });
+
+    const handler = await captureEnvironmentTool(ctx, 'agor_environment_set');
+    const result = await handler({ worktreeId: 'wt-1', variant: 'e2e', andStart: true });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.success).toBe(false);
+    expect(parsed.variant_set).toBe(true);
+    expect(parsed.error).toMatch(/Variant was set to "e2e"/);
+    expect(parsed.error).toMatch(/start failed: docker compose returned 137/);
+    expect(renderCalls).toHaveLength(1);
+    expect(startCalls).toHaveLength(1);
   });
 
   it('first-time variant assignment on a legacy worktree (environment_variant=null) succeeds when stopped', async () => {

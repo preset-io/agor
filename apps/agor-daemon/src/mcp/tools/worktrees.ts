@@ -25,6 +25,7 @@ import {
 } from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
+import { assertValidVariant } from './_environment-helpers.js';
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9-]+$/;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/i;
@@ -230,18 +231,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
 
       // Validate variant up front so the error lists the available variants.
       const variant = coerceString(args.variant);
-      if (variant) {
-        const repoEnv = repo.environment;
-        if (!repoEnv?.variants || !repoEnv.variants[variant]) {
-          const available = repoEnv?.variants ? Object.keys(repoEnv.variants) : [];
-          throw new Error(
-            `Invalid variant "${variant}". ` +
-              (available.length > 0
-                ? `Available variants: ${available.join(', ')}`
-                : 'This repo has no environment variants configured.')
-          );
-        }
-      }
+      if (variant) assertValidVariant(repo, variant);
 
       // Auto-suffix: resolve name conflicts by appending -2, -3, etc.
       // Uses direct DB query to bypass Feathers pagination limits
