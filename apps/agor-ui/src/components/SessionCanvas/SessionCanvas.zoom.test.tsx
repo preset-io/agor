@@ -1,6 +1,6 @@
 import { render } from '@testing-library/react';
-import type { ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import type { MouseEventHandler, ReactNode } from 'react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import SessionCanvas from './SessionCanvas';
 
 let reactFlowProps: Record<string, unknown> | null = null;
@@ -12,7 +12,7 @@ vi.mock('reactflow', () => ({
     onClick,
   }: {
     children?: ReactNode;
-    onClick?: React.MouseEventHandler<HTMLButtonElement>;
+    onClick?: MouseEventHandler<HTMLButtonElement>;
   }) => (
     <button type="button" onClick={onClick}>
       {children}
@@ -37,6 +37,10 @@ vi.mock('./canvas/AppNode', () => ({
 vi.mock('./canvas/ArtifactNode', () => ({
   ArtifactNode: () => <div data-testid="artifact-node" />,
 }));
+
+beforeEach(() => {
+  reactFlowProps = null;
+});
 
 describe('SessionCanvas zoom shortcuts', () => {
   it('uses Command or Control plus scroll to zoom while preserving scroll panning', () => {
