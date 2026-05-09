@@ -1207,10 +1207,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Explicit executor trigger for an already-created task. Lets pure-REST
   // harnesses (Python, Go, shell+curl — anything without an MCP client) drive
   // the executor by POSTing a Task row first (`POST /tasks`) and then poking
-  // it awake here. Wraps `spawnTaskExecutor` (via the `claimAndRunExistingTask`
-  // helper, which adds an in-memory per-task lock) — the same primitive that
-  // `/sessions/:id/prompt` uses on its idle path — so the on-the-wire effect
-  // is identical to "create a task and run it now."
+  // it awake here. Wraps `spawnTaskExecutor` via `runExistingTask` (status
+  // revalidation) under `withSessionTurnLock` — the same shared session-level
+  // mutex that `/sessions/:id/prompt`'s idle branch and the queue drainer
+  // also acquire — so the on-the-wire effect is identical to "create a task
+  // and run it now."
   //
   // Only CREATED tasks on IDLE sessions are accepted. QUEUED tasks are
   // rejected with a hint to wait for the queue drainer (running them out of

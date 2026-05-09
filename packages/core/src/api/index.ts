@@ -127,10 +127,10 @@ export interface TasksClientHelpers {
   /**
    * Trigger executor pickup for an already-created task. Pure-REST harnesses
    * use this after `POST /tasks` to avoid needing an MCP client. Returns the
-   * Task with `status: 'running'`. Errors if the task is not in
-   * `'created'`/`'queued'` state, or if the session is not IDLE — busy
-   * sessions should be prompted via `client.sessions.prompt()` instead, which
-   * creates and queues the task atomically.
+   * Task with `status: 'running'`. Only `'created'` tasks on idle sessions
+   * are accepted — `'queued'` tasks drain automatically in queue-position
+   * order via the queue processor, and busy sessions should be prompted via
+   * `client.sessions.prompt()` (which creates and queues the task atomically).
    */
   run(taskId: string, options?: TaskRunOptions): Promise<Task>;
 }
