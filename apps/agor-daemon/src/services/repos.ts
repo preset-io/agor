@@ -185,7 +185,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const rbacEnabled = isWorktreeRbacEnabled();
 
     // Resolve Unix user for impersonation (handles simple/insulated/strict modes)
-    const asUser = rbacEnabled && userId ? await resolveGitImpersonationForUser(this.db, userId) : undefined;
+    const asUser =
+      rbacEnabled && userId ? await resolveGitImpersonationForUser(this.db, userId) : undefined;
 
     // Fire and forget - spawn executor and return immediately.
     // Executor handles: git clone, .agor.yml parsing, DB record creation.
@@ -702,7 +703,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       const rbacEnabled = isWorktreeRbacEnabled();
 
       // Resolve Unix user for impersonation (handles simple/insulated/strict modes)
-      const asUser = rbacEnabled && userId ? await resolveGitImpersonationForUser(this.db, userId) : undefined;
+      const asUser =
+        rbacEnabled && userId ? await resolveGitImpersonationForUser(this.db, userId) : undefined;
 
       spawnExecutorFireAndForget(
         {

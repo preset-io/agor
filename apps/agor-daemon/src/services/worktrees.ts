@@ -478,7 +478,10 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       console.log(`🗑️  Spawning executor to remove worktree from filesystem: ${worktree.path}`);
 
       // Resolve Unix user for impersonation (handles simple/insulated/strict modes)
-      const asUser = await resolveGitImpersonationForWorktree(this.db, worktree);
+      const rbacEnabled = isWorktreeRbacEnabled();
+      const asUser = rbacEnabled
+        ? await resolveGitImpersonationForWorktree(this.db, worktree)
+        : undefined;
 
       // Generate session token for executor authentication
       const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as
