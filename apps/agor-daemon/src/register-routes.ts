@@ -46,6 +46,7 @@ import type {
   SessionID,
   StreamingEventType,
   Task,
+  TaskID,
   User,
   UUID,
   WorktreeID,
@@ -87,6 +88,7 @@ import {
   registerAuthenticatedRoute,
   requireMinimumRole,
 } from './utils/authorization.js';
+import { claimAndRunExistingTask, normalizeMessageSource } from './utils/task-runner.js';
 import {
   createUploadMiddleware,
   enforceParsedTotalUploadSize,
@@ -1043,16 +1045,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (!data.prompt) throw new Error('Prompt required');
 
         // Validate and normalize messageSource
-        let messageSource: 'gateway' | 'agor' | undefined = data.messageSource;
-        if (
-          messageSource !== undefined &&
-          messageSource !== 'gateway' &&
-          messageSource !== 'agor'
-        ) {
+        const messageSource = normalizeMessageSource(data.messageSource, params);
+        if (messageSource !== data.messageSource && data.messageSource !== undefined) {
           console.warn(
-            `[Daemon] Invalid messageSource value: ${messageSource}, defaulting based on provider`
+            `[Daemon] Invalid messageSource value: ${data.messageSource}, defaulted based on provider`
           );
-          messageSource = params.provider ? 'agor' : undefined;
         }
 
         let session = await sessionsService.get(id, params);
@@ -1182,17 +1179,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Explicit executor trigger for an already-created task. Lets pure-REST
   // harnesses (Python, Go, shell+curl — anything without an MCP client) drive
   // the executor by POSTing a Task row first (`POST /tasks`) and then poking
-  // it awake here. Wraps `spawnTaskExecutor` — the same helper that
+  // it awake here. Wraps `spawnTaskExecutor` (via the `claimAndRunExistingTask`
+  // helper, which adds an in-memory per-task lock) — the same primitive that
   // `/sessions/:id/prompt` uses on its idle path — so the on-the-wire effect
   // is identical to "create a task and run it now."
   //
-  // Only CREATED / QUEUED tasks on IDLE sessions are accepted. If the session
-  // is busy, the caller should hit `POST /sessions/:id/prompt` instead — that
-  // route owns the create-task-and-queue path and assigns queue positions
-  // atomically. Splitting the two responsibilities keeps this endpoint a
-  // narrow "run this thing now" trigger and avoids re-implementing queue
-  // sequencing here.
+  // Only CREATED tasks on IDLE sessions are accepted. QUEUED tasks are
+  // rejected with a hint to wait for the queue drainer (running them out of
+  // order would violate the queue-position invariant); busy sessions are
+  // rejected with a hint to use `POST /sessions/:id/prompt` (which owns the
+  // atomic create-and-queue path). Splitting the two responsibilities keeps
+  // this endpoint a narrow "run this thing now" trigger.
   // ============================================================================
+
+  // In-memory lock map serializing concurrent /tasks/:id/run calls for the
+  // same task ID. Single-process only — see task-runner.ts for rationale.
+  const taskRunLocks = new Map<TaskID, Promise<void>>();
 
   registerAuthenticatedRoute(
     app,
@@ -1215,13 +1217,21 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           throw new NotFound(`Task ${taskId} not found`);
         }
 
-        // Only CREATED and QUEUED tasks may be triggered. Terminal and
-        // in-flight states are rejected so the caller doesn't accidentally
-        // race the executor or try to revive a finished task.
-        if (task.status !== TaskStatus.CREATED && task.status !== TaskStatus.QUEUED) {
+        // Only CREATED tasks may be triggered. QUEUED tasks must drain in
+        // queue-position order via the queue processor — running them out of
+        // order would violate the invariant documented in
+        // `context/concepts/task-queueing.md`. Terminal/in-flight states are
+        // rejected so the caller doesn't try to revive a finished task or
+        // race a live executor.
+        if (task.status !== TaskStatus.CREATED) {
+          const hint =
+            task.status === TaskStatus.QUEUED
+              ? `Queued tasks drain automatically in queue-position order ` +
+                `when the session becomes idle — wait for it, or stop the ` +
+                `currently running task to free the queue.`
+              : `Only 'created' tasks may be triggered.`;
           throw new Conflict(
-            `Task ${taskId.substring(0, 8)} cannot be run: status is '${task.status}' ` +
-              `(only 'created' or 'queued' tasks may be triggered).`
+            `Task ${taskId.substring(0, 8)} cannot be run: status is '${task.status}'. ${hint}`
           );
         }
 
@@ -1239,27 +1249,54 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           );
         }
 
-        // Validate / normalize messageSource — same shape as the prompt route.
-        let messageSource: MessageSource | undefined = data.messageSource;
-        if (
-          messageSource !== undefined &&
-          messageSource !== 'gateway' &&
-          messageSource !== 'agor'
-        ) {
-          messageSource = params.provider ? 'agor' : undefined;
+        // Worktree RBAC — defense in depth. Without this, a member with
+        // 'view' permission could trigger execution; the eventual
+        // `tasks.patch` inside spawnTaskExecutor would still 403 via the
+        // `ensureCanPromptInSession` hook, but only after we'd done extra
+        // work and emitted partial state. Mirrors the upload route's
+        // pattern (~L1467) and `ensureCanPromptInSession` semantics.
+        if (worktreeRbacEnabled && session.worktree_id) {
+          const userId = params.user?.user_id as UUID | undefined;
+          if (!userId) {
+            throw new Forbidden('Authentication required to run tasks');
+          }
+          const wt = await worktreeRepository.findById(session.worktree_id);
+          if (!wt) {
+            throw new NotFound(`Worktree ${session.worktree_id} not found`);
+          }
+          const isOwner = await worktreeRepository.isOwner(wt.worktree_id, userId);
+          const effectiveLevel = resolveWorktreePermission(
+            wt,
+            userId,
+            isOwner,
+            params.user?.role,
+            superadminOpts.allowSuperadmin
+          );
+          const canRun =
+            PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt ||
+            (effectiveLevel === 'session' && session.created_by === userId);
+          if (!canRun) {
+            throw new Forbidden(
+              `You have '${effectiveLevel}' permission on this worktree, which does not ` +
+                `allow running tasks. Need 'prompt' or 'all' (or 'session' for own sessions).`
+            );
+          }
         }
 
-        const runningTask = await spawnTaskExecutor(
+        return claimAndRunExistingTask(
           task,
           {
             permissionMode: data.permissionMode,
             stream: data.stream !== false,
-            messageSource,
+            messageSource: normalizeMessageSource(data.messageSource, params),
           },
-          params
+          params,
+          {
+            findTaskById: (id) => taskRepo.findById(id),
+            spawnFn: spawnTaskExecutor,
+            locks: taskRunLocks,
+          }
         );
-
-        return runningTask;
       },
     },
     {

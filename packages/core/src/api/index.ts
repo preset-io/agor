@@ -48,6 +48,7 @@ const WORKTREES_SERVICE_EXTENDED = Symbol('agor.worktreesServiceExtended');
 const SERVICE_FIND_ALL_EXTENDED = Symbol('agor.serviceFindAllExtended');
 const CLIENT_SERVICE_FACTORY_EXTENDED = Symbol('agor.clientServiceFactoryExtended');
 const CLIENT_SESSIONS_HELPERS_EXTENDED = Symbol('agor.clientSessionsHelpersExtended');
+const CLIENT_TASKS_HELPERS_EXTENDED = Symbol('agor.clientTasksHelpersExtended');
 
 /**
  * Client-side input type helper:
@@ -759,6 +760,18 @@ function extendSessionsHelpers(client: AgorClient): void {
     },
   };
 
+  augmentedClient[CLIENT_SESSIONS_HELPERS_EXTENDED] = true;
+}
+
+function extendTasksHelpers(client: AgorClient): void {
+  const augmentedClient = client as AgorClient & {
+    [CLIENT_TASKS_HELPERS_EXTENDED]?: boolean;
+  };
+
+  if (augmentedClient[CLIENT_TASKS_HELPERS_EXTENDED]) {
+    return;
+  }
+
   client.tasks = {
     run: async (taskId: string, options?: TaskRunOptions) => {
       const { params, ...requestOptions } = options ?? {};
@@ -769,7 +782,7 @@ function extendSessionsHelpers(client: AgorClient): void {
     },
   };
 
-  augmentedClient[CLIENT_SESSIONS_HELPERS_EXTENDED] = true;
+  augmentedClient[CLIENT_TASKS_HELPERS_EXTENDED] = true;
 }
 
 /**
@@ -839,6 +852,7 @@ export async function createRestClient(
   extendReposService(client);
   extendWorktreesService(client);
   extendSessionsHelpers(client);
+  extendTasksHelpers(client);
 
   return client;
 }
@@ -921,6 +935,7 @@ export function createClient(
   extendReposService(client);
   extendWorktreesService(client);
   extendSessionsHelpers(client);
+  extendTasksHelpers(client);
 
   return client;
 }
