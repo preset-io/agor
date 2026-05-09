@@ -633,7 +633,6 @@ function AppContent() {
     }
   };
 
-  // Handle update user (`silent` suppresses the success toast; errors always show)
   const handleUpdateUser = async (
     userId: string,
     updates: UpdateUserInput,
