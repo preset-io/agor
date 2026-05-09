@@ -295,6 +295,12 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       if (updates.archived_at !== undefined) {
         setData.archived_at = updates.archived_at ? new Date(updates.archived_at) : null;
       }
+      // worktree_id: passing null clears the FK; passing undefined leaves it
+      // alone. Required so a republish from a worktree path backfills the FK
+      // for artifacts that were created before the column was populated.
+      if (updates.worktree_id !== undefined) {
+        setData.worktree_id = updates.worktree_id ?? null;
+      }
 
       await update(this.db, artifacts).set(setData).where(eq(artifacts.artifact_id, fullId)).run();
 

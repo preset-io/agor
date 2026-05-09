@@ -494,7 +494,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     if (updates.public !== undefined) dbUpdates.public = updates.public;
     if (updates.archived !== undefined) {
       dbUpdates.archived = updates.archived;
-      dbUpdates.archived_at = updates.archived ? new Date().toISOString() : undefined;
+      // Explicit null on unarchive — `undefined` would be ignored by the
+      // repo's `!== undefined` gate, leaving the stale archive timestamp
+      // in place and confusing anything that reads it for archive history.
+      dbUpdates.archived_at = updates.archived ? new Date().toISOString() : null;
     }
     if (moving) dbUpdates.board_id = newBoardId;
     if (updates.required_env_vars !== undefined) {

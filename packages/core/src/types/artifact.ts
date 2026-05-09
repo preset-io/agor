@@ -170,7 +170,11 @@ export interface Artifact {
 
   /** Whether this artifact is archived */
   archived: boolean;
-  archived_at?: string;
+  /**
+   * When the artifact was archived. Null/undefined when not archived; a
+   * timestamp when archived. Always cleared on unarchive (NULL in DB).
+   */
+  archived_at?: string | null;
 }
 
 /**
