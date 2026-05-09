@@ -5,11 +5,11 @@
  * after daemon start are missing). This means in-process simple-git calls fail
  * for repos whose ACLs rely on recently-added groups.
  *
- * Solution: Use `sudo -u <daemonUser>` to run git commands, which calls
- * initgroups() and gets fresh group memberships from /etc/group.
- *
- * Falls back to direct shell execution (without sudo) when no daemon user
- * is configured (e.g., simple mode without Unix isolation).
+ * When supplemental groups exist (RBAC enabled, or `unix_user_mode` insulated/
+ * strict), we wrap git commands in `sudo -u <daemonUser>` so sudo calls
+ * initgroups() and gets fresh group memberships from /etc/group. In the open-
+ * access default (no RBAC, simple mode) no such groups exist, so we run the
+ * git command directly — this avoids requiring sudoers config (#1140).
  *
  * @see git-impersonation.ts for the same pattern used in git clone/worktree operations
  */

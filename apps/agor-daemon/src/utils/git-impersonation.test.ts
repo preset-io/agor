@@ -28,9 +28,9 @@ vi.mock('@agor/core/config', async () => {
   };
 });
 
-// validateResolvedUnixUser hits the OS via getent/id; stub it out — the
-// resolver only validates after deciding to impersonate, so these tests
-// never need a real Unix user.
+// validateResolvedUnixUser is a no-op for `simple` mode (the resolver always
+// passes that), but stub it anyway so the test never depends on real Unix
+// user lookups via getent/id, even if the production call switches modes.
 vi.mock('@agor/core/unix', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('@agor/core/unix');
   return {
