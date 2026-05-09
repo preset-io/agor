@@ -382,27 +382,28 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   }
 
   /**
-   * Custom method: Spawn a child session
+   * Spawn a child session, optionally delegating to a different agentic tool.
    *
-   * Creates a new session, optionally delegating to a different agentic tool.
+   * Config resolution is centralized in {@link resolveChildSessionConfig}
+   * (`@agor/core/sessions`):
    *
-   * Config resolution is centralized in
-   * {@link resolveChildSessionConfig} (`@agor/core/sessions`). The rule, in
-   * one place, field by field:
-   *
-   *   model_config:    request → parent (same tool only) → user default → undefined
+   *   model_config:      request → parent (same tool only) → user default → undefined
    *   permission_config: request → parent (same tool only) → user default → mapped system default
    *
-   * The "same tool only" gate is the bug fix for the cross-tool inheritance
-   * regression: a Codex child spawned from a Claude parent must not inherit
-   * `claude-opus-4-7` from the parent — Codex cannot run Claude models. When
-   * the user has no per-tool default for the child, the helper returns
-   * `model_config: undefined` and we let the SDK pick its built-in default
-   * for that tool instead of feeding it a poisoned value.
+   * The "same tool only" gate prevents cross-tool inheritance bugs: a Codex
+   * child spawned from a Claude parent must not inherit `claude-opus-4-7`,
+   * because Codex cannot run Claude models. When no per-tool default exists,
+   * the helper returns `model_config: undefined` and the SDK picks its own
+   * default rather than running with a poisoned value.
    *
-   * MCP server inheritance is handled separately at the bottom of this
-   * method — MCPs are tool-agnostic, and the existing "explicit list >
-   * copy from parent" rule is correct regardless of tool match.
+   * Identity resolution runs *before* defaults lookup so per-tool defaults
+   * come from the resolved child owner (the caller in normal cross-user
+   * spawns), not the parent owner. Otherwise a collaborator spawning a
+   * subsession would get the parent owner's preferences stamped on their
+   * own session.
+   *
+   * MCP server inheritance is handled inline below — MCPs are tool-agnostic
+   * and follow "explicit list > copy from parent" regardless of tool match.
    */
   async spawn(
     id: string,
@@ -415,16 +416,20 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     const parent = await this.get(id, params);
     const targetTool = data.agent || parent.agentic_tool;
 
-    // Look up the parent's owner for their per-tool defaults. Failing this
-    // lookup is non-fatal — the resolver gracefully falls through to the
-    // mapped system default when `user` is null.
+    // Resolve identity first so per-tool defaults come from the resolved
+    // child owner, not the parent owner. (For internal/provider-less calls,
+    // `resolveChildIdentity` returns `parent.created_by` anyway.)
+    const { created_by, unix_username } = await this.resolveChildIdentity(parent, params);
+
+    // Load the child owner's per-tool defaults. Failing this lookup is
+    // non-fatal — the resolver falls through to the mapped system default
+    // when `user` is null.
     let user: import('@agor/core/types').User | null = null;
-    const userId = parent.created_by;
-    if (userId && this.app) {
+    if (created_by && this.app) {
       try {
         user = (await this.app
           .service('users')
-          .get(userId, params)) as import('@agor/core/types').User;
+          .get(created_by, params)) as import('@agor/core/types').User;
       } catch (error) {
         console.warn(
           'Could not fetch user preferences for spawned session, using system defaults:',
@@ -449,9 +454,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     const modelConfig = resolved.model_config;
 
     // Soft validation: warn (don't block) when the resolved model looks like
-    // it belongs to a different tool. Custom model strings are always
-    // accepted — this just surfaces the regression class that motivated the
-    // resolver refactor.
+    // it belongs to a different tool. Custom model strings are accepted.
     const lintWarning = formatModelToolMismatchWarning(
       lintModelToolMatch(modelConfig?.model, targetTool)
     );
@@ -459,10 +462,10 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       console.warn(`[SessionsService.spawn] ${lintWarning}`);
     }
 
-    // Build callback configuration
-    // callback_session_id is the single source of truth for where to deliver callbacks.
-    // Default to parent session when callbacks are enabled (which is the default for spawn).
-    const isCallbackEnabled = data.enableCallback !== false; // default: true for spawn
+    // callback_session_id is the single source of truth for where to deliver
+    // callbacks. Default to parent session when callbacks are enabled (which
+    // is the default for spawn).
+    const isCallbackEnabled = data.enableCallback !== false;
     const callbackConfig = {
       ...(data.enableCallback !== undefined ? { enabled: data.enableCallback } : {}),
       ...(isCallbackEnabled
@@ -474,20 +477,13 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       ...(data.includeOriginalPrompt !== undefined
         ? { include_original_prompt: data.includeOriginalPrompt }
         : {}),
-      // Default callback mode to "once" — fires once then auto-disables
       callback_mode: data.callbackMode ?? 'once',
     };
 
-    // Build final prompt (append extra instructions if provided)
     let finalPrompt = data.prompt;
     if (data.extraInstructions) {
       finalPrompt = `${data.prompt}\n\n${data.extraInstructions}`;
     }
-
-    // Default: attribute the child to the MCP-authenticated caller, not the
-    // parent owner. Legacy parent-inheriting "identity borrowing" is preserved
-    // only when the worktree opts in via dangerously_allow_session_sharing.
-    const { created_by, unix_username } = await this.resolveChildIdentity(parent, params);
 
     const spawnedSession = await this.create(
       {

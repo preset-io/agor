@@ -1,51 +1,35 @@
 /**
  * Soft validation: does this model ID look like it belongs to this agentic tool?
  *
- * Why "soft"?
- * -----------
- * Users can pin custom model strings (BYOK proxies, fine-tunes, dated
- * snapshots, internal aliases) — Agor deliberately accepts arbitrary model
- * IDs and lets the SDK be the final arbiter. We can't reject what we don't
- * recognize. But we *can* recognize the obvious mismatches: a session whose
- * `agentic_tool` is `codex` and whose `model_config.model` is `claude-opus-4-7`
- * is almost certainly a config bug (this is the bug this validator was
- * introduced to surface — see `resolve-child-session-config.ts`).
- *
- * The lint table is a compact prefix map keyed by family substring. A model
- * matches a tool when one of the tool's prefixes is found in the (lowercased)
- * model ID. Unknown models — those that don't match *any* prefix table —
- * pass silently: the user knows what they're doing, or the SDK will tell them.
- *
- * Copilot is the awkward case: Copilot proxies models from multiple
- * providers, so `claude-sonnet-4.6` is a perfectly valid Copilot model.
- * Copilot is therefore omitted from the prefix table — any model is plausible.
+ * Users can pin custom model strings (BYOK proxies, fine-tunes, dated snapshots,
+ * internal aliases), so we never reject — we only warn on the obvious mismatch
+ * a `codex` session being handed a `claude-*` model. The lint table is a
+ * compact prefix map; tools that proxy upstream providers (Copilot, OpenCode)
+ * are skipped entirely because any namespace is plausible.
  */
 
 import type { AgenticToolName } from '../types/agentic-tool.js';
 
 /**
  * Family prefixes that identify a model as belonging to a specific tool.
+ * Match rule: the (normalized) model ID `startsWith` one of the tool's
+ * prefixes. Normalization strips a leading `models/` (Google's API form)
+ * so e.g. `models/gemini-2.5-flash` matches `gemini-`. Keep entries lowercase.
  *
- * Match rule: a lowercased model ID is considered to belong to a tool when
- * *any* of the tool's prefixes appears anywhere in the lowercased ID. This
- * is intentionally fuzzy — Anthropic ships `claude-3-7-sonnet-latest`,
- * OpenAI ships `gpt-5.4-mini`, Google ships `gemini-2.5-flash`. Substring
- * containment is more permissive than `startsWith` (which would miss e.g.
- * `models/gemini-2.5-flash`) and tighter than running a regex.
- *
- * Copilot is intentionally absent: Copilot routes to upstream providers
- * (Anthropic, OpenAI, Google), so a Copilot session can legitimately use
- * any of these prefixes. We can't usefully lint it.
- *
- * To extend: add a prefix here. Keep entries lowercase.
+ * To extend: add a prefix here.
  */
 const TOOL_MODEL_PREFIXES: Partial<Record<AgenticToolName, readonly string[]>> = {
   'claude-code': ['claude-'],
   codex: ['gpt-', 'o1-', 'o1.', 'o3-', 'o3.', 'o4-', 'o4.', 'codex-'],
   gemini: ['gemini-'],
-  // OpenCode is a multi-provider router — ship anything via `provider`.
-  // Copilot routes to upstream providers — omitted.
 };
+
+/**
+ * Tools that proxy/route to upstream providers (Anthropic, OpenAI, Google, ...).
+ * A `claude-*` model on a Copilot session is legitimate — there is no useful
+ * lint to perform. The validator returns `null` (no opinion) for these.
+ */
+const UNOPINIONATED_TOOLS: ReadonlySet<AgenticToolName> = new Set(['copilot', 'opencode']);
 
 /** Result of a model/tool match check. `null` means "no opinion". */
 export type ModelToolMatch =
@@ -57,6 +41,8 @@ export type ModelToolMatch =
  * Inspect a model/tool pair without rejecting it.
  *
  * Returns:
+ * - `null` when there's no opinion to give (no model, or the tool routes
+ *   to upstream providers and any model is plausible).
  * - `ok` when the model ID matches one of `tool`'s known prefixes.
  * - `mismatch` when the model ID matches a *different* tool's prefixes
  *   (this is the cross-tool spawn bug — surfaces "Codex session got a
@@ -69,26 +55,33 @@ export function lintModelToolMatch(
   tool: AgenticToolName
 ): ModelToolMatch | null {
   if (!model) return null;
-  const lower = model.toLowerCase();
+  if (UNOPINIONATED_TOOLS.has(tool)) return null;
+  const normalized = normalizeModelId(model);
 
-  // 1. Does it match the *requested* tool? Then we're happy.
   const requestedPrefixes = TOOL_MODEL_PREFIXES[tool];
-  if (requestedPrefixes?.some((p) => lower.includes(p))) {
+  if (requestedPrefixes?.some((p) => normalized.startsWith(p))) {
     return { match: 'ok', tool, model };
   }
 
-  // 2. Does it match some *other* tool? Then it's a likely mismatch.
   for (const [otherTool, prefixes] of Object.entries(TOOL_MODEL_PREFIXES) as Array<
     [AgenticToolName, readonly string[]]
   >) {
     if (otherTool === tool) continue;
-    if (prefixes.some((p) => lower.includes(p))) {
+    if (prefixes.some((p) => normalized.startsWith(p))) {
       return { match: 'mismatch', tool, model, looksLike: otherTool };
     }
   }
 
-  // 3. Doesn't match anything we know. No opinion.
   return { match: 'unknown', tool, model };
+}
+
+/**
+ * Lowercase + strip the Google `models/` prefix. Anchored matching uses this
+ * normalized form so wrapped IDs still match family prefixes correctly.
+ */
+function normalizeModelId(model: string): string {
+  const lower = model.toLowerCase();
+  return lower.startsWith('models/') ? lower.slice('models/'.length) : lower;
 }
 
 /**
