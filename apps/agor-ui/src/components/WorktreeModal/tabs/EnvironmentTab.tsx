@@ -275,11 +275,13 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
 
   // ----- Render (variant → snapshot) -----
   const variantChanged = selectedVariant !== worktree.environment_variant;
+  const envIsActive = envStatus === 'running' || envStatus === 'starting';
   const renderDisabled =
     !canTriggerEnv ||
     !repo.environment ||
     !selectedVariant ||
     (variantChanged && !isAdmin) ||
+    (variantChanged && envIsActive) ||
     isRendering;
   const renderDisabledTooltip = !canTriggerEnv
     ? triggerDisabledTooltip
@@ -287,7 +289,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       ? 'Configure repo environment variants first'
       : variantChanged && !isAdmin
         ? 'Only admins can change the worktree variant'
-        : undefined;
+        : variantChanged && envIsActive
+          ? `Stop the environment before switching variants (currently ${envStatus})`
+          : undefined;
 
   const performRender = async () => {
     if (!client) return;

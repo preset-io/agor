@@ -1641,6 +1641,18 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
         ROLES.ADMIN,
         `change worktree environment variant to "${requestedVariant}"`
       );
+
+      // Refuse to swap variants while the env is live. The current process
+      // was started with the old command strings; replacing them out from
+      // under it would leave us unable to stop/restart cleanly. This guard
+      // is the authoritative invariant for ALL callers (REST, UI, MCP).
+      const envStatus = worktree.environment_instance?.status;
+      if (envStatus === 'running' || envStatus === 'starting') {
+        throw new Error(
+          `Cannot change environment variant to "${requestedVariant}" while the environment is ${envStatus} ` +
+            `(currently configured for "${currentVariant || '(none)'}"). Stop the environment first.`
+        );
+      }
     }
 
     // Resolve host IP + unix GID (matches executor's renderEnvironmentTemplates).

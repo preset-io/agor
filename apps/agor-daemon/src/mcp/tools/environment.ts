@@ -222,21 +222,10 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
           assertValidVariant(repo, variant);
         }
 
-        // Switching variant out from under a live env would replace the
-        // command strings the running process was started with. Force an
-        // explicit stop first. Only relevant when the resolved variant
-        // actually differs from what's persisted.
-        if (targetVariant && targetVariant !== worktree.environment_variant) {
-          const envStatus = worktree.environment_instance?.status;
-          if (envStatus === 'running' || envStatus === 'starting') {
-            return textResult({
-              success: false,
-              error:
-                `Environment is ${envStatus} with variant "${worktree.environment_variant || '(none)'}". ` +
-                `Stop it first, then set variant to "${targetVariant}".`,
-            });
-          }
-        }
+        // The "variant change while env is running/starting" guard lives in
+        // WorktreesService.renderEnvironment so it covers REST/UI/MCP
+        // uniformly. The error it throws is propagated by the outer catch
+        // below.
 
         const updated = await worktreesService.renderEnvironment(
           worktreeId as WorktreeID,

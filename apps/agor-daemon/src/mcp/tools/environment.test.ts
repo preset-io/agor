@@ -185,7 +185,10 @@ describe('agor_environment_set', () => {
     expect(startCalls).toHaveLength(1);
   });
 
-  it('refuses to switch variant when env is running', async () => {
+  it('propagates the service-layer "running" error when renderEnvironment refuses a variant change', async () => {
+    // The "don't switch variants while live" invariant lives in
+    // WorktreesService.renderEnvironment so REST/UI/MCP all honor it.
+    // Here we verify the handler delegates and surfaces the error verbatim.
     const renderCalls: unknown[][] = [];
     const startCalls: unknown[][] = [];
 
@@ -200,7 +203,10 @@ describe('agor_environment_set', () => {
         }),
         renderEnvironment: async (...args: unknown[]) => {
           renderCalls.push(args);
-          return {};
+          throw new Error(
+            'Cannot change environment variant to "e2e" while the environment is running ' +
+              '(currently configured for "dev"). Stop the environment first.'
+          );
         },
         startEnvironment: async (...args: unknown[]) => {
           startCalls.push(args);
@@ -215,37 +221,9 @@ describe('agor_environment_set', () => {
 
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/running/);
-    expect(parsed.error).toMatch(/Stop it first/);
-    expect(renderCalls).toHaveLength(0);
+    expect(parsed.error).toMatch(/Stop the environment first/);
+    expect(renderCalls).toHaveLength(1);
     expect(startCalls).toHaveLength(0);
-  });
-
-  it('refuses to switch variant when env is starting', async () => {
-    const renderCalls: unknown[][] = [];
-
-    const ctx = makeCtx({
-      repos: { get: async () => fakeRepo },
-      worktrees: {
-        get: async () => ({
-          worktree_id: 'wt-1',
-          repo_id: 'repo-1',
-          environment_variant: 'dev',
-          environment_instance: { status: 'starting' },
-        }),
-        renderEnvironment: async (...args: unknown[]) => {
-          renderCalls.push(args);
-          return {};
-        },
-      },
-    });
-
-    const handler = await captureEnvironmentTool(ctx, 'agor_environment_set');
-    const result = await handler({ worktreeId: 'wt-1', variant: 'e2e' });
-    const parsed = JSON.parse(result.content[0].text);
-
-    expect(parsed.success).toBe(false);
-    expect(parsed.error).toMatch(/starting/);
-    expect(renderCalls).toHaveLength(0);
   });
 
   it('allows re-rendering with the SAME variant on a running env (no variant change)', async () => {
