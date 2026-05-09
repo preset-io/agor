@@ -62,7 +62,7 @@
     "@google/gemini-cli-core": "^0.31.0",
     "@google/genai": "^1.43.0",
     "@iarna/toml": "^2.2.5",
-    "@libsql/client": "^0.17.2",
+    "@libsql/client": "^0.17.3",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@oclif/core": "^4.8.3",
     "@oclif/plugin-help": "^6.2.37",
@@ -94,7 +94,7 @@
     "multer": "^2.1.1",
     "node-pty": "^1.2.0-beta.12",
     "open": "^11.0.0",
-    "postgres": "^3.4.8",
+    "postgres": "^3.4.9",
     "simple-git": "^3.36.0",
     "slackify-markdown": "^5.0.0",
     "socket.io": "^4.8.3",
@@ -102,7 +102,7 @@
     "swagger-ui-dist": "^5.32.1",
     "uuid": "^14.0.0",
     "uuidv7": "^1.1.0",
-    "zod": "^4.3.6"
+    "zod": "^4.4.3"
   },
   "oclif": {
     "bin": "agor",

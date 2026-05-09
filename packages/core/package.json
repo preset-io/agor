@@ -269,7 +269,7 @@
     "@google/gemini-cli-core": "^0.31.0",
     "@google/genai": "^1.43.0",
     "@iarna/toml": "^2.2.5",
-    "@libsql/client": "^0.17.2",
+    "@libsql/client": "^0.17.3",
     "@octokit/auth-app": "^8.2.0",
     "@octokit/rest": "^22.0.1",
     "@openai/codex-sdk": "^0.128.0",
@@ -282,12 +282,12 @@
     "drizzle-orm": "^0.45.2",
     "js-yaml": "^4.1.1",
     "open": "^11.0.0",
-    "postgres": "^3.4.8",
+    "postgres": "^3.4.9",
     "simple-git": "^3.36.0",
     "slackify-markdown": "^5.0.0",
     "socket.io-client": "^4.8.3",
     "uuid": "^14.0.0",
-    "zod": "^4.3.6"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
