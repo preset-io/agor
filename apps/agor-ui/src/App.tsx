@@ -231,19 +231,23 @@ function AppContent() {
 
     if (!currentUser) return;
 
-    // Mark onboarding complete and store result in preferences
-    handleUpdateUser(currentUser.user_id, {
-      onboarding_completed: true,
-      preferences: {
-        ...currentUser.preferences,
-        mainBoardId: result.boardId || currentUser.preferences?.mainBoardId,
-        onboarding: {
-          path: result.path,
-          worktreeId: result.worktreeId,
-          boardId: result.boardId,
+    // Silent: the wizard closing + navigation is the confirmation here.
+    handleUpdateUser(
+      currentUser.user_id,
+      {
+        onboarding_completed: true,
+        preferences: {
+          ...currentUser.preferences,
+          mainBoardId: result.boardId || currentUser.preferences?.mainBoardId,
+          onboarding: {
+            path: result.path,
+            worktreeId: result.worktreeId,
+            boardId: result.boardId,
+          },
         },
       },
-    });
+      { silent: true }
+    );
 
     // Clear the assistant pending flag if applicable
     if (result.path === 'assistant' && client) {
@@ -629,13 +633,19 @@ function AppContent() {
     }
   };
 
-  // Handle update user
-  const handleUpdateUser = async (userId: string, updates: UpdateUserInput) => {
+  // Handle update user (`silent` suppresses the success toast; errors always show)
+  const handleUpdateUser = async (
+    userId: string,
+    updates: UpdateUserInput,
+    options: { silent?: boolean } = {}
+  ) => {
     if (!client) return;
     try {
       // Cast UpdateUserInput to Partial<User> - backend handles encryption/conversion
       await client.service('users').patch(userId, updates as Partial<User>);
-      showSuccess('User updated successfully!');
+      if (!options.silent) {
+        showSuccess('User updated successfully!');
+      }
     } catch (error) {
       showError(`Failed to update user: ${error instanceof Error ? error.message : String(error)}`);
     }

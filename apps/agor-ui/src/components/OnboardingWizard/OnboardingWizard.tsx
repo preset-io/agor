@@ -817,15 +817,14 @@ export function OnboardingWizard({
 
   const handleSkip = useCallback(() => {
     if (!user) return;
-    onUpdateUser(user.user_id, { onboarding_completed: true });
-    // Close immediately - the parent will handle setting the state
+    // onComplete sets onboarding_completed; updating it here too would double-PATCH.
     onComplete({
       worktreeId: '',
       sessionId: '',
       boardId: '',
       path: 'assistant',
     });
-  }, [user, onUpdateUser, onComplete]);
+  }, [user, onComplete]);
 
   const handleBack = useCallback(() => {
     setError(null);
