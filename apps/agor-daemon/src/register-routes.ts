@@ -46,7 +46,6 @@ import type {
   SessionID,
   StreamingEventType,
   Task,
-  TaskID,
   User,
   UUID,
   WorktreeID,
@@ -88,7 +87,8 @@ import {
   registerAuthenticatedRoute,
   requireMinimumRole,
 } from './utils/authorization.js';
-import { claimAndRunExistingTask, normalizeMessageSource } from './utils/task-runner.js';
+import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
+import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import {
   createUploadMiddleware,
   enforceParsedTotalUploadSize,
@@ -728,6 +728,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   );
 
   /**
+   * Per-session "turn" lock — single source of truth for "who's allowed to
+   * spawn an executor for this session right now" mutual exclusion. Shared
+   * by `/sessions/:id/prompt`'s idle branch, `/tasks/:id/run`, and the
+   * queue processor's drain loop. See `utils/session-turn-lock.ts`.
+   *
+   * Without this, two concurrent prompts on the same idle session could
+   * both observe `status === 'idle'` and both spawn executors — a race
+   * that pre-dates the `/tasks/:id/run` route but is now fixed across all
+   * three entry points.
+   */
+  const sessionTurnLocks: SessionTurnLocks = new Map();
+
+  /**
    * Helper: Safely patch an entity, returning false if it was deleted mid-execution
    */
   async function safePatch<T>(
@@ -1090,81 +1103,96 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // immediately or gets queued is the *response*, not a different code
         // path. Sentinels and queue-position assignment live in
         // `taskRepo.createPending` so callers don't reassemble them by hand.
+        //
+        // Wrapped in `withSessionTurnLock` so the queue-vs-idle decision and
+        // the subsequent spawn are atomic with respect to other entry points
+        // (`/tasks/:id/run`, the queue drainer). Without this, two concurrent
+        // prompts on an idle session could both observe `status === 'idle'`
+        // and both spawn executors. Inside the lock the session is re-read,
+        // so the decision is made against the freshest possible state.
         const taskRepo = new TaskRepository(db);
-        const queuedTasks = await taskRepo.findQueued(id as SessionID);
-        const shouldQueue = session.status !== SessionStatus.IDLE || queuedTasks.length > 0;
         const createdBy = params.user?.user_id ?? 'anonymous';
 
-        if (shouldQueue) {
-          const queuedTask = await taskRepo.createPending({
+        return await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () => {
+          const lockedSession = await sessionsService.get(id, params);
+          if (lockedSession.status === SessionStatus.STOPPING) {
+            // The earlier STOPPING check was against pre-lock state — re-check
+            // here so a session that entered STOPPING while we waited for our
+            // turn doesn't accept a prompt.
+            throw new Error('Cannot send prompt: session is currently stopping');
+          }
+          const queuedTasks = await taskRepo.findQueued(id as SessionID);
+          const shouldQueue = lockedSession.status !== SessionStatus.IDLE || queuedTasks.length > 0;
+
+          if (shouldQueue) {
+            const queuedTask = await taskRepo.createPending({
+              session_id: id as SessionID,
+              full_prompt: data.prompt,
+              created_by: createdBy,
+              status: TaskStatus.QUEUED,
+              metadata: {
+                ...(params.user?.user_id ? { queued_by_user_id: params.user.user_id } : {}),
+                ...(messageSource ? { source: messageSource } : {}),
+              },
+            });
+
+            console.log(
+              `📬 [Prompt] Auto-queued task for session ${id.substring(0, 8)} at position ${queuedTask.queue_position} ` +
+                `(session status: ${lockedSession.status}, existing queue items: ${queuedTasks.length})`
+            );
+
+            app.service('tasks').emit('queued', queuedTask);
+
+            if (lockedSession.status === SessionStatus.IDLE) {
+              setImmediate(async () => {
+                try {
+                  await sessionsService.triggerQueueProcessing(id as SessionID, params);
+                } catch (error) {
+                  console.error(
+                    `❌ [Prompt] Failed to trigger queue processing after auto-queue:`,
+                    error
+                  );
+                }
+              });
+            }
+
+            // Uniform response: the entity is always a Task. Caller inspects
+            // `task.status` (`'queued'` here) and `task.queue_position` to know
+            // what happened.
+            return queuedTask;
+          }
+
+          console.log(`   Session agent: ${lockedSession.agentic_tool}`);
+          console.log(
+            `   Session permission_config.mode: ${lockedSession.permission_config?.mode || 'not set'}`
+          );
+
+          // Idle path: create a CREATED task, then hand off to spawnTaskExecutor
+          // which is the sole place that populates message_range / git_state,
+          // writes the user-message row, and spawns the executor. Both this
+          // path and processNextQueuedTask go through that helper so behavior
+          // stays in lockstep.
+          const task = await taskRepo.createPending({
             session_id: id as SessionID,
             full_prompt: data.prompt,
             created_by: createdBy,
-            status: TaskStatus.QUEUED,
-            metadata: {
-              ...(params.user?.user_id ? { queued_by_user_id: params.user.user_id } : {}),
-              ...(messageSource ? { source: messageSource } : {}),
-            },
+            status: TaskStatus.CREATED,
+            metadata: messageSource ? { source: messageSource } : undefined,
           });
+          // Bypassing the service means no native 'created' emit; do it here
+          // so reactive clients see the new task before the executor spawns.
+          app.service('tasks').emit('created', task);
 
-          console.log(
-            `📬 [Prompt] Auto-queued task for session ${id.substring(0, 8)} at position ${queuedTask.queue_position} ` +
-              `(session status: ${session.status}, existing queue items: ${queuedTasks.length})`
+          return await spawnTaskExecutor(
+            task,
+            {
+              permissionMode: data.permissionMode,
+              stream: data.stream !== false,
+              messageSource,
+            },
+            params
           );
-
-          app.service('tasks').emit('queued', queuedTask);
-
-          if (session.status === SessionStatus.IDLE) {
-            setImmediate(async () => {
-              try {
-                await sessionsService.triggerQueueProcessing(id as SessionID, params);
-              } catch (error) {
-                console.error(
-                  `❌ [Prompt] Failed to trigger queue processing after auto-queue:`,
-                  error
-                );
-              }
-            });
-          }
-
-          // Uniform response: the entity is always a Task. Caller inspects
-          // `task.status` (`'queued'` here) and `task.queue_position` to know
-          // what happened.
-          return queuedTask;
-        }
-
-        console.log(`   Session agent: ${session.agentic_tool}`);
-        console.log(
-          `   Session permission_config.mode: ${session.permission_config?.mode || 'not set'}`
-        );
-
-        // Idle path: create a CREATED task, then hand off to spawnTaskExecutor
-        // which is the sole place that populates message_range / git_state,
-        // writes the user-message row, and spawns the executor. Both this
-        // path and processNextQueuedTask go through that helper so behavior
-        // stays in lockstep.
-        const task = await taskRepo.createPending({
-          session_id: id as SessionID,
-          full_prompt: data.prompt,
-          created_by: createdBy,
-          status: TaskStatus.CREATED,
-          metadata: messageSource ? { source: messageSource } : undefined,
         });
-        // Bypassing the service means no native 'created' emit; do it here
-        // so reactive clients see the new task before the executor spawns.
-        app.service('tasks').emit('created', task);
-
-        const runningTask = await spawnTaskExecutor(
-          task,
-          {
-            permissionMode: data.permissionMode,
-            stream: data.stream !== false,
-            messageSource,
-          },
-          params
-        );
-
-        return runningTask;
       },
     },
     {
@@ -1191,10 +1219,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // atomic create-and-queue path). Splitting the two responsibilities keeps
   // this endpoint a narrow "run this thing now" trigger.
   // ============================================================================
-
-  // In-memory lock map serializing concurrent /tasks/:id/run calls for the
-  // same task ID. Single-process only — see task-runner.ts for rationale.
-  const taskRunLocks = new Map<TaskID, Promise<void>>();
 
   registerAuthenticatedRoute(
     app,
@@ -1235,68 +1259,85 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           );
         }
 
-        const session = await sessionsService.get(task.session_id, params);
-
-        if (session.status === SessionStatus.STOPPING) {
-          throw new BadRequest('Cannot run task: session is currently stopping');
-        }
-
-        if (session.status !== SessionStatus.IDLE) {
-          throw new Conflict(
-            `Cannot run task ${taskId.substring(0, 8)}: session is '${session.status}'. ` +
-              `To enqueue a prompt on a busy session, POST to /sessions/:id/prompt instead — ` +
-              `it creates and queues a task atomically.`
-          );
-        }
-
         // Worktree RBAC — defense in depth. Without this, a member with
         // 'view' permission could trigger execution; the eventual
         // `tasks.patch` inside spawnTaskExecutor would still 403 via the
         // `ensureCanPromptInSession` hook, but only after we'd done extra
         // work and emitted partial state. Mirrors the upload route's
-        // pattern (~L1467) and `ensureCanPromptInSession` semantics.
-        if (worktreeRbacEnabled && session.worktree_id) {
-          const userId = params.user?.user_id as UUID | undefined;
-          if (!userId) {
-            throw new Forbidden('Authentication required to run tasks');
-          }
-          const wt = await worktreeRepository.findById(session.worktree_id);
-          if (!wt) {
-            throw new NotFound(`Worktree ${session.worktree_id} not found`);
-          }
-          const isOwner = await worktreeRepository.isOwner(wt.worktree_id, userId);
-          const effectiveLevel = resolveWorktreePermission(
-            wt,
-            userId,
-            isOwner,
-            params.user?.role,
-            superadminOpts.allowSuperadmin
-          );
-          const canRun =
-            PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt ||
-            (effectiveLevel === 'session' && session.created_by === userId);
-          if (!canRun) {
-            throw new Forbidden(
-              `You have '${effectiveLevel}' permission on this worktree, which does not ` +
-                `allow running tasks. Need 'prompt' or 'all' (or 'session' for own sessions).`
+        // pattern (~L1467) and `ensureCanPromptInSession` semantics —
+        // including the service-account / no-provider bypasses so executor
+        // callbacks aren't held to the same checks as user requests.
+        const isInternalCall = !params.provider;
+        const isServiceAccount =
+          (params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount === true;
+        if (worktreeRbacEnabled && task.session_id && !isInternalCall && !isServiceAccount) {
+          const session = await sessionsService.get(task.session_id, params);
+          if (!session.worktree_id) {
+            // Sessions without worktrees are out of RBAC scope; fall through.
+          } else {
+            const userId = params.user?.user_id as UUID | undefined;
+            if (!userId) {
+              throw new Forbidden('Authentication required to run tasks');
+            }
+            const wt = await worktreeRepository.findById(session.worktree_id);
+            if (!wt) {
+              throw new NotFound(`Worktree ${session.worktree_id} not found`);
+            }
+            const isOwner = await worktreeRepository.isOwner(wt.worktree_id, userId);
+            const effectiveLevel = resolveWorktreePermission(
+              wt,
+              userId,
+              isOwner,
+              params.user?.role,
+              superadminOpts.allowSuperadmin
             );
+            const canRun =
+              PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt ||
+              (effectiveLevel === 'session' && session.created_by === userId);
+            if (!canRun) {
+              throw new Forbidden(
+                `You have '${effectiveLevel}' permission on this worktree, which does not ` +
+                  `allow running tasks. Need 'prompt' or 'all' (or 'session' for own sessions).`
+              );
+            }
           }
         }
 
-        return claimAndRunExistingTask(
-          task,
-          {
-            permissionMode: data.permissionMode,
-            stream: data.stream !== false,
-            messageSource: normalizeMessageSource(data.messageSource, params),
-          },
-          params,
-          {
-            findTaskById: (id) => taskRepo.findById(id),
-            spawnFn: spawnTaskExecutor,
-            locks: taskRunLocks,
+        // Acquire the session-turn lock before validating session state and
+        // spawning. This is what closes the race against concurrent
+        // /tasks/:id/run on different tasks of the same session, against
+        // /sessions/:id/prompt's idle branch, and against the queue
+        // drainer — they all serialize through `sessionTurnLocks`.
+        return await withSessionTurnLock(sessionTurnLocks, task.session_id, async () => {
+          // Re-read session state inside the lock — it may have flipped to
+          // RUNNING while we waited for our turn.
+          const session = await sessionsService.get(task.session_id, params);
+
+          if (session.status === SessionStatus.STOPPING) {
+            throw new BadRequest('Cannot run task: session is currently stopping');
           }
-        );
+          if (session.status !== SessionStatus.IDLE) {
+            throw new Conflict(
+              `Cannot run task ${taskId.substring(0, 8)}: session is '${session.status}'. ` +
+                `To enqueue a prompt on a busy session, POST to /sessions/:id/prompt instead — ` +
+                `it creates and queues a task atomically.`
+            );
+          }
+
+          return await runExistingTask(
+            task,
+            {
+              permissionMode: data.permissionMode,
+              stream: data.stream !== false,
+              messageSource: normalizeMessageSource(data.messageSource, params),
+            },
+            params,
+            {
+              findTaskById: (id) => taskRepo.findById(id),
+              spawnFn: spawnTaskExecutor,
+            }
+          );
+        });
       },
     },
     {
@@ -1855,17 +1896,23 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  // Queue processing implementation — task-centric.
-  const queueProcessingLocks = new Map<SessionID, Promise<void>>();
+  // Queue processing implementation — task-centric. Acquires the shared
+  // `sessionTurnLocks` (declared near the top of registerRoutes) so the
+  // drainer can't race `/sessions/:id/prompt` or `/tasks/:id/run` for the
+  // same session. The retry-on-existing-lock indirection (vs. a plain
+  // `withSessionTurnLock` wrapper) preserves the original "if drain is in
+  // flight, schedule a retry instead of stacking concurrent drainers"
+  // semantics — important because callbacks can fire processNextQueuedTask
+  // from arbitrary points in the lifecycle.
   const queueRetryScheduled = new Set<SessionID>();
 
   async function processNextQueuedTask(sessionId: SessionID, params: RouteParams): Promise<void> {
-    const existingLock = queueProcessingLocks.get(sessionId);
+    const existingLock = sessionTurnLocks.get(sessionId);
     if (existingLock) {
       console.log(
-        `⏳ [Queue] Processing in progress for session ${sessionId.substring(0, 8)}, waiting...`
+        `⏳ [Queue] Session turn in progress for ${sessionId.substring(0, 8)}, waiting...`
       );
-      await existingLock;
+      await existingLock.catch(() => undefined);
       if (!queueRetryScheduled.has(sessionId)) {
         queueRetryScheduled.add(sessionId);
         setImmediate(async () => {
@@ -1883,19 +1930,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return;
     }
 
-    const processingPromise = processNextQueuedTaskInternal(sessionId, params);
-
-    queueProcessingLocks.set(
-      sessionId,
-      processingPromise.catch(() => {
-        // Swallow error for waiters
-      })
-    );
+    let resolveLock!: () => void;
+    const lockPromise = new Promise<void>((resolve) => {
+      resolveLock = resolve;
+    });
+    sessionTurnLocks.set(sessionId, lockPromise);
 
     try {
-      await processingPromise;
+      await processNextQueuedTaskInternal(sessionId, params);
     } finally {
-      queueProcessingLocks.delete(sessionId);
+      sessionTurnLocks.delete(sessionId);
+      resolveLock();
     }
   }
 

@@ -193,7 +193,7 @@ curl -X POST http://localhost:3030/tasks/<task-id>/run \
   -d '{ "stream": true }'
 ```
 
-The response is the patched `Task` row with `status: 'running'`. The endpoint only accepts tasks in `created` or `queued` state on an `idle` session — busy sessions should be prompted via `POST /sessions/:id/prompt` instead, which creates and queues the task atomically.
+The response is the patched `Task` row with `status: 'running'`. The endpoint only accepts tasks in `created` state on an `idle` session — `queued` tasks drain automatically in queue-position order, and busy sessions should be prompted via `POST /sessions/:id/prompt` (which creates and queues the task atomically).
 
 ## Message Content Shape
 
