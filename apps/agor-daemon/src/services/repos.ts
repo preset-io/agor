@@ -385,6 +385,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       zoneId?: string;
       others_can?: WorktreePermissionLevel;
       others_fs_access?: 'none' | 'read' | 'write';
+      environment_variant?: string;
     },
     params?: RepoParams
   ): Promise<Worktree> {
@@ -587,6 +588,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         // RBAC fields (optional, defaults handled by repository layer)
         ...(data.others_can ? { others_can: data.others_can } : {}),
         ...(data.others_fs_access ? { others_fs_access: data.others_fs_access } : {}),
+        ...(data.environment_variant ? { environment_variant: data.environment_variant } : {}),
         sessions: [],
         last_used: new Date().toISOString(),
         issue_url: data.issue_url,
