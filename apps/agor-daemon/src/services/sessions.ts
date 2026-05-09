@@ -15,8 +15,8 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { type Application, Forbidden } from '@agor/core/feathers';
-import { resolveModelConfig } from '@agor/core/models';
-import { resolveSessionDefaults } from '@agor/core/sessions';
+import { formatModelToolMismatchWarning, lintModelToolMatch } from '@agor/core/models';
+import { resolveChildSessionConfig } from '@agor/core/sessions';
 import type {
   AuthenticatedParams,
   MCPServerID,
@@ -384,87 +384,80 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   /**
    * Custom method: Spawn a child session
    *
-   * Creates a new session for delegating a subsession to another agent.
+   * Creates a new session, optionally delegating to a different agentic tool.
    *
-   * Settings inheritance:
-   * - If spawning the same agentic tool → inherit parent's settings (permission_config, model_config)
-   * - If spawning a different tool → use user's preferred settings for that tool
-   * - Explicit overrides in SpawnConfig take precedence over both
+   * Config resolution is centralized in
+   * {@link resolveChildSessionConfig} (`@agor/core/sessions`). The rule, in
+   * one place, field by field:
+   *
+   *   model_config:    request → parent (same tool only) → user default → undefined
+   *   permission_config: request → parent (same tool only) → user default → mapped system default
+   *
+   * The "same tool only" gate is the bug fix for the cross-tool inheritance
+   * regression: a Codex child spawned from a Claude parent must not inherit
+   * `claude-opus-4-7` from the parent — Codex cannot run Claude models. When
+   * the user has no per-tool default for the child, the helper returns
+   * `model_config: undefined` and we let the SDK pick its built-in default
+   * for that tool instead of feeding it a poisoned value.
+   *
+   * MCP server inheritance is handled separately at the bottom of this
+   * method — MCPs are tool-agnostic, and the existing "explicit list >
+   * copy from parent" rule is correct regardless of tool match.
    */
   async spawn(
     id: string,
     data: Partial<import('@agor/core/types').SpawnConfig>,
     params?: SessionParams
   ): Promise<Session> {
-    // Validate required fields
     if (!data.prompt) {
       throw new Error('Spawn requires a prompt');
     }
     const parent = await this.get(id, params);
     const targetTool = data.agent || parent.agentic_tool;
-    const isSameTool = targetTool === parent.agentic_tool;
 
-    // Determine settings based on:
-    // 1. Explicit overrides in SpawnConfig (highest priority)
-    // 2. User preferences (if spawning different tool)
-    // 3. Parent settings (fallback via getInheritableConfig)
-
-    const inherited = getInheritableConfig(parent);
-    let permissionConfig = inherited.permission_config;
-    let modelConfig = inherited.model_config;
-
-    // If spawning a different tool and no explicit overrides, fall through to
-    // the helper for the target tool. The parent's permission_config is
-    // meaningless for a different agent — e.g. a Claude session's `acceptEdits`
-    // mode means nothing for a Codex spawn, and Codex reads its own
-    // `permission_config.codex` sub-config that the parent doesn't carry.
-    // Always adopt the helper's resolved values (user defaults > system
-    // fallback) instead of partially keeping the parent's, so cross-agent
-    // permission-mode mapping and Codex sub-config defaults flow through.
-    if (!isSameTool && !data.permissionMode && !data.modelConfig) {
-      const userId = parent.created_by;
-      if (userId && this.app) {
-        try {
-          const user = await this.app.service('users').get(userId, params);
-          const userResolved = resolveSessionDefaults({ agenticTool: targetTool, user });
-          permissionConfig = userResolved.permission_config;
-          // model_config: prefer user default, but if user has no model
-          // pinned, keep the parent's so cross-tool spawns inherit the
-          // family-level "use the smart model" choice rather than nothing.
-          modelConfig = userResolved.model_config ?? modelConfig;
-        } catch (error) {
-          // If we can't fetch user preferences, fall back to the helper with
-          // no user (system defaults) — still better than parent's stale
-          // cross-agent config.
-          console.warn(
-            'Could not fetch user preferences for spawned session, using system defaults:',
-            error
-          );
-          const sysResolved = resolveSessionDefaults({ agenticTool: targetTool });
-          permissionConfig = sysResolved.permission_config;
-        }
+    // Look up the parent's owner for their per-tool defaults. Failing this
+    // lookup is non-fatal — the resolver gracefully falls through to the
+    // mapped system default when `user` is null.
+    let user: import('@agor/core/types').User | null = null;
+    const userId = parent.created_by;
+    if (userId && this.app) {
+      try {
+        user = (await this.app
+          .service('users')
+          .get(userId, params)) as import('@agor/core/types').User;
+      } catch (error) {
+        console.warn(
+          'Could not fetch user preferences for spawned session, using system defaults:',
+          error
+        );
       }
     }
 
-    // Apply explicit overrides from SpawnConfig
-    if (data.permissionMode) {
-      permissionConfig = {
-        mode: data.permissionMode,
-        ...(targetTool === 'codex' && data.codexSandboxMode && data.codexApprovalPolicy
-          ? {
-              codex: {
-                sandboxMode: data.codexSandboxMode,
-                approvalPolicy: data.codexApprovalPolicy,
-                networkAccess: data.codexNetworkAccess,
-              },
-            }
-          : permissionConfig?.codex
-            ? { codex: permissionConfig.codex }
-            : {}),
-      };
-    }
+    const resolved = resolveChildSessionConfig({
+      parent,
+      effectiveTool: targetTool,
+      user,
+      overrides: {
+        permissionMode: data.permissionMode,
+        modelConfig: data.modelConfig,
+        codexSandboxMode: data.codexSandboxMode,
+        codexApprovalPolicy: data.codexApprovalPolicy,
+        codexNetworkAccess: data.codexNetworkAccess,
+      },
+    });
+    const permissionConfig = resolved.permission_config;
+    const modelConfig = resolved.model_config;
 
-    modelConfig = resolveModelConfig(data.modelConfig) ?? modelConfig;
+    // Soft validation: warn (don't block) when the resolved model looks like
+    // it belongs to a different tool. Custom model strings are always
+    // accepted — this just surfaces the regression class that motivated the
+    // resolver refactor.
+    const lintWarning = formatModelToolMismatchWarning(
+      lintModelToolMatch(modelConfig?.model, targetTool)
+    );
+    if (lintWarning) {
+      console.warn(`[SessionsService.spawn] ${lintWarning}`);
+    }
 
     // Build callback configuration
     // callback_session_id is the single source of truth for where to deliver callbacks.
