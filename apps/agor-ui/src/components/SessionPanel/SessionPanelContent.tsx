@@ -6,12 +6,13 @@ import {
   VerticalAlignBottomOutlined,
   VerticalAlignTopOutlined,
 } from '@ant-design/icons';
-import { App, Button, Divider, Space, Tooltip, Typography, theme } from 'antd';
+import { Button, Divider, Space, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAppEntityData } from '../../contexts/AppDataContext';
 import { copyToClipboard } from '../../utils/clipboard';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
+import { useThemedMessage } from '../../utils/message';
 import { ConversationView } from '../ConversationView';
 import { ForkSpawnModal } from '../ForkSpawnModal';
 import { MCPServerPill } from '../MCPServer';
@@ -57,7 +58,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     isOpen,
   }) => {
     const { token } = theme.useToken();
-    const { message } = App.useApp();
+    const { showSuccess, showError } = useThemedMessage();
 
     // Get data from entity context only — keeps this panel insulated from
     // session/worktree/board patches flowing through AppLiveDataContext.
@@ -238,7 +239,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                       icon={<CopyOutlined />}
                       onClick={async () => {
                         await copyToClipboard(task.full_prompt);
-                        message.success('Message copied to clipboard');
+                        showSuccess('Message copied to clipboard');
                       }}
                     />
                     <Button
@@ -257,7 +258,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                           // entirely; spawnTaskExecutor never gets a chance.
                           await client.service('tasks').remove(task.task_id);
                         } catch (error) {
-                          message.error(
+                          showError(
                             `Failed to remove queued task: ${error instanceof Error ? error.message : String(error)}`
                           );
 

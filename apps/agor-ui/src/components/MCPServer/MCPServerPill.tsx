@@ -1,8 +1,9 @@
 import type { AgorClient, MCPServer } from '@agor-live/client';
 import { ApiOutlined, EditOutlined, LoginOutlined, ReloadOutlined } from '@ant-design/icons';
-import { App, Tooltip } from 'antd';
+import { Tooltip } from 'antd';
 import { useState } from 'react';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useThemedMessage } from '../../utils/message';
 import { formatAbsoluteTime } from '../../utils/time';
 import { Tag } from '../Tag';
 import { MCPServerEditModal } from './MCPServerEditModal';
@@ -46,7 +47,7 @@ function formatExpiresIn(expiresAtMs: number): { verb: 'Expires' | 'Expired'; ph
  *                 so operators can fix config without leaving the session view.
  */
 export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth, client }) => {
-  const { message } = App.useApp();
+  const { showSuccess, showInfo, showWarning, showError } = useThemedMessage();
   const { isAdmin } = usePermissions();
   const [refreshing, setRefreshing] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
@@ -72,13 +73,13 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
 
       if (data.success && data.authorizationUrl) {
         window.open(data.authorizationUrl, '_blank', 'noopener,noreferrer');
-        message.info('Complete sign-in in the new tab.');
+        showInfo('Complete sign-in in the new tab.');
 
         // Listen for completion — show toast when done
         if (data.state) {
           const handleCompleted = (event: { state: string; success: boolean }) => {
             if (event.state === data.state && event.success) {
-              message.success(`${server.display_name || server.name} authenticated!`);
+              showSuccess(`${server.display_name || server.name} authenticated!`);
               client.io.off('oauth:completed', handleCompleted);
             }
           };
@@ -87,10 +88,10 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
           setTimeout(() => client.io.off('oauth:completed', handleCompleted), 5 * 60 * 1000);
         }
       } else if (!data.success) {
-        message.error(data.error || 'Failed to start OAuth flow');
+        showError(data.error || 'Failed to start OAuth flow');
       }
     } catch (err) {
-      message.error(`OAuth error: ${err instanceof Error ? err.message : String(err)}`);
+      showError(`OAuth error: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -108,20 +109,20 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
 
       if (result.success) {
         setExpiresAtOverride(result.expires_at);
-        message.success(
+        showSuccess(
           result.expires_at
             ? `${server.display_name || server.name} refreshed — expires ${formatExpiresIn(result.expires_at).phrase}`
             : `${server.display_name || server.name} refreshed`
         );
       } else if (result.error === 'needs_reauth') {
-        message.warning('Refresh token is no longer valid — sign in again.');
+        showWarning('Refresh token is no longer valid — sign in again.');
         // Fall through to full OAuth flow so the user can re-auth in one click.
         await handleOAuthClick();
       } else {
-        message.error(`Refresh failed: ${result.error || 'unknown error'}`);
+        showError(`Refresh failed: ${result.error || 'unknown error'}`);
       }
     } catch (err) {
-      message.error(`Refresh error: ${err instanceof Error ? err.message : String(err)}`);
+      showError(`Refresh error: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setRefreshing(false);
     }

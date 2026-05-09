@@ -37,6 +37,7 @@ import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
+import { useThemedMessage } from '../../utils/message';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { EffortSelector } from '../EffortSelector';
@@ -222,7 +223,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   onClose,
 }) => {
   const { token } = theme.useToken();
-  const { modal, message } = App.useApp();
+  const { modal } = App.useApp();
+  const { showSuccess, showInfo, showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
 
   // Get data from entity context only — SessionPanel intentionally does NOT
@@ -525,7 +527,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
     // Show feedback immediately if this is a retry
     if (isStopping) {
-      message.info('Retrying stop request...');
+      showInfo('Retrying stop request...');
     }
 
     setStopRequestInFlight(true);
@@ -533,7 +535,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       await client.service(`sessions/${session.session_id}/stop`).create({});
     } catch (error) {
       console.error('Failed to stop execution:', error);
-      message.error('Failed to stop execution. You can try again.');
+      showError('Failed to stop execution. You can try again.');
     } finally {
       setStopRequestInFlight(false);
     }
@@ -1048,7 +1050,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             }}
             initialFiles={droppedFiles}
             onUploadComplete={(files) => {
-              message.success(`Uploaded ${files.length} file(s)`);
+              showSuccess(`Uploaded ${files.length} file(s)`);
             }}
             onInsertMention={(filepath) => {
               // Insert @filepath mention into the textarea

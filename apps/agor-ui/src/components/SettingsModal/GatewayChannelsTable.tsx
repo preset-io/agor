@@ -29,7 +29,6 @@ import {
 } from '@ant-design/icons';
 import {
   Alert,
-  message as antdMessage,
   Badge,
   Button,
   Checkbox,
@@ -300,6 +299,8 @@ const ChannelFormFields: React.FC<{
   githubLoading,
   githubError,
 }) => {
+  const { showError } = useThemedMessage();
+
   // Watch message source settings for showing warnings/scope requirements
   const enableChannels = Form.useWatch('enable_channels', form) ?? false;
   const enableGroups = Form.useWatch('enable_groups', form) ?? false;
@@ -461,9 +462,7 @@ const ChannelFormFields: React.FC<{
                   try {
                     const accessToken = localStorage.getItem(ACCESS_TOKEN_KEY);
                     if (!accessToken) {
-                      antdMessage.error(
-                        'You must be logged in as an admin to install the GitHub App.'
-                      );
+                      showError('You must be logged in as an admin to install the GitHub App.');
                       return;
                     }
                     const stateRes = await fetch(`${daemonUrl}/api/github/setup/state`, {
@@ -481,18 +480,18 @@ const ChannelFormFields: React.FC<{
                         typeof body?.error === 'string'
                           ? body.error
                           : `Failed to start GitHub App install (HTTP ${stateRes.status})`;
-                      antdMessage.error(err);
+                      showError(err);
                       return;
                     }
                     const { state } = (await stateRes.json()) as { state?: string };
                     if (!state) {
-                      antdMessage.error('Daemon did not return an install state token.');
+                      showError('Daemon did not return an install state token.');
                       return;
                     }
                     params.set('state', state);
                     window.open(`${daemonUrl}/api/github/setup/new?${params.toString()}`, '_blank');
                   } catch (err) {
-                    antdMessage.error(
+                    showError(
                       err instanceof Error ? err.message : 'Failed to initiate GitHub App install'
                     );
                   }

@@ -1,6 +1,7 @@
 import type { AgorClient, FileDetail, FileListItem, Worktree } from '@agor-live/client';
-import { Alert, message, Space } from 'antd';
+import { Alert, Space } from 'antd';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { useThemedMessage } from '../../../utils/message';
 import { CodePreviewModal } from '../../CodePreviewModal/CodePreviewModal';
 import type { FileItem } from '../../FileCollection/FileCollection';
 import { FileCollection } from '../../FileCollection/FileCollection';
@@ -29,6 +30,11 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
 
   const worktreeIdRef = useRef(worktree.worktree_id);
   worktreeIdRef.current = worktree.worktree_id;
+
+  // Themed message instance (held in a ref so download callback stays stable)
+  const themed = useThemedMessage();
+  const themedRef = useRef(themed);
+  themedRef.current = themed;
 
   // Fetch files when tab is opened
   useEffect(() => {
@@ -63,7 +69,7 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
     if (!currentClient) return;
 
     try {
-      message.loading({ content: 'Downloading file...', key: 'download' });
+      themedRef.current.showLoading('Downloading file...', { key: 'download' });
 
       const detail = (await currentClient.service('file').get(file.path, {
         query: { worktree_id: worktreeIdRef.current },
@@ -99,10 +105,10 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      message.success({ content: 'Downloaded!', key: 'download' });
+      themedRef.current.showSuccess('Downloaded!', { key: 'download' });
     } catch (err) {
       console.error('Failed to download file:', err);
-      message.error({ content: 'Failed to download file', key: 'download' });
+      themedRef.current.showError('Failed to download file', { key: 'download' });
     }
   }, []);
 
@@ -126,7 +132,7 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
           setSelectedFile(detail as FileDetail);
         } catch (err) {
           console.error('Failed to fetch file detail:', err);
-          message.error('Failed to load file');
+          themedRef.current.showError('Failed to load file');
           setModalOpen(false);
         } finally {
           setLoadingDetail(false);

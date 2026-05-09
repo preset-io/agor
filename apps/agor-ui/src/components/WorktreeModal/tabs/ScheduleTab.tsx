@@ -15,7 +15,6 @@ import {
   Form,
   Input,
   InputNumber,
-  message,
   Space,
   Switch,
   Typography,
@@ -24,6 +23,7 @@ import cronstrue from 'cronstrue';
 import { useEffect, useState } from 'react';
 import { Cron } from 'react-js-cron';
 import 'react-js-cron/dist/styles.css';
+import { useThemedMessage } from '../../../utils/message';
 import { AgenticToolConfigForm } from '../../AgenticToolConfigForm';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../../AgentSelectionGrid';
 
@@ -44,6 +44,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   onExecuteScheduleNow,
 }) => {
   const [form] = Form.useForm();
+  const { showError } = useThemedMessage();
   const [isInitialized, setIsInitialized] = useState(false);
   const [scheduleEnabled, setScheduleEnabled] = useState(worktree.schedule_enabled || false);
   const [cronExpression, setCronExpression] = useState(worktree.schedule_cron || '0 0 * * *');
@@ -137,7 +138,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
       });
       // Note: onUpdate already shows a success toast, so we don't show another one here
     } catch (error) {
-      message.error('Failed to save schedule configuration');
+      showError('Failed to save schedule configuration');
       console.error('Error saving schedule:', error);
     }
   };

@@ -41,6 +41,7 @@ Step-by-step implementation guides referenced from code.
 ### `guidelines/` — house rules
 
 - [`testing.md`](guidelines/testing.md) — Vitest patterns and conventions.
+- [`toasts.md`](guidelines/toasts.md) — Toast/message pattern. Always `useThemedMessage()` — never static `message.x()`.
 
 ### `explorations/` — active design docs
 
