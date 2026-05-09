@@ -193,6 +193,8 @@ Concrete examples:
 
 When both apply (e.g. the user kicked off a long-running task and it returned hours later) — emit **both**. The toast confirms the moment-of-return if you're looking; the notification is the durable record for if you weren't.
 
+**Caveat — context-aware toast suppression.** If the notification's source page is the user's *current* page (they're already looking at the session detail panel when its task returns), the **client suppresses the toast** to avoid double-signal. The notification is still created server-side (durable record); the local toast is what gets skipped. Implementation: client receives `notification:created`, compares `source_session_id` / `source_board_id` against current route, fires toast only if mismatched.
+
 ---
 
 ## 4. Notification types — v1 taxonomy
@@ -201,9 +203,23 @@ Hold the line on a small set. Each one needs a clear trigger, recipient set, and
 
 | Type | Trigger | Recipient(s) | Link target | Default subscription |
 |---|---|---|---|---|
-| **`mention`** | `board_comments.created` or `.patched` where `data.mentions[]` includes a user_id (or content matches `@username` / `@email` per existing detection) | Each mentioned user | Board, comments panel open, scrolled to comment | Always (mentions are always opt-in by definition) |
-| **`session_returned`** | `tasks.patch` sets `status` to `COMPLETED` or `FAILED` AND parent session's `worktree.archived = false` AND `session.archived = false` | Subscribers of the session (see §6) | Session detail panel open in the right board | Subscribed automatically (see §6) |
+| **`mention`** | A `board_comments` row is **created** (or patched to add a new mention) and `data.mentions[]` contains a user_id. Excludes self-mentions (`recipient ≠ author`). | Each mentioned user | Board with comments panel open, scrolled to comment | Always (mentions are inherently directed) |
+| **`session_returned`** | `tasks.patch` sets `status` to `COMPLETED` or `FAILED` AND `session.archived = false` AND `worktree.archived = false`. **Fires per task completion, not per message.** | Subscribers of the session (see §6) | Session detail panel open in the right board | Auto-subscribed via interaction (see §6) |
 | **`global_admin`** | Admin authors a global message (see §7) | All users (fanout) | Optionally a URL; otherwise just the panel | Always (one slot, dismissible) |
+
+### 4.1 What carries through to the notification
+
+For `session_returned` specifically — because the producer wires into the task lifecycle, not the message stream — there's a clean rule for what the rendered card shows:
+
+| Card slot | Source | Notes |
+|---|---|---|
+| **Title** | `getSessionDisplayTitle(session)` | The session's display name; falls back to first prompt. Same helper the session drawer uses. |
+| **Preview** | The **last assistant message** of the completed task, plain-text-extracted, truncated to ~160 chars | NOT the prompt. The prompt lives in the session if you click through. The preview answers "what came back." |
+| **Metadata line** | Worktree name, agentic_tool icon, relative time | Reuses `<ToolIcon>` and `formatRelativeTime`. |
+
+The producer fetches the last assistant message using the same query already implemented for parent-session callbacks (`context/explorations/parent-session-callbacks.md` §3, decision #3) — `MAX(index)` assistant-role message in the completing task. Reuse that logic; don't reinvent.
+
+**Importantly:** individual `messages` rows (assistant chunks, tool calls, tool results) **never** trigger notifications. The unit is the **task**, fired once when its terminal status is reached. A task that produces 50 messages = 1 notification (or 0, if collapsed onto an existing un-read row).
 
 **Out of v1, listed for completeness:**
 
@@ -245,7 +261,9 @@ export const notifications = sqliteTable(
       enum: ['mention', 'session_returned', 'global_admin'],
     }).notNull(),
 
-    // Display fields (materialized so the panel renders without joins)
+    // Display fields (materialized so the panel renders without joins).
+    // For session_returned: title = session display name, preview = last
+    // assistant message of the completed task (see §4.1).
     title: text('title').notNull(),                // ~80 chars
     preview: text('preview'),                      // ~160 chars, optional
     link_url: text('link_url'),                    // optional override; otherwise computed from source_*
@@ -375,7 +393,7 @@ Notifications follow the user, not the browser tab. Two open tabs = same panel s
 - `session.archived = true` → no future `session_returned` notifs for that session.
 - **Pre-existing notifs and mutes are swept on archive.** Two `DELETE` statements run inside the existing archive hook:
   - `DELETE FROM notifications WHERE source_session_id = $sid` (or `source_worktree_id = $wid`). They're stale invitations — clicking one goes to a session the user has explicitly retired. Better to clear them than leave dead links.
-  - `DELETE FROM session_notification_mutes WHERE session_id = $sid` (v1.5). Mute is moot once archived; avoids zombie-mute rows hanging around if a session is later un-archived.
+  - `DELETE FROM notification_mutes WHERE scope_type = 'session' AND scope_id = $sid` (v1.5). Mute is moot once archived; avoids zombie-mute rows.
 
 ### 6.3 Three layers of subscription — and which ones we ship
 
@@ -383,11 +401,36 @@ Subscription has three plausible shapes; v1 ships layer 1 only, v1.5 adds layer 
 
 | Layer | What it is | New schema? | When to ship |
 |---|---|---|---|
-| **1. Implicit** | Derived from `sessions.created_by` ∪ `tasks.created_by` (+ optionally mention recipients). Zero new state. Archive = unsub. | None | **v1** |
-| **2. Explicit mute** | A tiny *opt-out* table — `session_notification_mutes(recipient_user_id, session_id, muted_at)`. Producer becomes `(creators ∪ prompters) − mutes`. Lets users say "stop pinging me about this session" without archiving. | `session_notification_mutes` (composite PK, both FKs `ON DELETE CASCADE`) | **v1.5** |
-| **3. Full subscription primitive** | First-class entity: every (user, session) pair has an explicit `subscribed`/`muted` row, populated on first interaction. Lets you positively subscribe to sessions you never touched ("watch a teammate's run"). | `session_subscribers` table; producer hooks on every `tasks.create` | **v2 or never** — only worth building if "watch-without-interacting" becomes a real ask |
+| **1. Implicit** | Derived from `sessions.created_by` ∪ `tasks.created_by` (+ mention recipients). Zero new state. Archive = unsub. | None | **v1** |
+| **2. Explicit mute (polymorphic)** | A tiny *opt-out* table — `notification_mutes(recipient_user_id, scope_type, scope_id, muted_at)`. Producer subtracts users who muted any scope the event falls under. | `notification_mutes` (composite PK on `(recipient_user_id, scope_type, scope_id)`) | **v1.5** |
+| **3. Full subscription primitive** | First-class entity: every (user, scope) pair has an explicit `subscribed`/`muted` row. Lets you positively subscribe to things you never touched ("watch a teammate's run"). | `notification_subscribers` table + producer hooks on every interaction event | **v2 or never** — only worth building if "watch-without-interacting" becomes a real ask |
 
-The layer-2 shape is **negative-only state** — only people who *bother* to mute show up in the table — which keeps it small and avoids the layer-3 fanout cost. Most of the value of "real subscriptions" without paying schema-fanout for everyone.
+The layer-2 shape is **negative-only state** — only people who *bother* to mute show up — which keeps the table small and avoids layer-3 fanout cost.
+
+#### 6.3.1 Polymorphic scope — handles sessions AND comment threads
+
+Naming the table `session_notification_mutes` was too narrow (caught by Max). Different notification types fall under different scopes:
+
+| Notification type | Scopes the producer checks |
+|---|---|
+| `session_returned` | `session_id`, `worktree_id` |
+| `mention` on a board-level comment | `board_id` |
+| `mention` on a session-attached comment | `session_id`, `worktree_id`, `board_id` |
+| `mention` on a threaded reply | `comment_thread` (= root `parent_comment_id`), + whatever the root is attached to |
+| `comment_reply` (v2) | `comment_thread`, + attached scope |
+
+A user who has muted **any** scope an event falls under suppresses the notification.
+
+**Mute UI surface — what to expose in v1.5:**
+
+| Scope | Affordance | Notes |
+|---|---|---|
+| `session` | Toggle in session footer + "Mute this session" on `session_returned` notification cards | The most common case — handles "I created this 3 weeks ago, still alive, don't care anymore" |
+| `comment_thread` | "Mute thread" on the thread root's overflow menu + on mention notification cards | Lights up properly when v2's `comment_reply` notif type lands; for v1.5 it suppresses *future mentions* on that thread |
+| `worktree` | Toggle in worktree settings | "Don't care about this worktree at all" |
+| `board` | **Skip.** Boards are too coarse — if you don't care about a board, you stop visiting it | |
+
+**Context can change.** Mute is reversible (just `DELETE` the row). When a thread pivots and you re-engage, unmute. The negative-only-state property means unmuting leaves no trace — which is what you want.
 
 ---
 
@@ -558,19 +601,28 @@ Numbered to match the brief's open questions where applicable.
 | 5 | Click-through dismiss | **Don't auto-dismiss on click.** Click marks read, dismiss is explicit. Matches Max's lean |
 | 6 | Session vs task linking | **`source_session_id` is the link target. `source_task_id` is metadata.** Tasks are the unit of work; sessions are the place you go back to |
 | 7 | De-dup / collapse | **Collapse `session_returned` per `(user, session, type)`. Don't collapse `mention` or `global_admin`.** §5.2 |
-| 8 | Mute / snooze per session | **v1.5.** New `session_notification_mutes(recipient_user_id, session_id, muted_at)` table — tiny opt-out, see §6.3 |
+| 8 | Mute / snooze per session | **v1.5.** Polymorphic `notification_mutes(recipient_user_id, scope_type, scope_id, muted_at)` table covering sessions, threads, worktrees. See §6.3 |
 | 9 | Cross-device sync | **Free** — same backing table, same socket room, two tabs see the same state |
 | 10 | Permissions on global messages | **Admin role.** Authored from a new `SettingsModal` tab. §7 |
 | 11 | Ticker / streamer rules | **Cut from v1.** §3.5 |
 | 12 | Notification taxonomy | **§4.** Three types in v1: mention, session_returned, global_admin |
 
-**Genuinely deferred (need Max's call before implementation):**
+### 10.1 Decisions made (after iteration with Max)
 
-- **Q-A:** Is the *interaction-based* subscription model (§6) acceptable, or does Max want literal "every session you can see, until archived"? My read: literal-everyone is too noisy in multi-user instances. But this is a product call.
-- **Q-B:** Mention detection today is **substring matching** in `App.tsx:678-689` — `@username` or `@email` in raw content. Phase 4 of board-comments adds an explicit `data.mentions: string[]`. Should the notification producer use the explicit field (more precise, requires the comment editor to populate it correctly) or fall back to substring (matches current detection, ships sooner)? **My recommendation: explicit field, populated by the comment editor at write time, which is a small additional task on the comments side.** But if we want notifications to ship before that lands, substring detection is fine as a stop-gap.
-- **Q-C:** "Assistant session" vs "worktree session" visual differentiation requires an `is_assistant` marker we don't have. v1 ships with one variant ("worktree session"); the assistant variant ships when persistent assistants get a schema marker. Confirm this is OK as a follow-up rather than a v1 prereq.
-- **Q-D:** Retention. With dismiss now hard-deleting (§5.3), the only growth tail is *aged read rows* — notifs the user saw but never explicitly dismissed. **Recommendation: nightly sweep, delete read rows older than 90 days.** Cheap cron. Could promote to v1 (~30 lines of code) if Max wants table size to be a non-thought from day one.
-- **Q-E:** Should `session_returned` fire on `FAILED` as well as `COMPLETED`? **Yes** — failures are exactly the kind of "you should look at this" event a notification system exists for. Mirrors the parent-callback design (`parent-session-callbacks.md` §1.2).
+These were originally flagged as "deferred" but have been resolved:
+
+- **Q-A — Subscription model: interaction-based (DECIDED).** Auto-subscribe via `created_by` ∪ `prompted` ∪ mention-recipients (§6). Literal "every visible session" was rejected as the multi-user spam path.
+- **Q-B — Mention detection: explicit field, substring as stop-gap (DECIDED).** v1 ships with whichever lands first — if board-comments Phase 4 (`data.mentions[]`) ships before notifications, use it; otherwise substring detection per `App.tsx:678-689` is acceptable as a temporary fallback. Either way, the notification producer reads the comment row at fire time; the *source of truth* for mention identity is on the comment, not the notification.
+- **Q-C — Assistant-session visual variant: deferred until `is_assistant` marker exists (DECIDED).** v1 ships one session-returned variant. Switch to two variants when persistent assistants get a schema flag (post-v1.5).
+- **Q-D — Retention: promoted to v1 (DECIDED).** Nightly sweep deletes read notifs older than 90 days. ~30 lines of code; means table size is a non-thought from day one. Reflected in the v1 plan (§11).
+- **Q-E — Fire on FAILED: yes (DECIDED).** Failures are exactly the events a notification system exists for. Mirrors parent-callback design.
+- **Q-F — Toast suppression on relevant page: yes, client-side (DECIDED).** When a `notification:created` event arrives and `source_session_id`/`source_board_id` matches the user's current route, the toast is suppressed. Notification still created server-side. Documented in §3.6.
+- **Q-G — Self-mention: skip the notification (DECIDED).** Producer enforces `recipient_user_id ≠ source_user_id`. `@me TODO check this` doesn't ping you.
+
+### 10.2 Still open (not blocking v1)
+
+- **Mute UI exact placement (v1.5).** Session footer is decided; "mute thread" surface depends on where comment-overflow menus live, which the comments team will pick. Not a v1 question.
+- **Layer-3 full subscription primitive.** Whether "watch-without-interacting" ever becomes a real ask. Defer indefinitely; revisit only if requested.
 
 ---
 
@@ -580,10 +632,12 @@ Numbered to match the brief's open questions where applicable.
 
 - Schema migration (`notifications` table, indexes).
 - `NotificationsService` (Feathers, `find`/`get`/`patch`/`remove` + custom `broadcast`).
-- Producers in `tasks.ts` (session_returned) and `board-comments.ts` (mention).
+- Producers in `tasks.ts` (session_returned, fires per task completion) and `board-comments.ts` (mention; skip self-mentions).
 - **Archive-time cleanup hook** — on `session.archived = true` or `worktree.archived = true`, run `DELETE FROM notifications WHERE source_session_id = …` (and worktree variant).
+- **Retention sweep** — nightly cron, `DELETE FROM notifications WHERE read_at IS NOT NULL AND read_at < now() - 90 days`.
 - Bell + counter on `AppHeader` right side.
 - Panel with the three card variants, mark-read-on-click/hover, **dismiss = hard-delete**, mark-all-read.
+- **Context-aware toast suppression** — client compares `source_session_id` / `source_board_id` against current route before firing the toast.
 - Sticky admin banner in navbar center.
 - Settings → Announcements admin tab (compose, list, expire).
 - Socket push wired through existing `user/{user_id}` rooms.
@@ -591,9 +645,10 @@ Numbered to match the brief's open questions where applicable.
 
 ### v1.5 — quality of life
 
-- **Mute per session** — new `session_notification_mutes` table (§6.3), surfaced from the session footer and from a "mute this session" action on `session_returned` notification cards. Archive-time hook also deletes mute rows for the archived session.
+- **Polymorphic mute table** — new `notification_mutes(recipient_user_id, scope_type, scope_id, muted_at)` table (§6.3). Producer subtracts users who muted any scope the event falls under.
+- **Mute affordances** — session footer, "Mute this session" / "Mute thread" actions on notification cards, worktree settings tab.
+- Archive-time hook extended to also delete mute rows for the archived entity.
 - **Snooze for N hours** — per-notification action.
-- **Retention sweep** — nightly delete of read notifs older than 90 days.
 - **Full inbox view** at `/notifications` — uses the same backing query, paginated, no popover.
 - **Assistant-session variant** — once persistent assistants land with a flag.
 
@@ -614,21 +669,23 @@ For a single engineer familiar with the codebase. Timeboxes are *rough order of 
 |---|---|
 | **Schema + migration** (sqlite + postgres + types) | 0.5d |
 | **Repository + service** (`NotificationsRepository`, `NotificationsService`, broadcast method, hooks) | 1d |
-| **Producer wiring** (tasks.ts patch hook, board-comments hooks for mention detection) | 1d |
+| **Producer wiring** (tasks.ts patch hook fetching last-assistant-message, board-comments mention hook with self-mention skip) | 1d |
+| **Archive cleanup + retention sweep** (delete on archive, nightly cron for 90d aged read rows) | 0.25d |
 | **Socket push + client subscription** (piggyback on existing rooms) | 0.5d |
 | **Bell + counter** (AppHeader integration, `<Badge>`) | 0.5d |
 | **Panel UI** (popover, card variants, mark-read, dismiss, mark-all-read) | 1.5d |
+| **Context-aware toast suppression** (route-match check before firing toast) | 0.25d |
 | **Sticky admin banner** (navbar center slot, dismiss, expiry) | 0.5d |
 | **Admin authoring UI** (SettingsModal tab, compose modal, list view) | 1d |
 | **Toast-vs-notification doc + guide page** | 0.25d |
 | **Tests + Storybook** (panel + cards + counter) | 1d |
 | **Smoke test + screenshot pass** | 0.25d |
 
-**Total ballpark:** ~7–8 engineering days for a single contributor end-to-end. Closer to ~10 once code review, schema migration coordination across sqlite+postgres, and the inevitable scope creep are factored in.
+**Total ballpark:** ~8 engineering days for a single contributor end-to-end. Closer to ~10–11 once code review, schema migration coordination across sqlite+postgres, and the inevitable scope creep are factored in.
 
 **Easy parallelization split:**
-- Backend (schema, service, producers, push) — ~3.5d
-- Frontend (bell, panel, banner, admin UI) — ~3.5d
+- Backend (schema, service, producers, archive/retention sweeps, push) — ~4d
+- Frontend (bell, panel, banner, toast suppression, admin UI) — ~4d
 
 ---
 
@@ -636,12 +693,13 @@ For a single engineer familiar with the codebase. Timeboxes are *rough order of 
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| **Spam from over-subscription** | High if §6 is wrong | Medium | Interaction-based subscription (§6), per-session mute in v1.5 |
+| **Spam from over-subscription** | High if §6 is wrong | Medium | Interaction-based subscription (§6), polymorphic mute table in v1.5 covering session/thread/worktree |
 | **Counter desync** (badge says 3, panel shows 0) | Medium | Low | Server-driven counter from the same table the panel reads. Single source of truth |
-| **Mention detection misses or false-positives** | Medium | Low | Switch to explicit `data.mentions[]` once comment editor populates it (Q-B) |
+| **Mention detection misses or false-positives** | Medium | Low | Q-B: explicit `data.mentions[]` is preferred; substring fallback is acceptable stop-gap |
 | **Admin-banner abuse** (spammy broadcasts) | Low | Medium | Admin-only authoring, expiry required, single banner slot |
-| **Table growth** | Low (small instances) → Medium (large instances) | Low | Retention sweep in v1.5 |
+| **Table growth** | Low (small instances) → Medium (large instances) | Low | Retention sweep promoted to v1 (90-day aged-read sweep) |
 | **Socket-disconnect window** missing notifs | Medium | Low | Fetch-on-reconnect fallback (§8.3) |
+| **Double-signal** (toast + notification + already-on-page) | Medium | Low | Context-aware toast suppression on the client (§3.6, Q-F) |
 
 ---
 
@@ -649,7 +707,7 @@ For a single engineer familiar with the codebase. Timeboxes are *rough order of 
 
 To avoid scope creep:
 
-- **No notification preference UI.** Subscription is interaction-based; mute is per-session in v1.5. No global per-type settings page.
+- **No notification preference UI.** Subscription is interaction-based; mute is polymorphic per-scope in v1.5. No global per-type settings page.
 - **No browser-native `Notification` API.** Web push is v2.
 - **No webhook/external delivery.** v2.
 - **No notification grouping by session in the panel.** Flat sort by recency. Grouping adds modes without adding clarity in a 20-row list.
