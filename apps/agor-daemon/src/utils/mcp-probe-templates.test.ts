@@ -16,10 +16,10 @@ describe('resolveProbeServerTemplates', () => {
       {
         url: 'https://api.example.com/mcp',
         transport: 'http',
-        auth: { type: 'bearer', token: '{{ user.env.GARMIN_TOKEN }}' },
-        name: 'garmin',
+        auth: { type: 'bearer', token: '{{ user.env.MY_API_TOKEN }}' },
+        name: 'example',
       },
-      { GARMIN_TOKEN: 'real-secret-abc123' }
+      { MY_API_TOKEN: 'real-secret-abc123' }
     );
 
     expect(result.ok).toBe(true);
@@ -51,7 +51,7 @@ describe('resolveProbeServerTemplates', () => {
         url: 'https://api.example.com/mcp',
         transport: 'http',
         auth: { type: 'bearer', token: '{{ user.env.MISSING }}' },
-        name: 'garmin',
+        name: 'example',
       },
       {} // no env vars defined
     );
