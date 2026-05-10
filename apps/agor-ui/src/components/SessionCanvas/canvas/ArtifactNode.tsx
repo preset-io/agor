@@ -732,7 +732,7 @@ function LegacyBanner({ upgradeInstructions }: { upgradeInstructions: string }) 
       // Flow node drag — without these, the user can't select the upgrade
       // prompt text to copy it.
       className="nodrag nopan"
-      style={{ borderRadius: 0, fontSize: 11, padding: '4px 12px' }}
+      style={{ borderRadius: 0, fontSize: 11, padding: '10px 14px' }}
       message="Legacy artifact — won't render correctly"
       description={
         <details style={{ marginTop: 4 }}>
