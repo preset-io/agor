@@ -3,18 +3,33 @@ import { Component, type ErrorInfo, type ReactNode } from 'react';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
-  fallbackTitle?: string;
+  fallbackTitle?: ReactNode;
+  // When this value changes, the boundary clears its error state and re-renders
+  // children. Useful when fresh data may unblock the failed render (e.g. a
+  // logs refresh after a transient bad payload).
+  resetKey?: unknown;
 }
 
 interface ErrorBoundaryState {
   error: Error | null;
+  resetKey: unknown;
 }
 
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { error: null };
+  state: ErrorBoundaryState = { error: null, resetKey: this.props.resetKey };
 
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+  static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
     return { error };
+  }
+
+  static getDerivedStateFromProps(
+    props: ErrorBoundaryProps,
+    state: ErrorBoundaryState
+  ): Partial<ErrorBoundaryState> | null {
+    if (props.resetKey !== state.resetKey) {
+      return { error: null, resetKey: props.resetKey };
+    }
+    return null;
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {

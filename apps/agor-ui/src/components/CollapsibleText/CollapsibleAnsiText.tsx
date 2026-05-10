@@ -2,7 +2,7 @@ import { theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
 import { TEXT_TRUNCATION } from '../../constants/ui';
-import { Ansi } from '../AnsiText/ansiImport';
+import { Ansi } from '../AnsiText';
 
 interface CollapsibleAnsiTextProps {
   children: string;

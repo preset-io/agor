@@ -2,7 +2,7 @@ import type { AgorClient, Worktree } from '@agor-live/client';
 import { ReloadOutlined } from '@ant-design/icons';
 import { Alert, Button, Checkbox, Modal, Space, Typography, theme } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Ansi } from '../AnsiText/ansiImport';
+import { Ansi } from '../AnsiText';
 import { ErrorBoundary } from '../ErrorBoundary';
 
 const { Text } = Typography;
@@ -151,7 +151,7 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
         </Button>,
       ]}
     >
-      <ErrorBoundary fallbackTitle="Couldn't render the logs viewer.">
+      <ErrorBoundary fallbackTitle="Couldn't render the logs viewer." resetKey={logs?.timestamp}>
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           {/* Timestamp and truncation warning */}
           {logs && !logs.error && (

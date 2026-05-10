@@ -15,7 +15,7 @@
 import type { AgorClient, Worktree } from '@agor-live/client';
 import { render, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { Ansi } from '../AnsiText/ansiImport';
+import { Ansi } from '../AnsiText';
 import { EnvironmentLogsModal } from './EnvironmentLogsModal';
 
 const mockWorktree: Partial<Worktree> = {
