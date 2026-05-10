@@ -276,9 +276,10 @@ describe('RepoRepository.findById', () => {
       expect(error).toBeInstanceOf(AmbiguousIdError);
       const ambiguousError = error as AmbiguousIdError;
       expect(ambiguousError.matches).toHaveLength(2);
-      // formatShortId returns 8 chars by default
-      expect(ambiguousError.matches[0]).toBe('01933e4a');
-      expect(ambiguousError.matches[1]).toBe('01933e4a');
+      // AmbiguousIdError carries full UUIDs so the user can disambiguate by
+      // pasting one back — short forms collapse to the same string when the
+      // prefix collides (which is exactly when the error fires).
+      expect(ambiguousError.matches).toEqual(expect.arrayContaining([id1, id2]));
     }
   });
 });
