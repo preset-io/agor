@@ -25,8 +25,10 @@ import { LockOutlined, SafetyCertificateOutlined, WarningOutlined } from '@ant-d
 import { Alert, Button, Card, Modal, Radio, Space, Tag, Typography } from 'antd';
 import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
+import { ThemedSyntaxHighlighter } from '@/components/ThemedSyntaxHighlighter';
 import { getDaemonUrl } from '@/config/daemon';
 import { useAuthConfig } from '@/hooks/useAuthConfig';
+import { getLanguageFromPath } from '@/utils/language';
 import { useThemedMessage } from '@/utils/message';
 import { FileCollection, type FileItem } from '../FileCollection/FileCollection';
 
@@ -139,7 +141,13 @@ export function ArtifactConsentModal({
         description="Granting trust injects your env-var values and any requested daemon capabilities into this artifact's runtime. The artifact's JS can read those values. Secrets never enter LLM context — but the artifact iframe can still exfiltrate them via fetch()."
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr)',
+          gap: 16,
+        }}
+      >
         <Card size="small" title="Files in this artifact" styles={{ body: { padding: 0 } }}>
           <div style={{ maxHeight: 360, overflow: 'auto' }}>
             <FileCollection
@@ -153,20 +161,34 @@ export function ArtifactConsentModal({
         <Card
           size="small"
           title={activeFile ? `Preview: ${activeFile}` : 'Pick a file to preview'}
-          styles={{ body: { padding: 0 } }}
+          // The Card is in a 1fr-2fr grid, so it claims its share of the
+          // 920px modal even when the file's longest line is wider; the
+          // `minmax(0, …)` columns above + the inner `minWidth: 0` here
+          // are what stop a long source line from blowing out the grid.
+          styles={{ body: { padding: 0, minWidth: 0 } }}
         >
-          <pre
-            style={{
-              margin: 0,
-              maxHeight: 360,
-              overflow: 'auto',
-              padding: 12,
-              fontSize: 11,
-              lineHeight: 1.5,
-            }}
-          >
-            {activeFile ? (files[activeFile] ?? '(file is empty)') : ''}
-          </pre>
+          <div style={{ maxHeight: 360, overflow: 'auto' }}>
+            {activeFile ? (
+              <ThemedSyntaxHighlighter
+                language={getLanguageFromPath(activeFile)}
+                showLineNumbers
+                customStyle={{
+                  margin: 0,
+                  borderRadius: 0,
+                  fontSize: 12,
+                  // The outer wrapper handles vertical scroll — let the
+                  // highlighter scroll horizontally on its own line.
+                  maxHeight: 'none',
+                }}
+              >
+                {files[activeFile] ?? '(file is empty)'}
+              </ThemedSyntaxHighlighter>
+            ) : (
+              <div style={{ padding: 12, fontSize: 12, opacity: 0.6 }}>
+                Click a file on the left to preview it.
+              </div>
+            )}
+          </div>
         </Card>
       </div>
 

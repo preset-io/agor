@@ -3,6 +3,7 @@ import { CopyOutlined } from '@ant-design/icons';
 import { Button, Modal } from 'antd';
 import { ThemedSyntaxHighlighter } from '@/components/ThemedSyntaxHighlighter';
 import { copyToClipboard } from '@/utils/clipboard';
+import { getLanguageFromPath } from '@/utils/language';
 import { useThemedMessage } from '@/utils/message';
 
 export interface CodePreviewModalProps {
@@ -11,40 +12,6 @@ export interface CodePreviewModalProps {
   onClose: () => void;
   loading?: boolean;
 }
-
-const getLanguageFromPath = (path: string): string => {
-  const ext = path.split('.').pop()?.toLowerCase();
-  const languageMap: Record<string, string> = {
-    js: 'javascript',
-    ts: 'typescript',
-    jsx: 'jsx',
-    tsx: 'tsx',
-    py: 'python',
-    rb: 'ruby',
-    go: 'go',
-    rs: 'rust',
-    java: 'java',
-    c: 'c',
-    cpp: 'cpp',
-    h: 'c',
-    css: 'css',
-    scss: 'scss',
-    html: 'html',
-    xml: 'xml',
-    json: 'json',
-    yaml: 'yaml',
-    yml: 'yaml',
-    sh: 'bash',
-    bash: 'bash',
-    sql: 'sql',
-    graphql: 'graphql',
-    proto: 'protobuf',
-    toml: 'toml',
-    vue: 'vue',
-    svelte: 'svelte',
-  };
-  return languageMap[ext || ''] || 'text';
-};
 
 export const CodePreviewModal = ({ file, open, onClose, loading }: CodePreviewModalProps) => {
   const { showSuccess } = useThemedMessage();
