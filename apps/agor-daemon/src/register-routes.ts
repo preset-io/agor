@@ -2816,16 +2816,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     '/worktrees/logs',
     {
       async find(params: Params) {
-        console.log('📋 Logs endpoint called');
-
         const id = params?.query?.worktree_id;
 
         if (!id) {
-          console.error('❌ No worktree_id in query params');
           throw new Error('worktree_id query parameter required');
         }
 
-        console.log('✅ Found worktree ID:', id);
         return worktreesService.getLogs(id as import('@agor/core/types').WorktreeID, params);
       },
       // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
