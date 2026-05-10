@@ -41,6 +41,7 @@ import expressStaticGzip from 'express-static-gzip';
 import { registerHooks } from './register-hooks.js';
 import { registerRoutes } from './register-routes.js';
 import { registerServices } from './register-services.js';
+import { isLoopbackBindHost, isLoopbackUrl } from './setup/bind-host.js';
 import { loadBuildInfo } from './setup/build-info.js';
 import { buildCorsConfig, isSandpackOrigin } from './setup/cors.js';
 import {
@@ -194,16 +195,24 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // --------------------------------------------------------------------------
   // Security: block anonymous when the daemon is reachable from outside the host
   // --------------------------------------------------------------------------
-  // The risk is "unauthenticated requests from the network", which is a
-  // function of the bind interface — not NODE_ENV. Localhost-bound daemons
-  // (the default, including the solo Quick Start path) are safe with
-  // allowAnonymous=true; only loopback can reach them. Railway/Render set
-  // their own env vars and always expose to the public internet, so we keep
-  // those signals as well.
-  const isLoopbackBind =
-    DAEMON_HOST === 'localhost' || DAEMON_HOST === '127.0.0.1' || DAEMON_HOST === '::1';
+  // The risk is "unauthenticated requests from the network", which has three
+  // independent signals:
+  //   1. bind interface — non-loopback bind means the kernel itself accepts
+  //      remote traffic (most direct exposure).
+  //   2. configured public base URL (`AGOR_BASE_URL` / `daemon.base_url`) —
+  //      operator declared the daemon is reachable at a non-loopback URL,
+  //      typically because it sits behind a reverse proxy that publishes a
+  //      localhost-bound daemon to the internet.
+  //   3. Railway / Render env vars — those PaaS platforms always expose
+  //      services publicly.
+  // NODE_ENV is intentionally NOT consulted: the CLI sets it to 'production'
+  // for Express/library perf optimizations even on solo localhost installs,
+  // so it carries no signal about exposure.
+  const declaredPublicBaseUrl = process.env.AGOR_BASE_URL ?? config.daemon?.base_url;
+  const baseUrlIsPublic = isLoopbackUrl(declaredPublicBaseUrl) === false;
   const isPublicDeployment =
-    !isLoopbackBind ||
+    !isLoopbackBindHost(DAEMON_HOST) ||
+    baseUrlIsPublic ||
     process.env.RAILWAY_ENVIRONMENT !== undefined ||
     process.env.RENDER !== undefined;
 
@@ -212,11 +221,18 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     console.error(
       '❌ SECURITY ERROR: Anonymous authentication is enabled on a network-reachable daemon'
     );
-    console.error(
-      `   Bind host: ${DAEMON_HOST} (anyone who can reach this address gets full access)`
-    );
+    console.error(`   Bind host: ${DAEMON_HOST}`);
+    if (baseUrlIsPublic) {
+      console.error(`   Public base URL: ${declaredPublicBaseUrl}`);
+    }
+    console.error('   Anyone who can reach this address gets full access.');
     console.error('   Fix one of:');
     console.error('     • Bind to localhost: set daemon.host: localhost in ~/.agor/config.yaml');
+    if (baseUrlIsPublic) {
+      console.error(
+        '     • Unset the public base URL (daemon.base_url / AGOR_BASE_URL) if the daemon is not actually reachable there'
+      );
+    }
     console.error(
       '     • Require auth:      set daemon.allowAnonymous: false (or unset; default is false)'
     );
