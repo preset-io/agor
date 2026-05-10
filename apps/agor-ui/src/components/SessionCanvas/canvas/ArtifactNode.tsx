@@ -722,6 +722,10 @@ function renderLegacyBanner(
       type="warning"
       showIcon
       icon={<WarningOutlined />}
+      // `nodrag nopan` so clicking on the banner doesn't start a React
+      // Flow node drag — without these, the user can't select the upgrade
+      // prompt text to copy it.
+      className="nodrag nopan"
       style={{ borderRadius: 0, fontSize: 11, padding: '4px 12px' }}
       message="Legacy artifact — won't render correctly"
       description={
@@ -739,6 +743,11 @@ function renderLegacyBanner(
               borderRadius: 4,
               maxHeight: 180,
               overflow: 'auto',
+              // React Flow nodes default to `user-select: none` to keep
+              // drag clean — opt this <pre> back into text selection so
+              // users can copy the upgrade prompt.
+              userSelect: 'text',
+              cursor: 'text',
             }}
           >
             {upgradeInstructions}
