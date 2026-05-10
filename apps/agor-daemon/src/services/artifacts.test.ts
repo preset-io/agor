@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { generateId } from '@agor/core';
-import { ArtifactRepository, BoardRepository, type Database } from '@agor/core/db';
+import { ArtifactRepository, BoardRepository, type Database, UsersRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Artifact, BoardID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect } from 'vitest';
@@ -35,6 +35,42 @@ async function seedBoard(db: Database) {
     name: 'Test Board',
     created_by: 'user-owner',
   });
+}
+
+/**
+ * Insert a row into `users` so FK-bearing tables (like
+ * `artifact_trust_grants.user_id`) accept a grant for this user. The CI
+ * SQLite has `PRAGMA foreign_keys = ON`; tests that skip seeding hit
+ * SQLITE_CONSTRAINT_FOREIGNKEY.
+ */
+async function seedUser(db: Database, userId: string): Promise<void> {
+  const repo = new UsersRepository(db);
+  await repo.create({
+    user_id: userId as never,
+    email: `${userId}@test.local`,
+    display_name: userId,
+  });
+}
+
+/**
+ * Compute the same default land subpath that `defaultLandFolderName` in
+ * the service does. Tests that pre-create the default destination must
+ * stay in sync — duplicating the logic here is the lesser evil vs
+ * exporting an internal helper just for tests.
+ */
+function defaultLandDestForArtifact(
+  tmpRoot: string,
+  artifact: { name: string; artifact_id: string }
+): string {
+  const slug = artifact.name
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+  const shortId = artifact.artifact_id.replace(/-/g, '').slice(0, 8);
+  const folder = slug.length > 0 ? `${slug}-${shortId}` : artifact.artifact_id;
+  return path.join(tmpRoot, '.agor', 'artifacts', folder);
 }
 
 /** Seed an artifact with a known file map and a board placement. */
@@ -137,7 +173,7 @@ describe('ArtifactsService.updateMetadata', () => {
 
     await expect(
       service.updateMetadata(artifact.artifact_id, { name: 'Hijacked' }, 'user-stranger')
-    ).rejects.toThrow(/not the owner/i);
+    ).rejects.toThrow(/Forbidden/i);
   });
 
   dbTest('rejects move to a nonexistent board without mutating the row', async ({ db }) => {
@@ -309,7 +345,7 @@ describe('ArtifactsService.land', () => {
 
     const result = await service.land(artifact.artifact_id, tmpRoot);
 
-    const expectedDest = path.join(tmpRoot, '.agor', 'artifacts', artifact.artifact_id);
+    const expectedDest = defaultLandDestForArtifact(tmpRoot, artifact);
     expect(result.destinationPath).toBe(expectedDest);
     expect(result.fileCount).toBe(3); // 2 source files + agor.artifact.json sidecar
     expect(readFileSync(path.join(expectedDest, 'app.js'), 'utf-8')).toBe('export const x = 1');
@@ -396,7 +432,7 @@ describe('ArtifactsService.land', () => {
     const artifact = await seedArtifact(db, board.board_id);
 
     // Pre-create the default destination with a file inside.
-    const dest = path.join(tmpRoot, '.agor', 'artifacts', artifact.artifact_id);
+    const dest = defaultLandDestForArtifact(tmpRoot, artifact);
     const fs = await import('node:fs/promises');
     await fs.mkdir(dest, { recursive: true });
     writeFileSync(path.join(dest, 'pre-existing.txt'), 'preexisting');
@@ -411,7 +447,7 @@ describe('ArtifactsService.land', () => {
       files: { '/only.js': 'fresh' },
     });
 
-    const dest = path.join(tmpRoot, '.agor', 'artifacts', artifact.artifact_id);
+    const dest = defaultLandDestForArtifact(tmpRoot, artifact);
     const fs = await import('node:fs/promises');
     await fs.mkdir(dest, { recursive: true });
     writeFileSync(path.join(dest, 'stale.txt'), 'stale');
@@ -599,6 +635,7 @@ describe('ArtifactsService.grantTrust', () => {
   dbTest('artifact-scope grant persists and authorizes future renders', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
     const board = await seedBoard(db);
+    await seedUser(db, 'user-stranger');
     const artifactRepo = new ArtifactRepository(db);
     const created = await artifactRepo.create({
       artifact_id: generateId(),
@@ -627,6 +664,7 @@ describe('ArtifactsService.grantTrust', () => {
     async ({ db }) => {
       const service = new ArtifactsService(db, makeFakeApp());
       const board = await seedBoard(db);
+      await seedUser(db, 'user-stranger');
       const artifactRepo = new ArtifactRepository(db);
       const created = await artifactRepo.create({
         artifact_id: generateId(),
@@ -685,6 +723,7 @@ describe('ArtifactsService.grantTrust', () => {
   dbTest('author-scope grant covers a different artifact by the same author', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
     const board = await seedBoard(db);
+    await seedUser(db, 'viewer-1');
     const artifactRepo = new ArtifactRepository(db);
     const a = await artifactRepo.create({
       artifact_id: generateId(),
