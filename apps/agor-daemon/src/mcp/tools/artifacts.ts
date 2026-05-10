@@ -76,7 +76,7 @@ const AgorRuntimeSchema = z
       .boolean()
       .optional()
       .describe(
-        "Inject `agor-runtime.js` into the served file map. Default: true. Set false to opt the artifact out of agent DOM introspection (e.g. if the artifact's own code conflicts with our message listener)."
+        "Inject the daemon-side `agor-runtime.js` into the served bundle (as an iframe-level `<script>` via Sandpack's `externalResources`). Default: true. Set false to opt the artifact out of agent DOM introspection (e.g. if the artifact's own code conflicts with our message listener)."
       ),
   })
   .optional();

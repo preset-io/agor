@@ -102,9 +102,10 @@ export interface AgorGrants {
  * to the active viewer's browser, dispatch to the iframe, and return the
  * iframe's reply.
  *
- * Injected at render time (in `getPayload`), parallel to `.env` synthesis
- * — never persisted in the artifact's `files` column. Stripped from
- * CodeSandbox exports for the same reason: it talks to an Agor parent
+ * Injected at render time (in `getPayload`) as a `data:text/javascript`
+ * URL added to `sandpack_config.options.externalResources`. The persisted
+ * `files` column and `sandpack_config` are never mutated. Doesn't show up
+ * in CodeSandbox exports for the same reason: it talks to an Agor parent
  * that doesn't exist outside Agor.
  *
  * Defaults to enabled. Authors can opt out (`enabled: false`) for
@@ -112,7 +113,11 @@ export interface AgorGrants {
  * own code conflicts with our message listener.
  */
 export interface AgorRuntimeConfig {
-  /** Inject `agor-runtime.js` into the served file map. Defaults to `true`. */
+  /**
+   * Inject the daemon-side `agor-runtime.js` into the served bundle (as an
+   * iframe-level `<script>` via Sandpack's `externalResources`). Defaults
+   * to `true`.
+   */
   enabled?: boolean;
 }
 

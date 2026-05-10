@@ -991,46 +991,21 @@ describe('ArtifactsService.updateMetadata authorization', () => {
 });
 
 describe('ArtifactsService.getPayload agor-runtime injection', () => {
-  dbTest('default-on: injects /agor-runtime.js + prepends import to entry', async ({ db }) => {
-    const service = new ArtifactsService(db, makeFakeApp());
-    const board = await seedBoard(db);
-    const artifactRepo = new ArtifactRepository(db);
-    const created = await artifactRepo.create({
-      artifact_id: generateId(),
-      board_id: board.board_id,
-      name: 'runtime-default',
-      template: 'react',
-      files: {
-        '/src/index.js': 'console.log("user code")',
-      },
-      public: true,
-      created_by: 'user-owner',
-    });
-
-    const payload = await service.getPayload(created.artifact_id, 'user-owner' as never);
-
-    expect(payload.files['/agor-runtime.js']).toBeDefined();
-    expect(payload.files['/agor-runtime.js']).toContain('agor:query');
-    // The entry file got the import prepended (served only — the persisted
-    // row is unchanged). Specifier is relative-from-entry, not root-
-    // absolute, so Sandpack resolves it across template variants.
-    expect(payload.files['/src/index.js']).toMatch(/^import '\.\.\/agor-runtime\.js';/);
-  });
-
   dbTest(
-    'detects /App.js as an injection target (most common React-template shape)',
+    'default-on: adds runtime data URL to sandpack_config.options.externalResources without touching files',
     async ({ db }) => {
       const service = new ArtifactsService(db, makeFakeApp());
       const board = await seedBoard(db);
       const artifactRepo = new ArtifactRepository(db);
-      // Hello-world-style artifact: only /App.js, Sandpack synthesizes
-      // the rest. This is the shape the testing agent surfaced as a
-      // gap — none of the original /src/index.* candidates matched, so
-      // the runtime got silently dropped and queries timed out.
+      // Hello-world-shape: /App.js only. The previous file-map injection
+      // approach silently dropped the runtime here (no /src/index.*
+      // entry to attach to). Under externalResources we don't need
+      // any user file at all — the runtime ships as an iframe-level
+      // <script src="..."> tag.
       const created = await artifactRepo.create({
         artifact_id: generateId(),
         board_id: board.board_id,
-        name: 'app-only',
+        name: 'runtime-default',
         template: 'react',
         files: { '/App.js': 'export default function App() { return null; }' },
         public: true,
@@ -1038,13 +1013,24 @@ describe('ArtifactsService.getPayload agor-runtime injection', () => {
       });
 
       const payload = await service.getPayload(created.artifact_id, 'user-owner' as never);
-      expect(payload.files['/agor-runtime.js']).toBeDefined();
-      // Both files at root → relative specifier is './agor-runtime.js'.
-      expect(payload.files['/App.js']).toMatch(/^import '\.\/agor-runtime\.js';/);
+
+      // User files are served verbatim — no import prepended, no synthesized
+      // runtime file in the map.
+      expect(payload.files['/App.js']).toBe('export default function App() { return null; }');
+      expect(payload.files['/agor-runtime.js']).toBeUndefined();
+
+      const resources = (payload.sandpack_config?.options as Record<string, unknown> | undefined)
+        ?.externalResources;
+      expect(Array.isArray(resources)).toBe(true);
+      const arr = resources as string[];
+      expect(arr.length).toBeGreaterThan(0);
+      expect(arr[0]).toMatch(/^data:text\/javascript;base64,/);
+      const decoded = Buffer.from(arr[0].split(',', 2)[1], 'base64').toString('utf-8');
+      expect(decoded).toContain('agor:query');
     }
   );
 
-  dbTest('opt-out: enabled=false skips injection entirely', async ({ db }) => {
+  dbTest('opt-out: enabled=false skips externalResources injection entirely', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
     const board = await seedBoard(db);
     const artifactRepo = new ArtifactRepository(db);
@@ -1062,28 +1048,55 @@ describe('ArtifactsService.getPayload agor-runtime injection', () => {
     const payload = await service.getPayload(created.artifact_id, 'user-owner' as never);
     expect(payload.files['/agor-runtime.js']).toBeUndefined();
     expect(payload.files['/src/index.js']).toBe('console.log("user code")');
+    const resources = (payload.sandpack_config?.options as Record<string, unknown> | undefined)
+      ?.externalResources;
+    // Either no externalResources at all, or an array that doesn't carry
+    // the runtime data URL. Both are acceptable opt-out shapes.
+    if (Array.isArray(resources)) {
+      expect((resources as string[]).every((r) => !r.startsWith('data:text/javascript'))).toBe(
+        true
+      );
+    } else {
+      expect(resources).toBeUndefined();
+    }
   });
 
-  dbTest('persistence: published rows do not carry the runtime file', async ({ db }) => {
-    const board = await seedBoard(db);
-    const artifactRepo = new ArtifactRepository(db);
-    const created = await artifactRepo.create({
-      artifact_id: generateId(),
-      board_id: board.board_id,
-      name: 'runtime-persistence',
-      template: 'react',
-      files: { '/src/index.js': 'console.log("user code")' },
-      public: true,
-      created_by: 'user-owner',
-    });
+  dbTest(
+    'persistence: published sandpack_config does not carry the runtime data URL',
+    async ({ db }) => {
+      const board = await seedBoard(db);
+      const artifactRepo = new ArtifactRepository(db);
+      const created = await artifactRepo.create({
+        artifact_id: generateId(),
+        board_id: board.board_id,
+        name: 'runtime-persistence',
+        template: 'react',
+        files: { '/src/index.js': 'console.log("user code")' },
+        public: true,
+        created_by: 'user-owner',
+      });
 
-    // The DB row's files map should never carry agor-runtime.js — it's a
-    // render-time injection only. Read directly from repo to bypass any
-    // per-render mutation in getPayload.
-    const stored = await artifactRepo.findById(created.artifact_id);
-    expect(stored?.files?.['/agor-runtime.js']).toBeUndefined();
-    expect(stored?.files?.['/src/index.js']).toBe('console.log("user code")');
-  });
+      // The persisted row should never carry the runtime injection — it's
+      // a render-time-only synthesis. Read directly from the repo to
+      // bypass any getPayload-level rewriting.
+      const stored = await artifactRepo.findById(created.artifact_id);
+      expect(stored?.files?.['/agor-runtime.js']).toBeUndefined();
+      expect(stored?.files?.['/src/index.js']).toBe('console.log("user code")');
+      const persistedResources = (
+        stored?.sandpack_config?.options as Record<string, unknown> | undefined
+      )?.externalResources;
+      // sanitizeSandpackConfig strips externalResources on write, so
+      // either nothing was persisted at all or any persisted array is
+      // empty / runtime-free.
+      if (Array.isArray(persistedResources)) {
+        expect(
+          (persistedResources as string[]).every((r) => !r.startsWith('data:text/javascript'))
+        ).toBe(true);
+      } else {
+        expect(persistedResources).toBeUndefined();
+      }
+    }
+  );
 });
 
 describe('ArtifactsService.queryArtifactRuntime', () => {
@@ -1136,35 +1149,6 @@ describe('ArtifactsService.queryArtifactRuntime', () => {
         timeoutMs: 500,
       })
     ).rejects.toThrow(/not found/i);
-  });
-
-  dbTest('rejects with no-entry error rather than misleading timeout', async ({ db }) => {
-    const service = new ArtifactsService(db, makeFakeApp());
-    const board = await seedBoard(db);
-    const artifactRepo = new ArtifactRepository(db);
-    // No /App.*, /index.*, /main.*, or /src/* — runtime can't attach.
-    // Without the pre-flight check the caller would see a generic
-    // "open the artifact in your browser" timeout, even though the
-    // browser IS open and the runtime simply wasn't injected.
-    const created = await artifactRepo.create({
-      artifact_id: generateId(),
-      board_id: board.board_id,
-      name: 'no-entry',
-      template: 'react',
-      files: { '/some-utility.js': 'export const x = 1' },
-      public: true,
-      created_by: 'user-owner',
-    });
-
-    await expect(
-      service.queryArtifactRuntime({
-        artifactId: created.artifact_id,
-        userId: 'user-owner',
-        kind: 'query_dom',
-        args: { selector: 'h1' },
-        timeoutMs: 500,
-      })
-    ).rejects.toThrow(/no recognizable entry file/i);
   });
 
   dbTest('times out cleanly when no browser answers', async ({ db }) => {

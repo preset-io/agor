@@ -8,6 +8,13 @@
  * dispatch; the daemon WebSocket-fans-out the request and correlates the
  * reply.
  *
+ * Injection: served as a `data:text/javascript;base64,…` URL in
+ * `sandpack_config.options.externalResources`. Sandpack adds the resulting
+ * `<script src="…">` tag to the iframe HTML before any user code runs, so
+ * the listener is registered before the bundle boots and we don't have to
+ * mutate any user files (no entry-file detection, no `import` prepended,
+ * no template-specific resolver issues).
+ *
  * Wire format:
  *   parent → iframe: { type: 'agor:query', requestId, kind, args }
  *   iframe → parent: { type: 'agor:result', requestId, ok: bool, result?, error? }
@@ -19,8 +26,8 @@
  * Caps everything (per-element HTML, total HTML, node count) so an
  * artifact with a giant DOM can't blow up the wire / agent context.
  *
- * NOT persisted — generated and injected per-render in `getPayload()`.
- * Stripped from CodeSandbox exports and round-trip `land()` output.
+ * NOT persisted — generated and injected per-render in `getPayload()`,
+ * never enters the file map or the persisted `sandpack_config`.
  */
 export const AGOR_RUNTIME_SOURCE = `// agor-runtime.js — injected by Agor at render time. Do not edit.
 // Source: apps/agor-daemon/src/utils/agor-runtime-source.ts
@@ -129,9 +136,3 @@ export const AGOR_RUNTIME_SOURCE = `// agor-runtime.js — injected by Agor at r
   }
 })();
 `;
-
-/**
- * Path the runtime lands at in the file map. Stable so the parent-side
- * filename detection (export strip, land() round-trip) can match it.
- */
-export const AGOR_RUNTIME_PATH = '/agor-runtime.js';

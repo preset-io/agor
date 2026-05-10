@@ -60,7 +60,7 @@ import {
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { DrizzleService } from '../adapters/drizzle.js';
-import { AGOR_RUNTIME_PATH, AGOR_RUNTIME_SOURCE } from '../utils/agor-runtime-source.js';
+import { AGOR_RUNTIME_SOURCE } from '../utils/agor-runtime-source.js';
 import {
   detectLegacyFormat,
   envVarPrefixForTemplate,
@@ -90,96 +90,43 @@ async function canonicalizeExistingPrefix(target: string): Promise<string> {
 }
 
 /**
- * Compute a relative ES-module specifier from `fromFile` to `toFile`. Both
- * are root-absolute paths in the served file map (e.g. `/src/index.js`,
- * `/agor-runtime.js`). Returns the kind of specifier Sandpack's bundler
- * resolves reliably across templates: `./agor-runtime.js` when the two
- * are siblings, `../agor-runtime.js` when the target is one or more
- * levels up.
+ * Lazily-built data URL carrying the agor-runtime IIFE. Sandpack injects
+ * each `externalResources` entry as a `<script src="...">` tag in the
+ * iframe HTML, so a `data:text/javascript;base64,…` URL avoids any extra
+ * HTTP round-trip and any cross-origin coupling. Built once per process —
+ * the source is a static constant.
  */
-function relativeImportSpecifier(fromFile: string, toFile: string): string {
-  const fromDir = path.posix.dirname(fromFile);
-  const targetPath = toFile.startsWith('/') ? toFile : `/${toFile}`;
-  let rel = path.posix.relative(fromDir, targetPath);
-  if (!rel.startsWith('.')) rel = `./${rel}`;
-  return rel;
+let cachedAgorRuntimeDataUrl: string | null = null;
+function agorRuntimeDataUrl(): string {
+  if (cachedAgorRuntimeDataUrl !== null) return cachedAgorRuntimeDataUrl;
+  const b64 = Buffer.from(AGOR_RUNTIME_SOURCE, 'utf-8').toString('base64');
+  cachedAgorRuntimeDataUrl = `data:text/javascript;base64,${b64}`;
+  return cachedAgorRuntimeDataUrl;
 }
 
 /**
- * Pick which file to prepend the `import './agor-runtime.js';` line into.
+ * Return a copy of `cfg` with the agor-runtime data URL prepended to
+ * `options.externalResources`. The persisted `sandpack_config` is never
+ * mutated — this builds a new object for the served payload only.
  *
- * Priority: artifact's recorded `entry` column → `customSetup.entry` from
- * the sandpack config → common Sandpack template entry conventions. Files
- * are matched against `filesOut` (the about-to-be-served file map) rather
- * than the canonical artifact files, so any leading-slash variants the
- * map happens to use are accepted.
- *
- * Returns null if nothing matches — caller skips runtime injection.
+ * Prepending (rather than appending) means the runtime's message listener
+ * is registered before any author-supplied external scripts run, so the
+ * order is deterministic across artifacts.
  */
-function pickEntryForRuntimeInjection(
-  filesOut: Record<string, string>,
-  artifact: { entry?: string; sandpack_config?: SandpackConfig }
-): string | null {
-  const candidates: string[] = [];
-  if (artifact.entry) candidates.push(artifact.entry);
-  if (artifact.sandpack_config?.customSetup?.entry) {
-    candidates.push(artifact.sandpack_config.customSetup.entry);
-  }
-  // Common Sandpack template entries. Order matters — earlier entries win
-  // when multiple match. Each template family has its own conventions:
-  //
-  //   `react` (default): user code goes in /App.{js,tsx,…}; Sandpack
-  //     synthesizes the bundler `index.js` itself. Most artifacts hit
-  //     this case — agents publishing minimal projects often only
-  //     provide `/App.js`.
-  //   Vite-style React: /src/App.* + /src/main.*.
-  //   Vue/Svelte: /src/App.{vue,svelte} + /src/main.*.
-  //   Vanilla / static: /index.* at root.
-  //
-  // We inject into the FIRST matching user file. Module side-effect
-  // imports run synchronously the first time the bundler pulls them in,
-  // so the runtime's IIFE registers before the rest of the artifact
-  // boots regardless of whether the file is the bundler-level entry.
-  candidates.push(
-    // React template — author's component file at root (the most common
-    // shape for agent-published artifacts).
-    '/App.tsx',
-    '/App.ts',
-    '/App.jsx',
-    '/App.js',
-    // React/Vite/Solid — author's component file under /src.
-    '/src/App.tsx',
-    '/src/App.ts',
-    '/src/App.jsx',
-    '/src/App.js',
-    // Standard bundler entries under /src.
-    '/src/index.tsx',
-    '/src/index.ts',
-    '/src/index.jsx',
-    '/src/index.js',
-    '/src/main.tsx',
-    '/src/main.ts',
-    '/src/main.jsx',
-    '/src/main.js',
-    // Bundler entries at root.
-    '/index.tsx',
-    '/index.ts',
-    '/index.jsx',
-    '/index.js',
-    '/main.tsx',
-    '/main.ts',
-    '/main.js'
-  );
-  for (const candidate of candidates) {
-    if (typeof candidate !== 'string') continue;
-    // Match either with or without the leading slash — file-map convention
-    // varies between persisted shapes.
-    const variants = [candidate, candidate.startsWith('/') ? candidate.slice(1) : `/${candidate}`];
-    for (const v of variants) {
-      if (typeof filesOut[v] === 'string') return v;
-    }
-  }
-  return null;
+function withInjectedAgorRuntime(cfg: SandpackConfig | undefined): SandpackConfig {
+  const dataUrl = agorRuntimeDataUrl();
+  const existingResources = (cfg?.options as Record<string, unknown> | undefined)
+    ?.externalResources;
+  const existingArr = Array.isArray(existingResources)
+    ? (existingResources as unknown[]).filter((v): v is string => typeof v === 'string')
+    : [];
+  return {
+    ...(cfg ?? {}),
+    options: {
+      ...(cfg?.options ?? {}),
+      externalResources: [dataUrl, ...existingArr],
+    },
+  };
 }
 
 /**
@@ -921,35 +868,17 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     }
 
     // Inject the iframe-side runtime that powers agent-driven introspection
-    // (DOM queries, etc.). Default-on; authors can opt out via
-    // `agor_runtime.enabled = false`. Render-time only — never persisted.
+    // (DOM queries, etc.) via `sandpack_config.options.externalResources` —
+    // Sandpack adds the resulting `<script src="...">` to the iframe HTML
+    // before any user code runs. We use a `data:` URL so no extra HTTP
+    // round-trip is required and no daemon-served origin needs to be
+    // CORS-allowed by the bundler. Default-on; authors can opt out via
+    // `agor_runtime.enabled = false`. Render-time only — never persisted,
+    // never touches user files.
     const runtimeEnabled = artifact.agor_runtime?.enabled !== false;
-    if (runtimeEnabled) {
-      filesOut[AGOR_RUNTIME_PATH] = AGOR_RUNTIME_SOURCE;
-      // Prepend an import to the entry file so the runtime registers its
-      // message listener before user code starts emitting events. We modify
-      // the served file map only — the persisted entry is untouched.
-      //
-      // Use a relative specifier rather than the root-absolute
-      // `/agor-runtime.js`. Sandpack's bundler resolves relative imports
-      // reliably across templates; root-absolute paths work in some
-      // bundler configurations and fail in others (e.g. Parcel-based
-      // templates resolve them against a different root).
-      const entryPath = pickEntryForRuntimeInjection(filesOut, artifact);
-      if (entryPath) {
-        const original = filesOut[entryPath] ?? '';
-        const importSpec = relativeImportSpecifier(entryPath, AGOR_RUNTIME_PATH);
-        filesOut[entryPath] = `import '${importSpec}';\n${original}`;
-      } else {
-        // No discoverable entry — drop the runtime file rather than ship
-        // it dead weight, and warn loudly so we notice if a template's
-        // entry detection grows stale.
-        delete filesOut[AGOR_RUNTIME_PATH];
-        console.warn(
-          `[artifacts] Could not find an entry file for ${artifact.artifact_id} (template=${artifact.template}); skipping agor-runtime.js injection.`
-        );
-      }
-    }
+    const servedSandpackConfig = runtimeEnabled
+      ? withInjectedAgorRuntime(artifact.sandpack_config)
+      : artifact.sandpack_config;
 
     const contentHash = this.computeHashFromFiles(filesOut);
     const legacy = detectLegacyFormat(artifact);
@@ -960,7 +889,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       description: artifact.description,
       template: artifact.template,
       files: filesOut,
-      sandpack_config: artifact.sandpack_config,
+      sandpack_config: servedSandpackConfig,
       dependencies: artifact.dependencies,
       entry: artifact.entry,
       content_hash: contentHash,
@@ -1358,8 +1287,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       if (
         stripped === 'agor.config.js' ||
         stripped === 'agor.artifact.json' ||
-        stripped === '.env' ||
-        stripped === 'agor-runtime.js'
+        stripped === '.env'
       ) {
         continue;
       }
@@ -1490,17 +1418,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     if (artifact.agor_runtime?.enabled === false) {
       throw new Error(
         `Runtime introspection is disabled for artifact ${input.artifactId} (agor_runtime.enabled = false). The artifact author can re-enable it via agor_artifacts_update.`
-      );
-    }
-    // Pre-flight entry check: the runtime is render-time-injected by
-    // prepending an `import` to the entry file. If we can't detect a
-    // user JS/TS file to inject into, the runtime is silently dropped at
-    // render time — and a vanilla "query timed out, open the artifact"
-    // error misleads the caller (the artifact IS open, it just has no
-    // runtime). Detect this up front and surface the actual cause.
-    if (artifact.files && !pickEntryForRuntimeInjection(artifact.files, artifact)) {
-      throw new Error(
-        `Runtime introspection is unavailable for artifact ${input.artifactId}: no recognizable entry file in the artifact's file map (looked for /App.{js,jsx,ts,tsx}, /src/App.{js,jsx,ts,tsx}, /index.* and /src/index.*, /main.* and /src/main.*). Add one of those to the file map and republish.`
       );
     }
 
@@ -1838,10 +1755,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       // Skip the synthesized .env so a round-trip via land() → publish()
       // doesn't accidentally bake the viewer's secrets into the next publish.
       if (relativePath === '.env') continue;
-      // Skip the daemon-injected runtime so a round-trip via land() →
-      // publish() doesn't persist a copy that then gets double-injected
-      // on next render. The runtime is render-time only.
-      if (relativePath === 'agor-runtime.js') continue;
       const normalizedPath = `/${relativePath.replace(/\\/g, '/')}`;
       files[normalizedPath] = fs.readFileSync(file, 'utf-8');
     }

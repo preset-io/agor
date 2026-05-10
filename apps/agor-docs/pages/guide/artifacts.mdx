@@ -44,7 +44,7 @@ Each artifact is a stored file map plus a small set of declarative metadata colu
 - `sandpack_config` — Author-controlled SandpackProvider props (template, customSetup, options). Sanitized on write.
 - `required_env_vars` — Names of env vars the artifact needs (e.g. `["OPENAI_KEY"]`). The daemon synthesizes a per-viewer `.env` at render time.
 - `agor_grants` — Declarative daemon capabilities (`agor_token`, `agor_api_url`, `agor_proxies`, …).
-- `agor_runtime` — Controls injection of the daemon-side `agor-runtime.js` (which powers agent DOM introspection via `agor_artifacts_query_dom`). Enabled by default; opt out per-artifact with `{ enabled: false }`. The runtime needs a JS/TS entry file to attach to — pure-HTML/`vanilla`-static artifacts skip injection silently and `agor_artifacts_query_dom` will time out against them.
+- `agor_runtime` — Controls injection of the daemon-side `agor-runtime.js` (which powers agent DOM introspection via `agor_artifacts_query_dom`). Enabled by default; opt out per-artifact with `{ enabled: false }`. The runtime ships as an iframe-level `<script>` tag via Sandpack's `externalResources`, so it works regardless of which user files exist (no entry-file detection, no file mutation, no template-specific gotchas).
 
 **On the board:**
 - **Header** — Artifact name with a trust badge (`Yours`/`Trusted`/`Untrusted`), an interact toggle (eye icon), and a 🔒 lock affordance to open the consent modal when the artifact is untrusted.
