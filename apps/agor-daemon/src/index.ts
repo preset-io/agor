@@ -182,23 +182,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   const getReadAuthHooks = () => (allowAnonymous ? [] : [requireAuth]);
 
   // --------------------------------------------------------------------------
-  // Security: block anonymous in public deployments
-  // --------------------------------------------------------------------------
-  const isPublicDeployment =
-    process.env.NODE_ENV === 'production' ||
-    process.env.RAILWAY_ENVIRONMENT !== undefined ||
-    process.env.RENDER !== undefined;
-
-  if (isPublicDeployment && allowAnonymous) {
-    console.error('');
-    console.error('❌ SECURITY ERROR: Anonymous authentication is enabled in a public deployment');
-    console.error('   This would allow unauthorized access to your Agor instance.');
-    console.error('   Set daemon.allowAnonymous=false in config or unset it (defaults to false)');
-    console.error('');
-    process.exit(1);
-  }
-
-  // --------------------------------------------------------------------------
   // Ports, daemon URL, credentials
   // --------------------------------------------------------------------------
   const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
@@ -207,6 +190,39 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
 
   const envUiPort = process.env.UI_PORT ? Number.parseInt(process.env.UI_PORT, 10) : undefined;
   const UI_PORT = envUiPort || config.ui?.port || 5173;
+
+  // --------------------------------------------------------------------------
+  // Security: block anonymous when the daemon is reachable from outside the host
+  // --------------------------------------------------------------------------
+  // The risk is "unauthenticated requests from the network", which is a
+  // function of the bind interface — not NODE_ENV. Localhost-bound daemons
+  // (the default, including the solo Quick Start path) are safe with
+  // allowAnonymous=true; only loopback can reach them. Railway/Render set
+  // their own env vars and always expose to the public internet, so we keep
+  // those signals as well.
+  const isLoopbackBind =
+    DAEMON_HOST === 'localhost' || DAEMON_HOST === '127.0.0.1' || DAEMON_HOST === '::1';
+  const isPublicDeployment =
+    !isLoopbackBind ||
+    process.env.RAILWAY_ENVIRONMENT !== undefined ||
+    process.env.RENDER !== undefined;
+
+  if (isPublicDeployment && allowAnonymous) {
+    console.error('');
+    console.error(
+      '❌ SECURITY ERROR: Anonymous authentication is enabled on a network-reachable daemon'
+    );
+    console.error(
+      `   Bind host: ${DAEMON_HOST} (anyone who can reach this address gets full access)`
+    );
+    console.error('   Fix one of:');
+    console.error('     • Bind to localhost: set daemon.host: localhost in ~/.agor/config.yaml');
+    console.error(
+      '     • Require auth:      set daemon.allowAnonymous: false (or unset; default is false)'
+    );
+    console.error('');
+    process.exit(1);
+  }
 
   // Handle INSTANCE_LABEL env var override (for Docker deployments)
   if (process.env.INSTANCE_LABEL) {
@@ -398,11 +414,17 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
   // --------------------------------------------------------------------------
-  // Static file serving (production only)
+  // Static file serving — serve the bundled UI when it exists alongside
+  // the daemon (i.e., installed-package layout: dist/daemon + dist/ui).
+  // Previously gated on NODE_ENV=production, which made the UI 404 in
+  // foreground mode (where NODE_ENV is unset) — see issue #1150. The actual
+  // signal is "do we have a built UI bundle to serve?", which existsSync
+  // already answers correctly for both dev (no, vite serves on its own port)
+  // and installed (yes, it sits at ../ui).
   // --------------------------------------------------------------------------
-  const isProduction = process.env.NODE_ENV === 'production';
   const serveStaticFiles = servicesConfig.static_files !== 'off';
-  if (isProduction && serveStaticFiles) {
+  let bundledUiAvailable = false;
+  if (serveStaticFiles) {
     const path = await import('node:path');
     const { fileURLToPath } = await import('node:url');
     const { existsSync } = await import('node:fs');
@@ -412,6 +434,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     const uiPath = path.resolve(dirname, '../ui');
 
     if (existsSync(uiPath)) {
+      bundledUiAvailable = true;
       console.log(`📂 Serving UI from: ${uiPath}`);
 
       app.use(
@@ -433,7 +456,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
         }
       }) as never);
     } else {
-      console.warn(`⚠️  UI directory not found at ${uiPath} - UI will not be served`);
+      console.warn(`⚠️  UI bundle not found at ${uiPath} - UI will not be served`);
       console.warn(`   This is expected in development mode (UI runs on port ${UI_PORT})`);
     }
   }
@@ -530,7 +553,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     svcEnabled,
     jwtSecret,
     daemonUrl,
-    isProduction,
+    bundledUiAvailable,
     DAEMON_PORT,
     UI_PORT,
     worktreeRbacEnabled,

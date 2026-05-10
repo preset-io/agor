@@ -99,7 +99,8 @@ export interface RegisterServicesContext {
   svcEnabled: (group: string) => boolean;
   jwtSecret: string;
   daemonUrl: string;
-  isProduction: boolean;
+  /** True when the daemon is serving the bundled UI itself at /ui (installed agor-live). */
+  bundledUiAvailable: boolean;
   DAEMON_PORT: number;
   UI_PORT: number;
   worktreeRbacEnabled: boolean;
@@ -360,8 +361,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       methods: ['create', 'routeMessage'],
     });
 
-    const isProduction = ctx.isProduction;
-    const uiUrl = isProduction ? `${daemonUrl}/ui` : `http://localhost:${ctx.UI_PORT}`;
+    const uiUrl = ctx.bundledUiAvailable ? `${daemonUrl}/ui` : `http://localhost:${ctx.UI_PORT}`;
     registerGitHubAppSetupRoutes(app, { uiUrl, daemonUrl, db });
   }
 
