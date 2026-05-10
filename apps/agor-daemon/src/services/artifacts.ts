@@ -46,13 +46,16 @@ import type {
   SandpackError,
   SandpackTemplate,
   UserID,
+  UserRole,
   WorktreeID,
 } from '@agor/core/types';
 import {
   ARTIFACT_SCOPED_ONLY_GRANT_KEYS,
   GRANT_ENV_VAR_NAMES,
+  hasMinimumRole,
   NO_CONSENT_GRANT_KEYS,
   proxyGrantEnvName,
+  ROLES,
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { DrizzleService } from '../adapters/drizzle.js';
@@ -165,13 +168,22 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   /** Held for `resolveUserEnvironment` (scope-aware env-var resolution). */
   private dbRef: Database;
 
-  /** In-memory ring buffer for console logs per artifact */
+  /**
+   * In-memory ring buffer for console logs.
+   *
+   * Keyed by `${artifactId}:${userId}` — NOT just artifactId. After a viewer
+   * grants trust, the daemon injects their secrets into the artifact's
+   * runtime; an artifact that does `console.log(import.meta.env.VITE_X)`
+   * would otherwise leak that secret into a global-per-artifact buffer
+   * readable by anyone via agor_artifacts_status. Per-viewer keying
+   * isolates each viewer's render output.
+   */
   private consoleLogs: Map<string, ArtifactConsoleEntry[]> = new Map();
 
-  /** In-memory Sandpack error state per artifact (from browser iframe) */
+  /** In-memory Sandpack error state, keyed by `${artifactId}:${userId}`. */
   private sandpackErrors: Map<string, SandpackError | null> = new Map();
 
-  /** In-memory Sandpack status per artifact (from browser iframe) */
+  /** In-memory Sandpack status, keyed by `${artifactId}:${userId}`. */
   private sandpackStatuses: Map<string, string> = new Map();
 
   /**
@@ -1043,6 +1055,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     // Server-derive the consent surface from the artifact's current request.
     const artifact = await this.artifactRepo.findById(input.artifactId);
     if (!artifact) throw new Error(`Artifact ${input.artifactId} not found`);
+    if (!this.isVisibleTo(artifact, input.userId)) {
+      // Mirror getPayload's privacy guarantee — don't leak existence of a
+      // private artifact via the trust endpoint.
+      throw new Error(`Artifact ${input.artifactId} not found`);
+    }
     const sanitizedEnv = sanitizeEnvVarNames(artifact.required_env_vars ?? []);
     const sanitizedGrants = sanitizeAgorGrants(artifact.agor_grants ?? {});
 
@@ -1278,29 +1295,66 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     return result;
   }
 
-  appendConsoleLogs(artifactId: string, entries: ArtifactConsoleEntry[]): void {
-    const existing = this.consoleLogs.get(artifactId) ?? [];
+  /** Compose the per-viewer key for the in-memory console/error/status maps. */
+  private viewerKey(artifactId: string, userId: string): string {
+    return `${artifactId}:${userId}`;
+  }
+
+  /** Drop every per-viewer buffer entry for an artifact (called on delete). */
+  private clearAllViewerBuffersFor(artifactId: string): void {
+    const prefix = `${artifactId}:`;
+    for (const key of this.consoleLogs.keys()) {
+      if (key.startsWith(prefix)) this.consoleLogs.delete(key);
+    }
+    for (const key of this.sandpackErrors.keys()) {
+      if (key.startsWith(prefix)) this.sandpackErrors.delete(key);
+    }
+    for (const key of this.sandpackStatuses.keys()) {
+      if (key.startsWith(prefix)) this.sandpackStatuses.delete(key);
+    }
+  }
+
+  appendConsoleLogs(artifactId: string, userId: string, entries: ArtifactConsoleEntry[]): void {
+    const key = this.viewerKey(artifactId, userId);
+    const existing = this.consoleLogs.get(key) ?? [];
     const combined = [...existing, ...entries];
     if (combined.length > MAX_CONSOLE_ENTRIES) {
-      this.consoleLogs.set(artifactId, combined.slice(-MAX_CONSOLE_ENTRIES));
+      this.consoleLogs.set(key, combined.slice(-MAX_CONSOLE_ENTRIES));
     } else {
-      this.consoleLogs.set(artifactId, combined);
+      this.consoleLogs.set(key, combined);
     }
   }
 
-  setSandpackError(artifactId: string, error: SandpackError | null, status?: string): void {
-    this.sandpackErrors.set(artifactId, error);
+  setSandpackError(
+    artifactId: string,
+    userId: string,
+    error: SandpackError | null,
+    status?: string
+  ): void {
+    const key = this.viewerKey(artifactId, userId);
+    this.sandpackErrors.set(key, error);
     if (status !== undefined) {
-      this.sandpackStatuses.set(artifactId, status);
+      this.sandpackStatuses.set(key, status);
     }
   }
 
-  async getStatus(artifactId: string): Promise<ArtifactStatus> {
+  /**
+   * Returns the artifact's runtime status — visibility-checked. The console
+   * logs and Sandpack-error fields are scoped to the calling user's render
+   * (see `viewerKey`); other viewers' captured output is never returned.
+   */
+  async getStatus(artifactId: string, userId?: UserID): Promise<ArtifactStatus> {
     const artifact = await this.artifactRepo.findById(artifactId);
     if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
+    if (!this.isVisibleTo(artifact, userId)) {
+      // Don't leak existence of private artifacts.
+      throw new Error(`Artifact ${artifactId} not found`);
+    }
 
-    const sandpackError = this.sandpackErrors.get(artifactId) ?? null;
-    const sandpackStatus = this.sandpackStatuses.get(artifactId);
+    const key = userId ? this.viewerKey(artifactId, userId) : null;
+    const sandpackError = key ? (this.sandpackErrors.get(key) ?? null) : null;
+    const sandpackStatus = key ? this.sandpackStatuses.get(key) : undefined;
+    const consoleLogs = key ? (this.consoleLogs.get(key) ?? []) : [];
 
     let buildStatus = artifact.build_status;
     let buildErrors = artifact.build_errors;
@@ -1317,14 +1371,27 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       build_errors: buildErrors ?? [],
       sandpack_error: sandpackError,
       sandpack_status: sandpackStatus,
-      console_logs: this.consoleLogs.get(artifactId) ?? [],
+      console_logs: consoleLogs,
       content_hash: artifact.content_hash,
     };
   }
 
-  async deleteArtifact(artifactId: string): Promise<void> {
+  /**
+   * Delete an artifact, its board placement, and its in-memory buffers.
+   * Owner-or-admin only — agent-facing tools must pass `userId` and the
+   * caller's role. The Feathers REST hook chain enforces the same rule for
+   * direct PATCH/REMOVE; this method is what the MCP tool calls and used
+   * to be unchecked.
+   */
+  async deleteArtifact(artifactId: string, userId?: string, userRole?: UserRole): Promise<void> {
     const artifact = await this.artifactRepo.findById(artifactId);
     if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
+
+    const isOwner = !!userId && artifact.created_by === userId;
+    const isAdmin = !!userRole && hasMinimumRole(userRole, ROLES.ADMIN);
+    if (!isOwner && !isAdmin) {
+      throw new Error("Forbidden: only the artifact's creator or an admin may delete it");
+    }
 
     const objectId = `artifact-${artifactId}`;
     try {
@@ -1336,10 +1403,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       // Board object may not exist or board may be deleted.
     }
 
-    this.consoleLogs.delete(artifactId);
-    this.sandpackErrors.delete(artifactId);
-    this.sandpackStatuses.delete(artifactId);
-
+    this.clearAllViewerBuffersFor(artifactId);
     await this.artifactRepo.delete(artifactId);
   }
 

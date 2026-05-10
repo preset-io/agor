@@ -521,8 +521,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ) {
           const artifactId = _params.route?.id;
           if (!artifactId) throw new Error('Artifact ID required');
+          const userId = _params.user?.user_id;
+          if (!userId) throw new Error('Authenticated user required');
           const artifactsService = app.service('artifacts') as unknown as ArtifactsService;
-          artifactsService.appendConsoleLogs(artifactId, data.entries as never);
+          // Visibility check: only viewers who can see the artifact may
+          // append to its console buffer. Without this any member could
+          // write spam into another artifact's logs.
+          const artifact = await artifactsService.get(artifactId);
+          if (!artifactsService.isVisibleTo(artifact, userId)) {
+            throw new Error(`Artifact ${artifactId} not found`);
+          }
+          artifactsService.appendConsoleLogs(artifactId, userId, data.entries as never);
           return { success: true };
         },
       },
@@ -545,8 +554,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ) {
           const artifactId = _params.route?.id;
           if (!artifactId) throw new Error('Artifact ID required');
+          const userId = _params.user?.user_id;
+          if (!userId) throw new Error('Authenticated user required');
           const artifactsService = app.service('artifacts') as unknown as ArtifactsService;
-          artifactsService.setSandpackError(artifactId, data.error, data.status);
+          const artifact = await artifactsService.get(artifactId);
+          if (!artifactsService.isVisibleTo(artifact, userId)) {
+            throw new Error(`Artifact ${artifactId} not found`);
+          }
+          artifactsService.setSandpackError(artifactId, userId, data.error, data.status);
           return { success: true };
         },
       },

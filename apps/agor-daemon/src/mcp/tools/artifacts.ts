@@ -99,7 +99,7 @@ IMPORTANT:
           .string()
           .optional()
           .describe(
-            'Board to place the artifact on. REQUIRED when creating; on update (artifactId given) defaults to the artifact’s current board if omitted.'
+            'Board to place the artifact on. REQUIRED when creating. IGNORED when updating (artifactId given) — to move an artifact between boards use agor_artifacts_update.'
           ),
         name: z
           .string()
@@ -221,7 +221,7 @@ Fields:
 - sandpack_status: Sandpack bundler status ('idle', 'running', 'timeout', etc.)
 - console_logs: console.log/warn/error output from the running app
 
-NOTE: sandpack_error and console_logs require a browser to be viewing the artifact. If no browser is connected, these fields will be empty/null.`,
+NOTE: sandpack_error and console_logs require a browser to be viewing the artifact. They are scoped to the calling user's render — you only see your own console output, never another viewer's.`,
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         artifactId: z.string().describe('Artifact ID'),
@@ -229,7 +229,7 @@ NOTE: sandpack_error and console_logs require a browser to be viewing the artifa
     },
     async (args) => {
       const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
-      const status = await service.getStatus(coerceString(args.artifactId)!);
+      const status = await service.getStatus(coerceString(args.artifactId)!, ctx.userId);
       return textResult(status);
     }
   );
@@ -239,7 +239,7 @@ NOTE: sandpack_error and console_logs require a browser to be viewing the artifa
     'agor_artifacts_delete',
     {
       description:
-        'Delete an artifact. Removes database record and board placement. Does not touch the filesystem.',
+        "Delete an artifact. Owner or admin only — calling as a different user returns 'Forbidden'. Removes database record and board placement. Does not touch the filesystem.",
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         artifactId: z.string().describe('Artifact ID to delete'),
@@ -250,7 +250,10 @@ NOTE: sandpack_error and console_logs require a browser to be viewing the artifa
       const artifactId = coerceString(args.artifactId)!;
 
       const artifact = await service.get(artifactId, ctx.baseServiceParams);
-      await service.deleteArtifact(artifactId);
+      // role on AuthenticatedUser is loosely typed as `string`; the service
+      // takes the strict `UserRole` union but values flowing through here
+      // are always valid roles (auth strategies enforce on the way in).
+      await service.deleteArtifact(artifactId, ctx.userId, ctx.authenticatedUser.role as never);
       ctx.app.service('artifacts').emit('removed', artifact);
 
       return textResult({ success: true, artifactId });

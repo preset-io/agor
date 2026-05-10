@@ -24,16 +24,6 @@ import type {
   SandpackTemplate,
 } from '@agor/core/types';
 
-/** Defaults merged underneath the artifact's `sandpack_config` at render time. */
-export const DEFAULT_SANDPACK_CONFIG: SandpackConfig = {
-  options: {
-    initMode: 'user-visible',
-    showLineNumbers: true,
-    showInlineErrors: true,
-    showTabs: true,
-  },
-};
-
 /**
  * Templates whose Sandpack runtime uses Vite. The synthesized `.env` keys
  * must be prefixed with `VITE_` so `import.meta.env.VITE_*` picks them up.

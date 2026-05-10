@@ -719,4 +719,142 @@ describe('ArtifactsService.grantTrust', () => {
     expect(payload.trust_state).toBe('trusted');
     expect(payload.trust_scope).toBe('author');
   });
+
+  dbTest('grantTrust rejects when artifact is not visible to caller', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'private',
+      template: 'react',
+      files: { '/index.js': 'console.log("x")' },
+      required_env_vars: ['OPENAI_KEY'],
+      public: false,
+      created_by: 'user-owner',
+    });
+
+    await expect(
+      service.grantTrust({
+        userId: 'user-stranger',
+        artifactId: created.artifact_id,
+        scopeType: 'artifact',
+      })
+    ).rejects.toThrow(/not found/i);
+  });
+});
+
+describe('ArtifactsService.getStatus + console isolation', () => {
+  dbTest('console logs and sandpack errors are scoped per viewer', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'console-isolation',
+      template: 'react',
+      files: { '/index.js': 'console.log("x")' },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    // Two different viewers post console output. Viewer A's output may
+    // contain values derived from their own injected secrets — those must
+    // never leak into viewer B's status read.
+    service.appendConsoleLogs(created.artifact_id, 'viewer-A', [
+      { timestamp: 1, level: 'log', message: 'A_SECRET=alpha' },
+    ]);
+    service.appendConsoleLogs(created.artifact_id, 'viewer-B', [
+      { timestamp: 2, level: 'log', message: 'B_SECRET=bravo' },
+    ]);
+    service.setSandpackError(created.artifact_id, 'viewer-A', { message: 'A-only error' }, 'idle');
+
+    const statusA = await service.getStatus(created.artifact_id, 'viewer-A' as never);
+    expect(statusA.console_logs.map((l) => l.message)).toEqual(['A_SECRET=alpha']);
+    expect(statusA.sandpack_error?.message).toBe('A-only error');
+
+    const statusB = await service.getStatus(created.artifact_id, 'viewer-B' as never);
+    expect(statusB.console_logs.map((l) => l.message)).toEqual(['B_SECRET=bravo']);
+    expect(statusB.sandpack_error).toBeNull();
+  });
+
+  dbTest('getStatus rejects when artifact is not visible to caller', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'private',
+      template: 'react',
+      files: { '/index.js': 'console.log("x")' },
+      public: false,
+      created_by: 'user-owner',
+    });
+
+    await expect(service.getStatus(created.artifact_id, 'user-stranger' as never)).rejects.toThrow(
+      /not found/i
+    );
+  });
+});
+
+describe('ArtifactsService.deleteArtifact authorization', () => {
+  dbTest('owner can delete', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'owned',
+      template: 'react',
+      files: { '/index.js': 'x' },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    await expect(
+      service.deleteArtifact(created.artifact_id, 'user-owner', 'member')
+    ).resolves.toBeUndefined();
+  });
+
+  dbTest('non-owner non-admin is rejected', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'owned',
+      template: 'react',
+      files: { '/index.js': 'x' },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    await expect(
+      service.deleteArtifact(created.artifact_id, 'user-stranger', 'member')
+    ).rejects.toThrow(/Forbidden/i);
+  });
+
+  dbTest("admin can delete someone else's artifact", async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'owned',
+      template: 'react',
+      files: { '/index.js': 'x' },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    await expect(
+      service.deleteArtifact(created.artifact_id, 'admin-user', 'admin')
+    ).resolves.toBeUndefined();
+  });
 });
