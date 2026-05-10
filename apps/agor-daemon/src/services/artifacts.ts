@@ -90,6 +90,22 @@ async function canonicalizeExistingPrefix(target: string): Promise<string> {
 }
 
 /**
+ * Compute a relative ES-module specifier from `fromFile` to `toFile`. Both
+ * are root-absolute paths in the served file map (e.g. `/src/index.js`,
+ * `/agor-runtime.js`). Returns the kind of specifier Sandpack's bundler
+ * resolves reliably across templates: `./agor-runtime.js` when the two
+ * are siblings, `../agor-runtime.js` when the target is one or more
+ * levels up.
+ */
+function relativeImportSpecifier(fromFile: string, toFile: string): string {
+  const fromDir = path.posix.dirname(fromFile);
+  const targetPath = toFile.startsWith('/') ? toFile : `/${toFile}`;
+  let rel = path.posix.relative(fromDir, targetPath);
+  if (!rel.startsWith('.')) rel = `./${rel}`;
+  return rel;
+}
+
+/**
  * Pick which file to prepend the `import './agor-runtime.js';` line into.
  *
  * Priority: artifact's recorded `entry` column → `customSetup.entry` from
@@ -480,9 +496,13 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         build_errors: buildResult.errors.length > 0 ? buildResult.errors : undefined,
       });
 
-      // Stale Sandpack state — new content will produce fresh state from the browser.
-      this.sandpackErrors.delete(existing.artifact_id);
-      this.sandpackStatuses.delete(existing.artifact_id);
+      // Stale Sandpack state — new content will produce fresh state from
+      // the browser. Use the helper to clear ALL per-viewer entries; bare
+      // `delete(artifact_id)` no longer matches the keys (which are now
+      // `${artifactId}:${userId}` after the per-viewer console isolation
+      // fix), so without this every viewer kept their stale error/status
+      // across republishes.
+      this.clearAllViewerBuffersFor(existing.artifact_id);
 
       this.app.service('artifacts').emit('patched', updated);
       return updated;
@@ -878,10 +898,17 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       // Prepend an import to the entry file so the runtime registers its
       // message listener before user code starts emitting events. We modify
       // the served file map only — the persisted entry is untouched.
+      //
+      // Use a relative specifier rather than the root-absolute
+      // `/agor-runtime.js`. Sandpack's bundler resolves relative imports
+      // reliably across templates; root-absolute paths work in some
+      // bundler configurations and fail in others (e.g. Parcel-based
+      // templates resolve them against a different root).
       const entryPath = pickEntryForRuntimeInjection(filesOut, artifact);
       if (entryPath) {
         const original = filesOut[entryPath] ?? '';
-        filesOut[entryPath] = `import '${AGOR_RUNTIME_PATH}';\n${original}`;
+        const importSpec = relativeImportSpecifier(entryPath, AGOR_RUNTIME_PATH);
+        filesOut[entryPath] = `import '${importSpec}';\n${original}`;
       } else {
         // No discoverable entry — drop the runtime file rather than ship
         // it dead weight, and warn loudly so we notice if a template's

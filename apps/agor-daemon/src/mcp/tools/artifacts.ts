@@ -109,7 +109,7 @@ DECLARATIVE CONFIG:
 CONSENT MODEL (TOFU): when the viewer is NOT the artifact author, the daemon does NOT inject env vars or grants without an explicit trust grant. Untrusted artifacts render with empty env values and a "Trust to render with secrets" badge.
 
 IMPORTANT:
-- Secrets never enter the LLM context. Env values are only injected into the served \`.env\` at view time.
+- Secret VALUES are never sent to the LLM as-is — they're only injected into the served \`.env\` at view time. CAVEAT: if your artifact renders a secret-derived value into the DOM (e.g. \`<div>API: {key}</div>\`), an agent calling \`agor_artifacts_query_dom\` against your own running render WILL see the rendered text. Treat any \`agor_artifacts_query_*\` reply as potentially carrying secret-derived output if the artifact renders one.
 - Missing user env vars render as "" — your app should detect that and surface a "configure SOMETHING in Settings" message rather than calling APIs with empty creds.
 - For node.js / static templates without a dotenv path, env vars are NOT injected; the daemon emits a warning if you declared any.`,
       inputSchema: z.object({

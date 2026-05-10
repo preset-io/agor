@@ -1012,8 +1012,9 @@ describe('ArtifactsService.getPayload agor-runtime injection', () => {
     expect(payload.files['/agor-runtime.js']).toBeDefined();
     expect(payload.files['/agor-runtime.js']).toContain('agor:query');
     // The entry file got the import prepended (served only — the persisted
-    // row is unchanged).
-    expect(payload.files['/src/index.js']).toMatch(/^import '\/agor-runtime\.js';/);
+    // row is unchanged). Specifier is relative-from-entry, not root-
+    // absolute, so Sandpack resolves it across template variants.
+    expect(payload.files['/src/index.js']).toMatch(/^import '\.\.\/agor-runtime\.js';/);
   });
 
   dbTest('opt-out: enabled=false skips injection entirely', async ({ db }) => {

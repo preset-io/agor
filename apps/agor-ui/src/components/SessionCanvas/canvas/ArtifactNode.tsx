@@ -87,6 +87,33 @@ function getAuthHeaders(): HeadersInit {
 }
 
 /**
+ * Decode the current user's id from the Feathers JWT in localStorage.
+ *
+ * Used by the runtime-query bridge to filter out queries the daemon emits
+ * for OTHER users — without this, every authenticated browser tab would
+ * run the agent's selector against its own (potentially secret-bearing)
+ * render. The server-side correlation already drops cross-user response
+ * POSTs, but the actual DOM query still ran in the wrong tab. Filtering
+ * client-side prevents the query from executing at all.
+ *
+ * Returns null on any parse failure — callers should treat that as
+ * "don't run this query" (safe default).
+ */
+function getCurrentUserIdFromJwt(): string | null {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('feathers-jwt') : null;
+  if (!token) return null;
+  try {
+    const parts = token.split('.');
+    if (parts.length < 2) return null;
+    const padded = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(atob(padded));
+    return typeof payload.sub === 'string' ? payload.sub : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Inner component that captures Sandpack console events and forwards them to the daemon.
  * Must be inside SandpackProvider.
  */
@@ -182,10 +209,28 @@ function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
       const detail = (event as CustomEvent).detail as {
         request_id: string;
         artifact_id: string;
+        requested_by_user_id?: string;
         kind: string;
         args: Record<string, unknown>;
       };
       if (!detail || detail.artifact_id !== artifactId) return;
+
+      // Requester filter: the daemon's `agor-query` event broadcasts on
+      // the global authenticated channel, so EVERY logged-in tab receives
+      // it. Without this client-side check, every tab would run the DOM
+      // query against its own (possibly secret-bearing) render — the
+      // server would later drop the wrong-user response, but the query
+      // would have already executed. Skipping here means non-requesters
+      // never run the selector at all.
+      const currentUserId = getCurrentUserIdFromJwt();
+      if (
+        detail.requested_by_user_id &&
+        currentUserId &&
+        detail.requested_by_user_id !== currentUserId
+      ) {
+        return;
+      }
+
       const requestId = detail.request_id;
       const target = iframe.current?.contentWindow;
       if (!target) {
@@ -199,6 +244,10 @@ function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
         const data = msgEvent.data;
         if (!data || typeof data !== 'object') return;
         if (data.type !== 'agor:result' || data.requestId !== requestId) return;
+        // Source check (defense in depth): only accept replies from the
+        // iframe we just dispatched to, not from any other postMessage
+        // source that happens to know our requestId.
+        if (msgEvent.source !== target) return;
         cleanup();
         void postResult({ ok: !!data.ok, result: data.result, error: data.error });
       };

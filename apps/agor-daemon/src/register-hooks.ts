@@ -577,6 +577,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     // the request id so the daemon can correlate to a pending query in
     // memory. The caller must be the same user that issued the original
     // query — the service-side check rejects mismatches silently.
+    //
+    // The injected agor-runtime.js caps replies (200KB document HTML, 50
+    // nodes per query, 50KB outerHTML per node), but a malicious or buggy
+    // browser could bypass the runtime and POST a much larger body. Cap
+    // here too so a wrongly-sized payload doesn't bloat the daemon's
+    // pending-query map or the agent's MCP context.
+    const RUNTIME_RESPONSE_BYTE_CAP = 512 * 1024;
     registerAuthenticatedRoute(
       app,
       '/artifacts/:id/runtime-response/:requestId',
@@ -589,13 +596,34 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           if (!requestId) throw new Error('Request ID required');
           const userId = _params.user?.user_id;
           if (!userId) throw new Error('Authenticated user required');
+
+          // Defensive size cap. JSON.stringify is the cheapest faithful
+          // measurement of "how big is this payload going to be when we
+          // hand it to the agent." Round trips through the runtime stay
+          // well under this in practice.
+          let payloadOk = data.ok;
+          let payloadResult = data.result;
+          let payloadError = data.error;
+          try {
+            const measured = JSON.stringify(payloadResult ?? null);
+            if (measured.length > RUNTIME_RESPONSE_BYTE_CAP) {
+              payloadOk = false;
+              payloadResult = undefined;
+              payloadError = `Runtime response exceeded ${RUNTIME_RESPONSE_BYTE_CAP} bytes (got ${measured.length}). Reduce maxNodes or use a more specific selector.`;
+            }
+          } catch (err) {
+            payloadOk = false;
+            payloadResult = undefined;
+            payloadError = `Runtime response was not JSON-serializable: ${err instanceof Error ? err.message : String(err)}`;
+          }
+
           const artifactsService = app.service('artifacts') as unknown as ArtifactsService;
           artifactsService.resolveRuntimeQuery({
             requestId,
             responderUserId: userId,
-            ok: data.ok,
-            result: data.result,
-            error: data.error,
+            ok: payloadOk,
+            result: payloadResult,
+            error: payloadError,
           });
           return { received: true };
         },
