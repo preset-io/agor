@@ -801,7 +801,7 @@ describe('ArtifactsService.getStatus + console isolation', () => {
 });
 
 describe('ArtifactsService.deleteArtifact authorization', () => {
-  dbTest('owner can delete', async ({ db }) => {
+  dbTest('owner can delete; returned artifact carries the deleted row', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
     const board = await seedBoard(db);
     const artifactRepo = new ArtifactRepository(db);
@@ -815,9 +815,8 @@ describe('ArtifactsService.deleteArtifact authorization', () => {
       created_by: 'user-owner',
     });
 
-    await expect(
-      service.deleteArtifact(created.artifact_id, 'user-owner', 'member')
-    ).resolves.toBeUndefined();
+    const deleted = await service.deleteArtifact(created.artifact_id, 'user-owner', 'member');
+    expect(deleted.artifact_id).toBe(created.artifact_id);
   });
 
   dbTest('non-owner non-admin is rejected', async ({ db }) => {
@@ -855,6 +854,99 @@ describe('ArtifactsService.deleteArtifact authorization', () => {
 
     await expect(
       service.deleteArtifact(created.artifact_id, 'admin-user', 'admin')
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ artifact_id: created.artifact_id });
+  });
+
+  // REST DELETE /artifacts/:id arrives via service.remove(id, params); regression
+  // guard that it threads params.user through to the auth-checked deleteArtifact.
+  dbTest('service.remove() threads params.user → owner deletes successfully', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'owned',
+      template: 'react',
+      files: { '/index.js': 'x' },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    const removed = await service.remove(created.artifact_id, {
+      user: { user_id: 'user-owner', role: 'member' },
+    });
+    expect(removed.artifact_id).toBe(created.artifact_id);
+  });
+
+  dbTest('service.remove() rejects when params.user is missing or wrong', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'owned',
+      template: 'react',
+      files: { '/index.js': 'x' },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    await expect(service.remove(created.artifact_id)).rejects.toThrow(/Forbidden/i);
+    await expect(
+      service.remove(created.artifact_id, {
+        user: { user_id: 'user-stranger', role: 'member' },
+      })
+    ).rejects.toThrow(/Forbidden/i);
+  });
+});
+
+describe('ArtifactsService.updateMetadata authorization', () => {
+  dbTest('admin can update someone else’s artifact', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'owned',
+      template: 'react',
+      files: { '/index.js': 'x' },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    const updated = await service.updateMetadata(
+      created.artifact_id,
+      { name: 'admin-renamed' },
+      'admin-user',
+      'admin'
+    );
+    expect(updated.name).toBe('admin-renamed');
+  });
+
+  dbTest('non-owner non-admin is rejected', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'owned',
+      template: 'react',
+      files: { '/index.js': 'x' },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    await expect(
+      service.updateMetadata(
+        created.artifact_id,
+        { name: 'stranger-renamed' },
+        'user-stranger',
+        'member'
+      )
+    ).rejects.toThrow(/Forbidden/i);
   });
 });

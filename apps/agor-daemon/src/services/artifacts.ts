@@ -238,7 +238,9 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       const artifactId = String(id);
       const existing = await this.artifactRepo.findById(artifactId);
       if (!existing) throw new Error(`Artifact ${artifactId} not found`);
-      const callerUserId = (params as { user?: { user_id?: string } } | undefined)?.user?.user_id;
+      const callerParams = params as { user?: { user_id?: string; role?: UserRole } } | undefined;
+      const callerUserId = callerParams?.user?.user_id;
+      const callerRole = callerParams?.user?.role;
 
       return this.updateMetadata(
         existing.artifact_id,
@@ -253,7 +255,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           width: d.width,
           height: d.height,
         },
-        callerUserId
+        callerUserId,
+        callerRole
       );
     }
 
@@ -270,11 +273,20 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     return artifact.created_by === userId;
   }
 
-  async remove(id: string | number, _params?: unknown): Promise<Artifact> {
+  async remove(id: string | number, params?: unknown): Promise<Artifact> {
     const artifactId = String(id);
-    const artifact = await this.artifactRepo.findById(artifactId);
-    if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
-    await this.deleteArtifact(artifactId);
+    const callerParams = params as { user?: { user_id?: string; role?: UserRole } } | undefined;
+    // Thread the authenticated caller through so deleteArtifact() can run
+    // its owner/admin check. The Feathers REST hook chain has already
+    // gated this call (see ensureArtifactOwnerOrAdmin in register-hooks),
+    // so the inline check is redundant for REST callers — but it stays as
+    // a defense-in-depth and as the single auth point for non-Feathers
+    // callers (e.g. internal lifecycle code).
+    const artifact = await this.deleteArtifact(
+      artifactId,
+      callerParams?.user?.user_id,
+      callerParams?.user?.role
+    );
     this.app.service('artifacts').emit('removed', artifact);
     return artifact;
   }
@@ -468,12 +480,18 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       agor_grants?: AgorGrants;
       sandpack_config?: SandpackConfig;
     },
-    userId?: string
+    userId?: string,
+    userRole?: UserRole
   ): Promise<Artifact> {
     const existing = await this.artifactRepo.findById(artifactId);
     if (!existing) throw new Error(`Artifact ${artifactId} not found`);
-    if (userId && existing.created_by && existing.created_by !== userId) {
-      throw new Error('Cannot update artifact: not the owner');
+    // Owner-or-admin: matches the Feathers REST hook (ensureArtifactOwner-
+    // OrAdmin) and the agor_artifacts_update tool description. Without the
+    // role check, an admin authorized by the hook still got rejected here.
+    const isOwner = !!userId && existing.created_by === userId;
+    const isAdmin = !!userRole && hasMinimumRole(userRole, ROLES.ADMIN);
+    if (userId && !isOwner && !isAdmin) {
+      throw new Error("Forbidden: only the artifact's creator or an admin may update it");
     }
 
     const fullArtifactId = existing.artifact_id;
@@ -1383,7 +1401,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * direct PATCH/REMOVE; this method is what the MCP tool calls and used
    * to be unchecked.
    */
-  async deleteArtifact(artifactId: string, userId?: string, userRole?: UserRole): Promise<void> {
+  async deleteArtifact(
+    artifactId: string,
+    userId?: string,
+    userRole?: UserRole
+  ): Promise<Artifact> {
     const artifact = await this.artifactRepo.findById(artifactId);
     if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
 
@@ -1405,6 +1427,9 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
     this.clearAllViewerBuffersFor(artifactId);
     await this.artifactRepo.delete(artifactId);
+    // Returned so callers can emit `removed` events without a redundant
+    // pre-delete fetch.
+    return artifact;
   }
 
   async findByBoardId(boardId: BoardID, userId?: string): Promise<Artifact[]> {

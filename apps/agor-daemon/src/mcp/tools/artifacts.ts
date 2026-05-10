@@ -12,7 +12,14 @@
  */
 
 import { WorktreeRepository } from '@agor/core/db';
-import type { AgorGrants, BoardID, SandpackConfig, UUID, WorktreeID } from '@agor/core/types';
+import type {
+  AgorGrants,
+  BoardID,
+  SandpackConfig,
+  UserRole,
+  UUID,
+  WorktreeID,
+} from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -249,11 +256,16 @@ NOTE: sandpack_error and console_logs require a browser to be viewing the artifa
       const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
       const artifactId = coerceString(args.artifactId)!;
 
-      const artifact = await service.get(artifactId, ctx.baseServiceParams);
-      // role on AuthenticatedUser is loosely typed as `string`; the service
-      // takes the strict `UserRole` union but values flowing through here
-      // are always valid roles (auth strategies enforce on the way in).
-      await service.deleteArtifact(artifactId, ctx.userId, ctx.authenticatedUser.role as never);
+      // deleteArtifact loads the row, runs the owner/admin check, performs
+      // the delete, and returns the artifact so we can emit `removed`
+      // without a redundant pre-delete fetch. role on AuthenticatedUser is
+      // loosely typed as `string`; auth strategies enforce a valid value
+      // upstream so the cast to UserRole is honest.
+      const artifact = await service.deleteArtifact(
+        artifactId,
+        ctx.userId,
+        ctx.authenticatedUser.role as UserRole
+      );
       ctx.app.service('artifacts').emit('removed', artifact);
 
       return textResult({ success: true, artifactId });
@@ -355,7 +367,8 @@ Caller must own the artifact (or be an admin).`,
           required_env_vars: args.requiredEnvVars,
           agor_grants: args.agorGrants as AgorGrants | undefined,
         },
-        ctx.userId
+        ctx.userId,
+        ctx.authenticatedUser.role as UserRole
       );
 
       const { files: _files, ...artifactSummary } = updated;
