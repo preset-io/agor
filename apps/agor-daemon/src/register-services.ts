@@ -2172,10 +2172,13 @@ async function registerMCPServices(
         const isTemplated = (url: string): boolean => url.includes('{{');
 
         const hasInlineConfig = !!data.url;
+        // `auth` is typed as the canonical MCPAuth (rather than narrowing to
+        // `typeof data.auth`) so the resolved auth from
+        // `resolveProbeServerTemplates` flows back in without casts.
         let serverConfig: {
           url: string;
           transport: 'http' | 'sse' | 'stdio';
-          auth?: typeof data.auth;
+          auth?: MCPAuth;
           name?: string;
           scope?: string;
           owner_user_id?: string;
@@ -2282,7 +2285,7 @@ async function registerMCPServices(
           {
             url: serverConfig.url,
             transport: serverConfig.transport,
-            auth: serverConfig.auth as MCPAuth | undefined,
+            auth: serverConfig.auth,
             name: serverConfig.name,
             mcpServerId: serverId,
           },
@@ -2293,7 +2296,7 @@ async function registerMCPServices(
           return { success: false, error: resolution.error };
         }
 
-        serverConfig.auth = resolution.resolved.auth as typeof serverConfig.auth;
+        serverConfig.auth = resolution.resolved.auth;
         // Re-validate whenever the input URL was templated, even if the
         // resolved string happens to match the input (e.g., a user env
         // value that itself looks like the template). Pre-resolution
