@@ -78,7 +78,29 @@ export function resolveProbeServerTemplates(
   // Surface unresolved auth templates as a clear error — otherwise the
   // probe sends an empty/literal Authorization header and the upstream
   // 401 hides the real cause from the user.
-  const unresolvedAuth = result.unresolvedFields.filter((f) => f.startsWith('auth.'));
+  //
+  // The core resolver intentionally omits OAuth fields from
+  // `unresolvedFields` (template-resolver.ts treats them as optional at
+  // session runtime, where missing values just skip OAuth behavior). For
+  // Test Connection a templated `oauth_client_secret` that resolves to
+  // empty still means the OAuth flow is about to fail upstream with a
+  // confusing error, so detect those locally and add them to the list.
+  const unresolvedAuth = [...result.unresolvedFields.filter((f) => f.startsWith('auth.'))];
+  if (serverConfig.auth?.type === 'oauth') {
+    const oauthTemplatedFields = [
+      'oauth_token_url',
+      'oauth_client_id',
+      'oauth_client_secret',
+      'oauth_scope',
+    ] as const;
+    for (const field of oauthTemplatedFields) {
+      const original = serverConfig.auth[field];
+      if (original && original.includes('{{') && !result.server.auth?.[field]) {
+        unresolvedAuth.push(`auth.${field}`);
+      }
+    }
+  }
+
   if (unresolvedAuth.length > 0) {
     return {
       ok: false,

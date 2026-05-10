@@ -143,4 +143,89 @@ describe('resolveProbeServerTemplates', () => {
 
     expect(result.ok).toBe(true);
   });
+
+  it('surfaces missing OAuth template variables that the core resolver would silently drop', () => {
+    // The shared resolver treats OAuth fields as optional and does not add
+    // them to `unresolvedFields` (template-resolver.ts:287-335). For Test
+    // Connection that's the wrong call: a templated `oauth_client_secret`
+    // resolving to empty leads to a confusing upstream OAuth failure
+    // instead of a local "set the env var" message. The helper compensates.
+    const result = resolveProbeServerTemplates(
+      {
+        url: 'https://api.example.com/mcp',
+        transport: 'http',
+        auth: {
+          type: 'oauth',
+          oauth_token_url: 'https://auth.example.com/token',
+          oauth_client_id: 'public-id',
+          oauth_client_secret: '{{ user.env.OAUTH_SECRET_MISSING }}',
+        },
+        name: 'oauth-server',
+      },
+      {} // no env vars defined
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('auth.oauth_client_secret');
+      expect(result.error).toContain('Settings');
+      // Resolved fields must NOT appear in the error.
+      expect(result.error).not.toContain('auth.oauth_client_id');
+      expect(result.error).not.toContain('auth.oauth_token_url');
+    }
+  });
+
+  it('resolves OAuth templates to actual values when env vars are present', () => {
+    const result = resolveProbeServerTemplates(
+      {
+        url: 'https://api.example.com/mcp',
+        transport: 'http',
+        auth: {
+          type: 'oauth',
+          oauth_token_url: '{{ user.env.OAUTH_TOKEN_URL }}',
+          oauth_client_id: '{{ user.env.OAUTH_CLIENT_ID }}',
+          oauth_client_secret: '{{ user.env.OAUTH_CLIENT_SECRET }}',
+          oauth_scope: '{{ user.env.OAUTH_SCOPE }}',
+        },
+        name: 'oauth-templated',
+      },
+      {
+        OAUTH_TOKEN_URL: 'https://auth.example.com/token',
+        OAUTH_CLIENT_ID: 'client-abc',
+        OAUTH_CLIENT_SECRET: 'secret-xyz',
+        OAUTH_SCOPE: 'read write',
+      }
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok && result.resolved.auth?.type === 'oauth') {
+      expect(result.resolved.auth.oauth_token_url).toBe('https://auth.example.com/token');
+      expect(result.resolved.auth.oauth_client_id).toBe('client-abc');
+      expect(result.resolved.auth.oauth_client_secret).toBe('secret-xyz');
+      expect(result.resolved.auth.oauth_scope).toBe('read write');
+    }
+  });
+
+  it('lists multiple missing OAuth fields together', () => {
+    const result = resolveProbeServerTemplates(
+      {
+        url: 'https://api.example.com/mcp',
+        transport: 'http',
+        auth: {
+          type: 'oauth',
+          oauth_token_url: '{{ user.env.OAUTH_TOKEN_URL_MISSING }}',
+          oauth_client_id: 'public-id',
+          oauth_client_secret: '{{ user.env.OAUTH_SECRET_MISSING }}',
+        },
+        name: 'oauth-server',
+      },
+      {}
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('auth.oauth_token_url');
+      expect(result.error).toContain('auth.oauth_client_secret');
+    }
+  });
 });
