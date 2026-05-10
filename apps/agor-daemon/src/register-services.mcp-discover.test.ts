@@ -3,42 +3,32 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * Regression tests for the `/mcp-servers/discover` endpoint's template
- * resolution.
+ * Structural regression check for the `/mcp-servers/discover` endpoint.
  *
- * Background: a previous bug had the discover endpoint passing
- * `serverConfig.auth` straight to `resolveMCPAuthHeaders`, with no
- * Handlebars resolution. Servers configured with the recommended
- * `{{ user.env.X }}` syntax for bearer/JWT tokens had the literal
- * template string sent as the Authorization header, the upstream MCP
- * server returned 401, and the UI surfaced "Connection failed" — even
- * though the same servers worked fine in real sessions (the executor
- * resolves these templates via process.env + AGOR_USER_ENV_KEYS).
+ * Behavior of the template resolution itself is covered in
+ * `utils/mcp-probe-templates.test.ts` (real input/output assertions).
+ * This file only protects the *wiring*: the discover endpoint MUST call
+ * `resolveProbeServerTemplates`, and it MUST do so before
+ * `resolveMCPAuthHeaders` consumes the auth config (otherwise the
+ * resolution is dead code that runs after the headers are built).
  *
- * The fix loads the caller's user env vars from the DB, builds the same
- * template context the executor uses, and runs `resolveMcpServerTemplates`
- * over the probe before `resolveMCPAuthHeaders` runs.
- *
- * These structural assertions intentionally operate on a window scoped to
- * the discover endpoint: they prevent removing or reordering the resolver
- * call without flagging unrelated changes elsewhere in `register-services.ts`.
+ * Same source-level pattern as `register-services.oauth-callback.test.ts`:
+ * cheap, no Feathers/DB scaffolding, scoped to the discover block so
+ * unrelated edits elsewhere in `register-services.ts` don't trigger it.
  */
-describe('register-services /mcp-servers/discover template resolution', () => {
+describe('register-services /mcp-servers/discover wiring', () => {
   const rawSource = readFileSync(join(__dirname, 'register-services.ts'), 'utf8');
 
-  // Strip block + line comments so prose mentioning the old buggy behavior
-  // can't satisfy or fool the assertions below. Keep `://` so URLs survive.
+  // Strip block + line comments so prose explaining the bug can't satisfy
+  // or fool the structural checks. Keep `://` so URLs survive.
   const codeOnly = rawSource
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/(^|[^:])\/\/.*$/gm, '$1');
 
-  /**
-   * Slice the discover endpoint body. We anchor on the unique
-   * `app.use('/mcp-servers/discover'` registration and stop at the next
-   * top-level `app.use(` or `app.service(` registration so refactors
-   * inside the endpoint stay covered while unrelated surrounding code
-   * doesn't leak in.
-   */
+  // Slice the discover endpoint body. We anchor on the unique
+  // `app.use('/mcp-servers/discover'` registration and stop at the next
+  // top-level `app.use(` or `app.service(` so the assertions stay scoped
+  // to the endpoint and don't drift into unrelated code.
   const discoverStart = codeOnly.indexOf("app.use('/mcp-servers/discover'");
   const afterDiscover = codeOnly.slice(discoverStart + 1);
   const nextAppUse = afterDiscover.search(/app\.(use|service)\s*\(/);
@@ -54,32 +44,16 @@ describe('register-services /mcp-servers/discover template resolution', () => {
     expect(discoverBlock.length).toBeGreaterThan(0);
   });
 
-  it('resolves Handlebars templates before building auth headers', () => {
-    // Without resolveMcpServerTemplates, the literal `{{ user.env.X }}`
-    // string is sent as the Authorization header → 401.
-    expect(discoverBlock).toMatch(/\bresolveMcpServerTemplates\s*\(/);
-
-    // The probe must resolve templates BEFORE handing the auth config to
-    // resolveMCPAuthHeaders — otherwise the resolution is dead code.
-    const resolveIdx = discoverBlock.search(/\bresolveMcpServerTemplates\s*\(/);
+  it('calls resolveProbeServerTemplates before resolveMCPAuthHeaders', () => {
+    const probeIdx = discoverBlock.search(/\bresolveProbeServerTemplates\s*\(/);
     const headersIdx = discoverBlock.search(/\bresolveMCPAuthHeaders\s*\(/);
-    expect(resolveIdx).toBeGreaterThan(-1);
+
+    // Both must be present.
+    expect(probeIdx).toBeGreaterThan(-1);
     expect(headersIdx).toBeGreaterThan(-1);
-    expect(resolveIdx).toBeLessThan(headersIdx);
-  });
 
-  it("loads the caller's user env vars from the DB to build the template context", () => {
-    // The daemon's process.env never holds user secrets — they live
-    // encrypted in the users table. Without resolveUserEnvironment the
-    // template context is empty and every {{ user.env.X }} resolves to
-    // undefined, masking the original bug as a different error.
-    expect(discoverBlock).toMatch(/\bresolveUserEnvironment\s*\(/);
-
-    // buildMCPTemplateContextFromEnv keys off AGOR_USER_ENV_KEYS to
-    // decide which keys are user-scoped. The synthetic env we construct
-    // here MUST include that tag — forgetting it produces an empty
-    // context even when user vars are loaded.
-    expect(discoverBlock).toMatch(/\bbuildMCPTemplateContextFromEnv\s*\(/);
-    expect(discoverBlock).toMatch(/\bAGOR_USER_ENV_KEYS_VAR\b/);
+    // Resolution must happen first — otherwise the headers are built from
+    // unresolved {{ user.env.X }} strings.
+    expect(probeIdx).toBeLessThan(headersIdx);
   });
 });

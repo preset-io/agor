@@ -29,7 +29,6 @@ import type {
   AuthenticatedParams,
   HookContext,
   MCPAuth,
-  MCPServer,
   MCPServerID,
   MessageSource,
   SessionID,
@@ -2258,53 +2257,30 @@ async function registerMCPServices(
         // fine in real sessions.
         const userId = params?.user?.user_id as UserID | undefined;
         if (userId) {
-          const { resolveUserEnvironment, AGOR_USER_ENV_KEYS_VAR } = await import(
-            '@agor/core/config'
-          );
-          const { resolveMcpServerTemplates, buildMCPTemplateContextFromEnv } = await import(
-            '@agor/core/mcp'
-          );
+          const { resolveUserEnvironment } = await import('@agor/core/config');
+          const { resolveProbeServerTemplates } = await import('./utils/mcp-probe-templates.js');
 
           const userEnv = await resolveUserEnvironment(userId, db);
-          const templateContext = buildMCPTemplateContextFromEnv({
-            ...userEnv,
-            [AGOR_USER_ENV_KEYS_VAR]: Object.keys(userEnv).join(','),
-          });
+          const resolution = resolveProbeServerTemplates(
+            {
+              url: serverConfig.url,
+              transport: serverConfig.transport,
+              auth: serverConfig.auth as MCPAuth | undefined,
+              name: serverConfig.name,
+              mcpServerId: serverId,
+            },
+            userEnv
+          );
 
-          const now = new Date();
-          const probeServer: MCPServer = {
-            mcp_server_id: ((serverId as string | undefined) ?? 'inline-test') as MCPServerID,
-            name: serverConfig.name || 'inline-test',
-            transport: serverConfig.transport,
-            url: serverConfig.url,
-            auth: serverConfig.auth as MCPAuth | undefined,
-            scope: 'global',
-            source: 'user',
-            enabled: true,
-            created_at: now,
-            updated_at: now,
-          };
-          const result = resolveMcpServerTemplates(probeServer, templateContext);
-
-          if (!result.isValid) {
-            return { success: false, error: result.errorMessage };
-          }
-          // Surface unresolved auth templates as a clear error — otherwise the
-          // probe sends an empty/literal Authorization header and the 401 hides
-          // the real cause from the user.
-          const unresolvedAuth = result.unresolvedFields.filter((f) => f.startsWith('auth.'));
-          if (unresolvedAuth.length > 0) {
-            return {
-              success: false,
-              error: `Unresolved env var template(s): ${unresolvedAuth.join(', ')}. Define the matching variables in Settings → Environment Variables.`,
-            };
+          if (!resolution.ok) {
+            return { success: false, error: resolution.error };
           }
 
-          serverConfig.auth = result.server.auth as typeof serverConfig.auth;
-          if (result.server.url) {
-            const recheck = validateUrl(result.server.url);
+          serverConfig.auth = resolution.resolved.auth as typeof serverConfig.auth;
+          if (resolution.resolved.url !== serverConfig.url) {
+            const recheck = validateUrl(resolution.resolved.url);
             if (!recheck.valid) return { success: false, error: recheck.error };
-            serverConfig.url = result.server.url;
+            serverConfig.url = resolution.resolved.url;
           }
         }
 
