@@ -28,6 +28,8 @@ import { NotAuthenticated } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   HookContext,
+  MCPAuth,
+  MCPServer,
   MCPServerID,
   MessageSource,
   SessionID,
@@ -2245,6 +2247,65 @@ async function registerMCPServices(
             success: false,
             error: `Connection test not supported for stdio servers (requires active session)`,
           };
+        }
+
+        // Resolve {{ user.env.X }} templates in url/auth using the caller's
+        // user env vars. The executor does this at session runtime via
+        // process.env + AGOR_USER_ENV_KEYS, but the daemon's process.env
+        // never holds user secrets — so we pull them from the DB here. Without
+        // this, Test Connection sends the literal `Bearer {{ user.env.X }}`
+        // string and the MCP server returns 401, even though the server works
+        // fine in real sessions.
+        const userId = (params as AuthenticatedParams).user?.user_id as UserID | undefined;
+        if (userId) {
+          const { resolveUserEnvironment, AGOR_USER_ENV_KEYS_VAR } = await import(
+            '@agor/core/config'
+          );
+          const { resolveMcpServerTemplates, buildMCPTemplateContextFromEnv } = await import(
+            '@agor/core/mcp'
+          );
+
+          const userEnv = await resolveUserEnvironment(userId, db);
+          const templateContext = buildMCPTemplateContextFromEnv({
+            ...userEnv,
+            [AGOR_USER_ENV_KEYS_VAR]: Object.keys(userEnv).join(','),
+          });
+
+          const now = new Date();
+          const probeServer: MCPServer = {
+            mcp_server_id: ((serverId as string | undefined) ?? 'inline-test') as MCPServerID,
+            name: serverConfig.name || 'inline-test',
+            transport: serverConfig.transport,
+            url: serverConfig.url,
+            auth: serverConfig.auth as MCPAuth | undefined,
+            scope: 'global',
+            source: 'user',
+            enabled: true,
+            created_at: now,
+            updated_at: now,
+          };
+          const result = resolveMcpServerTemplates(probeServer, templateContext);
+
+          if (!result.isValid) {
+            return { success: false, error: result.errorMessage };
+          }
+          // Surface unresolved auth templates as a clear error — otherwise the
+          // probe sends an empty/literal Authorization header and the 401 hides
+          // the real cause from the user.
+          const unresolvedAuth = result.unresolvedFields.filter((f) => f.startsWith('auth.'));
+          if (unresolvedAuth.length > 0) {
+            return {
+              success: false,
+              error: `Unresolved env var template(s): ${unresolvedAuth.join(', ')}. Define the matching variables in Settings → Environment Variables.`,
+            };
+          }
+
+          serverConfig.auth = result.server.auth as typeof serverConfig.auth;
+          if (result.server.url) {
+            const recheck = validateUrl(result.server.url);
+            if (!recheck.valid) return { success: false, error: recheck.error };
+            serverConfig.url = result.server.url;
+          }
         }
 
         console.log('[MCP Discovery] Starting test for:', serverConfig.name || 'inline-config');
