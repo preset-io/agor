@@ -44,6 +44,7 @@ Each artifact is a stored file map plus a small set of declarative metadata colu
 - `sandpack_config` — Author-controlled SandpackProvider props (template, customSetup, options). Sanitized on write.
 - `required_env_vars` — Names of env vars the artifact needs (e.g. `["OPENAI_KEY"]`). The daemon synthesizes a per-viewer `.env` at render time.
 - `agor_grants` — Declarative daemon capabilities (`agor_token`, `agor_api_url`, `agor_proxies`, …).
+- `agor_runtime` — Controls injection of the daemon-side `agor-runtime.js` (which powers agent DOM introspection via `agor_artifacts_query_dom`). Enabled by default; opt out per-artifact with `{ enabled: false }`.
 
 **On the board:**
 - **Header** — Artifact name with a trust badge (`Yours`/`Trusted`/`Untrusted`), an interact toggle (eye icon), and a 🔒 lock affordance to open the consent modal when the artifact is untrusted.
@@ -132,6 +133,7 @@ Agents manage artifacts through Agor's [MCP tools](/guide/internal-mcp):
 | `agor_artifacts_list` | List visible artifacts (optionally filtered by board) |
 | `agor_artifacts_delete` | Remove an artifact (DB record + board placement) |
 | `agor_artifacts_export_codesandbox` | Eject the artifact to CodeSandbox (returns a sandbox URL). Daemon-supplied capabilities won't work there — set required env vars via CodeSandbox Secret Keys |
+| `agor_artifacts_query_dom` | Query the rendered DOM via CSS selector. Round-trips through the viewer's open tab (no headless browser). Requires `agor_runtime.enabled !== false` and a browser tab logged in as you currently viewing the artifact |
 
 The typical agent workflow: **publish** the folder, **iterate** by editing files locally and republishing with the same `artifactId`. To pick up where you left off from another worktree, **land** the artifact back to disk first.
 

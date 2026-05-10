@@ -225,6 +225,13 @@
       "when": 1777400000000,
       "tag": "0032_artifacts_format_refactor",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1778500000000,
+      "tag": "0033_artifacts_agor_runtime",
+      "breakpoints": true
     }
   ]
 }

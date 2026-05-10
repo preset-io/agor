@@ -93,6 +93,30 @@ export interface AgorGrants {
 }
 
 /**
+ * Per-artifact configuration for the daemon-injected `agor-runtime.js`.
+ *
+ * The runtime is a small (~30 lines) iframe-side script that listens for
+ * `postMessage` queries from the Agor parent page (e.g. `agor:query` with
+ * a CSS selector) and replies with serialized DOM snapshots. Agents call
+ * the matching MCP tools (e.g. `agor_artifacts_query_dom`) which fan out
+ * to the active viewer's browser, dispatch to the iframe, and return the
+ * iframe's reply.
+ *
+ * Injected at render time (in `getPayload`), parallel to `.env` synthesis
+ * — never persisted in the artifact's `files` column. Stripped from
+ * CodeSandbox exports for the same reason: it talks to an Agor parent
+ * that doesn't exist outside Agor.
+ *
+ * Defaults to enabled. Authors can opt out (`enabled: false`) for
+ * artifacts that should not be introspectable, or for artifacts whose
+ * own code conflicts with our message listener.
+ */
+export interface AgorRuntimeConfig {
+  /** Inject `agor-runtime.js` into the served file map. Defaults to `true`. */
+  enabled?: boolean;
+}
+
+/**
  * Artifact - Live web application rendered via Sandpack on the board canvas
  *
  * Artifacts are board-scoped, DB-backed objects. The `files` column holds the
@@ -155,6 +179,14 @@ export interface Artifact {
    * Names are stored without prefix (e.g. `["OPENAI_KEY", "STRIPE_KEY"]`).
    */
   required_env_vars?: string[];
+
+  /**
+   * Daemon-injected `agor-runtime.js` config. Default behavior (when this
+   * field is null/undefined) is enabled — agents calling
+   * `agor_artifacts_query_dom` etc. will get responses from any browser
+   * currently viewing the artifact. Set `enabled: false` to opt out.
+   */
+  agor_runtime?: AgorRuntimeConfig;
 
   /** Daemon capabilities the artifact wants the daemon to inject. */
   agor_grants?: AgorGrants;

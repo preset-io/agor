@@ -1051,6 +1051,7 @@ export const artifacts = pgTable(
     sandpack_config: jsonb('sandpack_config'),
     required_env_vars: jsonb('required_env_vars'),
     agor_grants: jsonb('agor_grants'),
+    agor_runtime: jsonb('agor_runtime'),
     public: t.bool('public').notNull().default(true),
     created_by: varchar('created_by', { length: 36 }),
     created_at: t.timestamp('created_at').notNull(),

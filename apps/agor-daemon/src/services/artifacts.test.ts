@@ -989,3 +989,258 @@ describe('ArtifactsService.updateMetadata authorization', () => {
     ).rejects.toThrow(/Forbidden/i);
   });
 });
+
+describe('ArtifactsService.getPayload agor-runtime injection', () => {
+  dbTest('default-on: injects /agor-runtime.js + prepends import to entry', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'runtime-default',
+      template: 'react',
+      files: {
+        '/src/index.js': 'console.log("user code")',
+      },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    const payload = await service.getPayload(created.artifact_id, 'user-owner' as never);
+
+    expect(payload.files['/agor-runtime.js']).toBeDefined();
+    expect(payload.files['/agor-runtime.js']).toContain('agor:query');
+    // The entry file got the import prepended (served only — the persisted
+    // row is unchanged).
+    expect(payload.files['/src/index.js']).toMatch(/^import '\/agor-runtime\.js';/);
+  });
+
+  dbTest('opt-out: enabled=false skips injection entirely', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'runtime-disabled',
+      template: 'react',
+      files: { '/src/index.js': 'console.log("user code")' },
+      agor_runtime: { enabled: false },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    const payload = await service.getPayload(created.artifact_id, 'user-owner' as never);
+    expect(payload.files['/agor-runtime.js']).toBeUndefined();
+    expect(payload.files['/src/index.js']).toBe('console.log("user code")');
+  });
+
+  dbTest('persistence: published rows do not carry the runtime file', async ({ db }) => {
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'runtime-persistence',
+      template: 'react',
+      files: { '/src/index.js': 'console.log("user code")' },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    // The DB row's files map should never carry agor-runtime.js — it's a
+    // render-time injection only. Read directly from repo to bypass any
+    // per-render mutation in getPayload.
+    const stored = await artifactRepo.findById(created.artifact_id);
+    expect(stored?.files?.['/agor-runtime.js']).toBeUndefined();
+    expect(stored?.files?.['/src/index.js']).toBe('console.log("user code")');
+  });
+});
+
+describe('ArtifactsService.queryArtifactRuntime', () => {
+  dbTest('rejects when agor_runtime.enabled is false', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'runtime-disabled',
+      template: 'react',
+      files: { '/index.js': 'x' },
+      agor_runtime: { enabled: false },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    await expect(
+      service.queryArtifactRuntime({
+        artifactId: created.artifact_id,
+        userId: 'user-owner',
+        kind: 'query_dom',
+        args: { selector: 'h1' },
+        timeoutMs: 500,
+      })
+    ).rejects.toThrow(/disabled/i);
+  });
+
+  dbTest('rejects when artifact is not visible to caller', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'private',
+      template: 'react',
+      files: { '/index.js': 'x' },
+      public: false,
+      created_by: 'user-owner',
+    });
+
+    await expect(
+      service.queryArtifactRuntime({
+        artifactId: created.artifact_id,
+        userId: 'user-stranger',
+        kind: 'query_dom',
+        args: { selector: 'h1' },
+        timeoutMs: 500,
+      })
+    ).rejects.toThrow(/not found/i);
+  });
+
+  dbTest('times out cleanly when no browser answers', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'no-browser',
+      template: 'react',
+      files: { '/index.js': 'x' },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    // Floor-clamped to 500ms by queryArtifactRuntime; that's enough to
+    // verify the timeout path without dragging the test suite.
+    const start = Date.now();
+    await expect(
+      service.queryArtifactRuntime({
+        artifactId: created.artifact_id,
+        userId: 'user-owner',
+        kind: 'query_dom',
+        args: { selector: 'h1' },
+        timeoutMs: 500,
+      })
+    ).rejects.toThrow(/timed out/i);
+    expect(Date.now() - start).toBeGreaterThanOrEqual(450);
+  });
+
+  dbTest('resolveRuntimeQuery delivers the iframe response', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'happy-path',
+      template: 'react',
+      files: { '/index.js': 'x' },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    let capturedRequestId: string | null = null;
+    // Mock the service.emit so we can grab the request_id and resolve the
+    // query before it times out. (Real production has an iframe round-trip
+    // do this; we short-circuit it here.)
+    const realApp = service as unknown as {
+      app: { service: (name: string) => { emit: (event: string, data: unknown) => void } };
+    };
+    const originalApp = realApp.app;
+    realApp.app = {
+      service: () => ({
+        emit: (event: string, data: unknown) => {
+          if (event === 'agor-query') {
+            capturedRequestId = (data as { request_id: string }).request_id;
+          }
+        },
+      }),
+    } as never;
+
+    const queryPromise = service.queryArtifactRuntime({
+      artifactId: created.artifact_id,
+      userId: 'user-owner',
+      kind: 'query_dom',
+      args: { selector: 'h1' },
+      timeoutMs: 5000,
+    });
+    // Flush the microtask queue so emit lands.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(capturedRequestId).not.toBeNull();
+    service.resolveRuntimeQuery({
+      requestId: capturedRequestId as string,
+      responderUserId: 'user-owner',
+      ok: true,
+      result: { matched: 1, nodes: [{ tag: 'h1', textContent: 'Hi' }] },
+    });
+
+    const result = await queryPromise;
+    expect(result).toEqual({ matched: 1, nodes: [{ tag: 'h1', textContent: 'Hi' }] });
+
+    realApp.app = originalApp;
+  });
+
+  dbTest('resolveRuntimeQuery silently ignores wrong-user responses', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'cross-user-block',
+      template: 'react',
+      files: { '/index.js': 'x' },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    let capturedRequestId: string | null = null;
+    const realApp = service as unknown as {
+      app: { service: (name: string) => { emit: (event: string, data: unknown) => void } };
+    };
+    const originalApp = realApp.app;
+    realApp.app = {
+      service: () => ({
+        emit: (event: string, data: unknown) => {
+          if (event === 'agor-query') {
+            capturedRequestId = (data as { request_id: string }).request_id;
+          }
+        },
+      }),
+    } as never;
+
+    const queryPromise = service.queryArtifactRuntime({
+      artifactId: created.artifact_id,
+      userId: 'user-owner',
+      kind: 'query_dom',
+      args: { selector: 'h1' },
+      timeoutMs: 600,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    // Different user (responder) tries to answer — should be silently
+    // dropped, query should still time out.
+    service.resolveRuntimeQuery({
+      requestId: capturedRequestId as string,
+      responderUserId: 'someone-else',
+      ok: true,
+      result: { i: 'should not be visible' },
+    });
+    await expect(queryPromise).rejects.toThrow(/timed out/i);
+
+    realApp.app = originalApp;
+  });
+});

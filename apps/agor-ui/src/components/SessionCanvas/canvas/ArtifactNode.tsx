@@ -51,6 +51,7 @@ import {
   SandpackProvider,
   type SandpackSetup,
   useSandpack,
+  useSandpackClient,
   useSandpackConsole,
 } from '@codesandbox/sandpack-react';
 import { Alert, Badge, Button, Card, Spin, Tag, Tooltip, Typography, theme } from 'antd';
@@ -158,6 +159,88 @@ function ConsoleReporter({ artifactId }: { artifactId: string }) {
  * Must be inside SandpackProvider.
  */
 const SANDPACK_ERROR_THROTTLE_MS = 1000;
+
+/**
+ * Bridges agent-driven runtime queries: WS event from the daemon → postMessage
+ * to the iframe → reply postMessage from `agor-runtime.js` → POST back to
+ * the daemon's `/artifacts/:id/runtime-response/:requestId`. Must be inside
+ * `<SandpackProvider>` so it can grab the iframe ref via `useSandpackClient`.
+ *
+ * Multiple ArtifactNode instances can be on the same board. Each registers
+ * its own bridge; the one whose `artifactId` matches the incoming event
+ * answers, the rest ignore. Server-side correlation also enforces that
+ * the responding user matches the requester, so even if multiple tabs
+ * answered the same query (one per ArtifactNode for the same artifact),
+ * only the first response wins.
+ */
+const RUNTIME_QUERY_DEFAULT_TIMEOUT_MS = 6000;
+function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
+  const { iframe } = useSandpackClient();
+
+  useEffect(() => {
+    const handleQuery = (event: Event) => {
+      const detail = (event as CustomEvent).detail as {
+        request_id: string;
+        artifact_id: string;
+        kind: string;
+        args: Record<string, unknown>;
+      };
+      if (!detail || detail.artifact_id !== artifactId) return;
+      const requestId = detail.request_id;
+      const target = iframe.current?.contentWindow;
+      if (!target) {
+        // Iframe not yet attached; can't answer this query. The daemon's
+        // pending entry will time out and surface a clean error to the
+        // agent. No need to POST a synthetic failure here.
+        return;
+      }
+
+      const messageHandler = (msgEvent: MessageEvent) => {
+        const data = msgEvent.data;
+        if (!data || typeof data !== 'object') return;
+        if (data.type !== 'agor:result' || data.requestId !== requestId) return;
+        cleanup();
+        void postResult({ ok: !!data.ok, result: data.result, error: data.error });
+      };
+      const timeout = setTimeout(() => {
+        cleanup();
+        void postResult({
+          ok: false,
+          error: 'Iframe did not respond before timeout (agor-runtime.js may be missing).',
+        });
+      }, RUNTIME_QUERY_DEFAULT_TIMEOUT_MS);
+      const cleanup = () => {
+        window.removeEventListener('message', messageHandler);
+        clearTimeout(timeout);
+      };
+
+      const postResult = async (body: { ok: boolean; result?: unknown; error?: string }) => {
+        try {
+          await fetch(`${getDaemonUrl()}/artifacts/${artifactId}/runtime-response/${requestId}`, {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(body),
+          });
+        } catch {
+          // The daemon's pending entry will time out on its own — nothing
+          // we can do client-side if the response POST itself fails.
+        }
+      };
+
+      window.addEventListener('message', messageHandler);
+      // Forward to the iframe. Cross-origin so target origin is '*';
+      // payload carries no secrets, just a query for the iframe to run.
+      target.postMessage(
+        { type: 'agor:query', requestId, kind: detail.kind, args: detail.args },
+        '*'
+      );
+    };
+    window.addEventListener('agor:artifact-runtime-query', handleQuery);
+    return () => window.removeEventListener('agor:artifact-runtime-query', handleQuery);
+  }, [artifactId, iframe]);
+
+  return null;
+}
 
 function SandpackErrorReporter({ artifactId }: { artifactId: string }) {
   const { sandpack } = useSandpack();
@@ -656,6 +739,7 @@ export const ArtifactNode = ({
             />
             <ConsoleReporter artifactId={data.artifactId} />
             <SandpackErrorReporter artifactId={data.artifactId} />
+            <ArtifactRuntimeBridge artifactId={data.artifactId} />
           </SandpackProvider>
         </div>
       </Card>

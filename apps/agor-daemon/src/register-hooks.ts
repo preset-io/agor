@@ -174,6 +174,7 @@ interface RouteParams extends Params {
     id?: string;
     messageId?: string;
     mcpId?: string;
+    requestId?: string;
   };
   user?: User;
 }
@@ -567,6 +568,40 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       },
       {
         create: { role: ROLES.MEMBER, action: 'post artifact sandpack error' },
+      },
+      requireAuth
+    );
+
+    // ── Runtime query responses ────────────────────────────────────────────
+    // Browser POSTs the iframe's `agor:result` payload here. Path encodes
+    // the request id so the daemon can correlate to a pending query in
+    // memory. The caller must be the same user that issued the original
+    // query — the service-side check rejects mismatches silently.
+    registerAuthenticatedRoute(
+      app,
+      '/artifacts/:id/runtime-response/:requestId',
+      {
+        async create(
+          data: { ok: boolean; result?: unknown; error?: string },
+          _params: RouteParams
+        ) {
+          const requestId = _params.route?.requestId;
+          if (!requestId) throw new Error('Request ID required');
+          const userId = _params.user?.user_id;
+          if (!userId) throw new Error('Authenticated user required');
+          const artifactsService = app.service('artifacts') as unknown as ArtifactsService;
+          artifactsService.resolveRuntimeQuery({
+            requestId,
+            responderUserId: userId,
+            ok: data.ok,
+            result: data.result,
+            error: data.error,
+          });
+          return { received: true };
+        },
+      },
+      {
+        create: { role: ROLES.MEMBER, action: 'post artifact runtime response' },
       },
       requireAuth
     );

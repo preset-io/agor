@@ -34,6 +34,7 @@ import {
 import type { Application } from '@agor/core/feathers';
 import type {
   AgorGrants,
+  AgorRuntimeConfig,
   Artifact,
   ArtifactBuildStatus,
   ArtifactConsoleEntry,
@@ -59,6 +60,7 @@ import {
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { DrizzleService } from '../adapters/drizzle.js';
+import { AGOR_RUNTIME_PATH, AGOR_RUNTIME_SOURCE } from '../utils/agor-runtime-source.js';
 import {
   detectLegacyFormat,
   envVarPrefixForTemplate,
@@ -88,6 +90,52 @@ async function canonicalizeExistingPrefix(target: string): Promise<string> {
 }
 
 /**
+ * Pick which file to prepend the `import './agor-runtime.js';` line into.
+ *
+ * Priority: artifact's recorded `entry` column → `customSetup.entry` from
+ * the sandpack config → common Sandpack template entry conventions. Files
+ * are matched against `filesOut` (the about-to-be-served file map) rather
+ * than the canonical artifact files, so any leading-slash variants the
+ * map happens to use are accepted.
+ *
+ * Returns null if nothing matches — caller skips runtime injection.
+ */
+function pickEntryForRuntimeInjection(
+  filesOut: Record<string, string>,
+  artifact: { entry?: string; sandpack_config?: SandpackConfig }
+): string | null {
+  const candidates: string[] = [];
+  if (artifact.entry) candidates.push(artifact.entry);
+  if (artifact.sandpack_config?.customSetup?.entry) {
+    candidates.push(artifact.sandpack_config.customSetup.entry);
+  }
+  // Common Sandpack template entries, in roughly observed-frequency order.
+  candidates.push(
+    '/src/index.tsx',
+    '/src/index.ts',
+    '/src/index.jsx',
+    '/src/index.js',
+    '/src/main.ts',
+    '/src/main.tsx',
+    '/src/main.js',
+    '/index.tsx',
+    '/index.ts',
+    '/index.jsx',
+    '/index.js'
+  );
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') continue;
+    // Match either with or without the leading slash — file-map convention
+    // varies between persisted shapes.
+    const variants = [candidate, candidate.startsWith('/') ? candidate.slice(1) : `/${candidate}`];
+    for (const v of variants) {
+      if (typeof filesOut[v] === 'string') return v;
+    }
+  }
+  return null;
+}
+
+/**
  * Build the default `.agor/artifacts/<folder>` name used when `land()` is
  * called without a custom subpath. Combines a slugified artifact name with
  * the first 8 chars of the UUID — readable AND collision-resistant — so the
@@ -114,6 +162,7 @@ interface ArtifactSidecar {
   sandpack_config?: SandpackConfig;
   required_env_vars?: string[];
   agor_grants?: AgorGrants;
+  agor_runtime?: AgorRuntimeConfig;
 }
 
 /**
@@ -140,6 +189,10 @@ function readArtifactSidecar(folderPath: string): ArtifactSidecar | null {
       agor_grants:
         parsed.agor_grants && typeof parsed.agor_grants === 'object'
           ? (parsed.agor_grants as AgorGrants)
+          : undefined,
+      agor_runtime:
+        parsed.agor_runtime && typeof parsed.agor_runtime === 'object'
+          ? (parsed.agor_runtime as AgorRuntimeConfig)
           : undefined,
     };
   } catch (err) {
@@ -191,6 +244,28 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * Keyed by `${userId}:${artifactId}`. Cleared when the daemon restarts.
    */
   private sessionGrants: Map<string, { envVars: Set<string>; grants: AgorGrants }> = new Map();
+
+  /**
+   * In-flight runtime queries keyed by request_id.
+   *
+   * When an agent calls `agor_artifacts_query_dom`, the daemon emits a
+   * service event a viewer's browser picks up, dispatches into the
+   * Sandpack iframe via postMessage, and POSTs the iframe's reply back.
+   * That POST resolves the pending entry here. Cleaned up on timeout.
+   *
+   * `requesterId` is checked against the response endpoint's authenticated
+   * user — only the original requester can fulfill their own query, so a
+   * different viewer's browser tab can't return that user's rendered DOM.
+   */
+  private pendingRuntimeQueries: Map<
+    string,
+    {
+      resolve: (result: unknown) => void;
+      reject: (err: Error) => void;
+      timeout: ReturnType<typeof setTimeout>;
+      requesterId: string;
+    }
+  > = new Map();
 
   constructor(db: Database, app: Application) {
     const artifactRepo = new ArtifactRepository(db);
@@ -307,6 +382,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       sandpack_config?: SandpackConfig;
       required_env_vars?: string[];
       agor_grants?: AgorGrants;
+      agor_runtime?: AgorRuntimeConfig;
       x?: number;
       y?: number;
       width?: number;
@@ -358,6 +434,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const agorGrants = sanitizeAgorGrants(
       data.agor_grants ?? sidecar?.agor_grants ?? existing?.agor_grants
     );
+    // agor_runtime is a small flag bag (currently just `enabled`). Same
+    // explicit-data > sidecar > existing > default chain. Default is
+    // implicit-enabled (i.e. `undefined` reads as enabled at render time).
+    const agorRuntime: AgorRuntimeConfig | undefined =
+      data.agor_runtime ?? sidecar?.agor_runtime ?? existing?.agor_runtime ?? undefined;
 
     // Name and board are required on create; on update they default to the
     // existing row so a routine republish doesn't have to know them.
@@ -392,6 +473,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         sandpack_config: resolvedSandpackConfig,
         required_env_vars: requiredEnvVars,
         agor_grants: agorGrants,
+        agor_runtime: agorRuntime,
         content_hash: contentHash,
         public: isPublic,
         build_status: buildResult.status,
@@ -422,6 +504,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       sandpack_config: resolvedSandpackConfig,
       required_env_vars: requiredEnvVars,
       agor_grants: agorGrants,
+      agor_runtime: agorRuntime,
       content_hash: contentHash,
       build_status: buildResult.status,
       build_errors: buildResult.errors.length > 0 ? buildResult.errors : undefined,
@@ -478,6 +561,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       height?: number;
       required_env_vars?: string[];
       agor_grants?: AgorGrants;
+      agor_runtime?: AgorRuntimeConfig;
       sandpack_config?: SandpackConfig;
     },
     userId?: string,
@@ -535,6 +619,9 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     }
     if (updates.agor_grants !== undefined) {
       dbUpdates.agor_grants = sanitizeAgorGrants(updates.agor_grants);
+    }
+    if (updates.agor_runtime !== undefined) {
+      dbUpdates.agor_runtime = updates.agor_runtime;
     }
     if (updates.sandpack_config !== undefined) {
       dbUpdates.sandpack_config = sanitizeSandpackConfig(updates.sandpack_config);
@@ -704,6 +791,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       sandpack_config: artifact.sandpack_config ?? {},
       required_env_vars: artifact.required_env_vars ?? [],
       agor_grants: artifact.agor_grants ?? {},
+      agor_runtime: artifact.agor_runtime ?? {},
     };
     const sidecarJson = `${JSON.stringify(sidecar, null, 2)}\n`;
     await writeFile(path.join(destination, 'agor.artifact.json'), sidecarJson, 'utf-8');
@@ -779,6 +867,30 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       // the artifact's bundler can read it. For vanilla/static templates the
       // file is irrelevant (synthesizeEnvFile returns null).
       if (envFile !== null) filesOut[SYNTHESIZED_ENV_PATH] = envFile;
+    }
+
+    // Inject the iframe-side runtime that powers agent-driven introspection
+    // (DOM queries, etc.). Default-on; authors can opt out via
+    // `agor_runtime.enabled = false`. Render-time only — never persisted.
+    const runtimeEnabled = artifact.agor_runtime?.enabled !== false;
+    if (runtimeEnabled) {
+      filesOut[AGOR_RUNTIME_PATH] = AGOR_RUNTIME_SOURCE;
+      // Prepend an import to the entry file so the runtime registers its
+      // message listener before user code starts emitting events. We modify
+      // the served file map only — the persisted entry is untouched.
+      const entryPath = pickEntryForRuntimeInjection(filesOut, artifact);
+      if (entryPath) {
+        const original = filesOut[entryPath] ?? '';
+        filesOut[entryPath] = `import '${AGOR_RUNTIME_PATH}';\n${original}`;
+      } else {
+        // No discoverable entry — drop the runtime file rather than ship
+        // it dead weight, and warn loudly so we notice if a template's
+        // entry detection grows stale.
+        delete filesOut[AGOR_RUNTIME_PATH];
+        console.warn(
+          `[artifacts] Could not find an entry file for ${artifact.artifact_id} (template=${artifact.template}); skipping agor-runtime.js injection.`
+        );
+      }
     }
 
     const contentHash = this.computeHashFromFiles(filesOut);
@@ -1188,7 +1300,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       if (
         stripped === 'agor.config.js' ||
         stripped === 'agor.artifact.json' ||
-        stripped === '.env'
+        stripped === '.env' ||
+        stripped === 'agor-runtime.js'
       ) {
         continue;
       }
@@ -1282,6 +1395,107 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       : 'No required env vars to configure.';
 
     return { artifactId, sandboxId, url, note };
+  }
+
+  // ── Runtime queries (DOM introspection from agent → viewer's iframe) ──
+
+  /**
+   * Send a query to the requester's own browser tab(s) viewing this
+   * artifact. The browser dispatches into the Sandpack iframe via
+   * postMessage; agor-runtime.js (auto-injected at render time) replies;
+   * the browser POSTs the reply to `/artifacts/:id/runtime-response/...`,
+   * which calls `resolveRuntimeQuery` to complete this promise.
+   *
+   * Visibility-checked. Rejects if:
+   * - the artifact is private and the caller can't see it,
+   * - the artifact has `agor_runtime.enabled === false`,
+   * - or no browser tab fulfilled the query within `timeoutMs`.
+   *
+   * Scope: the response endpoint requires the responding user to match
+   * `requesterId`. So even though the dispatch event is broadcast, only
+   * the requester's own browser can complete the round-trip with their
+   * own (potentially secret-bearing) DOM. Cross-user introspection of
+   * a third party's render is structurally prevented.
+   */
+  async queryArtifactRuntime(input: {
+    artifactId: string;
+    userId: string;
+    kind: 'query_dom' | 'document_html';
+    args: Record<string, unknown>;
+    timeoutMs?: number;
+  }): Promise<unknown> {
+    const artifact = await this.artifactRepo.findById(input.artifactId);
+    if (!artifact) throw new Error(`Artifact ${input.artifactId} not found`);
+    if (!this.isVisibleTo(artifact, input.userId)) {
+      throw new Error(`Artifact ${input.artifactId} not found`);
+    }
+    if (artifact.agor_runtime?.enabled === false) {
+      throw new Error(
+        `Runtime introspection is disabled for artifact ${input.artifactId} (agor_runtime.enabled = false). The artifact author can re-enable it via agor_artifacts_update.`
+      );
+    }
+
+    const requestId = generateId();
+    const timeoutMs = Math.min(Math.max(input.timeoutMs ?? 5000, 500), 30000);
+
+    const promise = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingRuntimeQueries.delete(requestId);
+        reject(
+          new Error(
+            `Runtime query timed out after ${timeoutMs}ms. Open the artifact in your browser (so the runtime can answer), then retry.`
+          )
+        );
+      }, timeoutMs);
+
+      this.pendingRuntimeQueries.set(requestId, {
+        resolve,
+        reject,
+        timeout,
+        requesterId: input.userId,
+      });
+    });
+
+    // Broadcast on the artifacts service. The client filters: only respond
+    // if currently viewing this artifact AND logged in as the requester.
+    this.app.service('artifacts').emit('agor-query', {
+      request_id: requestId,
+      artifact_id: input.artifactId,
+      requested_by_user_id: input.userId,
+      kind: input.kind,
+      args: input.args,
+    });
+
+    return promise;
+  }
+
+  /**
+   * Called by the response REST endpoint when a viewer's browser POSTs
+   * the iframe's reply. The auth boundary already authenticated the
+   * caller; we additionally check that the responder matches the original
+   * requester so a different user can't fulfill someone else's query.
+   *
+   * Silently no-op when the request id is unknown (timed out, never
+   * existed, or already completed). Stale POSTs are common — multiple
+   * tabs may answer the same query and only the first wins.
+   */
+  resolveRuntimeQuery(input: {
+    requestId: string;
+    responderUserId: string;
+    ok: boolean;
+    result?: unknown;
+    error?: string;
+  }): void {
+    const pending = this.pendingRuntimeQueries.get(input.requestId);
+    if (!pending) return;
+    if (pending.requesterId !== input.responderUserId) return;
+    clearTimeout(pending.timeout);
+    this.pendingRuntimeQueries.delete(input.requestId);
+    if (input.ok) {
+      pending.resolve(input.result);
+    } else {
+      pending.reject(new Error(input.error || 'Runtime query failed (no error provided)'));
+    }
   }
 
   // ── Build / status / console / find helpers (mostly unchanged) ──
@@ -1555,6 +1769,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       // Skip the synthesized .env so a round-trip via land() → publish()
       // doesn't accidentally bake the viewer's secrets into the next publish.
       if (relativePath === '.env') continue;
+      // Skip the daemon-injected runtime so a round-trip via land() →
+      // publish() doesn't persist a copy that then gets double-injected
+      // on next render. The runtime is render-time only.
+      if (relativePath === 'agor-runtime.js') continue;
       const normalizedPath = `/${relativePath.replace(/\\/g, '/')}`;
       files[normalizedPath] = fs.readFileSync(file, 'utf-8');
     }

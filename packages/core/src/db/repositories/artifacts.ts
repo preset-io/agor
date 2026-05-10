@@ -8,6 +8,7 @@
 
 import type {
   AgorGrants,
+  AgorRuntimeConfig,
   Artifact,
   ArtifactBuildStatus,
   BoardID,
@@ -78,6 +79,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       sandpack_config: readJson<SandpackConfig>(row.sandpack_config),
       required_env_vars: readJson<string[]>(row.required_env_vars),
       agor_grants: readJson<AgorGrants>(row.agor_grants),
+      agor_runtime: readJson<AgorRuntimeConfig>(row.agor_runtime),
       public: row.public !== undefined ? Boolean(row.public) : true,
       created_by: row.created_by ?? undefined,
       created_at: new Date(row.created_at).toISOString(),
@@ -130,6 +132,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         sandpack_config: writeJson(this.db, data.sandpack_config) as never,
         required_env_vars: writeJson(this.db, data.required_env_vars) as never,
         agor_grants: writeJson(this.db, data.agor_grants) as never,
+        agor_runtime: writeJson(this.db, data.agor_runtime) as never,
         public: data.public ?? true,
         created_by: data.created_by ?? null,
         created_at: now,
@@ -286,6 +289,9 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       }
       if (updates.required_env_vars !== undefined) {
         setData.required_env_vars = writeJson(this.db, updates.required_env_vars);
+      }
+      if (updates.agor_runtime !== undefined) {
+        setData.agor_runtime = writeJson(this.db, updates.agor_runtime);
       }
       if (updates.agor_grants !== undefined) {
         setData.agor_grants = writeJson(this.db, updates.agor_grants);

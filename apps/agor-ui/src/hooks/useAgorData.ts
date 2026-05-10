@@ -816,6 +816,21 @@ export function useAgorData(
     artifactsService.on('updated', handleArtifactPatched);
     artifactsService.on('removed', handleArtifactRemoved);
 
+    // Agent-driven runtime queries: daemon emits when an MCP tool wants to
+    // introspect the iframe DOM. ArtifactNode components listen for the
+    // re-dispatched window event and filter by artifactId — the only one
+    // currently rendering this artifact answers, anyone else ignores.
+    const handleAgorQuery = (event: {
+      request_id: string;
+      artifact_id: string;
+      requested_by_user_id: string;
+      kind: string;
+      args: Record<string, unknown>;
+    }) => {
+      window.dispatchEvent(new CustomEvent('agor:artifact-runtime-query', { detail: event }));
+    };
+    artifactsService.on('agor-query', handleAgorQuery);
+
     // Subscribe to session-MCP server relationship events
     const sessionMcpService = client.service('session-mcp-servers');
     const handleSessionMcpCreated = (relationship: {
@@ -1089,6 +1104,7 @@ export function useAgorData(
       artifactsService.removeListener('patched', handleArtifactPatched);
       artifactsService.removeListener('updated', handleArtifactPatched);
       artifactsService.removeListener('removed', handleArtifactRemoved);
+      artifactsService.removeListener('agor-query', handleAgorQuery);
     };
   }, [client, enabled, fetchData, hasInitiallyFetched]);
 

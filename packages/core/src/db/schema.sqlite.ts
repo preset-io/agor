@@ -1053,6 +1053,7 @@ export const artifacts = sqliteTable(
     sandpack_config: text('sandpack_config'), // JSON: SandpackConfig (author-controlled, sanitized on write)
     required_env_vars: text('required_env_vars'), // JSON: string[] of env var NAMES (no prefix)
     agor_grants: text('agor_grants'), // JSON: AgorGrants (declarative daemon capabilities)
+    agor_runtime: text('agor_runtime'), // JSON: AgorRuntimeConfig (controls daemon-injected agor-runtime.js)
     public: t.bool('public').notNull().default(true),
     created_by: text('created_by', { length: 36 }),
     created_at: t.timestamp('created_at').notNull(),

@@ -14,6 +14,7 @@
 import { WorktreeRepository } from '@agor/core/db';
 import type {
   AgorGrants,
+  AgorRuntimeConfig,
   BoardID,
   SandpackConfig,
   UserRole,
@@ -66,6 +67,17 @@ const AgorGrantsSchema = z
     agor_artifact_id: z.boolean().optional(),
     agor_board_id: z.boolean().optional(),
     agor_proxies: z.array(z.string()).optional(),
+  })
+  .optional();
+
+const AgorRuntimeSchema = z
+  .object({
+    enabled: z
+      .boolean()
+      .optional()
+      .describe(
+        "Inject `agor-runtime.js` into the served file map. Default: true. Set false to opt the artifact out of agent DOM introspection (e.g. if the artifact's own code conflicts with our message listener)."
+      ),
   })
   .optional();
 
@@ -140,6 +152,9 @@ IMPORTANT:
         agorGrants: AgorGrantsSchema.describe(
           'Daemon capabilities to inject. See tool description for the full list.'
         ),
+        agorRuntime: AgorRuntimeSchema.describe(
+          'Controls injection of the daemon-side `agor-runtime.js` (which powers agent DOM introspection via agor_artifacts_query_dom). Default: enabled.'
+        ),
         x: z.number().optional().describe('X position on board (default: 0, only used on create)'),
         y: z.number().optional().describe('Y position on board (default: 0, only used on create)'),
         width: z
@@ -170,6 +185,7 @@ IMPORTANT:
           sandpack_config: args.sandpackConfig as SandpackConfig | undefined,
           required_env_vars: args.requiredEnvVars,
           agor_grants: args.agorGrants as AgorGrants | undefined,
+          agor_runtime: args.agorRuntime as AgorRuntimeConfig | undefined,
           x: args.x,
           y: args.y,
           width: args.width,
@@ -342,6 +358,9 @@ Caller must own the artifact (or be an admin).`,
           .optional()
           .describe("Replace the artifact's required_env_vars list."),
         agorGrants: AgorGrantsSchema.describe("Replace the artifact's agor_grants object."),
+        agorRuntime: AgorRuntimeSchema.describe(
+          "Replace the artifact's agor_runtime config (controls agor-runtime.js injection)."
+        ),
       }),
     },
     async (args) => {
@@ -366,6 +385,7 @@ Caller must own the artifact (or be an admin).`,
           sandpack_config: args.sandpackConfig as SandpackConfig | undefined,
           required_env_vars: args.requiredEnvVars,
           agor_grants: args.agorGrants as AgorGrants | undefined,
+          agor_runtime: args.agorRuntime as AgorRuntimeConfig | undefined,
         },
         ctx.userId,
         ctx.authenticatedUser.role as UserRole
@@ -525,6 +545,69 @@ CAVEAT: daemon-supplied capabilities (\`AGOR_TOKEN\`, \`AGOR_PROXY_*\`, etc.) wo
       const artifactId = await resolveArtifactId(ctx, coerceString(args.artifactId)!);
       try {
         const result = await service.exportToCodeSandbox(artifactId, ctx.userId);
+        return textResult(result);
+      } catch (err) {
+        return textResult({
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  );
+
+  // Tool 10: agor_artifacts_query_dom
+  server.registerTool(
+    'agor_artifacts_query_dom',
+    {
+      description: `Query the rendered DOM of a running artifact via CSS selector.
+
+Round-trip: this MCP call → daemon → WebSocket → your own browser tab(s) viewing the artifact → Sandpack iframe → \`agor-runtime.js\` (auto-injected at render time) → response back up the chain. Replies carry serialized matches: tag, attributes, textContent, outerHTML.
+
+REQUIREMENTS:
+- The artifact must have \`agor_runtime.enabled !== false\` (default is enabled). If the author disabled introspection, the call returns a clean error.
+- A browser tab logged in as YOU must be currently viewing the artifact. The daemon scopes responses to the requesting user — another viewer's browser cannot answer your query (and so cannot leak their secret-bearing render).
+- If no qualifying tab is open, the call times out (default 5s) with an error suggesting you open the artifact and retry.
+
+Caps: 50 nodes max, 50KB outerHTML per node, 5KB textContent per node. Tightened for context budget.
+
+Use cases:
+- "Did my artifact actually render the new heading?" — \`{ selector: 'h1' }\`
+- "Inspect a list of cards" — \`{ selector: '.card', multiple: true }\`
+- "Get the full document" — use \`agor_artifacts_query_dom\` with \`selector: 'html'\` or call agor_artifacts_query_document_html (lower-level dump).`,
+      annotations: { readOnlyHint: true },
+      inputSchema: z.object({
+        artifactId: z.string().describe('Artifact ID (full UUID or short prefix)'),
+        selector: z
+          .string()
+          .describe('CSS selector to match (e.g. "h1", ".card", "[data-test=\'submit\']")'),
+        multiple: z
+          .boolean()
+          .optional()
+          .describe('querySelectorAll vs querySelector. Default: false (single match).'),
+        maxNodes: z
+          .number()
+          .optional()
+          .describe('Max nodes to return (capped at 50 by the runtime). Default: 50.'),
+        timeoutMs: z
+          .number()
+          .optional()
+          .describe('How long to wait for the browser to answer (500-30000). Default: 5000.'),
+      }),
+    },
+    async (args) => {
+      const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
+      const artifactId = await resolveArtifactId(ctx, coerceString(args.artifactId)!);
+      try {
+        const result = await service.queryArtifactRuntime({
+          artifactId,
+          userId: ctx.userId,
+          kind: 'query_dom',
+          args: {
+            selector: coerceString(args.selector),
+            multiple: args.multiple,
+            maxNodes: args.maxNodes,
+          },
+          timeoutMs: args.timeoutMs,
+        });
         return textResult(result);
       } catch (err) {
         return textResult({
