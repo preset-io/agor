@@ -125,19 +125,50 @@ function pickEntryForRuntimeInjection(
   if (artifact.sandpack_config?.customSetup?.entry) {
     candidates.push(artifact.sandpack_config.customSetup.entry);
   }
-  // Common Sandpack template entries, in roughly observed-frequency order.
+  // Common Sandpack template entries. Order matters — earlier entries win
+  // when multiple match. Each template family has its own conventions:
+  //
+  //   `react` (default): user code goes in /App.{js,tsx,…}; Sandpack
+  //     synthesizes the bundler `index.js` itself. Most artifacts hit
+  //     this case — agents publishing minimal projects often only
+  //     provide `/App.js`.
+  //   Vite-style React: /src/App.* + /src/main.*.
+  //   Vue/Svelte: /src/App.{vue,svelte} + /src/main.*.
+  //   Vanilla / static: /index.* at root.
+  //
+  // We inject into the FIRST matching user file. Module side-effect
+  // imports run synchronously the first time the bundler pulls them in,
+  // so the runtime's IIFE registers before the rest of the artifact
+  // boots regardless of whether the file is the bundler-level entry.
   candidates.push(
+    // React template — author's component file at root (the most common
+    // shape for agent-published artifacts).
+    '/App.tsx',
+    '/App.ts',
+    '/App.jsx',
+    '/App.js',
+    // React/Vite/Solid — author's component file under /src.
+    '/src/App.tsx',
+    '/src/App.ts',
+    '/src/App.jsx',
+    '/src/App.js',
+    // Standard bundler entries under /src.
     '/src/index.tsx',
     '/src/index.ts',
     '/src/index.jsx',
     '/src/index.js',
-    '/src/main.ts',
     '/src/main.tsx',
+    '/src/main.ts',
+    '/src/main.jsx',
     '/src/main.js',
+    // Bundler entries at root.
     '/index.tsx',
     '/index.ts',
     '/index.jsx',
-    '/index.js'
+    '/index.js',
+    '/main.tsx',
+    '/main.ts',
+    '/main.js'
   );
   for (const candidate of candidates) {
     if (typeof candidate !== 'string') continue;
@@ -1459,6 +1490,17 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     if (artifact.agor_runtime?.enabled === false) {
       throw new Error(
         `Runtime introspection is disabled for artifact ${input.artifactId} (agor_runtime.enabled = false). The artifact author can re-enable it via agor_artifacts_update.`
+      );
+    }
+    // Pre-flight entry check: the runtime is render-time-injected by
+    // prepending an `import` to the entry file. If we can't detect a
+    // user JS/TS file to inject into, the runtime is silently dropped at
+    // render time — and a vanilla "query timed out, open the artifact"
+    // error misleads the caller (the artifact IS open, it just has no
+    // runtime). Detect this up front and surface the actual cause.
+    if (artifact.files && !pickEntryForRuntimeInjection(artifact.files, artifact)) {
+      throw new Error(
+        `Runtime introspection is unavailable for artifact ${input.artifactId}: no recognizable entry file in the artifact's file map (looked for /App.{js,jsx,ts,tsx}, /src/App.{js,jsx,ts,tsx}, /index.* and /src/index.*, /main.* and /src/main.*). Add one of those to the file map and republish.`
       );
     }
 

@@ -1017,6 +1017,33 @@ describe('ArtifactsService.getPayload agor-runtime injection', () => {
     expect(payload.files['/src/index.js']).toMatch(/^import '\.\.\/agor-runtime\.js';/);
   });
 
+  dbTest(
+    'detects /App.js as an injection target (most common React-template shape)',
+    async ({ db }) => {
+      const service = new ArtifactsService(db, makeFakeApp());
+      const board = await seedBoard(db);
+      const artifactRepo = new ArtifactRepository(db);
+      // Hello-world-style artifact: only /App.js, Sandpack synthesizes
+      // the rest. This is the shape the testing agent surfaced as a
+      // gap — none of the original /src/index.* candidates matched, so
+      // the runtime got silently dropped and queries timed out.
+      const created = await artifactRepo.create({
+        artifact_id: generateId(),
+        board_id: board.board_id,
+        name: 'app-only',
+        template: 'react',
+        files: { '/App.js': 'export default function App() { return null; }' },
+        public: true,
+        created_by: 'user-owner',
+      });
+
+      const payload = await service.getPayload(created.artifact_id, 'user-owner' as never);
+      expect(payload.files['/agor-runtime.js']).toBeDefined();
+      // Both files at root → relative specifier is './agor-runtime.js'.
+      expect(payload.files['/App.js']).toMatch(/^import '\.\/agor-runtime\.js';/);
+    }
+  );
+
   dbTest('opt-out: enabled=false skips injection entirely', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
     const board = await seedBoard(db);
@@ -1109,6 +1136,35 @@ describe('ArtifactsService.queryArtifactRuntime', () => {
         timeoutMs: 500,
       })
     ).rejects.toThrow(/not found/i);
+  });
+
+  dbTest('rejects with no-entry error rather than misleading timeout', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    // No /App.*, /index.*, /main.*, or /src/* — runtime can't attach.
+    // Without the pre-flight check the caller would see a generic
+    // "open the artifact in your browser" timeout, even though the
+    // browser IS open and the runtime simply wasn't injected.
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'no-entry',
+      template: 'react',
+      files: { '/some-utility.js': 'export const x = 1' },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    await expect(
+      service.queryArtifactRuntime({
+        artifactId: created.artifact_id,
+        userId: 'user-owner',
+        kind: 'query_dom',
+        args: { selector: 'h1' },
+        timeoutMs: 500,
+      })
+    ).rejects.toThrow(/no recognizable entry file/i);
   });
 
   dbTest('times out cleanly when no browser answers', async ({ db }) => {
