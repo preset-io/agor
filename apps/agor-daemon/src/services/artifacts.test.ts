@@ -1025,8 +1025,58 @@ describe('ArtifactsService.getPayload agor-runtime injection', () => {
       const arr = resources as string[];
       expect(arr.length).toBeGreaterThan(0);
       expect(arr[0]).toMatch(/^data:text\/javascript;base64,/);
-      const decoded = Buffer.from(arr[0].split(',', 2)[1], 'base64').toString('utf-8');
+      // Critical: must end in `.js` so Sandpack's static client (which
+      // sniffs MIME via `/\.([^.]*)$/` on the URL) accepts it. A bare
+      // base64 data URL ends in base64 chars and gets silently rejected
+      // — see SandpackStatic.injectExternalResources.
+      expect(arr[0]).toMatch(/\.js$/);
+      const sandpackExtensionSniff = /\.([^.]*)$/;
+      expect(arr[0].match(sandpackExtensionSniff)?.[1]).toBe('js');
+      // The body before the `#` fragment is the actual base64 payload.
+      const body = arr[0].slice('data:text/javascript;base64,'.length).split('#', 1)[0];
+      const decoded = Buffer.from(body, 'base64').toString('utf-8');
       expect(decoded).toContain('agor:query');
+    }
+  );
+
+  dbTest(
+    'externalResources is daemon-owned: author-supplied entries are not preserved',
+    async ({ db }) => {
+      // sanitizeSandpackConfig strips externalResources on write, but a
+      // legacy/manually-edited row could still carry them. Render-time
+      // injection must NOT re-emit them — that would re-enable a prop
+      // the sanitizer explicitly blocked (XSS into the iframe).
+      const service = new ArtifactsService(db, makeFakeApp());
+      const board = await seedBoard(db);
+      const artifactRepo = new ArtifactRepository(db);
+      const created = await artifactRepo.create({
+        artifact_id: generateId(),
+        board_id: board.board_id,
+        name: 'author-resources',
+        template: 'react',
+        files: { '/App.js': 'export default () => null;' },
+        // Cast through `any` to simulate a row that escaped the
+        // sanitizer (legacy / manual edit). `SandpackConfig.options`
+        // doesn't expose `externalResources` because authors aren't
+        // allowed to set it; we want to prove the daemon doesn't honor
+        // it even when it slips into the persisted row anyway.
+        sandpack_config: {
+          options: { externalResources: ['https://attacker.example/xss.js'] },
+        } as any,
+        public: true,
+        created_by: 'user-owner',
+      });
+
+      const payload = await service.getPayload(created.artifact_id, 'user-owner' as never);
+      const resources = (payload.sandpack_config?.options as Record<string, unknown> | undefined)
+        ?.externalResources;
+      expect(Array.isArray(resources)).toBe(true);
+      const arr = resources as string[];
+      // Exactly one entry: the daemon's runtime URL. The attacker entry
+      // is dropped.
+      expect(arr.length).toBe(1);
+      expect(arr[0]).toMatch(/^data:text\/javascript;base64,/);
+      expect(arr.some((r) => r.includes('attacker.example'))).toBe(false);
     }
   );
 

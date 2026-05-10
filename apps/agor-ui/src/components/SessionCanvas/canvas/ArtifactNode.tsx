@@ -105,8 +105,13 @@ function getCurrentUserIdFromJwt(): string | null {
   try {
     const parts = token.split('.');
     if (parts.length < 2) return null;
-    const padded = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const payload = JSON.parse(atob(padded));
+    // base64url → base64. atob requires `=` padding to a multiple of 4;
+    // base64url payloads are usually unpadded, so add it back before
+    // decoding. Without this, decode can throw on perfectly valid JWTs
+    // and we'd fail open (see the bridge's requester filter).
+    let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4 !== 0) b64 += '=';
+    const payload = JSON.parse(atob(b64));
     return typeof payload.sub === 'string' ? payload.sub : null;
   } catch {
     return null;
@@ -220,15 +225,13 @@ function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
       // it. Without this client-side check, every tab would run the DOM
       // query against its own (possibly secret-bearing) render — the
       // server would later drop the wrong-user response, but the query
-      // would have already executed. Skipping here means non-requesters
-      // never run the selector at all.
-      const currentUserId = getCurrentUserIdFromJwt();
-      if (
-        detail.requested_by_user_id &&
-        currentUserId &&
-        detail.requested_by_user_id !== currentUserId
-      ) {
-        return;
+      // would have already executed. Fail closed (skip the query) if we
+      // can't establish the viewer's identity — falling open here would
+      // re-introduce the cross-user privacy leak this filter exists to
+      // prevent.
+      if (detail.requested_by_user_id) {
+        const currentUserId = getCurrentUserIdFromJwt();
+        if (!currentUserId || currentUserId !== detail.requested_by_user_id) return;
       }
 
       const requestId = detail.request_id;

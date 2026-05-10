@@ -95,36 +95,40 @@ async function canonicalizeExistingPrefix(target: string): Promise<string> {
  * iframe HTML, so a `data:text/javascript;base64,…` URL avoids any extra
  * HTTP round-trip and any cross-origin coupling. Built once per process —
  * the source is a static constant.
+ *
+ * The `#agor-runtime.js` fragment is necessary because Sandpack's static
+ * client infers content type from the URL's last extension via
+ * `/\.([^.]*)$/` and rejects anything that isn't `.js` or `.css` (see
+ * `@codesandbox/sandpack-client/dist/index-*.mjs` -> `injectExternalResources`).
+ * A bare `data:text/javascript;base64,…` ends in base64 chars, which would
+ * be silently rejected. Browsers strip the fragment when fetching, so the
+ * decoded body runs identically.
  */
 let cachedAgorRuntimeDataUrl: string | null = null;
 function agorRuntimeDataUrl(): string {
   if (cachedAgorRuntimeDataUrl !== null) return cachedAgorRuntimeDataUrl;
   const b64 = Buffer.from(AGOR_RUNTIME_SOURCE, 'utf-8').toString('base64');
-  cachedAgorRuntimeDataUrl = `data:text/javascript;base64,${b64}`;
+  cachedAgorRuntimeDataUrl = `data:text/javascript;base64,${b64}#agor-runtime.js`;
   return cachedAgorRuntimeDataUrl;
 }
 
 /**
- * Return a copy of `cfg` with the agor-runtime data URL prepended to
- * `options.externalResources`. The persisted `sandpack_config` is never
- * mutated — this builds a new object for the served payload only.
+ * Return a copy of `cfg` with the agor-runtime data URL set as the sole
+ * entry in `options.externalResources`. The persisted `sandpack_config`
+ * is never mutated — this builds a new object for the served payload only.
  *
- * Prepending (rather than appending) means the runtime's message listener
- * is registered before any author-supplied external scripts run, so the
- * order is deterministic across artifacts.
+ * `externalResources` is daemon-owned: `sanitizeSandpackConfig` deliberately
+ * strips it on write (XSS into the iframe), so we don't preserve any
+ * author-supplied entries here even though `SandpackConfig` allows the
+ * shape — re-emitting them would re-enable a prop the sanitizer blocked.
  */
 function withInjectedAgorRuntime(cfg: SandpackConfig | undefined): SandpackConfig {
   const dataUrl = agorRuntimeDataUrl();
-  const existingResources = (cfg?.options as Record<string, unknown> | undefined)
-    ?.externalResources;
-  const existingArr = Array.isArray(existingResources)
-    ? (existingResources as unknown[]).filter((v): v is string => typeof v === 'string')
-    : [];
   return {
     ...(cfg ?? {}),
     options: {
       ...(cfg?.options ?? {}),
-      externalResources: [dataUrl, ...existingArr],
+      externalResources: [dataUrl],
     },
   };
 }

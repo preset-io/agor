@@ -246,7 +246,7 @@ Missing values render as empty string, not undefined. Check for that and surface
 
 ### Security properties
 
-- **Secrets never hit the LLM.** Agents only see env var **names**; values are resolved at view time on the daemon and injected into the served file map.
+- **Raw secret values never enter agent prompts.** Agents see env var **names**; values are resolved at view time on the daemon and injected into the served file map — they're not in any payload an agent reads via the artifacts MCP tools. **Caveat:** `agor_artifacts_query_dom` and `agor_artifacts_query_document_html` return whatever the iframe rendered, so an artifact that prints (or otherwise reflects) a secret-derived value into the DOM will surface that into the calling agent's context. Opt out with `agor_runtime: { enabled: false }` for artifacts that intentionally render sensitive output.
 - **Per-viewer rendering.** Two users viewing the same artifact get their own `.env` with their own values.
 - **Encrypted at rest** with AES-256-GCM.
 - **No cross-author injection without consent** — the TOFU flow blocks accidental secret leaks into someone else's code.
@@ -259,7 +259,7 @@ Missing values render as empty string, not undefined. Check for that and surface
   backgroundColor: 'rgba(212, 148, 10, 0.08)',
   fontSize: '14px'
 }}>
-**Trust boundary:** Once you grant trust, secrets are injected into the artifact's JavaScript and execute in the Sandpack iframe. A malicious artifact could exfiltrate injected values via `fetch()`. Only grant trust to artifacts you've reviewed — the consent modal includes a code-preview pane for exactly that reason. The guarantee is that **your secrets stay out of the LLM context and that no daemon-side injection happens without your explicit consent**, not that the artifact JS can't read them once you opt in.
+**Trust boundary:** Once you grant trust, secrets are injected into the artifact's JavaScript and execute in the Sandpack iframe. A malicious artifact could exfiltrate injected values via `fetch()`, or render them into the DOM where `agor_artifacts_query_dom` would surface them to a calling agent. Only grant trust to artifacts you've reviewed — the consent modal includes a code-preview pane for exactly that reason. The guarantee is that **no daemon-side secret injection happens without your explicit consent**, not that the artifact JS can't read or expose those values once you opt in.
 </div>
 
 ### Legacy format (`agor.config.js`)
