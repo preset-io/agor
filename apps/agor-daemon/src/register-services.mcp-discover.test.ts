@@ -21,9 +21,7 @@ describe('register-services /mcp-servers/discover wiring', () => {
 
   // Strip block + line comments so prose explaining the bug can't satisfy
   // or fool the structural checks. Keep `://` so URLs survive.
-  const codeOnly = rawSource
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+  const codeOnly = rawSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 
   // Slice the discover endpoint body. We anchor on the unique
   // `app.use('/mcp-servers/discover'` registration and stop at the next
