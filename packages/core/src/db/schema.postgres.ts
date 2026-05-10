@@ -61,7 +61,7 @@ export const sessions = pgTable(
     updated_at: t.timestamp('updated_at'),
 
     // User attribution
-    created_by: varchar('created_by', { length: 36 }).notNull().default('anonymous'),
+    created_by: varchar('created_by', { length: 36 }).notNull(),
 
     // Unix username for SDK impersonation (immutable once set)
     // Set from creator's unix_username at session creation time
@@ -225,7 +225,7 @@ export const tasks = pgTable(
     queue_position: integer('queue_position'),
 
     // User attribution
-    created_by: varchar('created_by', { length: 36 }).notNull().default('anonymous'),
+    created_by: varchar('created_by', { length: 36 }).notNull(),
 
     // MD5 of SDK session file at task completion (only populated when stateless_fs_mode is enabled)
     session_md5: text('session_md5'),
@@ -386,7 +386,7 @@ export const boards = pgTable(
     updated_at: t.timestamp('updated_at'),
 
     // User attribution
-    created_by: varchar('created_by', { length: 36 }).notNull().default('anonymous'),
+    created_by: varchar('created_by', { length: 36 }).notNull(),
 
     // Materialized for lookups
     name: text('name').notNull(),
@@ -513,7 +513,7 @@ export const worktrees = pgTable(
     updated_at: t.timestamp('updated_at'),
 
     // User attribution
-    created_by: varchar('created_by', { length: 36 }).notNull().default('anonymous'),
+    created_by: varchar('created_by', { length: 36 }).notNull(),
 
     // Materialized for queries
     name: text('name').notNull(), // "feat-auth", "main"
@@ -1197,7 +1197,7 @@ export const boardComments = pgTable(
     board_id: varchar('board_id', { length: 36 })
       .notNull()
       .references(() => boards.board_id, { onDelete: 'cascade' }),
-    created_by: varchar('created_by', { length: 36 }).notNull().default('anonymous'),
+    created_by: varchar('created_by', { length: 36 }).notNull(),
 
     // FLEXIBLE ATTACHMENTS (all optional)
     // Phase 1: board-level only (all NULL)
@@ -1286,7 +1286,7 @@ export const gatewayChannels = pgTable(
     updated_at: t.timestamp('updated_at').notNull(),
 
     // User attribution
-    created_by: varchar('created_by', { length: 36 }).notNull().default('anonymous'),
+    created_by: varchar('created_by', { length: 36 }).notNull(),
 
     // Materialized for queries
     name: text('name').notNull(),

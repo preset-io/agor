@@ -45,8 +45,6 @@ function createConfigData(overrides?: Partial<AgorConfig>): AgorConfig {
     daemon: {
       port: 4000,
       host: '0.0.0.0',
-      allowAnonymous: false,
-      requireAuth: true,
     },
     ui: {
       port: 8080,
@@ -94,8 +92,6 @@ describe('getDefaultConfig', () => {
     expect(defaults.display?.shortIdLength).toBe(8);
     expect(defaults.daemon?.port).toBe(3030);
     expect(defaults.daemon?.host).toBe('localhost');
-    expect(defaults.daemon?.allowAnonymous).toBe(true);
-    expect(defaults.daemon?.requireAuth).toBe(false);
     expect(defaults.ui?.port).toBe(5173);
     expect(defaults.ui?.host).toBe('localhost');
   });
@@ -494,9 +490,9 @@ describe('setConfigValue', () => {
 
   it('should handle boolean values', async () => {
     await saveConfig({});
-    await setConfigValue('daemon.allowAnonymous', false);
+    await setConfigValue('daemon.mcpEnabled', false);
 
-    const value = await getConfigValue('daemon.allowAnonymous');
+    const value = await getConfigValue('daemon.mcpEnabled');
     expect(value).toBe(false);
   });
 

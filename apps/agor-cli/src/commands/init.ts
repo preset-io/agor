@@ -338,16 +338,11 @@ export default class Init extends Command {
     await seedInitialData(db);
     this.log(`${chalk.green('   ✓')} Created Main Board`);
 
-    // Prompt for auth/multiplayer setup (unless --force)
+    // Create the admin user (auth is always required — anonymous mode was removed).
     if (!skipPrompts) {
-      await this.promptAuthSetup(dbPath);
+      await this.promptAdminSetup(dbPath);
     } else {
-      // With --force, enable auth by default (multiplayer mode) with default admin user
-      await setConfigValue('daemon.requireAuth', true);
-      await setConfigValue('daemon.allowAnonymous', false);
-      this.log(`${chalk.green('   ✓')} Enabled authentication (multiplayer mode)`);
-
-      // Create default admin user with credentials displayed to user
+      // --force: create default admin (admin@agor.live / admin) and warn.
       try {
         const db = createDatabase({ url: `file:${dbPath}`, dialect: 'sqlite' });
         const defaultEmail = 'admin@agor.live';
@@ -420,38 +415,36 @@ export default class Init extends Command {
   }
 
   /**
-   * Prompt user for auth/multiplayer setup
+   * Prompt user for admin account setup.
+   *
+   * Authentication is always required (anonymous mode was removed). If the
+   * user skips the prompts here, the daemon will auto-bootstrap an admin on
+   * first start (`ensureFirstRunAdmin`) and write credentials to
+   * `~/.agor/admin-credentials`.
    */
-  private async promptAuthSetup(dbPath: string): Promise<void> {
+  private async promptAdminSetup(dbPath: string): Promise<void> {
+    this.log('');
+    this.log(chalk.bold('👤 Create your admin account:'));
+    this.log(chalk.gray('   (Skip this and the daemon will auto-create one on first start)'));
     this.log('');
 
-    const { enableAuth } = await inquirer.prompt([
+    const { setupNow } = await inquirer.prompt([
       {
         type: 'confirm',
-        name: 'enableAuth',
-        message: 'Enable authentication and multiplayer features?',
+        name: 'setupNow',
+        message: 'Set up your admin account now?',
         default: true,
       },
     ]);
 
-    if (!enableAuth) {
-      this.log(chalk.gray('Authentication disabled. Running in single-user mode.'));
-      this.log('');
-      this.log(chalk.gray('You can enable auth later with:'));
-      this.log(chalk.gray('  agor config set daemon.requireAuth true'));
-      this.log(chalk.gray('  agor user create-admin'));
+    if (!setupNow) {
+      this.log(
+        chalk.gray(
+          '   Skipped. The daemon will create admin@agor.live on first start; the generated password lands in ~/.agor/admin-credentials.'
+        )
+      );
       return;
     }
-
-    // Enable auth in config
-    await setConfigValue('daemon.requireAuth', true);
-    await setConfigValue('daemon.allowAnonymous', false);
-    this.log(`${chalk.green('   ✓')} Enabled authentication`);
-
-    // Admin user is required when auth is enabled
-    this.log('');
-    this.log(chalk.bold('👤 Create your admin account:'));
-    this.log('');
 
     // Prompt for user details
     const { email, username, password } = await inquirer.prompt([
@@ -734,11 +727,6 @@ export default class Init extends Command {
       await setConfigValue('daemon.instanceLabel', instanceLabel);
       this.log(`${chalk.green('   ✓')} Set daemon.instanceLabel = ${instanceLabel}`);
     }
-
-    // Enable authentication for Docker/deployment environments
-    await setConfigValue('daemon.requireAuth', true);
-    await setConfigValue('daemon.allowAnonymous', false);
-    this.log(`${chalk.green('   ✓')} Enabled authentication`);
 
     // Set OpenCode server URL (Docker-specific)
     await setConfigValue('opencode.enabled', true);

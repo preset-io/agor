@@ -100,7 +100,7 @@ describe('WorktreeRepository.create', () => {
     await (db as any).insert(boards).values({
       board_id: boardId,
       created_at: new Date(),
-      created_by: 'anonymous' as UUID,
+      created_by: 'test-user' as UUID,
       name: 'Test Board',
       data: {},
     });
@@ -147,27 +147,34 @@ describe('WorktreeRepository.create', () => {
     expect(created.last_used).toBeDefined();
   });
 
-  dbTest('should apply defaults for omitted fields', async ({ db }) => {
-    const repoRepo = new RepoRepository(db);
-    const wtRepo = new WorktreeRepository(db);
+  dbTest(
+    'should apply defaults for omitted fields (and throw if created_by missing)',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const wtRepo = new WorktreeRepository(db);
 
-    const repo = await repoRepo.create(createRepoData());
-    const data = createWorktreeData({ repo_id: repo.repo_id });
-    delete (data as any).worktree_id;
-    delete (data as any).created_by;
+      const repo = await repoRepo.create(createRepoData());
+      const dataNoCreator = createWorktreeData({ repo_id: repo.repo_id });
+      delete (dataNoCreator as any).worktree_id;
+      delete (dataNoCreator as any).created_by;
+      await expect(wtRepo.create(dataNoCreator)).rejects.toThrow(/created_by/);
 
-    const created = await wtRepo.create(data);
+      const data = createWorktreeData({ repo_id: repo.repo_id });
+      delete (data as any).worktree_id;
 
-    // Verify defaults
-    expect(created.worktree_id).toBeDefined();
-    expect(created.worktree_id).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
-    );
-    expect(created.created_by).toBe('anonymous');
-    expect(created.new_branch).toBe(false);
-    expect(created.board_id).toBeUndefined();
-    expect(new Date(created.last_used!).getTime()).toBeGreaterThan(0);
-  });
+      const created = await wtRepo.create(data);
+
+      // Verify defaults
+      expect(created.worktree_id).toBeDefined();
+      expect(created.worktree_id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+      );
+      expect(created.created_by).toBeDefined();
+      expect(created.new_branch).toBe(false);
+      expect(created.board_id).toBeUndefined();
+      expect(new Date(created.last_used!).getTime()).toBeGreaterThan(0);
+    }
+  );
 
   dbTest('should preserve provided timestamps', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
@@ -471,7 +478,7 @@ describe('WorktreeRepository.update', () => {
     await (db as any).insert(boards).values({
       board_id: boardId,
       created_at: new Date(),
-      created_by: 'anonymous' as UUID,
+      created_by: 'test-user' as UUID,
       name: 'Test Board',
       data: {},
     });
@@ -535,7 +542,7 @@ describe('WorktreeRepository.update', () => {
     await (db as any).insert(boards).values({
       board_id: boardId,
       created_at: new Date(),
-      created_by: 'anonymous' as UUID,
+      created_by: 'test-user' as UUID,
       name: 'Test Board',
       data: {},
     });

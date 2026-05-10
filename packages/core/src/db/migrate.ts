@@ -283,11 +283,20 @@ export async function initializeDatabase(db: Database): Promise<void> {
 }
 
 /**
- * Seed initial data (default board only)
+ * Seed initial data (default board only).
  *
- * Note: Does NOT create a default admin user.
- * Admin users must be created explicitly via `agor user create-admin` or during `agor init`
+ * The default board carries no `created_by` at this stage — it will be
+ * stamped when the first-run admin is bootstrapped (see `ensureFirstRunAdmin`,
+ * which re-attributes legacy 'anonymous' rows to the bootstrapped admin). We
+ * write a `pending-bootstrap-admin` sentinel so the bootstrap sweep picks it
+ * up alongside any other legacy rows.
+ *
+ * Admin users are NOT created here. They are created either by `agor init`
+ * (interactive) or by `ensureFirstRunAdmin` on first daemon start (default
+ * admin with generated password).
  */
+const SEED_PENDING_OWNER = 'anonymous';
+
 export async function seedInitialData(db: Database): Promise<void> {
   try {
     const { generateId } = await import('../lib/ids');
@@ -307,7 +316,9 @@ export async function seedInitialData(db: Database): Promise<void> {
           slug: 'default',
           created_at: now,
           updated_at: now,
-          created_by: 'anonymous',
+          // Sentinel — re-stamped to the real admin user_id by
+          // ensureFirstRunAdmin() during the next daemon start.
+          created_by: SEED_PENDING_OWNER,
           data: {
             description: 'Main board for all sessions',
             sessions: [],

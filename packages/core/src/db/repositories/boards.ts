@@ -72,6 +72,9 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   private boardToInsert(board: Partial<Board>): BoardInsert {
     const now = Date.now();
     const boardId = board.board_id ?? generateId();
+    if (!board.created_by) {
+      throw new RepositoryError('Board must have a created_by');
+    }
 
     return {
       board_id: boardId,
@@ -79,7 +82,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       slug: board.slug !== undefined ? board.slug : null,
       created_at: new Date(board.created_at ?? now),
       updated_at: board.last_updated ? new Date(board.last_updated) : new Date(now),
-      created_by: board.created_by ?? 'anonymous',
+      created_by: board.created_by,
       data: {
         description: board.description,
         color: board.color,
@@ -448,13 +451,16 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         return defaultBoard;
       }
 
-      // Create default board
+      // Create default board with the same 'anonymous' sentinel that
+      // `seedInitialData` uses — `ensureFirstRunAdmin` re-attributes it to
+      // the bootstrapped admin on first daemon start.
       return this.create({
         name: 'Main Board',
         slug: 'default',
         description: 'Main board for all sessions',
         color: '#1677ff',
         icon: '⭐',
+        created_by: 'anonymous',
       });
     } catch (error) {
       throw new RepositoryError(

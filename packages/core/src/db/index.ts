@@ -36,7 +36,9 @@ export * from './database-wrapper';
 
 // Encryption utilities
 export * from './encryption';
-
+// First-run admin bootstrap (creates default admin if no users exist; also
+// re-attributes legacy 'anonymous' created_by rows from removed anonymous mode)
+export * from './first-run-bootstrap';
 // Migrations
 export * from './migrate';
 // Pending-migrations presentation (shared by CLI and daemon)

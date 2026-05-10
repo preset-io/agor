@@ -50,7 +50,7 @@ function createWorktreeData(overrides?: {
     path: `/home/user/.agor/repos/test-repo/${name}`,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-    created_by: 'anonymous' as UUID,
+    created_by: 'test-user' as UUID,
   };
 }
 
@@ -62,7 +62,7 @@ async function createBoard(db: Database, overrides?: { board_id?: BoardID; name?
   await (db as any).insert(boards).values({
     board_id: boardId,
     created_at: new Date(),
-    created_by: 'anonymous',
+    created_by: 'test-user',
     name: overrides?.name ?? 'Test Board',
     data: {},
   });

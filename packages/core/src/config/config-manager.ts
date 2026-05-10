@@ -128,8 +128,6 @@ export function getDefaultConfig(): AgorConfig {
     daemon: {
       port: DAEMON.DEFAULT_PORT,
       host: DAEMON.DEFAULT_HOST,
-      allowAnonymous: true, // Default: Allow anonymous access (local mode)
-      requireAuth: false, // Default: Do not require authentication
       mcpEnabled: true, // Default: Enable built-in MCP server
     },
     ui: {

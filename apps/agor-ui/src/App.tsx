@@ -116,9 +116,10 @@ function AppContent() {
     reAuthenticate,
   } = useAuth();
 
-  // Call ALL hooks unconditionally BEFORE any conditional returns
-  // Connect to daemon with authentication token
-  // If auth not required and anonymous allowed, connect without token
+  // Call ALL hooks unconditionally BEFORE any conditional returns.
+  // Connect to daemon with authentication token (auth is always required —
+  // anonymous mode was removed; the LoginPage gate below blocks rendering
+  // until we have a token).
   const {
     client,
     connected,
@@ -127,7 +128,6 @@ function AppContent() {
     retryConnection,
   } = useAgorClient({
     accessToken: authenticated ? accessToken : null,
-    allowAnonymous: authConfig?.allowAnonymous ?? false,
   });
 
   // Track FE/BE drift: capture the daemon's build SHA on first load (via
@@ -317,19 +317,20 @@ function AppContent() {
     );
   }
 
-  // Show login page if auth is required and not authenticated
-  // BUT: Show a reconnecting message if we have tokens but aren't connected yet
+  // Auth is always required (anonymous mode was removed). Show login page
+  // when not authenticated; reconnecting state when we have tokens but the
+  // socket is reconnecting; spinner while authenticating.
   const hasTokens =
     typeof window !== 'undefined' &&
     !!(localStorage.getItem('agor-access-token') || localStorage.getItem('agor-refresh-token'));
 
-  if (authConfig?.requireAuth && !authLoading && !authenticated && !hasTokens) {
+  if (!authLoading && !authenticated && !hasTokens) {
     return <LoginPage onLogin={login} error={authError} />;
   }
 
-  // Show reconnecting state if we have tokens but lost connection
-  // ONLY show fullscreen on initial connection, not during reconnections
-  if (authConfig?.requireAuth && hasTokens && (!connected || !authenticated) && !hasLoadedOnce) {
+  // Show reconnecting state if we have tokens but lost connection.
+  // ONLY show fullscreen on initial connection, not during reconnections.
+  if (hasTokens && (!connected || !authenticated) && !hasLoadedOnce) {
     return (
       <div
         style={{
@@ -349,8 +350,8 @@ function AppContent() {
     );
   }
 
-  // Show loading while checking authentication (only if auth is required)
-  if (authConfig?.requireAuth && authLoading) {
+  // Show loading while checking authentication
+  if (authLoading) {
     return (
       <div
         style={{
@@ -369,15 +370,7 @@ function AppContent() {
   }
 
   // Show connection error
-  // BUT: If auth is required and anonymous auth failed, show login page instead
   if (connectionError) {
-    const isAnonymousAuthError = connectionError.includes('Anonymous authentication failed');
-
-    if (authConfig?.requireAuth && isAnonymousAuthError && !authenticated) {
-      // Anonymous auth failed but auth is required - show login page
-      return <LoginPage onLogin={login} error={authError || connectionError} />;
-    }
-
     return (
       <div
         style={{
@@ -1163,7 +1156,7 @@ function AppContent() {
     try {
       await client.service('board-comments').create({
         board_id: boardId,
-        created_by: user?.user_id || 'anonymous',
+        created_by: user?.user_id || 'unknown',
         content,
         content_preview: content.slice(0, 200),
       });
@@ -1206,7 +1199,7 @@ function AppContent() {
       // Use the custom route for creating replies
       await client.service(`board-comments/${parentId}/reply`).create({
         content,
-        created_by: user?.user_id || 'anonymous',
+        created_by: user?.user_id || 'unknown',
       });
     } catch (error) {
       showError(`Failed to send reply: ${error instanceof Error ? error.message : String(error)}`);
@@ -1218,7 +1211,7 @@ function AppContent() {
     try {
       // Use the custom route for toggling reactions
       await client.service(`board-comments/${commentId}/toggle-reaction`).create({
-        user_id: user?.user_id || 'anonymous',
+        user_id: user?.user_id || 'unknown',
         emoji,
       });
     } catch (error) {

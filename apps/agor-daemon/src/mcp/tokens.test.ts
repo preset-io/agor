@@ -72,6 +72,7 @@ async function seedSession(
       worktree_id: worktreeId,
       repo_id: repo.repo_id,
       created_at: new Date(),
+      created_by: 'test-user',
       name: 'main',
       ref: 'main',
       worktree_unique_id: 1,
@@ -86,7 +87,7 @@ async function seedSession(
       status: 'idle',
       agentic_tool: 'claude-code',
       worktree_id: worktreeId,
-      created_by: 'anonymous',
+      created_by: 'test-user',
       data: { genealogy: { children: [] }, contextFiles: [], tasks: [], git_state: {} },
     })
     .run();

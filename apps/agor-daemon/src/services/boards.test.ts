@@ -4,10 +4,13 @@
  * Basic tests to verify custom export/import/clone methods are properly wired up.
  */
 
-import type { Board } from '@agor/core/types';
+import type { Board, UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { BoardsService } from './boards';
+
+const TEST_USER = 'test-user' as UUID;
+const TEST_PARAMS = { user: { user_id: TEST_USER } } as never;
 
 describe('BoardsService - Custom Methods', () => {
   dbTest('toBlob should export board to JSON blob', async ({ db }) => {
@@ -19,6 +22,7 @@ describe('BoardsService - Custom Methods', () => {
       slug: 'test-board',
       description: 'Board for testing export',
       icon: '🧪',
+      created_by: TEST_USER,
     })) as Board;
 
     // Export to blob
@@ -36,6 +40,7 @@ describe('BoardsService - Custom Methods', () => {
     await service.create({
       name: 'Slug Export Board',
       slug: 'slug-export',
+      created_by: TEST_USER,
     });
 
     const blob = await service.toBlob('slug-export');
@@ -52,6 +57,7 @@ describe('BoardsService - Custom Methods', () => {
       name: 'Original Board',
       slug: 'original-board',
       icon: '🔷',
+      created_by: TEST_USER,
     })) as Board;
 
     const blob = await service.toBlob(original.board_id);
@@ -60,7 +66,7 @@ describe('BoardsService - Custom Methods', () => {
     blob.name = 'Imported Board';
     blob.slug = 'imported-board';
 
-    const imported = await service.fromBlob(blob);
+    const imported = await service.fromBlob(blob, TEST_PARAMS);
 
     expect(imported.name).toBe('Imported Board');
     expect(imported.slug).toBe('imported-board');
@@ -75,6 +81,7 @@ describe('BoardsService - Custom Methods', () => {
       name: 'YAML Board',
       slug: 'yaml-board',
       icon: '📄',
+      created_by: TEST_USER,
     })) as Board;
 
     const yaml = await service.toYaml(board.board_id);
@@ -93,6 +100,7 @@ describe('BoardsService - Custom Methods', () => {
       name: 'Original YAML Board',
       slug: 'original-yaml',
       description: 'Test description',
+      created_by: TEST_USER,
     })) as Board;
 
     const yaml = await service.toYaml(original.board_id);
@@ -102,7 +110,7 @@ describe('BoardsService - Custom Methods', () => {
       .replace('name: Original YAML Board', 'name: Imported YAML Board')
       .replace('slug: original-yaml', 'slug: imported-yaml');
 
-    const imported = await service.fromYaml(modifiedYaml);
+    const imported = await service.fromYaml(modifiedYaml, TEST_PARAMS);
 
     expect(imported.name).toBe('Imported YAML Board');
     expect(imported.slug).toBe('imported-yaml');
@@ -118,9 +126,10 @@ describe('BoardsService - Custom Methods', () => {
       slug: 'original',
       description: 'To be cloned',
       icon: '🔵',
+      created_by: TEST_USER,
     })) as Board;
 
-    const cloned = await service.clone(original.board_id, 'Cloned Board');
+    const cloned = await service.clone(original.board_id, 'Cloned Board', TEST_PARAMS);
 
     expect(cloned.name).toBe('Cloned Board');
     expect(cloned.slug).toBe('cloned-board');
@@ -135,9 +144,10 @@ describe('BoardsService - Custom Methods', () => {
     await service.create({
       name: 'Slug Clone Source',
       slug: 'slug-source',
+      created_by: TEST_USER,
     });
 
-    const cloned = await service.clone('slug-source', 'Slug Clone Target');
+    const cloned = await service.clone('slug-source', 'Slug Clone Target', TEST_PARAMS);
 
     expect(cloned.name).toBe('Slug Clone Target');
     expect(cloned.slug).toBe('slug-clone-target');

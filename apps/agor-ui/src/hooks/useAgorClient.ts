@@ -28,19 +28,18 @@ interface UseAgorClientResult {
 interface UseAgorClientOptions {
   url?: string;
   accessToken?: string | null;
-  allowAnonymous?: boolean;
 }
 
 /**
  * Create and manage Agor daemon client connection
  *
- * @param options - Connection options (url, accessToken, allowAnonymous)
+ * @param options - Connection options (url, accessToken)
  * @returns Client instance, connection state, and error
  */
 export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClientResult {
-  const { url = getDaemonUrl(), accessToken, allowAnonymous = false } = options;
+  const { url = getDaemonUrl(), accessToken } = options;
   const [connected, setConnected] = useState(false);
-  const [connecting, setConnecting] = useState(!!accessToken || allowAnonymous); // Connecting if we have token OR anonymous is allowed
+  const [connecting, setConnecting] = useState(!!accessToken);
   const [error, setError] = useState<string | null>(null);
   const clientRef = useRef<AgorClient | null>(null);
 
@@ -51,8 +50,8 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
   // which reset real-time subscriptions and explicitly flipped
   // `connected: false` at connect() start — a UI flicker that no disconnect
   // grace period could catch. The effect now rebuilds only when the
-  // *presence* of a token flips (login/logout) or when url/allowAnonymous
-  // changes; in-place refreshes just re-authenticate the existing socket.
+  // *presence* of a token flips (login/logout) or when url changes;
+  // in-place refreshes just re-authenticate the existing socket.
   const accessTokenRef = useRef(accessToken);
   accessTokenRef.current = accessToken;
   const hasToken = !!accessToken;
@@ -103,11 +102,11 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
     };
 
     async function connect() {
-      // Don't create client if no access token and anonymous not allowed.
-      // `hasToken` is the effect-level snapshot (also a dep, so a later
-      // login rebuilds the effect); we still read the value from the ref
-      // below in case it rotated during the async connect path.
-      if (!hasToken && !allowAnonymous) {
+      // Don't create client if no access token. `hasToken` is the effect-level
+      // snapshot (also a dep, so a later login rebuilds the effect); we still
+      // read the value from the ref below in case it rotated during the async
+      // connect path.
+      if (!hasToken) {
         setConnecting(false);
         setConnected(false);
         setError(null);
@@ -278,14 +277,6 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
                   return;
                 }
               }
-            } else if (allowAnonymous) {
-              await client.authenticate({
-                strategy: 'anonymous',
-              });
-              setConnected(true);
-              setConnecting(false);
-              setError(null);
-              return;
             }
 
             // If we get here, authentication failed
@@ -413,30 +404,19 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
         return; // Exit early, don't try to authenticate
       }
 
-      // Authenticate with JWT or anonymous. Pull the token from the ref
-      // so if a refresh landed while we were establishing the socket, we
-      // use the fresh one.
+      // Authenticate with JWT. Pull the token from the ref so if a refresh
+      // landed while we were establishing the socket, we use the fresh one.
       const initialAccessToken = accessTokenRef.current;
       try {
         if (initialAccessToken) {
-          // Authenticate with JWT token
           await client.authenticate({
             strategy: 'jwt',
             accessToken: initialAccessToken,
           });
-        } else if (allowAnonymous) {
-          // Authenticate anonymously
-          await client.authenticate({
-            strategy: 'anonymous',
-          });
         }
       } catch (_err) {
         if (mounted) {
-          setError(
-            initialAccessToken
-              ? 'Authentication failed. Please log in again.'
-              : 'Anonymous authentication failed. Check daemon configuration.'
-          );
+          setError('Authentication failed. Please log in again.');
           setConnecting(false);
           setConnected(false);
         }
@@ -496,9 +476,9 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
     };
     // The dep list deliberately uses `hasToken` (presence), not the token
     // value itself: see the accessTokenRef comment above. Rebuilds happen
-    // only on login/logout and url/allowAnonymous changes; token refreshes
-    // are absorbed in-place by the handler above.
-  }, [url, hasToken, allowAnonymous]);
+    // only on login/logout and url changes; token refreshes are absorbed
+    // in-place by the handler above.
+  }, [url, hasToken]);
 
   /**
    * Manually retry connection

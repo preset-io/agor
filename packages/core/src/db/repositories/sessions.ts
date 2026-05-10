@@ -109,6 +109,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     if (!session.worktree_id) {
       throw new RepositoryError('Session must have a worktree_id');
     }
+    if (!session.created_by) {
+      throw new RepositoryError('Session must have a created_by');
+    }
 
     return {
       session_id: sessionId,
@@ -116,7 +119,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       updated_at: session.last_updated ? new Date(session.last_updated) : new Date(now),
       status: session.status ?? SessionStatus.IDLE,
       agentic_tool: session.agentic_tool ?? 'claude-code',
-      created_by: session.created_by ?? 'anonymous',
+      created_by: session.created_by,
       unix_username: session.unix_username ?? null, // Stamped at creation time by setSessionUnixUsername hook
       board_id: null, // Board ID tracked separately in boards.sessions array
       parent_session_id: session.genealogy?.parent_session_id ?? null,

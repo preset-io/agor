@@ -21,8 +21,6 @@ export function getDefaultConfig(): AgorConfig {
     daemon: {
       port: DEFAULT_DAEMON_PORT,
       host: DEFAULT_DAEMON_HOST,
-      allowAnonymous: true,
-      requireAuth: false,
       mcpEnabled: true,
     },
     ui: {

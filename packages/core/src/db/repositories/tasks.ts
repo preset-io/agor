@@ -52,6 +52,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     if (!task.session_id) {
       throw new RepositoryError('session_id is required when creating a task');
     }
+    if (!task.created_by) {
+      throw new RepositoryError('created_by is required when creating a task');
+    }
 
     // Ensure git_state always has required fields
     const git_state = task.git_state ?? {
@@ -66,7 +69,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       completed_at: task.completed_at ? new Date(task.completed_at) : undefined,
       status: task.status ?? TaskStatus.CREATED,
       queue_position: task.queue_position ?? null,
-      created_by: task.created_by ?? 'anonymous',
+      created_by: task.created_by,
       session_md5: task.session_md5 ?? null,
       data: {
         full_prompt: task.full_prompt ?? '',

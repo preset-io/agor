@@ -76,6 +76,9 @@ export class BoardCommentsRepository
   private commentToInsert(comment: Partial<BoardComment>): BoardCommentInsert {
     const now = Date.now();
     const commentId = comment.comment_id ?? generateId();
+    if (!comment.created_by) {
+      throw new RepositoryError('BoardComment must have a created_by');
+    }
 
     // Auto-generate content_preview if not provided
     const contentPreview =
@@ -84,7 +87,7 @@ export class BoardCommentsRepository
     return {
       comment_id: commentId,
       board_id: comment.board_id!,
-      created_by: comment.created_by ?? 'anonymous',
+      created_by: comment.created_by,
       content: comment.content ?? '',
       content_preview: contentPreview,
       session_id: comment.session_id ?? null,

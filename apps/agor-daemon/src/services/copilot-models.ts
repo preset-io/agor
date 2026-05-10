@@ -85,7 +85,7 @@ export class CopilotModelsService {
 
     if (!resolution.apiKey) {
       console.log(
-        `[Copilot Models] No GitHub token for user ${userId?.substring(0, 8) ?? 'anonymous'} — returning static list`
+        `[Copilot Models] No GitHub token for user ${userId?.substring(0, 8) ?? 'unknown'} — returning static list`
       );
       return STATIC_RESULT;
     }
@@ -100,7 +100,7 @@ export class CopilotModelsService {
       await client.start();
       const dynamic: ModelInfo[] = await client.listModels();
       console.log(
-        `[Copilot Models] Fetched ${dynamic.length} models for user ${userId?.substring(0, 8) ?? 'anonymous'} (source: ${resolution.source})`
+        `[Copilot Models] Fetched ${dynamic.length} models for user ${userId?.substring(0, 8) ?? 'unknown'} (source: ${resolution.source})`
       );
       return {
         default: DEFAULT_COPILOT_MODEL,

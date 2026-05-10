@@ -69,7 +69,7 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
           boardId={boardId}
           comments={boardComments}
           userById={userById}
-          currentUserId={currentUser?.user_id || 'anonymous'}
+          currentUserId={currentUser?.user_id || 'unknown'}
           boardObjects={board?.objects}
           worktreeById={worktreeById}
           onSendComment={(content) => onSendComment(boardId, content)}

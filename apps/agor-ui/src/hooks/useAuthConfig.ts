@@ -11,7 +11,6 @@ import { getDaemonUrl } from '../config/daemon';
 
 interface AuthConfig {
   requireAuth: boolean;
-  allowAnonymous: boolean;
 }
 
 interface InstanceConfig {
@@ -88,7 +87,7 @@ export function useAuthConfig() {
       } catch (err) {
         setError(err instanceof Error ? err : new Error(String(err)));
         // Default to requiring auth on error (secure by default)
-        setConfig({ requireAuth: true, allowAnonymous: false });
+        setConfig({ requireAuth: true });
         setInstanceConfig(null);
         setOnboardingConfig(null);
         setServicesConfig(undefined);

@@ -174,7 +174,7 @@ agor.service('messages').on('created', (msg) => {
 - **Branded ID types** — `WorktreeId`, `SessionId`, `BoardId` aren't interchangeable; the compiler catches mix-ups.
 - **Service hooks across REST + WebSocket** — One subscription, one event API; the same `created`/`patched`/`removed` pattern for every entity.
 - **Schema-driven types** — Generated from Drizzle ORM models so DB schema changes propagate to clients at compile time.
-- **Authentication strategies built in** — `anonymous`, `local`, `jwt`, and session-token strategies share one client surface.
+- **Authentication strategies built in** — `local`, `jwt`, `api-key`, and session-token strategies share one client surface.
 - **Same client the UI uses** — Whatever pattern works for an Agor screen works for your script.
 
 > If you're integrating Agor into your own tooling, prefer `@agor-live/client` over raw HTTP. You'll inherit every type and event the product evolves.
@@ -489,12 +489,14 @@ Every session requires a worktree (foreign key constraint):
 
 ## Authentication
 
-Four authentication strategies:
+Four authentication strategies (all require credentials — there is no anonymous path):
 
-1. **Anonymous** (default) - No auth required for local development
-2. **Local** (email/password) - JWT-based authentication for user login
-3. **JWT** - Token refresh and validation for user sessions
+1. **Local** (email/password) - JWT-based authentication for user login
+2. **JWT** - Token refresh and validation for user sessions
+3. **API Key** - Long-lived `agor_sk_…` tokens for scripts and CI
 4. **Session Token** - Opaque UUID tokens for executor-to-daemon authentication
+
+On a fresh install with zero users, the daemon auto-creates an admin user on first start (`ensureFirstRunAdmin`), writing the generated password to `~/.agor/admin-credentials` (mode 0600) and printing it once to the daemon log.
 
 **Session Token Strategy Details:**
 

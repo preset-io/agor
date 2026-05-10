@@ -139,7 +139,10 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
    * Import board from blob (JSON)
    */
   async fromBlob(blob: BoardExportBlob, params?: BoardParams): Promise<Board> {
-    const userId = params?.user?.user_id || 'anonymous';
+    const userId = params?.user?.user_id;
+    if (!userId) {
+      throw new Error('fromBlob requires an authenticated user');
+    }
     this.boardRepo.validateBoardBlob(blob);
     const data = this.buildBoardDataFromBlob(blob, userId);
 
@@ -204,7 +207,10 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     if (!boardIdentifier) throw new Error('Board ID or slug required');
     if (!name) throw new Error('Board name required');
 
-    const userId = params?.user?.user_id || 'anonymous';
+    const userId = params?.user?.user_id;
+    if (!userId) {
+      throw new Error('Board clone requires an authenticated user');
+    }
     const resolvedBoardId = await this.resolveBoardId(boardIdentifier);
     const blob = await this.boardRepo.toBlob(resolvedBoardId);
     const boardData = this.buildBoardDataFromBlob(blob, userId, name);
@@ -230,7 +236,10 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
 
     console.log(`📦 Archiving board: ${board.name}`);
 
-    const currentUserId = params?.user?.user_id || 'anonymous';
+    const currentUserId = params?.user?.user_id;
+    if (!currentUserId) {
+      throw new Error('Board archive requires an authenticated user');
+    }
     const archivedBoard = await this.patch(
       id,
       {

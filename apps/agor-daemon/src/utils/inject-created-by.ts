@@ -1,14 +1,6 @@
 /**
  * Before-create hook that stamps `created_by` on incoming data.
  *
- * Why this hook exists
- * --------------------
- * The previous inline implementations on the sessions/tasks/boards services
- * used `if (!item.created_by) item.created_by = userId` — which let an
- * authenticated external caller POST `/sessions` (or `/tasks`, `/boards`)
- * with `created_by: <other_user_id>` and have the new resource attributed to
- * a different user. That is identity attribution forgery.
- *
  * Security model
  * --------------
  * - **External calls** (`params.provider != null` — REST, socketio, MCP):
@@ -18,7 +10,9 @@
  *   rejected the call already).
  * - **Internal calls** (`params.provider == null` — scheduler, callbacks,
  *   service-to-service): respect an explicitly-provided `data.created_by`,
- *   defaulting to the (usually absent) caller user_id or `'anonymous'`.
+ *   otherwise default to the caller user_id. If neither is present we throw
+ *   — internal callers must hand us a real user (e.g. via `params.user` or
+ *   an explicit `created_by`); an unattributed row is a programmer bug.
  *
  * Place this hook AFTER any role/permission gate (e.g. `requireMinimumRole`)
  * so that on external calls `params.user` is guaranteed to be populated.
@@ -43,7 +37,12 @@ export function injectCreatedBy() {
         item.created_by = userId;
       } else if (!item.created_by) {
         // Internal: only fill the gap, never override.
-        item.created_by = userId ?? 'anonymous';
+        if (!userId) {
+          throw new Error(
+            'injectCreatedBy: internal call has no params.user and no explicit created_by — every row must be attributed to a real user'
+          );
+        }
+        item.created_by = userId;
       }
     };
 

@@ -216,9 +216,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
     `🚀 Agor daemon running at http://${displayHost}:${DAEMON_PORT} (bound to ${DAEMON_HOST})`
   );
   console.log(`   Health: http://${displayHost}:${DAEMON_PORT}/health`);
-  console.log(
-    `   Authentication: ${config.daemon?.allowAnonymous !== false ? '🔓 Anonymous (default)' : '🔐 Required'}`
-  );
+  console.log(`   Authentication: 🔐 Required`);
   console.log(`   Login: POST http://${displayHost}:${DAEMON_PORT}/authentication`);
   console.log(`   Services:`);
   console.log(`     - /sessions`);

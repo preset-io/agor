@@ -77,6 +77,7 @@ async function seedRepoAndWorktree(
       worktree_id: opts.worktreeId,
       repo_id: repo.repo_id,
       created_at: new Date(),
+      created_by: 'test-user',
       name: opts.worktreeName,
       ref: 'main',
       worktree_unique_id: opts.uniqueId,
@@ -98,7 +99,7 @@ async function seedSession(
       status: 'idle',
       agentic_tool: opts.tool,
       worktree_id: opts.worktreeId,
-      created_by: 'anonymous',
+      created_by: 'test-user',
       data: { genealogy: { children: [] }, contextFiles: [], tasks: [], git_state: {} },
     })
     .run();

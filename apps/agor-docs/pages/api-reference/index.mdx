@@ -91,7 +91,7 @@ curl -X GET http://localhost:3030/sessions \
 4. Click **"Authorize"**
 5. Now all generated curl commands and "Try it out" buttons will automatically include your token
 
-**Anonymous Mode:** For local development, anonymous authentication is enabled by default (no token required).
+**Authentication is always required.** On first daemon start, an admin user is auto-created with a random password — credentials are written to `~/.agor/admin-credentials` (mode 0600) and printed once to the daemon log. Use those to log in and obtain a JWT.
 
 ### Core Services
 

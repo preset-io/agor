@@ -80,7 +80,6 @@ import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { registerProxies } from './setup/proxies.js';
 import { applyTierHooks } from './setup/service-tiers.js';
-import { AnonymousStrategy } from './strategies/anonymous.js';
 import { buildAuthRateLimitKey } from './utils/auth-rate-limit-key.js';
 import {
   ensureMinimumRole,
@@ -143,7 +142,6 @@ export interface RegisterRoutesContext {
   svcTier: (group: string) => ServiceTier;
   jwtSecret: string;
   worktreeRbacEnabled: boolean;
-  allowAnonymous: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   enforcePasswordChange: (context: HookContext) => Promise<HookContext>;
   superadminOpts: { allowSuperadmin: boolean };
@@ -191,7 +189,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     svcTier,
     jwtSecret,
     worktreeRbacEnabled,
-    allowAnonymous,
     requireAuth,
     enforcePasswordChange,
     superadminOpts,
@@ -235,7 +232,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Authentication Configuration
   // ============================================================================
 
-  const authStrategiesArray = ['api-key', 'jwt', 'local', 'anonymous'];
+  const authStrategiesArray = ['api-key', 'jwt', 'local'];
   if (sessionTokenService) {
     authStrategiesArray.push('session-token');
   }
@@ -277,7 +274,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Register authentication strategies
   authentication.register('jwt', new ServiceJWTStrategy());
   authentication.register('local', new LocalStrategy());
-  authentication.register('anonymous', new AnonymousStrategy());
 
   // Register API key authentication strategy
   const { ApiKeyStrategy } = await import('./auth/api-key-strategy.js');
@@ -373,7 +369,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             hasAccessToken: !!context.result?.accessToken,
           });
 
-          if (context.result?.user && context.result.user.user_id !== 'anonymous') {
+          if (context.result?.user) {
             const refreshToken = jwt.sign(
               {
                 sub: context.result.user.user_id,
@@ -1111,7 +1107,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // and both spawn executors. Inside the lock the session is re-read,
         // so the decision is made against the freshest possible state.
         const taskRepo = new TaskRepository(db);
-        const createdBy = params.user?.user_id ?? 'anonymous';
+        if (!params.user?.user_id) {
+          throw new NotAuthenticated('Authentication required to prompt a session');
+        }
+        const createdBy = params.user.user_id;
 
         return await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () => {
           const lockedSession = await sessionsService.get(id, params);
@@ -1707,7 +1706,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     ((req: any, res: any, next: any) => {
       if (DEBUG_UPLOAD) {
         console.log('✅ [Upload Route] Authentication passed');
-        console.log('   User:', req.feathers?.user?.user_id?.substring(0, 8) || 'anonymous');
+        console.log('   User:', req.feathers?.user?.user_id?.substring(0, 8) ?? 'unknown');
       }
       next();
       // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
@@ -3096,8 +3095,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         buildSha: DAEMON_BUILD_INFO.sha,
         builtAt: DAEMON_BUILD_INFO.builtAt,
         auth: {
-          requireAuth: config.daemon?.requireAuth === true,
-          allowAnonymous: allowAnonymous,
+          requireAuth: true,
         },
         instance: {
           label: config.daemon?.instanceLabel,

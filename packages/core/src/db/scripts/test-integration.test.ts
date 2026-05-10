@@ -333,6 +333,7 @@ describe('Task Repository Integration', () => {
       session_id: session.session_id,
       full_prompt: 'This is a test task',
       status: TaskStatus.CREATED,
+      created_by: 'test-user' as UserID,
       message_range: {
         start_index: 0,
         end_index: 1,
@@ -380,6 +381,7 @@ describe('Task Repository Integration', () => {
         session_id: sessionId,
         full_prompt: fullPrompt,
         status: TaskStatus.CREATED,
+        created_by: 'test-user' as UserID,
         message_range: {
           start_index: 0,
           end_index: 1,
@@ -423,6 +425,7 @@ describe('Task Repository Integration', () => {
       session_id: session.session_id,
       full_prompt: 'Test prompt',
       status: TaskStatus.CREATED,
+      created_by: 'test-user' as UserID,
       message_range: {
         start_index: 0,
         end_index: 1,
@@ -472,6 +475,7 @@ describe('Board Repository Integration', () => {
       description: 'A test board',
       color: '#ff0000',
       icon: 'rocket',
+      created_by: 'test-user' as UserID,
     });
 
     expect(board.board_id).toBeDefined();
@@ -491,6 +495,7 @@ describe('Board Repository Integration', () => {
       description: 'Test',
       color: '#000000',
       icon: 'star',
+      created_by: 'test-user' as UserID,
     });
 
     const found = await repo.findBySlug('my-board');
@@ -778,6 +783,7 @@ describe('Error Handling', () => {
       description: 'Test',
       color: '#000',
       icon: 'star',
+      created_by: 'test-user' as UserID,
     });
 
     const second = await repo.create({
@@ -786,6 +792,7 @@ describe('Error Handling', () => {
       description: 'Test',
       color: '#fff',
       icon: 'rocket',
+      created_by: 'test-user' as UserID,
     });
 
     expect(first.slug).toBe('duplicate-slug');
@@ -844,6 +851,7 @@ describe('Edge Cases and Data Integrity', () => {
       session_id: session.session_id,
       full_prompt: 'Test',
       status: TaskStatus.CREATED,
+      created_by: 'test-user' as UserID,
       message_range: {
         start_index: 0,
         end_index: 1,
@@ -880,6 +888,7 @@ describe('Edge Cases and Data Integrity', () => {
       session_id: session.session_id,
       full_prompt: fullPrompt,
       status: TaskStatus.CREATED,
+      created_by: 'test-user' as UserID,
       message_range: {
         start_index: 0,
         end_index: 1,

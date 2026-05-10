@@ -67,6 +67,7 @@ async function createTestWorktree(db: any, overrides?: { worktree_id?: UUID; rep
     path: '/tmp/test-repo',
     base_ref: 'main',
     new_branch: false,
+    created_by: 'test-user' as UUID,
   });
 
   return worktree;
@@ -139,15 +140,13 @@ describe('SessionRepository.create', () => {
     expect(created.agentic_tool).toBe('claude-code');
   });
 
-  dbTest('should default to anonymous created_by if not provided', async ({ db }) => {
+  dbTest('should throw if created_by is not provided', async ({ db }) => {
     const repo = new SessionRepository(db);
     const worktree = await createTestWorktree(db);
     const data = createSessionData({ worktree_id: worktree.worktree_id });
     delete (data as any).created_by;
 
-    const created = await repo.create(data);
-
-    expect(created.created_by).toBe('anonymous');
+    await expect(repo.create(data)).rejects.toThrow(/created_by/);
   });
 
   dbTest('should throw error if worktree_id is missing', async ({ db }) => {

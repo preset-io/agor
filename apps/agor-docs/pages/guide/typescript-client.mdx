@@ -77,7 +77,6 @@ import { createClient } from '@agor-live/client';
 const client = createClient('http://localhost:3030');
 
 await client.authenticate({ strategy: 'jwt', accessToken: '…' });
-// or { strategy: 'anonymous' } when the daemon allows it
 
 client.service('messages').on('created', (msg) => {
   console.log('[message]', msg.session_id, msg.role, msg.content?.slice(0, 80));
@@ -141,7 +140,8 @@ This is what you'd reach for if you wanted to:
 |---|---|---|
 | **API Key** | Scripts, services, CI | Pass to `createRestClient(url, apiKey)`, or set `AGOR_API_KEY=agor_sk_…` and use `getApiKeyFromEnv()` |
 | **JWT** | Browser apps after login | `await client.authenticate({ strategy: 'jwt', accessToken })` |
-| **Anonymous** | Open-access instances | `await client.authenticate({ strategy: 'anonymous' })` |
+
+Authentication is required on every endpoint. There is no anonymous strategy.
 
 Issue API keys from **User Settings → Personal API Keys**. Keys are scoped to your user — every action runs under your identity, billing, env vars, and MCP OAuth grants.
 

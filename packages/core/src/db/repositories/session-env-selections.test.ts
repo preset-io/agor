@@ -56,6 +56,7 @@ async function setup(db: any) {
     path: '/tmp/test-repo',
     base_ref: 'main',
     new_branch: false,
+    created_by: 'test-user' as UUID,
   });
 
   const session = await sessionRepo.create(createSessionData(worktree.worktree_id));

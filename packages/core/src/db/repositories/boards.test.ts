@@ -75,14 +75,12 @@ describe('BoardRepository.create', () => {
     expect(created.name).toBe('Untitled Board');
   });
 
-  dbTest('should default to "anonymous" created_by if not provided', async ({ db }) => {
+  dbTest('should throw if created_by is not provided', async ({ db }) => {
     const repo = new BoardRepository(db);
     const data = createBoardData();
     delete (data as any).created_by;
 
-    const created = await repo.create(data);
-
-    expect(created.created_by).toBe('anonymous');
+    await expect(repo.create(data)).rejects.toThrow(/created_by/);
   });
 
   dbTest('should store all optional fields correctly', async ({ db }) => {

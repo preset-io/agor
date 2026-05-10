@@ -82,6 +82,7 @@ async function createTestSession(
     path: `/test/worktree/${uniqueId}`,
     ref: 'main',
     worktree_unique_id: uniqueId,
+    created_by: 'test-user' as UUID,
   });
 
   // Create session
@@ -89,6 +90,7 @@ async function createTestSession(
     session_id: overrides?.session_id,
     worktree_id: worktree.worktree_id,
     title: 'Test Session',
+    created_by: 'test-user' as UUID,
   });
 
   return session.session_id as SessionID;
@@ -104,6 +106,7 @@ async function createTestTask(db: any, sessionId: SessionID): Promise<TaskID> {
     session_id: sessionId,
     full_prompt: 'Test task',
     message_range: { start_index: 0, end_index: 10, start_timestamp: new Date().toISOString() },
+    created_by: 'test-user' as UUID,
   });
 
   return task.task_id as TaskID;

@@ -99,6 +99,7 @@ async function setupTestData(db: any) {
     path: '/tmp/test-repo',
     base_ref: 'main',
     new_branch: false,
+    created_by: 'test-user' as UUID,
   });
 
   // Create session
@@ -608,6 +609,7 @@ describe('SessionMCPServerRepository error handling', () => {
       path: '/tmp/test-repo',
       base_ref: 'main',
       new_branch: false,
+      created_by: 'test-user' as UUID,
     });
 
     const server = await mcpServerRepo.create(createMCPServerData());
@@ -655,6 +657,7 @@ describe('SessionMCPServerRepository error handling', () => {
       path: '/tmp/test-repo',
       base_ref: 'main',
       new_branch: false,
+      created_by: 'test-user' as UUID,
     });
 
     const server = await mcpServerRepo.create(createMCPServerData());

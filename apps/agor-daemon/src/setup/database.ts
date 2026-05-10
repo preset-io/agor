@@ -10,7 +10,10 @@ import { access, mkdir } from 'node:fs/promises';
 import {
   checkMigrationStatus,
   createDatabaseAsync,
+  ensureFirstRunAdmin,
   formatPendingMigrationsMessage,
+  getAdminCredentialsPath,
+  logBootstrapResult,
   seedInitialData,
 } from '@agor/core/db';
 import { extractDbFilePath } from '@agor/core/utils/path';
@@ -111,6 +114,14 @@ export async function initializeDatabase(dbPath: string): Promise<DatabaseInitRe
   // Seed initial data (idempotent - only creates if missing)
   console.log('🌱 Seeding initial data...');
   await seedInitialData(db);
+
+  // First-run admin bootstrap: create a default admin if no users exist, and
+  // re-attribute any legacy `created_by='anonymous'` rows to a real user. This
+  // is the upgrade path for installs that previously ran in (now-removed)
+  // anonymous mode — their data isn't orphaned, and they get clear credentials
+  // printed on first start.
+  const bootstrapResult = await ensureFirstRunAdmin(db);
+  logBootstrapResult(bootstrapResult, getAdminCredentialsPath());
 
   console.log('✅ Database ready');
 

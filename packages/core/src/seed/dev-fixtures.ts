@@ -30,9 +30,11 @@ export interface SeedOptions {
   baseDir?: string;
 
   /**
-   * User ID to attribute created entities to (defaults to 'anonymous')
+   * User ID to attribute created entities to. Required — every row must be
+   * attributed to a real user. Pass the user_id of an existing admin (e.g.
+   * the one auto-created by `ensureFirstRunAdmin` on first daemon start).
    */
-  userId?: UUID;
+  userId: UUID;
 
   /**
    * Skip if data already exists (idempotent)
@@ -49,7 +51,12 @@ export interface SeedResult {
 /**
  * Seed development fixtures
  */
-export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedResult> {
+export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult> {
+  if (!options?.userId) {
+    throw new Error(
+      'seedDevFixtures: options.userId is required — pass the user_id of an existing admin'
+    );
+  }
   // Respect DATABASE_URL and AGOR_DB_DIALECT environment variables
   // Priority: DATABASE_URL env var > default SQLite file path
   let databaseUrl: string;
@@ -86,7 +93,7 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
   }
 
   const baseDir = options.baseDir ?? path.join(os.homedir(), '.agor', 'repos');
-  const userId = (options.userId ?? 'anonymous') as UUID;
+  const userId = options.userId;
 
   // Check if data already exists (always check for idempotency)
   const existing = await repoRepo.findBySlug('agor');

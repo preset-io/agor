@@ -188,9 +188,7 @@ export interface RegisterHooksContext {
   svcEnabled: (group: string) => boolean;
   jwtSecret: string;
   worktreeRbacEnabled: boolean;
-  allowAnonymous: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
-  getReadAuthHooks: () => Array<(context: HookContext) => Promise<HookContext>>;
   superadminOpts: { allowSuperadmin: boolean };
 
   // Service instances from registerServices()
@@ -213,9 +211,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     svcEnabled,
     jwtSecret,
     worktreeRbacEnabled,
-    allowAnonymous,
     requireAuth,
-    getReadAuthHooks,
     superadminOpts,
     sessionsService,
     boardsService,
@@ -341,8 +337,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [
         typedValidateQuery(boardObjectQueryValidator),
-        ...getReadAuthHooks(),
-        ...(allowAnonymous ? [] : [requireMinimumRole(ROLES.MEMBER, 'manage board objects')]),
+        requireAuth,
+        requireMinimumRole(ROLES.MEMBER, 'manage board objects'),
       ],
       // NOTE: We deliberately do NOT add scopeFindToAccessibleWorktrees here.
       // Board-objects may reference `worktree_id` (worktree cards) OR `card_id`
@@ -430,7 +426,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('card-types')?.hooks({
     before: {
-      all: [...getReadAuthHooks()],
+      all: [requireAuth],
       create: [requireMinimumRole(ROLES.MEMBER, 'create card types')],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update card types')],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete card types')],
@@ -439,7 +435,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('cards')?.hooks({
     before: {
-      all: [...getReadAuthHooks()],
+      all: [requireAuth],
       create: [requireMinimumRole(ROLES.MEMBER, 'create cards'), injectCreatedBy()],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update cards')],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete cards')],
@@ -477,7 +473,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('artifacts')?.hooks({
     before: {
-      all: [...getReadAuthHooks()],
+      all: [requireAuth],
       find: [
         // RBAC: Artifacts carry a `worktree_id` (nullable — survives worktree deletion).
         // Scope find() to the worktrees the caller can access. Rows with null
@@ -563,7 +559,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('board-comments')?.hooks({
     before: {
-      all: [typedValidateQuery(boardCommentQueryValidator), ...getReadAuthHooks()],
+      all: [typedValidateQuery(boardCommentQueryValidator), requireAuth],
       create: [requireMinimumRole(ROLES.MEMBER, 'create board comments'), injectCreatedBy()],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update board comments')],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete board comments')],
@@ -574,8 +570,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [
         typedValidateQuery(repoQueryValidator),
-        ...getReadAuthHooks(),
-        ...(allowAnonymous ? [] : [requireMinimumRole(ROLES.MEMBER, 'access repositories')]),
+        requireAuth,
+        requireMinimumRole(ROLES.MEMBER, 'access repositories'),
       ],
       create: [requireMinimumRole(ROLES.MEMBER, 'create repositories'), requireAdminForEnvConfig()],
       update: [requireMinimumRole(ROLES.MEMBER, 'update repositories'), requireAdminForEnvConfig()],
@@ -588,8 +584,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [
         typedValidateQuery(worktreeQueryValidator),
-        ...getReadAuthHooks(),
-        ...(allowAnonymous ? [] : [requireMinimumRole(ROLES.MEMBER, 'access worktrees')]),
+        requireAuth,
+        requireMinimumRole(ROLES.MEMBER, 'access worktrees'),
       ],
       find: [
         // RBAC: Optimized SQL-based filtering (single query with JOIN, no N+1)
@@ -893,7 +889,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Creation/update/removal remain gated by requireMinimumRole(ADMIN).
   safeService('mcp-servers')?.hooks({
     before: {
-      all: [typedValidateQuery(mcpServerQueryValidator), ...getReadAuthHooks()],
+      all: [typedValidateQuery(mcpServerQueryValidator), requireAuth],
       create: [requireMinimumRole(ROLES.ADMIN, 'create MCP servers')],
       patch: [requireMinimumRole(ROLES.ADMIN, 'update MCP servers')],
       remove: [requireMinimumRole(ROLES.ADMIN, 'delete MCP servers')],
@@ -1473,7 +1469,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   app.service('sessions').hooks({
     before: {
-      all: [typedValidateQuery(sessionQueryValidator), ...getReadAuthHooks()],
+      all: [typedValidateQuery(sessionQueryValidator), requireAuth],
       find: [
         // RBAC: Optimized SQL-based filtering (single query with JOIN on worktrees, no N+1)
         ...(worktreeRbacEnabled ? [scopeSessionQuery(sessionsRepository, superadminOpts)] : []),
@@ -1584,7 +1580,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           if (cbConfig?.callback_session_id) {
             // Use authenticated user, NOT context.data.created_by (which could be client-supplied)
             const authenticatedUserId =
-              (context.params as { user?: { user_id: string } }).user?.user_id || 'anonymous';
+              (context.params as { user?: { user_id: string } }).user?.user_id || 'unknown';
             await ensureCanPromptTargetSession(
               cbConfig.callback_session_id,
               authenticatedUserId,
@@ -1630,7 +1626,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ?.callback_config as { callback_session_id?: string } | undefined;
           if (patchCbConfig?.callback_session_id) {
             const userId =
-              (context.params as { user?: { user_id: string } }).user?.user_id || 'anonymous';
+              (context.params as { user?: { user_id: string } }).user?.user_id || 'unknown';
             await ensureCanPromptTargetSession(
               patchCbConfig.callback_session_id,
               userId,
@@ -1675,7 +1671,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           }
 
           const { generateSessionToken } = await import('./mcp/tokens.js');
-          const userId = session.created_by || 'anonymous';
+          const userId = session.created_by || 'unknown';
 
           const jwtSecret = app.settings.authentication?.secret;
           if (!jwtSecret) {
@@ -1714,7 +1710,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           // Mint MCP token for this session (jti + exp + gen embedded)
           const { generateSessionToken } = await import('./mcp/tokens.js');
           const session = context.result as Session;
-          const userId = session.created_by || 'anonymous';
+          const userId = session.created_by || 'unknown';
 
           // Get JWT secret from app settings
           const jwtSecret = app.settings.authentication?.secret;
@@ -1864,7 +1860,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   if (svcEnabled('leaderboard')) {
     app.service('leaderboard').hooks({
       before: {
-        all: [...getReadAuthHooks()],
+        all: [requireAuth],
       },
     });
   }
@@ -1942,7 +1938,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('boards')?.hooks({
     before: {
-      all: [typedValidateQuery(boardQueryValidator), ...getReadAuthHooks()],
+      all: [typedValidateQuery(boardQueryValidator), requireAuth],
       find: [
         // RBAC: restrict boards.find to boards the caller created or has a
         // worktree on. Runs at the SQL layer via BoardRepository.findVisibleBoardIds

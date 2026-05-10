@@ -177,6 +177,9 @@ export class GatewayChannelRepository
   private channelToInsert(data: Partial<GatewayChannel>): GatewayChannelInsert {
     const now = Date.now();
     const id = data.id ?? generateId();
+    if (!data.created_by) {
+      throw new RepositoryError('GatewayChannel must have a created_by');
+    }
 
     const encryptedAgenticConfig = encryptAgenticConfig(
       (data.agentic_config as unknown as Record<string, unknown> | null) ?? null
@@ -186,7 +189,7 @@ export class GatewayChannelRepository
       id,
       created_at: new Date(data.created_at ?? now),
       updated_at: new Date(data.updated_at ?? now),
-      created_by: data.created_by ?? 'anonymous',
+      created_by: data.created_by,
       name: data.name ?? 'Untitled Channel',
       channel_type: data.channel_type ?? 'slack',
       target_worktree_id: data.target_worktree_id ?? '',

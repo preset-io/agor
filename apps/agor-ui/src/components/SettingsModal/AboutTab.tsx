@@ -42,7 +42,6 @@ interface HealthInfo {
       };
   auth?: {
     requireAuth: boolean;
-    allowAnonymous: boolean;
   };
   encryption?: {
     enabled: boolean;
@@ -215,14 +214,7 @@ export const AboutTab: React.FC<AboutTabProps> = ({
                       </>
                     ))}
                   {healthInfo?.auth && (
-                    <>
-                      <Descriptions.Item label="Authentication">
-                        {healthInfo.auth.requireAuth ? '🔐 Required' : '🔓 Optional'}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Anonymous Access">
-                        {healthInfo.auth.allowAnonymous ? '✓ Enabled' : '✗ Disabled'}
-                      </Descriptions.Item>
-                    </>
+                    <Descriptions.Item label="Authentication">🔐 Required</Descriptions.Item>
                   )}
                   {healthInfo?.execution && (
                     <>

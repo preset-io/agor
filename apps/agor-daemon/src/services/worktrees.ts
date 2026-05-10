@@ -487,13 +487,16 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as
         | UserID
         | undefined;
+      if (!userId) {
+        throw new Error('Worktree remove requires an authenticated user');
+      }
       const appWithToken = this.app as unknown as {
         sessionTokenService?: import('../services/session-token-service').SessionTokenService;
       };
 
       // Generate token and spawn executor (fire-and-forget)
       appWithToken.sessionTokenService
-        ?.generateToken('worktree-remove', userId || 'anonymous')
+        ?.generateToken('worktree-remove', userId)
         .then((sessionToken) => {
           spawnExecutor(
             {
@@ -546,7 +549,12 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   ): Promise<WorktreeWithZoneAndSessions | { deleted: true; worktree_id: WorktreeID }> {
     const { metadataAction, filesystemAction } = options;
     const worktree = await this.get(id, params);
-    const currentUserId = 'anonymous' as UUID; // TODO: Get from auth context
+    const currentUserId = (params as AuthenticatedParams | undefined)?.user?.user_id as
+      | UUID
+      | undefined;
+    if (!currentUserId) {
+      throw new Error('Worktree archive/delete requires an authenticated user');
+    }
 
     // Stop environment if running
     if (worktree.environment_instance?.status === 'running') {
@@ -577,7 +585,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       // to the wrong home directory, causing safety check failures.
 
       appWithToken.sessionTokenService
-        ?.generateToken('worktree-clean', userId || 'anonymous')
+        ?.generateToken('worktree-clean', userId ?? currentUserId)
         .then((sessionToken) => {
           spawnExecutor(
             {
@@ -607,7 +615,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       // to the wrong home directory, causing safety check failures.
 
       appWithToken.sessionTokenService
-        ?.generateToken('worktree-delete', userId || 'anonymous')
+        ?.generateToken('worktree-delete', userId ?? currentUserId)
         .then((sessionToken) => {
           spawnExecutor(
             {

@@ -71,6 +71,7 @@ async function createSessionWithDeps(db: Database): Promise<UUID> {
     ref: 'main',
     worktree_unique_id: worktreeCounter++,
     path: '/tmp/test/worktree',
+    created_by: 'test-user' as UUID,
   });
 
   // Create session
@@ -79,6 +80,7 @@ async function createSessionWithDeps(db: Database): Promise<UUID> {
     session_id: generateId(),
     worktree_id: worktree.worktree_id,
     agentic_tool: 'claude-code',
+    created_by: 'test-user' as UUID,
   });
 
   return session.session_id;
@@ -130,15 +132,13 @@ describe('TaskRepository.create', () => {
     expect(created.status).toBe(TaskStatus.CREATED);
   });
 
-  dbTest('should default created_by to anonymous', async ({ db }) => {
+  dbTest('should throw if created_by is missing', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
     const data = createTaskData({ session_id: sessionId });
     delete (data as any).created_by;
 
-    const created = await taskRepo.create(data);
-
-    expect(created.created_by).toBe('anonymous');
+    await expect(taskRepo.create(data)).rejects.toThrow(/created_by/);
   });
 
   dbTest('should throw error if session_id is missing', async ({ db }) => {

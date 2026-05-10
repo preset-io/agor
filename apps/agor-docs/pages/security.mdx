@@ -168,7 +168,7 @@ Cross-user spawns under the legacy path emit `[SECURITY]` warning logs. See `con
 
 Independent of mode:
 
-- ✅ **Authentication on every call** — REST and Socket.IO require a JWT. Anonymous mode (if enabled) is read-only `viewer`.
+- ✅ **Authentication on every call** — REST and Socket.IO require a JWT, API key, or valid session token. There is no anonymous / unauthenticated path.
 - ✅ **Role-based authorization** — `viewer` / `member` / `admin` / `owner` gate privileged endpoints (terminals, env controls, config, user management).
 - ✅ **Encrypted credentials at rest** — Passwords with bcrypt (12 rounds), API keys and per-user env vars with AES-256-GCM under `AGOR_MASTER_SECRET`.
 - ✅ **Path traversal guards** — File browsing is restricted to `context/` within each worktree with traversal protection.

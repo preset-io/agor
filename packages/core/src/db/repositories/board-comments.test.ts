@@ -110,15 +110,13 @@ describe('BoardCommentsRepository.create', () => {
     expect(created.content_preview.length).toBe(203); // 200 + '...'
   });
 
-  dbTest('should default to anonymous created_by if not provided', async ({ db }) => {
+  dbTest('should throw if created_by is not provided', async ({ db }) => {
     const repo = new BoardCommentsRepository(db);
     const board = await createTestBoard(db);
     const data = createCommentData({ board_id: board.board_id });
     delete (data as any).created_by;
 
-    const created = await repo.create(data);
-
-    expect(created.created_by).toBe('anonymous');
+    await expect(repo.create(data)).rejects.toThrow(/created_by/);
   });
 
   dbTest('should store comments without optional attachments', async ({ db }) => {

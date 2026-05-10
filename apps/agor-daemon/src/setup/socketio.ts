@@ -63,8 +63,6 @@ export interface SocketIOOptions {
   corsOrigin: CorsOrigin;
   /** JWT secret for token verification */
   jwtSecret: string;
-  /** Whether anonymous access is allowed */
-  allowAnonymous: boolean;
   /**
    * Whether the HTTP CORS layer is allowing credentials. The socket.io
    * transport must mirror this — when the HTTP side has dropped credentials
@@ -239,7 +237,7 @@ export function createSocketIOConfig(
   callback: (io: Server) => void;
   getSocketServer: () => Server | null;
 } {
-  const { corsOrigin, jwtSecret, allowAnonymous, credentialsAllowed, buildInfo } = options;
+  const { corsOrigin, jwtSecret, credentialsAllowed, buildInfo } = options;
   // Default ON to mirror the daemon-wide default (see register-hooks.ts).
   const webTerminalEnabled = options.webTerminalEnabled !== false;
 
@@ -281,16 +279,12 @@ export function createSocketIOConfig(
           socket.handshake.headers?.authorization?.replace('Bearer ', '');
 
         if (!token) {
-          // SECURITY: Always allow unauthenticated socket connections
-          // This is required for the login flow to work (client needs to connect before authenticating)
-          // Service-level hooks (requireAuth) will enforce authentication for protected endpoints
-          // The /authentication endpoint explicitly allows unauthenticated access for login
-          if (allowAnonymous) {
-            console.log(`🔓 WebSocket connection without auth (anonymous allowed): ${socket.id}`);
-          } else {
-            console.log(`🔓 WebSocket connection without auth (for login flow): ${socket.id}`);
-          }
-          // Don't set socket.feathers.user - will be handled by FeathersJS auth
+          // Allow the socket to connect without auth so the client can run the
+          // login flow (POST /authentication). Service-level hooks (requireAuth)
+          // enforce authentication on every protected endpoint, so an
+          // unauthenticated socket can't read or write anything until it
+          // authenticates.
+          console.log(`🔓 WebSocket connection without auth (for login flow): ${socket.id}`);
           return next();
         }
 
@@ -358,7 +352,7 @@ export function createSocketIOConfig(
       activeConnections++;
       const user = (socket as FeathersSocket).feathers?.user;
       console.log(
-        `🔌 Socket.io connection established: ${socket.id} (user: ${user ? user.user_id.substring(0, 8) : 'anonymous'}, total: ${activeConnections})`
+        `🔌 Socket.io connection established: ${socket.id} (user: ${user ? user.user_id.substring(0, 8) : 'unknown'}, total: ${activeConnections})`
       );
 
       // Welcome event: ship the daemon's build identity so UI tabs can spot
@@ -395,7 +389,7 @@ export function createSocketIOConfig(
       const getUserId = () => {
         // In FeathersJS, the authenticated user is stored in socket.feathers
         const user = (socket as FeathersSocket).feathers?.user;
-        return user?.user_id || 'anonymous';
+        return user?.user_id || 'unknown';
       };
 
       // Handle cursor movement events

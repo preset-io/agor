@@ -101,12 +101,6 @@ export interface AgorDaemonSettings {
    */
   base_url?: string;
 
-  /** Allow anonymous access (default: true for local mode) */
-  allowAnonymous?: boolean;
-
-  /** Require authentication for all requests (default: false) */
-  requireAuth?: boolean;
-
   /** JWT secret (auto-generated if not provided) */
   jwtSecret?: string;
 

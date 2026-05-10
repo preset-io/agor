@@ -565,7 +565,7 @@ export const App: React.FC<AppProps> = ({
           reason: allow ? 'Approved by user' : 'Denied by user',
           remember: scope !== PermissionScope.ONCE, // Only remember if not 'once'
           scope,
-          decidedBy: user?.user_id || 'anonymous',
+          decidedBy: user?.user_id || 'unknown',
         });
       } catch (error) {
         console.error('❌ Failed to send permission decision:', error);
@@ -590,7 +590,7 @@ export const App: React.FC<AppProps> = ({
           taskId,
           answers,
           annotations,
-          respondedBy: user?.user_id || 'anonymous',
+          respondedBy: user?.user_id || 'unknown',
         });
       } catch (error) {
         console.error('Failed to send input response:', error);
@@ -844,7 +844,7 @@ export const App: React.FC<AppProps> = ({
                         (c: BoardComment) => c.board_id === currentBoardId
                       )}
                       userById={userById}
-                      currentUserId={user?.user_id || 'anonymous'}
+                      currentUserId={user?.user_id || 'unknown'}
                       boardObjects={currentBoard?.objects}
                       worktreeById={worktreeById}
                       collapsed={commentsPanelCollapsed}

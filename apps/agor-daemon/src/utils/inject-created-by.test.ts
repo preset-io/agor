@@ -102,10 +102,9 @@ describe('injectCreatedBy', () => {
       expect((ctx.data as { created_by: string }).created_by).toBe(ALICE);
     });
 
-    it('falls back to "anonymous" when internal call has no user and no created_by', () => {
+    it('throws when internal call has no user and no created_by', () => {
       const ctx = makeContext({ data: { title: 'x' } });
-      hook(ctx);
-      expect((ctx.data as { created_by: string }).created_by).toBe('anonymous');
+      expect(() => hook(ctx)).toThrow(/every row must be attributed to a real user/);
     });
   });
 

@@ -102,13 +102,16 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
   private worktreeToInsert(worktree: Partial<Worktree>): WorktreeInsert {
     const now = Date.now();
     const worktreeId = worktree.worktree_id ?? (generateId() as WorktreeID);
+    if (!worktree.created_by) {
+      throw new RepositoryError('Worktree must have a created_by');
+    }
 
     return {
       worktree_id: worktreeId,
       repo_id: worktree.repo_id!,
       created_at: worktree.created_at ? new Date(worktree.created_at) : new Date(now),
       updated_at: new Date(now),
-      created_by: worktree.created_by ?? 'anonymous',
+      created_by: worktree.created_by,
       name: worktree.name!,
       ref: worktree.ref!,
       ref_type: worktree.ref_type,

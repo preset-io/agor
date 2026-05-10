@@ -28,7 +28,6 @@ try {
   console.log(chalk.cyan('Daemon Status:'));
   console.log(`  Version: ${health.version}`);
   console.log(`  Auth Required: ${health.auth.requireAuth}`);
-  console.log(`  Allow Anonymous: ${health.auth.allowAnonymous}`);
   console.log('');
 } catch {
   console.log(chalk.red('✗ Daemon not responding'));

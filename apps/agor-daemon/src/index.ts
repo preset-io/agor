@@ -41,7 +41,6 @@ import expressStaticGzip from 'express-static-gzip';
 import { registerHooks } from './register-hooks.js';
 import { registerRoutes } from './register-routes.js';
 import { registerServices } from './register-services.js';
-import { isLoopbackBindHost, isLoopbackUrl } from './setup/bind-host.js';
 import { loadBuildInfo } from './setup/build-info.js';
 import { buildCorsConfig, isSandpackOrigin } from './setup/cors.js';
 import {
@@ -143,9 +142,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // --------------------------------------------------------------------------
   // Auth configuration
   // --------------------------------------------------------------------------
-  const allowAnonymous = config.daemon?.allowAnonymous === true;
-  const authStrategies = allowAnonymous ? ['api-key', 'jwt', 'anonymous'] : ['api-key', 'jwt'];
-  const requireAuth = authenticate({ strategies: authStrategies });
+  const requireAuth = authenticate({ strategies: ['api-key', 'jwt'] });
 
   const enforcePasswordChange = async (context: HookContext) => {
     const user = context.params?.user as User | undefined;
@@ -180,8 +177,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     });
   };
 
-  const getReadAuthHooks = () => (allowAnonymous ? [] : [requireAuth]);
-
   // --------------------------------------------------------------------------
   // Ports, daemon URL, credentials
   // --------------------------------------------------------------------------
@@ -191,54 +186,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
 
   const envUiPort = process.env.UI_PORT ? Number.parseInt(process.env.UI_PORT, 10) : undefined;
   const UI_PORT = envUiPort || config.ui?.port || 5173;
-
-  // --------------------------------------------------------------------------
-  // Security: block anonymous when the daemon is reachable from outside the host
-  // --------------------------------------------------------------------------
-  // The risk is "unauthenticated requests from the network", which has three
-  // independent signals:
-  //   1. bind interface — non-loopback bind means the kernel itself accepts
-  //      remote traffic (most direct exposure).
-  //   2. configured public base URL (`AGOR_BASE_URL` / `daemon.base_url`) —
-  //      operator declared the daemon is reachable at a non-loopback URL,
-  //      typically because it sits behind a reverse proxy that publishes a
-  //      localhost-bound daemon to the internet.
-  //   3. Railway / Render env vars — those PaaS platforms always expose
-  //      services publicly.
-  // NODE_ENV is intentionally NOT consulted: the CLI sets it to 'production'
-  // for Express/library perf optimizations even on solo localhost installs,
-  // so it carries no signal about exposure.
-  const declaredPublicBaseUrl = process.env.AGOR_BASE_URL ?? config.daemon?.base_url;
-  const baseUrlIsPublic = isLoopbackUrl(declaredPublicBaseUrl) === false;
-  const isPublicDeployment =
-    !isLoopbackBindHost(DAEMON_HOST) ||
-    baseUrlIsPublic ||
-    process.env.RAILWAY_ENVIRONMENT !== undefined ||
-    process.env.RENDER !== undefined;
-
-  if (isPublicDeployment && allowAnonymous) {
-    console.error('');
-    console.error(
-      '❌ SECURITY ERROR: Anonymous authentication is enabled on a network-reachable daemon'
-    );
-    console.error(`   Bind host: ${DAEMON_HOST}`);
-    if (baseUrlIsPublic) {
-      console.error(`   Public base URL: ${declaredPublicBaseUrl}`);
-    }
-    console.error('   Anyone who can reach this address gets full access.');
-    console.error('   Fix one of:');
-    console.error('     • Bind to localhost: set daemon.host: localhost in ~/.agor/config.yaml');
-    if (baseUrlIsPublic) {
-      console.error(
-        '     • Unset the public base URL (daemon.base_url / AGOR_BASE_URL) if the daemon is not actually reachable there'
-      );
-    }
-    console.error(
-      '     • Require auth:      set daemon.allowAnonymous: false (or unset; default is false)'
-    );
-    console.error('');
-    process.exit(1);
-  }
 
   // Handle INSTANCE_LABEL env var override (for Docker deployments)
   if (process.env.INSTANCE_LABEL) {
@@ -534,7 +481,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   const socketIOConfig = createSocketIOConfig(app, {
     corsOrigin,
     jwtSecret,
-    allowAnonymous,
     credentialsAllowed,
     // Mirror the HTTP terminals service gate (register-hooks.ts) so the
     // `allow_web_terminal: false` kill-switch is enforced on the WebSocket
@@ -587,9 +533,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     svcEnabled,
     jwtSecret,
     worktreeRbacEnabled,
-    allowAnonymous,
     requireAuth,
-    getReadAuthHooks,
     superadminOpts,
     sessionsService: services.sessionsService,
     messagesService: services.messagesService,
@@ -610,7 +554,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     svcTier,
     jwtSecret,
     worktreeRbacEnabled,
-    allowAnonymous,
     requireAuth,
     enforcePasswordChange,
     superadminOpts,

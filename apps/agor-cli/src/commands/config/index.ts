@@ -91,16 +91,6 @@ export default class ConfigIndex extends Command {
             `  JWT secret:    ${chalk.gray(`***${daemonConfig.jwtSecret.slice(-8)}`)} ${chalk.dim('(saved)')}`
           );
         }
-        if (daemonConfig.allowAnonymous !== undefined) {
-          this.log(
-            `  allow anon:    ${chalk.gray(daemonConfig.allowAnonymous ? 'enabled' : 'disabled')}`
-          );
-        }
-        if (daemonConfig.requireAuth !== undefined) {
-          this.log(
-            `  require auth:  ${chalk.gray(daemonConfig.requireAuth ? 'enabled' : 'disabled')}`
-          );
-        }
       }
 
       // Config File Path
@@ -125,7 +115,6 @@ export default class ConfigIndex extends Command {
       this.log(chalk.cyan('  Daemon:'));
       this.log('    daemon.port, daemon.host');
       this.log('    daemon.jwtSecret (auto-generated if not set)');
-      this.log('    daemon.allowAnonymous, daemon.requireAuth');
 
       this.log('');
     } catch (error) {

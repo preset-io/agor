@@ -553,6 +553,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     });
 
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
+    if (!userId) {
+      throw new Error('createWorktree requires an authenticated user');
+    }
 
     // Get ALL used unique IDs (including archived worktrees) to avoid collisions.
     // Previously this queried via Feathers which excluded archived worktrees by default,
@@ -594,13 +597,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         issue_url: data.issue_url,
         pull_request_url: data.pull_request_url,
         board_id: data.boardId,
-        created_by: (params as AuthenticatedParams | undefined)?.user?.user_id || 'anonymous',
+        created_by: userId,
       },
       params
     )) as Worktree;
 
     // Add creating user as owner of the worktree
-    if (userId) {
+    {
       const worktreeRepo = new WorktreeRepository(this.db);
       await worktreeRepo.addOwner(worktree.worktree_id, userId);
       console.log(`✓ Added user ${userId.substring(0, 8)} as owner of worktree ${worktree.name}`);

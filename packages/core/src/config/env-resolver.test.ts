@@ -86,6 +86,7 @@ async function createSessionForUser(db: any, userId: UserID): Promise<SessionID>
     path: '/tmp/test-repo',
     base_ref: 'main',
     new_branch: false,
+    created_by: userId,
   });
 
   const data: Partial<Session> = {
