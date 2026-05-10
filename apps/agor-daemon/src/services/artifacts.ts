@@ -1141,8 +1141,13 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     }
 
     // Strip Agor-only sidecars + the synthesized .env. CodeSandbox expects
-    // `src/index.js` keys, not `/src/index.js` (no leading slash).
+    // `src/index.js` keys, not `/src/index.js` (no leading slash). Hold the
+    // user's package.json aside so we can merge dependencies into it before
+    // adding it back — CSB infers the runtime (CRA / vue-cli / svelte / …)
+    // from the dependency graph in package.json, so getting this right is
+    // what makes the export validate.
     const filesPayload: Record<string, { content: string }> = {};
+    let userPackageJson: string | null = null;
     for (const [filePath, content] of Object.entries(artifact.files)) {
       const stripped = filePath.startsWith('/') ? filePath.slice(1) : filePath;
       if (
@@ -1152,13 +1157,47 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       ) {
         continue;
       }
+      if (stripped === 'package.json') {
+        userPackageJson = content;
+        continue;
+      }
       filesPayload[stripped] = { content };
     }
 
-    const definePayload = {
-      files: filesPayload,
-      template: artifact.sandpack_config?.template ?? artifact.template,
+    let userPkg: Record<string, unknown> = {};
+    if (userPackageJson) {
+      try {
+        const parsed = JSON.parse(userPackageJson);
+        if (typeof parsed === 'object' && parsed !== null) {
+          userPkg = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Forgive malformed user package.json — synthesize one from the
+        // dependency cache rather than failing the whole export.
+      }
+    }
+    const customSetupDeps = artifact.sandpack_config?.customSetup?.dependencies ?? {};
+    const cachedDeps = artifact.dependencies ?? {};
+    const mergedDeps: Record<string, string> = {
+      ...customSetupDeps,
+      ...cachedDeps,
+      ...((userPkg.dependencies as Record<string, string> | undefined) ?? {}),
     };
+    const finalPkg: Record<string, unknown> = {
+      name: 'artifact-export',
+      version: '0.0.0',
+      main: artifact.entry ?? userPkg.main ?? 'src/index.js',
+      ...userPkg,
+      dependencies: mergedDeps,
+    };
+    filesPayload['package.json'] = { content: JSON.stringify(finalPkg, null, 2) };
+
+    // Don't send a top-level `template` — Sandpack template names (`react`,
+    // `react-ts`, `vue3`, …) are NOT valid CSB template names (`create-
+    // react-app`, `vue-cli`, …). CSB returns "Unable to process params"
+    // when given a Sandpack name. Letting CSB infer from package.json deps
+    // is both simpler and more reliable.
+    const definePayload = { files: filesPayload };
 
     let res: Response;
     try {

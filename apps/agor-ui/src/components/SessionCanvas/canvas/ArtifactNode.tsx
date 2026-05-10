@@ -226,6 +226,20 @@ function SandpackErrorReporter({ artifactId }: { artifactId: string }) {
   return null;
 }
 
+/** Forgiving JSON parse — used when reading a user's package.json which may
+ *  be malformed; we'd rather export with a synthesized package.json than
+ *  fail the whole flow. */
+function safeJsonParse(input: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(input);
+    return typeof parsed === 'object' && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export const ArtifactNode = ({
   data,
   selected,
@@ -296,6 +310,7 @@ export const ArtifactNode = ({
   );
 
   // Eject the artifact to a fresh CodeSandbox sandbox in a new tab.
+  // (helper used inside the handler to forgive parse errors on user pkg.json)
   //
   // Browser-side form-POST instead of a daemon round-trip — the daemon's
   // outbound IP is consistently blocked by Cloudflare on CodeSandbox's
@@ -307,6 +322,7 @@ export const ArtifactNode = ({
   const handleOpenInCodeSandbox = useCallback(() => {
     if (!payload) return;
     const filesPayload: Record<string, { content: string }> = {};
+    let userPackageJson: string | null = null;
     for (const [filePath, content] of Object.entries(payload.files)) {
       const stripped = filePath.startsWith('/') ? filePath.slice(1) : filePath;
       // Strip Agor-only sidecars + the synthesized .env — they'd be inert
@@ -319,12 +335,45 @@ export const ArtifactNode = ({
       ) {
         continue;
       }
+      // Hold onto the user's package.json (if any) — we merge it below to
+      // make sure CSB sees the artifact's dependencies even when the
+      // author kept them in `sandpack_config.customSetup` rather than the
+      // package.json itself.
+      if (stripped === 'package.json') {
+        userPackageJson = content;
+        continue;
+      }
       filesPayload[stripped] = { content };
     }
-    const definePayload = {
-      files: filesPayload,
-      template: payload.sandpack_config?.template ?? payload.template,
+
+    // Merge dependencies: user's package.json > artifact.dependencies cache
+    // > sandpack_config.customSetup.dependencies. CSB infers the runtime
+    // (CRA / vue-cli / svelte / parcel / …) from the dependency graph in
+    // `package.json`, so getting this right is what makes the export work.
+    const userPkg: Record<string, unknown> =
+      (userPackageJson ? safeJsonParse(userPackageJson) : null) ?? {};
+    const customSetupDeps = payload.sandpack_config?.customSetup?.dependencies ?? {};
+    const cachedDeps = payload.dependencies ?? {};
+    const mergedDeps: Record<string, string> = {
+      ...customSetupDeps,
+      ...cachedDeps,
+      ...((userPkg.dependencies as Record<string, string> | undefined) ?? {}),
     };
+    const finalPkg: Record<string, unknown> = {
+      name: 'artifact-export',
+      version: '0.0.0',
+      main: payload.entry ?? userPkg.main ?? 'src/index.js',
+      ...userPkg,
+      dependencies: mergedDeps,
+    };
+    filesPayload['package.json'] = { content: JSON.stringify(finalPkg, null, 2) };
+
+    // Don't send a top-level `template` — Sandpack template names (`react`,
+    // `react-ts`, `vue3`, …) are NOT valid CSB template names (`create-
+    // react-app`, `vue-cli`, …). Letting CSB infer from package.json deps
+    // is both simpler and more reliable than maintaining a translation
+    // table.
+    const definePayload = { files: filesPayload };
     const parameters = compressToBase64(JSON.stringify(definePayload))
       .replace(/\+/g, '-')
       .replace(/\//g, '_')
