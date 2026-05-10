@@ -2164,6 +2164,13 @@ async function registerMCPServices(
           }
         };
 
+        // Skip pre-resolution URL validation for templated URLs — `new URL()`
+        // rejects whitespace inside `{{ user.env.X }}` (and full-URL templates
+        // like `{{ user.env.MCP_URL }}` have no scheme yet), so validating
+        // pre-resolution would block legitimate templates from ever reaching
+        // the resolver. The resolved URL is re-validated below before use.
+        const isTemplated = (url: string): boolean => url.includes('{{');
+
         const hasInlineConfig = !!data.url;
         let serverConfig: {
           url: string;
@@ -2176,8 +2183,10 @@ async function registerMCPServices(
         let serverId: string | undefined;
 
         if (hasInlineConfig) {
-          const urlValidation = validateUrl(data.url!);
-          if (!urlValidation.valid) return { success: false, error: urlValidation.error };
+          if (!isTemplated(data.url!)) {
+            const urlValidation = validateUrl(data.url!);
+            if (!urlValidation.valid) return { success: false, error: urlValidation.error };
+          }
           serverConfig = {
             url: data.url!,
             transport: data.transport || 'http',
@@ -2224,7 +2233,7 @@ async function registerMCPServices(
                 error: 'Access denied: admin role required to discover session-scoped MCP servers',
               };
           }
-          if (server.url) {
+          if (server.url && !isTemplated(server.url)) {
             const urlValidation = validateUrl(server.url);
             if (!urlValidation.valid) return { success: false, error: urlValidation.error };
           }
@@ -2277,7 +2286,12 @@ async function registerMCPServices(
           }
 
           serverConfig.auth = resolution.resolved.auth as typeof serverConfig.auth;
-          if (resolution.resolved.url !== serverConfig.url) {
+          // Re-validate whenever the input URL was templated, even if the
+          // resolved string happens to match the input (e.g., a user env
+          // value that itself looks like the template). Pre-resolution
+          // validation is skipped for templated URLs, so this is the only
+          // gate that runs for them.
+          if (resolution.resolved.url !== serverConfig.url || isTemplated(serverConfig.url)) {
             const recheck = validateUrl(resolution.resolved.url);
             if (!recheck.valid) return { success: false, error: recheck.error };
             serverConfig.url = resolution.resolved.url;
