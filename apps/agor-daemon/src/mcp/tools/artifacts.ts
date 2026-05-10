@@ -572,7 +572,7 @@ Caps: 50 nodes max, 50KB outerHTML per node, 5KB textContent per node. Tightened
 Use cases:
 - "Did my artifact actually render the new heading?" — \`{ selector: 'h1' }\`
 - "Inspect a list of cards" — \`{ selector: '.card', multiple: true }\`
-- "Get the full document" — use \`agor_artifacts_query_dom\` with \`selector: 'html'\` or call agor_artifacts_query_document_html (lower-level dump).`,
+- "Get the full document" — use \`{ selector: 'html' }\`, or call \`agor_artifacts_query_document_html\` for an unstructured dump of the entire \`document.documentElement.outerHTML\`.`,
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         artifactId: z.string().describe('Artifact ID (full UUID or short prefix)'),
@@ -606,6 +606,44 @@ Use cases:
             multiple: args.multiple,
             maxNodes: args.maxNodes,
           },
+          timeoutMs: args.timeoutMs,
+        });
+        return textResult(result);
+      } catch (err) {
+        return textResult({
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  );
+
+  // Tool 11: agor_artifacts_query_document_html
+  server.registerTool(
+    'agor_artifacts_query_document_html',
+    {
+      description: `Return the rendered artifact's full \`document.documentElement.outerHTML\` (unstructured dump).
+
+Same round-trip as agor_artifacts_query_dom: requires \`agor_runtime.enabled\` and a browser tab logged in as YOU currently viewing the artifact.
+
+Capped at 200KB. Truncated output ends with \`... [truncated]\`. For targeted queries prefer agor_artifacts_query_dom with a CSS selector — this tool is the "give me everything" escape hatch when you don't know what to look for yet.`,
+      annotations: { readOnlyHint: true },
+      inputSchema: z.object({
+        artifactId: z.string().describe('Artifact ID (full UUID or short prefix)'),
+        timeoutMs: z
+          .number()
+          .optional()
+          .describe('How long to wait for the browser to answer (500-30000). Default: 5000.'),
+      }),
+    },
+    async (args) => {
+      const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
+      const artifactId = await resolveArtifactId(ctx, coerceString(args.artifactId)!);
+      try {
+        const result = await service.queryArtifactRuntime({
+          artifactId,
+          userId: ctx.userId,
+          kind: 'document_html',
+          args: {},
           timeoutMs: args.timeoutMs,
         });
         return textResult(result);
