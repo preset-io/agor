@@ -89,6 +89,7 @@ describeIntegration('MCP Tools - Session Tools', () => {
     expect(toolNames).toContain('agor_repos_get');
     expect(toolNames).toContain('agor_repos_create_remote');
     expect(toolNames).toContain('agor_repos_create_local');
+    expect(toolNames).toContain('agor_repos_update');
     expect(toolNames).toContain('agor_worktrees_get');
     expect(toolNames).toContain('agor_worktrees_list');
     expect(toolNames).toContain('agor_worktrees_update');

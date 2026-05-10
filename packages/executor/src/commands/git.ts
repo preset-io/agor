@@ -21,6 +21,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseAgorYml } from '@agor/core/config';
 import {
+  categorizeGitError,
   cleanWorktree,
   cloneRepo,
   createWorktree,
@@ -201,25 +202,44 @@ export async function handleGitClone(
       // some-feature-branch" actually persist into the DB record instead
       // of being silently overwritten by whatever GitHub's HEAD points at.
       const defaultBranch = payload.params.default_branch?.trim() || cloneResult.defaultBranch;
-      console.log(
-        `[git.clone] Creating repo record: slug=${slug} default_branch=${defaultBranch}` +
-          (payload.params.default_branch ? ' (user-supplied)' : ' (auto-detected)')
-      );
 
-      // Create repo via Feathers service
-      // The daemon's repos service handles validation and hooks
-      const repoRecord = await client.service('repos').create({
-        repo_type: 'remote',
-        slug,
-        name: repoName,
-        remote_url: payload.params.url,
-        local_path: cloneResult.path,
-        default_branch: defaultBranch,
-        ...(environment ? { environment } : {}),
-      });
-
-      repoId = repoRecord.repo_id;
-      console.log(`[git.clone] Repo record created: ${repoId}`);
+      if (payload.params.repoId) {
+        // Daemon pre-created the row in `cloneRepository` so failures stay
+        // queryable. Patch it to `ready` and fill in the post-clone fields.
+        repoId = payload.params.repoId;
+        console.log(
+          `[git.clone] Patching pre-created repo ${repoId.substring(0, 8)} to ready: ` +
+            `slug=${slug} default_branch=${defaultBranch}` +
+            (payload.params.default_branch ? ' (user-supplied)' : ' (auto-detected)')
+        );
+        await client.service('repos').patch(repoId, {
+          name: repoName,
+          local_path: cloneResult.path,
+          default_branch: defaultBranch,
+          clone_status: 'ready',
+          ...(environment ? { environment } : {}),
+        });
+      } else {
+        // Legacy fallback (no pre-created row): create the record now. Used
+        // when a caller invokes the executor directly without going through
+        // `reposService.cloneRepository` (e.g. ad-hoc tooling).
+        console.log(
+          `[git.clone] Creating repo record: slug=${slug} default_branch=${defaultBranch}` +
+            (payload.params.default_branch ? ' (user-supplied)' : ' (auto-detected)')
+        );
+        const repoRecord = await client.service('repos').create({
+          repo_type: 'remote',
+          slug,
+          name: repoName,
+          remote_url: payload.params.url,
+          local_path: cloneResult.path,
+          default_branch: defaultBranch,
+          clone_status: 'ready',
+          ...(environment ? { environment } : {}),
+        });
+        repoId = repoRecord.repo_id;
+        console.log(`[git.clone] Repo record created: ${repoId}`);
+      }
 
       // Initialize Unix group for repo isolation via daemon RPC (if requested).
       // Runs daemon-side so that groupadd/chgrp/setfacl execute with daemon
@@ -257,6 +277,40 @@ export async function handleGitClone(
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('[git.clone] Failed:', errorMessage);
+
+    // Persist failure on the pre-created repo row so MCP / REST callers can
+    // discover the outcome via `agor_repos_get(repoId)` instead of polling
+    // `agor_repos_list` forever for a row that will never appear. The daemon
+    // also broadcasts WebSocket `repo:cloneError` independently — this row
+    // is the durable record for clients that connect later.
+    if (payload.params.repoId && client) {
+      try {
+        const category = categorizeGitError(errorMessage);
+        const firstLine = errorMessage.split('\n')[0]?.slice(0, 500) || errorMessage.slice(0, 500);
+        await client.service('repos').patch(payload.params.repoId, {
+          clone_status: 'failed',
+          clone_error: {
+            // simple-git wraps git's exit code in the message rather than
+            // surfacing it as a numeric field; default to 1 since the
+            // underlying call already failed.
+            exit_code: 1,
+            category,
+            message: firstLine,
+          },
+        });
+        console.log(
+          `[git.clone] Marked repo ${payload.params.repoId.substring(0, 8)} as failed (${category})`
+        );
+      } catch (patchError) {
+        // Best-effort: if the daemon-side patch fails, the daemon's `onExit`
+        // handler in `cloneRepository` is the safety net (it patches based on
+        // exit code alone) — log and move on.
+        console.error(
+          '[git.clone] Failed to mark repo as failed:',
+          patchError instanceof Error ? patchError.message : String(patchError)
+        );
+      }
+    }
 
     return {
       success: false,

@@ -116,10 +116,11 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
  */
 export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersParams> {
   addLocalRepository(data: { path: string; slug?: string }, params?: FeathersParams): Promise<Repo>;
+  findBySlug(slug: string, params?: FeathersParams): Promise<Repo | null>;
   cloneRepository(
-    data: { url: string; name?: string; slug?: string; destination?: string },
+    data: { url: string; name?: string; slug?: string; default_branch?: string },
     params?: FeathersParams
-  ): Promise<Repo>;
+  ): Promise<{ status: 'pending' | 'exists'; slug: string; repo_id?: string }>;
   createWorktree(
     id: string,
     data: {

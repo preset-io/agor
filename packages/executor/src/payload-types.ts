@@ -191,6 +191,16 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
     /** Create DB record after clone (default: true) */
     createDbRecord: z.boolean().optional().default(true),
 
+    /**
+     * Pre-existing repo row to patch with clone outcome. When set, the
+     * executor patches this row with `clone_status: 'ready'` (success) or
+     * `'failed'` (with `clone_error`) instead of creating a new row. The
+     * daemon pre-creates the row in `cloneRepository` so failures are
+     * persisted (and queryable) instead of vanishing into a dropped
+     * `{ status: 'pending' }` response.
+     */
+    repoId: z.string().optional(),
+
     /** User ID of the requesting user (for per-user credential resolution) */
     userId: z.string().uuid().optional(),
 

@@ -260,6 +260,55 @@ export function buildAuthHeaderEnv(
 }
 
 /**
+ * Bucket a git error message into a coarse category so callers (UI, MCP) can
+ * suggest the right next step.
+ *
+ * The buckets line up with `RepoCloneErrorCategory` in
+ * `packages/core/src/types/repo.ts`. The matching is intentionally loose —
+ * git's stderr varies across versions and remotes, and a false-positive
+ * `auth_failed` is cheaper than `unknown` for the user trying to recover.
+ *
+ * `'auth_failed'` is the bucket whose copy points users at Settings → API
+ * Keys (the most common reason private clones silently failed pre-#1126).
+ */
+export type GitErrorCategory = 'auth_failed' | 'not_found' | 'network' | 'unknown';
+
+export function categorizeGitError(stderr: string): GitErrorCategory {
+  const s = stderr.toLowerCase();
+  if (
+    s.includes('authentication failed') ||
+    s.includes('could not read username') ||
+    s.includes('could not read password') ||
+    s.includes('terminal prompts disabled') ||
+    s.includes('fatal: authentication') ||
+    s.includes('http basic') ||
+    s.includes('403 forbidden') ||
+    s.includes('permission denied (publickey)')
+  ) {
+    return 'auth_failed';
+  }
+  if (
+    s.includes('repository not found') ||
+    s.includes('not found') ||
+    s.includes('does not exist') ||
+    s.includes('404')
+  ) {
+    return 'not_found';
+  }
+  if (
+    s.includes('could not resolve host') ||
+    s.includes('connection refused') ||
+    s.includes('connection timed out') ||
+    s.includes('operation timed out') ||
+    s.includes('network is unreachable') ||
+    s.includes('network error')
+  ) {
+    return 'network';
+  }
+  return 'unknown';
+}
+
+/**
  * Mask `GIT_CONFIG_VALUE_<n>` entries carrying an `Authorization:` header.
  * Use before serialising env into logs / error reports. The match is loose
  * on purpose — a false-positive redaction is cheaper than a leaked token.

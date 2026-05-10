@@ -163,6 +163,37 @@ describe('RepoRepository.create', () => {
     expect(created.created_at).toBe(createdAt);
     expect(created.last_updated).toBe(lastUpdated);
   });
+
+  // Issue #1126 / Bug B: pre-#1126 a failed clone left zero state because the
+  // executor only wrote the row on success. Pre-create + patch lets MCP
+  // callers discover the outcome via `agor_repos_get(repoId)`.
+  dbTest('should round-trip clone_status and clone_error through data blob', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    const placeholder = await repo.create({
+      ...createRepoData({ slug: 'test/cloning' }),
+      clone_status: 'cloning',
+    });
+    expect(placeholder.clone_status).toBe('cloning');
+    expect(placeholder.clone_error).toBeUndefined();
+
+    const failed = await repo.update(placeholder.repo_id, {
+      clone_status: 'failed',
+      clone_error: {
+        exit_code: 128,
+        category: 'auth_failed',
+        message: 'fatal: Authentication failed for github.com',
+      },
+    });
+    expect(failed.clone_status).toBe('failed');
+    expect(failed.clone_error?.category).toBe('auth_failed');
+    expect(failed.clone_error?.exit_code).toBe(128);
+
+    // findById must surface the same shape (catches a regression where
+    // `rowToRepo` forgot to forward the new fields).
+    const fetched = await repo.findById(placeholder.repo_id);
+    expect(fetched?.clone_status).toBe('failed');
+    expect(fetched?.clone_error?.category).toBe('auth_failed');
+  });
 });
 
 // ============================================================================

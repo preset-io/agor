@@ -80,6 +80,8 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       ...data,
       environment,
       environment_config,
+      clone_status: data.clone_status,
+      clone_error: data.clone_error,
     };
   }
 
@@ -128,6 +130,8 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         default_branch: repo.default_branch,
         environment,
         environment_config,
+        clone_status: repo.clone_status,
+        clone_error: repo.clone_error,
       },
     };
   }

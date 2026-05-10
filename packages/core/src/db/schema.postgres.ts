@@ -449,6 +449,14 @@ export const repos = pgTable(
         remote_url?: string;
         local_path: string; // Absolute path to base repository
         default_branch?: string;
+        // Async clone lifecycle: 'cloning' → 'ready' | 'failed'. Undefined for
+        // legacy rows and for local-type repos. See packages/core/src/types/repo.ts.
+        clone_status?: 'cloning' | 'ready' | 'failed';
+        clone_error?: {
+          exit_code: number;
+          category: 'auth_failed' | 'not_found' | 'network' | 'unknown';
+          message: string;
+        };
         // v2 environment config — source of truth. Named variants + optional
         // deployment-local template_overrides. See RepoEnvironment in
         // packages/core/src/types/worktree.ts.

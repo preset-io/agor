@@ -128,9 +128,42 @@ export interface Repo {
    */
   unix_group?: string;
 
+  /**
+   * Async clone lifecycle status for `repo_type: 'remote'` repos.
+   *
+   * - `'cloning'`: row was pre-created by the daemon; executor is running `git clone`
+   * - `'ready'`: clone finished successfully (executor patched the row)
+   * - `'failed'`: clone exited non-zero — see `clone_error` for details
+   * - `undefined`: legacy row created before this field existed, or `repo_type: 'local'`
+   *
+   * Callers that need to know whether a remote clone succeeded should poll
+   * `agor_repos_get(repoId)` and treat anything other than `'ready'`/`undefined`
+   * as not-yet-usable.
+   */
+  clone_status?: RepoCloneStatus;
+
+  /**
+   * Populated when `clone_status === 'failed'`. Cleared on retry.
+   *
+   * `category` exists so a UI can suggest the right next step
+   * (e.g. `auth_failed` → "configure GITHUB_TOKEN in Settings → API Keys").
+   */
+  clone_error?: RepoCloneError;
+
   /** Repository metadata */
   created_at: string;
   last_updated: string;
+}
+
+export type RepoCloneStatus = 'cloning' | 'ready' | 'failed';
+
+export type RepoCloneErrorCategory = 'auth_failed' | 'not_found' | 'network' | 'unknown';
+
+export interface RepoCloneError {
+  exit_code: number;
+  category: RepoCloneErrorCategory;
+  /** Short, user-facing first-line message (stderr excerpt or wrapper message). */
+  message: string;
 }
 
 /**

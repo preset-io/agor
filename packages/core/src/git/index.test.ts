@@ -11,6 +11,7 @@ import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  categorizeGitError,
   cloneRepo,
   createWorktree,
   extractRepoName,
@@ -1231,5 +1232,38 @@ describe('cloneRepo', () => {
     await cloneRepo({ url: remoteDir });
 
     await expect(cloneRepo({ url: remoteDir, branch: 'does-not-exist' })).rejects.toThrow();
+  });
+});
+
+describe('categorizeGitError', () => {
+  // Issue #1126 / Bug B: clone failures need to bucket into categories so the
+  // UI / MCP can suggest the right next step. The auth_failed bucket is the
+  // important one — it's the path that points users at Settings → API Keys.
+  it('categorizes private-repo authentication failures as auth_failed', () => {
+    expect(
+      categorizeGitError('fatal: Authentication failed for https://github.com/foo/bar.git/')
+    ).toBe('auth_failed');
+    expect(categorizeGitError('remote: HTTP Basic: Access denied')).toBe('auth_failed');
+    expect(categorizeGitError('Permission denied (publickey).')).toBe('auth_failed');
+    expect(categorizeGitError('terminal prompts disabled')).toBe('auth_failed');
+  });
+
+  it('categorizes missing repos as not_found', () => {
+    expect(categorizeGitError('remote: Repository not found.')).toBe('not_found');
+    expect(categorizeGitError('error: 404 not found')).toBe('not_found');
+  });
+
+  it('categorizes connectivity issues as network', () => {
+    expect(categorizeGitError('fatal: unable to access: Could not resolve host: github.com')).toBe(
+      'network'
+    );
+    expect(
+      categorizeGitError('fatal: unable to connect to git.example.com: Connection refused')
+    ).toBe('network');
+  });
+
+  it('falls through to unknown for unrecognised stderr', () => {
+    expect(categorizeGitError('fatal: corrupted ref refs/heads/main')).toBe('unknown');
+    expect(categorizeGitError('')).toBe('unknown');
   });
 });

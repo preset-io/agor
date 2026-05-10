@@ -26,8 +26,10 @@ import { type Database, RepoRepository, WorktreeRepository } from '@agor/core/db
 import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
+  extractRepoName,
   getDefaultBranch,
   getRemoteUrl,
+  getReposDir,
   getWorktreePath,
   isValidGitRepo,
   listWorktrees,
@@ -134,19 +136,27 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   /**
    * Custom method: Clone repository (fire-and-forget)
    *
-   * Spawns executor to handle everything:
+   * The DB row is created EARLY (here) with `clone_status: 'cloning'` so
+   * MCP / UI callers can discover the outcome via `agor_repos_get(repoId)`
+   * even when the clone fails — fixes #1126's "silent pending forever"
+   * symptom. The executor then handles:
    * - Git clone
    * - Parse .agor.yml
-   * - Create DB record via Feathers
+   * - Patch the existing row to `'ready'` (with parsed env, default branch)
+   *   or `'failed'` (with categorized clone_error)
    * - Initialize Unix group
    *
-   * Returns immediately with { status: 'pending' }.
-   * Client receives 'repos.created' WebSocket event when complete.
+   * Returns immediately with `{ status: 'pending', slug, repo_id }`.
+   * Clients see a `repos.created` event for the placeholder row, then a
+   * `repos.patched` event when the clone finishes.
+   *
+   * Slug-collision policy: a previous `clone_status: 'failed'` row is
+   * deleted to allow seamless retry; any other state surfaces `'exists'`.
    */
   async cloneRepository(
     data: { url: string; slug?: string; name?: string; default_branch?: string },
     params?: RepoParams
-  ): Promise<{ status: 'pending' | 'exists'; slug: string }> {
+  ): Promise<{ status: 'pending' | 'exists'; slug: string; repo_id?: string }> {
     // Note: `||` (not `??`) is intentional — we want an empty `data.slug`
     // to fall through to derivation rather than be treated as "explicit".
     let slug = data.slug || data.name;
@@ -159,22 +169,31 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       throw new Error('Could not derive a valid slug from URL. Please provide a slug.');
     }
 
-    // If repo with this slug already exists, this is a no-op but we surface
-    // it as `status: 'exists'` (rather than `pending`) so callers can give
-    // users immediate feedback — otherwise the UI would wait indefinitely
-    // for a `repos.created` event that will never fire.
+    // Slug-collision policy:
+    // - `clone_status: 'failed'` → previous attempt left a tombstone row;
+    //   delete it so the user can retry without manually cleaning up.
+    //   Cascades to any half-initialized worktree rows (FK onDelete: cascade).
+    // - any other state (ready / cloning / undefined-legacy) → surface
+    //   `'exists'` so callers don't unintentionally clobber a working repo
+    //   or interrupt an in-flight clone.
     const existing = await this.repoRepo.findBySlug(slug);
     if (existing) {
-      return { status: 'exists', slug };
+      if (existing.clone_status === 'failed') {
+        console.log(
+          `[clone ${slug}] Found previous failed clone (${existing.repo_id.substring(0, 8)}); deleting to retry`
+        );
+        await this.repoRepo.delete(existing.repo_id);
+      } else {
+        return { status: 'exists', slug, repo_id: existing.repo_id };
+      }
     }
 
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
 
     // Generate service JWT for executor authentication. The executor talks back
-    // to the daemon to create the repo record (which may include
-    // environment_config from .agor.yml) and patch status — operations that
-    // materialize admin-defined templates rather than user edits. Using a
-    // service token ensures hooks like requireAdminForEnvConfig bypass via
+    // to the daemon to patch the pre-created repo row to 'ready'/'failed' (and
+    // surface the parsed `.agor.yml` environment on success). Using a service
+    // token ensures hooks like requireAdminForEnvConfig bypass via
     // _isServiceAccount. Executor fetches per-user credentials via Feathers
     // RPC (users.getGitEnvironment) using the same service JWT.
     const sessionToken = generateSessionToken(
@@ -188,11 +207,41 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const asUser =
       rbacEnabled && userId ? await resolveGitImpersonationForUser(this.db, userId) : undefined;
 
+    // Pre-create the repo row with `clone_status: 'cloning'` so failures stay
+    // queryable via `agor_repos_get(repoId)`. Pre-#1126 the row was only
+    // created on success by the executor — a failed clone left zero state and
+    // MCP callers had no way to discover the outcome (issue #1126 bug B).
+    //
+    // Use the Feathers service `create` (not `repoRepo.create`) so the
+    // standard `repos.created` WebSocket event fires and the UI can render
+    // a "cloning" card immediately, then transition to ready/failed when the
+    // executor patches the row.
+    //
+    // local_path is computed best-effort (mirrors what the executor will use
+    // inside `cloneRepo`); the executor patches it to the actual on-disk path
+    // on success.
+    const expectedRepoName = extractRepoName(data.url);
+    const expectedLocalPath = path.join(getReposDir(), expectedRepoName);
+    const placeholder = (await this.create(
+      {
+        slug: slug as RepoSlug,
+        name: data.name || slug,
+        repo_type: 'remote',
+        remote_url: data.url,
+        local_path: expectedLocalPath,
+        ...(data.default_branch ? { default_branch: data.default_branch } : {}),
+        clone_status: 'cloning',
+      },
+      params
+    )) as Repo;
+    const repoId = placeholder.repo_id;
+
     // Fire and forget - spawn executor and return immediately.
-    // Executor handles: git clone, .agor.yml parsing, DB record creation.
+    // Executor handles: git clone, .agor.yml parsing, repo row patching.
     // Executor fetches per-user credentials via Feathers RPC (users.getGitEnvironment).
     // Unix group init (groupadd/chgrp/setfacl) runs daemon-side via repos.initializeUnixGroup RPC.
     const app = this.app;
+    const repoRepo = this.repoRepo;
     spawnExecutorFireAndForget(
       {
         command: 'git.clone',
@@ -201,6 +250,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         params: {
           url: data.url,
           slug,
+          repoId,
           // Forward the user-supplied default_branch so the executor
           // persists what the operator typed in "Add Repository" instead
           // of silently overwriting it with origin/HEAD.
@@ -215,7 +265,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         asUser, // Run as resolved user (fresh groups via sudo -u)
         onExit: (code) => {
           if (code !== 0 && code !== null) {
-            // Broadcast clone failure to all connected clients
+            // Broadcast clone failure to all connected clients (the existing
+            // toast UX). Persistent failure state lives on the repo row.
             console.error(
               `[clone ${slug}] Clone failed with exit code ${code}, broadcasting error`
             );
@@ -236,15 +287,43 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
                 slug,
                 url: data.url,
                 error: `Clone failed (exit code ${code}). Check that the repository URL is correct and accessible.${branchHint}`,
+                repo_id: repoId,
               });
             }
+
+            // Safety net: if the executor crashed before it could patch the
+            // row (e.g. lost daemon connection), the repo would be stuck in
+            // `'cloning'` forever. Force it to `'failed'` here, but only if
+            // it's still 'cloning' (don't clobber a 'failed' write the
+            // executor already made with a richer category/message).
+            void (async () => {
+              try {
+                const current = await repoRepo.findById(repoId);
+                if (current && current.clone_status === 'cloning') {
+                  await repoRepo.update(repoId, {
+                    clone_status: 'failed',
+                    clone_error: {
+                      exit_code: code,
+                      category: 'unknown',
+                      message: `Clone exited with code ${code} before reporting an error.`,
+                    },
+                  });
+                }
+              } catch (err) {
+                console.error(
+                  `[clone ${slug}] Failed to mark repo as failed in onExit safety net:`,
+                  err instanceof Error ? err.message : String(err)
+                );
+              }
+            })();
           }
         },
       }
     );
 
-    // Return immediately - client will receive WebSocket event when repo is created
-    return { status: 'pending', slug };
+    // Return immediately - callers can poll `agor_repos_get(repoId)` for
+    // `clone_status: 'ready' | 'failed'` to discover the final outcome.
+    return { status: 'pending', slug, repo_id: repoId };
   }
 
   /**
