@@ -546,7 +546,15 @@ export const ArtifactNode = ({
           }
         `}</style>
         <div
-          className="artifact-sandpack-wrapper"
+          // React Flow's node-drag, canvas-pan, and wheel-zoom listeners all
+          // attach at the node level and would otherwise fire on every
+          // mousedown/wheel inside the iframe. The `nodrag nopan nowheel`
+          // classes are React Flow's documented escape hatch — without them,
+          // dragging to text-select inside the artifact starts a node drag
+          // (so copy/paste / selection breaks), and scrolling a long page
+          // zooms the canvas. Only apply in interact mode so the card
+          // remains draggable when the iframe is overlay-blocked.
+          className={`artifact-sandpack-wrapper${interactMode ? ' nodrag nopan nowheel' : ''}`}
           style={{
             flex: 1,
             position: 'relative',
