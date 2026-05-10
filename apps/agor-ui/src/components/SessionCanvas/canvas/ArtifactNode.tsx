@@ -478,6 +478,10 @@ export const ArtifactNode = ({
                   <Button
                     type="text"
                     size="small"
+                    // `danger` themes the icon via Ant's colorError token —
+                    // signals "this artifact won't render with secrets until
+                    // you grant trust" without us hardcoding a hex.
+                    danger
                     icon={<LockOutlined />}
                     onClick={(e) => {
                       e.stopPropagation();
