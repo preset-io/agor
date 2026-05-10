@@ -188,6 +188,7 @@ const HANDLEBARS_ARTIFACT_BOARD_ID_RE = /\{\{\s*artifact\.boardId\s*\}\}/;
  * an interpolated upgrade prompt.
  */
 export function detectLegacyFormat(artifact: {
+  artifact_id?: string;
   files?: Record<string, string>;
   sandpack_config?: SandpackConfig;
   required_env_vars?: string[];
@@ -247,6 +248,7 @@ export function detectLegacyFormat(artifact: {
   const detectedEnvVarsArr = [...detectedEnvVars].sort();
   const detectedGrantsArr = [...detectedGrants].sort();
   const upgradeInstructions = renderUpgradeInstructions({
+    artifactId: artifact.artifact_id,
     detectedEnvVars: detectedEnvVarsArr,
     detectedGrants: detectedGrantsArr,
     signals: [...signals],
@@ -262,6 +264,7 @@ export function detectLegacyFormat(artifact: {
 }
 
 function renderUpgradeInstructions(input: {
+  artifactId?: string;
   detectedEnvVars: string[];
   detectedGrants: string[];
   signals: ArtifactLegacySignal[];
@@ -291,18 +294,29 @@ function renderUpgradeInstructions(input: {
   if (input.signals.includes('has_agor_config_js')) removals.push('agor.config.js');
   const removalsLine = removals.length > 0 ? removals.join(' and ') : '(none)';
 
+  // Pin the artifact id into the prompt so an agent given this string knows
+  // exactly which row to migrate. Without it the agent has to guess (or
+  // worse, batch-migrate every legacy artifact it can find).
+  const artifactRef = input.artifactId ? `"${input.artifactId}"` : '<this artifact id>';
+
   return [
-    'Use the agor_artifacts_get tool to read the current artifact files.',
-    'Then use agor_artifacts_publish to republish with the new format:',
-    `  - Drop these legacy files from the file map: ${removalsLine}`,
-    '  - Set sandpack_config (template, customSetup.entry, customSetup.dependencies)',
-    '    so the artifact still renders correctly.',
-    `  - Set required_env_vars: ${envVarsLine}`,
-    `  - Set agor_grants: ${grantsLine}`,
+    `Migrate ONLY this artifact: ${artifactRef}. Do not touch any other artifacts.`,
+    '',
+    `1. Read the current files: agor_artifacts_get(artifactId=${artifactRef}).`,
+    `2. Republish with the new format: agor_artifacts_publish(folderPath=<tmp folder you write the rewritten files to>, artifactId=${artifactRef}, …).`,
+    '',
+    'In the rewritten file map:',
+    `  - Drop these legacy files: ${removalsLine}`,
     '  - Update source files to read env vars via the bundler convention',
     '    (Vite: import.meta.env.VITE_*, CRA: process.env.REACT_APP_*,',
     '    Node: process.env.*) instead of {{ user.env.* }} or',
     '    {{ agor.* }} Handlebars tokens.',
+    '',
+    'In the publish call, set:',
+    '  - sandpack_config (template, customSetup.entry, customSetup.dependencies)',
+    '    so the artifact still renders correctly.',
+    `  - required_env_vars: ${envVarsLine}`,
+    `  - agor_grants: ${grantsLine}`,
     '',
     'Use agor_search_tools for the full publish/get tool schemas.',
   ].join('\n');

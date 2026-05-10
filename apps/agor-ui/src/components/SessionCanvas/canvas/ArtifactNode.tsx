@@ -36,6 +36,7 @@ import type {
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
+  CopyOutlined,
   DeleteOutlined,
   ExportOutlined,
   EyeOutlined,
@@ -57,6 +58,7 @@ import { compressToBase64 } from 'lz-string';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NodeResizer } from 'reactflow';
 import { getDaemonUrl } from '@/config/daemon';
+import { copyToClipboard } from '@/utils/clipboard';
 import { useThemedMessage } from '@/utils/message';
 import { ArtifactConsentModal } from '../../ArtifactConsentModal/ArtifactConsentModal';
 import { withBodyReset } from './utils/sandpackDefaults';
@@ -470,9 +472,9 @@ export const ArtifactNode = ({
     payload.trust_state === 'untrusted' &&
     ((payload.required_env_vars && payload.required_env_vars.length > 0) ||
       (payload.agor_grants && Object.keys(payload.agor_grants).length > 0));
-  const legacyBanner = payload.legacy?.is_legacy
-    ? renderLegacyBanner(payload.legacy.upgrade_instructions, token)
-    : null;
+  const legacyBanner = payload.legacy?.is_legacy ? (
+    <LegacyBanner upgradeInstructions={payload.legacy.upgrade_instructions} />
+  ) : null;
 
   return (
     <>
@@ -713,10 +715,14 @@ function renderTrustBadge(payload: ArtifactPayload) {
   );
 }
 
-function renderLegacyBanner(
-  upgradeInstructions: string,
-  token: ReturnType<typeof theme.useToken>['token']
-) {
+function LegacyBanner({ upgradeInstructions }: { upgradeInstructions: string }) {
+  const { token } = theme.useToken();
+  const { showSuccess, showError } = useThemedMessage();
+  const handleCopy = async () => {
+    const ok = await copyToClipboard(upgradeInstructions);
+    if (ok) showSuccess('Upgrade prompt copied — paste it to an agent');
+    else showError('Failed to copy — select the text manually and copy with the keyboard');
+  };
   return (
     <Alert
       type="warning"
@@ -733,25 +739,43 @@ function renderLegacyBanner(
           <summary style={{ cursor: 'pointer', color: token.colorTextSecondary }}>
             Show upgrade prompt for an agent
           </summary>
-          <pre
-            style={{
-              whiteSpace: 'pre-wrap',
-              fontSize: 10,
-              marginTop: 6,
-              padding: 8,
-              background: token.colorFillTertiary,
-              borderRadius: 4,
-              maxHeight: 180,
-              overflow: 'auto',
-              // React Flow nodes default to `user-select: none` to keep
-              // drag clean — opt this <pre> back into text selection so
-              // users can copy the upgrade prompt.
-              userSelect: 'text',
-              cursor: 'text',
-            }}
-          >
-            {upgradeInstructions}
-          </pre>
+          <div style={{ position: 'relative', marginTop: 6 }}>
+            <Button
+              type="text"
+              size="small"
+              icon={<CopyOutlined />}
+              onClick={handleCopy}
+              style={{
+                position: 'absolute',
+                top: 4,
+                right: 4,
+                zIndex: 1,
+                fontSize: 11,
+              }}
+            >
+              Copy
+            </Button>
+            <pre
+              style={{
+                whiteSpace: 'pre-wrap',
+                fontSize: 10,
+                margin: 0,
+                padding: 8,
+                paddingRight: 64, // leave room for the absolute-positioned copy button
+                background: token.colorFillTertiary,
+                borderRadius: 4,
+                maxHeight: 180,
+                overflow: 'auto',
+                // React Flow nodes default to `user-select: none` to keep
+                // drag clean — opt this <pre> back into text selection so
+                // users can copy the upgrade prompt manually too.
+                userSelect: 'text',
+                cursor: 'text',
+              }}
+            >
+              {upgradeInstructions}
+            </pre>
+          </div>
         </details>
       }
     />
