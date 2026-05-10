@@ -2256,7 +2256,7 @@ async function registerMCPServices(
         // this, Test Connection sends the literal `Bearer {{ user.env.X }}`
         // string and the MCP server returns 401, even though the server works
         // fine in real sessions.
-        const userId = (params as AuthenticatedParams).user?.user_id as UserID | undefined;
+        const userId = params?.user?.user_id as UserID | undefined;
         if (userId) {
           const { resolveUserEnvironment, AGOR_USER_ENV_KEYS_VAR } = await import(
             '@agor/core/config'
