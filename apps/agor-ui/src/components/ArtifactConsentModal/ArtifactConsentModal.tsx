@@ -22,11 +22,12 @@
 
 import type { AgorGrants, ArtifactTrustScopeType } from '@agor-live/client';
 import { LockOutlined, SafetyCertificateOutlined, WarningOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Modal, message, Radio, Space, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Modal, Radio, Space, Tag, Typography } from 'antd';
 import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 import { getDaemonUrl } from '@/config/daemon';
 import { useAuthConfig } from '@/hooks/useAuthConfig';
+import { useThemedMessage } from '@/utils/message';
 import { FileCollection, type FileItem } from '../FileCollection/FileCollection';
 
 interface ArtifactConsentModalProps {
@@ -68,6 +69,7 @@ export function ArtifactConsentModal({
   onGranted,
 }: ArtifactConsentModalProps) {
   const { featuresConfig } = useAuthConfig();
+  const { showSuccess, showError } = useThemedMessage();
   const [scope, setScope] = useState<Exclude<ArtifactTrustScopeType, 'self'>>('artifact');
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -102,13 +104,13 @@ export function ArtifactConsentModal({
       });
       if (!res.ok) {
         const detail = await res.text().catch(() => '');
-        message.error(`Failed to grant trust: ${res.statusText} ${detail}`);
+        showError(`Failed to grant trust: ${res.statusText} ${detail}`);
         return;
       }
-      message.success('Trust granted');
+      showSuccess('Trust granted');
       onGranted();
     } catch (err) {
-      message.error(`Failed to grant trust: ${err instanceof Error ? err.message : String(err)}`);
+      showError(`Failed to grant trust: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSubmitting(false);
     }

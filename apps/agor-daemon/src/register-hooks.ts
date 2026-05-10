@@ -591,32 +591,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       requireAuth
     );
 
-    // Export artifact to CodeSandbox via their define API. The "Open in
-    // CodeSandbox" button on the artifact card calls this; the same path is
-    // exposed to agents via the agor_artifacts_export_codesandbox MCP tool.
-    // Returns { url, sandboxId, note } on success or { error } on failure.
-    registerAuthenticatedRoute(
-      app,
-      '/artifacts/:id/export/codesandbox',
-      {
-        async create(_data: unknown, params: RouteParams) {
-          const artifactId = params.route?.id;
-          if (!artifactId) throw new Error('Artifact ID required');
-          const userId = params.user?.user_id;
-          const artifactsService = app.service('artifacts') as unknown as ArtifactsService;
-          try {
-            return await artifactsService.exportToCodeSandbox(artifactId, userId);
-          } catch (err) {
-            return { error: err instanceof Error ? err.message : String(err) };
-          }
-        },
-      },
-      {
-        create: { role: ROLES.MEMBER, action: 'export artifact to codesandbox' },
-      },
-      requireAuth
-    );
-
     // List the calling user's active trust grants. Used by the settings page.
     registerAuthenticatedRoute(
       app,

@@ -52,10 +52,12 @@ import {
   useSandpack,
   useSandpackConsole,
 } from '@codesandbox/sandpack-react';
-import { Alert, Badge, Button, Card, message, Spin, Tag, Tooltip, Typography, theme } from 'antd';
+import { Alert, Badge, Button, Card, Spin, Tag, Tooltip, Typography, theme } from 'antd';
+import { compressToBase64 } from 'lz-string';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NodeResizer } from 'reactflow';
 import { getDaemonUrl } from '@/config/daemon';
+import { useThemedMessage } from '@/utils/message';
 import { ArtifactConsentModal } from '../../ArtifactConsentModal/ArtifactConsentModal';
 import { withBodyReset } from './utils/sandpackDefaults';
 
@@ -232,6 +234,7 @@ export const ArtifactNode = ({
   selected?: boolean;
 }) => {
   const { token } = theme.useToken();
+  const { showError } = useThemedMessage();
   const [interactMode, setInteractMode] = useState(false);
   const [payload, setPayload] = useState<ArtifactPayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -293,32 +296,58 @@ export const ArtifactNode = ({
   );
 
   // Eject the artifact to a fresh CodeSandbox sandbox in a new tab.
-  // Open the tab synchronously on click, then redirect it after the daemon
-  // returns the URL — async window.open() is blocked by most popup blockers.
+  //
+  // Browser-side form-POST instead of a daemon round-trip — the daemon's
+  // outbound IP is consistently blocked by Cloudflare on CodeSandbox's
+  // define endpoint, but real browser submissions go through. This is also
+  // what AntD/Storybook do for their "Open in CodeSandbox" buttons.
+  //
+  // Implementation matches @codesandbox/sandpack-client's `getParameters`:
+  // LZString.compressToBase64 with URL-safe character substitution.
   const handleOpenInCodeSandbox = useCallback(() => {
-    const newTab = window.open('about:blank', '_blank');
-    void (async () => {
-      try {
-        const res = await fetch(
-          `${getDaemonUrl()}/artifacts/${data.artifactId}/export/codesandbox`,
-          { method: 'POST', headers: getAuthHeaders() }
-        );
-        const body = (await res.json()) as { url?: string; error?: string };
-        if (!res.ok || body.error || !body.url) {
-          newTab?.close();
-          message.error(`Open in CodeSandbox failed: ${body.error ?? res.statusText}`);
-          return;
-        }
-        if (newTab) newTab.location.href = body.url;
-        else window.open(body.url, '_blank');
-      } catch (err) {
-        newTab?.close();
-        message.error(
-          `Open in CodeSandbox failed: ${err instanceof Error ? err.message : String(err)}`
-        );
+    if (!payload) return;
+    const filesPayload: Record<string, { content: string }> = {};
+    for (const [filePath, content] of Object.entries(payload.files)) {
+      const stripped = filePath.startsWith('/') ? filePath.slice(1) : filePath;
+      // Strip Agor-only sidecars + the synthesized .env — they'd be inert
+      // (or broken) outside Agor. The synthesized .env carries the viewer's
+      // secrets; never ship it to a third party.
+      if (
+        stripped === 'agor.config.js' ||
+        stripped === 'agor.artifact.json' ||
+        stripped === '.env'
+      ) {
+        continue;
       }
-    })();
-  }, [data.artifactId]);
+      filesPayload[stripped] = { content };
+    }
+    const definePayload = {
+      files: filesPayload,
+      template: payload.sandpack_config?.template ?? payload.template,
+    };
+    const parameters = compressToBase64(JSON.stringify(definePayload))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = 'https://codesandbox.io/api/v1/sandboxes/define';
+    form.target = '_blank';
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'parameters';
+    input.value = parameters;
+    form.appendChild(input);
+    document.body.appendChild(form);
+    try {
+      form.submit();
+    } catch (err) {
+      showError(`Open in CodeSandbox failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      form.remove();
+    }
+  }, [payload, showError]);
 
   // Loading state
   if (loading && !payload) {
