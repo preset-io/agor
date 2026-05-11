@@ -218,7 +218,17 @@ function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
         kind: string;
         args: Record<string, unknown>;
       };
-      if (!detail || detail.artifact_id !== artifactId) return;
+      if (!detail) return;
+      if (detail.artifact_id !== artifactId) {
+        console.log(
+          `[agor-query] bridge skip (wrong artifact): mine=${artifactId.slice(0, 8)} event=${detail.artifact_id?.slice(0, 8)} requestId=${detail.request_id}`
+        );
+        return;
+      }
+      console.log(
+        `[agor-query] bridge received requestId=${detail.request_id} kind=${detail.kind} ` +
+          `iframeAttached=${!!iframe.current?.contentWindow}`
+      );
 
       // Requester filter: the daemon's `agor-query` event broadcasts on
       // the global authenticated channel, so EVERY logged-in tab receives
@@ -231,12 +241,21 @@ function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
       // prevent.
       if (detail.requested_by_user_id) {
         const currentUserId = getCurrentUserIdFromJwt();
-        if (!currentUserId || currentUserId !== detail.requested_by_user_id) return;
+        if (!currentUserId || currentUserId !== detail.requested_by_user_id) {
+          console.log(
+            `[agor-query] bridge skip (wrong user): requestId=${detail.request_id} ` +
+              `mine=${currentUserId?.slice(0, 8) ?? 'null'} requestedBy=${detail.requested_by_user_id.slice(0, 8)}`
+          );
+          return;
+        }
       }
 
       const requestId = detail.request_id;
       const target = iframe.current?.contentWindow;
       if (!target) {
+        console.log(
+          `[agor-query] bridge no iframe contentWindow requestId=${requestId} — query will time out`
+        );
         // Iframe not yet attached; can't answer this query. The daemon's
         // pending entry will time out and surface a clean error to the
         // agent. No need to POST a synthetic failure here.
@@ -251,6 +270,9 @@ function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
         // iframe we just dispatched to, not from any other postMessage
         // source that happens to know our requestId.
         if (msgEvent.source !== target) return;
+        console.log(
+          `[agor-query] iframe replied requestId=${requestId} ok=${!!data.ok} ${data.error ? `error=${data.error}` : ''}`
+        );
         cleanup();
         void postResult({ ok: !!data.ok, result: data.result, error: data.error });
       };
@@ -280,6 +302,9 @@ function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
       };
 
       window.addEventListener('message', messageHandler);
+      console.log(
+        `[agor-query] bridge postMessage requestId=${requestId} kind=${detail.kind} -> iframe`
+      );
       // Forward to the iframe. Cross-origin so target origin is '*';
       // payload carries no secrets, just a query for the iframe to run.
       target.postMessage(
@@ -869,7 +894,7 @@ function LegacyBanner({ upgradeInstructions }: { upgradeInstructions: string }) 
       // prompt text to copy it.
       className="nodrag nopan"
       style={{ borderRadius: 0, fontSize: 11, padding: '10px 14px' }}
-      message="Legacy artifact — won't render correctly"
+      title="Legacy artifact — won't render correctly"
       description={
         <details style={{ marginTop: 4 }}>
           <summary style={{ cursor: 'pointer', color: token.colorTextSecondary }}>
