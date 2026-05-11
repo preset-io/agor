@@ -11,6 +11,7 @@ import type {
   BoardExportBlob,
   CardType,
   CardWithType,
+  CloneRepositoryResult,
   ContextFileDetail,
   ContextFileListItem,
   MCPServer,
@@ -158,6 +159,7 @@ export interface ServiceTypes {
   tasks: Task;
   boards: Board;
   repos: Repo;
+  'repos/clone': Repo;
   'repos/local': Repo;
   worktrees: Worktree;
   users: User;
@@ -302,6 +304,22 @@ export interface ReposService extends AgorService<Repo> {
 
 export interface ReposLocalService extends AgorService<Repo> {
   create(data: { path: string; slug?: string }, params?: Params): Promise<Repo>;
+}
+
+/**
+ * `POST /repos/clone` returns the async `CloneRepositoryResult` envelope
+ * (status + repo_id for polling), not a fully-materialized `Repo`. Declared
+ * as a minimal standalone interface (not `AgorService<Repo>`) because
+ * overriding `create()` with a non-`Repo` return type would be a structural
+ * mismatch on the base service. Callers should fetch the full `Repo` via
+ * `client.service('repos').get(repo_id)` once polling shows `clone_status:
+ * 'ready'`.
+ */
+export interface ReposCloneService {
+  create(
+    data: { url: string; name?: string; slug?: string; default_branch?: string },
+    params?: Params
+  ): Promise<CloneRepositoryResult>;
 }
 
 /**
@@ -451,6 +469,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'tasks'): TasksService;
   service(path: 'messages'): MessagesService;
   service(path: 'repos'): ReposService;
+  service(path: 'repos/clone'): ReposCloneService;
   service(path: 'repos/local'): ReposLocalService;
   service(path: 'worktrees'): WorktreesService;
   service(path: 'boards'): BoardsService;

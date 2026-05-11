@@ -35,6 +35,7 @@ export type {
   AgorService,
   BoardsService,
   MessagesService,
+  ReposCloneService,
   ReposLocalService,
   ReposService,
   ServiceTypes,

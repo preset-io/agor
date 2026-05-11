@@ -4,7 +4,7 @@
  * Clones the repo to ~/.agor/repos/<name> and registers it with the daemon.
  */
 
-import type { CloneRepositoryResult, Repo } from '@agor-live/client';
+import type { Repo } from '@agor-live/client';
 import { extractSlugFromUrl, isValidGitUrl, isValidSlug } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
@@ -93,11 +93,11 @@ export default class RepoAdd extends BaseCommand {
       // `clone_status: 'cloning'` and is patched to `'ready'`/`'failed'`
       // when the executor finishes. Use the route exposed at `/repos/clone`
       // (same path the UI calls) — there is no client method shortcut for it.
-      const result = (await client.service('repos/clone').create({
+      const result = await client.service('repos/clone').create({
         url: args.url,
         name: slug,
         slug,
-      })) as CloneRepositoryResult;
+      });
 
       if (result.status === 'exists') {
         this.log(`${chalk.yellow('⚠')} Repository '${slug}' is already registered`);

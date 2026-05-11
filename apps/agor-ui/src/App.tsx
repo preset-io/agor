@@ -795,11 +795,11 @@ function AppContent() {
     client.io.on('repo:cloneError', handleCloneError);
 
     try {
-      const result = (await client.service('repos/clone').create({
+      const result = await client.service('repos/clone').create({
         url: data.url,
         slug: data.slug,
         default_branch: data.default_branch,
-      })) as { status?: 'pending' | 'exists'; slug?: string; repo_id?: string };
+      });
 
       // Daemon short-circuits with `status: 'exists'` when a repo with this
       // slug is already registered — no `repos.created` event will fire, so

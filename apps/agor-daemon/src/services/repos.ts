@@ -181,15 +181,21 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Go through `this.remove` (the Feathers service) — NOT `repoRepo.delete`
     // directly — so the standard `repos.removed` WebSocket event fires and
     // connected UIs drop the failed row from their state before we create
-    // the replacement placeholder. `cleanup` defaults to false, so the
-    // (probably-missing) filesystem isn't touched.
+    // the replacement placeholder.
+    //
+    // CRITICAL: do NOT forward the caller's `params.query` into the retry
+    // remove. A REST caller hitting `/repos/clone?cleanup=true` would
+    // otherwise trip the filesystem-cleanup branch on the placeholder
+    // (which doesn't exist on disk anyway, but the side-effects matter for
+    // worktrees that may have been pre-created). Pass an explicitly empty
+    // query so retry is always a DB-only tombstone removal.
     const existing = await this.repoRepo.findBySlug(slug);
     if (existing) {
       if (existing.clone_status === 'failed') {
         console.log(
           `[clone ${slug}] Found previous failed clone (${existing.repo_id.substring(0, 8)}); deleting to retry`
         );
-        await this.remove(existing.repo_id, params);
+        await this.remove(existing.repo_id, { ...params, query: {} });
       } else {
         return { status: 'exists', slug, repo_id: existing.repo_id };
       }
