@@ -1456,24 +1456,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
     // Broadcast on the artifacts service. The client filters: only respond
     // if currently viewing this artifact AND logged in as the requester.
-    // The diagnostic log is best-effort — `channel`/`listenerCount` aren't
-    // present on the fake app used in tests, so we tolerate either missing.
-    const svc = this.app.service('artifacts') as unknown as {
-      listenerCount?: (e: string) => number;
-    };
-    const appWithChannel = this.app as unknown as {
-      channel?: (name: string) => { length: number };
-    };
-    const listenerCount =
-      typeof svc.listenerCount === 'function' ? svc.listenerCount('agor-query') : 'n/a';
-    const authChannelSize =
-      typeof appWithChannel.channel === 'function'
-        ? appWithChannel.channel('authenticated').length
-        : 'n/a';
-    console.log(
-      `[agor-query] emit requestId=${requestId} artifactId=${input.artifactId.slice(0, 8)} kind=${input.kind} ` +
-        `listenerCount=${listenerCount} authenticatedChannelSize=${authChannelSize}`
-    );
     this.app.service('artifacts').emit('agor-query', {
       request_id: requestId,
       artifact_id: input.artifactId,

@@ -827,10 +827,6 @@ export function useAgorData(
       kind: string;
       args: Record<string, unknown>;
     }) => {
-      console.log(
-        `[agor-query] WS received requestId=${event.request_id} artifactId=${event.artifact_id?.slice(0, 8)} ` +
-          `kind=${event.kind} requestedBy=${event.requested_by_user_id?.slice(0, 8)}`
-      );
       window.dispatchEvent(new CustomEvent('agor:artifact-runtime-query', { detail: event }));
     };
     artifactsService.on('agor-query', handleAgorQuery);

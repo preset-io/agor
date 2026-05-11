@@ -1602,14 +1602,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : '',
         `channels: ${app.channel('authenticated').length}`
       );
-    } else if (!context.method && context.path) {
-      // Custom event (no method on the fake-hook the channel mixin builds —
-      // see @feathersjs/transport-commons channels/index.ts:67-71). This is
-      // the path agor-query takes; log to diagnose silent drops.
-      console.log(
-        `📡 [Publish] custom event path=${context.path} event=${context.event ?? '?'} ` +
-          `channels=${app.channel('authenticated').length}`
-      );
     }
     // Broadcast only to authenticated clients (joined to channel on login)
     return app.channel('authenticated');

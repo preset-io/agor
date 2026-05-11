@@ -230,18 +230,7 @@ function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
         kind: string;
         args: Record<string, unknown>;
       };
-      if (!detail) return;
-      if (detail.artifact_id !== artifactId) {
-        console.log(
-          `[agor-query] bridge skip (wrong artifact): mine=${artifactId.slice(0, 16)} event=${detail.artifact_id?.slice(0, 16)} requestId=${detail.request_id}`
-        );
-        return;
-      }
-      const currentSandpack = sandpackRef.current;
-      console.log(
-        `[agor-query] bridge received requestId=${detail.request_id} kind=${detail.kind} ` +
-          `clientCount=${Object.keys(currentSandpack.clients).length}`
-      );
+      if (!detail || detail.artifact_id !== artifactId) return;
 
       // Requester filter: the daemon's `agor-query` event broadcasts on
       // the global authenticated channel, so EVERY logged-in tab receives
@@ -254,13 +243,7 @@ function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
       // prevent.
       if (detail.requested_by_user_id) {
         const currentUserId = getCurrentUserIdFromJwt();
-        if (!currentUserId || currentUserId !== detail.requested_by_user_id) {
-          console.log(
-            `[agor-query] bridge skip (wrong user): requestId=${detail.request_id} ` +
-              `mine=${currentUserId?.slice(0, 16) ?? 'null'} requestedBy=${detail.requested_by_user_id.slice(0, 16)}`
-          );
-          return;
-        }
+        if (!currentUserId || currentUserId !== detail.requested_by_user_id) return;
       }
 
       const requestId = detail.request_id;
@@ -268,14 +251,11 @@ function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
       // each ArtifactNode has one preview (one client). If multiple
       // existed we'd target the first; the agor-runtime listener is
       // identical across them so the choice is arbitrary.
+      const currentSandpack = sandpackRef.current;
       const clientIds = Object.keys(currentSandpack.clients);
       const firstClient = clientIds.length > 0 ? currentSandpack.clients[clientIds[0]] : null;
       const target = firstClient?.iframe?.contentWindow ?? null;
       if (!target) {
-        console.log(
-          `[agor-query] bridge no client iframe requestId=${requestId} clients=${clientIds.length} ` +
-            `firstHasIframe=${!!firstClient?.iframe} — query will time out`
-        );
         // Sandpack hasn't registered a client yet (still booting, or
         // initMode='user-visible' is waiting for visibility). The
         // daemon's pending entry will time out cleanly. The agent's
@@ -291,9 +271,6 @@ function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
         // iframe we just dispatched to, not from any other postMessage
         // source that happens to know our requestId.
         if (msgEvent.source !== target) return;
-        console.log(
-          `[agor-query] iframe replied requestId=${requestId} ok=${!!data.ok} ${data.error ? `error=${data.error}` : ''}`
-        );
         cleanup();
         void postResult({ ok: !!data.ok, result: data.result, error: data.error });
       };
@@ -323,9 +300,6 @@ function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
       };
 
       window.addEventListener('message', messageHandler);
-      console.log(
-        `[agor-query] bridge postMessage requestId=${requestId} kind=${detail.kind} -> iframe`
-      );
       // Forward to the iframe. Cross-origin so target origin is '*';
       // payload carries no secrets, just a query for the iframe to run.
       target.postMessage(
