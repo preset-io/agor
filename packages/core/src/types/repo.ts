@@ -167,6 +167,22 @@ export interface RepoCloneError {
 }
 
 /**
+ * Return shape of `reposService.cloneRepository` (and the REST + MCP layers
+ * that wrap it).
+ *
+ * - `'pending'`: row pre-created with `clone_status: 'cloning'`. Callers should
+ *   poll `agor_repos_get(repo_id)` or listen for `repos.patched` until
+ *   `clone_status` is `'ready'` or `'failed'`.
+ * - `'exists'`: no-op — a row with the requested slug is already registered.
+ *   `repo_id` is included so callers can fetch the existing row.
+ */
+export interface CloneRepositoryResult {
+  status: 'pending' | 'exists';
+  slug: string;
+  repo_id?: string;
+}
+
+/**
  * Request shape for creating/cloning a remote repository from the UI.
  *
  * The UI validates and fills in `slug` and `default_branch` before dispatching,

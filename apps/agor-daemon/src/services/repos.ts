@@ -37,6 +37,7 @@ import {
 } from '@agor/core/git';
 import type {
   AuthenticatedParams,
+  CloneRepositoryResult,
   QueryParams,
   Repo,
   RepoEnvironment,
@@ -156,7 +157,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   async cloneRepository(
     data: { url: string; slug?: string; name?: string; default_branch?: string },
     params?: RepoParams
-  ): Promise<{ status: 'pending' | 'exists'; slug: string; repo_id?: string }> {
+  ): Promise<CloneRepositoryResult> {
     // Note: `||` (not `??`) is intentional — we want an empty `data.slug`
     // to fall through to derivation rather than be treated as "explicit".
     let slug = data.slug || data.name;
@@ -176,13 +177,19 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // - any other state (ready / cloning / undefined-legacy) → surface
     //   `'exists'` so callers don't unintentionally clobber a working repo
     //   or interrupt an in-flight clone.
+    //
+    // Go through `this.remove` (the Feathers service) — NOT `repoRepo.delete`
+    // directly — so the standard `repos.removed` WebSocket event fires and
+    // connected UIs drop the failed row from their state before we create
+    // the replacement placeholder. `cleanup` defaults to false, so the
+    // (probably-missing) filesystem isn't touched.
     const existing = await this.repoRepo.findBySlug(slug);
     if (existing) {
       if (existing.clone_status === 'failed') {
         console.log(
           `[clone ${slug}] Found previous failed clone (${existing.repo_id.substring(0, 8)}); deleting to retry`
         );
-        await this.repoRepo.delete(existing.repo_id);
+        await this.remove(existing.repo_id, params);
       } else {
         return { status: 'exists', slug, repo_id: existing.repo_id };
       }
@@ -241,7 +248,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Executor fetches per-user credentials via Feathers RPC (users.getGitEnvironment).
     // Unix group init (groupadd/chgrp/setfacl) runs daemon-side via repos.initializeUnixGroup RPC.
     const app = this.app;
-    const repoRepo = this.repoRepo;
+    // Capture the Feathers service so the `onExit` safety net (below) writes
+    // through the same service layer the executor uses — that way clients
+    // receive `repos.patched` regardless of which path declares failure.
+    const reposService = this.app.service('repos');
     spawnExecutorFireAndForget(
       {
         command: 'git.clone',
@@ -296,11 +306,15 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             // `'cloning'` forever. Force it to `'failed'` here, but only if
             // it's still 'cloning' (don't clobber a 'failed' write the
             // executor already made with a richer category/message).
+            //
+            // Use the service (no `params` → internal call, bypasses auth
+            // hooks) so the patched event fires for any client that joined
+            // after the initial broadcast above.
             void (async () => {
               try {
-                const current = await repoRepo.findById(repoId);
-                if (current && current.clone_status === 'cloning') {
-                  await repoRepo.update(repoId, {
+                const current = (await reposService.get(repoId)) as Repo;
+                if (current.clone_status === 'cloning') {
+                  await reposService.patch(repoId, {
                     clone_status: 'failed',
                     clone_error: {
                       exit_code: code,
@@ -354,6 +368,87 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const { initializeRepoUnixGroup } = await import('../utils/unix-group-init.js');
     const unixGroup = await initializeRepoUnixGroup(this.db, this.app, data.repoId, data.userId);
     return { unixGroup };
+  }
+
+  /**
+   * Custom method: Patch repo metadata with validation.
+   *
+   * Centralizes the rules that wrap the bare Feathers `patch` so callers
+   * (MCP, REST, UI, internal) can't drift:
+   * - `slug` must match `isValidSlug` and be unique across all repos.
+   * - `remote_url`, when provided, must be a valid git URL.
+   * - Resulting `repo_type: 'remote'` requires a `remote_url` (the patch's
+   *   own field or the existing row's).
+   *
+   * Slug renames are DB-only — `local_path` on disk is not moved. Worktrees
+   * and running sessions hold absolute paths into the old directory, so a
+   * directory move is intentionally out of scope (do delete + re-clone).
+   */
+  async updateMetadata(
+    id: string,
+    patch: {
+      name?: string;
+      slug?: string;
+      repo_type?: 'remote' | 'local';
+      remote_url?: string;
+      default_branch?: string;
+    },
+    params?: RepoParams
+  ): Promise<Repo> {
+    const cleanPatch: Partial<Repo> = {};
+    if (patch.name !== undefined) cleanPatch.name = patch.name;
+
+    if (patch.slug !== undefined) {
+      if (!isValidSlug(patch.slug)) {
+        throw new Error('slug must be in org/name format');
+      }
+      cleanPatch.slug = patch.slug as RepoSlug;
+    }
+
+    if (patch.repo_type !== undefined) {
+      if (patch.repo_type !== 'remote' && patch.repo_type !== 'local') {
+        throw new Error('repo_type must be "remote" or "local"');
+      }
+      cleanPatch.repo_type = patch.repo_type;
+    }
+
+    if (patch.remote_url !== undefined) {
+      if (patch.remote_url && !isValidGitUrl(patch.remote_url)) {
+        throw new Error('remote_url must be a valid git URL (https:// or git@)');
+      }
+      cleanPatch.remote_url = patch.remote_url;
+    }
+
+    if (patch.default_branch !== undefined) cleanPatch.default_branch = patch.default_branch;
+
+    if (Object.keys(cleanPatch).length === 0) {
+      throw new Error('At least one field must be provided to update');
+    }
+
+    const current = (await this.get(id, params)) as Repo;
+
+    // Slug uniqueness — pre-check for a clean error message, but the DB
+    // uniqueness constraint remains authoritative for concurrent writes.
+    if (cleanPatch.slug && cleanPatch.slug !== current.slug) {
+      const collision = await this.repoRepo.findBySlug(cleanPatch.slug);
+      if (collision && collision.repo_id !== current.repo_id) {
+        throw new Error(`A repository with slug '${cleanPatch.slug}' already exists`);
+      }
+    }
+
+    // Resulting `remote` repos must have a remote_url. Evaluate against the
+    // post-patch shape so we catch both "URL provided in patch" and
+    // "URL already on the row".
+    const effectiveType = cleanPatch.repo_type ?? current.repo_type;
+    const effectiveRemoteUrl =
+      'remote_url' in cleanPatch ? cleanPatch.remote_url : current.remote_url;
+    if (effectiveType === 'remote' && !effectiveRemoteUrl) {
+      throw new Error('repo_type "remote" requires a remote_url');
+    }
+
+    // Use the Feathers service `patch` (not `repoRepo.update`) so the standard
+    // `patched` WebSocket event fires and the existing patch hooks run.
+    return (await this.patch(id, cleanPatch, params)) as Repo;
   }
 
   /**

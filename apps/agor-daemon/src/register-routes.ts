@@ -2267,7 +2267,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     '/repos/clone',
     {
       async create(
-        data: { url: string; name?: string; destination?: string; default_branch?: string },
+        data: { url: string; name?: string; slug?: string; default_branch?: string },
         params: RouteParams
       ) {
         return reposService.cloneRepository(data, params);

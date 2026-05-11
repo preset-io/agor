@@ -131,7 +131,11 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         environment,
         environment_config,
         clone_status: repo.clone_status,
-        clone_error: repo.clone_error,
+        // `|| undefined` (not `??`) — deepMerge writes explicit `null` to
+        // clear `clone_error` on the success patch from the executor; we
+        // coerce that to `undefined` here so the stored value matches the
+        // `clone_error?: RepoCloneError` invariant (set only when failed).
+        clone_error: repo.clone_error || undefined,
       },
     };
   }
@@ -299,7 +303,12 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
           .where(eq(repos.repo_id, fullId))
           .run();
 
-        // Return merged repo with refreshed timestamp (no need to re-fetch)
+        // Sync re-derived fields back onto `merged` so the returned object
+        // matches what was actually persisted. `repoToInsert` coerces
+        // explicit-clear sentinels (e.g. `clone_error: null` from deepMerge)
+        // to `undefined`; without this sync the caller sees the un-coerced
+        // null and the type invariant lies.
+        merged.clone_error = insertData.data.clone_error;
         merged.last_updated = newUpdatedAt.toISOString();
         return merged;
       });

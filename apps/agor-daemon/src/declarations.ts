@@ -10,6 +10,7 @@
 import type { ExpressApplication, Service } from '@agor/core/feathers';
 import type {
   Board,
+  CloneRepositoryResult,
   AuthenticatedParams as CoreAuthenticatedParams,
   AuthenticatedUser as CoreAuthenticatedUser,
   CreateHookContext as CoreCreateHookContext,
@@ -116,11 +117,21 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
  */
 export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersParams> {
   addLocalRepository(data: { path: string; slug?: string }, params?: FeathersParams): Promise<Repo>;
-  findBySlug(slug: string, params?: FeathersParams): Promise<Repo | null>;
   cloneRepository(
     data: { url: string; name?: string; slug?: string; default_branch?: string },
     params?: FeathersParams
-  ): Promise<{ status: 'pending' | 'exists'; slug: string; repo_id?: string }>;
+  ): Promise<CloneRepositoryResult>;
+  updateMetadata(
+    id: string,
+    patch: {
+      name?: string;
+      slug?: string;
+      repo_type?: 'remote' | 'local';
+      remote_url?: string;
+      default_branch?: string;
+    },
+    params?: FeathersParams
+  ): Promise<Repo>;
   createWorktree(
     id: string,
     data: {

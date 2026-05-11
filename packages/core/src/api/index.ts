@@ -271,11 +271,6 @@ export interface MessagesService extends AgorService<Message> {
  */
 export interface ReposService extends AgorService<Repo> {
   /**
-   * Clone a repository and register it
-   */
-  clone(data: { url: string; name?: string; slug?: string }, params?: Params): Promise<Repo>;
-
-  /**
    * Initialize Unix group for a repo (daemon-side privileged operation).
    * Called by executor after cloning.
    */

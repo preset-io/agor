@@ -13,6 +13,7 @@ import { mkdir, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { simpleGit } from 'simple-git';
 import { getReposDir, getWorktreesDir } from '../config/config-manager';
+import type { RepoCloneErrorCategory } from '../types/repo';
 
 /**
  * Validate a user-supplied git ref (branch name, tag) before it is passed to
@@ -263,17 +264,15 @@ export function buildAuthHeaderEnv(
  * Bucket a git error message into a coarse category so callers (UI, MCP) can
  * suggest the right next step.
  *
- * The buckets line up with `RepoCloneErrorCategory` in
- * `packages/core/src/types/repo.ts`. The matching is intentionally loose —
- * git's stderr varies across versions and remotes, and a false-positive
- * `auth_failed` is cheaper than `unknown` for the user trying to recover.
- *
- * `'auth_failed'` is the bucket whose copy points users at Settings → API
- * Keys (the most common reason private clones silently failed pre-#1126).
+ * Returns the canonical `RepoCloneErrorCategory` union from `@agor/core/types`
+ * so callers can persist it onto `Repo.clone_error.category` without redeclaring
+ * the values. The matching is intentionally loose — git's stderr varies across
+ * versions and remotes, and a false-positive `auth_failed` is cheaper than
+ * `unknown` for the user trying to recover. `'auth_failed'` is the bucket whose
+ * copy points users at Settings → API Keys (the most common reason private
+ * clones silently failed pre-#1126).
  */
-export type GitErrorCategory = 'auth_failed' | 'not_found' | 'network' | 'unknown';
-
-export function categorizeGitError(stderr: string): GitErrorCategory {
+export function categorizeGitError(stderr: string): RepoCloneErrorCategory {
   const s = stderr.toLowerCase();
   if (
     s.includes('authentication failed') ||

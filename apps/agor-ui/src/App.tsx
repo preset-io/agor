@@ -720,10 +720,13 @@ function AppContent() {
       return;
     }
 
-    // POST /repos/clone returns { status: 'pending' } immediately; the actual
-    // clone runs asynchronously in the executor. Show a persistent loading
-    // toast and wire one-shot listeners to resolve it on success or failure,
-    // with a safety timeout so the toast doesn't linger if events get lost.
+    // POST /repos/clone returns `{ status: 'pending', repo_id }` immediately;
+    // the daemon pre-creates the repo row with `clone_status: 'cloning'` and
+    // the executor patches it to `'ready'`/`'failed'`. Listen for `patched`
+    // (the durable outcome) — `created` only fires for the placeholder now,
+    // unless the row is a legacy `create_local` (no `clone_status`).
+    // `repo:cloneError` is kept as a belt-and-suspenders fallback so older
+    // executors that don't patch still surface failures.
     const toastKey = `clone-repo-${data.slug}`;
     const CLONE_TIMEOUT_MS = 120_000;
     showLoading(`Cloning ${data.slug}...`, { key: toastKey });
@@ -733,14 +736,41 @@ function AppContent() {
 
     const cleanup = () => {
       reposService.removeListener('created', handleCreated);
+      reposService.removeListener('patched', handlePatched);
       client.io.off('repo:cloneError', handleCloneError);
       clearTimeout(timeoutHandle);
     };
     const handleCreated = (repo: Repo) => {
       if (settled || repo.slug !== data.slug) return;
+      // Skip the `'cloning'` placeholder — `handlePatched` will declare the
+      // outcome once the executor finishes. `undefined` covers legacy rows
+      // and any direct executor-path that bypasses the placeholder.
+      if (repo.clone_status === 'cloning') return;
       settled = true;
       showSuccess(`Cloned ${data.slug}`, { key: toastKey });
       cleanup();
+    };
+    const handlePatched = (repo: Repo) => {
+      if (settled || repo.slug !== data.slug) return;
+      if (repo.clone_status === 'ready') {
+        settled = true;
+        showSuccess(`Cloned ${data.slug}`, { key: toastKey });
+        cleanup();
+      } else if (repo.clone_status === 'failed') {
+        settled = true;
+        const err = repo.clone_error;
+        // Authoring-failed clones almost always mean the user has no
+        // `GITHUB_TOKEN` configured (or it expired). Surface that hint
+        // alongside the raw git message so the recovery path is one click.
+        const hint =
+          err?.category === 'auth_failed'
+            ? ' — configure GITHUB_TOKEN in Settings → API Keys for private repos'
+            : '';
+        showError(`Failed to clone ${data.slug}: ${err?.message ?? 'unknown error'}${hint}`, {
+          key: toastKey,
+        });
+        cleanup();
+      }
     };
     const handleCloneError = (payload: { slug?: string; url?: string; error?: string }) => {
       if (settled) return;
@@ -761,6 +791,7 @@ function AppContent() {
     }, CLONE_TIMEOUT_MS);
 
     reposService.on('created', handleCreated);
+    reposService.on('patched', handlePatched);
     client.io.on('repo:cloneError', handleCloneError);
 
     try {
@@ -768,7 +799,7 @@ function AppContent() {
         url: data.url,
         slug: data.slug,
         default_branch: data.default_branch,
-      })) as { status?: 'pending' | 'exists'; slug?: string };
+      })) as { status?: 'pending' | 'exists'; slug?: string; repo_id?: string };
 
       // Daemon short-circuits with `status: 'exists'` when a repo with this
       // slug is already registered — no `repos.created` event will fire, so

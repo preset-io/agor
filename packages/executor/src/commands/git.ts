@@ -217,6 +217,14 @@ export async function handleGitClone(
           local_path: cloneResult.path,
           default_branch: defaultBranch,
           clone_status: 'ready',
+          // Explicit null clears any prior `clone_error` (e.g. from a retry
+          // through the daemon's failed-row replace path). `deepMerge` in
+          // `RepoRepository.update` propagates the null; `repoToInsert`
+          // coerces it back to `undefined` so the stored shape stays
+          // aligned with the `clone_error?: RepoCloneError` invariant.
+          // Cast: Feathers' patch typing is `Partial<Repo>`, which forbids
+          // null on optional fields even when the merger explicitly handles it.
+          clone_error: null as unknown as undefined,
           ...(environment ? { environment } : {}),
         });
       } else {
