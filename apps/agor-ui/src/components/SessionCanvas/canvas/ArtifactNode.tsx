@@ -51,7 +51,6 @@ import {
   SandpackProvider,
   type SandpackSetup,
   useSandpack,
-  useSandpackClient,
   useSandpackConsole,
 } from '@codesandbox/sandpack-react';
 import { Alert, Badge, Button, Card, Spin, Tag, Tooltip, Typography, theme } from 'antd';
@@ -207,7 +206,20 @@ const SANDPACK_ERROR_THROTTLE_MS = 1000;
  */
 const RUNTIME_QUERY_DEFAULT_TIMEOUT_MS = 6000;
 function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
-  const { iframe } = useSandpackClient();
+  // CRITICAL: must be `useSandpack` (read existing clients) rather than
+  // `useSandpackClient` — the latter "registers a new sandpack client"
+  // and expects the caller to render its own <iframe> and pass the ref;
+  // because we don't render one, the ref stays null forever and the
+  // bridge can never postMessage to the actual preview iframe. By going
+  // through `sandpack.clients`, we grab the iframe the sibling
+  // <SandpackPreview> already registered with the provider.
+  const { sandpack } = useSandpack();
+  // Park the current sandpack state in a ref so the window-event handler
+  // can read the latest `clients` without re-attaching on every Sandpack
+  // re-render (status ticks, file updates, etc). Re-attaching would
+  // leave a brief gap where a daemon emit could miss the listener.
+  const sandpackRef = useRef(sandpack);
+  sandpackRef.current = sandpack;
 
   useEffect(() => {
     const handleQuery = (event: Event) => {
@@ -221,13 +233,14 @@ function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
       if (!detail) return;
       if (detail.artifact_id !== artifactId) {
         console.log(
-          `[agor-query] bridge skip (wrong artifact): mine=${artifactId.slice(0, 8)} event=${detail.artifact_id?.slice(0, 8)} requestId=${detail.request_id}`
+          `[agor-query] bridge skip (wrong artifact): mine=${artifactId.slice(0, 16)} event=${detail.artifact_id?.slice(0, 16)} requestId=${detail.request_id}`
         );
         return;
       }
+      const currentSandpack = sandpackRef.current;
       console.log(
         `[agor-query] bridge received requestId=${detail.request_id} kind=${detail.kind} ` +
-          `iframeAttached=${!!iframe.current?.contentWindow}`
+          `clientCount=${Object.keys(currentSandpack.clients).length}`
       );
 
       // Requester filter: the daemon's `agor-query` event broadcasts on
@@ -244,21 +257,29 @@ function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
         if (!currentUserId || currentUserId !== detail.requested_by_user_id) {
           console.log(
             `[agor-query] bridge skip (wrong user): requestId=${detail.request_id} ` +
-              `mine=${currentUserId?.slice(0, 8) ?? 'null'} requestedBy=${detail.requested_by_user_id.slice(0, 8)}`
+              `mine=${currentUserId?.slice(0, 16) ?? 'null'} requestedBy=${detail.requested_by_user_id.slice(0, 16)}`
           );
           return;
         }
       }
 
       const requestId = detail.request_id;
-      const target = iframe.current?.contentWindow;
+      // Pick the first registered Sandpack client's iframe. In practice
+      // each ArtifactNode has one preview (one client). If multiple
+      // existed we'd target the first; the agor-runtime listener is
+      // identical across them so the choice is arbitrary.
+      const clientIds = Object.keys(currentSandpack.clients);
+      const firstClient = clientIds.length > 0 ? currentSandpack.clients[clientIds[0]] : null;
+      const target = firstClient?.iframe?.contentWindow ?? null;
       if (!target) {
         console.log(
-          `[agor-query] bridge no iframe contentWindow requestId=${requestId} — query will time out`
+          `[agor-query] bridge no client iframe requestId=${requestId} clients=${clientIds.length} ` +
+            `firstHasIframe=${!!firstClient?.iframe} — query will time out`
         );
-        // Iframe not yet attached; can't answer this query. The daemon's
-        // pending entry will time out and surface a clean error to the
-        // agent. No need to POST a synthetic failure here.
+        // Sandpack hasn't registered a client yet (still booting, or
+        // initMode='user-visible' is waiting for visibility). The
+        // daemon's pending entry will time out cleanly. The agent's
+        // retry will land after Sandpack is ready.
         return;
       }
 
@@ -314,7 +335,10 @@ function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
     };
     window.addEventListener('agor:artifact-runtime-query', handleQuery);
     return () => window.removeEventListener('agor:artifact-runtime-query', handleQuery);
-  }, [artifactId, iframe]);
+    // `sandpack` is read via sandpackRef at query time, so we don't need
+    // it in deps — the handler attaches once per artifact and keeps
+    // working as Sandpack re-renders.
+  }, [artifactId]);
 
   return null;
 }
