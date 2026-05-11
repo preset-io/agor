@@ -552,10 +552,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       repoLocalPath: repo.local_path,
     });
 
-    const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
-    if (!userId) {
-      throw new Error('createWorktree requires an authenticated user');
-    }
+    // Auth hooks (`requireMinimumRole`) guarantee `params.user` exists by
+    // the time we get here. Asserting non-null rather than re-checking.
+    const userId = (params as AuthenticatedParams).user!.user_id as UserID;
 
     // Get ALL used unique IDs (including archived worktrees) to avoid collisions.
     // Previously this queried via Feathers which excluded archived worktrees by default,

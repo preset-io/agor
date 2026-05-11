@@ -678,10 +678,11 @@ export const worktreeOwners = sqliteTable(
 );
 
 /**
- * Users table - Authentication and authorization
+ * Users table - Authentication and authorization.
  *
- * Optional table - only created when authentication is enabled via `agor auth init`.
- * In anonymous mode (default), this table doesn't exist and all operations are permitted.
+ * Always present. Authentication is required for every endpoint; on first
+ * daemon start with an empty users table, a default admin is auto-created
+ * (see `bootstrapFirstRunAdmin`).
  */
 export const users = sqliteTable(
   'users',

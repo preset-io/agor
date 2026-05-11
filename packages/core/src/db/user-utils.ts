@@ -11,7 +11,7 @@ import type { User, UserID } from '../types';
 import { normalizeRole } from '../types/user';
 import type { Database } from './client';
 import { insert, select } from './database-wrapper';
-import { users } from './schema';
+import { type UserRow, users } from './schema';
 
 /**
  * Create user input
@@ -22,6 +22,39 @@ export interface CreateUserData {
   name?: string;
   role?: 'superadmin' | 'admin' | 'member' | 'viewer';
   unix_username?: string;
+  /**
+   * Force the user to change their password on first login. Set this for
+   * any user whose initial password was generated/printed (e.g. the
+   * first-run bootstrap admin) so the cleartext doesn't stay valid.
+   */
+  must_change_password?: boolean;
+}
+
+/**
+ * Convert a raw `users` row into the canonical `User` model. Centralized so
+ * all callers agree on field handling — JSON-bag fields (avatar, preferences)
+ * come from `row.data`, role goes through `normalizeRole`, and nullable DB
+ * columns become `undefined` rather than `null`.
+ */
+export function userRowToUser(row: UserRow): User {
+  const userData = (row.data ?? {}) as {
+    avatar?: string;
+    preferences?: Record<string, unknown>;
+  };
+  return {
+    user_id: row.user_id as UserID,
+    email: row.email,
+    name: row.name ?? undefined,
+    emoji: row.emoji ?? undefined,
+    role: normalizeRole(row.role ?? undefined),
+    unix_username: row.unix_username ?? undefined,
+    avatar: userData.avatar,
+    preferences: userData.preferences,
+    onboarding_completed: !!row.onboarding_completed,
+    must_change_password: !!row.must_change_password,
+    created_at: row.created_at,
+    updated_at: row.updated_at ?? undefined,
+  };
 }
 
 /**
@@ -66,6 +99,7 @@ export async function createUser(db: Database, data: CreateUserData): Promise<Us
       emoji: defaultEmoji,
       role,
       unix_username: data.unix_username ?? null,
+      must_change_password: data.must_change_password ?? false,
       created_at: createdAt,
       updated_at: updatedAt,
       data: {
@@ -75,23 +109,7 @@ export async function createUser(db: Database, data: CreateUserData): Promise<Us
     .returning()
     .one();
 
-  // Convert to User type
-  const userData = row.data as { avatar?: string; preferences?: Record<string, unknown> };
-
-  return {
-    user_id: row.user_id as UserID,
-    email: row.email,
-    name: row.name ?? undefined,
-    emoji: row.emoji ?? undefined,
-    role: normalizeRole(row.role ?? undefined),
-    unix_username: row.unix_username ?? undefined,
-    avatar: userData.avatar,
-    preferences: userData.preferences,
-    onboarding_completed: !!row.onboarding_completed,
-    must_change_password: !!row.must_change_password,
-    created_at: row.created_at,
-    updated_at: row.updated_at ?? undefined,
-  };
+  return userRowToUser(row);
 }
 
 /**
@@ -115,27 +133,7 @@ export async function userExists(db: Database, email: string): Promise<boolean> 
  */
 export async function getUserByEmail(db: Database, email: string): Promise<User | null> {
   const row = await select(db).from(users).where(eq(users.email, email)).one();
-
-  if (!row) {
-    return null;
-  }
-
-  const userData = row.data as { avatar?: string; preferences?: Record<string, unknown> };
-
-  return {
-    user_id: row.user_id as UserID,
-    email: row.email,
-    name: row.name ?? undefined,
-    emoji: row.emoji ?? undefined,
-    role: normalizeRole(row.role ?? undefined),
-    unix_username: row.unix_username ?? undefined,
-    avatar: userData.avatar,
-    preferences: userData.preferences,
-    onboarding_completed: !!row.onboarding_completed,
-    must_change_password: !!row.must_change_password,
-    created_at: row.created_at,
-    updated_at: row.updated_at ?? undefined,
-  };
+  return row ? userRowToUser(row) : null;
 }
 
 /**

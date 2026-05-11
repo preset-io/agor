@@ -451,16 +451,16 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         return defaultBoard;
       }
 
-      // Create default board with the same 'anonymous' sentinel that
-      // `seedInitialData` uses — `ensureFirstRunAdmin` re-attributes it to
-      // the bootstrapped admin on first daemon start.
+      // Create default board with the legacy sentinel; the first-run admin
+      // bootstrap re-attributes it to the bootstrapped admin on next start.
+      const { LEGACY_ANONYMOUS_OWNER_ID } = await import('../first-run-bootstrap');
       return this.create({
         name: 'Main Board',
         slug: 'default',
         description: 'Main board for all sessions',
         color: '#1677ff',
         icon: '⭐',
-        created_by: 'anonymous',
+        created_by: LEGACY_ANONYMOUS_OWNER_ID,
       });
     } catch (error) {
       throw new RepositoryError(

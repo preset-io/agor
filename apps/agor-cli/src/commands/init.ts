@@ -419,7 +419,7 @@ export default class Init extends Command {
    *
    * Authentication is always required (anonymous mode was removed). If the
    * user skips the prompts here, the daemon will auto-bootstrap an admin on
-   * first start (`ensureFirstRunAdmin`) and write credentials to
+   * first start (`runFirstRunAdminBootstrap`) and write credentials to
    * `~/.agor/admin-credentials`.
    */
   private async promptAdminSetup(dbPath: string): Promise<void> {

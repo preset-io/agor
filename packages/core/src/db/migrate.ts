@@ -285,22 +285,21 @@ export async function initializeDatabase(db: Database): Promise<void> {
 /**
  * Seed initial data (default board only).
  *
- * The default board carries no `created_by` at this stage — it will be
- * stamped when the first-run admin is bootstrapped (see `ensureFirstRunAdmin`,
- * which re-attributes legacy 'anonymous' rows to the bootstrapped admin). We
- * write a `pending-bootstrap-admin` sentinel so the bootstrap sweep picks it
- * up alongside any other legacy rows.
+ * The caller may pass `createdBy` to stamp the default board with a real
+ * user_id. When omitted, the board is stamped with `LEGACY_ANONYMOUS_OWNER_ID`
+ * — a sentinel that the first-run admin bootstrap re-attributes to a real
+ * admin on the next daemon start.
  *
  * Admin users are NOT created here. They are created either by `agor init`
- * (interactive) or by `ensureFirstRunAdmin` on first daemon start (default
+ * (interactive) or by `bootstrapFirstRunAdmin` on first daemon start (default
  * admin with generated password).
  */
-const SEED_PENDING_OWNER = 'anonymous';
-
-export async function seedInitialData(db: Database): Promise<void> {
+export async function seedInitialData(db: Database, createdBy?: string): Promise<void> {
   try {
     const { generateId } = await import('../lib/ids');
+    const { LEGACY_ANONYMOUS_OWNER_ID } = await import('./first-run-bootstrap');
     const now = new Date();
+    const owner = createdBy ?? LEGACY_ANONYMOUS_OWNER_ID;
 
     // 1. Check if default board exists (by slug to avoid duplicates)
     const existingBoard = await select(db).from(boards).where(eq(boards.slug, 'default')).one();
@@ -316,9 +315,7 @@ export async function seedInitialData(db: Database): Promise<void> {
           slug: 'default',
           created_at: now,
           updated_at: now,
-          // Sentinel — re-stamped to the real admin user_id by
-          // ensureFirstRunAdmin() during the next daemon start.
-          created_by: SEED_PENDING_OWNER,
+          created_by: owner,
           data: {
             description: 'Main board for all sessions',
             sessions: [],

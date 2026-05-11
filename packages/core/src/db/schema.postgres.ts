@@ -683,8 +683,8 @@ export const worktreeOwners = pgTable(
 /**
  * Users table - Authentication and authorization
  *
- * Optional table - only created when authentication is enabled via `agor auth init`.
- * In anonymous mode (default), this table doesn't exist and all operations are permitted.
+ * Authentication is required for every endpoint; on first daemon start with an
+ * empty users table, a default admin is auto-created (see `bootstrapFirstRunAdmin`).
  */
 export const users = pgTable(
   'users',

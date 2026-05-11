@@ -483,13 +483,9 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
         ? await resolveGitImpersonationForWorktree(this.db, worktree)
         : undefined;
 
-      // Generate session token for executor authentication
-      const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as
-        | UserID
-        | undefined;
-      if (!userId) {
-        throw new Error('Worktree remove requires an authenticated user');
-      }
+      // Generate session token for executor authentication. Hook chain
+      // enforces auth before we get here, so non-null assertion is safe.
+      const userId = (params as AuthenticatedParams).user!.user_id as UserID;
       const appWithToken = this.app as unknown as {
         sessionTokenService?: import('../services/session-token-service').SessionTokenService;
       };
@@ -549,12 +545,8 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   ): Promise<WorktreeWithZoneAndSessions | { deleted: true; worktree_id: WorktreeID }> {
     const { metadataAction, filesystemAction } = options;
     const worktree = await this.get(id, params);
-    const currentUserId = (params as AuthenticatedParams | undefined)?.user?.user_id as
-      | UUID
-      | undefined;
-    if (!currentUserId) {
-      throw new Error('Worktree archive/delete requires an authenticated user');
-    }
+    // Hook chain enforces auth before we get here.
+    const currentUserId = (params as AuthenticatedParams).user!.user_id as UUID;
 
     // Stop environment if running
     if (worktree.environment_instance?.status === 'running') {
