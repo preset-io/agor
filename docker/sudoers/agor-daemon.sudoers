@@ -32,6 +32,20 @@
 Defaults:agor !requiretty
 
 # ============================================================================
+# Preserve GIT_CONFIG_PARAMETERS across the sudo boundary
+# ============================================================================
+# The daemon sets GIT_CONFIG_PARAMETERS at startup to harden every spawned
+# git invocation (refuse credential-bearing URLs, block file:// / ext::
+# submodule URLs, enforce fsckObjects, protect HFS/NTFS path traversal).
+# sudo's default env reset would drop this; env_keep preserves it for any
+# `sudo -u <user> ...` path that doesn't go through the spawn-executor
+# env-allowlist explicitly.
+#
+# See docs/internal/credential-leak-defenses-2026-05-11.md and
+# packages/core/src/git/index.ts: DEFAULT_GIT_CONFIG_PARAMETERS.
+Defaults:agor env_keep += "GIT_CONFIG_PARAMETERS"
+
+# ============================================================================
 # USER IMPERSONATION - Agent Process Execution
 # ============================================================================
 # Core feature: Run agent sessions as the user who created the session.

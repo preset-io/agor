@@ -483,6 +483,38 @@ pnpm agor config set ui.port 5174
 Tunable from `~/.agor/config.yaml` under `security.*` — see
 [`context/concepts/security.md`](context/concepts/security.md).
 
+### Git Config Hardening (`security.git_config_parameters`)
+
+The daemon injects a `GIT_CONFIG_PARAMETERS` env var at startup that propagates
+to every git invocation it (or any spawned executor / sub-tool) runs. The
+default list refuses credential-bearing URLs (`transfer.credentialInUrl=die`,
+git 2.41+), blocks the `file://` / `ext::` protocol RCE families, validates
+object integrity (`fsckObjects`), and enables HFS/NTFS path-traversal
+protection.
+
+```yaml
+# ~/.agor/config.yaml
+security:
+  # Omit this key to use the safe defaults (recommended).
+  # Set to [] to disable all defaults (debug only).
+  # Set to a non-empty list to REPLACE the defaults verbatim.
+  git_config_parameters:
+    - transfer.credentialInUrl=die
+    - protocol.file.allow=user
+    - protocol.ext.allow=never
+    - fetch.fsckObjects=true
+    - transfer.fsckObjects=true
+    - core.protectHFS=true
+    - core.protectNTFS=true
+```
+
+Sudoers note: the shipped `docker/sudoers/agor-daemon.sudoers` includes
+`env_keep += "GIT_CONFIG_PARAMETERS"` so the hardening survives the
+`sudo -u <user>` boundary in insulated / strict modes. Operators upgrading an
+existing install should re-run their sudoers deployment to pick this up.
+
+Background: [`docs/internal/credential-leak-defenses-2026-05-11.md`](docs/internal/credential-leak-defenses-2026-05-11.md).
+
 ---
 
 ## Troubleshooting

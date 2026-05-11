@@ -587,6 +587,47 @@ export interface AgorSecuritySettings {
 
   /** CORS configuration (origins, credentials, methods, headers, max-age). */
   cors?: AgorCorsSettings;
+
+  /**
+   * Extra git config injected into every daemon- and agent-issued git
+   * invocation via the `GIT_CONFIG_PARAMETERS` env var. Each entry is a
+   * literal `key=value` pair.
+   *
+   * Defaults (when this key is omitted) lock down several well-known leak /
+   * RCE surfaces:
+   *   - `transfer.credentialInUrl=die` — refuse fetch/push when a URL carries
+   *     embedded credentials (git 2.41+). Tainted configs become useless for
+   *     transfer, even when the *write* of the tainted value isn't blocked.
+   *   - `protocol.file.allow=user` — refuse auto-fetched `file://` submodule
+   *     URLs (CVE-2022-39253 family).
+   *   - `protocol.ext.allow=never` — refuse the `ext::` URL scheme, which can
+   *     execute arbitrary commands.
+   *   - `fetch.fsckObjects=true` / `transfer.fsckObjects=true` — verify object
+   *     integrity on fetch / push.
+   *   - `core.protectHFS=true` / `core.protectNTFS=true` — block cross-FS
+   *     path-traversal attacks via crafted filenames.
+   *
+   * Setting this to an empty array disables the defaults entirely (debug
+   * only). Setting to a non-empty array REPLACES the defaults — copy the
+   * default list and edit if you want to keep most of them.
+   *
+   * See `docs/internal/credential-leak-defenses-2026-05-11.md`.
+   *
+   * @example Append a custom proxy hardening pair
+   * ```yaml
+   * security:
+   *   git_config_parameters:
+   *     - transfer.credentialInUrl=die
+   *     - protocol.file.allow=user
+   *     - protocol.ext.allow=never
+   *     - fetch.fsckObjects=true
+   *     - transfer.fsckObjects=true
+   *     - core.protectHFS=true
+   *     - core.protectNTFS=true
+   *     - http.proxy=http://corp-proxy.example.com:3128
+   * ```
+   */
+  git_config_parameters?: string[];
 }
 
 /**

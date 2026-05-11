@@ -31,6 +31,7 @@ import {
   rest,
   socketio,
 } from '@agor/core/feathers';
+import { buildGitConfigParameters, resolveGitConfigParameters } from '@agor/core/git';
 import { registerHandlebarsHelpers } from '@agor/core/templates/handlebars-helpers';
 import type { HookContext, ServiceGroupName, ServiceTier, User } from '@agor/core/types';
 import { getServiceTier, isServiceEnabled } from '@agor/core/types';
@@ -130,6 +131,31 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     : options?.configPath
       ? await loadConfigFromFile(options.configPath)
       : await loadConfig();
+
+  // ------------------------------------------------------------------------
+  // Harden every spawned git invocation via GIT_CONFIG_PARAMETERS.
+  // Set BEFORE any child-process spawn so it propagates by inheritance to:
+  //   - daemon-issued git via createGit() (reads ...process.env)
+  //   - spawned executors (spawn-executor.ts forwards this var explicitly
+  //     through its impersonation env allowlist)
+  //   - any tool that internally invokes git (husky hooks, npm postinstall,
+  //     gh CLI) since they all read GIT_CONFIG_PARAMETERS at git startup
+  // The default pairs lock down the credential-in-URL leak surface plus a
+  // handful of well-known RCE/integrity surfaces — see
+  // packages/core/src/git/index.ts: DEFAULT_GIT_CONFIG_PARAMETERS, and
+  // docs/internal/credential-leak-defenses-2026-05-11.md.
+  const gitConfigParams = buildGitConfigParameters(
+    resolveGitConfigParameters(config.security?.git_config_parameters)
+  );
+  if (gitConfigParams.length > 0) {
+    process.env.GIT_CONFIG_PARAMETERS = gitConfigParams;
+    console.log(`🔒 GIT_CONFIG_PARAMETERS hardened: ${gitConfigParams}`);
+  } else {
+    // Empty array in config = explicit "disable all defaults". Leave any
+    // pre-existing env var untouched so an operator debugging an issue can
+    // still inject their own values via the shell.
+    console.log('🔒 GIT_CONFIG_PARAMETERS disabled by config (security.git_config_parameters: [])');
+  }
 
   // Surface a clear migration note if the config still carries leftover
   // anonymous-mode keys. Operators upgrading from a release that had
