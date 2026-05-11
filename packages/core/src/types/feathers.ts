@@ -303,9 +303,9 @@ export interface AuthenticationResult {
   accessToken: string;
   /** Authentication metadata */
   authentication: {
-    /** Strategy used (e.g., 'local', 'jwt', 'anonymous') */
+    /** Strategy used (e.g., 'local', 'jwt', 'api-key', 'session-token') */
     strategy: string;
-    /** Token (may be undefined for anonymous) */
+    /** Token (may be undefined depending on strategy) */
     accessToken?: string;
     /** Decoded JWT payload */
     payload?: Record<string, unknown>;

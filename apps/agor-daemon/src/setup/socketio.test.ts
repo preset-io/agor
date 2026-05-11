@@ -123,7 +123,6 @@ function buildHarness(opts: Partial<SocketIOOptions> = {}) {
   const config = createSocketIOConfig(app, {
     corsOrigin: '*',
     jwtSecret: 'test-secret',
-    allowAnonymous: false,
     credentialsAllowed: false,
     webTerminalEnabled: true,
     ...opts,

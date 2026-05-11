@@ -561,9 +561,10 @@ export class SchedulerService {
 
       // 7. Trigger prompt execution (creates task and starts agent)
       // IMPORTANT: Must pass provider: undefined to bypass auth (internal call)
-      // AND pass user: creator so the executor's session token is generated for the correct user.
-      // Without the user, the token defaults to 'anonymous' which doesn't exist in the database,
-      // causing the executor to fail with "User not found: anonymous" error.
+      // AND pass user: creator so the executor's session token is generated
+      // for the correct user. Without the user, the injectCreatedBy hook
+      // would throw (created_by has no fallback now), and the session token
+      // would have no `sub` to authorize the executor against.
       const promptService = this.app.service('/sessions/:id/prompt');
       await promptService.create(
         {

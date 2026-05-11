@@ -115,7 +115,7 @@ app.use('/boards', createBoardsService(db), {
 ```typescript
 app.service('boards').hooks({
   before: {
-    all: [validateQuery, ...getReadAuthHooks()],
+    all: [validateQuery, requireAuth],
     create: [requireMinimumRole('member', 'create boards')],
     patch: [requireMinimumRole('member', 'update boards')],
     remove: [requireMinimumRole('admin', 'delete boards')],
