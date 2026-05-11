@@ -49,6 +49,7 @@ import {
   initializeAnthropicBaseUrl,
 } from './setup/credentials.js';
 import { initializeDatabase } from './setup/database.js';
+import { warnDeprecatedAnonymousConfig } from './setup/first-run-admin.js';
 import { securityHeaders } from './setup/security-headers.js';
 import { logServicesConfig, resolveServicesConfig } from './setup/service-tiers.js';
 import { configureChannels, createSocketIOConfig } from './setup/socketio.js';
@@ -129,6 +130,12 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     : options?.configPath
       ? await loadConfigFromFile(options.configPath)
       : await loadConfig();
+
+  // Surface a clear migration note if the config still carries leftover
+  // anonymous-mode keys. Operators upgrading from a release that had
+  // `daemon.allowAnonymous` / `daemon.requireAuth` see what to do; the keys
+  // are otherwise silently ignored.
+  warnDeprecatedAnonymousConfig(config);
 
   // Resolve service tier configuration (validate deps, auto-promote)
   const servicesConfig = resolveServicesConfig(config.services);

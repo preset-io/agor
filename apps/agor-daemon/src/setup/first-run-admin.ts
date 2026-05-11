@@ -18,6 +18,7 @@ import { close, open, unlink, write } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import type { AgorConfig } from '@agor/core/config';
 import {
   type AdminBootstrapResult,
   BOOTSTRAP_ADMIN_EMAIL,
@@ -191,4 +192,52 @@ export function logFirstRunAdminBootstrap(result: DaemonBootstrapResult): void {
       `🧹 Re-attributed ${result.reattributedCount} legacy anonymous row(s) → ${result.admin.email}\n`
     );
   }
+}
+
+/**
+ * Keys that used to control the (now-removed) anonymous-mode path. Surfaced
+ * as deprecation warnings on startup so operators upgrading from an older
+ * release see a clear migration note instead of a silent ignore.
+ */
+const DEPRECATED_ANONYMOUS_KEYS = ['allowAnonymous', 'requireAuth'] as const;
+
+/**
+ * Print a clear stderr banner if the loaded config still carries leftover
+ * keys from the anonymous-mode path. The keys themselves have no runtime
+ * effect anymore — this is purely an operator-UX nudge.
+ *
+ * Detected separately from the `AgorConfig` type because we deliberately
+ * removed these fields from the interface; we reach into the raw object via
+ * a Record cast to see what the YAML file actually contained.
+ */
+export function warnDeprecatedAnonymousConfig(config: AgorConfig): void {
+  const daemon = (config as { daemon?: Record<string, unknown> }).daemon;
+  if (!daemon) return;
+
+  const present = DEPRECATED_ANONYMOUS_KEYS.filter((key) => Object.hasOwn(daemon, key));
+  if (present.length === 0) return;
+
+  const lines: string[] = [
+    '',
+    '================================================================',
+    '⚠️  DEPRECATED CONFIG KEYS DETECTED',
+    '----------------------------------------------------------------',
+    '  Your config.yaml contains:',
+  ];
+  for (const key of present) {
+    lines.push(`    daemon.${key}: ${String(daemon[key])}`);
+  }
+  lines.push(
+    '',
+    '  These keys no longer have any effect. Authentication is now',
+    '  always required — anonymous mode was removed.',
+    '',
+    '  Action: remove these keys from your config.yaml at your',
+    '  convenience. If you previously ran anonymously, the daemon',
+    `  has auto-generated admin credentials at ${getAdminCredentialsPath()}`,
+    '  (printed below if just created on this start).',
+    '================================================================',
+    ''
+  );
+  process.stderr.write(lines.join('\n'));
 }
