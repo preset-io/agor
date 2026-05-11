@@ -151,7 +151,7 @@ function defaultLandFolderName(artifact: { name: string; artifact_id: string }):
 }
 
 /**
- * Round-trip sidecar shape written by `land()` and read back by `publish()`.
+ * Round-trip sidecar shape written by `land()` and read back by `publishArtifact()`.
  * Carries metadata that doesn't fit into the file map (template, sandpack
  * config, declarative consent surface).
  */
@@ -284,10 +284,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   // Direct Feathers create is intentionally rejected — artifacts require
-  // the publish() lifecycle (folder → DB).
+  // the publishArtifact() lifecycle (folder → DB).
   async create(_data: Partial<Artifact>, _params?: unknown): Promise<Artifact> {
     throw new Error(
-      'Direct artifact creation not supported. Use publish() or agor_artifacts_publish MCP tool.'
+      'Direct artifact creation not supported. Use publishArtifact() or agor_artifacts_publish MCP tool.'
     );
   }
 
@@ -368,8 +368,16 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * Publish a folder as a live Sandpack artifact on a board. Reads files from
    * `folderPath`, serializes them into the DB, and places (or updates) the
    * artifact on the board.
+   *
+   * Named `publishArtifact` (not `publish`) on purpose: `service.publish`
+   * is a reserved Feathers channel-mixin hook — if a service defines a
+   * `publish()` method, the mixin assumes custom channel routing and
+   * skips all event subscriptions, including the default
+   * `created`/`patched`/`removed` and custom events like `agor-query`.
+   * That breaks every WebSocket fan-out from this service. See
+   * `@feathersjs/transport-commons` channels/index.ts.
    */
-  async publish(
+  async publishArtifact(
     data: {
       folderPath: string;
       board_id?: string;
@@ -547,7 +555,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
   /**
    * Update artifact metadata without touching files.
-   * For file/content changes use publish().
+   * For file/content changes use publishArtifact().
    */
   async updateMetadata(
     artifactId: string,
@@ -694,8 +702,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
   /**
    * Materialize an artifact's stored file map to a destination under a worktree.
-   * Inverse of publish(). Sandpack metadata is reconstructed as a sidecar
-   * `agor.artifact.json` so a round-trip via publish() round-trips the
+   * Inverse of publishArtifact(). Sandpack metadata is reconstructed as a sidecar
+   * `agor.artifact.json` so a round-trip via publishArtifact() round-trips the
    * metadata that doesn't live in the file map.
    *
    * Security:
@@ -781,7 +789,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
     // Round-trip sidecar: persist artifact-level metadata that has no place in
     // a normal file tree (template, sandpack_config, required_env_vars,
-    // agor_grants). publish() reads agor.artifact.json back if present;
+    // agor_grants). publishArtifact() reads agor.artifact.json back if present;
     // ordinary builds/Vite/CRA never look at it.
     //
     // Always emit every field — even when empty — so the sidecar is
@@ -1752,11 +1760,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     for (const file of fileList) {
       const relativePath = path.relative(rootDir, file);
       // The `agor.artifact.json` sidecar is land()'s round-trip carrier for
-      // metadata that doesn't fit in the file map. publish() consumes it
+      // metadata that doesn't fit in the file map. publishArtifact() consumes it
       // separately (callers pass the parsed values via the publish args).
       // Either way it doesn't belong in the served file map.
       if (relativePath === 'agor.artifact.json') continue;
-      // Skip the synthesized .env so a round-trip via land() → publish()
+      // Skip the synthesized .env so a round-trip via land() → publishArtifact()
       // doesn't accidentally bake the viewer's secrets into the next publish.
       if (relativePath === '.env') continue;
       const normalizedPath = `/${relativePath.replace(/\\/g, '/')}`;

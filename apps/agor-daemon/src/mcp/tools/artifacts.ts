@@ -174,7 +174,7 @@ IMPORTANT:
       const resolvedArtifactId = coerceString(args.artifactId)
         ? await resolveArtifactId(ctx, coerceString(args.artifactId)!)
         : undefined;
-      const artifact = await service.publish(
+      const artifact = await service.publishArtifact(
         {
           folderPath: coerceString(args.folderPath)!,
           board_id: resolvedBoardId,
