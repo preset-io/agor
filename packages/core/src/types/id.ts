@@ -105,6 +105,45 @@ export function toShortId(id: AnyShortId, length: number = 8): ShortID {
 }
 
 /**
+ * Convert a (possibly-hyphenated) short-ID prefix into a SQL `LIKE`-friendly
+ * pattern that matches the canonical hyphenated UUID storage format.
+ *
+ * Repositories store IDs as full hyphenated UUIDs (e.g. `019e0eca-0d2d-7…`).
+ * Users pass prefixes in mixed forms — bare hex (`019e0eca0d2d`), partial
+ * hyphenated (`019e0eca-0d2d`), or copy-pasted from `AmbiguousIdError`
+ * (which prints the full hyphenated UUID, so a prefix-truncation often
+ * lands on a hyphen boundary). Without normalization, `LIKE '019e0eca0d2d%'`
+ * can never match a row whose ID is `019e0eca-0d2d-7XXX-…` because of the
+ * hyphen at position 8.
+ *
+ * This strips any hyphens from the input and re-inserts them at the
+ * canonical UUID positions (8, 12, 16, 20 hex chars) so the resulting
+ * pattern matches the stored format. Non-hex / empty inputs pass through
+ * to a pattern that will naturally not match any UUID column.
+ *
+ * @example
+ *   prefixToLikePattern('019e0eca')        === '019e0eca%'
+ *   prefixToLikePattern('019e0eca0d2d')    === '019e0eca-0d2d%'
+ *   prefixToLikePattern('019e0eca-0d2d')   === '019e0eca-0d2d%'
+ *   prefixToLikePattern('019E0ECA')        === '019e0eca%' // lowercased
+ */
+export function prefixToLikePattern(prefix: string): string {
+  const clean = prefix.replace(/-/g, '').toLowerCase();
+  // Hyphens land at hex positions 8, 12, 16, 20 in a canonical UUID.
+  const breaks = [8, 12, 16, 20];
+  let out = '';
+  let cursor = 0;
+  for (const b of breaks) {
+    if (b >= clean.length) {
+      return `${out}${clean.slice(cursor)}%`;
+    }
+    out += `${clean.slice(cursor, b)}-`;
+    cursor = b;
+  }
+  return `${out}${clean.slice(cursor)}%`;
+}
+
+/**
  * Find all entities whose ID starts with the given short-ID prefix.
  *
  * This is the shared short-ID matching primitive used by both core

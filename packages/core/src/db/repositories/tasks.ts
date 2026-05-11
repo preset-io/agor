@@ -5,7 +5,7 @@
  */
 
 import type { SessionID, Task, TaskMetadata, UUID } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import { prefixToLikePattern, TaskStatus } from '@agor/core/types';
 import { eq, like, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -101,8 +101,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     }
 
     // Short ID - need to resolve
-    const normalized = id.replace(/-/g, '').toLowerCase();
-    const pattern = `${normalized}%`;
+    const pattern = prefixToLikePattern(id);
 
     const results = await select(this.db).from(tasks).where(like(tasks.task_id, pattern)).all();
 

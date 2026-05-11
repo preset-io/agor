@@ -5,6 +5,7 @@
  */
 
 import type { CardType, UUID } from '@agor/core/types';
+import { prefixToLikePattern } from '@agor/core/types';
 import { eq, like } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -36,8 +37,7 @@ export class CardTypeRepository implements BaseRepository<CardType, Partial<Card
   private async resolveId(id: string): Promise<string> {
     if (id.length === 36 && id.includes('-')) return id;
 
-    const normalized = id.replace(/-/g, '').toLowerCase();
-    const pattern = `${normalized}%`;
+    const pattern = prefixToLikePattern(id);
     const results = await select(this.db)
       .from(cardTypes)
       .where(like(cardTypes.card_type_id, pattern))

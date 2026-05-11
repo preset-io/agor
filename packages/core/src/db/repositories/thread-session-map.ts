@@ -13,6 +13,7 @@ import type {
   ThreadStatus,
   UUID,
 } from '@agor/core/types';
+import { prefixToLikePattern } from '@agor/core/types';
 import { and, eq, like, lt } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -78,8 +79,7 @@ export class ThreadSessionMapRepository
       return id;
     }
 
-    const normalized = id.replace(/-/g, '').toLowerCase();
-    const pattern = `${normalized}%`;
+    const pattern = prefixToLikePattern(id);
 
     const results = await select(this.db)
       .from(threadSessionMap)

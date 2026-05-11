@@ -5,7 +5,7 @@
  */
 
 import type { Session, UUID } from '@agor/core/types';
-import { SessionStatus, WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
+import { prefixToLikePattern, SessionStatus, WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
 import { and, desc, eq, inArray, isNotNull, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
@@ -165,8 +165,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     }
 
     // Short ID - need to resolve
-    const normalized = id.replace(/-/g, '').toLowerCase();
-    const pattern = `${normalized}%`;
+    const pattern = prefixToLikePattern(id);
 
     const results = await select(this.db)
       .from(sessions)

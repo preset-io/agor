@@ -6,6 +6,7 @@
  */
 
 import type { BoardComment, CommentID, UUID } from '@agor/core/types';
+import { prefixToLikePattern } from '@agor/core/types';
 import { and, eq, isNull, like } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -114,8 +115,7 @@ export class BoardCommentsRepository
     }
 
     // Short ID - need to resolve
-    const normalized = id.replace(/-/g, '').toLowerCase();
-    const pattern = `${normalized}%`;
+    const pattern = prefixToLikePattern(id);
 
     const results = await select(this.db)
       .from(boardComments)

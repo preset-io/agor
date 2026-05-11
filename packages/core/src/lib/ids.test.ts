@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { prefixToLikePattern } from '../types/id';
 import {
   expandPrefix,
   findByShortIdPrefix,
@@ -318,6 +319,48 @@ describe('findByShortIdPrefix', () => {
     const iter = new Set(entities);
     const matches = findByShortIdPrefix('0193', iter);
     expect(matches).toHaveLength(3);
+  });
+});
+
+describe('prefixToLikePattern', () => {
+  // The whole point: stored IDs are hyphenated UUIDs, so the LIKE pattern
+  // must match that format. A bare-hex prefix that spans a hyphen
+  // boundary used to silently match nothing.
+  it('passes through a sub-8 prefix unchanged (no hyphen yet)', () => {
+    expect(prefixToLikePattern('019e0eca')).toBe('019e0eca%');
+    expect(prefixToLikePattern('019')).toBe('019%');
+  });
+
+  it('inserts a hyphen at position 8 for prefixes that cross it', () => {
+    expect(prefixToLikePattern('019e0eca0d2d')).toBe('019e0eca-0d2d%');
+    expect(prefixToLikePattern('019e0eca0d')).toBe('019e0eca-0d%');
+  });
+
+  it('inserts hyphens at the canonical positions 8, 12, 16, 20', () => {
+    expect(prefixToLikePattern('019e0eca0d2d7000')).toBe('019e0eca-0d2d-7000%');
+    expect(prefixToLikePattern('019e0eca0d2d70008000')).toBe('019e0eca-0d2d-7000-8000%');
+    expect(prefixToLikePattern('019e0eca0d2d7000800000000000')).toBe(
+      '019e0eca-0d2d-7000-8000-00000000%'
+    );
+  });
+
+  it('accepts already-hyphenated prefixes and re-emits canonical form', () => {
+    expect(prefixToLikePattern('019e0eca-0d2d')).toBe('019e0eca-0d2d%');
+    // Even malformed-but-equivalent hyphen placement normalizes correctly.
+    expect(prefixToLikePattern('019e0-eca0d2d')).toBe('019e0eca-0d2d%');
+  });
+
+  it('lowercases the prefix', () => {
+    expect(prefixToLikePattern('019E0ECA-0D2D')).toBe('019e0eca-0d2d%');
+  });
+
+  it('handles the full 32/36-char canonical UUID', () => {
+    expect(prefixToLikePattern('019e0eca0d2d7000800000000000abcd')).toBe(
+      '019e0eca-0d2d-7000-8000-00000000abcd%'
+    );
+    expect(prefixToLikePattern('019e0eca-0d2d-7000-8000-00000000abcd')).toBe(
+      '019e0eca-0d2d-7000-8000-00000000abcd%'
+    );
   });
 });
 

@@ -13,6 +13,7 @@ import type {
   GatewayEnvVar,
   UUID,
 } from '@agor/core/types';
+import { prefixToLikePattern } from '@agor/core/types';
 import { eq, like } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -207,8 +208,7 @@ export class GatewayChannelRepository
       return id;
     }
 
-    const normalized = id.replace(/-/g, '').toLowerCase();
-    const pattern = `${normalized}%`;
+    const pattern = prefixToLikePattern(id);
 
     const results = await select(this.db)
       .from(gatewayChannels)

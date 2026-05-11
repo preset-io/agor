@@ -14,7 +14,7 @@ import type {
   User,
   UUID,
 } from '@agor/core/types';
-import { toAgenticToolsStatus } from '@agor/core/types';
+import { prefixToLikePattern, toAgenticToolsStatus } from '@agor/core/types';
 import { eq, like } from 'drizzle-orm';
 import { normalizeStoredEnvMap, type RawStoredEnvVar } from '../../config/env-vars';
 import { generateId } from '../../lib/ids';
@@ -133,8 +133,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
     }
 
     // Short ID - need to resolve
-    const normalized = id.replace(/-/g, '').toLowerCase();
-    const pattern = `${normalized}%`;
+    const pattern = prefixToLikePattern(id);
 
     const results = await select(this.db).from(users).where(like(users.user_id, pattern)).all();
 

@@ -5,6 +5,7 @@
  */
 
 import type { Repo, RepoEnvironment, RepoEnvironmentConfigV1, UUID } from '@agor/core/types';
+import { prefixToLikePattern } from '@agor/core/types';
 import { eq, like, sql } from 'drizzle-orm';
 import { resolveVariant, wrapV1AsV2 } from '../../config/variant-resolver.js';
 import { generateId } from '../../lib/ids';
@@ -142,8 +143,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
     }
 
     // Short ID - need to resolve
-    const normalized = id.replace(/-/g, '').toLowerCase();
-    const pattern = `${normalized}%`;
+    const pattern = prefixToLikePattern(id);
 
     const results = await select(this.db).from(repos).where(like(repos.repo_id, pattern)).all();
 
