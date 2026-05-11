@@ -277,7 +277,12 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   }
 
   if (svcEnabled('artifacts')) {
-    app.use('/artifacts', createArtifactsService(db, app));
+    // `agor-query` is the runtime-introspection fan-out event (daemon →
+    // viewer's browser tab). Feathers' default `serviceEvents` is just
+    // ['created','updated','patched','removed'], so without this it
+    // fires locally on the server's EventEmitter and never reaches any
+    // socket. See queryArtifactRuntime in services/artifacts.ts.
+    app.use('/artifacts', createArtifactsService(db, app), { events: ['agor-query'] });
   }
 
   if (svcEnabled('boards')) {
