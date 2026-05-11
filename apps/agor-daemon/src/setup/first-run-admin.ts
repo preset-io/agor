@@ -66,7 +66,30 @@ async function writeCredentialsExclusive(
   // Equivalent to `wx` mode in fs.writeFile, but writeFile doesn't expose the
   // mode parameter at create time on all platforms; using `open` directly is
   // the portable way to get both O_EXCL and mode 0600 in one syscall.
-  const fd = (await openP(path, 'wx', 0o600)) as unknown as number;
+  let fd: number;
+  try {
+    fd = (await openP(path, 'wx', 0o600)) as unknown as number;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+      // Pre-existing credentials file with zero users in the DB is an
+      // operator-recoverable but ambiguous state — we refuse to clobber
+      // an existing file in case the operator already stored it elsewhere.
+      throw new Error(
+        [
+          `Refusing to bootstrap admin: credentials file already exists at ${path}`,
+          'but the users table is empty.',
+          '',
+          'This usually means a previous bootstrap left a credentials file behind',
+          'while the database was reset. To proceed:',
+          `  - If you still have the password: keep ${path} as-is and create the`,
+          `    admin manually (\`agor user create-admin\`), or restore the DB.`,
+          `  - If the password is lost: delete ${path} and restart the daemon`,
+          '    to regenerate.',
+        ].join('\n')
+      );
+    }
+    throw err;
+  }
   try {
     await writeP(fd, body);
   } finally {
