@@ -24,6 +24,7 @@ import type {
 } from '@agor/core/types';
 import { MessageRole, TaskStatus } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import { ensureRepoOriginAligned } from '../utils/realign-repo-origin';
 import type { SessionsService } from './sessions';
 
 /**
@@ -359,6 +360,30 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           const sessionsService = this.app.service('sessions') as unknown as SessionsService;
           if (sessionsService.triggerQueueProcessing) {
             await sessionsService.triggerQueueProcessing(task.session_id);
+          }
+
+          // Self-heal git-config drift: an agent that finished its task may have
+          // overwritten `remote.origin.url` with a credential-bearing variant
+          // (e.g. via `gh auth login` + `gh repo set-default`, or a stray
+          // `git remote set-url`). Realigning to the DB's canonical value here
+          // means the *next* agent on any sibling worktree starts from a clean
+          // `.git/config`. Read-only on the happy path (~10–20ms); fire-and-
+          // forget so transient git lock errors don't break task completion.
+          if (session.worktree_id) {
+            this.app
+              .service('worktrees')
+              .get(session.worktree_id, params)
+              .then((worktree) => {
+                const repoId = worktree?.repo_id;
+                if (!repoId) return;
+                return ensureRepoOriginAligned(this.app, repoId);
+              })
+              .catch((err: unknown) => {
+                const message = err instanceof Error ? err.message : String(err);
+                console.warn(
+                  `⚠️  [TasksService] ensureRepoOriginAligned failed for session ${task.session_id.substring(0, 8)}: ${message}`
+                );
+              });
           }
         } catch (error) {
           console.error('❌ [TasksService] Failed to process task completion:', error);
