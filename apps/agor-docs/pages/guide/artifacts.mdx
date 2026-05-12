@@ -194,18 +194,25 @@ agor_artifacts_publish({
 
 ### Reading injected values in app code
 
-The daemon prefixes the synthesized `.env` keys per template, so apps use the standard idiom:
+The daemon prefixes the synthesized `.env` keys per template — each bundler has
+its own hard-coded allowlist (CRA only inlines `REACT_APP_*`, Vite only inlines
+`VITE_*`, etc.). Apps use the standard idiom for their template:
 
 | Template family | Bundler | `.env` prefix | Read from |
 |---|---|---|---|
-| `react`, `react-ts`, `vue3`, `svelte`, `solid` | Vite | `VITE_` | `import.meta.env.VITE_X` |
+| `react`, `react-ts` | Create React App (sandpack-react v2) | `REACT_APP_` | `process.env.REACT_APP_X` |
+| `vue3`, `svelte`, `solid` | Vite | `VITE_` | `import.meta.env.VITE_X` |
 | `vue`, `angular` | Vue/Angular CLI | (none) | `process.env.X` |
 | `vanilla`, `vanilla-ts` | Static | n/a | not supported |
 
 ```ts
-const apiKey = import.meta.env.VITE_OPENAI_KEY;
-const agorToken = import.meta.env.VITE_AGOR_TOKEN;
-const proxyUrl = import.meta.env.VITE_AGOR_PROXY_OPENAI;
+// react / react-ts (CRA)
+const apiKey = process.env.REACT_APP_OPENAI_KEY;
+const agorToken = process.env.REACT_APP_AGOR_TOKEN;
+const proxyUrl = process.env.REACT_APP_AGOR_PROXY_OPENAI;
+
+// vue3 / svelte / solid (Vite)
+// const apiKey = import.meta.env.VITE_OPENAI_KEY;
 
 if (!apiKey) {
   return <ConfigurePrompt name="OPENAI_KEY" />;

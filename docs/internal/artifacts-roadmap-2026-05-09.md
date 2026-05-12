@@ -89,17 +89,18 @@ Light. The artifact runtime is arbitrary-JS-by-design, so most "unsafe" Sandpack
 
 Array of plain var names (no prefix). Examples: `["OPENAI_KEY", "GITHUB_TOKEN"]`.
 
-At payload-fetch time, the daemon looks up the **viewing user's** encrypted `user.env.X` for each name and synthesizes a `.env` file injected into the file map on the way out (never persisted). Prefix per template:
+At payload-fetch time, the daemon looks up the **viewing user's** encrypted `user.env.X` for each name and synthesizes a `.env` file injected into the file map on the way out (never persisted). Each bundler has its own hard-coded allowlist (CRA only inlines `REACT_APP_*`, Vite only inlines `VITE_*`, etc.), so the daemon must prefix per template:
 
-| Template family | Bundler | Prefix written to `.env` | App reads as |
+| `SandpackTemplate` | Bundler (sandpack `environment`) | Prefix written to `.env` | App reads as |
 |---|---|---|---|
-| `vite-*`, `react-ts`, `react`, `vue3`, `svelte`, `solid` | Vite | `VITE_` | `import.meta.env.VITE_X` |
-| `create-react-app`, legacy `react`-CRA | Webpack/CRA | `REACT_APP_` | `process.env.REACT_APP_X` |
-| `node` | Node | none | `process.env.X` |
-| `vanilla`, `static` | none | n/a (skip injection) | n/a |
-| Other (`vue`, `angular-cli`, `parcel`-based) | Parcel/Vue-CLI | none | `process.env.X` |
+| `react`, `react-ts` | Create React App | `REACT_APP_` | `process.env.REACT_APP_X` |
+| `vue3`, `svelte`, `solid` | Vite (sandpack `node`) | `VITE_` | `import.meta.env.VITE_X` |
+| `vue`, `angular` | Vue/Angular CLI | none | `process.env.X` |
+| `vanilla`, `vanilla-ts` | Static | n/a (skip injection) | n/a |
 
-Prefix logic lives in a single helper: `envVarPrefixForTemplate(template: SandpackTemplate): string`. Templates without a working dotenv path (`vanilla`, `static`) skip env injection entirely; the daemon emits a warning if such an artifact has a non-empty `required_env_vars`.
+Prefix logic lives in a single helper: `envVarPrefixForTemplate(template: SandpackTemplate): string | null`. Templates without a working dotenv path (`vanilla`, `vanilla-ts`) skip env injection entirely; the daemon emits a warning if such an artifact has a non-empty `required_env_vars`.
+
+The CRA mapping is tied to `@codesandbox/sandpack-react` v2.x, which ships the `react` / `react-ts` templates with `environment: 'create-react-app'`. When the upstream `react` template flips to Vite (planned for sandpack-react v3), move them from `CRA_TEMPLATES` to `VITE_TEMPLATES`.
 
 ### 3. `agor_grants` jsonb column
 

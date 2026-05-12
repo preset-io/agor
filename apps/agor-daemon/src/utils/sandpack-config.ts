@@ -25,10 +25,26 @@ import type {
 } from '@agor/core/types';
 
 /**
- * Templates whose Sandpack runtime uses Vite. The synthesized `.env` keys
- * must be prefixed with `VITE_` so `import.meta.env.VITE_*` picks them up.
+ * Templates whose Sandpack runtime is Vite-based (sandpack environment
+ * `node`). The synthesized `.env` keys must be prefixed with `VITE_` so
+ * `import.meta.env.VITE_*` picks them up.
  */
-const VITE_TEMPLATES = new Set<SandpackTemplate>(['react', 'react-ts', 'vue3', 'svelte', 'solid']);
+const VITE_TEMPLATES = new Set<SandpackTemplate>(['vue3', 'svelte', 'solid']);
+
+/**
+ * Templates whose Sandpack runtime is Create React App (sandpack environment
+ * `create-react-app`). Only `REACT_APP_*`-prefixed vars in `.env` reach
+ * `process.env` at bundle time; the artifact reads them via
+ * `process.env.REACT_APP_X`. The prefix isn't an agor convention — it's
+ * baked into CRA's webpack config, which silently drops non-`REACT_APP_*`
+ * vars.
+ *
+ * Tied to `@codesandbox/sandpack-react` v2.x, which ships `react` and
+ * `react-ts` with `environment: 'create-react-app'`. If/when the upstream
+ * `react` template flips to Vite (planned for sandpack-react v3), move
+ * them to `VITE_TEMPLATES`.
+ */
+const CRA_TEMPLATES = new Set<SandpackTemplate>(['react', 'react-ts']);
 
 /**
  * Templates that don't have a working dotenv path at all. The daemon emits
@@ -40,15 +56,15 @@ const NO_ENV_TEMPLATES = new Set<SandpackTemplate>(['vanilla', 'vanilla-ts']);
  * Returns the prefix the daemon should apply when synthesizing `.env` for
  * the given template, or `null` if the template doesn't support a dotenv
  * path (the artifact will need to find another way to consume secrets).
+ *
+ * `vue` (Vue CLI), `angular` (Angular CLI), etc. fall through to the empty
+ * prefix — their bundlers consume plain `process.env.X` without name
+ * mangling.
  */
 export function envVarPrefixForTemplate(template: SandpackTemplate): string | null {
   if (NO_ENV_TEMPLATES.has(template)) return null;
   if (VITE_TEMPLATES.has(template)) return 'VITE_';
-  // CRA isn't a separate template in the current type — it ships as a
-  // forked `react` build that consumers opt into. We default to `VITE_`
-  // for `react` since the upstream Sandpack template is now Vite-based.
-  // `vue` (Vue CLI), `angular` (Angular CLI), etc. consume plain
-  // `process.env.X`.
+  if (CRA_TEMPLATES.has(template)) return 'REACT_APP_';
   return '';
 }
 

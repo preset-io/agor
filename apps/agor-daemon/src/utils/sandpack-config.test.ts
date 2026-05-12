@@ -71,9 +71,15 @@ describe('sanitizeSandpackConfig', () => {
 });
 
 describe('envVarPrefixForTemplate', () => {
-  it('vite-family templates get VITE_', () => {
-    expect(envVarPrefixForTemplate('react')).toBe('VITE_');
-    expect(envVarPrefixForTemplate('react-ts')).toBe('VITE_');
+  it('CRA-based React templates get REACT_APP_', () => {
+    // sandpack-react v2 ships `react` and `react-ts` with
+    // `environment: 'create-react-app'`. Vite-style `import.meta.env` is
+    // unavailable there — env vars reach `process.env.REACT_APP_X`.
+    expect(envVarPrefixForTemplate('react')).toBe('REACT_APP_');
+    expect(envVarPrefixForTemplate('react-ts')).toBe('REACT_APP_');
+  });
+
+  it('Vite-family templates get VITE_', () => {
     expect(envVarPrefixForTemplate('vue3')).toBe('VITE_');
     expect(envVarPrefixForTemplate('svelte')).toBe('VITE_');
     expect(envVarPrefixForTemplate('solid')).toBe('VITE_');

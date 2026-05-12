@@ -96,7 +96,7 @@ The folder should contain ordinary source files (no \`sandpack.json\`, no \`agor
 Recommended: create the folder inside your worktree so files can be version-controlled.
 
 DECLARATIVE CONFIG:
-- \`requiredEnvVars\`: array of env var NAMES the artifact needs (e.g. ["OPENAI_KEY", "STRIPE_KEY"]). The daemon synthesizes a per-viewer \`.env\` at render time using values from the viewer's stored env vars (Settings → Environment Variables). Names are stored without prefix; the daemon prefixes per template (Vite → \`VITE_\`, CRA → \`REACT_APP_\`, etc.). Reference these in your code via \`import.meta.env.VITE_X\` (Vite) or \`process.env.X\` (Node).
+- \`requiredEnvVars\`: array of env var NAMES the artifact needs (e.g. ["OPENAI_KEY", "STRIPE_KEY"]). The daemon synthesizes a per-viewer \`.env\` at render time using values from the viewer's stored env vars (Settings → Environment Variables). Names are stored without prefix; the daemon prefixes per template at render time (CRA → \`REACT_APP_\`, Vite → \`VITE_\`, etc.). Reference accordingly in your code: \`react\`/\`react-ts\` are CRA-backed (sandpack-react v2), so use \`process.env.REACT_APP_X\`; \`vue3\`/\`svelte\`/\`solid\` are Vite-backed, so use \`import.meta.env.VITE_X\`; \`vue\`/\`angular\` use plain \`process.env.X\`; \`vanilla\`/\`vanilla-ts\` have no dotenv path (daemon warns and injects nothing).
 - \`agorGrants\`: declarative daemon capabilities. Each grant maps to a fixed env var:
     \`agor_token: true\`     → mints a 15-min daemon JWT for the viewer; injected as \`AGOR_TOKEN\`. ARTIFACT-SCOPED CONSENT ONLY — author/instance grants don't auto-cover this.
     \`agor_api_url: true\`   → injects the daemon URL as \`AGOR_API_URL\`.
