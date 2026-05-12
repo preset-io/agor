@@ -548,7 +548,8 @@ describe('ArtifactsService.getPayload trust + .env synthesis', () => {
     expect(payload.trust_state).toBe('self');
     expect(payload.trust_scope).toBe('self');
     // .env is synthesized even though the user has no env var stored — value is empty.
-    expect(payload.files['/.env']).toMatch(/VITE_OPENAI_KEY=/);
+    // `react` template is CRA-backed, so the prefix is `REACT_APP_`.
+    expect(payload.files['/.env']).toMatch(/REACT_APP_OPENAI_KEY=/);
   });
 
   dbTest(
@@ -572,9 +573,10 @@ describe('ArtifactsService.getPayload trust + .env synthesis', () => {
       const payload = await service.getPayload(created.artifact_id, 'user-stranger' as never);
       expect(payload.trust_state).toBe('untrusted');
       // Empty values, but keys are present so the artifact can detect the state.
-      expect(payload.files['/.env']).toMatch(/VITE_OPENAI_KEY=/);
-      expect(payload.files['/.env']).toMatch(/VITE_STRIPE_KEY=/);
-      expect(payload.files['/.env']).toMatch(/VITE_AGOR_TOKEN=/);
+      // `react` template is CRA-backed, so the prefix is `REACT_APP_`.
+      expect(payload.files['/.env']).toMatch(/REACT_APP_OPENAI_KEY=/);
+      expect(payload.files['/.env']).toMatch(/REACT_APP_STRIPE_KEY=/);
+      expect(payload.files['/.env']).toMatch(/REACT_APP_AGOR_TOKEN=/);
     }
   );
 
