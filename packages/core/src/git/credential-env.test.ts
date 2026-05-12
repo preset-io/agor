@@ -334,8 +334,8 @@ describe('buildGitConfigParameters', () => {
     // git's parser treats single quotes as LITERAL characters in the env-var
     // value (not shell escaping). The outer quotes here are TS string
     // delimiters; the inner single quotes are git protocol.
-    expect(buildGitConfigParameters(['transfer.credentialInUrl=die'])).toBe(
-      "'transfer.credentialInUrl=die'"
+    expect(buildGitConfigParameters(['transfer.credentialsInUrl=die'])).toBe(
+      "'transfer.credentialsInUrl=die'"
     );
   });
 
@@ -362,7 +362,7 @@ describe('resolveGitConfigParameters', () => {
     const out = resolveGitConfigParameters(undefined);
     expect(out).toEqual(getDefaultGitConfigParameters());
     // Defaults must include the headline credential-in-URL guard.
-    expect(out).toContain('transfer.credentialInUrl=die');
+    expect(out).toContain('transfer.credentialsInUrl=die');
   });
 
   it('returns an empty array when configured value is [] (explicit "disable")', () => {
@@ -375,7 +375,7 @@ describe('resolveGitConfigParameters', () => {
     // list — they don't get them implicitly.
     const out = resolveGitConfigParameters(['custom.key=value']);
     expect(out).toEqual(['custom.key=value']);
-    expect(out).not.toContain('transfer.credentialInUrl=die');
+    expect(out).not.toContain('transfer.credentialsInUrl=die');
   });
 });
 
@@ -392,7 +392,7 @@ describe('getDefaultGitConfigParameters', () => {
 
   it('includes all the documented defense pairs (regression for accidental removal)', () => {
     const defaults = getDefaultGitConfigParameters();
-    expect(defaults).toContain('transfer.credentialInUrl=die');
+    expect(defaults).toContain('transfer.credentialsInUrl=die');
     expect(defaults).toContain('protocol.file.allow=user');
     expect(defaults).toContain('protocol.ext.allow=never');
     expect(defaults).toContain('fetch.fsckObjects=true');
@@ -409,7 +409,7 @@ describe('GIT_CONFIG_PARAMETERS end-to-end', () => {
   //
   // Test the *contract* we own — "the env var parses; git can read the
   // setting back" — independent of git's enforcement behavior, which is
-  // version-gated (`transfer.credentialInUrl=die` is git 2.41+). A
+  // version-gated (`transfer.credentialsInUrl=die` is git 2.41+). A
   // separately-gated test below covers the actual enforcement.
 
   function withTempRepoSync<T>(fn: (repoPath: string) => T): T {
@@ -450,13 +450,13 @@ describe('GIT_CONFIG_PARAMETERS end-to-end', () => {
     withTempRepoSync((repoPath) => {
       const result = spawnSync(
         'git',
-        ['-C', repoPath, 'config', '--get', 'transfer.credentialInUrl'],
+        ['-C', repoPath, 'config', '--get', 'transfer.credentialsInUrl'],
         {
           stdio: 'pipe',
           env: {
             ...process.env,
             GIT_CONFIG_GLOBAL: '/dev/null',
-            GIT_CONFIG_PARAMETERS: buildGitConfigParameters(['transfer.credentialInUrl=die']),
+            GIT_CONFIG_PARAMETERS: buildGitConfigParameters(['transfer.credentialsInUrl=die']),
           },
         }
       );
@@ -472,7 +472,7 @@ describe('GIT_CONFIG_PARAMETERS end-to-end', () => {
       const params = buildGitConfigParameters([
         'protocol.ext.allow=never',
         'protocol.file.allow=user',
-        'transfer.credentialInUrl=die',
+        'transfer.credentialsInUrl=die',
       ]);
       const askOne = (key: string) =>
         spawnSync('git', ['-C', repoPath, 'config', '--get', key], {
@@ -480,7 +480,7 @@ describe('GIT_CONFIG_PARAMETERS end-to-end', () => {
           env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_PARAMETERS: params },
         });
 
-      expect(askOne('transfer.credentialInUrl').stdout.toString().trim()).toBe('die');
+      expect(askOne('transfer.credentialsInUrl').stdout.toString().trim()).toBe('die');
       expect(askOne('protocol.file.allow').stdout.toString().trim()).toBe('user');
       expect(askOne('protocol.ext.allow').stdout.toString().trim()).toBe('never');
     });
@@ -494,7 +494,7 @@ describe('GIT_CONFIG_PARAMETERS end-to-end', () => {
     withTempRepoSync((repoPath) => {
       const result = spawnSync(
         'git',
-        ['-C', repoPath, 'config', '--get', 'transfer.credentialInUrl'],
+        ['-C', repoPath, 'config', '--get', 'transfer.credentialsInUrl'],
         {
           stdio: 'pipe',
           env: {
@@ -511,28 +511,46 @@ describe('GIT_CONFIG_PARAMETERS end-to-end', () => {
   });
 
   it.skipIf(!gitAtLeast(2, 41))(
-    'transfer.credentialInUrl=die makes git refuse a credential-bearing URL (git 2.41+)',
+    'transfer.credentialsInUrl=die makes git refuse a configured remote.<name>.url carrying creds (git 2.41+)',
     () => {
       // Headline enforcement test, gated on the git version that introduced
       // the setting. On older git this test silently skips — the env-var
       // contract is still verified above, so the implementation is
       // exercised; we just can't observe the refusal locally.
+      //
+      // Critically: this setting only checks credentials in *configured*
+      // `remote.<name>.url` values, not credentials passed as URLs on argv.
+      // Per git's docs (Documentation/config/transfer.adoc):
+      //   "Note that this is currently limited to detecting credentials in
+      //    remote.<name>.url configuration; it won't detect credentials in
+      //    remote.<name>.pushurl configuration."
+      // So we configure the remote with creds, then run a transfer op that
+      // resolves through the named remote — that's the path the setting
+      // actually guards. An earlier version of this test used argv URLs and
+      // produced a DNS error rather than the credential refusal we wanted.
       withTempRepoSync((repoPath) => {
-        const result = spawnSync(
+        const taintedUrl = 'https://USER:tok@example.invalid/foo.git';
+        const addRemote = spawnSync(
           'git',
-          ['-C', repoPath, 'ls-remote', 'https://USER:tok@example.invalid/foo.git'],
-          {
-            stdio: 'pipe',
-            env: {
-              ...process.env,
-              GIT_CONFIG_GLOBAL: '/dev/null',
-              GIT_CONFIG_PARAMETERS: buildGitConfigParameters(['transfer.credentialInUrl=die']),
-              GIT_TERMINAL_PROMPT: '0',
-            },
-          }
+          ['-C', repoPath, 'remote', 'add', 'origin', taintedUrl],
+          { stdio: 'pipe' }
         );
+        expect(addRemote.status).toBe(0);
+
+        const result = spawnSync('git', ['-C', repoPath, 'ls-remote', 'origin'], {
+          stdio: 'pipe',
+          env: {
+            ...process.env,
+            GIT_CONFIG_GLOBAL: '/dev/null',
+            GIT_CONFIG_PARAMETERS: buildGitConfigParameters(['transfer.credentialsInUrl=die']),
+            GIT_TERMINAL_PROMPT: '0',
+          },
+        });
         expect(result.status).not.toBe(0);
-        expect(result.stderr.toString()).toMatch(/credential|URL|refus/i);
+        // git's diagnostic when this fires: "fatal: refusing to work with
+        // credential in URL". Match a loose superset in case wording shifts
+        // across versions.
+        expect(result.stderr.toString()).toMatch(/credential|refus/i);
       });
     }
   );

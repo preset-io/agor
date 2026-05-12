@@ -228,7 +228,7 @@ export function buildGitConfigEnv(entries: [string, string][]): Record<string, s
  * Default `GIT_CONFIG_PARAMETERS` pairs. Locks down the most-impactful
  * credential-leak and remote-code-execution surfaces git has accumulated.
  *
- * `transfer.credentialInUrl=die` is the headline entry: it tells git 2.41+
+ * `transfer.credentialsInUrl=die` is the headline entry: it tells git 2.41+
  * to refuse any fetch/push whose URL carries embedded credentials, both on
  * argv (`git fetch https://USER:TOK@…`) and in config (`remote.X.url`,
  * `branch.X.remote` URL-form, `url.X.insteadOf` rewrites). Tainted configs
@@ -241,7 +241,7 @@ export function buildGitConfigEnv(entries: [string, string][]): Record<string, s
  * path-traversal attacks via crafted filenames.
  */
 const DEFAULT_GIT_CONFIG_PARAMETERS: readonly string[] = Object.freeze([
-  'transfer.credentialInUrl=die',
+  'transfer.credentialsInUrl=die',
   'protocol.file.allow=user',
   'protocol.ext.allow=never',
   'fetch.fsckObjects=true',
@@ -297,8 +297,8 @@ export function resolveGitConfigParameters(
  * @see https://git-scm.com/docs/git-config#ENVIRONMENT (`GIT_CONFIG_PARAMETERS`)
  *
  * @example
- *   buildGitConfigParameters(['transfer.credentialInUrl=die'])
- *   // => "'transfer.credentialInUrl=die'"
+ *   buildGitConfigParameters(['transfer.credentialsInUrl=die'])
+ *   // => "'transfer.credentialsInUrl=die'"
  *
  *   buildGitConfigParameters(['a=1', 'b=2'])
  *   // => "'a=1' 'b=2'"

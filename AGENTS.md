@@ -487,7 +487,7 @@ Tunable from `~/.agor/config.yaml` under `security.*` — see
 
 The daemon injects a `GIT_CONFIG_PARAMETERS` env var at startup that propagates
 to every git invocation it (or any spawned executor / sub-tool) runs. The
-default list refuses credential-bearing URLs (`transfer.credentialInUrl=die`,
+default list refuses credential-bearing URLs (`transfer.credentialsInUrl=die`,
 git 2.41+), blocks the `file://` / `ext::` protocol RCE families, validates
 object integrity (`fsckObjects`), and enables HFS/NTFS path-traversal
 protection.
@@ -499,7 +499,7 @@ security:
   # Set to [] to disable all defaults (debug only).
   # Set to a non-empty list to REPLACE the defaults verbatim.
   git_config_parameters:
-    - transfer.credentialInUrl=die
+    - transfer.credentialsInUrl=die
     - protocol.file.allow=user
     - protocol.ext.allow=never
     - fetch.fsckObjects=true

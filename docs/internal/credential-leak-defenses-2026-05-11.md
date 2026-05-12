@@ -13,7 +13,7 @@ Agor worktrees share `.git/config` with their base repo. On a multi-tenant host 
 
 No single defense closes the problem. We propose (and partially ship) a **three-layer stack**:
 
-1. **Hard-stop the transfer side** — `GIT_CONFIG_PARAMETERS` injected at daemon startup and forwarded across the sudo boundary into every executor. The default pairs include `transfer.credentialInUrl=die` (git 2.41+) plus a handful of CVE-mitigation defaults (protocol allowlist, fsck, HFS/NTFS protection). Tainted configs become useless for fetch/push, even when the *write* of the tainted value isn't blocked. **Shipped in this PR** — `security.git_config_parameters` in `~/.agor/config.yaml`.
+1. **Hard-stop the transfer side** — `GIT_CONFIG_PARAMETERS` injected at daemon startup and forwarded across the sudo boundary into every executor. The default pairs include `transfer.credentialsInUrl=die` (git 2.41+) plus a handful of CVE-mitigation defaults (protocol allowlist, fsck, HFS/NTFS protection). The credential-in-URL guard is narrow by design — it only covers `remote.<name>.url` (vector 1), explicitly NOT `pushurl` or `branch.X.remote` per git's docs. But `remote.origin.url` is by far the most common leak target (every `gh repo clone` / `git remote add` writes there), so the high-frequency case is closed; the rest is covered by Layer A.5 (realignment) + the heartbeat scan + Layer C. **Shipped in this PR** — `security.git_config_parameters` in `~/.agor/config.yaml`.
 2. **Self-heal the canonical origin** — `ensureGitRemoteUrl(repoPath, "origin", expectedUrl)` realigns `remote.origin.url` to the DB's canonical value, leaving user-added remotes untouched. **Shipped as a helper in this PR**; wiring it into the right call sites (clone, periodic sweep, every daemon-issued op on a known repo) is deferred to a follow-up so each wiring point gets its own review.
 3. **Eliminate the cross-user reach** with per-agent Unix UIDs so one agent literally cannot read another user's `gh` state or env-injected tokens. The `address-issue-1140-impersonation-abstraction` worktree is the implementation arm.
 
@@ -47,18 +47,18 @@ Below is the exhaustive list of paths a token can take into git's view of the wo
 | # | Vector | Form | Persistence scope | Currently caught by | Caught by proposed stack |
 |---|---|---|---|---|---|
 | 1 | `[remote "X"] url = https://USER:TOK@host/…` | URL credentials | Per-repo `.git/config`, shared across all worktrees | Nothing | Option 4 (transfer hard-stop), Option 1 (ACL), Option 6 (scan) |
-| 2 | `[branch "X"] remote = https://USER:TOK@host/…` (URL in a name-only key) | URL credentials, misused key | Per-repo `.git/config` | Nothing | Option 4, Option 1, Option 6 |
-| 3 | `[remote "X"] pushurl = https://USER:TOK@host/…` | URL credentials, push side | Per-repo | Nothing | Option 4, Option 1, Option 6 |
+| 2 | `[branch "X"] remote = https://USER:TOK@host/…` (URL in a name-only key) | URL credentials, misused key | Per-repo `.git/config` | Nothing | Option 1 (ACL), Option 6 (scan). **Not** caught by Option 4 — git's `transfer.credentialsInUrl` is scoped to `remote.<name>.url` only, per [git's docs](https://git-scm.com/docs/git-config#Documentation/git-config.txt-transfercredentialsInUrl). |
+| 3 | `[remote "X"] pushurl = https://USER:TOK@host/…` | URL credentials, push side | Per-repo | Nothing | Option 1, Option 6. **Not** caught by Option 4 — git explicitly excludes `pushurl` from `transfer.credentialsInUrl`. |
 | 4 | `[http "https://github.com/"] extraheader = Authorization: Basic <b64>` (persisted in config, not env) | Header in config | Per-repo or global config | Nothing | Option 1 (ACL), Option 6 (extended regex) |
-| 5 | `[credential] helper = store --file=<path>` + the credential file | Helper-managed plaintext store | Helper file (`~/.git-credentials` or per-repo) | Nothing | Option 4 partially (still works at transfer time — does not help here); Option 6 with extended regex; Option 8 (per-uid isolation) |
+| 5 | `[credential] helper = store --file=<path>` + the credential file | Helper-managed plaintext store | Helper file (`~/.git-credentials` or per-repo) | Nothing | Option 6 with extended regex; Option 8 (per-uid isolation) |
 | 6 | `~/.git-credentials` (default store-helper location) | Plaintext credential cache | Per-uid home dir | Nothing | Option 8 (per-uid isolation); Option 6 extended |
 | 7 | `~/.netrc` (curl/git fallback, `machine HOST login X password TOK`) | Plaintext netrc | Per-uid home dir | Nothing | Option 8; Option 6 extended |
-| 8 | `[url "https://USER:TOK@host/"] insteadOf = https://host/` | URL-rewrite baking | Per-repo or global | Nothing | Option 4 (transfer kicks in when the rewritten URL is used), Option 1, Option 6 |
+| 8 | `[url "https://USER:TOK@host/"] insteadOf = https://host/` | URL-rewrite baking | Per-repo or global | Nothing | Option 1, Option 6. **Partially** by Option 4 — only if the rewritten target lands in `remote.<name>.url`; rewrites used on argv URLs bypass the check. |
 | 9 | `~/.config/gh/hosts.yml` (GitHub CLI's auth state) | Per-uid plaintext | Per-uid home dir | Nothing | Option 8 (the only complete fix); Option 6 extended for visibility |
 | 10 | `.git/hooks/<name>` containing inline tokens | Hook script | Per-repo `.git/hooks/` (NOT shared across worktrees — each worktree has its own hooks dir at `.git/worktrees/<name>/hooks/`, but `core.hooksPath` could re-share) | Nothing | Option 1 if extended to hooks; Option 6 with a hooks scan |
 | 11 | `core.sshCommand = ssh -i /path/to/key …` | Key path (attribution shift, not direct cred leak) | Per-repo | `createGit()` overrides it for daemon-issued ops only | Option 8 (agent ops too) |
 
-**Coverage scoring** (used below): each defense option closes some subset of {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}. The recommended stack closes 1–4, 8, 10 hard; degrades 5–7, 9, 11 to per-uid leaks (i.e. user X cannot read user Y's leaks).
+**Coverage scoring** (used below): each defense option closes some subset of {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}. With the corrected scope for Option 4 (the `transfer.credentialsInUrl` config key only checks `remote.<name>.url`, not `pushurl` / `branch.X.remote` / argv), the recommended stack closes vector 1 hard at the transfer layer, and depends on Layer A.5 (`ensureGitRemoteUrl`) + the heartbeat scan + Option 8 for the remaining vectors.
 
 ---
 
@@ -130,22 +130,22 @@ This is its own worktree, probably 2–3 PRs. **This design doc is the spec.**
 
 **Verdict.** **Already done.** This design doc treats it as foundational. Cite it as the proof that daemon-side is clean and the remaining work is agent-side + persistence-side.
 
-### 3.4 Option 4 — `transfer.credentialInUrl=die` (the easy hard-stop)
+### 3.4 Option 4 — `transfer.credentialsInUrl=die` (the easy hard-stop)
 
 **Mechanism.** Built into git 2.41+. Set it globally and **git will refuse any transfer operation (fetch / push / clone / archive / ls-remote) that uses a URL with embedded credentials**, both when the URL is on argv and when the URL is read from config (`remote.X.url`, `branch.X.remote` URL form, `url.X.insteadOf` rewrites, submodule URLs).
 
 **Critical detail to understand.** It does not block the *write* (you can still `git remote set-url origin https://TOK@...` — that's not a transfer op). It blocks the *use*. Tainted configs become *useless* for transfer. Combined with the heartbeat scan (Option 6) that catches the write within minutes, the loop closes: an agent that taints config gets nothing out of it, and the next scan removes it.
 
 **Three places to set it:**
-1. **Per daemon-issued op** — extend `createGit()`'s injected `GIT_CONFIG_KEY_n` list (`packages/core/src/git/index.ts:387`) to include `transfer.credentialInUrl=die`. **Already a one-line change** — see Appendix C.1.
-2. **In every executor's env** — set `GIT_CONFIG_PARAMETERS="'transfer.credentialInUrl=die'"` (single-quoted, the protocol git expects) in the env-file the daemon writes for spawn (`apps/agor-daemon/src/utils/spawn-executor.ts:295-304`). This blankets every git call the agent makes inside its sandbox.
-3. **System-wide** — `git config --system transfer.credentialInUrl die` writes to `/etc/gitconfig`. Useful for hosts where (1)+(2) don't cover every entrypoint (interactive shells, cron, etc.). Document for ops; do not require it.
+1. **Per daemon-issued op** — extend `createGit()`'s injected `GIT_CONFIG_KEY_n` list (`packages/core/src/git/index.ts:387`) to include `transfer.credentialsInUrl=die`. **Already a one-line change** — see Appendix C.1.
+2. **In every executor's env** — set `GIT_CONFIG_PARAMETERS="'transfer.credentialsInUrl=die'"` (single-quoted, the protocol git expects) in the env-file the daemon writes for spawn (`apps/agor-daemon/src/utils/spawn-executor.ts:295-304`). This blankets every git call the agent makes inside its sandbox.
+3. **System-wide** — `git config --system transfer.credentialsInUrl die` writes to `/etc/gitconfig`. Useful for hosts where (1)+(2) don't cover every entrypoint (interactive shells, cron, etc.). Document for ops; do not require it.
 
 **Closes vectors:** 1, 2, 3, 8 at the transfer layer (and 4 in argv form). Renders the persisted token *useless* even when the write went through. Does not close persistence-only leaks (5, 6, 7 — those are credential-helper paths, not URL paths).
 
 **Does not close.** Persistence itself; per-uid leaks (9); hooks (10); attribution shifts (11).
 
-**Bypass paths.** Agent uses `--config` flag on its own git call: `git -c transfer.credentialInUrl=allow fetch https://TOK@…`. *True bypass*, but loud — it's evidence of intent, not accident. The heartbeat scan still catches the persisted artifact.
+**Bypass paths.** Agent uses `--config` flag on its own git call: `git -c transfer.credentialsInUrl=allow fetch https://TOK@…`. *True bypass*, but loud — it's evidence of intent, not accident. The heartbeat scan still catches the persisted artifact.
 
 **Cost.** Two file edits, ~6 lines, fully reversible. No UX cost. Tests required (verify the env-var protocol parses correctly through simple-git's `unsafe.allowUnsafeConfigEnvCount` path — already permitted in `createGit()`).
 
@@ -161,7 +161,7 @@ This is its own worktree, probably 2–3 PRs. **This design doc is the spec.**
 
 **Cost.** Low to write, high to maintain (every clone needs the hook installed; agents can delete it; `core.hooksPath` can re-point it).
 
-**Verdict.** **Skip in favor of Option 4.** `transfer.credentialInUrl=die` is the same idea (block the transfer) with stronger semantics, no bypass via `--no-verify`, and one config line instead of a maintained hook script.
+**Verdict.** **Skip in favor of Option 4.** `transfer.credentialsInUrl=die` is the same idea (block the transfer) with stronger semantics, no bypass via `--no-verify`, and one config line instead of a maintained hook script.
 
 ### 3.6 Option 6 — Heartbeat scan + alert
 
@@ -207,7 +207,7 @@ Three layers; Layer A ships here.
 
 | # | Deliverable | Where | Closes |
 |---|---|---|---|
-| A.1 | `security.git_config_parameters` config key + safe defaults (`transfer.credentialInUrl=die`, `protocol.file.allow=user`, `protocol.ext.allow=never`, `fetch.fsckObjects=true`, `transfer.fsckObjects=true`, `core.protectHFS=true`, `core.protectNTFS=true`) | `packages/core/src/config/types.ts` (`AgorSecuritySettings.git_config_parameters`), `packages/core/src/git/index.ts` (`DEFAULT_GIT_CONFIG_PARAMETERS`, `getDefaultGitConfigParameters`, `resolveGitConfigParameters`, `buildGitConfigParameters`) | Foundation for A.2 / A.3 |
+| A.1 | `security.git_config_parameters` config key + safe defaults (`transfer.credentialsInUrl=die`, `protocol.file.allow=user`, `protocol.ext.allow=never`, `fetch.fsckObjects=true`, `transfer.fsckObjects=true`, `core.protectHFS=true`, `core.protectNTFS=true`) | `packages/core/src/config/types.ts` (`AgorSecuritySettings.git_config_parameters`), `packages/core/src/git/index.ts` (`DEFAULT_GIT_CONFIG_PARAMETERS`, `getDefaultGitConfigParameters`, `resolveGitConfigParameters`, `buildGitConfigParameters`) | Foundation for A.2 / A.3 |
 | A.2 | Set `process.env.GIT_CONFIG_PARAMETERS` at daemon startup | `apps/agor-daemon/src/index.ts` — right after config load, before any child-process spawn | Covers daemon-direct git via `createGit()`; covers any tool that internally invokes git (husky, gh, npm postinstall) since they all inherit `process.env` |
 | A.3 | Forward `GIT_CONFIG_PARAMETERS` through the `sudo -u` boundary in the spawn-executor allowlist | `apps/agor-daemon/src/utils/spawn-executor.ts` `essentialEnv` block | Covers agent-issued git too |
 | A.4 | `env_keep += GIT_CONFIG_PARAMETERS` for sudo paths that don't go through the spawn-executor allowlist (defence in depth) | `docker/sudoers/agor-daemon.sudoers` | Future sudo callsites can't accidentally drop the hardening |
@@ -215,12 +215,12 @@ Three layers; Layer A ships here.
 | A.6 | Tests | `packages/core/src/git/credential-env.test.ts` (42 tests, one git-version-gated) | — |
 
 **Closes (via Layer A defaults at transfer time):** 1, 2, 3, 4, 8.
-**Requires git 2.41+ for the `transfer.credentialInUrl=die` enforcement.** On older git the env var is silently ignored (no harm, no help) and the other pairs (`protocol.*`, `fsckObjects`, `core.protectHFS/NTFS`) still apply. The daemon logs the resolved `GIT_CONFIG_PARAMETERS` at startup so operators can confirm what's active.
+**Requires git 2.41+ for the `transfer.credentialsInUrl=die` enforcement.** On older git the env var is silently ignored (no harm, no help) and the other pairs (`protocol.*`, `fsckObjects`, `core.protectHFS/NTFS`) still apply. The daemon logs the resolved `GIT_CONFIG_PARAMETERS` at startup so operators can confirm what's active.
 
 ### Layer B (proposed, NOT shipping) — Filesystem ACLs on `.git/config`
 
 **Dropped.** The legitimate-write set is wider than initially scoped: agents legitimately need `git remote add upstream`, `git push -u` writes branch tracking, husky writes `core.hooksPath`, `git submodule init` syncs `.gitmodules` → `.git/config`, plus `safe.directory` edge cases. Mediating all of these through MCP is a significant lift with marginal additional coverage on top of Layer A + Layer C. The original write-block role is split between:
-- Layer A.1 (`transfer.credentialInUrl=die`) — tainted URLs become useless even when persisted
+- Layer A.1 (`transfer.credentialsInUrl=die`) — tainted URLs become useless even when persisted
 - Layer A.5 (`ensureGitRemoteUrl`) — canonical origin self-heals on the high-frequency leak target
 - Layer C (per-uid isolation) — cross-user reach blocked at the OS layer
 
@@ -252,14 +252,14 @@ Originally bundled in Layer A. Carved out because the surface is its own thing: 
 
 | Vector | Pre-Layer-A | After Layer A (shipped here) | After Layer C |
 |---|---|---|---|
-| 1 — `remote.X.url` with creds | Unprotected | Transfer-blocked + canonical self-heal via `ensureGitRemoteUrl` | Per-uid contained |
-| 2 — `branch.X.remote` URL form | Unprotected | Transfer-blocked | Per-uid |
-| 3 — `pushurl` with creds | Unprotected | Transfer-blocked | Per-uid |
+| 1 — `remote.X.url` with creds | Unprotected | Transfer-blocked (`transfer.credentialsInUrl=die`) + canonical self-heal via `ensureGitRemoteUrl` | Per-uid contained |
+| 2 — `branch.X.remote` URL form | Unprotected | Detected only (heartbeat follow-up); transfer hardening does NOT cover this key per git's docs | Per-uid |
+| 3 — `pushurl` with creds | Unprotected | Detected only (heartbeat follow-up); transfer hardening explicitly excludes `pushurl` per git's docs | Per-uid |
 | 4 — `http.*.extraheader` persisted | Unprotected | Detected via heartbeat (follow-up PR) | Per-uid |
 | 5 — `credential.helper=store` + file | Unprotected | Detected (heartbeat) | Per-uid contained |
 | 6 — `~/.git-credentials` | Unprotected | Detected (heartbeat) | Per-uid contained |
 | 7 — `~/.netrc` | Unprotected | Detected (heartbeat) | Per-uid contained |
-| 8 — `url.X.insteadOf` token bake | Unprotected | Transfer-blocked | Per-uid |
+| 8 — `url.X.insteadOf` token bake | Unprotected | Partial: transfer-blocked when the rewritten URL flows through `remote.X.url`; not on argv | Per-uid |
 | 9 — `~/.config/gh/hosts.yml` | Unprotected | (per-uid by default) | **Closed** |
 | 10 — `.git/hooks/<name>` with creds | Unprotected | Detected if heartbeat extended to hooks | Per-uid |
 | 11 — `core.sshCommand` attribution | Daemon-side overridden | Same | Per-uid (agent-side too) |
@@ -289,7 +289,7 @@ For follow-up PRs:
 3. **Branch-tracking writes through MCP.** If Layer B is ever revisited, the daemon would need to mediate `git push --set-upstream`. Two options: (a) wrap the push in a daemon RPC, (b) write `branch.X.remote/merge` post-push via a "fixup my tracking" RPC. (b) is simpler but racy.
 4. **CI lint for credential-in-URL.** Layer D.1 needs a CI grep rule. Trivial but needs a home — extend `pnpm lint`, or new `pnpm security:check`.
 5. **Public-deployment guard extension.** Today the daemon refuses to boot in `allowAnonymous` + public-bind combos (`apps/agor-daemon/src/index.ts:213-217`). Extend to refuse `unix_user_mode: simple` + public-bind once Layer C lands.
-6. **Git version requirement note.** `transfer.credentialInUrl=die` requires git 2.41+. On older git the env var is silently ignored. Consider a daemon startup warning if `git --version` reports < 2.41 (deferred — current default still applies the other protocol/fsck hardening pairs that work on older git).
+6. **Git version requirement note.** `transfer.credentialsInUrl=die` requires git 2.41+. On older git the env var is silently ignored. Consider a daemon startup warning if `git --version` reports < 2.41 (deferred — current default still applies the other protocol/fsck hardening pairs that work on older git).
 
 ---
 
@@ -330,7 +330,7 @@ Layer A is implemented in this PR. The pointers below name the canonical surface
 
 | Concern | File |
 |---|---|
-| Config type + safe defaults (`transfer.credentialInUrl=die` + protocol/fsck/HFS pairs) | `packages/core/src/config/types.ts` (`AgorSecuritySettings.git_config_parameters`) |
+| Config type + safe defaults (`transfer.credentialsInUrl=die` + protocol/fsck/HFS pairs) | `packages/core/src/config/types.ts` (`AgorSecuritySettings.git_config_parameters`) |
 | `DEFAULT_GIT_CONFIG_PARAMETERS`, resolver, builder | `packages/core/src/git/index.ts` (`getDefaultGitConfigParameters`, `resolveGitConfigParameters`, `buildGitConfigParameters`) |
 | Daemon-process env injection | `apps/agor-daemon/src/index.ts` (right after config load) |
 | Sudo-boundary forward to executors | `apps/agor-daemon/src/utils/spawn-executor.ts` (`essentialEnv` allowlist) |
