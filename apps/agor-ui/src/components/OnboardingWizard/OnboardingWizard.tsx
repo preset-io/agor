@@ -422,12 +422,14 @@ export function OnboardingWizard({
     }
   }, [open, user, assistantPending, path, repoById, boardById, worktreeById]);
 
-  // Initialize branch name when user is available
+  // Initialize branch name once when user first loads (ref guards against re-init on edit)
+  const branchNameInitRef = useRef(false);
   useEffect(() => {
-    if (user && !branchName) {
+    if (user && !branchNameInitRef.current) {
+      branchNameInitRef.current = true;
       setBranchName(`private-${usernameSlug}`);
     }
-  }, [user, branchName, usernameSlug]);
+  }, [user, usernameSlug]);
 
   // Initialize worktree name for own-repo path (only once when path is chosen)
   const worktreeNameInitRef = useRef(false);
