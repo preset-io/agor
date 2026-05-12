@@ -10,14 +10,15 @@ import path from 'node:path';
 import type { AgorConfig } from '@agor/core/config';
 import { getAgorHome } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
-import { generateId, MessagesRepository, SessionRepository } from '@agor/core/db';
-import type { Id, Message, MessageID, Paginated, Session, SessionID, Task } from '@agor/core/types';
-import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
+import { MessagesRepository, SessionRepository } from '@agor/core/db';
+import type { Id, Paginated, Session, SessionID, Task } from '@agor/core/types';
+import { SessionStatus, TaskStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
 import type { GatewayService } from './services/gateway.js';
 import { createHealthMonitor } from './services/health-monitor.js';
 import { SchedulerService } from './services/scheduler.js';
 import type { TerminalsService } from './services/terminals.js';
+import { appendSystemMessage } from './utils/append-system-message.js';
 
 // ---------------------------------------------------------------------------
 // Context
@@ -250,23 +251,14 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
           }
         }
 
-        const restartMessage: Message = {
-          message_id: generateId() as MessageID,
-          session_id: sessionId as SessionID,
-          task_id: attachTask.task_id,
-          type: 'system',
-          role: MessageRole.SYSTEM,
-          index: messageCount,
-          timestamp: new Date().toISOString(),
-          content_preview: messageText.substring(0, 200),
+        const messageIndex = await appendSystemMessage({
+          app,
+          db,
+          sessionId,
+          taskId: attachTask.task_id,
           content: messageText,
-          metadata: {
-            source: 'agor',
-            subtype,
-          },
-        };
-
-        await app.service('messages').create(restartMessage, {});
+          metadata: { source: 'agor', subtype },
+        });
 
         // Extend the task's message_range.end_index so the notice is counted
         // and loaded within the task's window in the UI
@@ -274,7 +266,7 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
           await tasksService.patch(attachTask.task_id, {
             message_range: {
               ...attachTask.message_range,
-              end_index: messageCount,
+              end_index: messageIndex,
             },
           });
         }

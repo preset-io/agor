@@ -10,20 +10,19 @@ import {
   renderChildCompletionCallback,
 } from '@agor/core/callbacks/child-completion-template';
 import { PAGINATION } from '@agor/core/config';
-import { type Database, MessagesRepository, TaskRepository } from '@agor/core/db';
+import { type Database, TaskRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
-  Message,
-  MessageID,
+  ContentBlock,
   Paginated,
   QueryParams,
   Session,
   SessionID,
   Task,
-  TaskID,
 } from '@agor/core/types';
-import { MessageRole, TaskStatus } from '@agor/core/types';
+import { TaskStatus } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import { appendSystemMessage } from '../utils/append-system-message';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
 import type { SessionsService } from './sessions';
 
@@ -466,11 +465,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         responseText = `(btw fork completed with status: ${task.status}, but no text response was found)`;
       }
 
-      // Get the parent session's current message count for index
-      const messageRepo = new MessagesRepository(this.db);
-      const parentMessages = await messageRepo.findBySessionId(parentSessionId as SessionID);
-      const nextIndex = parentMessages.length;
-
       // Find the parent's current running task to attach the message to
       const parentSession = await this.app.service('sessions').get(parentSessionId);
       const parentLatestTaskId = parentSession.tasks?.[parentSession.tasks.length - 1];
@@ -487,26 +481,17 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         }
       }
 
-      const { generateId } = await import('@agor/core');
-
       // Build preview from prompt + response
       const previewText = `Q: ${promptText.substring(0, 80)} → A: ${responseText.substring(0, 100)}`;
 
-      const btwResultMessage: Message = {
-        message_id: generateId() as MessageID,
-        session_id: parentSessionId as SessionID,
-        task_id: parentLatestTaskId as TaskID | undefined,
-        type: 'system',
-        role: MessageRole.SYSTEM,
-        index: nextIndex,
-        timestamp: new Date().toISOString(),
-        content_preview: previewText.substring(0, 200),
-        content: [
-          {
-            type: 'text',
-            text: responseText,
-          },
-        ],
+      // Create via service so FeathersJS broadcasts the `created` event to all clients
+      await appendSystemMessage({
+        app: this.app,
+        db: this.db,
+        sessionId: parentSessionId,
+        taskId: parentLatestTaskId as string | undefined,
+        content: [{ type: 'text', text: responseText } as ContentBlock],
+        contentPreview: previewText.substring(0, 200),
         metadata: {
           is_btw_result: true,
           // The ephemeral btw fork session
@@ -521,10 +506,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           btw_caller_title: callerTitle,
           source: 'agor',
         },
-      };
-
-      // Create via service so FeathersJS broadcasts the `created` event to all clients
-      await messagesService.create(btwResultMessage);
+      });
 
       console.log(
         `💬 [TasksService] Injected btw result message into parent session ${parentSessionId.substring(0, 8)} from btw fork ${btwSession.session_id.substring(0, 8)}`

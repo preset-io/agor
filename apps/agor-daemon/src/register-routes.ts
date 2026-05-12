@@ -53,6 +53,7 @@ import type {
 import {
   AGENTIC_TOOL_CAPABILITIES,
   hasMinimumRole,
+  MessageRole,
   ROLES,
   SERVICE_GROUP_NAMES,
   SessionStatus,
@@ -80,6 +81,7 @@ import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { registerProxies } from './setup/proxies.js';
 import { applyTierHooks } from './setup/service-tiers.js';
+import { appendSystemMessage } from './utils/append-system-message.js';
 import { buildAuthRateLimitKey } from './utils/auth-rate-limit-key.js';
 import {
   ensureMinimumRole,
@@ -990,21 +992,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // `messageStartIndex`. countMessages always reports the live row
           // count, so it lands the system error at the true tail whether
           // the user-message row exists or not (no gap, no collision).
-          const sysIndex = await sessionsRepository.countMessages(sessionId);
           const errorContent = `⚠️ The agent failed to start.\n\n${errorMessage}`;
-          const sysMessage: Message = {
-            message_id: generateId() as UUID,
-            session_id: sessionId,
-            type: 'system',
-            role: 'assistant' as Message['role'],
-            index: sysIndex,
-            timestamp: new Date().toISOString(),
-            content_preview: errorContent.substring(0, 200),
+          await appendSystemMessage({
+            app,
+            db,
+            sessionId,
+            taskId,
             content: errorContent,
-            task_id: taskId,
+            role: MessageRole.ASSISTANT,
             metadata: { is_meta: true },
-          };
-          await app.service('messages').create(sysMessage, params);
+            params,
+          });
         } catch (sysErr) {
           console.warn(
             '[Daemon] Failed to write system error message after spawn failure:',

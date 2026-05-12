@@ -79,6 +79,7 @@ import { createUsersService } from './services/users.js';
 import { setupWorktreeOwnersService } from './services/worktree-owners.js';
 import { createWorktreesService } from './services/worktrees.js';
 import { userRoomName } from './setup/socketio.js';
+import { appendSystemMessage } from './utils/append-system-message.js';
 import { escapeHtml } from './utils/html.js';
 import {
   computeFileHash,
@@ -690,15 +691,10 @@ function createExecuteHandler(
     );
 
     // Validate required user environment variables
-    const { SessionRepository: SessRepo, MessagesRepository: _MsgRepo } = await import(
-      '@agor/core/db'
-    );
-    const sessionsRepository = new SessRepo(db);
     const requiredUserEnvVars = config.execution?.required_user_env_vars;
     if (requiredUserEnvVars && requiredUserEnvVars.length > 0) {
       const missingVars = requiredUserEnvVars.filter((v: string) => !executorEnv[v]);
       if (missingVars.length > 0) {
-        const { generateId } = await import('@agor/core/db');
         const missingList = missingVars.map((v: string) => `\`${v}\``).join(', ');
         const errorContent = [
           `**Missing required environment variables:** ${missingList}`,
@@ -709,19 +705,14 @@ function createExecuteHandler(
           '',
           'This is a one-time setup — once configured, this message will not appear again.',
         ].join('\n');
-        const messagesService = app.service('messages') as unknown as MessagesServiceImpl;
-        const systemMessage = {
-          message_id: generateId() as import('@agor/core/types').Message['message_id'],
-          session_id: sessionId as import('@agor/core/types').Message['session_id'],
-          task_id: data.taskId as import('@agor/core/types').Message['task_id'],
-          type: 'system' as const,
-          role: 'system' as import('@agor/core/types').Message['role'],
+        await appendSystemMessage({
+          app,
+          db,
+          sessionId,
+          taskId: data.taskId,
           content: errorContent,
-          content_preview: `Missing required env vars: ${missingVars.join(', ')}`,
-          index: await sessionsRepository.countMessages(sessionId),
-          timestamp: new Date().toISOString(),
-        };
-        await messagesService.create(systemMessage);
+          contentPreview: `Missing required env vars: ${missingVars.join(', ')}`,
+        });
         throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
       }
     }
