@@ -91,16 +91,18 @@ Array of plain var names (no prefix). Examples: `["OPENAI_KEY", "GITHUB_TOKEN"]`
 
 At payload-fetch time, the daemon looks up the **viewing user's** encrypted `user.env.X` for each name and synthesizes a `.env` file injected into the file map on the way out (never persisted). Each bundler has its own hard-coded allowlist (CRA only inlines `REACT_APP_*`, Vite only inlines `VITE_*`, etc.), so the daemon must prefix per template:
 
-| `SandpackTemplate` | Bundler (sandpack `environment`) | Prefix written to `.env` | App reads as |
-|---|---|---|---|
-| `react`, `react-ts` | Create React App | `REACT_APP_` | `process.env.REACT_APP_X` |
-| `vue3`, `svelte`, `solid` | Vite (sandpack `node`) | `VITE_` | `import.meta.env.VITE_X` |
-| `vue`, `angular` | Vue/Angular CLI | none | `process.env.X` |
-| `vanilla`, `vanilla-ts` | Static | n/a (skip injection) | n/a |
+| `SandpackTemplate` | Bundler (sandpack `environment`) | Prefix written to `.env` | App reads as | Status |
+|---|---|---|---|---|
+| `react`, `react-ts` | Create React App | `REACT_APP_` | `process.env.REACT_APP_X` | verified against sandpack-react v2.20.0 |
+| `vue3`, `svelte`, `solid` | (inherited from #1147 — see note) | `VITE_` | `import.meta.env.VITE_X` | **not verified**; mapped as best-effort |
+| `vue`, `angular` | Vue CLI / Angular CLI | none | `process.env.X` | **not verified** (Vue CLI likely wants `VUE_APP_*`) |
+| `vanilla`, `vanilla-ts` | Static / Parcel | n/a (skip injection) | n/a | verified |
 
-Prefix logic lives in a single helper: `envVarPrefixForTemplate(template: SandpackTemplate): string | null`. Templates without a working dotenv path (`vanilla`, `vanilla-ts`) skip env injection entirely; the daemon emits a warning if such an artifact has a non-empty `required_env_vars`.
+Prefix logic lives in a single helper: `envVarPrefixForTemplate(template: SandpackTemplate): string | null`. Templates without a working dotenv path (`vanilla`, `vanilla-ts`) skip env injection entirely; the daemon emits a warning if such an artifact has a non-empty `required_env_vars`. The lookup table is exhaustive over the `SandpackTemplate` union (`satisfies Record<…>`), so adding a new union member is a compile error until it's mapped here.
 
-The CRA mapping is tied to `@codesandbox/sandpack-react` v2.x, which ships the `react` / `react-ts` templates with `environment: 'create-react-app'`. When the upstream `react` template flips to Vite (planned for sandpack-react v3), move them from `CRA_TEMPLATES` to `VITE_TEMPLATES`.
+The CRA mapping is tied to `@codesandbox/sandpack-react` v2.x, which ships `react` / `react-ts` with `environment: 'create-react-app'`. If a future Sandpack version flips the built-in `react` template to a Vite-based environment, move them to `VITE_`.
+
+The `vue3` / `svelte` / `solid` / `vue` / `angular` mappings were inherited from PR #1147 and have not been exercised end-to-end. Empirically, sandpack-react v2.20.0 maps `svelte` → `environment: 'svelte'` (Svelte 3 + Rollup, not Vite), `solid` → `environment: 'solid'`, `vue` → `environment: 'vue-cli'`, and there is no `vue3` key in `SANDBOX_TEMPLATES`. The first artifact that lands on one of those templates will likely need this audited — track as a follow-up.
 
 ### 3. `agor_grants` jsonb column
 

@@ -121,7 +121,7 @@ Always check r.ok before JSON.parse, and surface the error JSON to the user — 
 
   1. Call agor_proxies_list to see what vendors are configured.
   2. Declare the vendors you'll use in agor_artifacts_publish via agorGrants={ agor_token: true, agor_proxies: ["..."] } and the user-side secrets via requiredEnvVars=["VENDOR_API_TOKEN", ...].
-  3. Wire a fetch wrapper that reads the three env vars (prefix per template: react/react-ts → process.env.REACT_APP_*; vue3/svelte/solid → import.meta.env.VITE_*) and includes the two headers on every call.
+  3. Wire a fetch wrapper that reads the three env vars. The verified mapping today is react/react-ts → process.env.REACT_APP_*. Other templates (vue3/svelte/solid/vue/angular) carry best-effort prefixes inherited from the original artifact-format proposal and may need audit the first time you ship one — see apps/agor-docs/pages/guide/artifacts.mdx for the current status table.
   4. If a user hasn't configured the env var, the value renders as "" — detect this and prompt them, don't make the API call.`,
       annotations: { readOnlyHint: true },
       inputSchema: z.object({}),

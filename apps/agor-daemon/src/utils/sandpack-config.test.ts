@@ -116,6 +116,47 @@ describe('effectiveTemplateForArtifact', () => {
       })
     ).toBe('svelte');
   });
+
+  it('falls back to artifact.template when sandpack_config.template is an unknown string', () => {
+    // DB rows / round-tripped sidecars / REST payloads can carry arbitrary
+    // strings cast through `SandpackTemplate` at the type boundary. Without
+    // this guard the prefix lookup returns `undefined` and the synth emits
+    // literal `undefinedOPENAI_KEY=…` lines into the served `.env`.
+    expect(
+      effectiveTemplateForArtifact({
+        template: 'react',
+        // biome-ignore lint/suspicious/noExplicitAny: simulating an invalid runtime value
+        sandpack_config: { template: 'totally-not-a-template' as any },
+      })
+    ).toBe('react');
+  });
+});
+
+describe('envVarPrefixForTemplate runtime guard', () => {
+  it('returns null for any value not in the known-template table', () => {
+    // Even though the TypeScript signature says `SandpackTemplate`,
+    // runtime callers can hand us anything. The helper must not return
+    // `undefined` — synth would then write the literal string
+    // "undefined" into `.env` lines.
+    // biome-ignore lint/suspicious/noExplicitAny: simulating an invalid runtime value
+    expect(envVarPrefixForTemplate('bogus' as any)).toBeNull();
+    // biome-ignore lint/suspicious/noExplicitAny: simulating an invalid runtime value
+    expect(envVarPrefixForTemplate('' as any)).toBeNull();
+  });
+});
+
+describe('sanitizeSandpackConfig.template', () => {
+  it('keeps known SandpackTemplate values', () => {
+    expect(sanitizeSandpackConfig({ template: 'react' }).template).toBe('react');
+    expect(sanitizeSandpackConfig({ template: 'svelte' }).template).toBe('svelte');
+  });
+
+  it('drops unknown template strings instead of casting them through', () => {
+    expect(
+      sanitizeSandpackConfig({ template: 'react-vite-experimental' }).template
+    ).toBeUndefined();
+    expect(sanitizeSandpackConfig({ template: 42 as unknown as string }).template).toBeUndefined();
+  });
 });
 
 describe('detectLegacyFormat', () => {

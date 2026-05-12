@@ -198,12 +198,14 @@ The daemon prefixes the synthesized `.env` keys per template — each bundler ha
 its own hard-coded allowlist (CRA only inlines `REACT_APP_*`, Vite only inlines
 `VITE_*`, etc.). Apps use the standard idiom for their template:
 
-| Template family | Bundler | `.env` prefix | Read from |
-|---|---|---|---|
-| `react`, `react-ts` | Create React App (sandpack-react v2) | `REACT_APP_` | `process.env.REACT_APP_X` |
-| `vue3`, `svelte`, `solid` | Vite | `VITE_` | `import.meta.env.VITE_X` |
-| `vue`, `angular` | Vue/Angular CLI | (none) | `process.env.X` |
-| `vanilla`, `vanilla-ts` | Static | n/a | not supported |
+| Template family | Bundler | `.env` prefix | Read from | Status |
+|---|---|---|---|---|
+| `react`, `react-ts` | Create React App (sandpack-react v2) | `REACT_APP_` | `process.env.REACT_APP_X` | verified |
+| `vue3`, `svelte`, `solid` | (depends on template) | `VITE_` | `import.meta.env.VITE_X` | best-effort, not verified end-to-end |
+| `vue`, `angular` | Vue CLI / Angular CLI | (none) | `process.env.X` | best-effort, not verified end-to-end |
+| `vanilla`, `vanilla-ts` | Static / Parcel | n/a | not supported | verified |
+
+Right now only the `react` / `react-ts` mapping has been exercised against a live artifact. The other rows are inherited from the original artifact-format proposal and may need adjustment when an artifact in that template family is first published; treat them as a starting point, not a contract.
 
 ```ts
 // react / react-ts (CRA)

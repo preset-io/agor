@@ -68,17 +68,35 @@ const ENV_PREFIX_BY_TEMPLATE = {
 } as const satisfies Record<SandpackTemplate, string | null>;
 
 /**
+ * Set of `SandpackTemplate` values the daemon understands at runtime.
+ * Derived from the prefix table so the two can't drift. Used by
+ * `sanitizeSandpackConfig` and `effectiveTemplateForArtifact` as a
+ * boundary check — DB rows or REST payloads can carry arbitrary strings
+ * that aren't part of the TS union, and we must not let those flow
+ * into the `.env` synth (otherwise the prefix lookup returns `undefined`
+ * and the daemon writes literal `undefinedOPENAI_KEY=…` lines).
+ */
+const KNOWN_TEMPLATES = new Set<string>(Object.keys(ENV_PREFIX_BY_TEMPLATE));
+
+export function isKnownSandpackTemplate(value: unknown): value is SandpackTemplate {
+  return typeof value === 'string' && KNOWN_TEMPLATES.has(value);
+}
+
+/**
  * Returns the prefix the daemon should apply when synthesizing `.env`
  * for the given template, or `null` if the template doesn't support a
  * dotenv path (the artifact will need to find another way to consume
- * secrets).
+ * secrets). Also returns `null` for any string the type system thinks
+ * is a `SandpackTemplate` but isn't in the runtime table — defensive
+ * against stale DB rows or callers that bypassed sanitization.
  *
  * If the artifact uses `sandpack_config.template` (or
  * `customSetup.environment`) to override the runtime, callers should
  * derive the effective template first — see `effectiveTemplateForArtifact`.
  */
 export function envVarPrefixForTemplate(template: SandpackTemplate): string | null {
-  return ENV_PREFIX_BY_TEMPLATE[template];
+  const prefix = ENV_PREFIX_BY_TEMPLATE[template];
+  return prefix === undefined ? null : prefix;
 }
 
 /**
@@ -100,7 +118,12 @@ export function effectiveTemplateForArtifact(artifact: {
   sandpack_config?: SandpackConfig;
 }): SandpackTemplate {
   const override = artifact.sandpack_config?.template;
-  return (override ?? artifact.template) as SandpackTemplate;
+  // Guard the runtime cast — `sandpack_config` comes from JSONB / REST /
+  // round-tripped sidecars and isn't structurally guaranteed to hold a
+  // member of the `SandpackTemplate` union. Fall through to the row's
+  // own template if the override is unknown.
+  if (isKnownSandpackTemplate(override)) return override;
+  return artifact.template;
 }
 
 /**
@@ -114,8 +137,8 @@ export function sanitizeSandpackConfig(input: unknown): SandpackConfig {
   const src = input as Record<string, unknown>;
   const out: SandpackConfig = {};
 
-  if (typeof src.template === 'string') {
-    out.template = src.template as SandpackTemplate;
+  if (isKnownSandpackTemplate(src.template)) {
+    out.template = src.template;
   }
 
   if (src.customSetup && typeof src.customSetup === 'object') {
