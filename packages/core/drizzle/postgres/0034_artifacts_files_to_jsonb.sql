@@ -18,39 +18,40 @@
 -- boundary). The repo code drops the writeJson/readJson helpers and passes
 -- plain JS objects through.
 --
--- USING-clause safety: legitimate rows hold valid JSON strings (or NULL) and
--- cast cleanly. Broken rows created between 0032 deploy and this migration
--- may contain garbage from the object→text coercion; the defensive CASE
--- NULLs anything that doesn't start with a JSON object/array character so
--- the migration never aborts. Affected rows need to be re-published from
--- their `path` source folder afterward to recover their content.
+-- USING-clause safety: we wrap the cast in a plpgsql function with an
+-- EXCEPTION handler so any row whose text contents fail `::jsonb` parsing
+-- (truncated JSON, accidental "[object Object]"-style coercions, etc.)
+-- becomes NULL instead of aborting the whole migration. The function is
+-- created and then dropped within this migration to avoid leaking helper
+-- artefacts.
+--
+-- Note on recoverability: rows whose text was `'{}'` (the most common
+-- corruption from the regression — a JS object coerced to its `String()`
+-- representation, then truncated/garbled by drizzle's text binder) will
+-- cast cleanly to an empty jsonb object — they are NOT NULL'd by this
+-- migration, but they ARE semantically empty. The 4 rows known to be
+-- corrupted during the regression window are tracked separately by their
+-- `path` column and need to be re-published from their source folder.
+
+CREATE OR REPLACE FUNCTION __agor_try_jsonb(value text) RETURNS jsonb
+LANGUAGE plpgsql IMMUTABLE AS $$
+BEGIN
+  IF value IS NULL THEN
+    RETURN NULL;
+  END IF;
+  RETURN value::jsonb;
+EXCEPTION WHEN others THEN
+  RETURN NULL;
+END;
+$$;--> statement-breakpoint
 
 ALTER TABLE "artifacts"
-  ALTER COLUMN "files" TYPE jsonb
-  USING (
-    CASE
-      WHEN "files" IS NULL THEN NULL::jsonb
-      WHEN "files" ~ '^\s*[{\[]' THEN "files"::jsonb
-      ELSE NULL::jsonb
-    END
-  );--> statement-breakpoint
+  ALTER COLUMN "files" TYPE jsonb USING __agor_try_jsonb("files");--> statement-breakpoint
 
 ALTER TABLE "artifacts"
-  ALTER COLUMN "dependencies" TYPE jsonb
-  USING (
-    CASE
-      WHEN "dependencies" IS NULL THEN NULL::jsonb
-      WHEN "dependencies" ~ '^\s*[{\[]' THEN "dependencies"::jsonb
-      ELSE NULL::jsonb
-    END
-  );--> statement-breakpoint
+  ALTER COLUMN "dependencies" TYPE jsonb USING __agor_try_jsonb("dependencies");--> statement-breakpoint
 
 ALTER TABLE "artifacts"
-  ALTER COLUMN "build_errors" TYPE jsonb
-  USING (
-    CASE
-      WHEN "build_errors" IS NULL THEN NULL::jsonb
-      WHEN "build_errors" ~ '^\s*[{\[]' THEN "build_errors"::jsonb
-      ELSE NULL::jsonb
-    END
-  );
+  ALTER COLUMN "build_errors" TYPE jsonb USING __agor_try_jsonb("build_errors");--> statement-breakpoint
+
+DROP FUNCTION __agor_try_jsonb(text);
