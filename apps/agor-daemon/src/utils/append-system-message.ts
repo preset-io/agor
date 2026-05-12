@@ -60,7 +60,7 @@ export async function appendSystemMessage(opts: AppendSystemMessageOptions): Pro
     ...(metadata ? { metadata } : {}),
   };
 
-  await app.service('messages').create(message, params ?? {});
+  const created = await app.service('messages').create(message, params ?? {});
 
-  return message;
+  return created as Message;
 }
