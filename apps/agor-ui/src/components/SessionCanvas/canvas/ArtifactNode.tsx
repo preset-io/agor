@@ -587,11 +587,18 @@ export const ArtifactNode = ({
       : 'success';
   const headerBadgeTitle = error ? 'Failed to load' : loading ? 'Reloading...' : 'Live';
   const trustBadge = payload ? renderTrustBadge(payload) : null;
+  // A loaded payload that's also in the error state is stale — the body
+  // renders the error placeholder, so the header shouldn't expose
+  // payload-acting controls (Export / Interact / Consent) that operate
+  // on the stale data. Keep the title + Reload + Delete though, since
+  // those still help the user act on the broken state.
+  const hasUsablePayload = !!payload && !error;
+  const hasRequiredEnvVars = (payload?.required_env_vars?.length ?? 0) > 0;
+  const hasConsentGrants = Object.keys(payload?.agor_grants ?? {}).length > 0;
   const showConsentAffordance =
+    hasUsablePayload &&
     payload?.trust_state === 'untrusted' &&
-    (((payload.required_env_vars && payload.required_env_vars.length > 0) ||
-      (payload.agor_grants && Object.keys(payload.agor_grants).length > 0)) ??
-      false);
+    (hasRequiredEnvVars || hasConsentGrants);
 
   const cardTitle = (
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -605,7 +612,12 @@ export const ArtifactNode = ({
         </Typography.Text>
         {trustBadge}
       </div>
-      <div style={{ display: 'flex', gap: 2 }}>
+      {/* `nodrag nopan` — React Flow's escape hatch. Without it the canvas
+          interprets a mousedown on these controls as the start of a node
+          drag (stopPropagation on click is too late, by then the drag
+          handler has already armed). Same pattern used elsewhere in this
+          file for the interact-mode iframe wrapper. */}
+      <div className="nodrag nopan" style={{ display: 'flex', gap: 2 }}>
         {showConsentAffordance && (
           <Tooltip title="Trust this artifact to inject secrets">
             <Button
@@ -623,7 +635,7 @@ export const ArtifactNode = ({
             />
           </Tooltip>
         )}
-        {payload && (
+        {hasUsablePayload && (
           <Tooltip title="Open in CodeSandbox (eject — daemon-injected env vars/AGOR_TOKEN won't carry over)">
             <Button
               type="text"
@@ -647,7 +659,7 @@ export const ArtifactNode = ({
             }}
           />
         </Tooltip>
-        {payload && (
+        {hasUsablePayload && (
           <Tooltip title={interactMode ? 'Exit interact mode' : 'Interact with app'}>
             <Button
               type={interactMode ? 'primary' : 'text'}
@@ -663,7 +675,7 @@ export const ArtifactNode = ({
         {data.onDeleteArtifact && (
           <Popconfirm
             title="Delete artifact?"
-            description={`This will remove "${payload?.name ?? fallbackName}" from the board.`}
+            description={`This will delete "${payload?.name ?? fallbackName}" and its files.`}
             onConfirm={(e) => {
               e?.stopPropagation();
               data.onDeleteArtifact?.(data.objectId, data.artifactId);
@@ -702,19 +714,24 @@ export const ArtifactNode = ({
     flexDirection: 'column',
   } as const;
 
+  // Shared resizer — same across loading / error / normal states.
+  const resizer = (
+    <NodeResizer
+      isVisible={selected}
+      minWidth={MIN_WIDTH}
+      minHeight={MIN_HEIGHT}
+      onResize={handleResize}
+      lineStyle={{ borderColor: token.colorPrimary }}
+      handleStyle={{ backgroundColor: token.colorPrimary, width: 8, height: 8 }}
+    />
+  );
+
   // Loading state — title bar is still visible (with reload + delete) so
   // a stuck loader can be retried or pruned.
   if (loading && !payload) {
     return (
       <>
-        <NodeResizer
-          isVisible={selected}
-          minWidth={MIN_WIDTH}
-          minHeight={MIN_HEIGHT}
-          onResize={handleResize}
-          lineStyle={{ borderColor: token.colorPrimary }}
-          handleStyle={{ backgroundColor: token.colorPrimary, width: 8, height: 8 }}
-        />
+        {resizer}
         <Card
           style={cardOuterStyle}
           styles={{
@@ -740,14 +757,7 @@ export const ArtifactNode = ({
   if (error) {
     return (
       <>
-        <NodeResizer
-          isVisible={selected}
-          minWidth={MIN_WIDTH}
-          minHeight={MIN_HEIGHT}
-          onResize={handleResize}
-          lineStyle={{ borderColor: token.colorPrimary }}
-          handleStyle={{ backgroundColor: token.colorPrimary, width: 8, height: 8 }}
-        />
+        {resizer}
         <Card
           style={cardOuterStyle}
           styles={{
@@ -771,7 +781,15 @@ export const ArtifactNode = ({
           >
             {error}
           </Typography.Text>
-          <Button size="small" icon={<ReloadOutlined />} onClick={fetchPayload}>
+          <Button
+            className="nodrag nopan"
+            size="small"
+            icon={<ReloadOutlined />}
+            onClick={(e) => {
+              e.stopPropagation();
+              fetchPayload();
+            }}
+          >
             Retry
           </Button>
         </Card>
@@ -796,14 +814,7 @@ export const ArtifactNode = ({
 
   return (
     <>
-      <NodeResizer
-        isVisible={selected}
-        minWidth={MIN_WIDTH}
-        minHeight={MIN_HEIGHT}
-        onResize={handleResize}
-        lineStyle={{ borderColor: token.colorPrimary }}
-        handleStyle={{ backgroundColor: token.colorPrimary, width: 8, height: 8 }}
-      />
+      {resizer}
       <Card
         style={cardOuterStyle}
         styles={{
