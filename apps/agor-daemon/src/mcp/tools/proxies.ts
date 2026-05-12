@@ -71,7 +71,8 @@ The daemon resolves consent (TOFU) and writes a per-viewer .env with the prefixe
   const agorToken   = process.env.REACT_APP_AGOR_TOKEN;
   const scToken     = process.env.REACT_APP_SHORTCUT_API_TOKEN;
 
-  // For Vite-backed templates (vue3 / svelte / solid), swap to:
+  // Best-effort inherited mapping for vue3 / svelte / solid (not yet
+  // verified end-to-end against the bundler they actually ship with):
   //   const x = import.meta.env.VITE_AGOR_PROXY_SHORTCUT;
 
   if (!scToken) {

@@ -213,7 +213,8 @@ const apiKey = process.env.REACT_APP_OPENAI_KEY;
 const agorToken = process.env.REACT_APP_AGOR_TOKEN;
 const proxyUrl = process.env.REACT_APP_AGOR_PROXY_OPENAI;
 
-// vue3 / svelte / solid (Vite)
+// Best-effort inherited mapping for vue3 / svelte / solid (not yet
+// verified end-to-end — see the status table above):
 // const apiKey = import.meta.env.VITE_OPENAI_KEY;
 
 if (!apiKey) {
