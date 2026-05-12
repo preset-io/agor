@@ -422,11 +422,8 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
   // Daemon restart / crash notice — injected by startup reconciliation.
   // Intentionally low-frequency and user-meaningful; contrast with PR #1116
   // which filtered high-frequency SDK lifecycle noise.
-  if (
-    isSystem &&
-    (message.metadata?.subtype === 'daemon_restart' || message.metadata?.subtype === 'daemon_crash')
-  ) {
-    const isGraceful = message.metadata.subtype === 'daemon_restart';
+  if (message.type === 'daemon_restart' || message.type === 'daemon_crash') {
+    const isGraceful = message.type === 'daemon_restart';
     const text = typeof message.content === 'string' ? message.content : '';
     return (
       <SystemMessage

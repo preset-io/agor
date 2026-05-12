@@ -344,6 +344,8 @@ export const messages = pgTable(
         'file-history-snapshot',
         'permission_request',
         'input_request',
+        'daemon_restart',
+        'daemon_crash',
       ],
     }).notNull(),
     role: text('role', {

@@ -13,7 +13,15 @@
 import type { Database } from '@agor/core/db';
 import { generateId, SessionRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { ContentBlock, Message, MessageID, Params, SessionID, TaskID } from '@agor/core/types';
+import type {
+  ContentBlock,
+  Message,
+  MessageID,
+  MessageType,
+  Params,
+  SessionID,
+  TaskID,
+} from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 
 export interface AppendSystemMessageOptions {
@@ -24,6 +32,8 @@ export interface AppendSystemMessageOptions {
   content: string | ContentBlock[];
   /** Falls back to the first 200 chars of string content when omitted */
   contentPreview?: string;
+  /** Defaults to 'system' */
+  type?: MessageType;
   /** Defaults to MessageRole.SYSTEM */
   role?: Message['role'];
   metadata?: Message['metadata'];
@@ -39,6 +49,7 @@ export async function appendSystemMessage(opts: AppendSystemMessageOptions): Pro
     taskId,
     content,
     contentPreview,
+    type = 'system',
     role = MessageRole.SYSTEM,
     metadata,
     params,
@@ -51,7 +62,7 @@ export async function appendSystemMessage(opts: AppendSystemMessageOptions): Pro
     message_id: generateId() as MessageID,
     session_id: sessionId as SessionID,
     task_id: taskId as TaskID | undefined,
-    type: 'system',
+    type,
     role,
     index,
     timestamp: new Date().toISOString(),

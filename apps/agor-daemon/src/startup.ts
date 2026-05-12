@@ -191,7 +191,7 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
   ]);
 
   if (affectedSessionIds.size > 0) {
-    const subtype = wasGraceful ? 'daemon_restart' : 'daemon_crash';
+    const restartType = wasGraceful ? 'daemon_restart' : ('daemon_crash' as const);
     const messageText = wasGraceful
       ? 'The Agor daemon was restarted. Your session was paused at this point. Tell the agent to resume your work, or pick up where you left off.'
       : 'The Agor daemon stopped unexpectedly. Your session was paused at this point. Tell the agent to resume your work, or pick up where you left off. If this keeps happening, contact your administrator.';
@@ -243,10 +243,7 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
             messageCount - 1
           );
           const last = lastMessages[0];
-          if (
-            last?.metadata?.subtype === 'daemon_restart' ||
-            last?.metadata?.subtype === 'daemon_crash'
-          ) {
+          if (last?.type === 'daemon_restart' || last?.type === 'daemon_crash') {
             console.log(
               `   ⏭  Session ${sessionId.substring(0, 8)} already has a restart notice — skipping`
             );
@@ -259,8 +256,9 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
           db,
           sessionId,
           taskId: attachTask.task_id,
+          type: restartType,
           content: messageText,
-          metadata: { source: 'agor', subtype },
+          metadata: { source: 'agor' },
         });
 
         // Extend the task's message_range.end_index so the notice is counted
@@ -273,7 +271,9 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
           });
         }
 
-        console.log(`   ✉  Injected ${subtype} notice into session ${sessionId.substring(0, 8)}`);
+        console.log(
+          `   ✉  Injected ${restartType} notice into session ${sessionId.substring(0, 8)}`
+        );
       } catch (err) {
         console.warn(
           `   ⚠️  Failed to inject restart notice into session ${sessionId.substring(0, 8)}:`,
