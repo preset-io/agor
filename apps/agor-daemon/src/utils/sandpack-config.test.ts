@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   detectLegacyFormat,
+  effectiveTemplateForArtifact,
   envVarPrefixForTemplate,
   sanitizeSandpackConfig,
 } from './sandpack-config';
@@ -93,6 +94,27 @@ describe('envVarPrefixForTemplate', () => {
   it('other templates default to no prefix (process.env.X)', () => {
     expect(envVarPrefixForTemplate('vue')).toBe('');
     expect(envVarPrefixForTemplate('angular')).toBe('');
+  });
+});
+
+describe('effectiveTemplateForArtifact', () => {
+  it('returns artifact.template when sandpack_config has no override', () => {
+    expect(effectiveTemplateForArtifact({ template: 'react' })).toBe('react');
+    expect(effectiveTemplateForArtifact({ template: 'svelte', sandpack_config: {} })).toBe(
+      'svelte'
+    );
+  });
+
+  it('prefers sandpack_config.template when set (UI uses this for rendering)', () => {
+    // If an author flips the runtime via sandpack_config.template, env
+    // synthesis must follow — otherwise the daemon would prefix for one
+    // bundler while the UI renders with a different one.
+    expect(
+      effectiveTemplateForArtifact({
+        template: 'react',
+        sandpack_config: { template: 'svelte' },
+      })
+    ).toBe('svelte');
   });
 });
 

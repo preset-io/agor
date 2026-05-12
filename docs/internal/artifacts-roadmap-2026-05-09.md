@@ -206,7 +206,7 @@ Render in **safe-degraded mode**: no env vars or grants injected (the old Handle
 >   - required_env_vars: [<detected var names>]
 >   - agor_grants: { <detected grants> }
 >   - sandpack.json and agor.config.js removed from the file map
->   - Source files updated to read from import.meta.env.VITE_* instead of {{user.env.*}}
+>   - Source files updated to read env vars via the bundler's convention instead of {{user.env.*}}: process.env.REACT_APP_* for CRA-backed react/react-ts, import.meta.env.VITE_* for Vite-backed templates
 > See agor_search_tools for full schemas.
 > ```
 

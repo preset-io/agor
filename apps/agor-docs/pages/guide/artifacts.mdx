@@ -282,7 +282,7 @@ Artifacts are designed for rapid prototyping, not permanent hosting. When you're
 1. **The code is already on disk** — artifact source files live at `.agor/artifacts/<id>/` inside your worktree. They're standard source files, not a proprietary format
 2. **Ask your agent to scaffold a real project** — "Take this artifact and set it up as a Next.js app" or "Create a Vite project from this prototype"
 3. **Pick your hosting** — Vercel, Netlify, Cloudflare Pages, a Docker container — the agent can set up deployment config for whatever platform you choose
-4. **Graduate your secrets** — Move `requiredEnvVars` to your hosting platform's environment variable system. The bundler convention is the same on the other side (Vite reads `import.meta.env.VITE_*`, etc.) — only the prefix and the source of values change.
+4. **Graduate your secrets** — Move `requiredEnvVars` to your hosting platform's environment variable system. The bundler convention is the same on the other side (CRA reads `process.env.REACT_APP_*`, Vite reads `import.meta.env.VITE_*`, etc.) — only the source of values changes.
 
 You can also one-click eject to CodeSandbox (`agor_artifacts_export_codesandbox`) if you want a quick share link — note that daemon-supplied capabilities (`AGOR_TOKEN`, `AGOR_PROXY_*`) won't work there.
 

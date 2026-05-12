@@ -63,6 +63,7 @@ import { DrizzleService } from '../adapters/drizzle.js';
 import { AGOR_RUNTIME_SOURCE } from '../utils/agor-runtime-source.js';
 import {
   detectLegacyFormat,
+  effectiveTemplateForArtifact,
   envVarPrefixForTemplate,
   sanitizeSandpackConfig,
 } from '../utils/sandpack-config.js';
@@ -864,8 +865,22 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     }
 
     if (hasInjectables) {
+      // The UI renders with `sandpack_config.template ?? artifact.template`,
+      // so .env synthesis must follow the same effective template — otherwise
+      // the daemon prefixes for one bundler while the bundler that actually
+      // runs is something else.
+      const effectiveTemplate = effectiveTemplateForArtifact(artifact);
+      // If the artifact explicitly overrides the sandpack environment we
+      // can't reliably guess the prefix — operator's responsibility to make
+      // the override match the template's prefix convention.
+      const envOverride = artifact.sandpack_config?.customSetup?.environment;
+      if (envOverride) {
+        console.warn(
+          `[artifacts] Artifact ${artifact.artifact_id} sets customSetup.environment=${envOverride}; .env prefix still derived from template=${effectiveTemplate}. If the override changes the bundler family the injected vars may not be picked up.`
+        );
+      }
       const envFile = await this.synthesizeEnvFile({
-        template: artifact.template,
+        template: effectiveTemplate,
         requiredEnvVars,
         envValues,
         grants,
@@ -1388,9 +1403,17 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
     const url = `https://codesandbox.io/s/${sandboxId}`;
     const requiredVars = artifact.required_env_vars ?? [];
-    const note = requiredVars.length
-      ? `This artifact declares required_env_vars=${JSON.stringify(requiredVars)}. Set the prefixed names (e.g. VITE_${requiredVars[0]}) in CodeSandbox → Settings → Secret Keys to make them available at runtime.`
-      : 'No required env vars to configure.';
+    const exportTemplate = effectiveTemplateForArtifact(artifact);
+    const exportPrefix = envVarPrefixForTemplate(exportTemplate);
+    let note: string;
+    if (requiredVars.length === 0) {
+      note = 'No required env vars to configure.';
+    } else if (exportPrefix === null) {
+      note = `This artifact declares required_env_vars=${JSON.stringify(requiredVars)} but its template (${exportTemplate}) has no dotenv path. CodeSandbox can't expose these to the running bundle without changes to the artifact's code.`;
+    } else {
+      const example = `${exportPrefix}${requiredVars[0]}`;
+      note = `This artifact declares required_env_vars=${JSON.stringify(requiredVars)}. Set the prefixed names (e.g. ${example} for template ${exportTemplate}) in CodeSandbox → Settings → Secret Keys to make them available at runtime.`;
+    }
 
     return { artifactId, sandboxId, url, note };
   }
