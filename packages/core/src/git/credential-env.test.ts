@@ -21,10 +21,8 @@ import {
   buildGitConfigParameters,
   createGit,
   ensureGitRemoteUrl,
-  getDefaultGitConfigParameters,
   parseHostFromGitUrl,
   redactGitEnv,
-  resolveGitConfigParameters,
 } from './index';
 
 describe('buildGitConfigEnv', () => {
@@ -357,50 +355,13 @@ describe('buildGitConfigParameters', () => {
   });
 });
 
-describe('resolveGitConfigParameters', () => {
-  it('returns the package defaults when configured value is undefined', () => {
-    const out = resolveGitConfigParameters(undefined);
-    expect(out).toEqual(getDefaultGitConfigParameters());
-    // Defaults must include the headline credential-in-URL guard.
-    expect(out).toContain('transfer.credentialsInUrl=die');
-  });
-
-  it('returns an empty array when configured value is [] (explicit "disable")', () => {
-    expect(resolveGitConfigParameters([])).toEqual([]);
-  });
-
-  it('REPLACES (not merges) defaults when configured value is non-empty', () => {
-    // Documented in the type comment: setting this in config replaces the
-    // defaults verbatim. If an operator wants both, they spread the default
-    // list — they don't get them implicitly.
-    const out = resolveGitConfigParameters(['custom.key=value']);
-    expect(out).toEqual(['custom.key=value']);
-    expect(out).not.toContain('transfer.credentialsInUrl=die');
-  });
-});
-
-describe('getDefaultGitConfigParameters', () => {
-  it('returns a fresh mutable copy each call (callers must not mutate the shared default)', () => {
-    const a = getDefaultGitConfigParameters();
-    const b = getDefaultGitConfigParameters();
-    expect(a).toEqual(b);
-    expect(a).not.toBe(b); // distinct array references
-    // And mutating one must not affect the next call's result.
-    a.push('mutation.canary=true');
-    expect(getDefaultGitConfigParameters()).not.toContain('mutation.canary=true');
-  });
-
-  it('includes all the documented defense pairs (regression for accidental removal)', () => {
-    const defaults = getDefaultGitConfigParameters();
-    expect(defaults).toContain('transfer.credentialsInUrl=die');
-    expect(defaults).toContain('protocol.file.allow=user');
-    expect(defaults).toContain('protocol.ext.allow=never');
-    expect(defaults).toContain('fetch.fsckObjects=true');
-    expect(defaults).toContain('transfer.fsckObjects=true');
-    expect(defaults).toContain('core.protectHFS=true');
-    expect(defaults).toContain('core.protectNTFS=true');
-  });
-});
+// Note: `getDefaultGitConfigParameters` / `resolveGitConfigParameters` /
+// `gitConfigParameterLooksSecret` / `renderGitConfigParametersForLog` live
+// in `packages/core/src/config/security-resolver.ts` (they're config
+// semantics, not git protocol). Their tests live next to them in
+// `packages/core/src/config/security-resolver.test.ts`. This file keeps
+// tests for the protocol-encoding side (`buildGitConfigParameters`) and the
+// real-git-behavior side (env propagation, drift realignment).
 
 describe('GIT_CONFIG_PARAMETERS end-to-end', () => {
   // E2E proof that GIT_CONFIG_PARAMETERS actually propagates to real git
@@ -629,6 +590,56 @@ describe('ensureGitRemoteUrl', () => {
         stdio: 'pipe',
       });
       expect(current.stdout.toString().trim()).toBe(upstream);
+    });
+  });
+
+  it('handles a multi-valued remote.origin.url (regression for the Codex-found bug)', async () => {
+    // Git config legally allows the same key to carry multiple values. A
+    // tool using `git config --add remote.origin.url <tainted>` after the
+    // canonical URL was already set produces this shape:
+    //   [remote "origin"]
+    //     url = https://github.com/foo/bar.git
+    //     url = https://USER:tok@evil.example/foo/bar.git
+    // The original `ensureGitRemoteUrl` used simple-git's `getRemotes()`,
+    // which surfaced only ONE of the two values, and then attempted
+    // `git remote set-url`, which fails with "multiple values" on this
+    // shape. The fix uses raw `git config --get-all` / `--replace-all`
+    // so the helper handles arbitrary cardinality correctly.
+    await withInitedRepo(async (repoPath) => {
+      const canonicalUrl = 'https://github.com/foo/bar.git';
+      const taintedUrl =
+        'https://x-access-token:ghp_AAAAAAAAAAAAAAAAAAAAAAAAAA@evil.example/foo/bar.git';
+      spawnSync('git', ['-C', repoPath, 'remote', 'add', 'origin', canonicalUrl], {
+        stdio: 'pipe',
+      });
+      // The taint: --add appends a second value, doesn't replace.
+      const addTaint = spawnSync(
+        'git',
+        ['-C', repoPath, 'config', '--add', 'remote.origin.url', taintedUrl],
+        { stdio: 'pipe' }
+      );
+      expect(addTaint.status).toBe(0);
+
+      // Sanity: the shape is genuinely multi-valued before realignment.
+      const before = spawnSync(
+        'git',
+        ['-C', repoPath, 'config', '--get-all', 'remote.origin.url'],
+        { stdio: 'pipe' }
+      );
+      expect(before.stdout.toString().trim().split('\n').length).toBe(2);
+
+      const result = await ensureGitRemoteUrl(repoPath, 'origin', canonicalUrl);
+      expect(result.changed).toBe(true);
+      // previousUrl carries BOTH prior values, newline-joined, so a caller
+      // logging drift can see what was overwritten.
+      expect(result.previousUrl?.split('\n').sort()).toEqual([canonicalUrl, taintedUrl].sort());
+
+      // After realignment: exactly one value, and it's the canonical one.
+      const after = spawnSync('git', ['-C', repoPath, 'config', '--get-all', 'remote.origin.url'], {
+        stdio: 'pipe',
+      });
+      const afterValues = after.stdout.toString().trim().split('\n').filter(Boolean);
+      expect(afterValues).toEqual([canonicalUrl]);
     });
   });
 });

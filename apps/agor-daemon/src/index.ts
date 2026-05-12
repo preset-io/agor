@@ -21,7 +21,13 @@ import { patchConsole } from '@agor/core/utils/logger';
 patchConsole();
 
 import type { AgorConfig, ResolvedSecurity } from '@agor/core/config';
-import { loadConfig, loadConfigFromFile, resolveSecurity } from '@agor/core/config';
+import {
+  loadConfig,
+  loadConfigFromFile,
+  renderGitConfigParametersForLog,
+  resolveGitConfigParameters,
+  resolveSecurity,
+} from '@agor/core/config';
 import { getDatabaseUrl } from '@agor/core/db';
 import {
   authenticate,
@@ -31,7 +37,7 @@ import {
   rest,
   socketio,
 } from '@agor/core/feathers';
-import { buildGitConfigParameters, resolveGitConfigParameters } from '@agor/core/git';
+import { buildGitConfigParameters } from '@agor/core/git';
 import { registerHandlebarsHelpers } from '@agor/core/templates/handlebars-helpers';
 import type { HookContext, ServiceGroupName, ServiceTier, User } from '@agor/core/types';
 import { getServiceTier, isServiceEnabled } from '@agor/core/types';
@@ -140,16 +146,22 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   //     through its impersonation env allowlist)
   //   - any tool that internally invokes git (husky hooks, npm postinstall,
   //     gh CLI) since they all read GIT_CONFIG_PARAMETERS at git startup
-  // The default pairs lock down the credential-in-URL leak surface plus a
-  // handful of well-known RCE/integrity surfaces — see
-  // packages/core/src/git/index.ts: DEFAULT_GIT_CONFIG_PARAMETERS, and
+  // The defaults + their rationale live in @agor/core/config
+  // (security-resolver.ts: DEFAULT_GIT_CONFIG_PARAMETERS). See also
   // docs/internal/credential-leak-defenses-2026-05-11.md.
-  const gitConfigParams = buildGitConfigParameters(
-    resolveGitConfigParameters(config.security?.git_config_parameters)
-  );
+  const resolvedGitParams = resolveGitConfigParameters(config.security?.git_config_parameters);
+  const gitConfigParams = buildGitConfigParameters(resolvedGitParams);
   if (gitConfigParams.length > 0) {
     process.env.GIT_CONFIG_PARAMETERS = gitConfigParams;
-    console.log(`🔒 GIT_CONFIG_PARAMETERS hardened: ${gitConfigParams}`);
+    // Log a redacted summary — operators may legitimately put a corporate
+    // proxy with creds in their pairs (e.g. http.proxy=http://user:pass@…)
+    // and we don't want those values landing in daemon logs / log shippers.
+    // renderGitConfigParametersForLog keeps the keys visible (so operators
+    // can verify the policy is what they configured) and only masks values
+    // that look credential-bearing.
+    console.log(
+      `🔒 GIT_CONFIG_PARAMETERS hardened: ${renderGitConfigParametersForLog(resolvedGitParams)}`
+    );
   } else {
     // Empty array in config = explicit "disable all defaults". Leave any
     // pre-existing env var untouched so an operator debugging an issue can

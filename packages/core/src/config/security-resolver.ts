@@ -433,3 +433,121 @@ export function resolveSecurity(
 
   return { csp: cspResult, cors: corsResult };
 }
+
+// ============================================================================
+// Git config hardening (security.git_config_parameters)
+// ============================================================================
+//
+// The daemon injects a `GIT_CONFIG_PARAMETERS` env var at startup that
+// propagates to every git invocation under Agor's control (daemon-direct via
+// createGit(), executor-spawned via the impersonation env allowlist, and any
+// tool that internally shells out to git). The defaults below close the
+// highest-leverage credential-leak and RCE surfaces git has accumulated.
+//
+// The actual encoding of pairs into the env var value (single-quote protocol)
+// lives in `@agor/core/git` as `buildGitConfigParameters` — that's a git-
+// protocol concern, this file is config policy.
+//
+// See docs/internal/credential-leak-defenses-2026-05-11.md.
+
+/**
+ * Default `security.git_config_parameters` pairs.
+ *
+ * - `transfer.credentialsInUrl=die` — git 2.41+ — refuse fetch/push when
+ *   `remote.<name>.url` carries embedded credentials. Per git's docs the
+ *   check is scoped to configured `remote.<name>.url` only (NOT `pushurl`,
+ *   NOT URLs on argv) — so this hardens vector 1 of the threat model;
+ *   detection of the other vectors is the heartbeat scan's job.
+ * - `protocol.file.allow=user` — refuse auto-fetched `file://` submodule
+ *   URLs (CVE-2022-39253 family).
+ * - `protocol.ext.allow=never` — refuse `ext::` URL scheme (arbitrary
+ *   command execution surface).
+ * - `fetch.fsckObjects=true` / `transfer.fsckObjects=true` — validate
+ *   object integrity on fetch / push.
+ * - `core.protectHFS=true` / `core.protectNTFS=true` — block cross-FS
+ *   path-traversal attacks via crafted filenames.
+ */
+const DEFAULT_GIT_CONFIG_PARAMETERS: readonly string[] = Object.freeze([
+  'transfer.credentialsInUrl=die',
+  'protocol.file.allow=user',
+  'protocol.ext.allow=never',
+  'fetch.fsckObjects=true',
+  'transfer.fsckObjects=true',
+  'core.protectHFS=true',
+  'core.protectNTFS=true',
+]);
+
+/**
+ * Returns the package's default `security.git_config_parameters` pairs as a
+ * fresh mutable copy. Callers wanting to extend the defaults should
+ * `[...getDefaultGitConfigParameters(), ...extras]`.
+ */
+export function getDefaultGitConfigParameters(): string[] {
+  return [...DEFAULT_GIT_CONFIG_PARAMETERS];
+}
+
+/**
+ * Resolve the effective `security.git_config_parameters` list from raw
+ * config.
+ *
+ * Semantics:
+ *  - `undefined` → use the package defaults (the safe baseline).
+ *  - `[]` → explicit "disable all" (debug only; loses the leak defenses).
+ *  - non-empty array → REPLACE the defaults verbatim. To extend, spread
+ *    {@link getDefaultGitConfigParameters} into the config.
+ *
+ * Replace (not merge) was chosen so admins can both extend AND opt out of
+ * specific defaults if a quirky repo trips them (e.g. `fsckObjects` rejecting
+ * a legacy object).
+ */
+export function resolveGitConfigParameters(
+  configured: readonly string[] | undefined
+): readonly string[] {
+  if (configured === undefined) return getDefaultGitConfigParameters();
+  return configured;
+}
+
+/**
+ * Heuristic check: does a `key=value` pair look like it embeds a credential?
+ *
+ * Operators who legitimately need a corporate proxy or static auth header
+ * can put credential-bearing pairs in `security.git_config_parameters`
+ * (e.g. `http.proxy=http://user:pass@corp:3128`, or
+ * `http.<URL>.extraheader=Authorization: Basic …`). Those flow through the
+ * daemon's startup log line, the sudo env, and the executor's inline env —
+ * places we wouldn't normally write secrets to. This helper exists so the
+ * daemon can avoid printing the *value* of such pairs in startup logs (and,
+ * if we ever need it, so callers can route sensitive pairs through the
+ * 0600-owned env-file path instead of inline env).
+ *
+ * The match is intentionally permissive — false positives only mean we log
+ * `<redacted>` for a non-secret value, which is harmless. The patterns
+ * cover the two shapes we expect in practice:
+ *   - URLs with userinfo:  `://[^/@]+:[^/@]+@`
+ *   - HTTP Authorization headers: `Authorization:` (case-insensitive)
+ */
+export function gitConfigParameterLooksSecret(pair: string): boolean {
+  if (/:\/\/[^/@\s]+:[^/@\s]+@/.test(pair)) return true;
+  if (/authorization:/i.test(pair)) return true;
+  return false;
+}
+
+/**
+ * Build a redaction-safe rendering of the resolved `git_config_parameters`
+ * for logging. Each pair is shown as `key=<value>` or `key=<redacted>` (when
+ * the value looks credential-bearing per {@link gitConfigParameterLooksSecret}).
+ *
+ * Example:
+ *   `'transfer.credentialsInUrl=die' 'http.proxy=<redacted>'`
+ */
+export function renderGitConfigParametersForLog(pairs: readonly string[]): string {
+  return pairs
+    .filter((p) => p.trim().length > 0)
+    .map((pair) => {
+      if (!gitConfigParameterLooksSecret(pair)) return pair;
+      const eq = pair.indexOf('=');
+      const key = eq >= 0 ? pair.slice(0, eq) : pair;
+      return `${key}=<redacted>`;
+    })
+    .join(' ');
+}

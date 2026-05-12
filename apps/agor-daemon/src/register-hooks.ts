@@ -58,7 +58,7 @@ import {
   requireMinimumRole,
 } from './utils/authorization.js';
 import { injectCreatedBy } from './utils/inject-created-by.js';
-import { ensureRepoOriginAligned } from './utils/realign-repo-origin.js';
+import { realignRepoOriginAfterPatchHook } from './utils/realign-repo-origin.js';
 import {
   createServiceToken,
   getDaemonUrl,
@@ -720,44 +720,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete repositories')],
     },
     after: {
-      patch: [
-        // Self-heal `remote.origin.url` after the two operations that change
-        // what the canonical URL is supposed to be:
-        //   1. Executor patches `clone_status: 'ready'` when an initial clone
-        //      completes. If the clone happened against a token-bearing URL,
-        //      the on-disk config is tainted; realigning now wipes that.
-        //   2. `updateMetadata()` flips `remote_url` (e.g. via
-        //      `agor_repos_update` MCP tool). The DB row changes; on-disk
-        //      should match it immediately.
-        // Skipped for unrelated patches (metadata-only updates, env config
-        // changes) to avoid spurious git work on every write.
-        async (context: HookContext) => {
-          const patchData = context.data as Partial<import('@agor/core/types').Repo> | undefined;
-          const result = context.result as
-            | import('@agor/core/types').Repo
-            | import('@agor/core/types').Repo[]
-            | undefined;
-          if (!patchData || !result) return context;
-
-          const remoteUrlChanged = Object.hasOwn(patchData, 'remote_url');
-          const cloneJustReady = patchData.clone_status === 'ready';
-          if (!remoteUrlChanged && !cloneJustReady) return context;
-
-          // Repo patches normally target a single row, but be defensive
-          // about Feathers' Array vs single contract.
-          const repos = Array.isArray(result) ? result : [result];
-          for (const repo of repos) {
-            if (!repo?.repo_id) continue;
-            ensureRepoOriginAligned(context.app, repo.repo_id).catch((err: unknown) => {
-              const message = err instanceof Error ? err.message : String(err);
-              console.warn(
-                `⚠️  [repos.after.patch] ensureRepoOriginAligned failed for repo ${repo.repo_id}: ${message}`
-              );
-            });
-          }
-          return context;
-        },
-      ],
+      patch: [realignRepoOriginAfterPatchHook()],
     },
   });
 

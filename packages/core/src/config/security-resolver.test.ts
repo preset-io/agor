@@ -15,6 +15,10 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import {
+  getDefaultGitConfigParameters,
+  gitConfigParameterLooksSecret,
+  renderGitConfigParametersForLog,
+  resolveGitConfigParameters,
   resolveSecurity,
   SANDPACK_CSP_FRAME_SRC,
   SANDPACK_CSP_WORKER_SRC,
@@ -322,5 +326,114 @@ describe('resolveSecurity — headerValue serialization', () => {
     // `name` or `name src1 src2`. An empty-array override yields just `script-src`.
     const segments = csp.headerValue.split('; ');
     expect(segments).toContain('script-src');
+  });
+});
+
+// ============================================================================
+// security.git_config_parameters
+// ============================================================================
+
+describe('getDefaultGitConfigParameters', () => {
+  it('returns a fresh mutable copy each call (callers must not mutate the shared default)', () => {
+    const a = getDefaultGitConfigParameters();
+    const b = getDefaultGitConfigParameters();
+    expect(a).toEqual(b);
+    expect(a).not.toBe(b); // distinct array references
+    // And mutating one must not affect the next call's result.
+    a.push('mutation.canary=true');
+    expect(getDefaultGitConfigParameters()).not.toContain('mutation.canary=true');
+  });
+
+  it('includes all the documented defense pairs (regression for accidental removal)', () => {
+    const defaults = getDefaultGitConfigParameters();
+    expect(defaults).toContain('transfer.credentialsInUrl=die');
+    expect(defaults).toContain('protocol.file.allow=user');
+    expect(defaults).toContain('protocol.ext.allow=never');
+    expect(defaults).toContain('fetch.fsckObjects=true');
+    expect(defaults).toContain('transfer.fsckObjects=true');
+    expect(defaults).toContain('core.protectHFS=true');
+    expect(defaults).toContain('core.protectNTFS=true');
+  });
+});
+
+describe('resolveGitConfigParameters', () => {
+  it('returns the package defaults when configured value is undefined', () => {
+    const out = resolveGitConfigParameters(undefined);
+    expect(out).toEqual(getDefaultGitConfigParameters());
+    // Defaults must include the headline credential-in-URL guard.
+    expect(out).toContain('transfer.credentialsInUrl=die');
+  });
+
+  it('returns an empty array when configured value is [] (explicit "disable")', () => {
+    expect(resolveGitConfigParameters([])).toEqual([]);
+  });
+
+  it('REPLACES (not merges) defaults when configured value is non-empty', () => {
+    // Documented in the type comment: setting this in config replaces the
+    // defaults verbatim. If an operator wants both, they spread the default
+    // list — they don't get them implicitly.
+    const out = resolveGitConfigParameters(['custom.key=value']);
+    expect(out).toEqual(['custom.key=value']);
+    expect(out).not.toContain('transfer.credentialsInUrl=die');
+  });
+});
+
+describe('gitConfigParameterLooksSecret', () => {
+  it('detects URLs with userinfo (proxy with embedded creds)', () => {
+    expect(gitConfigParameterLooksSecret('http.proxy=http://user:pass@corp.example:3128')).toBe(
+      true
+    );
+    expect(gitConfigParameterLooksSecret('http.proxy=https://USER:tok@proxy.example:443')).toBe(
+      true
+    );
+  });
+
+  it('detects HTTP Authorization headers (extraheader-style values)', () => {
+    expect(
+      gitConfigParameterLooksSecret('http.https://github.com/.extraheader=Authorization: Basic abc')
+    ).toBe(true);
+    // Case-insensitive — git accepts lowercase too.
+    expect(gitConfigParameterLooksSecret('http.x.extraheader=authorization: bearer xyz')).toBe(
+      true
+    );
+  });
+
+  it('does NOT flag the defaults (none of which carry secrets)', () => {
+    for (const pair of getDefaultGitConfigParameters()) {
+      expect(gitConfigParameterLooksSecret(pair)).toBe(false);
+    }
+  });
+
+  it('does NOT flag plain URLs without userinfo', () => {
+    expect(gitConfigParameterLooksSecret('http.proxy=https://corp-proxy.example:3128')).toBe(false);
+    expect(gitConfigParameterLooksSecret('url.https://github.com/.insteadOf=git@github.com:')).toBe(
+      false
+    );
+  });
+});
+
+describe('renderGitConfigParametersForLog', () => {
+  it('passes non-secret pairs through verbatim', () => {
+    expect(renderGitConfigParametersForLog(['transfer.credentialsInUrl=die', 'a=b'])).toBe(
+      'transfer.credentialsInUrl=die a=b'
+    );
+  });
+
+  it('masks secret-looking values, keeping keys visible (operators verify policy)', () => {
+    const out = renderGitConfigParametersForLog([
+      'transfer.credentialsInUrl=die',
+      'http.proxy=http://user:pass@corp:3128',
+      'http.https://x/.extraheader=Authorization: Basic abc',
+    ]);
+    expect(out).toContain('transfer.credentialsInUrl=die'); // safe — passes through
+    expect(out).toContain('http.proxy=<redacted>'); // key visible, value scrubbed
+    expect(out).toContain('http.https://x/.extraheader=<redacted>');
+    // Defence-in-depth: nothing matching the original secret material survives.
+    expect(out).not.toContain('user:pass');
+    expect(out).not.toContain('Basic abc');
+  });
+
+  it('skips empty / whitespace entries (matches buildGitConfigParameters behaviour)', () => {
+    expect(renderGitConfigParametersForLog(['a=1', '', '   ', 'b=2'])).toBe('a=1 b=2');
   });
 });

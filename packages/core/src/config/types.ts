@@ -611,6 +611,17 @@ export interface AgorSecuritySettings {
    * only). Setting to a non-empty array REPLACES the defaults — copy the
    * default list and edit if you want to keep most of them.
    *
+   * ⚠️ Be careful with credential-bearing pairs. If you set values like
+   * `http.proxy=http://user:pass@corp:3128` or `http.<URL>.extraheader=
+   * Authorization: …`, those flow through several places the daemon
+   * normally avoids writing secrets to: the daemon's startup log, the sudo
+   * `env_keep` boundary, and the executor's inline env. The daemon redacts
+   * such values from log output (via `renderGitConfigParametersForLog` —
+   * key visible, value masked when it looks credential-bearing), but the
+   * env-var value itself is not routed through the encrypted env-file
+   * path. Prefer encoding secrets in a credential helper or environment
+   * variable rather than baking them into this config key.
+   *
    * See `docs/internal/credential-leak-defenses-2026-05-11.md`.
    *
    * @example Append a custom proxy hardening pair

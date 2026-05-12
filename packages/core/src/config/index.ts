@@ -26,6 +26,10 @@ export type {
   ResolveSecurityOptions,
 } from './security-resolver';
 export {
+  getDefaultGitConfigParameters,
+  gitConfigParameterLooksSecret,
+  renderGitConfigParametersForLog,
+  resolveGitConfigParameters,
   resolveSecurity,
   SANDPACK_CSP_FRAME_SRC,
   SANDPACK_CSP_WORKER_SRC,
