@@ -349,32 +349,82 @@ describe('getDefaultGitConfigParameters', () => {
     expect(defaults).toContain('transfer.credentialsInUrl=die');
     expect(defaults).toContain('protocol.file.allow=user');
     expect(defaults).toContain('protocol.ext.allow=never');
-    expect(defaults).toContain('fetch.fsckObjects=true');
-    expect(defaults).toContain('transfer.fsckObjects=true');
     expect(defaults).toContain('core.protectHFS=true');
     expect(defaults).toContain('core.protectNTFS=true');
+  });
+
+  it('does NOT include fsckObjects (would break legacy repos with technically-broken commits)', () => {
+    // Discussed and explicitly rejected for defaults — operators who want
+    // object integrity validation can opt in via `extras`. Pinning this in
+    // a test so a future "let's tighten the defaults" pass has to make a
+    // conscious decision.
+    const defaults = getDefaultGitConfigParameters();
+    expect(defaults).not.toContain('fetch.fsckObjects=true');
+    expect(defaults).not.toContain('transfer.fsckObjects=true');
   });
 });
 
 describe('resolveGitConfigParameters', () => {
-  it('returns the package defaults when configured value is undefined', () => {
+  it('returns the defaults when configured value is undefined', () => {
     const out = resolveGitConfigParameters(undefined);
     expect(out).toEqual(getDefaultGitConfigParameters());
-    // Defaults must include the headline credential-in-URL guard.
     expect(out).toContain('transfer.credentialsInUrl=die');
   });
 
-  it('returns an empty array when configured value is [] (explicit "disable")', () => {
-    expect(resolveGitConfigParameters([])).toEqual([]);
+  it('returns the defaults for an empty object (both extras and override unset)', () => {
+    expect(resolveGitConfigParameters({})).toEqual(getDefaultGitConfigParameters());
   });
 
-  it('REPLACES (not merges) defaults when configured value is non-empty', () => {
-    // Documented in the type comment: setting this in config replaces the
-    // defaults verbatim. If an operator wants both, they spread the default
-    // list — they don't get them implicitly.
-    const out = resolveGitConfigParameters(['custom.key=value']);
-    expect(out).toEqual(['custom.key=value']);
+  it('extras: empty array == no extras (defaults remain)', () => {
+    expect(resolveGitConfigParameters({ extras: [] })).toEqual(getDefaultGitConfigParameters());
+  });
+
+  it('extras: appends new keys to the defaults', () => {
+    const out = resolveGitConfigParameters({
+      extras: ['fetch.fsckObjects=true', 'http.proxy=http://corp:3128'],
+    });
+    // Defaults still present.
+    expect(out).toContain('transfer.credentialsInUrl=die');
+    expect(out).toContain('protocol.file.allow=user');
+    // Extras appended.
+    expect(out).toContain('fetch.fsckObjects=true');
+    expect(out).toContain('http.proxy=http://corp:3128');
+  });
+
+  it('extras: same key as a default overrides the default value (extras win)', () => {
+    // An operator who explicitly weakens transfer.credentialsInUrl knows
+    // what they're doing — extras with a colliding key REPLACES that one
+    // pair, doesn't emit both.
+    const out = resolveGitConfigParameters({ extras: ['transfer.credentialsInUrl=warn'] });
+    expect(out).toContain('transfer.credentialsInUrl=warn');
     expect(out).not.toContain('transfer.credentialsInUrl=die');
+    // Other defaults are untouched.
+    expect(out).toContain('protocol.file.allow=user');
+  });
+
+  it('extras: emits at most one entry per key (no spurious duplicates)', () => {
+    // After merging, each `key=` appears at most once. Otherwise git would
+    // resolve them last-write-wins anyway, but emitting both is needless
+    // noise in the env var.
+    const out = resolveGitConfigParameters({ extras: ['transfer.credentialsInUrl=warn'] });
+    const credKeyEntries = out.filter((p) => p.startsWith('transfer.credentialsInUrl='));
+    expect(credKeyEntries).toEqual(['transfer.credentialsInUrl=warn']);
+  });
+
+  it('override: REPLACES defaults verbatim', () => {
+    const out = resolveGitConfigParameters({ override: ['transfer.credentialsInUrl=warn'] });
+    expect(out).toEqual(['transfer.credentialsInUrl=warn']);
+    expect(out).not.toContain('protocol.file.allow=user');
+  });
+
+  it('override: empty array disables ALL defaults (debug escape hatch)', () => {
+    expect(resolveGitConfigParameters({ override: [] })).toEqual([]);
+  });
+
+  it('throws when both extras AND override are set (ambiguous — config typo)', () => {
+    expect(() => resolveGitConfigParameters({ extras: ['a=1'], override: ['b=2'] })).toThrow(
+      /cannot set both/i
+    );
   });
 });
 

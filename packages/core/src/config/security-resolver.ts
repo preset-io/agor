@@ -451,7 +451,9 @@ export function resolveSecurity(
 // See docs/internal/credential-leak-defenses-2026-05-11.md.
 
 /**
- * Default `security.git_config_parameters` pairs.
+ * Default `security.git_config_parameters` pairs. Conservative on purpose —
+ * each entry is either nearly zero risk of breaking real workflows or already
+ * the default on at least one widely-used git version.
  *
  * - `transfer.credentialsInUrl=die` — git 2.41+ — refuse fetch/push when
  *   `remote.<name>.url` carries embedded credentials. Per git's docs the
@@ -459,52 +461,103 @@ export function resolveSecurity(
  *   NOT URLs on argv) — so this hardens vector 1 of the threat model;
  *   detection of the other vectors is the heartbeat scan's job.
  * - `protocol.file.allow=user` — refuse auto-fetched `file://` submodule
- *   URLs (CVE-2022-39253 family).
+ *   URLs (CVE-2022-39253 family). Default in git 2.38+, so on modern git
+ *   this is a no-op confirmation; on older git it actually does work.
  * - `protocol.ext.allow=never` — refuse `ext::` URL scheme (arbitrary
- *   command execution surface).
- * - `fetch.fsckObjects=true` / `transfer.fsckObjects=true` — validate
- *   object integrity on fetch / push.
+ *   command execution surface). Rarely used in real repos.
  * - `core.protectHFS=true` / `core.protectNTFS=true` — block cross-FS
- *   path-traversal attacks via crafted filenames.
+ *   path-traversal attacks via crafted filenames. Already default on
+ *   macOS/Windows; this just turns it on for Linux too.
+ *
+ * Notably NOT in the defaults: `fetch.fsckObjects=true` /
+ * `transfer.fsckObjects=true`. Object integrity validation sounds great in
+ * the abstract but in practice it refuses fetches from legacy repos with
+ * technically-broken commits (bad author lines, weird historical metadata)
+ * which causes the whole feature to get disabled. Operators who want fsck
+ * can opt in via `extras`.
  */
 const DEFAULT_GIT_CONFIG_PARAMETERS: readonly string[] = Object.freeze([
   'transfer.credentialsInUrl=die',
   'protocol.file.allow=user',
   'protocol.ext.allow=never',
-  'fetch.fsckObjects=true',
-  'transfer.fsckObjects=true',
   'core.protectHFS=true',
   'core.protectNTFS=true',
 ]);
 
 /**
  * Returns the package's default `security.git_config_parameters` pairs as a
- * fresh mutable copy. Callers wanting to extend the defaults should
- * `[...getDefaultGitConfigParameters(), ...extras]`.
+ * fresh mutable copy. Callers wanting to extend the defaults should use
+ * `extras` in config (or this getter + spread, for tests).
  */
 export function getDefaultGitConfigParameters(): string[] {
   return [...DEFAULT_GIT_CONFIG_PARAMETERS];
 }
 
 /**
+ * Extract the key portion (everything before the first `=`) from a
+ * `key=value` pair. Used for de-duplicating pairs across defaults + extras
+ * when the same key appears on both sides — the later entry wins (operator
+ * intent), and we collapse them into a single entry rather than emitting
+ * two pairs with the same key (which git would resolve last-write-wins
+ * anyway, but at the cost of a noisier env var).
+ */
+function gitConfigParameterKey(pair: string): string {
+  const eq = pair.indexOf('=');
+  return eq >= 0 ? pair.slice(0, eq) : pair;
+}
+
+/**
  * Resolve the effective `security.git_config_parameters` list from raw
  * config.
  *
- * Semantics:
- *  - `undefined` → use the package defaults (the safe baseline).
- *  - `[]` → explicit "disable all" (debug only; loses the leak defenses).
- *  - non-empty array → REPLACE the defaults verbatim. To extend, spread
- *    {@link getDefaultGitConfigParameters} into the config.
+ * Two-tier shape (mirrors CSP's `extras` + `override`):
  *
- * Replace (not merge) was chosen so admins can both extend AND opt out of
- * specific defaults if a quirky repo trips them (e.g. `fsckObjects` rejecting
- * a legacy object).
+ *   - `undefined` (key omitted) → use the package defaults.
+ *   - `{ extras: […] }` → defaults ++ extras, with extras winning on key
+ *     collision (so an operator who writes `transfer.credentialsInUrl=warn`
+ *     in `extras` downgrades the safe default's `die`).
+ *   - `{ override: […] }` → REPLACE defaults verbatim. The escape hatch
+ *     for operators who need full control. An empty array here means
+ *     "disable all defaults" (debug only).
+ *   - `{ extras: […], override: […] }` → throws. Pick one; mixing is
+ *     ambiguous and almost always a config typo.
+ *   - `{}` (both unset) → defaults.
  */
+export interface AgorGitConfigParametersSettings {
+  /** Pairs appended to (and de-duped against) the safe defaults. */
+  extras?: string[];
+  /** Pairs that REPLACE the defaults wholesale. Escape hatch. */
+  override?: string[];
+}
+
 export function resolveGitConfigParameters(
-  configured: readonly string[] | undefined
+  configured: AgorGitConfigParametersSettings | undefined
 ): readonly string[] {
   if (configured === undefined) return getDefaultGitConfigParameters();
-  return configured;
+
+  const hasExtras = configured.extras !== undefined;
+  const hasOverride = configured.override !== undefined;
+
+  if (hasExtras && hasOverride) {
+    throw new Error(
+      'security.git_config_parameters: cannot set both `extras` and `override`. ' +
+        'Use `extras` to append to the safe defaults, or `override` to replace them entirely.'
+    );
+  }
+
+  if (hasOverride) {
+    return configured.override ?? [];
+  }
+
+  const extras = configured.extras ?? [];
+  if (extras.length === 0) return getDefaultGitConfigParameters();
+
+  // Merge: extras win on key collision; same-key duplicates are collapsed.
+  const extraKeys = new Set(extras.map(gitConfigParameterKey));
+  return [
+    ...DEFAULT_GIT_CONFIG_PARAMETERS.filter((p) => !extraKeys.has(gitConfigParameterKey(p))),
+    ...extras,
+  ];
 }
 
 /**

@@ -593,23 +593,28 @@ export interface AgorSecuritySettings {
    * invocation via the `GIT_CONFIG_PARAMETERS` env var. Each entry is a
    * literal `key=value` pair.
    *
-   * Defaults (when this key is omitted) lock down several well-known leak /
-   * RCE surfaces:
-   *   - `transfer.credentialsInUrl=die` — refuse fetch/push when a URL carries
-   *     embedded credentials (git 2.41+). Tainted configs become useless for
-   *     transfer, even when the *write* of the tainted value isn't blocked.
-   *   - `protocol.file.allow=user` — refuse auto-fetched `file://` submodule
-   *     URLs (CVE-2022-39253 family).
-   *   - `protocol.ext.allow=never` — refuse the `ext::` URL scheme, which can
-   *     execute arbitrary commands.
-   *   - `fetch.fsckObjects=true` / `transfer.fsckObjects=true` — verify object
-   *     integrity on fetch / push.
+   * Two-tier shape (mirrors `security.csp`):
+   *   - `extras`: append to the safe defaults (95% case).
+   *   - `override`: replace the defaults entirely (escape hatch). Setting
+   *     `override: []` disables all defaults.
+   *   - Setting both `extras` and `override` is rejected at config-load
+   *     time as ambiguous.
+   *
+   * Default pairs (when this key is omitted) lock down well-known leak /
+   * RCE surfaces with near-zero risk of breaking real workflows:
+   *   - `transfer.credentialsInUrl=die` — git 2.41+ — refuse fetch/push
+   *     when a configured `remote.<name>.url` carries embedded credentials.
+   *   - `protocol.file.allow=user` — refuse auto-fetched `file://`
+   *     submodule URLs (CVE-2022-39253 family). Default in git 2.38+.
+   *   - `protocol.ext.allow=never` — refuse the `ext::` URL scheme, which
+   *     can execute arbitrary commands.
    *   - `core.protectHFS=true` / `core.protectNTFS=true` — block cross-FS
    *     path-traversal attacks via crafted filenames.
    *
-   * Setting this to an empty array disables the defaults entirely (debug
-   * only). Setting to a non-empty array REPLACES the defaults — copy the
-   * default list and edit if you want to keep most of them.
+   * Notably NOT defaulted: `fetch.fsckObjects` / `transfer.fsckObjects`.
+   * Object integrity validation is desirable but in practice refuses
+   * fetches from legacy repos with technically-broken commits (bad author
+   * lines, weird metadata). Operators who want it can opt in via `extras`.
    *
    * ⚠️ Be careful with credential-bearing pairs. If you set values like
    * `http.proxy=http://user:pass@corp:3128` or `http.<URL>.extraheader=
@@ -624,21 +629,29 @@ export interface AgorSecuritySettings {
    *
    * See `docs/internal/credential-leak-defenses-2026-05-11.md`.
    *
-   * @example Append a custom proxy hardening pair
+   * @example Append a custom hardening pair to the safe defaults
    * ```yaml
    * security:
    *   git_config_parameters:
-   *     - transfer.credentialsInUrl=die
-   *     - protocol.file.allow=user
-   *     - protocol.ext.allow=never
-   *     - fetch.fsckObjects=true
-   *     - transfer.fsckObjects=true
-   *     - core.protectHFS=true
-   *     - core.protectNTFS=true
-   *     - http.proxy=http://corp-proxy.example.com:3128
+   *     extras:
+   *       - fetch.fsckObjects=true
+   *       - http.proxy=http://corp-proxy.example.com:3128
+   * ```
+   *
+   * @example Replace defaults entirely (escape hatch)
+   * ```yaml
+   * security:
+   *   git_config_parameters:
+   *     override:
+   *       - transfer.credentialsInUrl=warn  # less strict for a quirky env
    * ```
    */
-  git_config_parameters?: string[];
+  git_config_parameters?: {
+    /** Pairs appended to (and de-duped against) the safe defaults. */
+    extras?: string[];
+    /** Pairs that REPLACE the safe defaults wholesale. Escape hatch. */
+    override?: string[];
+  };
 }
 
 /**

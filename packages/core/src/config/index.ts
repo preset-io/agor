@@ -20,6 +20,7 @@ export * from './repo-reference';
 export * from './resource-schemas';
 export * from './resource-sync';
 export type {
+  AgorGitConfigParametersSettings,
   ResolvedCors,
   ResolvedCsp,
   ResolvedSecurity,
