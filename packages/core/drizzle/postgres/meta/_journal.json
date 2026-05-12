@@ -232,6 +232,13 @@
       "when": 1778500000000,
       "tag": "0033_artifacts_agor_runtime",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1778688000000,
+      "tag": "0034_artifacts_files_to_jsonb",
+      "breakpoints": true
     }
   ]
 }

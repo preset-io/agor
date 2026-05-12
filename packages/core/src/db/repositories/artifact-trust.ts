@@ -18,30 +18,12 @@ import type { AgorGrants, ArtifactTrustGrant, ArtifactTrustScopeType } from '@ag
 import { and, eq, isNull } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { deleteFrom, insert, isPostgresDatabase, select, update } from '../database-wrapper';
+import { deleteFrom, insert, select, update } from '../database-wrapper';
 import {
   type ArtifactTrustGrantInsert,
   type ArtifactTrustGrantRow,
   artifactTrustGrants,
 } from '../schema';
-
-function readJson<T>(value: unknown, fallback: T): T {
-  if (value === null || value === undefined) return fallback;
-  if (typeof value === 'string') {
-    try {
-      return JSON.parse(value) as T;
-    } catch {
-      return fallback;
-    }
-  }
-  return value as T;
-}
-
-function writeJson(db: Database, value: unknown): unknown {
-  if (value === undefined || value === null) return null;
-  if (isPostgresDatabase(db)) return value;
-  return JSON.stringify(value);
-}
 
 export class ArtifactTrustGrantRepository {
   constructor(private db: Database) {}
@@ -52,8 +34,8 @@ export class ArtifactTrustGrantRepository {
       user_id: row.user_id as never,
       scope_type: row.scope_type as ArtifactTrustScopeType,
       scope_value: row.scope_value ?? null,
-      env_vars_set: readJson<string[]>(row.env_vars_set, []),
-      agor_grants_set: readJson<AgorGrants>(row.agor_grants_set, {}),
+      env_vars_set: row.env_vars_set,
+      agor_grants_set: row.agor_grants_set,
       granted_at: new Date(row.granted_at).toISOString(),
       revoked_at: row.revoked_at ? new Date(row.revoked_at).toISOString() : undefined,
     };
@@ -80,8 +62,8 @@ export class ArtifactTrustGrantRepository {
       user_id: input.user_id,
       scope_type: input.scope_type,
       scope_value: input.scope_value,
-      env_vars_set: writeJson(this.db, input.env_vars_set) as never,
-      agor_grants_set: writeJson(this.db, input.agor_grants_set) as never,
+      env_vars_set: input.env_vars_set,
+      agor_grants_set: input.agor_grants_set,
       granted_at: now,
       revoked_at: null,
     };

@@ -2,17 +2,15 @@
  * Artifact Repository
  *
  * Type-safe CRUD for artifacts. Artifacts are live web applications rendered
- * via Sandpack on board canvases. JSON columns are de/serialised here so the
- * service layer can deal in plain objects.
+ * via Sandpack on board canvases. JSON columns use the schema-level `t.json<T>`
+ * helper, so drizzle handles serialization at the column boundary on both
+ * dialects (SQLite `text` with `mode: 'json'`, Postgres native `jsonb`).
  */
 
 import type {
-  AgorGrants,
-  AgorRuntimeConfig,
   Artifact,
   ArtifactBuildStatus,
   BoardID,
-  SandpackConfig,
   SandpackTemplate,
   UUID,
   WorktreeID,
@@ -21,7 +19,7 @@ import { prefixToLikePattern } from '@agor/core/types';
 import { and, eq, like, or } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { deleteFrom, insert, isPostgresDatabase, select, update } from '../database-wrapper';
+import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type ArtifactInsert, type ArtifactRow, artifacts } from '../schema';
 import {
   AmbiguousIdError,
@@ -29,35 +27,6 @@ import {
   EntityNotFoundError,
   RepositoryError,
 } from './base';
-
-/**
- * JSON columns differ between SQLite (text) and Postgres (jsonb). On
- * Postgres the driver hands us a parsed value; on SQLite we get a string and
- * must JSON.parse. This helper hides the difference from the rest of the
- * repo.
- */
-function readJson<T>(value: unknown): T | undefined {
-  if (value === null || value === undefined) return undefined;
-  if (typeof value === 'string') {
-    if (value.length === 0) return undefined;
-    try {
-      return JSON.parse(value) as T;
-    } catch {
-      return undefined;
-    }
-  }
-  return value as T;
-}
-
-/**
- * Mirror of `readJson` for writes. Postgres takes the value as-is (the
- * jsonb driver serialises); SQLite needs a string.
- */
-function writeJson(db: Database, value: unknown): unknown {
-  if (value === undefined || value === null) return null;
-  if (isPostgresDatabase(db)) return value;
-  return JSON.stringify(value);
-}
 
 export class ArtifactRepository implements BaseRepository<Artifact, Partial<Artifact>> {
   constructor(private db: Database) {}
@@ -72,15 +41,15 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       path: row.path ?? null,
       template: (row.template ?? 'react') as SandpackTemplate,
       build_status: (row.build_status ?? 'unknown') as ArtifactBuildStatus,
-      build_errors: readJson<string[]>(row.build_errors),
+      build_errors: row.build_errors ?? undefined,
       content_hash: row.content_hash ?? undefined,
-      files: readJson<Record<string, string>>(row.files),
-      dependencies: readJson<Record<string, string>>(row.dependencies),
+      files: row.files ?? undefined,
+      dependencies: row.dependencies ?? undefined,
       entry: row.entry ?? undefined,
-      sandpack_config: readJson<SandpackConfig>(row.sandpack_config),
-      required_env_vars: readJson<string[]>(row.required_env_vars),
-      agor_grants: readJson<AgorGrants>(row.agor_grants),
-      agor_runtime: readJson<AgorRuntimeConfig>(row.agor_runtime),
+      sandpack_config: row.sandpack_config ?? undefined,
+      required_env_vars: row.required_env_vars ?? undefined,
+      agor_grants: row.agor_grants ?? undefined,
+      agor_runtime: row.agor_runtime ?? undefined,
       public: row.public !== undefined ? Boolean(row.public) : true,
       created_by: row.created_by ?? undefined,
       created_at: new Date(row.created_at).toISOString(),
@@ -124,15 +93,15 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         path: data.path ?? null,
         template: data.template ?? 'react',
         build_status: data.build_status ?? 'unknown',
-        build_errors: writeJson(this.db, data.build_errors) as never,
+        build_errors: data.build_errors ?? null,
         content_hash: data.content_hash ?? null,
-        files: writeJson(this.db, data.files) as never,
-        dependencies: writeJson(this.db, data.dependencies) as never,
+        files: data.files ?? null,
+        dependencies: data.dependencies ?? null,
         entry: data.entry ?? null,
-        sandpack_config: writeJson(this.db, data.sandpack_config) as never,
-        required_env_vars: writeJson(this.db, data.required_env_vars) as never,
-        agor_grants: writeJson(this.db, data.agor_grants) as never,
-        agor_runtime: writeJson(this.db, data.agor_runtime) as never,
+        sandpack_config: data.sandpack_config ?? null,
+        required_env_vars: data.required_env_vars ?? null,
+        agor_grants: data.agor_grants ?? null,
+        agor_runtime: data.agor_runtime ?? null,
         public: data.public ?? true,
         created_by: data.created_by ?? null,
         created_at: now,
@@ -274,27 +243,27 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       if (updates.template !== undefined) setData.template = updates.template;
       if (updates.build_status !== undefined) setData.build_status = updates.build_status;
       if (updates.build_errors !== undefined) {
-        setData.build_errors = writeJson(this.db, updates.build_errors);
+        setData.build_errors = updates.build_errors ?? null;
       }
       if (updates.content_hash !== undefined) setData.content_hash = updates.content_hash ?? null;
       if (updates.files !== undefined) {
-        setData.files = writeJson(this.db, updates.files);
+        setData.files = updates.files ?? null;
       }
       if (updates.dependencies !== undefined) {
-        setData.dependencies = writeJson(this.db, updates.dependencies);
+        setData.dependencies = updates.dependencies ?? null;
       }
       if (updates.entry !== undefined) setData.entry = updates.entry ?? null;
       if (updates.sandpack_config !== undefined) {
-        setData.sandpack_config = writeJson(this.db, updates.sandpack_config);
+        setData.sandpack_config = updates.sandpack_config ?? null;
       }
       if (updates.required_env_vars !== undefined) {
-        setData.required_env_vars = writeJson(this.db, updates.required_env_vars);
+        setData.required_env_vars = updates.required_env_vars ?? null;
       }
       if (updates.agor_runtime !== undefined) {
-        setData.agor_runtime = writeJson(this.db, updates.agor_runtime);
+        setData.agor_runtime = updates.agor_runtime ?? null;
       }
       if (updates.agor_grants !== undefined) {
-        setData.agor_grants = writeJson(this.db, updates.agor_grants);
+        setData.agor_grants = updates.agor_grants ?? null;
       }
       if (updates.public !== undefined) setData.public = updates.public;
       if (updates.archived !== undefined) setData.archived = updates.archived;

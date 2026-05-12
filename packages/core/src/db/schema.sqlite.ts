@@ -6,11 +6,14 @@
  */
 
 import type {
+  AgorGrants,
+  AgorRuntimeConfig,
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
   Message,
   PermissionMode,
+  SandpackConfig,
   Session,
   Task,
 } from '@agor/core/types';
@@ -1054,15 +1057,15 @@ export const artifacts = sqliteTable(
     path: text('path'), // provenance only — where files were read from
     template: text('template').notNull().default('react'),
     build_status: text('build_status').notNull().default('unknown'),
-    build_errors: text('build_errors'), // JSON array of error strings
+    build_errors: t.json<string[]>('build_errors'),
     content_hash: text('content_hash'),
-    files: text('files'), // JSON: Record<string, string> — serialized file contents
-    dependencies: text('dependencies'), // JSON: Record<string, string> — denormalized cache of package.json
+    files: t.json<Record<string, string>>('files'),
+    dependencies: t.json<Record<string, string>>('dependencies'),
     entry: text('entry'), // denormalized cache of the Sandpack entry file
-    sandpack_config: text('sandpack_config'), // JSON: SandpackConfig (author-controlled, sanitized on write)
-    required_env_vars: text('required_env_vars'), // JSON: string[] of env var NAMES (no prefix)
-    agor_grants: text('agor_grants'), // JSON: AgorGrants (declarative daemon capabilities)
-    agor_runtime: text('agor_runtime'), // JSON: AgorRuntimeConfig (controls daemon-injected agor-runtime.js)
+    sandpack_config: t.json<SandpackConfig>('sandpack_config'),
+    required_env_vars: t.json<string[]>('required_env_vars'),
+    agor_grants: t.json<AgorGrants>('agor_grants'),
+    agor_runtime: t.json<AgorRuntimeConfig>('agor_runtime'),
     public: t.bool('public').notNull().default(true),
     created_by: text('created_by', { length: 36 }),
     created_at: t.timestamp('created_at').notNull(),
@@ -1096,8 +1099,8 @@ export const artifactTrustGrants = sqliteTable(
     // scope_types in the future doesn't require a SQLite table-recreate.
     scope_type: text('scope_type').notNull(),
     scope_value: text('scope_value'),
-    env_vars_set: text('env_vars_set').notNull(),
-    agor_grants_set: text('agor_grants_set').notNull(),
+    env_vars_set: t.json<string[]>('env_vars_set').notNull(),
+    agor_grants_set: t.json<AgorGrants>('agor_grants_set').notNull(),
     granted_at: t.timestamp('granted_at').notNull(),
     revoked_at: t.timestamp('revoked_at'),
   },
