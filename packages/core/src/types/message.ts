@@ -24,8 +24,8 @@ export enum MessageRole {
 export type MessageSource = 'gateway' | 'agor';
 
 /**
- * Message type (from Claude transcript)
- * Distinguishes conversation messages from meta/snapshot messages
+ * Message type
+ * Distinguishes conversation messages from meta/synthetic messages
  */
 export type MessageType =
   | 'user'
