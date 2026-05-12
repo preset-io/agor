@@ -53,7 +53,18 @@ import {
   useSandpack,
   useSandpackConsole,
 } from '@codesandbox/sandpack-react';
-import { Alert, Badge, Button, Card, Spin, Tag, Tooltip, Typography, theme } from 'antd';
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  Popconfirm,
+  Spin,
+  Tag,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
 import { compressToBase64 } from 'lz-string';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NodeResizer } from 'reactflow';
@@ -557,59 +568,214 @@ export const ArtifactNode = ({
     window.dispatchEvent(new CustomEvent(`agor:export-codesandbox-${data.artifactId}`));
   }, [data.artifactId]);
 
-  // Loading state
+  // Title bar — always rendered, regardless of load state. When the
+  // payload hasn't come back yet (initial fetch in flight, or the row's
+  // files column got corrupted and getPayload threw), the user still
+  // needs to see which card is which on the board so they can hit the
+  // reload or delete button. We fall back to a short-id placeholder
+  // until `payload.name` is available.
+  //
+  // The action buttons split into two groups: the ones that need a
+  // valid payload to do anything useful (export, interact, consent)
+  // only render when `payload` exists; reload and delete are always
+  // available so a stuck artifact can be retried or removed.
+  const fallbackName = `Artifact ${data.artifactId.slice(0, 8)}`;
+  const headerBadgeStatus: 'processing' | 'error' | 'success' = error
+    ? 'error'
+    : loading
+      ? 'processing'
+      : 'success';
+  const headerBadgeTitle = error ? 'Failed to load' : loading ? 'Reloading...' : 'Live';
+  const trustBadge = payload ? renderTrustBadge(payload) : null;
+  const showConsentAffordance =
+    payload?.trust_state === 'untrusted' &&
+    (((payload.required_env_vars && payload.required_env_vars.length > 0) ||
+      (payload.agor_grants && Object.keys(payload.agor_grants).length > 0)) ??
+      false);
+
+  const cardTitle = (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+        <Badge status={headerBadgeStatus} title={headerBadgeTitle} />
+        <Typography.Text
+          style={{ fontSize: 12, fontWeight: 600, maxWidth: data.width - 200 }}
+          ellipsis
+        >
+          {payload?.name ?? fallbackName}
+        </Typography.Text>
+        {trustBadge}
+      </div>
+      <div style={{ display: 'flex', gap: 2 }}>
+        {showConsentAffordance && (
+          <Tooltip title="Trust this artifact to inject secrets">
+            <Button
+              type="text"
+              size="small"
+              // `danger` themes the icon via Ant's colorError token —
+              // signals "this artifact won't render with secrets until
+              // you grant trust" without us hardcoding a hex.
+              danger
+              icon={<LockOutlined />}
+              onClick={(e) => {
+                e.stopPropagation();
+                setConsentOpen(true);
+              }}
+            />
+          </Tooltip>
+        )}
+        {payload && (
+          <Tooltip title="Open in CodeSandbox (eject — daemon-injected env vars/AGOR_TOKEN won't carry over)">
+            <Button
+              type="text"
+              size="small"
+              icon={<ExportOutlined />}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleOpenInCodeSandbox();
+              }}
+            />
+          </Tooltip>
+        )}
+        <Tooltip title="Reload">
+          <Button
+            type="text"
+            size="small"
+            icon={<ReloadOutlined spin={loading} />}
+            onClick={(e) => {
+              e.stopPropagation();
+              fetchPayload();
+            }}
+          />
+        </Tooltip>
+        {payload && (
+          <Tooltip title={interactMode ? 'Exit interact mode' : 'Interact with app'}>
+            <Button
+              type={interactMode ? 'primary' : 'text'}
+              size="small"
+              icon={interactMode ? <CheckCircleOutlined /> : <EyeOutlined />}
+              onClick={(e) => {
+                e.stopPropagation();
+                setInteractMode((prev) => !prev);
+              }}
+            />
+          </Tooltip>
+        )}
+        {data.onDeleteArtifact && (
+          <Popconfirm
+            title="Delete artifact?"
+            description={`This will remove "${payload?.name ?? fallbackName}" from the board.`}
+            onConfirm={(e) => {
+              e?.stopPropagation();
+              data.onDeleteArtifact?.(data.objectId, data.artifactId);
+            }}
+            onCancel={(e) => e?.stopPropagation()}
+            okText="Delete"
+            cancelText="Cancel"
+            okButtonProps={{ danger: true }}
+          >
+            <Tooltip title="Delete artifact">
+              <Button
+                type="text"
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
+                onClick={(e) => e.stopPropagation()}
+              />
+            </Tooltip>
+          </Popconfirm>
+        )}
+      </div>
+    </div>
+  );
+
+  // Shared Card chrome — body content swaps based on load state but the
+  // title bar stays put so the user always knows which artifact this is.
+  const cardOuterStyle = {
+    width: data.width,
+    height: data.height,
+    background: token.colorBgContainer,
+    border: `2px solid ${error ? token.colorErrorBorder : selected ? token.colorPrimary : token.colorBorder}`,
+    borderRadius: 8,
+    boxShadow: token.boxShadowSecondary,
+    overflow: 'hidden',
+    display: 'flex',
+    flexDirection: 'column',
+  } as const;
+
+  // Loading state — title bar is still visible (with reload + delete) so
+  // a stuck loader can be retried or pruned.
   if (loading && !payload) {
     return (
-      <Card
-        style={{
-          width: data.width,
-          height: data.height,
-          background: token.colorBgContainer,
-          border: `2px solid ${token.colorBorder}`,
-          borderRadius: 8,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-        styles={{
-          body: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' },
-        }}
-      >
-        <Spin indicator={<LoadingOutlined />} description="Loading artifact..." />
-      </Card>
+      <>
+        <NodeResizer
+          isVisible={selected}
+          minWidth={MIN_WIDTH}
+          minHeight={MIN_HEIGHT}
+          onResize={handleResize}
+          lineStyle={{ borderColor: token.colorPrimary }}
+          handleStyle={{ backgroundColor: token.colorPrimary, width: 8, height: 8 }}
+        />
+        <Card
+          style={cardOuterStyle}
+          styles={{
+            body: {
+              padding: 0,
+              flex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            },
+          }}
+          size="small"
+          title={cardTitle}
+        >
+          <Spin indicator={<LoadingOutlined />} description="Loading artifact..." />
+        </Card>
+      </>
     );
   }
 
-  // Error state
+  // Error state — title bar visible so the user can see which artifact
+  // failed and act on it (Retry / Delete) without guessing.
   if (error) {
     return (
-      <Card
-        style={{
-          width: data.width,
-          height: data.height,
-          background: token.colorBgContainer,
-          border: `2px solid ${token.colorErrorBorder}`,
-          borderRadius: 8,
-        }}
-        styles={{
-          body: {
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            height: '100%',
-            gap: 8,
-          },
-        }}
-      >
-        <CloseCircleOutlined style={{ fontSize: 24, color: token.colorError }} />
-        <Typography.Text type="danger" style={{ fontSize: 12, textAlign: 'center' }}>
-          {error}
-        </Typography.Text>
-        <Button size="small" icon={<ReloadOutlined />} onClick={fetchPayload}>
-          Retry
-        </Button>
-      </Card>
+      <>
+        <NodeResizer
+          isVisible={selected}
+          minWidth={MIN_WIDTH}
+          minHeight={MIN_HEIGHT}
+          onResize={handleResize}
+          lineStyle={{ borderColor: token.colorPrimary }}
+          handleStyle={{ backgroundColor: token.colorPrimary, width: 8, height: 8 }}
+        />
+        <Card
+          style={cardOuterStyle}
+          styles={{
+            body: {
+              padding: 0,
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+            },
+          }}
+          size="small"
+          title={cardTitle}
+        >
+          <CloseCircleOutlined style={{ fontSize: 24, color: token.colorError }} />
+          <Typography.Text
+            type="danger"
+            style={{ fontSize: 12, textAlign: 'center', padding: '0 16px' }}
+          >
+            {error}
+          </Typography.Text>
+          <Button size="small" icon={<ReloadOutlined />} onClick={fetchPayload}>
+            Retry
+          </Button>
+        </Card>
+      </>
     );
   }
 
@@ -624,11 +790,6 @@ export const ArtifactNode = ({
       : {}),
   };
   const sandpackTemplate = (sandpackConfig.template ?? payload.template) as 'react';
-  const trustBadge = renderTrustBadge(payload);
-  const showConsentAffordance =
-    payload.trust_state === 'untrusted' &&
-    ((payload.required_env_vars && payload.required_env_vars.length > 0) ||
-      (payload.agor_grants && Object.keys(payload.agor_grants).length > 0));
   const legacyBanner = payload.legacy?.is_legacy ? (
     <LegacyBanner upgradeInstructions={payload.legacy.upgrade_instructions} />
   ) : null;
@@ -644,17 +805,7 @@ export const ArtifactNode = ({
         handleStyle={{ backgroundColor: token.colorPrimary, width: 8, height: 8 }}
       />
       <Card
-        style={{
-          width: data.width,
-          height: data.height,
-          background: token.colorBgContainer,
-          border: `2px solid ${selected ? token.colorPrimary : token.colorBorder}`,
-          borderRadius: 8,
-          boxShadow: token.boxShadowSecondary,
-          overflow: 'hidden',
-          display: 'flex',
-          flexDirection: 'column',
-        }}
+        style={cardOuterStyle}
         styles={{
           body: {
             padding: 0,
@@ -665,87 +816,7 @@ export const ArtifactNode = ({
           },
         }}
         size="small"
-        title={
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-              <Badge
-                status={loading ? 'processing' : 'success'}
-                title={loading ? 'Reloading...' : 'Live'}
-              />
-              <Typography.Text
-                style={{ fontSize: 12, fontWeight: 600, maxWidth: data.width - 200 }}
-                ellipsis
-              >
-                {payload.name}
-              </Typography.Text>
-              {trustBadge}
-            </div>
-            <div style={{ display: 'flex', gap: 2 }}>
-              {showConsentAffordance && (
-                <Tooltip title="Trust this artifact to inject secrets">
-                  <Button
-                    type="text"
-                    size="small"
-                    // `danger` themes the icon via Ant's colorError token —
-                    // signals "this artifact won't render with secrets until
-                    // you grant trust" without us hardcoding a hex.
-                    danger
-                    icon={<LockOutlined />}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setConsentOpen(true);
-                    }}
-                  />
-                </Tooltip>
-              )}
-              <Tooltip title="Open in CodeSandbox (eject — daemon-injected env vars/AGOR_TOKEN won't carry over)">
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<ExportOutlined />}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleOpenInCodeSandbox();
-                  }}
-                />
-              </Tooltip>
-              <Tooltip title="Reload">
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<ReloadOutlined spin={loading} />}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    fetchPayload();
-                  }}
-                />
-              </Tooltip>
-              <Tooltip title={interactMode ? 'Exit interact mode' : 'Interact with app'}>
-                <Button
-                  type={interactMode ? 'primary' : 'text'}
-                  size="small"
-                  icon={interactMode ? <CheckCircleOutlined /> : <EyeOutlined />}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setInteractMode((prev) => !prev);
-                  }}
-                />
-              </Tooltip>
-              {data.onDeleteArtifact && (
-                <Button
-                  type="text"
-                  size="small"
-                  danger
-                  icon={<DeleteOutlined />}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    data.onDeleteArtifact?.(data.objectId, data.artifactId);
-                  }}
-                />
-              )}
-            </div>
-          </div>
-        }
+        title={cardTitle}
       >
         {/* Force Sandpack internal containers to fill available height */}
         <style>{`
