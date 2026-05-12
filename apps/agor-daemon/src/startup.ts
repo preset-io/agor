@@ -11,7 +11,7 @@ import type { AgorConfig } from '@agor/core/config';
 import { getAgorHome } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
 import { generateId, MessagesRepository, SessionRepository } from '@agor/core/db';
-import type { Id, Message, Paginated, Session, Task } from '@agor/core/types';
+import type { Id, Message, MessageID, Paginated, Session, SessionID, Task } from '@agor/core/types';
 import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
 import type { GatewayService } from './services/gateway.js';
@@ -180,6 +180,10 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
   // persistent record in the conversation. Contrast with PR #1116 (filtered
   // high-frequency SDK lifecycle noise): this is intentional, low-frequency,
   // and user-meaningful.
+  //
+  // The message MUST be attached to a task: the reactive client drops taskless
+  // messages (ReactiveSessionState groups messages by task_id), so a notice
+  // with no task_id would be silently invisible in the UI.
   const affectedSessionIds = new Set<string>([
     ...orphanedSessions.map((s) => s.session_id as string),
     ...Array.from(sessionIdsWithOrphanedTasks),
@@ -191,17 +195,46 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
       ? 'The Agor daemon was restarted. Your session was paused at this point. Tell the agent to resume your work, or pick up where you left off.'
       : 'The Agor daemon stopped unexpectedly. Your session was paused at this point. Tell the agent to resume your work, or pick up where you left off. If this keeps happening, contact your administrator.';
 
+    // Build session → last orphaned task map so we can attach notices to a task_id.
+    // Prefer orphaned tasks (they were the active tasks at shutdown); fall back to
+    // querying the session's most-recent task if none was orphaned.
+    const lastOrphanedTaskBySession = new Map<string, Task>();
+    for (const task of orphanedTasks) {
+      const sid = task.session_id as string;
+      const existing = lastOrphanedTaskBySession.get(sid);
+      if (!existing || task.created_at > existing.created_at) {
+        lastOrphanedTaskBySession.set(sid, task);
+      }
+    }
+
     const sessionRepo = new SessionRepository(db);
     const messageRepo = new MessagesRepository(db);
 
     for (const sessionId of affectedSessionIds) {
       try {
+        // Resolve the task to attach the notice to
+        let attachTask = lastOrphanedTaskBySession.get(sessionId);
+        if (!attachTask) {
+          const taskResult = (await tasksService.find({
+            query: { session_id: sessionId, $sort: { created_at: -1 }, $limit: 1 },
+          })) as unknown as Paginated<Task>;
+          attachTask = taskResult.data[0];
+        }
+        if (!attachTask) {
+          // No task exists — message would be invisible (transcript is task-scoped).
+          // This session has never had any work, so there is nothing for the user to resume.
+          console.log(
+            `   ⏭  Session ${sessionId.substring(0, 8)} has no tasks — skipping restart notice`
+          );
+          continue;
+        }
+
         // Idempotency: skip if the last message is already a daemon restart notice
         // (guards against rapid restart cycles piling up notices before the user responds)
         const messageCount = await sessionRepo.countMessages(sessionId);
         if (messageCount > 0) {
           const lastMessages = await messageRepo.findByRange(
-            sessionId as Message['session_id'],
+            sessionId as SessionID,
             messageCount - 1,
             messageCount - 1
           );
@@ -218,8 +251,9 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
         }
 
         const restartMessage: Message = {
-          message_id: generateId() as Message['message_id'],
-          session_id: sessionId as Message['session_id'],
+          message_id: generateId() as MessageID,
+          session_id: sessionId as SessionID,
+          task_id: attachTask.task_id,
           type: 'system',
           role: MessageRole.SYSTEM,
           index: messageCount,
@@ -233,6 +267,18 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
         };
 
         await app.service('messages').create(restartMessage, {});
+
+        // Extend the task's message_range.end_index so the notice is counted
+        // and loaded within the task's window in the UI
+        if (attachTask.message_range) {
+          await tasksService.patch(attachTask.task_id, {
+            message_range: {
+              ...attachTask.message_range,
+              end_index: messageCount,
+            },
+          });
+        }
+
         console.log(`   ✉  Injected ${subtype} notice into session ${sessionId.substring(0, 8)}`);
       } catch (err) {
         console.warn(
