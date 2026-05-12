@@ -22,7 +22,7 @@ import type {
 } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
-import { appendSystemMessage } from '../utils/append-system-message';
+import { appendSystemMessage } from '../utils/append-system-message.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
 import type { SessionsService } from './sessions';
 

@@ -216,10 +216,12 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
         // Resolve the task to attach the notice to
         let attachTask = lastOrphanedTaskBySession.get(sessionId);
         if (!attachTask) {
+          // TasksService.find() with a scalar session_id uses a fast path that
+          // ignores $sort, returning tasks ascending by created_at — take the last.
           const taskResult = (await tasksService.find({
-            query: { session_id: sessionId, $sort: { created_at: -1 }, $limit: 1 },
+            query: { session_id: sessionId },
           })) as unknown as Paginated<Task>;
-          attachTask = taskResult.data[0];
+          attachTask = taskResult.data.at(-1);
         }
         if (!attachTask) {
           // No task exists — message would be invisible (transcript is task-scoped).
@@ -251,7 +253,7 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
           }
         }
 
-        const messageIndex = await appendSystemMessage({
+        const injectedMessage = await appendSystemMessage({
           app,
           db,
           sessionId,
@@ -261,12 +263,12 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
         });
 
         // Extend the task's message_range.end_index so the notice is counted
-        // and loaded within the task's window in the UI
+        // and loaded within the task's window in the UI.
         if (attachTask.message_range) {
           await tasksService.patch(attachTask.task_id, {
             message_range: {
               ...attachTask.message_range,
-              end_index: messageIndex,
+              end_index: injectedMessage.index,
             },
           });
         }

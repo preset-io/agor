@@ -27,12 +27,12 @@ export interface AppendSystemMessageOptions {
   contentPreview?: string;
   /** Defaults to MessageRole.SYSTEM */
   role?: Message['role'];
-  metadata?: Record<string, unknown>;
+  metadata?: Message['metadata'];
   /** FeathersJS request params forwarded to the service create call */
   params?: Params;
 }
 
-export async function appendSystemMessage(opts: AppendSystemMessageOptions): Promise<number> {
+export async function appendSystemMessage(opts: AppendSystemMessageOptions): Promise<Message> {
   const {
     app,
     db,
@@ -63,5 +63,5 @@ export async function appendSystemMessage(opts: AppendSystemMessageOptions): Pro
 
   await app.service('messages').create(message, params ?? {});
 
-  return index;
+  return message;
 }
