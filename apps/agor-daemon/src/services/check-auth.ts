@@ -14,7 +14,7 @@
 
 import { type ApiKeyName, resolveApiKey } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
-import type { AgenticToolName, UserID } from '@agor/core/types';
+import type { AgenticToolName, AuthenticatedParams, UserID } from '@agor/core/types';
 
 export interface AuthCheckResult {
   authenticated: boolean;
@@ -71,10 +71,10 @@ export function createCheckAuthService(db: Database) {
   return {
     async create(
       data: { tool: AgenticToolName; apiKey?: string },
-      params?: { user?: { user_id: UserID } }
+      params?: AuthenticatedParams
     ): Promise<AuthCheckResult> {
       const { tool, apiKey: rawKey } = data;
-      const userId = params?.user?.user_id;
+      const userId = params?.user?.user_id as UserID | undefined;
 
       // opencode is server-based — no credentials concept, always ready
       if (tool === 'opencode') {

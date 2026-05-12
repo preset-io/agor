@@ -1344,11 +1344,7 @@ export function OnboardingWizard({
               Save API Key
             </Button>
             {onCheckAuth && (
-              <Button
-                onClick={handleTestAuth}
-                loading={testAuthLoading}
-                disabled={loading}
-              >
+              <Button onClick={handleTestAuth} loading={testAuthLoading} disabled={loading}>
                 Test Connection
               </Button>
             )}

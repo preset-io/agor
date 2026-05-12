@@ -1316,9 +1316,17 @@ function AppContent() {
           onCheckAuth={async (tool, apiKey) => {
             if (!client) return { authenticated: false, method: 'none' as const };
             try {
-              return await client.service('check-auth').create({ tool, apiKey });
+              return (await client.service('check-auth').create({ tool, apiKey })) as {
+                authenticated: boolean;
+                method: string;
+                hint?: string;
+              };
             } catch {
-              return { authenticated: false, method: 'none' as const, hint: 'Connection check failed.' };
+              return {
+                authenticated: false,
+                method: 'none' as const,
+                hint: 'Connection check failed.',
+              };
             }
           }}
           assistantPending={
