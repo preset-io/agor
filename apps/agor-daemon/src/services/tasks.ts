@@ -232,13 +232,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           // If a new task has started, we must NOT set the session to IDLE
           const session = await this.app.service('sessions').get(task.session_id, params);
 
-          // Self-heal git-config drift on the task's repo. Runs as soon as
-          // we know which worktree the task belongs to, so it's decoupled
-          // from session-state updates, callback delivery, queue processing,
-          // and btw-fork archiving — any of which can throw and short-
-          // circuit the cleanup path. Realignment is fire-and-forget; an
-          // earlier write contention or transient error must not break
-          // task completion. Read-only on the happy path (~10–20ms).
+          // Realign on terminal transition — decoupled from session-state
+          // updates and callback delivery so an error there doesn't skip it.
           if (session.worktree_id) {
             this.app
               .service('worktrees')

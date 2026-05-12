@@ -138,35 +138,19 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       ? await loadConfigFromFile(options.configPath)
       : await loadConfig();
 
-  // ------------------------------------------------------------------------
-  // Harden every spawned git invocation via GIT_CONFIG_PARAMETERS.
-  // Set BEFORE any child-process spawn so it propagates by inheritance to:
-  //   - daemon-issued git via createGit() (reads ...process.env)
-  //   - spawned executors (spawn-executor.ts forwards this var explicitly
-  //     through its impersonation env allowlist)
-  //   - any tool that internally invokes git (husky hooks, npm postinstall,
-  //     gh CLI) since they all read GIT_CONFIG_PARAMETERS at git startup
-  // The defaults + their rationale live in @agor/core/config
-  // (security-resolver.ts: DEFAULT_GIT_CONFIG_PARAMETERS). See also
-  // docs/internal/credential-leak-defenses-2026-05-11.md.
+  // Set GIT_CONFIG_PARAMETERS before any child-process spawn so every git
+  // invocation under Agor's control inherits it. See @agor/core/config
+  // (security-resolver) for the defaults + resolver semantics.
   const resolvedGitParams = resolveGitConfigParameters(config.security?.git_config_parameters);
   const gitConfigParams = buildGitConfigParameters(resolvedGitParams);
   if (gitConfigParams.length > 0) {
     process.env.GIT_CONFIG_PARAMETERS = gitConfigParams;
-    // Log a redacted summary — operators may legitimately put a corporate
-    // proxy with creds in their pairs (e.g. http.proxy=http://user:pass@…)
-    // and we don't want those values landing in daemon logs / log shippers.
-    // renderGitConfigParametersForLog keeps the keys visible (so operators
-    // can verify the policy is what they configured) and only masks values
-    // that look credential-bearing.
     console.log(
       `🔒 GIT_CONFIG_PARAMETERS hardened: ${renderGitConfigParametersForLog(resolvedGitParams)}`
     );
   } else {
-    // Empty array in config = explicit "disable all defaults". Leave any
-    // pre-existing env var untouched so an operator debugging an issue can
-    // still inject their own values via the shell.
-    console.log('🔒 GIT_CONFIG_PARAMETERS disabled by config (security.git_config_parameters: [])');
+    // override: [] in config — leave any inherited env var as-is.
+    console.log('🔒 GIT_CONFIG_PARAMETERS disabled by config (override: [])');
   }
 
   // Surface a clear migration note if the config still carries leftover

@@ -590,66 +590,25 @@ export interface AgorSecuritySettings {
 
   /**
    * Extra git config injected into every daemon- and agent-issued git
-   * invocation via the `GIT_CONFIG_PARAMETERS` env var. Each entry is a
-   * literal `key=value` pair.
+   * invocation via `GIT_CONFIG_PARAMETERS`. Two-tier shape (mirrors
+   * `security.csp`): `extras` appends to the safe defaults, `override`
+   * replaces them. Setting both throws. See
+   * `docs/internal/credential-leak-defenses-2026-05-11.md` for the
+   * default list, rationale, and the secrets caveat (don't bake
+   * credential-bearing values like `http.proxy=http://user:pass@…` here —
+   * the daemon redacts them from logs but the env var itself isn't
+   * routed through the encrypted env-file path).
    *
-   * Two-tier shape (mirrors `security.csp`):
-   *   - `extras`: append to the safe defaults (95% case).
-   *   - `override`: replace the defaults entirely (escape hatch). Setting
-   *     `override: []` disables all defaults.
-   *   - Setting both `extras` and `override` is rejected at config-load
-   *     time as ambiguous.
-   *
-   * Default pairs (when this key is omitted) lock down well-known leak /
-   * RCE surfaces with near-zero risk of breaking real workflows:
-   *   - `transfer.credentialsInUrl=die` — git 2.41+ — refuse fetch/push
-   *     when a configured `remote.<name>.url` carries embedded credentials.
-   *   - `protocol.file.allow=user` — refuse auto-fetched `file://`
-   *     submodule URLs (CVE-2022-39253 family). Default in git 2.38+.
-   *   - `protocol.ext.allow=never` — refuse the `ext::` URL scheme, which
-   *     can execute arbitrary commands.
-   *   - `core.protectHFS=true` / `core.protectNTFS=true` — block cross-FS
-   *     path-traversal attacks via crafted filenames.
-   *
-   * Notably NOT defaulted: `fetch.fsckObjects` / `transfer.fsckObjects`.
-   * Object integrity validation is desirable but in practice refuses
-   * fetches from legacy repos with technically-broken commits (bad author
-   * lines, weird metadata). Operators who want it can opt in via `extras`.
-   *
-   * ⚠️ Be careful with credential-bearing pairs. If you set values like
-   * `http.proxy=http://user:pass@corp:3128` or `http.<URL>.extraheader=
-   * Authorization: …`, those flow through several places the daemon
-   * normally avoids writing secrets to: the daemon's startup log, the sudo
-   * `env_keep` boundary, and the executor's inline env. The daemon redacts
-   * such values from log output (via `renderGitConfigParametersForLog` —
-   * key visible, value masked when it looks credential-bearing), but the
-   * env-var value itself is not routed through the encrypted env-file
-   * path. Prefer encoding secrets in a credential helper or environment
-   * variable rather than baking them into this config key.
-   *
-   * See `docs/internal/credential-leak-defenses-2026-05-11.md`.
-   *
-   * @example Append a custom hardening pair to the safe defaults
+   * @example
    * ```yaml
    * security:
    *   git_config_parameters:
    *     extras:
    *       - fetch.fsckObjects=true
-   *       - http.proxy=http://corp-proxy.example.com:3128
-   * ```
-   *
-   * @example Replace defaults entirely (escape hatch)
-   * ```yaml
-   * security:
-   *   git_config_parameters:
-   *     override:
-   *       - transfer.credentialsInUrl=warn  # less strict for a quirky env
    * ```
    */
   git_config_parameters?: {
-    /** Pairs appended to (and de-duped against) the safe defaults. */
     extras?: string[];
-    /** Pairs that REPLACE the safe defaults wholesale. Escape hatch. */
     override?: string[];
   };
 }

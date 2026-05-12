@@ -437,44 +437,15 @@ export function resolveSecurity(
 // ============================================================================
 // Git config hardening (security.git_config_parameters)
 // ============================================================================
-//
-// The daemon injects a `GIT_CONFIG_PARAMETERS` env var at startup that
-// propagates to every git invocation under Agor's control (daemon-direct via
-// createGit(), executor-spawned via the impersonation env allowlist, and any
-// tool that internally shells out to git). The defaults below close the
-// highest-leverage credential-leak and RCE surfaces git has accumulated.
-//
-// The actual encoding of pairs into the env var value (single-quote protocol)
-// lives in `@agor/core/git` as `buildGitConfigParameters` — that's a git-
-// protocol concern, this file is config policy.
-//
-// See docs/internal/credential-leak-defenses-2026-05-11.md.
+// Defaults + resolver semantics; the env-var encoding lives in @agor/core/git.
+// Design: docs/internal/credential-leak-defenses-2026-05-11.md.
 
 /**
- * Default `security.git_config_parameters` pairs. Conservative on purpose —
- * each entry is either nearly zero risk of breaking real workflows or already
- * the default on at least one widely-used git version.
- *
- * - `transfer.credentialsInUrl=die` — git 2.41+ — refuse fetch/push when
- *   `remote.<name>.url` carries embedded credentials. Per git's docs the
- *   check is scoped to configured `remote.<name>.url` only (NOT `pushurl`,
- *   NOT URLs on argv) — so this hardens vector 1 of the threat model;
- *   detection of the other vectors is the heartbeat scan's job.
- * - `protocol.file.allow=user` — refuse auto-fetched `file://` submodule
- *   URLs (CVE-2022-39253 family). Default in git 2.38+, so on modern git
- *   this is a no-op confirmation; on older git it actually does work.
- * - `protocol.ext.allow=never` — refuse `ext::` URL scheme (arbitrary
- *   command execution surface). Rarely used in real repos.
- * - `core.protectHFS=true` / `core.protectNTFS=true` — block cross-FS
- *   path-traversal attacks via crafted filenames. Already default on
- *   macOS/Windows; this just turns it on for Linux too.
- *
- * Notably NOT in the defaults: `fetch.fsckObjects=true` /
- * `transfer.fsckObjects=true`. Object integrity validation sounds great in
- * the abstract but in practice it refuses fetches from legacy repos with
- * technically-broken commits (bad author lines, weird historical metadata)
- * which causes the whole feature to get disabled. Operators who want fsck
- * can opt in via `extras`.
+ * Conservative defaults. `transfer.credentialsInUrl=die` (git 2.41+) is
+ * scoped to `remote.<name>.url` per git's docs — NOT `pushurl`, NOT argv.
+ * The protocol/HFS/NTFS pairs are either git defaults already (modern git
+ * or macOS/Windows) or near-zero risk on Linux. `fsckObjects` is deliberately
+ * out — too prone to refusing legacy repos; opt in via `extras` if needed.
  */
 const DEFAULT_GIT_CONFIG_PARAMETERS: readonly string[] = Object.freeze([
   'transfer.credentialsInUrl=die',
@@ -484,49 +455,20 @@ const DEFAULT_GIT_CONFIG_PARAMETERS: readonly string[] = Object.freeze([
   'core.protectNTFS=true',
 ]);
 
-/**
- * Returns the package's default `security.git_config_parameters` pairs as a
- * fresh mutable copy. Callers wanting to extend the defaults should use
- * `extras` in config (or this getter + spread, for tests).
- */
 export function getDefaultGitConfigParameters(): string[] {
   return [...DEFAULT_GIT_CONFIG_PARAMETERS];
 }
 
-/**
- * Extract the key portion (everything before the first `=`) from a
- * `key=value` pair. Used for de-duplicating pairs across defaults + extras
- * when the same key appears on both sides — the later entry wins (operator
- * intent), and we collapse them into a single entry rather than emitting
- * two pairs with the same key (which git would resolve last-write-wins
- * anyway, but at the cost of a noisier env var).
- */
 function gitConfigParameterKey(pair: string): string {
   const eq = pair.indexOf('=');
   return eq >= 0 ? pair.slice(0, eq) : pair;
 }
 
-/**
- * Resolve the effective `security.git_config_parameters` list from raw
- * config.
- *
- * Two-tier shape (mirrors CSP's `extras` + `override`):
- *
- *   - `undefined` (key omitted) → use the package defaults.
- *   - `{ extras: […] }` → defaults ++ extras, with extras winning on key
- *     collision (so an operator who writes `transfer.credentialsInUrl=warn`
- *     in `extras` downgrades the safe default's `die`).
- *   - `{ override: […] }` → REPLACE defaults verbatim. The escape hatch
- *     for operators who need full control. An empty array here means
- *     "disable all defaults" (debug only).
- *   - `{ extras: […], override: […] }` → throws. Pick one; mixing is
- *     ambiguous and almost always a config typo.
- *   - `{}` (both unset) → defaults.
- */
+/** Two-tier shape, mirrors `security.csp`. `extras` and `override` are mutually exclusive. */
 export interface AgorGitConfigParametersSettings {
-  /** Pairs appended to (and de-duped against) the safe defaults. */
+  /** Append to the safe defaults; same-key entries override the default's value. */
   extras?: string[];
-  /** Pairs that REPLACE the defaults wholesale. Escape hatch. */
+  /** Replace defaults wholesale. `[]` disables every default. */
   override?: string[];
 }
 
@@ -545,14 +487,11 @@ export function resolveGitConfigParameters(
     );
   }
 
-  if (hasOverride) {
-    return configured.override ?? [];
-  }
+  if (hasOverride) return configured.override ?? [];
 
   const extras = configured.extras ?? [];
   if (extras.length === 0) return getDefaultGitConfigParameters();
 
-  // Merge: extras win on key collision; same-key duplicates are collapsed.
   const extraKeys = new Set(extras.map(gitConfigParameterKey));
   return [
     ...DEFAULT_GIT_CONFIG_PARAMETERS.filter((p) => !extraKeys.has(gitConfigParameterKey(p))),
@@ -561,23 +500,9 @@ export function resolveGitConfigParameters(
 }
 
 /**
- * Heuristic check: does a `key=value` pair look like it embeds a credential?
- *
- * Operators who legitimately need a corporate proxy or static auth header
- * can put credential-bearing pairs in `security.git_config_parameters`
- * (e.g. `http.proxy=http://user:pass@corp:3128`, or
- * `http.<URL>.extraheader=Authorization: Basic …`). Those flow through the
- * daemon's startup log line, the sudo env, and the executor's inline env —
- * places we wouldn't normally write secrets to. This helper exists so the
- * daemon can avoid printing the *value* of such pairs in startup logs (and,
- * if we ever need it, so callers can route sensitive pairs through the
- * 0600-owned env-file path instead of inline env).
- *
- * The match is intentionally permissive — false positives only mean we log
- * `<redacted>` for a non-secret value, which is harmless. The patterns
- * cover the two shapes we expect in practice:
- *   - URLs with userinfo:  `://[^/@]+:[^/@]+@`
- *   - HTTP Authorization headers: `Authorization:` (case-insensitive)
+ * Heuristic for "looks credential-bearing". Used to mask values in the
+ * startup log when operators bake corp-proxy URLs / static auth headers
+ * into `extras`. Permissive — false positives only redact non-secrets.
  */
 export function gitConfigParameterLooksSecret(pair: string): boolean {
   if (/:\/\/[^/@\s]+:[^/@\s]+@/.test(pair)) return true;
@@ -585,22 +510,13 @@ export function gitConfigParameterLooksSecret(pair: string): boolean {
   return false;
 }
 
-/**
- * Build a redaction-safe rendering of the resolved `git_config_parameters`
- * for logging. Each pair is shown as `key=<value>` or `key=<redacted>` (when
- * the value looks credential-bearing per {@link gitConfigParameterLooksSecret}).
- *
- * Example:
- *   `'transfer.credentialsInUrl=die' 'http.proxy=<redacted>'`
- */
+/** Render for log: keys stay visible; secret-looking values become `<redacted>`. */
 export function renderGitConfigParametersForLog(pairs: readonly string[]): string {
   return pairs
     .filter((p) => p.trim().length > 0)
     .map((pair) => {
       if (!gitConfigParameterLooksSecret(pair)) return pair;
-      const eq = pair.indexOf('=');
-      const key = eq >= 0 ? pair.slice(0, eq) : pair;
-      return `${key}=<redacted>`;
+      return `${gitConfigParameterKey(pair)}=<redacted>`;
     })
     .join(' ');
 }

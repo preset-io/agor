@@ -226,32 +226,13 @@ export function buildGitConfigEnv(entries: [string, string][]): Record<string, s
 }
 
 /**
- * Build the `GIT_CONFIG_PARAMETERS` env-var value from a list of `key=value`
- * pairs.
+ * Encode pairs into the `GIT_CONFIG_PARAMETERS` env-var value (single-quote
+ * protocol — quotes are literal, not shell escaping, but the close-escape-
+ * reopen pattern matches).
  *
- * Git's protocol expects space-separated, single-quoted pairs (single quotes
- * are LITERAL characters in the env-var value — not shell escaping, but the
- * encoding is the same close-escape-reopen pattern, so we reuse
- * {@link escapeShellArg}). We don't expect single quotes in our values, but
- * the escape is cheap insurance against future config drift.
+ * Empty input returns `''` so callers can avoid setting the var at all.
  *
- * Returns the empty string for an empty / all-blank input — caller should
- * treat that as "don't set the env var at all" so the inherited value (if
- * any) is preserved.
- *
- * Default pairs + the `resolveGitConfigParameters` semantics live in
- * `@agor/core/config` (`security-resolver.ts`) — they're config policy, not
- * git protocol. This function stays here because the encoding *is* a git-
- * protocol concern.
- *
- * @see https://git-scm.com/docs/git-config#ENVIRONMENT (`GIT_CONFIG_PARAMETERS`)
- *
- * @example
- *   buildGitConfigParameters(['transfer.credentialsInUrl=die'])
- *   // => "'transfer.credentialsInUrl=die'"
- *
- *   buildGitConfigParameters(['a=1', 'b=2'])
- *   // => "'a=1' 'b=2'"
+ * @see https://git-scm.com/docs/git-config#ENVIRONMENT
  */
 export function buildGitConfigParameters(pairs: readonly string[]): string {
   return pairs
@@ -743,20 +724,9 @@ export async function getRemoteUrl(
 }
 
 /**
- * Result of {@link ensureGitRemoteUrl}.
- *
- *  - `changed: false, previousUrl: <url>` — URL already matched (single
- *    canonical value), no write done.
- *  - `changed: false, previousUrl: undefined` — remote does not exist, no
- *    write done (helper does NOT create missing remotes by design — creation
- *    is an explicit event that should not happen silently from a realignment
- *    path).
- *  - `changed: true, previousUrl: <previous-values, newline-joined>` — config
- *    was overwritten. When the previous state was multi-valued (which is
- *    legal in git — a key can have multiple values), every prior value is
- *    captured in `previousUrl` joined by newlines so callers logging the
- *    drift can still see what they replaced (without leaking the values in
- *    plain log lines — callers are expected to redact).
+ * `previousUrl` is newline-joined when the prior state was multi-valued (git
+ * config legally allows that). Callers logging this MUST redact — values can
+ * carry credentials.
  */
 export interface EnsureRemoteUrlResult {
   changed: boolean;
@@ -764,35 +734,13 @@ export interface EnsureRemoteUrlResult {
 }
 
 /**
- * Ensure a repo's `remote.<name>.url` matches the canonical value from the
- * database, silently realigning if the on-disk config has drifted.
+ * Realign `remote.<name>.url` to `expectedUrl`, leaving other remotes alone.
+ * No-op when already matching; deliberately does NOT create the remote when
+ * absent. Caller must trust `expectedUrl` (no validation here).
  *
- * Why: worktrees share `.git/config` with their base repo, so an agent or
- * external tool that overwrites `remote.origin.url` with a credential-bearing
- * variant taints every sibling worktree until detected. Calling this on every
- * daemon-issued git op against the repo keeps the canonical URL canonical
- * even when the `transfer.credentialsInUrl` guard alone isn't enough (e.g.
- * a token that an out-of-band tool extracts from the config text and reuses
- * outside git).
- *
- * Scoped to ONE named remote. User-added remotes (`upstream`, fork remotes,
- * etc.) are explicitly untouched — daemon ownership is per-remote, not
- * blanket. The DB row `repos.remote_url` is the source of truth for the
- * canonical `origin`; legitimate origin changes flow through
- * `agor_repos_update`, which updates the row AND calls this helper.
- *
- * Handles the multi-value case: git config legally allows `remote.X.url` to
- * carry multiple values (whoever wrote with `git config --add` instead of
- * `--replace-all`). `simple-git.getRemotes()` only surfaces the first value
- * and `git remote set-url` errors on multi-valued keys. So we use raw
- * `git config --get-all` to enumerate all values and `git config
- * --replace-all` to collapse them down to the canonical one in a single
- * write. This is the path Codex's review surfaced as a real correctness
- * issue with the v1 of this helper.
- *
- * Does NOT validate `expectedUrl`. Callers must supply a value already
- * trusted at the boundary (i.e. the value just read from the DB), not user
- * input at call time.
+ * Uses raw `git config --get-all` / `--replace-all` to handle the multi-value
+ * case (`--add` semantics) — `simple-git.getRemotes()` surfaces only one
+ * value, and `git remote set-url` errors when the key is multi-valued.
  */
 export async function ensureGitRemoteUrl(
   repoPath: string,
@@ -803,8 +751,7 @@ export async function ensureGitRemoteUrl(
   const { git } = createGit(repoPath, env);
   const configKey = `remote.${remoteName}.url`;
 
-  // Enumerate ALL values for the key. `--get-all` returns one per line and
-  // exits 1 when the key is unset (so absence ≡ "no remote of this name").
+  // `--get-all` exits 1 when the key is unset; absence ≡ "no remote".
   let currentUrls: string[];
   try {
     const raw = await git.raw(['config', '--get-all', configKey]);
@@ -813,31 +760,17 @@ export async function ensureGitRemoteUrl(
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
   } catch {
-    // Either the repo is corrupt, OR the key is unset (`git config --get-all`
-    // exits 1 in that case). Both collapse to "nothing to realign" — the
-    // helper deliberately does NOT create a missing remote. If the repo is
-    // genuinely corrupt, the caller's next git op will surface that more
-    // loudly than we could here.
     return { changed: false, previousUrl: undefined };
   }
 
   if (currentUrls.length === 0) {
     return { changed: false, previousUrl: undefined };
   }
-  // Already canonical: exactly one value, and it matches.
   if (currentUrls.length === 1 && currentUrls[0] === expectedUrl) {
     return { changed: false, previousUrl: currentUrls[0] };
   }
 
-  // Drift (multi-valued, or single mismatched value). `--replace-all` is the
-  // right git command: it removes every existing value for the key and
-  // writes a single canonical value, atomically (under `.git/config.lock`).
-  // `git remote set-url` would error out on the multi-valued case.
   await git.raw(['config', '--replace-all', configKey, expectedUrl]);
-
-  // Preserve every prior value in `previousUrl` for caller-side logging /
-  // forensics. Newline-joined keeps the multi-value shape explicit. Callers
-  // logging this MUST redact — these values can carry credentials.
   return { changed: true, previousUrl: currentUrls.join('\n') };
 }
 

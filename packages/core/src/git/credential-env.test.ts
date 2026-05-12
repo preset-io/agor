@@ -329,9 +329,6 @@ describe('buildGitConfigParameters', () => {
   });
 
   it('single-quotes a single pair', () => {
-    // git's parser treats single quotes as LITERAL characters in the env-var
-    // value (not shell escaping). The outer quotes here are TS string
-    // delimiters; the inner single quotes are git protocol.
     expect(buildGitConfigParameters(['transfer.credentialsInUrl=die'])).toBe(
       "'transfer.credentialsInUrl=die'"
     );
@@ -342,37 +339,15 @@ describe('buildGitConfigParameters', () => {
   });
 
   it('strips empty / whitespace-only entries', () => {
-    // Defensive: a config that accidentally yields a blank entry shouldn't
-    // produce a stray `''` in the env var, which git would error on.
     expect(buildGitConfigParameters(['a=1', '', '   ', 'b=2'])).toBe("'a=1' 'b=2'");
   });
 
-  it('escapes embedded single quotes per the standard shell pattern', () => {
-    // Defence-in-depth — not expected in practice, but the encoding must
-    // survive odd values (e.g. a future pair whose value carries punctuation).
-    // The encoding closes the quote, emits an escaped quote, re-opens.
+  it('escapes embedded single quotes via close-escape-reopen', () => {
     expect(buildGitConfigParameters([`http.proxy=it's-fine`])).toBe(`'http.proxy=it'\\''s-fine'`);
   });
 });
 
-// Note: `getDefaultGitConfigParameters` / `resolveGitConfigParameters` /
-// `gitConfigParameterLooksSecret` / `renderGitConfigParametersForLog` live
-// in `packages/core/src/config/security-resolver.ts` (they're config
-// semantics, not git protocol). Their tests live next to them in
-// `packages/core/src/config/security-resolver.test.ts`. This file keeps
-// tests for the protocol-encoding side (`buildGitConfigParameters`) and the
-// real-git-behavior side (env propagation, drift realignment).
-
 describe('GIT_CONFIG_PARAMETERS end-to-end', () => {
-  // E2E proof that GIT_CONFIG_PARAMETERS actually propagates to real git
-  // through the simple-git path (so `process.env` set at daemon startup
-  // reaches every spawned git invocation).
-  //
-  // Test the *contract* we own — "the env var parses; git can read the
-  // setting back" — independent of git's enforcement behavior, which is
-  // version-gated (`transfer.credentialsInUrl=die` is git 2.41+). A
-  // separately-gated test below covers the actual enforcement.
-
   function withTempRepoSync<T>(fn: (repoPath: string) => T): T {
     const repoPath = mkdtempSync(join(tmpdir(), 'agor-git-params-it-'));
     const init = spawnSync('git', ['init', '-q', repoPath], { stdio: 'pipe' });
@@ -387,11 +362,6 @@ describe('GIT_CONFIG_PARAMETERS end-to-end', () => {
     }
   }
 
-  /**
-   * Detect git's major.minor — used to gate version-dependent assertions.
-   * Returns `[major, minor]` or `[0, 0]` if git is missing or its output is
-   * unparseable (in which case the gated tests skip with a clear message).
-   */
   function gitVersion(): [number, number] {
     const out = spawnSync('git', ['--version'], { stdio: 'pipe' });
     const match = out.stdout.toString().match(/git version (\d+)\.(\d+)/);
@@ -403,11 +373,7 @@ describe('GIT_CONFIG_PARAMETERS end-to-end', () => {
     return m > major || (m === major && n >= minor);
   }
 
-  it('git reads the configured pair back via `git config --get` (env-var contract)', () => {
-    // This proves: (a) buildGitConfigParameters emits the protocol shape git
-    // expects, (b) the env var propagates to the spawned git process, (c) git
-    // parses it as effective config. We don't depend on git enforcing the
-    // setting — only that it parses and surfaces the value.
+  it('git reads the configured pair back via `git config --get`', () => {
     withTempRepoSync((repoPath) => {
       const result = spawnSync(
         'git',
@@ -427,8 +393,6 @@ describe('GIT_CONFIG_PARAMETERS end-to-end', () => {
   });
 
   it('git reads multiple pairs back when GIT_CONFIG_PARAMETERS carries several', () => {
-    // Cover the multi-pair branch of buildGitConfigParameters — proves the
-    // space-separated quoting protocol is correctly understood by git.
     withTempRepoSync((repoPath) => {
       const params = buildGitConfigParameters([
         'protocol.ext.allow=never',
@@ -448,10 +412,6 @@ describe('GIT_CONFIG_PARAMETERS end-to-end', () => {
   });
 
   it('without the env var, the setting is absent (rules out ambient /etc/gitconfig)', () => {
-    // Sanity check that the prior tests' positive signal is caused by our
-    // env var, not by a system-wide policy. If this test ever starts
-    // returning a non-empty value, an admin has applied a global policy and
-    // the previous tests no longer prove anything specific to our path.
     withTempRepoSync((repoPath) => {
       const result = spawnSync(
         'git',
@@ -471,24 +431,12 @@ describe('GIT_CONFIG_PARAMETERS end-to-end', () => {
     });
   });
 
+  // transfer.credentialsInUrl is scoped to configured `remote.<name>.url`
+  // (not pushurl, not argv) — so we configure the remote with creds, then
+  // run a transfer op against the remote name.
   it.skipIf(!gitAtLeast(2, 41))(
-    'transfer.credentialsInUrl=die makes git refuse a configured remote.<name>.url carrying creds (git 2.41+)',
+    'transfer.credentialsInUrl=die refuses a creds-bearing remote.<name>.url (git 2.41+)',
     () => {
-      // Headline enforcement test, gated on the git version that introduced
-      // the setting. On older git this test silently skips — the env-var
-      // contract is still verified above, so the implementation is
-      // exercised; we just can't observe the refusal locally.
-      //
-      // Critically: this setting only checks credentials in *configured*
-      // `remote.<name>.url` values, not credentials passed as URLs on argv.
-      // Per git's docs (Documentation/config/transfer.adoc):
-      //   "Note that this is currently limited to detecting credentials in
-      //    remote.<name>.url configuration; it won't detect credentials in
-      //    remote.<name>.pushurl configuration."
-      // So we configure the remote with creds, then run a transfer op that
-      // resolves through the named remote — that's the path the setting
-      // actually guards. An earlier version of this test used argv URLs and
-      // produced a DNS error rather than the credential refusal we wanted.
       withTempRepoSync((repoPath) => {
         const taintedUrl = 'https://USER:tok@example.invalid/foo.git';
         const addRemote = spawnSync(
@@ -508,9 +456,6 @@ describe('GIT_CONFIG_PARAMETERS end-to-end', () => {
           },
         });
         expect(result.status).not.toBe(0);
-        // git's diagnostic when this fires: "fatal: refusing to work with
-        // credential in URL". Match a loose superset in case wording shifts
-        // across versions.
         expect(result.stderr.toString()).toMatch(/credential|refus/i);
       });
     }
@@ -518,10 +463,6 @@ describe('GIT_CONFIG_PARAMETERS end-to-end', () => {
 });
 
 describe('ensureGitRemoteUrl', () => {
-  // Realignment helper: keeps `remote.<name>.url` matching the canonical
-  // value from the DB even when an external tool has rewritten it (e.g.
-  // an agent that ran `git remote set-url origin https://TOK@…`).
-
   function withInitedRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
     const repoPath = mkdtempSync(join(tmpdir(), 'agor-ensure-url-it-'));
     const init = spawnSync('git', ['init', '-q', repoPath], { stdio: 'pipe' });
@@ -593,18 +534,9 @@ describe('ensureGitRemoteUrl', () => {
     });
   });
 
-  it('handles a multi-valued remote.origin.url (regression for the Codex-found bug)', async () => {
-    // Git config legally allows the same key to carry multiple values. A
-    // tool using `git config --add remote.origin.url <tainted>` after the
-    // canonical URL was already set produces this shape:
-    //   [remote "origin"]
-    //     url = https://github.com/foo/bar.git
-    //     url = https://USER:tok@evil.example/foo/bar.git
-    // The original `ensureGitRemoteUrl` used simple-git's `getRemotes()`,
-    // which surfaced only ONE of the two values, and then attempted
-    // `git remote set-url`, which fails with "multiple values" on this
-    // shape. The fix uses raw `git config --get-all` / `--replace-all`
-    // so the helper handles arbitrary cardinality correctly.
+  it('collapses a multi-valued remote.origin.url to one canonical value', async () => {
+    // git config --add semantics: same key, multiple values. Both
+    // simple-git getRemotes() and `git remote set-url` mishandle this.
     await withInitedRepo(async (repoPath) => {
       const canonicalUrl = 'https://github.com/foo/bar.git';
       const taintedUrl =
@@ -612,29 +544,14 @@ describe('ensureGitRemoteUrl', () => {
       spawnSync('git', ['-C', repoPath, 'remote', 'add', 'origin', canonicalUrl], {
         stdio: 'pipe',
       });
-      // The taint: --add appends a second value, doesn't replace.
-      const addTaint = spawnSync(
-        'git',
-        ['-C', repoPath, 'config', '--add', 'remote.origin.url', taintedUrl],
-        { stdio: 'pipe' }
-      );
-      expect(addTaint.status).toBe(0);
-
-      // Sanity: the shape is genuinely multi-valued before realignment.
-      const before = spawnSync(
-        'git',
-        ['-C', repoPath, 'config', '--get-all', 'remote.origin.url'],
-        { stdio: 'pipe' }
-      );
-      expect(before.stdout.toString().trim().split('\n').length).toBe(2);
+      spawnSync('git', ['-C', repoPath, 'config', '--add', 'remote.origin.url', taintedUrl], {
+        stdio: 'pipe',
+      });
 
       const result = await ensureGitRemoteUrl(repoPath, 'origin', canonicalUrl);
       expect(result.changed).toBe(true);
-      // previousUrl carries BOTH prior values, newline-joined, so a caller
-      // logging drift can see what was overwritten.
       expect(result.previousUrl?.split('\n').sort()).toEqual([canonicalUrl, taintedUrl].sort());
 
-      // After realignment: exactly one value, and it's the canonical one.
       const after = spawnSync('git', ['-C', repoPath, 'config', '--get-all', 'remote.origin.url'], {
         stdio: 'pipe',
       });

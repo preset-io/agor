@@ -282,13 +282,8 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
           OPENAI_BASE_URL: env.OPENAI_BASE_URL,
           GEMINI_API_KEY: env.GEMINI_API_KEY,
           GOOGLE_API_KEY: env.GOOGLE_API_KEY,
-          // Forward the daemon-resolved git hardening pairs across the sudo
-          // boundary. Without this, sudo's default env reset drops the var
-          // and the agent's git invocations lose the credential-in-URL guard
-          // and the protocol/fsck/HFS defenses. The sudoers `env_keep` entry
-          // (docker/sudoers/agor-daemon.sudoers) is the belt for sudo paths
-          // that don't go through this allowlist — this entry is the
-          // suspenders for the spawn-executor path.
+          // Forward git hardening pairs across the sudo boundary (sudoers
+          // env_keep is the belt; this is the suspenders for this path).
           GIT_CONFIG_PARAMETERS: env.GIT_CONFIG_PARAMETERS,
         }).filter(([_, v]) => v !== undefined)
       )

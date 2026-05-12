@@ -353,11 +353,9 @@ describe('getDefaultGitConfigParameters', () => {
     expect(defaults).toContain('core.protectNTFS=true');
   });
 
-  it('does NOT include fsckObjects (would break legacy repos with technically-broken commits)', () => {
-    // Discussed and explicitly rejected for defaults — operators who want
-    // object integrity validation can opt in via `extras`. Pinning this in
-    // a test so a future "let's tighten the defaults" pass has to make a
-    // conscious decision.
+  // fsckObjects deliberately not defaulted — pinned so a future "tighten the
+  // defaults" pass has to make a conscious decision.
+  it('does NOT include fsckObjects', () => {
     const defaults = getDefaultGitConfigParameters();
     expect(defaults).not.toContain('fetch.fsckObjects=true');
     expect(defaults).not.toContain('transfer.fsckObjects=true');
@@ -383,29 +381,20 @@ describe('resolveGitConfigParameters', () => {
     const out = resolveGitConfigParameters({
       extras: ['fetch.fsckObjects=true', 'http.proxy=http://corp:3128'],
     });
-    // Defaults still present.
     expect(out).toContain('transfer.credentialsInUrl=die');
     expect(out).toContain('protocol.file.allow=user');
-    // Extras appended.
     expect(out).toContain('fetch.fsckObjects=true');
     expect(out).toContain('http.proxy=http://corp:3128');
   });
 
   it('extras: same key as a default overrides the default value (extras win)', () => {
-    // An operator who explicitly weakens transfer.credentialsInUrl knows
-    // what they're doing — extras with a colliding key REPLACES that one
-    // pair, doesn't emit both.
     const out = resolveGitConfigParameters({ extras: ['transfer.credentialsInUrl=warn'] });
     expect(out).toContain('transfer.credentialsInUrl=warn');
     expect(out).not.toContain('transfer.credentialsInUrl=die');
-    // Other defaults are untouched.
     expect(out).toContain('protocol.file.allow=user');
   });
 
   it('extras: emits at most one entry per key (no spurious duplicates)', () => {
-    // After merging, each `key=` appears at most once. Otherwise git would
-    // resolve them last-write-wins anyway, but emitting both is needless
-    // noise in the env var.
     const out = resolveGitConfigParameters({ extras: ['transfer.credentialsInUrl=warn'] });
     const credKeyEntries = out.filter((p) => p.startsWith('transfer.credentialsInUrl='));
     expect(credKeyEntries).toEqual(['transfer.credentialsInUrl=warn']);
@@ -429,7 +418,7 @@ describe('resolveGitConfigParameters', () => {
 });
 
 describe('gitConfigParameterLooksSecret', () => {
-  it('detects URLs with userinfo (proxy with embedded creds)', () => {
+  it('detects URLs with userinfo', () => {
     expect(gitConfigParameterLooksSecret('http.proxy=http://user:pass@corp.example:3128')).toBe(
       true
     );
@@ -438,17 +427,16 @@ describe('gitConfigParameterLooksSecret', () => {
     );
   });
 
-  it('detects HTTP Authorization headers (extraheader-style values)', () => {
+  it('detects HTTP Authorization headers, case-insensitive', () => {
     expect(
       gitConfigParameterLooksSecret('http.https://github.com/.extraheader=Authorization: Basic abc')
     ).toBe(true);
-    // Case-insensitive — git accepts lowercase too.
     expect(gitConfigParameterLooksSecret('http.x.extraheader=authorization: bearer xyz')).toBe(
       true
     );
   });
 
-  it('does NOT flag the defaults (none of which carry secrets)', () => {
+  it('does NOT flag the defaults', () => {
     for (const pair of getDefaultGitConfigParameters()) {
       expect(gitConfigParameterLooksSecret(pair)).toBe(false);
     }
@@ -469,21 +457,20 @@ describe('renderGitConfigParametersForLog', () => {
     );
   });
 
-  it('masks secret-looking values, keeping keys visible (operators verify policy)', () => {
+  it('masks secret-looking values, keeping keys visible', () => {
     const out = renderGitConfigParametersForLog([
       'transfer.credentialsInUrl=die',
       'http.proxy=http://user:pass@corp:3128',
       'http.https://x/.extraheader=Authorization: Basic abc',
     ]);
-    expect(out).toContain('transfer.credentialsInUrl=die'); // safe — passes through
-    expect(out).toContain('http.proxy=<redacted>'); // key visible, value scrubbed
+    expect(out).toContain('transfer.credentialsInUrl=die');
+    expect(out).toContain('http.proxy=<redacted>');
     expect(out).toContain('http.https://x/.extraheader=<redacted>');
-    // Defence-in-depth: nothing matching the original secret material survives.
     expect(out).not.toContain('user:pass');
     expect(out).not.toContain('Basic abc');
   });
 
-  it('skips empty / whitespace entries (matches buildGitConfigParameters behaviour)', () => {
+  it('skips empty / whitespace entries', () => {
     expect(renderGitConfigParametersForLog(['a=1', '', '   ', 'b=2'])).toBe('a=1 b=2');
   });
 });
