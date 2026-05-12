@@ -473,25 +473,68 @@ function gitConfigParameterKey(pair: string): string {
   return eq >= 0 ? trimmed.slice(0, eq) : trimmed;
 }
 
+/**
+ * Runtime validation for an `extras` or `override` list. YAML can produce
+ * shapes the TS type doesn't catch (a bare string instead of an array, a
+ * mix of strings and numbers, etc.), and silent acceptance would either
+ * corrupt the Map merge (strings iterate as characters) or crash later in
+ * the protocol encoder. Throw at config-load with a clear path.
+ */
+function validateGitConfigParameterList(value: unknown, path: string): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error(`${path} must be an array of strings`);
+  }
+  for (const item of value) {
+    if (typeof item !== 'string') {
+      throw new Error(`${path} must be an array of strings; got ${typeof item}`);
+    }
+  }
+  return value;
+}
+
 export function resolveGitConfigParameters(
   configured: AgorGitConfigParametersSettings | undefined
 ): readonly string[] {
-  if (configured === undefined) return getDefaultGitConfigParameters();
+  if (configured === undefined || configured === null) {
+    return getDefaultGitConfigParameters();
+  }
 
-  const hasExtras = configured.extras !== undefined;
-  const hasOverride = configured.override !== undefined;
+  // Flat-array shape was the v1 of this key on the design branch (now
+  // superseded by { extras, override }). Catch operators who copied it from
+  // earlier docs / forks and migrate them with a clear hint.
+  if (Array.isArray(configured)) {
+    throw new Error(
+      'security.git_config_parameters: takes { extras: [...] } or { override: [...] }, ' +
+        'not a flat array. Move your list under `extras` (to append to the safe defaults) ' +
+        'or `override` (to replace them).'
+    );
+  }
 
-  if (hasExtras && hasOverride) {
+  if (typeof configured !== 'object') {
+    throw new Error(
+      'security.git_config_parameters: must be an object with optional `extras` / `override` arrays'
+    );
+  }
+
+  const extras = validateGitConfigParameterList(
+    (configured as { extras?: unknown }).extras,
+    'security.git_config_parameters.extras'
+  );
+  const override = validateGitConfigParameterList(
+    (configured as { override?: unknown }).override,
+    'security.git_config_parameters.override'
+  );
+
+  if (extras !== undefined && override !== undefined) {
     throw new Error(
       'security.git_config_parameters: cannot set both `extras` and `override`. ' +
         'Use `extras` to append to the safe defaults, or `override` to replace them entirely.'
     );
   }
 
-  if (hasOverride) return configured.override ?? [];
-
-  const extras = configured.extras ?? [];
-  if (extras.length === 0) return getDefaultGitConfigParameters();
+  if (override !== undefined) return override;
+  if (extras === undefined || extras.length === 0) return getDefaultGitConfigParameters();
 
   // Map-based merge handles defaults+extras AND duplicate keys within extras
   // (last write wins) AND whitespace normalization in one pass.

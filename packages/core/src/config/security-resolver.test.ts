@@ -436,6 +436,54 @@ describe('resolveGitConfigParameters', () => {
       /cannot set both/i
     );
   });
+
+  // Runtime validation — YAML can produce shapes the TS type doesn't catch.
+  describe('runtime validation', () => {
+    it('treats null like unset (returns defaults)', () => {
+      expect(resolveGitConfigParameters(null as never)).toEqual(getDefaultGitConfigParameters());
+    });
+
+    it('throws a migration hint when given a flat array (the v1 shape on this branch)', () => {
+      expect(() => resolveGitConfigParameters(['a=1', 'b=2'] as never)).toThrow(
+        /not a flat array.*extras.*override/is
+      );
+    });
+
+    it('throws when configured value is a primitive (string, number)', () => {
+      expect(() => resolveGitConfigParameters('a=1' as never)).toThrow(/must be an object/i);
+      expect(() => resolveGitConfigParameters(42 as never)).toThrow(/must be an object/i);
+    });
+
+    it('throws when extras is a bare string instead of an array', () => {
+      expect(() =>
+        resolveGitConfigParameters({ extras: 'fetch.fsckObjects=true' as never })
+      ).toThrow(/extras must be an array of strings/);
+    });
+
+    it('throws when extras contains a non-string item', () => {
+      expect(() => resolveGitConfigParameters({ extras: ['a=1', 42 as never] })).toThrow(
+        /extras must be an array of strings.*number/
+      );
+    });
+
+    it('throws when override is a bare string instead of an array', () => {
+      expect(() => resolveGitConfigParameters({ override: 'a=1' as never })).toThrow(
+        /override must be an array of strings/
+      );
+    });
+
+    it('throws when override contains a non-string item', () => {
+      expect(() => resolveGitConfigParameters({ override: [{} as never] })).toThrow(
+        /override must be an array of strings.*object/
+      );
+    });
+
+    it('treats extras: null and override: null as unset (returns defaults)', () => {
+      expect(
+        resolveGitConfigParameters({ extras: null as never, override: null as never })
+      ).toEqual(getDefaultGitConfigParameters());
+    });
+  });
 });
 
 describe('redactUrlUserinfo', () => {
