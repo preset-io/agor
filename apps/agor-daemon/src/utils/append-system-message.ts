@@ -6,9 +6,8 @@
  * connected clients). Used by startup reconciliation, spawn-failure handling,
  * env-var validation, and btw result injection.
  *
- * Returns the index assigned to the new message. Callers that need to update a
- * task's message_range.end_index (e.g. startup.ts) can use the return value
- * directly.
+ * Returns the created Message. Callers that need to update a task's
+ * message_range.end_index (e.g. startup.ts) can read it from message.index.
  */
 
 import type { Database } from '@agor/core/db';

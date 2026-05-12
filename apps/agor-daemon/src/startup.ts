@@ -216,12 +216,13 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
         // Resolve the task to attach the notice to
         let attachTask = lastOrphanedTaskBySession.get(sessionId);
         if (!attachTask) {
-          // TasksService.find() with a scalar session_id uses a fast path that
-          // ignores $sort, returning tasks ascending by created_at — take the last.
-          const taskResult = (await tasksService.find({
-            query: { session_id: sessionId },
-          })) as unknown as Paginated<Task>;
-          attachTask = taskResult.data.at(-1);
+          // Sessions maintain an ordered task-ID list; the last entry is the most
+          // recent task without relying on TasksService.find() sort behavior.
+          const session = await sessionsService.get(sessionId as Id);
+          const latestTaskId = session.tasks?.at(-1);
+          if (latestTaskId) {
+            attachTask = await tasksService.get(latestTaskId);
+          }
         }
         if (!attachTask) {
           // No task exists — message would be invisible (transcript is task-scoped).
@@ -264,12 +265,11 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
 
         // Extend the task's message_range.end_index so the notice is counted
         // and loaded within the task's window in the UI.
+        // Pass only end_index: TaskRepository.update() deep-merges with the live
+        // DB row, preserving fields written by the STOPPED patch (e.g. end_timestamp).
         if (attachTask.message_range) {
           await tasksService.patch(attachTask.task_id, {
-            message_range: {
-              ...attachTask.message_range,
-              end_index: injectedMessage.index,
-            },
+            message_range: { end_index: injectedMessage.index } as Task['message_range'],
           });
         }
 
