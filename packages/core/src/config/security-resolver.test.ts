@@ -17,6 +17,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   getDefaultGitConfigParameters,
   gitConfigParameterLooksSecret,
+  redactUrlUserinfo,
   renderGitConfigParametersForLog,
   resolveGitConfigParameters,
   resolveSecurity,
@@ -394,10 +395,30 @@ describe('resolveGitConfigParameters', () => {
     expect(out).toContain('protocol.file.allow=user');
   });
 
-  it('extras: emits at most one entry per key (no spurious duplicates)', () => {
+  it('extras: emits at most one entry per key (default + extras collision)', () => {
     const out = resolveGitConfigParameters({ extras: ['transfer.credentialsInUrl=warn'] });
     const credKeyEntries = out.filter((p) => p.startsWith('transfer.credentialsInUrl='));
     expect(credKeyEntries).toEqual(['transfer.credentialsInUrl=warn']);
+  });
+
+  it('extras: same-key duplicates within extras collapse to the last one (last write wins)', () => {
+    const out = resolveGitConfigParameters({
+      extras: ['transfer.credentialsInUrl=warn', 'transfer.credentialsInUrl=die'],
+    });
+    const credKeyEntries = out.filter((p) => p.startsWith('transfer.credentialsInUrl='));
+    expect(credKeyEntries).toEqual(['transfer.credentialsInUrl=die']);
+  });
+
+  it('extras: whitespace around pairs is trimmed before keying (no spurious split)', () => {
+    const out = resolveGitConfigParameters({ extras: ['  transfer.credentialsInUrl=warn  '] });
+    expect(out).toContain('transfer.credentialsInUrl=warn');
+    expect(out).not.toContain('transfer.credentialsInUrl=die'); // default got replaced
+  });
+
+  it('extras: blank / whitespace-only entries are dropped', () => {
+    const out = resolveGitConfigParameters({ extras: ['', '   ', 'http.proxy=http://corp:3128'] });
+    expect(out).toContain('http.proxy=http://corp:3128');
+    expect(out).not.toContain('');
   });
 
   it('override: REPLACES defaults verbatim', () => {
@@ -417,16 +438,37 @@ describe('resolveGitConfigParameters', () => {
   });
 });
 
-describe('gitConfigParameterLooksSecret', () => {
-  it('detects URLs with userinfo', () => {
-    expect(gitConfigParameterLooksSecret('http.proxy=http://user:pass@corp.example:3128')).toBe(
-      true
-    );
-    expect(gitConfigParameterLooksSecret('http.proxy=https://USER:tok@proxy.example:443')).toBe(
-      true
+describe('redactUrlUserinfo', () => {
+  it('replaces user:pass in https URLs', () => {
+    expect(redactUrlUserinfo('http.proxy=https://USER:TOK@corp:3128')).toBe(
+      'http.proxy=https://<redacted>@corp:3128'
     );
   });
 
+  it('replaces user-only userinfo (no password)', () => {
+    expect(redactUrlUserinfo('https://USER@host/repo.git')).toBe(
+      'https://<redacted>@host/repo.git'
+    );
+  });
+
+  it('redacts userinfo embedded in a config KEY (the Codex-found case)', () => {
+    expect(
+      redactUrlUserinfo('url.https://USER:TOK@github.com/.insteadOf=https://github.com/')
+    ).toBe('url.https://<redacted>@github.com/.insteadOf=https://github.com/');
+  });
+
+  it('leaves SCP-form URLs alone (no `://` anchor)', () => {
+    expect(redactUrlUserinfo('git@github.com:foo/bar.git')).toBe('git@github.com:foo/bar.git');
+  });
+
+  it('passes plain URLs through unchanged', () => {
+    expect(redactUrlUserinfo('https://corp-proxy.example:3128')).toBe(
+      'https://corp-proxy.example:3128'
+    );
+  });
+});
+
+describe('gitConfigParameterLooksSecret', () => {
   it('detects HTTP Authorization headers, case-insensitive', () => {
     expect(
       gitConfigParameterLooksSecret('http.https://github.com/.extraheader=Authorization: Basic abc')
@@ -441,13 +483,6 @@ describe('gitConfigParameterLooksSecret', () => {
       expect(gitConfigParameterLooksSecret(pair)).toBe(false);
     }
   });
-
-  it('does NOT flag plain URLs without userinfo', () => {
-    expect(gitConfigParameterLooksSecret('http.proxy=https://corp-proxy.example:3128')).toBe(false);
-    expect(gitConfigParameterLooksSecret('url.https://github.com/.insteadOf=git@github.com:')).toBe(
-      false
-    );
-  });
 });
 
 describe('renderGitConfigParametersForLog', () => {
@@ -457,16 +492,25 @@ describe('renderGitConfigParametersForLog', () => {
     );
   });
 
-  it('masks secret-looking values, keeping keys visible', () => {
+  it('scrubs URL userinfo in values', () => {
+    const out = renderGitConfigParametersForLog(['http.proxy=http://user:pass@corp:3128']);
+    expect(out).toBe('http.proxy=http://<redacted>@corp:3128');
+    expect(out).not.toContain('user:pass');
+  });
+
+  it('scrubs URL userinfo in KEYS (creds-in-key regression)', () => {
     const out = renderGitConfigParametersForLog([
-      'transfer.credentialsInUrl=die',
-      'http.proxy=http://user:pass@corp:3128',
+      'url.https://USER:TOK@github.com/.insteadOf=https://github.com/',
+    ]);
+    expect(out).toBe('url.https://<redacted>@github.com/.insteadOf=https://github.com/');
+    expect(out).not.toContain('USER:TOK');
+  });
+
+  it('masks values still matching Authorization after URL scrub', () => {
+    const out = renderGitConfigParametersForLog([
       'http.https://x/.extraheader=Authorization: Basic abc',
     ]);
-    expect(out).toContain('transfer.credentialsInUrl=die');
-    expect(out).toContain('http.proxy=<redacted>');
     expect(out).toContain('http.https://x/.extraheader=<redacted>');
-    expect(out).not.toContain('user:pass');
     expect(out).not.toContain('Basic abc');
   });
 

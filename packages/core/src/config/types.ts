@@ -579,6 +579,20 @@ export interface AgorCorsSettings {
 }
 
 /**
+ * `security.git_config_parameters` shape. Mirrors `security.csp`: `extras`
+ * appends to safe defaults, `override` replaces them. Mutually exclusive.
+ *
+ * Defaults + rationale: `docs/internal/credential-leak-defenses-2026-05-11.md`.
+ * Don't bake credential-bearing values (e.g. `http.proxy=http://user:pass@…`)
+ * here — the daemon redacts them from logs but the env var itself isn't
+ * routed through the encrypted env-file path.
+ */
+export interface AgorGitConfigParametersSettings {
+  extras?: string[];
+  override?: string[];
+}
+
+/**
  * Top-level security config block.
  */
 export interface AgorSecuritySettings {
@@ -588,29 +602,8 @@ export interface AgorSecuritySettings {
   /** CORS configuration (origins, credentials, methods, headers, max-age). */
   cors?: AgorCorsSettings;
 
-  /**
-   * Extra git config injected into every daemon- and agent-issued git
-   * invocation via `GIT_CONFIG_PARAMETERS`. Two-tier shape (mirrors
-   * `security.csp`): `extras` appends to the safe defaults, `override`
-   * replaces them. Setting both throws. See
-   * `docs/internal/credential-leak-defenses-2026-05-11.md` for the
-   * default list, rationale, and the secrets caveat (don't bake
-   * credential-bearing values like `http.proxy=http://user:pass@…` here —
-   * the daemon redacts them from logs but the env var itself isn't
-   * routed through the encrypted env-file path).
-   *
-   * @example
-   * ```yaml
-   * security:
-   *   git_config_parameters:
-   *     extras:
-   *       - fetch.fsckObjects=true
-   * ```
-   */
-  git_config_parameters?: {
-    extras?: string[];
-    override?: string[];
-  };
+  /** Git config hardening — see {@link AgorGitConfigParametersSettings}. */
+  git_config_parameters?: AgorGitConfigParametersSettings;
 }
 
 /**

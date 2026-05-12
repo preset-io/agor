@@ -14,7 +14,15 @@
  * rather than emitting a subtly-broken header and failing at request time.
  */
 
-import type { AgorConfig, AgorCorsMode, AgorCspDirectives, AgorSecuritySettings } from './types';
+import type {
+  AgorConfig,
+  AgorCorsMode,
+  AgorCspDirectives,
+  AgorGitConfigParametersSettings,
+  AgorSecuritySettings,
+} from './types';
+
+export type { AgorGitConfigParametersSettings } from './types';
 
 /**
  * Known CSP directive names (lowercase, hyphenated). Used to validate config
@@ -460,16 +468,9 @@ export function getDefaultGitConfigParameters(): string[] {
 }
 
 function gitConfigParameterKey(pair: string): string {
-  const eq = pair.indexOf('=');
-  return eq >= 0 ? pair.slice(0, eq) : pair;
-}
-
-/** Two-tier shape, mirrors `security.csp`. `extras` and `override` are mutually exclusive. */
-export interface AgorGitConfigParametersSettings {
-  /** Append to the safe defaults; same-key entries override the default's value. */
-  extras?: string[];
-  /** Replace defaults wholesale. `[]` disables every default. */
-  override?: string[];
+  const trimmed = pair.trim();
+  const eq = trimmed.indexOf('=');
+  return eq >= 0 ? trimmed.slice(0, eq) : trimmed;
 }
 
 export function resolveGitConfigParameters(
@@ -492,31 +493,44 @@ export function resolveGitConfigParameters(
   const extras = configured.extras ?? [];
   if (extras.length === 0) return getDefaultGitConfigParameters();
 
-  const extraKeys = new Set(extras.map(gitConfigParameterKey));
-  return [
-    ...DEFAULT_GIT_CONFIG_PARAMETERS.filter((p) => !extraKeys.has(gitConfigParameterKey(p))),
-    ...extras,
-  ];
+  // Map-based merge handles defaults+extras AND duplicate keys within extras
+  // (last write wins) AND whitespace normalization in one pass.
+  const byKey = new Map<string, string>();
+  for (const raw of [...DEFAULT_GIT_CONFIG_PARAMETERS, ...extras]) {
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) continue;
+    byKey.set(gitConfigParameterKey(trimmed), trimmed);
+  }
+  return [...byKey.values()];
 }
 
 /**
- * Heuristic for "looks credential-bearing". Used to mask values in the
- * startup log when operators bake corp-proxy URLs / static auth headers
- * into `extras`. Permissive — false positives only redact non-secrets.
+ * Replace userinfo in any URL with `<redacted>`. Catches creds embedded in
+ * either the value (e.g. `http.proxy=http://USER:TOK@host/`) or the config
+ * KEY (git config keys can carry URLs as subsections, e.g.
+ * `url."https://USER:TOK@host/".insteadOf=…`). Anchored to `://` so SCP-form
+ * `git@host:path` URLs aren't false-positively matched.
  */
-export function gitConfigParameterLooksSecret(pair: string): boolean {
-  if (/:\/\/[^/@\s]+:[^/@\s]+@/.test(pair)) return true;
-  if (/authorization:/i.test(pair)) return true;
-  return false;
+export function redactUrlUserinfo(s: string): string {
+  return s.replace(/:\/\/[^/@\s]+@/g, '://<redacted>@');
 }
 
-/** Render for log: keys stay visible; secret-looking values become `<redacted>`. */
+/** True when a pair still looks credential-bearing AFTER URL-userinfo redaction. */
+export function gitConfigParameterLooksSecret(pair: string): boolean {
+  return /authorization:/i.test(pair);
+}
+
+/**
+ * Render for log: scrub URL userinfo from key+value, then mask the value if
+ * the residue still matches an auth-header pattern.
+ */
 export function renderGitConfigParametersForLog(pairs: readonly string[]): string {
   return pairs
     .filter((p) => p.trim().length > 0)
     .map((pair) => {
-      if (!gitConfigParameterLooksSecret(pair)) return pair;
-      return `${gitConfigParameterKey(pair)}=<redacted>`;
+      const scrubbed = redactUrlUserinfo(pair);
+      if (!gitConfigParameterLooksSecret(scrubbed)) return scrubbed;
+      return `${gitConfigParameterKey(scrubbed)}=<redacted>`;
     })
     .join(' ');
 }

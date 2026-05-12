@@ -212,10 +212,10 @@ Three layers; Layer A ships here.
 | A.3 | Forward `GIT_CONFIG_PARAMETERS` through the `sudo -u` boundary in the spawn-executor allowlist | `apps/agor-daemon/src/utils/spawn-executor.ts` `essentialEnv` block | Covers agent-issued git too |
 | A.4 | `env_keep += GIT_CONFIG_PARAMETERS` for sudo paths that don't go through the spawn-executor allowlist (defence in depth) | `docker/sudoers/agor-daemon.sudoers` | Future sudo callsites can't accidentally drop the hardening |
 | A.5 | `ensureGitRemoteUrl()` primitive + `ensureRepoOriginAlignedById` / `ensureRepoOriginAlignedForRepo` daemon wrappers + 2 wiring sites | `packages/core/src/git/index.ts` (primitive, multi-value-aware), `apps/agor-daemon/src/utils/realign-repo-origin.ts` (wrappers + `realignRepoOriginAfterPatchHook` factory), `apps/agor-daemon/src/services/tasks.ts` (task-terminal-transition site), `apps/agor-daemon/src/register-hooks.ts` (`repos.after.patch` site) | 1 (self-heal), 8 (when `insteadOf` is on `origin`) |
-| A.6 | Tests | `packages/core/src/git/credential-env.test.ts` (42 tests, one git-version-gated) | — |
+| A.6 | Tests | `packages/core/src/git/credential-env.test.ts` (protocol encoder + real-git E2E, one git-version-gated), `packages/core/src/config/security-resolver.test.ts` (defaults, extras/override semantics, redaction), `apps/agor-daemon/src/utils/realign-repo-origin.test.ts` (wrapper + hook filter) | — |
 
-**Closes (via Layer A defaults at transfer time):** 1, 2, 3, 4, 8.
-**Requires git 2.41+ for the `transfer.credentialsInUrl=die` enforcement.** On older git the env var is silently ignored (no harm, no help) and the other pairs (`protocol.*`, `fsckObjects`, `core.protectHFS/NTFS`) still apply. The daemon logs the resolved `GIT_CONFIG_PARAMETERS` at startup so operators can confirm what's active.
+**Closes via Layer A defaults:** vector 1 (`remote.<name>.url` with creds) at transfer time + self-heal on drift via realignment. Vectors 2/3/8 are detected (not transfer-blocked) by the heartbeat follow-up; per-uid (Layer C) covers the rest.
+**Requires git 2.41+ for the `transfer.credentialsInUrl=die` enforcement.** On older git the env var is silently ignored (no harm, no help) and the other pairs (`protocol.*`, `core.protectHFS/NTFS`) still apply. The daemon logs the resolved `GIT_CONFIG_PARAMETERS` at startup (with URL userinfo redacted) so operators can confirm what's active.
 
 ### Layer B (proposed, NOT shipping) — Filesystem ACLs on `.git/config`
 

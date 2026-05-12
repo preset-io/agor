@@ -149,8 +149,10 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       `🔒 GIT_CONFIG_PARAMETERS hardened: ${renderGitConfigParametersForLog(resolvedGitParams)}`
     );
   } else {
-    // override: [] in config — leave any inherited env var as-is.
-    console.log('🔒 GIT_CONFIG_PARAMETERS disabled by config (override: [])');
+    // override: [] in config — Agor defaults disabled; any inherited env var preserved.
+    console.log(
+      '🔒 Agor git hardening disabled (override: []); inherited GIT_CONFIG_PARAMETERS preserved'
+    );
   }
 
   // Surface a clear migration note if the config still carries leftover

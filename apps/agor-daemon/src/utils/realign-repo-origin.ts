@@ -1,3 +1,4 @@
+import { redactUrlUserinfo } from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
 import { ensureGitRemoteUrl } from '@agor/core/git';
 import type { HookContext, Repo, RepoID } from '@agor/core/types';
@@ -29,9 +30,11 @@ export async function ensureRepoOriginAlignedForRepo(repo: Repo): Promise<void> 
 
   const result = await ensureGitRemoteUrl(repo.local_path, 'origin', repo.remote_url);
   if (result.changed) {
+    // Defense in depth — current validation rejects userinfo in remote_url
+    // on write, but historical DB rows may predate that.
     console.warn(
       `[SECURITY] Realigned remote.origin.url for repo ${repo.repo_id} (slug=${repo.slug}); ` +
-        `canonical URL now: ${repo.remote_url}`
+        `canonical URL now: ${redactUrlUserinfo(repo.remote_url)}`
     );
   }
 }

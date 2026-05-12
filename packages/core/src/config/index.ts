@@ -29,6 +29,7 @@ export type {
 export {
   getDefaultGitConfigParameters,
   gitConfigParameterLooksSecret,
+  redactUrlUserinfo,
   renderGitConfigParametersForLog,
   resolveGitConfigParameters,
   resolveSecurity,
