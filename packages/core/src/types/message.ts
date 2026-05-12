@@ -253,6 +253,16 @@ export interface Message {
      */
     source?: MessageSource;
 
+    /**
+     * Subtype for system messages that need distinct UI treatment.
+     * - 'daemon_restart': Daemon was stopped cleanly (SIGTERM/SIGINT) and restarted
+     * - 'daemon_crash': Daemon stopped unexpectedly (SIGKILL, OOM, panic) and restarted
+     * Injected by startup reconciliation into sessions that were active at the time.
+     * Contrast with PR #1116 (filtered high-frequency SDK lifecycle events) — this is
+     * intentional, low-frequency, and user-meaningful.
+     */
+    subtype?: 'daemon_restart' | 'daemon_crash';
+
     /** Additional agent-specific fields */
     [key: string]: unknown;
   };

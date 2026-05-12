@@ -20,7 +20,7 @@ import {
   PermissionStatus,
   type User,
 } from '@agor-live/client';
-import { RobotOutlined } from '@ant-design/icons';
+import { RobotOutlined, SyncOutlined, WarningOutlined } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
 import { Tooltip, theme } from 'antd';
 
@@ -34,6 +34,7 @@ import { CopyableContent } from '../CopyableContent';
 import { InputRequestBlock } from '../InputRequestBlock';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { PermissionRequestBlock } from '../PermissionRequestBlock';
+import { SystemMessage } from '../SystemMessage';
 import { ThinkingBlock } from '../ThinkingBlock';
 import {
   buildBashDescriptionNode,
@@ -415,6 +416,37 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
         </div>
         <MarkdownRenderer content={markdownContent} />
       </div>
+    );
+  }
+
+  // Daemon restart / crash notice — injected by startup reconciliation.
+  // Intentionally low-frequency and user-meaningful; contrast with PR #1116
+  // which filtered high-frequency SDK lifecycle noise.
+  if (
+    isSystem &&
+    (message.metadata?.subtype === 'daemon_restart' || message.metadata?.subtype === 'daemon_crash')
+  ) {
+    const isGraceful = message.metadata.subtype === 'daemon_restart';
+    const text = typeof message.content === 'string' ? message.content : '';
+    return (
+      <SystemMessage
+        content={
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+            <span
+              style={{
+                color: isGraceful ? token.colorInfo : token.colorWarning,
+                flexShrink: 0,
+                marginTop: 2,
+              }}
+            >
+              {isGraceful ? <SyncOutlined /> : <WarningOutlined />}
+            </span>
+            <div style={{ fontSize: 13 }}>
+              <MarkdownRenderer content={text} />
+            </div>
+          </div>
+        }
+      />
     );
   }
 
