@@ -291,6 +291,10 @@ export function OnboardingWizard({
   // Elapsed time for clone progress
   const [cloneElapsedSeconds, setCloneElapsedSeconds] = useState(0);
   const cloneIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Repo IDs that were already failed when the current clone attempt started.
+  // The failure watcher ignores these so a stale row from a prior attempt never
+  // immediately cancels a new retry before the daemon has a chance to replace it.
+  const knownFailedRepoIdsRef = useRef<Set<string>>(new Set());
 
   // ─── Derived ──────────────────────────────────────
   const steps = useMemo(() => getStepsForPath(path), [path]);
@@ -522,6 +526,9 @@ export function OnboardingWizard({
     let failedRepo: Repo | undefined;
     for (const [, repo] of repoById) {
       if (repo.clone_status !== 'failed') continue;
+      // Skip rows that were already failed when this attempt started — those are
+      // stale from a prior attempt and will be replaced by the daemon shortly.
+      if (knownFailedRepoIdsRef.current.has(repo.repo_id)) continue;
       if (
         (path === 'assistant' &&
           (repo.slug === FRAMEWORK_REPO_SLUG || repo.remote_url?.includes('agor-assistant'))) ||
@@ -671,6 +678,15 @@ export function OnboardingWizard({
   );
 
   const handleStartClone = useCallback(async () => {
+    // Snapshot which repos are already failed before this attempt starts.
+    // The repoById failure watcher ignores these IDs so a stale row from a
+    // previous attempt never immediately cancels the new clone.
+    const snapshot = new Set<string>();
+    for (const [id, repo] of repoById) {
+      if (repo.clone_status === 'failed') snapshot.add(id);
+    }
+    knownFailedRepoIdsRef.current = snapshot;
+
     setError(null);
     setLoading(true);
     setCloneElapsedSeconds(0);
@@ -744,6 +760,7 @@ export function OnboardingWizard({
     repoUrl,
     repoSlug,
     localRepoPath,
+    repoById,
     onCreateRepo,
     onCreateLocalRepo,
   ]);
