@@ -367,11 +367,6 @@ export default class Init extends Command {
       }
     }
 
-    // Prompt for assistant setup (unless --force or skipped prompts)
-    if (!skipPrompts) {
-      await this.promptAssistantSetup();
-    }
-
     // Success summary
     this.log('');
     this.log(chalk.green.bold('✅ Agor initialized successfully!'));
@@ -495,56 +490,6 @@ export default class Init extends Command {
     });
 
     this.log(`${chalk.green('   ✓')} Admin user created (${chalk.gray(email)})`);
-  }
-
-  /**
-   * Prompt user for assistant setup
-   *
-   * Stores intent in config.yaml for the UI wizard to pick up.
-   * The framework repo is public, so HTTPS always works.
-   */
-  private async promptAssistantSetup(): Promise<void> {
-    this.log('');
-    this.log(chalk.bold('🤖 Assistant'));
-    this.log('');
-    this.log(
-      chalk.gray('An assistant is a persistent AI companion that manages your Agor instance.')
-    );
-    this.log(
-      chalk.gray(
-        'It maintains memory across sessions, orchestrates work, and learns your preferences.'
-      )
-    );
-    this.log('');
-
-    const { setupAssistant } = await inquirer.prompt([
-      {
-        type: 'confirm',
-        name: 'setupAssistant',
-        message: 'Set up your assistant?',
-        default: true,
-      },
-    ]);
-
-    if (setupAssistant) {
-      const frameworkRepoUrl = 'https://github.com/preset-io/agor-assistant.git';
-      await setConfigValue('onboarding.assistantPending', true);
-      await setConfigValue('onboarding.frameworkRepoUrl', frameworkRepoUrl);
-      this.log(`${chalk.green('   ✓')} Assistant setup queued for the UI wizard`);
-
-      // Check for ANTHROPIC_API_KEY
-      if (!process.env.ANTHROPIC_API_KEY) {
-        this.log('');
-        this.log(
-          chalk.yellow(
-            '   💡 Tip: Set ANTHROPIC_API_KEY in your environment for Claude Code sessions'
-          )
-        );
-        this.log(chalk.gray('   You can also configure API keys in the UI after setup'));
-      }
-    } else {
-      this.log(chalk.gray('   Skipped. You can set this up later from the UI.'));
-    }
   }
 
   /**
