@@ -321,6 +321,126 @@ describe('ArtifactsService.patch (board move routing)', () => {
   });
 });
 
+describe('ArtifactsService.publishArtifact', () => {
+  let tmpFolder: string;
+
+  beforeEach(() => {
+    tmpFolder = mkdtempSync(path.join(tmpdir(), 'agor-publish-test-'));
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(tmpFolder, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  dbTest('persists files to DB so land() can read them back', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+
+    writeFileSync(path.join(tmpFolder, 'App.js'), 'export default function App() { return null; }');
+    writeFileSync(
+      path.join(tmpFolder, 'index.js'),
+      'import { createRoot } from "react-dom/client";\n'
+    );
+
+    const published = await service.publishArtifact(
+      {
+        folderPath: tmpFolder,
+        board_id: board.board_id,
+        name: 'Publish Roundtrip Test',
+        template: 'react',
+      },
+      'user-owner'
+    );
+
+    expect(published.build_status).toBe('success');
+    expect(published.content_hash).toBeDefined();
+    expect(published.files).toBeDefined();
+    expect(Object.keys(published.files ?? {})).toEqual(
+      expect.arrayContaining(['/App.js', '/index.js'])
+    );
+
+    // The bug: the row that lands in the DB has no `files` value, so a
+    // subsequent read can't materialize the artifact.
+    const reloaded = await artifactRepo.findById(published.artifact_id);
+    expect(reloaded?.files).toBeDefined();
+    expect(Object.keys(reloaded?.files ?? {})).toEqual(
+      expect.arrayContaining(['/App.js', '/index.js'])
+    );
+
+    // End-to-end: land() pulls files back to disk via the persisted row.
+    const landRoot = mkdtempSync(path.join(tmpdir(), 'agor-publish-land-'));
+    try {
+      const result = await service.land(published.artifact_id, landRoot);
+      expect(result.fileCount).toBeGreaterThanOrEqual(2);
+      expect(readFileSync(path.join(result.destinationPath, 'App.js'), 'utf-8')).toBe(
+        'export default function App() { return null; }'
+      );
+    } finally {
+      rmSync(landRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Regression for the post-Artifacts-2.0 publish bug: on Postgres the
+  // `files`/`dependencies`/`build_errors` columns are still `text` (not
+  // jsonb), so the repo MUST stringify objects before insert. Otherwise
+  // postgres-js coerces JS objects via `Object.prototype.toString()` into
+  // the literal string "[object Object]", which JSON.parse rejects on
+  // read — leaving every fresh artifact with files=undefined and breaking
+  // land() / the viewer iframe.
+  //
+  // dbTest runs on SQLite so we can't trip the postgres-js coercion
+  // directly. Instead, peek at the raw libsql column to confirm we wrote
+  // a JSON string (the shape both dialects need); if a future refactor
+  // stops stringifying for one dialect, this assertion will fail loudly.
+  dbTest('stores files as a JSON string in the text column', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+
+    writeFileSync(path.join(tmpFolder, 'App.js'), 'export default () => null;');
+
+    const published = await service.publishArtifact(
+      {
+        folderPath: tmpFolder,
+        board_id: board.board_id,
+        name: 'JSON String Shape',
+        template: 'react',
+      },
+      'user-owner'
+    );
+
+    // dbTest gives us a LibSQLDatabase — go behind the repo's row mapper
+    // to see what actually landed in the column. Postgres-side this would
+    // use db.execute(sql`...`); both wrappers are exposed under one API
+    // by `executeRaw` in database-wrapper.ts, but importing it adds the
+    // drizzle-orm dep to the daemon and isn't worth it for one test.
+    const libsql = (
+      db as unknown as {
+        $client: {
+          execute(args: { sql: string; args: unknown[] }): Promise<{
+            rows: Array<Record<string, unknown>>;
+          }>;
+        };
+      }
+    ).$client;
+    const raw = await libsql.execute({
+      sql: 'SELECT files, dependencies, build_errors FROM artifacts WHERE artifact_id = ?',
+      args: [published.artifact_id],
+    });
+    const row = raw.rows[0];
+    expect(row).toBeDefined();
+    expect(typeof row.files).toBe('string');
+    expect(row.files).not.toBe('[object Object]');
+    expect(JSON.parse(row.files as string)).toMatchObject({
+      '/App.js': 'export default () => null;',
+    });
+  });
+});
+
 describe('ArtifactsService.land', () => {
   let tmpRoot: string;
 

@@ -31,10 +31,12 @@ import {
 } from './base';
 
 /**
- * JSON columns differ between SQLite (text) and Postgres (jsonb). On
- * Postgres the driver hands us a parsed value; on SQLite we get a string and
- * must JSON.parse. This helper hides the difference from the rest of the
- * repo.
+ * JSON columns differ between SQLite (text) and Postgres (mixed: some
+ * `jsonb`, some `text` for historical reasons — see `schema.postgres.ts`
+ * around `files`/`dependencies`/`build_errors`). On Postgres the jsonb
+ * driver hands us a parsed value; on SQLite (and on Postgres text columns
+ * that carry serialized JSON) we get a string and must JSON.parse. This
+ * helper hides the difference.
  */
 function readJson<T>(value: unknown): T | undefined {
   if (value === null || value === undefined) return undefined;
@@ -50,12 +52,29 @@ function readJson<T>(value: unknown): T | undefined {
 }
 
 /**
- * Mirror of `readJson` for writes. Postgres takes the value as-is (the
- * jsonb driver serialises); SQLite needs a string.
+ * Write helper for `jsonb` columns. On Postgres, drizzle's jsonb column
+ * stringifies the value via its own `mapToDriverValue`, so we pass the
+ * raw object. On SQLite (where the same logical column is `text`), we
+ * stringify ourselves.
  */
-function writeJson(db: Database, value: unknown): unknown {
+function writeJsonb(db: Database, value: unknown): unknown {
   if (value === undefined || value === null) return null;
   if (isPostgresDatabase(db)) return value;
+  return JSON.stringify(value);
+}
+
+/**
+ * Write helper for columns that are `text` on BOTH dialects but carry a
+ * serialized JSON payload — `files`, `dependencies`, `build_errors` on the
+ * artifacts row. These pre-date the jsonb columns and never got migrated
+ * (changing a `text` to `jsonb` requires a data rewrite). Always
+ * stringify so postgres-js doesn't coerce a JS object via
+ * `Object.prototype.toString()` into the string `"[object Object]"` —
+ * which is exactly how the post-Artifacts-2.0 publish path silently
+ * dropped every file map on Postgres deployments.
+ */
+function writeJsonText(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
   return JSON.stringify(value);
 }
 
@@ -124,15 +143,15 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         path: data.path ?? null,
         template: data.template ?? 'react',
         build_status: data.build_status ?? 'unknown',
-        build_errors: writeJson(this.db, data.build_errors) as never,
+        build_errors: writeJsonText(data.build_errors) as never,
         content_hash: data.content_hash ?? null,
-        files: writeJson(this.db, data.files) as never,
-        dependencies: writeJson(this.db, data.dependencies) as never,
+        files: writeJsonText(data.files) as never,
+        dependencies: writeJsonText(data.dependencies) as never,
         entry: data.entry ?? null,
-        sandpack_config: writeJson(this.db, data.sandpack_config) as never,
-        required_env_vars: writeJson(this.db, data.required_env_vars) as never,
-        agor_grants: writeJson(this.db, data.agor_grants) as never,
-        agor_runtime: writeJson(this.db, data.agor_runtime) as never,
+        sandpack_config: writeJsonb(this.db, data.sandpack_config) as never,
+        required_env_vars: writeJsonb(this.db, data.required_env_vars) as never,
+        agor_grants: writeJsonb(this.db, data.agor_grants) as never,
+        agor_runtime: writeJsonb(this.db, data.agor_runtime) as never,
         public: data.public ?? true,
         created_by: data.created_by ?? null,
         created_at: now,
@@ -274,27 +293,27 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       if (updates.template !== undefined) setData.template = updates.template;
       if (updates.build_status !== undefined) setData.build_status = updates.build_status;
       if (updates.build_errors !== undefined) {
-        setData.build_errors = writeJson(this.db, updates.build_errors);
+        setData.build_errors = writeJsonText(updates.build_errors);
       }
       if (updates.content_hash !== undefined) setData.content_hash = updates.content_hash ?? null;
       if (updates.files !== undefined) {
-        setData.files = writeJson(this.db, updates.files);
+        setData.files = writeJsonText(updates.files);
       }
       if (updates.dependencies !== undefined) {
-        setData.dependencies = writeJson(this.db, updates.dependencies);
+        setData.dependencies = writeJsonText(updates.dependencies);
       }
       if (updates.entry !== undefined) setData.entry = updates.entry ?? null;
       if (updates.sandpack_config !== undefined) {
-        setData.sandpack_config = writeJson(this.db, updates.sandpack_config);
+        setData.sandpack_config = writeJsonb(this.db, updates.sandpack_config);
       }
       if (updates.required_env_vars !== undefined) {
-        setData.required_env_vars = writeJson(this.db, updates.required_env_vars);
+        setData.required_env_vars = writeJsonb(this.db, updates.required_env_vars);
       }
       if (updates.agor_runtime !== undefined) {
-        setData.agor_runtime = writeJson(this.db, updates.agor_runtime);
+        setData.agor_runtime = writeJsonb(this.db, updates.agor_runtime);
       }
       if (updates.agor_grants !== undefined) {
-        setData.agor_grants = writeJson(this.db, updates.agor_grants);
+        setData.agor_grants = writeJsonb(this.db, updates.agor_grants);
       }
       if (updates.public !== undefined) setData.public = updates.public;
       if (updates.archived !== undefined) setData.archived = updates.archived;
