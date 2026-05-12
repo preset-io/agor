@@ -58,8 +58,12 @@ export async function validateGitRef(ref: unknown): Promise<void> {
   // fails outside a git worktree — breaking callers like the seed script
   // that validate refs before a repo exists. The non-`--branch` form is
   // pure syntactic validation and needs no git context.
-  const gitBinary = getGitBinary();
-  const git = simpleGit({ binary: gitBinary });
+  //
+  // Route through `createGit` so the unsafe-ops scanner is opt-in here too
+  // — otherwise a daemon env carrying `GIT_SSH_COMMAND` (or similar) would
+  // throw a confusing "not permitted without enabling allowUnsafeSshCommand"
+  // out of what is meant to be a pure syntactic check.
+  const { git } = createGit();
   try {
     await git.raw(['check-ref-format', `refs/heads/${ref}`]);
   } catch {
@@ -373,11 +377,18 @@ export function createGit(
 ): { git: ReturnType<typeof simpleGit> } {
   const gitBinary = getGitBinary();
 
-  // Non-secret config stays in `config:` (becomes `-c key=value` on argv,
-  // which is fine for these values).
-  const config = [
-    'core.sshCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null',
-  ];
+  // No `-c core.sshCommand=...` injection. PR #786 added one to skip the
+  // first-time-host SSH prompt in Docker — but it silently overrode the
+  // user's intentional `core.sshCommand` from `~/.gitconfig` on every
+  // daemon-issued op AND was the argv that tripped simple-git's bundled
+  // `@simple-git/argv-parser` ("Configuring core.sshCommand is not
+  // permitted…"). `GIT_CONFIG_GLOBAL=/dev/null` (set below) is the correct
+  // way to neutralize the user gitconfig for token-carrying ops; the
+  // `unsafe.allowUnsafeSshCommand` flag below remains as defense-in-depth
+  // for anything else that injects `core.sshCommand` (e.g. an SSH-origin
+  // pull whose existing `.git/config` carries one). Agor's daemon-issued
+  // ops are HTTPS+token regardless (`clone-redesign.md`).
+  const config: string[] = [];
 
   // Auth header config goes through env vars so the token never lands on
   // argv. buildAuthHeaderEnv returns [] when no usable token is supplied.

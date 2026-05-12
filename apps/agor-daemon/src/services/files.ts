@@ -7,7 +7,7 @@
  */
 
 import { type Database, SessionRepository, WorktreeRepository } from '@agor/core/db';
-import { simpleGit } from '@agor/core/git';
+import { createGit } from '@agor/core/git';
 import type { SessionID } from '@agor/core/types';
 
 // Constants for file search
@@ -66,8 +66,11 @@ export class FilesService {
         return [];
       }
 
-      // Run git ls-files
-      const git = simpleGit(worktree.path);
+      // Run git ls-files. Use the shared factory so the unsafe-ops scanner
+      // is opt-in here too — otherwise a daemon env that happens to carry
+      // `GIT_SSH_COMMAND` (or similar) trips the scanner before the command
+      // ever reaches git.
+      const { git } = createGit(worktree.path);
       let result: string;
 
       try {

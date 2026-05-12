@@ -184,10 +184,38 @@ const AGENT_LABELS: Record<AgenticToolName, string> = {
 };
 
 /**
+ * A repo is "usable" once its clone has actually completed. After PR #1126
+ * the daemon pre-creates a placeholder row with `clone_status: 'cloning'`
+ * before the executor runs — matching it as if it were finished caused the
+ * wizard to auto-advance off the `'clone'` step within ~50ms, which then
+ * dropped the subsequent `repo:cloneError` event (its listener filters on
+ * `currentStep === 'clone'`). Legacy rows have no `clone_status`; treat
+ * those as ready too so existing repos still match.
+ */
+function isRepoReady(repo: Repo): boolean {
+  return repo.clone_status === 'ready' || repo.clone_status === undefined;
+}
+
+/**
+ * Find the framework repo only when it's actually usable. Wraps
+ * `findFrameworkRepo` (which intentionally returns placeholders so
+ * AssistantTab / AssistantsTable can detect "exists") with the wizard's
+ * stricter "clone finished" filter.
+ */
+function findReadyFrameworkRepo(repoById: Map<string, Repo>): [string, Repo] | undefined {
+  const found = findFrameworkRepo(repoById);
+  return found && isRepoReady(found[1]) ? found : undefined;
+}
+
+/**
  * Find a repo in the wizard's in-memory map that matches the user's input.
  * Used by both the clone-complete auto-advance effect and the board/worktree
  * safety-net effect — centralised here so the match criteria cannot drift
  * between the two.
+ *
+ * Placeholder rows (`clone_status: 'cloning' | 'failed'`) are skipped — the
+ * caller asked "is the clone done yet?", and the answer for a placeholder
+ * is no.
  */
 function findMatchingRepoId(
   repoById: Map<string, Repo>,
@@ -195,6 +223,7 @@ function findMatchingRepoId(
 ): string | null {
   const normalizedInput = criteria.remoteUrl ? normalizeRepoUrl(criteria.remoteUrl) : '';
   for (const [id, repo] of repoById) {
+    if (!isRepoReady(repo)) continue;
     if (
       (normalizedInput &&
         repo.remote_url &&
@@ -361,8 +390,11 @@ export function OnboardingWizard({
       // Board exists — go to worktree creation
       setCurrentStep('worktree');
     } else if (resumedPath === 'assistant') {
-      // Check if the framework repo already exists
-      const found = findFrameworkRepo(repoById);
+      // Check if the framework repo is registered AND finished cloning.
+      // A placeholder (`clone_status: 'cloning'`) or `'failed'` row means
+      // the previous clone is still in flight or stuck — resume on the
+      // clone step so the user can wait it out or hit Retry.
+      const found = findReadyFrameworkRepo(repoById);
       if (found) {
         setCreatedRepoId(found[0]);
       }
@@ -393,8 +425,11 @@ export function OnboardingWizard({
     if (currentStep !== 'clone' || !loading) return;
 
     if (path === 'assistant') {
-      // Look for framework repo
-      const found = findFrameworkRepo(repoById);
+      // Only advance once the framework repo is actually cloned. Matching
+      // the pre-created placeholder (`clone_status: 'cloning'`) would push
+      // us off the clone step before `repo:cloneError` arrives, so a real
+      // failure would never reach `handleCloneError`. See `isRepoReady`.
+      const found = findReadyFrameworkRepo(repoById);
       if (found) {
         setCreatedRepoId(found[0]);
         setLoading(false);
@@ -438,9 +473,10 @@ export function OnboardingWizard({
       setCreatedRepoId(matchId);
       return;
     }
-    // For assistant path, find framework repo
+    // For assistant path, find framework repo (placeholders excluded —
+    // `createdRepoId` should point at a real, cloned repo).
     if (path === 'assistant') {
-      const found = findFrameworkRepo(repoById);
+      const found = findReadyFrameworkRepo(repoById);
       if (found) {
         setCreatedRepoId(found[0]);
       }
@@ -476,31 +512,57 @@ export function OnboardingWizard({
   }, [currentStep, loading, worktreeById, createdWorktreeId]);
 
   // ─── Listen for clone error events from backend ──
+  // Two redundant channels because event ordering is not guaranteed and we
+  // want whichever lands first to break the spinner:
+  //
+  //  1. `repo:cloneError` (WebSocket broadcast from `cloneRepository`'s
+  //     onExit safety net) — fires only when the executor exits non-zero
+  //     and carries a generic, branch-aware message.
+  //  2. `repos.patched` (Feathers service event) — fires whenever the
+  //     placeholder row transitions to `clone_status: 'failed'`. The patch
+  //     payload includes `clone_error.message` (the first line of git's
+  //     stderr) which is far more useful than the generic WS message —
+  //     e.g. "configuring core.sshCommand is not permitted…" surfaces
+  //     verbatim instead of being swallowed into "Clone failed (exit 1)".
   useEffect(() => {
     if (!client?.io) return;
 
-    const handleCloneError = (data: { slug: string; url: string; error: string }) => {
-      // Only handle if we're on the clone step and loading
+    const isOurCloneByIdentity = (slug: string | undefined, url: string | undefined) =>
+      (path === 'assistant' && slug === FRAMEWORK_REPO_SLUG) ||
+      (path === 'own-repo' && ((url && url === repoUrl) || (slug && slug === repoSlug)));
+
+    const surfaceError = (message: string) => {
+      // Only handle if we're on the clone step and loading. If the user has
+      // moved on (or the wizard never reached `'clone'`), don't yank state.
       if (currentStep !== 'clone' || !loading) return;
-
-      // Check if the error is for our clone operation
-      const isOurClone =
-        (path === 'assistant' && data.slug === FRAMEWORK_REPO_SLUG) ||
-        (path === 'own-repo' && (data.url === repoUrl || data.slug === repoSlug));
-
-      if (isOurClone) {
-        setLoading(false);
-        setError(data.error);
-        if (cloneTimeoutRef.current) {
-          clearTimeout(cloneTimeoutRef.current);
-          cloneTimeoutRef.current = null;
-        }
+      setLoading(false);
+      setError(message);
+      if (cloneTimeoutRef.current) {
+        clearTimeout(cloneTimeoutRef.current);
+        cloneTimeoutRef.current = null;
       }
     };
 
+    const handleCloneError = (data: { slug: string; url: string; error: string }) => {
+      if (!isOurCloneByIdentity(data.slug, data.url)) return;
+      surfaceError(data.error);
+    };
+
+    const handleRepoPatched = (repo: Repo) => {
+      if (repo.clone_status !== 'failed') return;
+      if (!isOurCloneByIdentity(repo.slug, repo.remote_url)) return;
+      // Prefer the row's specific error; fall back to a generic message.
+      const message =
+        repo.clone_error?.message ?? `Clone failed (exit ${repo.clone_error?.exit_code ?? '?'}).`;
+      surfaceError(message);
+    };
+
+    const reposService = client.service('repos');
     client.io.on('repo:cloneError', handleCloneError);
+    reposService.on('patched', handleRepoPatched);
     return () => {
       client.io.off('repo:cloneError', handleCloneError);
+      reposService.removeListener('patched', handleRepoPatched);
     };
   }, [client, currentStep, loading, path, repoUrl, repoSlug]);
 
@@ -552,8 +614,11 @@ export function OnboardingWizard({
       saveOnboardingProgress({ path: selectedPath });
 
       if (selectedPath === 'assistant') {
-        // Check if framework repo already exists
-        const found = findFrameworkRepo(repoById);
+        // Check if framework repo already exists AND is cloned. A leftover
+        // placeholder/failed row means the previous attempt didn't finish —
+        // route the user to the clone step so they see the spinner (or
+        // error + Retry) instead of being sent on with no usable repo.
+        const found = findReadyFrameworkRepo(repoById);
         if (found) {
           setCreatedRepoId(found[0]);
           setCurrentStep('board');

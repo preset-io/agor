@@ -26,6 +26,7 @@ import { type Database, RepoRepository, WorktreeRepository } from '@agor/core/db
 import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
+  createGit,
   extractRepoName,
   getDefaultBranch,
   getRemoteUrl,
@@ -33,7 +34,6 @@ import {
   getWorktreePath,
   isValidGitRepo,
   listWorktrees,
-  simpleGit,
 } from '@agor/core/git';
 import type {
   AuthenticatedParams,
@@ -592,7 +592,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // This gives the user immediate feedback instead of a silent fire-and-forget failure
     if (repo.local_path) {
       try {
-        const git = simpleGit(repo.local_path);
+        // Use the shared factory so the unsafe-ops scanner is opt-in
+        // (otherwise a daemon env carrying GIT_SSH_COMMAND or similar
+        // would throw before the fetch even ran).
+        const { git } = createGit(repo.local_path);
 
         // Check 1: Validate sourceBranch exists on remote (if specified)
         // Skip for tags — tags are validated differently (they don't have origin/ prefix)
