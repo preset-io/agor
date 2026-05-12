@@ -516,10 +516,10 @@ export function OnboardingWizard({
   // ─── Watch repoById for clone failure (state-driven, race-free) ──
   // Events can arrive while the listener closure still has `loading=false`
   // (between handleStartClone() setting loading=true and the next React render
-  // re-registering the effect). Reading failure from authoritative repoById
-  // state covers that race AND durable failure on remount (if the event was
-  // already missed). Logic mirrors the auto-advance effect above, but for
-  // clone_status: 'failed' rather than 'ready'.
+  // re-registering the effect). Reading from authoritative repoById covers that
+  // race without relying on event delivery. Pre-existing failed rows (stale from
+  // prior attempts) are excluded via knownFailedRepoIdsRef — see handleStartClone.
+  // Logic mirrors the auto-advance effect above, but for clone_status: 'failed'.
   useEffect(() => {
     if (currentStep !== 'clone' || !loading) return;
 
