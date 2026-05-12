@@ -197,6 +197,29 @@ export interface ITool {
    */
   normalizedSdkResponse(rawResponse: RawSdkResponse): NormalizedSdkResponse;
 
+  // ============================================================
+  // Auth Check (optional — implement for pre-session validation)
+  // ============================================================
+
+  /**
+   * Check whether the tool's credentials are valid without spawning a session.
+   *
+   * Implementations should use the cheapest available mechanism:
+   * - API-key tools: lightweight models-list HTTP call against the provider
+   * - OAuth/CLI tools: CLI auth status check (e.g. `claude auth status`)
+   * - Server-based tools (OpenCode): connectivity check
+   *
+   * Optional — tools that don't implement this return undefined.
+   *
+   * @param apiKey - Raw API key to validate. When omitted the implementation
+   *   should use credentials already available in its environment.
+   */
+  isAuthenticated?(apiKey?: string): Promise<{
+    authenticated: boolean;
+    method: 'api-key' | 'oauth' | 'native' | 'none';
+    hint?: string;
+  }>;
+
   /**
    * Compute cumulative context window usage for a session
    *

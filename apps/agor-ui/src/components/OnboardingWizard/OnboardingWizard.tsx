@@ -60,6 +60,12 @@ const { useToken } = theme;
 
 const CLONE_TIMEOUT_MS = 120_000;
 
+const ASSISTANT_BOOT_PROMPT = `You are starting your first session as an Agor assistant.
+
+Read the framework files in this worktree. Then introduce yourself — show that you understand your role as a persistent, memory-aware assistant, not a generic chatbot. Keep your intro brief and warm.
+
+Context: this is a fresh Agor installation, assistant path, first session.`;
+
 // ─── Types ──────────────────────────────────────────────
 
 type WizardPath = 'assistant' | 'own-repo';
@@ -102,6 +108,10 @@ export interface OnboardingWizardProps {
   onCreateSession: (config: NewSessionConfig, boardId: string) => Promise<string | null>;
   onUpdateUser: (userId: string, updates: UpdateUserInput) => void;
   onUpdateWorktree?: (worktreeId: string, updates: Partial<Worktree>) => void;
+  onCheckAuth?: (
+    tool: AgenticToolName,
+    apiKey?: string
+  ) => Promise<{ authenticated: boolean; method: string; hint?: string }>;
 
   // Config from health endpoint
   assistantPending?: boolean;
@@ -259,6 +269,7 @@ export function OnboardingWizard({
   onCreateSession,
   onUpdateUser,
   onUpdateWorktree,
+  onCheckAuth,
   assistantPending,
   frameworkRepoUrl,
   systemCredentials,
@@ -279,12 +290,17 @@ export function OnboardingWizard({
   const [worktreeName, setWorktreeName] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName>('claude-code');
+  const [testAuthLoading, setTestAuthLoading] = useState(false);
+  const [testAuthResult, setTestAuthResult] = useState<{
+    authenticated: boolean;
+    method: string;
+    hint?: string;
+  } | null>(null);
 
   // Created resource IDs
   const [createdRepoId, setCreatedRepoId] = useState<string | null>(null);
   const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
   const [createdWorktreeId, setCreatedWorktreeId] = useState<string | null>(null);
-  const [createdSessionId, setCreatedSessionId] = useState<string | null>(null);
 
   // Timeout ref for clone
   const cloneTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -893,8 +909,17 @@ export function OnboardingWizard({
     setCurrentStep('launch');
   }, []);
 
+  const handleTestAuth = useCallback(async () => {
+    if (!onCheckAuth) return;
+    setTestAuthLoading(true);
+    setTestAuthResult(null);
+    const result = await onCheckAuth(selectedAgent, apiKey.trim() || undefined);
+    setTestAuthLoading(false);
+    setTestAuthResult(result);
+  }, [onCheckAuth, selectedAgent, apiKey]);
+
   const handleLaunch = useCallback(async () => {
-    if (!createdWorktreeId || !createdBoardId) {
+    if (!createdWorktreeId || !createdBoardId || !path) {
       setError('Missing worktree or board.');
       return;
     }
@@ -907,13 +932,14 @@ export function OnboardingWizard({
         {
           worktree_id: createdWorktreeId,
           agent: selectedAgent,
+          ...(path === 'assistant' && { initialPrompt: ASSISTANT_BOOT_PROMPT }),
         },
         createdBoardId
       );
 
       if (sessionId) {
-        setCreatedSessionId(sessionId);
         setLoading(false);
+        onComplete({ worktreeId: createdWorktreeId, sessionId, boardId: createdBoardId, path });
       } else {
         setLoading(false);
         setError('Failed to create session. Please try again.');
@@ -922,18 +948,7 @@ export function OnboardingWizard({
       setLoading(false);
       setError(`Failed to launch session: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [createdWorktreeId, createdBoardId, selectedAgent, onCreateSession]);
-
-  const handleFinish = useCallback(() => {
-    if (!createdWorktreeId || !createdSessionId || !createdBoardId || !path) return;
-
-    onComplete({
-      worktreeId: createdWorktreeId,
-      sessionId: createdSessionId,
-      boardId: createdBoardId,
-      path,
-    });
-  }, [createdWorktreeId, createdSessionId, createdBoardId, path, onComplete]);
+  }, [createdWorktreeId, createdBoardId, selectedAgent, path, onCreateSession, onComplete]);
 
   const handleSkip = useCallback(() => {
     if (!user) return;
@@ -1229,6 +1244,7 @@ export function OnboardingWizard({
               setSelectedAgent(value);
               setApiKey('');
               setError(null);
+              setTestAuthResult(null);
             }}
             options={[
               { value: 'claude-code', label: 'Claude Code (Recommended)' },
@@ -1303,7 +1319,21 @@ export function OnboardingWizard({
 
           {error && <Alert type="error" title={error} showIcon style={{ marginBottom: 16 }} />}
 
-          <Space>
+          {testAuthResult && (
+            <Alert
+              type={testAuthResult.authenticated ? 'success' : 'warning'}
+              showIcon
+              style={{ marginBottom: 16, textAlign: 'left' }}
+              title={
+                testAuthResult.authenticated
+                  ? `Connected (${testAuthResult.method})`
+                  : 'Not authenticated'
+              }
+              description={testAuthResult.hint}
+            />
+          )}
+
+          <Space wrap>
             <Button
               type="primary"
               onClick={handleSaveApiKey}
@@ -1313,10 +1343,27 @@ export function OnboardingWizard({
             >
               Save API Key
             </Button>
+            {onCheckAuth && (
+              <Button
+                onClick={handleTestAuth}
+                loading={testAuthLoading}
+                disabled={loading}
+              >
+                Test Connection
+              </Button>
+            )}
             <Button type="link" onClick={handleAdvanceFromApiKeys}>
               Skip for now
             </Button>
           </Space>
+          <div style={{ marginTop: 12 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              You can update credentials any time in{' '}
+              <Text code style={{ fontSize: 12 }}>
+                Settings → Agent Setup
+              </Text>
+            </Text>
+          </div>
         </>
       )}
     </div>
@@ -1324,50 +1371,31 @@ export function OnboardingWizard({
 
   const renderLaunch = () => (
     <div style={{ textAlign: 'center', padding: '24px 0' }}>
-      {!createdSessionId ? (
-        <>
-          <Title level={4}>Ready to Launch</Title>
-          <Paragraph type="secondary">
-            {path === 'assistant'
-              ? "Your assistant is set up. Let's create your first session!"
-              : "Your worktree is ready. Let's launch a session!"}
-          </Paragraph>
+      <Title level={4}>Ready to Launch</Title>
+      <Paragraph type="secondary">
+        {path === 'assistant'
+          ? "Your assistant is set up. Let's create your first session!"
+          : "Your worktree is ready. Let's launch a session!"}
+      </Paragraph>
 
-          {error && (
-            <Alert
-              type="error"
-              title={error}
-              showIcon
-              style={{ marginBottom: 16, textAlign: 'left' }}
-            />
-          )}
-
-          <Button
-            type="primary"
-            size="large"
-            icon={<RocketOutlined />}
-            onClick={handleLaunch}
-            loading={loading}
-          >
-            Launch Session
-          </Button>
-        </>
-      ) : (
-        <>
-          <Result
-            status="success"
-            title={
-              path === 'assistant'
-                ? 'Say hello to your assistant!'
-                : 'Tell your session what to work on!'
-            }
-            subTitle="Your Claude Code session is ready. Close this wizard to start chatting."
-          />
-          <Button type="primary" size="large" onClick={handleFinish}>
-            Let's go
-          </Button>
-        </>
+      {error && (
+        <Alert
+          type="error"
+          title={error}
+          showIcon
+          style={{ marginBottom: 16, textAlign: 'left' }}
+        />
       )}
+
+      <Button
+        type="primary"
+        size="large"
+        icon={<RocketOutlined />}
+        onClick={handleLaunch}
+        loading={loading}
+      >
+        Launch Session
+      </Button>
     </div>
   );
 
@@ -1547,7 +1575,7 @@ export function OnboardingWizard({
       {renderStepContent()}
 
       {/* Back button (where appropriate) */}
-      {currentStep !== 'welcome' && currentStep !== 'launch' && stepIndex > 1 && !loading && (
+      {currentStep !== 'welcome' && stepIndex > 1 && !loading && (
         <div style={{ marginTop: 16 }}>
           <Button type="link" onClick={handleBack} style={{ padding: 0 }}>
             &larr; Back

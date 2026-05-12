@@ -273,11 +273,13 @@ function AppContent() {
       }
     }
 
-    // Navigate to the user's board + session
+    // Navigate to the user's board + session, or to the boards list if they skipped
     if (result.boardId && result.sessionId) {
       navigate(`/b/${result.boardId}/${result.sessionId}/`);
     } else if (result.boardId) {
       navigate(`/b/${result.boardId}/`);
+    } else {
+      navigate('/');
     }
   };
 
@@ -927,13 +929,17 @@ function AppContent() {
     }
   };
 
-  const handleUpdateWorktree = async (worktreeId: string, updates: WorktreeUpdate) => {
+  const handleUpdateWorktree = async (
+    worktreeId: string,
+    updates: WorktreeUpdate,
+    options: { silent?: boolean } = {}
+  ) => {
     if (!client) return;
     try {
       // Cast to Partial<Worktree> to satisfy Feathers type checking
       // The backend MCP handler properly handles null values for clearing fields
       await client.service('worktrees').patch(worktreeId, updates as Partial<Worktree>);
-      showSuccess('Worktree updated successfully!');
+      if (!options.silent) showSuccess('Worktree updated successfully!');
     } catch (error) {
       showError(
         `Failed to update worktree: ${error instanceof Error ? error.message : String(error)}`
@@ -1303,8 +1309,18 @@ function AppContent() {
           onCreateLocalRepo={handleCreateLocalRepo}
           onCreateWorktree={handleCreateWorktree}
           onCreateSession={handleCreateSession}
-          onUpdateUser={handleUpdateUser}
-          onUpdateWorktree={handleUpdateWorktree}
+          onUpdateUser={(userId, updates) => handleUpdateUser(userId, updates, { silent: true })}
+          onUpdateWorktree={(worktreeId, updates) =>
+            handleUpdateWorktree(worktreeId, updates, { silent: true })
+          }
+          onCheckAuth={async (tool, apiKey) => {
+            if (!client) return { authenticated: false, method: 'none' as const };
+            try {
+              return await client.service('check-auth').create({ tool, apiKey });
+            } catch {
+              return { authenticated: false, method: 'none' as const, hint: 'Connection check failed.' };
+            }
+          }}
           assistantPending={
             onboardingConfig?.assistantPending ?? onboardingConfig?.persistedAgentPending
           }

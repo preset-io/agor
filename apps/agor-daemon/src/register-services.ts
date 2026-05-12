@@ -53,6 +53,7 @@ import { createArtifactsService } from './services/artifacts.js';
 import { createBoardCommentsService } from './services/board-comments.js';
 import { createBoardObjectsService } from './services/board-objects.js';
 import { createBoardsService } from './services/boards.js';
+import { createCheckAuthService } from './services/check-auth.js';
 import { createCardTypesService } from './services/card-types.js';
 import { createCardsService } from './services/cards.js';
 import { createConfigService } from './services/config.js';
@@ -366,6 +367,9 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       return await configService.resolveApiKey(data);
     },
   });
+
+  app.use('/check-auth', createCheckAuthService(db));
+  app.service('/check-auth').hooks({ before: { create: [ctx.requireAuth] } });
 
   // Copilot dynamic model discovery via @github/copilot-sdk's listModels().
   // Resolves the GitHub token per-user (with config.yaml + env fallback)
