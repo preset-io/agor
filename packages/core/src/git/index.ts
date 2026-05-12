@@ -366,6 +366,12 @@ export function redactGitEnv(env: Record<string, string | undefined>): Record<st
  * `/etc/gitconfig` is intentionally NOT killed — admin policy territory
  * (CA bundles, proxies, safe.directory).
  *
+ * **env isolation**: `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_TERMINAL_PROMPT=0` are
+ * only set when `env` is provided (or an auth token is found in it). Callers
+ * that omit `env` (e.g. `createGit(worktreePath)`) intentionally inherit the
+ * daemon process environment so they can read `/etc/gitconfig`, `safe.directory`,
+ * and other admin-policy config. They still get the `unsafe.*` scanner opt-ins.
+ *
  * @param authHost - Host to scope the auth header to. When omitted, falls back
  *                   to github.com; callers should derive this via
  *                   {@link parseHostFromGitUrl} or {@link resolveAuthHost}.
@@ -580,7 +586,10 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
     }
   }
 
-  // Create git instance with user env vars (SSH host key checking is always disabled).
+  // Create git instance with user env vars. Auth headers are injected via
+  // http.extraheader; GIT_CONFIG_GLOBAL isolation is active only when env is
+  // provided (intentional — callers without env inherit the daemon process
+  // environment so they can read /etc/gitconfig, safe.directory, etc.).
   // Derive the auth-header host from the clone URL so GitHub Enterprise and
   // self-hosted GitLab work without per-deployment configuration. (Bitbucket
   // Cloud needs a different username shape — see buildAuthHeaderEnv comments.)
@@ -1411,7 +1420,8 @@ export async function deleteBranch(repoPath: string, branchName: string): Promis
 }
 
 /**
- * Re-export simpleGit for use in services
- * Allows other packages to use simple-git through @agor/core dependency
+ * Re-export for test helpers only.
+ * Production service code must use createGit() to get the unsafe-ops flags,
+ * env hardening, and consistent git binary selection.
  */
 export { simpleGit };

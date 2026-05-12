@@ -197,14 +197,12 @@ function isRepoReady(repo: Repo): boolean {
 }
 
 /**
- * Find the framework repo only when it's actually usable. Wraps
- * `findFrameworkRepo` (which intentionally returns placeholders so
- * AssistantTab / AssistantsTable can detect "exists") with the wizard's
- * stricter "clone finished" filter.
+ * Find the framework repo only when it's actually usable. Uses `readyOnly`
+ * so non-ready candidates are excluded **before** priority selection —
+ * a stale failed/cloning private fork never hides a ready public repo.
  */
 function findReadyFrameworkRepo(repoById: Map<string, Repo>): [string, Repo] | undefined {
-  const found = findFrameworkRepo(repoById);
-  return found && isRepoReady(found[1]) ? found : undefined;
+  return findFrameworkRepo(repoById, { readyOnly: true });
 }
 
 /**
@@ -510,6 +508,46 @@ export function OnboardingWizard({
       }
     }
   }, [currentStep, loading, worktreeById, createdWorktreeId]);
+
+  // ─── Watch repoById for clone failure (state-driven, race-free) ──
+  // Events can arrive while the listener closure still has `loading=false`
+  // (between handleStartClone() setting loading=true and the next React render
+  // re-registering the effect). Reading failure from authoritative repoById
+  // state covers that race AND durable failure on remount (if the event was
+  // already missed). Logic mirrors the auto-advance effect above, but for
+  // clone_status: 'failed' rather than 'ready'.
+  useEffect(() => {
+    if (currentStep !== 'clone' || !loading) return;
+
+    let failedRepo: Repo | undefined;
+    for (const [, repo] of repoById) {
+      if (repo.clone_status !== 'failed') continue;
+      if (
+        (path === 'assistant' &&
+          (repo.slug === FRAMEWORK_REPO_SLUG || repo.remote_url?.includes('agor-assistant'))) ||
+        (path === 'own-repo' &&
+          ((repoUrl &&
+            repo.remote_url &&
+            normalizeRepoUrl(repo.remote_url) === normalizeRepoUrl(repoUrl)) ||
+            (repoSlug && repo.slug === repoSlug) ||
+            (localRepoPath && repo.local_path === localRepoPath)))
+      ) {
+        failedRepo = repo;
+        break;
+      }
+    }
+
+    if (!failedRepo) return;
+    const message =
+      failedRepo.clone_error?.message ??
+      `Clone failed (exit ${failedRepo.clone_error?.exit_code ?? '?'}).`;
+    setLoading(false);
+    setError(message);
+    if (cloneTimeoutRef.current) {
+      clearTimeout(cloneTimeoutRef.current);
+      cloneTimeoutRef.current = null;
+    }
+  }, [currentStep, loading, path, repoById, repoUrl, repoSlug, localRepoPath]);
 
   // ─── Listen for clone error events from backend ──
   // Two redundant channels because event ordering is not guaranteed and we

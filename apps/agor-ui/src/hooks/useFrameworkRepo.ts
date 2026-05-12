@@ -50,14 +50,25 @@ export function useFrameworkRepo(repos: Repo[]): Repo | undefined {
 
 /**
  * Non-hook version for use in loops / imperative code (e.g., OnboardingWizard effects).
+ *
+ * When `readyOnly` is true, non-ready repos (`clone_status: 'cloning' | 'failed'`) are
+ * excluded **before** priority selection, so a stale/failed higher-priority match (e.g.
+ * an abandoned `agor-assistant-private` clone) never hides a ready lower-priority repo.
  */
-export function findFrameworkRepo(repos: Iterable<[string, Repo]>): [string, Repo] | undefined {
+export function findFrameworkRepo(
+  repos: Iterable<[string, Repo]>,
+  options?: { readyOnly?: boolean }
+): [string, Repo] | undefined {
   const repoArray: Repo[] = [];
   const entryMap = new Map<string, [string, Repo]>();
 
   for (const entry of repos) {
-    repoArray.push(entry[1]);
-    entryMap.set(entry[1].repo_id, entry);
+    const repo = entry[1];
+    if (options?.readyOnly && repo.clone_status !== 'ready' && repo.clone_status !== undefined) {
+      continue;
+    }
+    repoArray.push(repo);
+    entryMap.set(repo.repo_id, entry);
   }
 
   const best = findBestFrameworkRepo(repoArray);
