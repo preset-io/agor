@@ -130,7 +130,7 @@ export function ArtifactConsentModal({
       onCancel={onClose}
       width={920}
       footer={null}
-      destroyOnClose
+      destroyOnHidden
     >
       <Alert
         type="warning"
