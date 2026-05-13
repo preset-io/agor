@@ -11,226 +11,277 @@
   ],
   "exports": {
     ".": {
+      "source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     },
     "./types": {
+      "source": "./src/types/index.ts",
       "types": "./dist/types/index.d.ts",
       "import": "./dist/types/index.js",
       "require": "./dist/types/index.cjs"
     },
     "./db": {
+      "source": "./src/db/index.ts",
       "types": "./dist/db/index.d.ts",
       "import": "./dist/db/index.js",
       "require": "./dist/db/index.cjs"
     },
     "./db/session-guard": {
+      "source": "./src/db/session-guard.ts",
       "types": "./dist/db/session-guard.d.ts",
       "import": "./dist/db/session-guard.js",
       "require": "./dist/db/session-guard.cjs"
     },
     "./git": {
+      "source": "./src/git/index.ts",
       "types": "./dist/git/index.d.ts",
       "import": "./dist/git/index.js",
       "require": "./dist/git/index.cjs"
     },
     "./api": {
+      "source": "./src/api/index.ts",
       "types": "./dist/api/index.d.ts",
       "import": "./dist/api/index.js",
       "require": "./dist/api/index.cjs"
     },
     "./claude": {
+      "source": "./src/claude/index.ts",
       "types": "./dist/claude/index.d.ts",
       "import": "./dist/claude/index.js",
       "require": "./dist/claude/index.cjs"
     },
     "./config": {
+      "source": "./src/config/index.ts",
       "types": "./dist/config/index.d.ts",
       "import": "./dist/config/index.js",
       "require": "./dist/config/index.cjs"
     },
     "./config/browser": {
+      "source": "./src/config/browser.ts",
       "types": "./dist/config/browser.d.ts",
       "import": "./dist/config/browser.js",
       "require": "./dist/config/browser.cjs"
     },
     "./permissions": {
+      "source": "./src/permissions/index.ts",
       "types": "./dist/permissions/index.d.ts",
       "import": "./dist/permissions/index.js",
       "require": "./dist/permissions/index.cjs"
     },
     "./feathers": {
+      "source": "./src/feathers/index.ts",
       "types": "./dist/feathers/index.d.ts",
       "import": "./dist/feathers/index.js",
       "require": "./dist/feathers/index.cjs"
     },
     "./lib/feathers-validation": {
+      "source": "./src/lib/feathers-validation.ts",
       "types": "./dist/lib/feathers-validation.d.ts",
       "import": "./dist/lib/feathers-validation.js",
       "require": "./dist/lib/feathers-validation.cjs"
     },
     "./templates/handlebars-helpers": {
+      "source": "./src/templates/handlebars-helpers.ts",
       "types": "./dist/templates/handlebars-helpers.d.ts",
       "import": "./dist/templates/handlebars-helpers.js",
       "require": "./dist/templates/handlebars-helpers.cjs"
     },
     "./templates/session-context": {
+      "source": "./src/templates/session-context.ts",
       "types": "./dist/templates/session-context.d.ts",
       "import": "./dist/templates/session-context.js",
       "require": "./dist/templates/session-context.cjs"
     },
     "./templates/spawn-subsession-template": {
+      "source": "./src/templates/spawn-subsession-template.ts",
       "types": "./dist/templates/spawn-subsession-template.d.ts",
       "import": "./dist/templates/spawn-subsession-template.js",
       "require": "./dist/templates/spawn-subsession-template.cjs"
     },
     "./templates/zone-trigger-context": {
+      "source": "./src/templates/zone-trigger-context.ts",
       "types": "./dist/templates/zone-trigger-context.d.ts",
       "import": "./dist/templates/zone-trigger-context.js",
       "require": "./dist/templates/zone-trigger-context.cjs"
     },
     "./environment/variable-resolver": {
+      "source": "./src/environment/variable-resolver.ts",
       "types": "./dist/environment/variable-resolver.d.ts",
       "import": "./dist/environment/variable-resolver.js",
       "require": "./dist/environment/variable-resolver.cjs"
     },
     "./environment/render-snapshot": {
+      "source": "./src/environment/render-snapshot.ts",
       "types": "./dist/environment/render-snapshot.d.ts",
       "import": "./dist/environment/render-snapshot.js",
       "require": "./dist/environment/render-snapshot.cjs"
     },
     "./utils/errors": {
+      "source": "./src/utils/errors.ts",
       "types": "./dist/utils/errors.d.ts",
       "import": "./dist/utils/errors.js",
       "require": "./dist/utils/errors.cjs"
     },
     "./yaml": {
+      "source": "./src/yaml/index.ts",
       "types": "./dist/yaml/index.d.ts",
       "import": "./dist/yaml/index.js",
       "require": "./dist/yaml/index.cjs"
     },
     "./utils/url": {
+      "source": "./src/utils/url.ts",
       "types": "./dist/utils/url.d.ts",
       "import": "./dist/utils/url.js",
       "require": "./dist/utils/url.cjs"
     },
     "./utils/permission-mode-mapper": {
+      "source": "./src/utils/permission-mode-mapper.ts",
       "types": "./dist/utils/permission-mode-mapper.d.ts",
       "import": "./dist/utils/permission-mode-mapper.js",
       "require": "./dist/utils/permission-mode-mapper.cjs"
     },
     "./utils/cron": {
+      "source": "./src/utils/cron.ts",
       "types": "./dist/utils/cron.d.ts",
       "import": "./dist/utils/cron.js",
       "require": "./dist/utils/cron.cjs"
     },
     "./utils/context-window": {
+      "source": "./src/utils/context-window.ts",
       "types": "./dist/utils/context-window.d.ts",
       "import": "./dist/utils/context-window.js",
       "require": "./dist/utils/context-window.cjs"
     },
     "./utils/board-placement": {
+      "source": "./src/utils/board-placement.ts",
       "types": "./dist/utils/board-placement.d.ts",
       "import": "./dist/utils/board-placement.js",
       "require": "./dist/utils/board-placement.cjs"
     },
     "./utils/path": {
+      "source": "./src/utils/path.ts",
       "types": "./dist/utils/path.d.ts",
       "import": "./dist/utils/path.js",
       "require": "./dist/utils/path.cjs"
     },
     "./utils/host-ip": {
+      "source": "./src/utils/host-ip.ts",
       "types": "./dist/utils/host-ip.d.ts",
       "import": "./dist/utils/host-ip.js",
       "require": "./dist/utils/host-ip.cjs"
     },
     "./utils/logger": {
+      "source": "./src/utils/logger.ts",
       "types": "./dist/utils/logger.d.ts",
       "import": "./dist/utils/logger.js",
       "require": "./dist/utils/logger.cjs"
     },
     "./utils/jwt": {
+      "source": "./src/utils/jwt.ts",
       "types": "./dist/utils/jwt.d.ts",
       "import": "./dist/utils/jwt.js",
       "require": "./dist/utils/jwt.cjs"
     },
     "./seed": {
+      "source": "./src/seed/index.ts",
       "types": "./dist/seed/index.d.ts",
       "import": "./dist/seed/index.js",
       "require": "./dist/seed/index.cjs"
     },
+    "./seed/dev-fixtures": {
+      "source": "./src/seed/dev-fixtures.ts",
+      "types": "./dist/seed/dev-fixtures.d.ts",
+      "import": "./dist/seed/dev-fixtures.js",
+      "require": "./dist/seed/dev-fixtures.cjs"
+    },
     "./callbacks/child-completion-template": {
+      "source": "./src/callbacks/child-completion-template.ts",
       "types": "./dist/callbacks/child-completion-template.d.ts",
       "import": "./dist/callbacks/child-completion-template.js",
       "require": "./dist/callbacks/child-completion-template.cjs"
     },
     "./client": {
+      "source": "./src/client/index.ts",
       "types": "./dist/client/index.d.ts",
       "import": "./dist/client/index.js",
       "require": "./dist/client/index.cjs"
     },
     "./models": {
+      "source": "./src/models/index.ts",
       "types": "./dist/models/index.d.ts",
       "import": "./dist/models/index.js",
       "require": "./dist/models/index.cjs"
     },
     "./sessions": {
+      "source": "./src/sessions/index.ts",
       "types": "./dist/sessions/index.d.ts",
       "import": "./dist/sessions/index.js",
       "require": "./dist/sessions/index.cjs"
     },
     "./models/browser": {
+      "source": "./src/models/browser.ts",
       "types": "./dist/models/browser.d.ts",
       "import": "./dist/models/browser.js",
       "require": "./dist/models/browser.cjs"
     },
     "./models/gemini-shared": {
+      "source": "./src/models/gemini-shared.ts",
       "types": "./dist/models/gemini-shared.d.ts",
       "import": "./dist/models/gemini-shared.js",
       "require": "./dist/models/gemini-shared.cjs"
     },
     "./sdk": {
+      "source": "./src/sdk/index.ts",
       "types": "./dist/sdk/index.d.ts",
       "import": "./dist/sdk/index.js",
       "require": "./dist/sdk/index.cjs"
     },
     "./tools/mcp/jwt-auth": {
+      "source": "./src/tools/mcp/jwt-auth.ts",
       "types": "./dist/tools/mcp/jwt-auth.d.ts",
       "import": "./dist/tools/mcp/jwt-auth.js",
       "require": "./dist/tools/mcp/jwt-auth.cjs"
     },
     "./tools/mcp/oauth-auth": {
+      "source": "./src/tools/mcp/oauth-auth.ts",
       "types": "./dist/tools/mcp/oauth-auth.d.ts",
       "import": "./dist/tools/mcp/oauth-auth.js",
       "require": "./dist/tools/mcp/oauth-auth.cjs"
     },
     "./tools/mcp/oauth-mcp-transport": {
+      "source": "./src/tools/mcp/oauth-mcp-transport.ts",
       "types": "./dist/tools/mcp/oauth-mcp-transport.d.ts",
       "import": "./dist/tools/mcp/oauth-mcp-transport.js",
       "require": "./dist/tools/mcp/oauth-mcp-transport.cjs"
     },
     "./tools/mcp/oauth-refresh": {
+      "source": "./src/tools/mcp/oauth-refresh.ts",
       "types": "./dist/tools/mcp/oauth-refresh.d.ts",
       "import": "./dist/tools/mcp/oauth-refresh.js",
       "require": "./dist/tools/mcp/oauth-refresh.cjs"
     },
     "./tools/mcp/oauth-token-expiry": {
+      "source": "./src/tools/mcp/oauth-token-expiry.ts",
       "types": "./dist/tools/mcp/oauth-token-expiry.d.ts",
       "import": "./dist/tools/mcp/oauth-token-expiry.js",
       "require": "./dist/tools/mcp/oauth-token-expiry.cjs"
     },
     "./unix": {
+      "source": "./src/unix/index.ts",
       "types": "./dist/unix/index.d.ts",
       "import": "./dist/unix/index.js",
       "require": "./dist/unix/index.cjs"
     },
     "./mcp": {
+      "source": "./src/mcp/index.ts",
       "types": "./dist/mcp/index.d.ts",
       "import": "./dist/mcp/index.js",
       "require": "./dist/mcp/index.cjs"
     },
     "./gateway": {
+      "source": "./src/gateway/index.ts",
       "types": "./dist/gateway/index.d.ts",
       "import": "./dist/gateway/index.js",
       "require": "./dist/gateway/index.cjs"
