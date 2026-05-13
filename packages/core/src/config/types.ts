@@ -672,10 +672,10 @@ export interface AgorCredentials {
 }
 
 /**
- * Onboarding settings (stored by CLI init, consumed by UI wizard)
+ * Onboarding settings (consumed by UI wizard; may be set by existing installs)
  */
 export interface AgorOnboardingSettings {
-  /** Whether assistant setup was requested during init */
+  /** Whether assistant setup is pending (set by existing installs, consumed by UI wizard) */
   assistantPending?: boolean;
   /** @deprecated Use assistantPending instead */
   persistedAgentPending?: boolean;

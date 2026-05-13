@@ -359,7 +359,7 @@ export function OnboardingWizard({
     const mainBoardId = user.preferences?.mainBoardId;
 
     if (!onboarding?.path) {
-      // No prior state — check if CLI set the assistant flag
+      // No prior state — auto-select assistant path if flag was set (e.g. by existing installs)
       if (assistantPending && !path) {
         setPath('assistant');
       }
