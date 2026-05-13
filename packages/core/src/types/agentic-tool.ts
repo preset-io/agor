@@ -153,6 +153,29 @@ export interface AgenticToolCapabilities {
  * Static capability map for all agentic tools.
  * Source of truth for what each tool supports — avoids scattered `if (tool === 'codex')` checks.
  */
+/**
+ * Auth check result — shared type for ITool.isAuthenticated and the daemon /check-auth service.
+ */
+export interface AuthCheckResult {
+  authenticated: boolean;
+  method: 'api-key' | 'oauth' | 'native' | 'none';
+  hint?: string;
+}
+
+/**
+ * Canonical mapping from AgenticToolName to the env-var name that holds its primary API key.
+ * Tools that authenticate without a key (opencode) are intentionally absent.
+ *
+ * Single source of truth — used by the daemon check-auth service, the executor tool registry,
+ * and the onboarding wizard's API-key step.
+ */
+export const TOOL_API_KEY_NAMES: Partial<Record<AgenticToolName, string>> = {
+  'claude-code': 'ANTHROPIC_API_KEY',
+  codex: 'OPENAI_API_KEY',
+  gemini: 'GEMINI_API_KEY',
+  copilot: 'COPILOT_GITHUB_TOKEN',
+};
+
 export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapabilities> = {
   'claude-code': {
     supportsSessionFork: true,

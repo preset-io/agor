@@ -11,7 +11,7 @@
  * - Don't split into Client/Session unless runtime separation is clear
  */
 
-import type { Message } from '@agor/core/types';
+import type { AuthCheckResult, Message } from '@agor/core/types';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 import type {
   CreateSessionConfig,
@@ -214,11 +214,7 @@ export interface ITool {
    * @param apiKey - Raw API key to validate. When omitted the implementation
    *   should use credentials already available in its environment.
    */
-  isAuthenticated?(apiKey?: string): Promise<{
-    authenticated: boolean;
-    method: 'api-key' | 'oauth' | 'native' | 'none';
-    hint?: string;
-  }>;
+  isAuthenticated?(apiKey?: string): Promise<AuthCheckResult>;
 
   /**
    * Compute cumulative context window usage for a session

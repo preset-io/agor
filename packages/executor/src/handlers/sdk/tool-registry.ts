@@ -142,7 +142,7 @@ export async function initializeToolRegistry(): Promise<void> {
   ToolRegistry.register({
     tool: 'gemini',
     name: 'Gemini',
-    apiKeyEnvVar: 'GOOGLE_API_KEY',
+    apiKeyEnvVar: 'GEMINI_API_KEY',
     runner: gemini.executeGeminiTask,
   });
 

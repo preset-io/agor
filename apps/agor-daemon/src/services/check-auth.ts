@@ -6,7 +6,8 @@
  *
  * Strategy per tool:
  * - API-key tools: lightweight HTTP call to the provider's models/user endpoint
- * - OAuth/native-auth tools: return optimistic true (CLI will gate at session time)
+ * - OAuth/native-auth tools (claude-code only): return optimistic true; the CLI gates at session time
+ * - Server-based tools (opencode): always ready
  *
  * Resolution precedence (when no raw key is provided by the caller):
  *   user encrypted key → config.yaml → env var → native auth
@@ -14,22 +15,23 @@
 
 import { type ApiKeyName, resolveApiKey } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
-import type { AgenticToolName, AuthenticatedParams, UserID } from '@agor/core/types';
+import type {
+  AgenticToolName,
+  AuthCheckResult,
+  AuthenticatedParams,
+  UserID,
+} from '@agor/core/types';
+import { TOOL_API_KEY_NAMES } from '@agor/core/types';
 
-export interface AuthCheckResult {
-  authenticated: boolean;
-  method: 'api-key' | 'oauth' | 'native' | 'none';
-  hint?: string;
-}
+/** Tools where no API key is required — native CLI/OAuth auth is a real, usable path. */
+const NATIVE_AUTH_TOOLS = new Set<string>(['claude-code']);
 
-const TOOL_KEY_NAMES: Partial<Record<AgenticToolName, string>> = {
-  'claude-code': 'ANTHROPIC_API_KEY',
-  codex: 'OPENAI_API_KEY',
-  gemini: 'GEMINI_API_KEY',
-  copilot: 'COPILOT_GITHUB_TOKEN',
-};
+const FETCH_TIMEOUT_MS = 8_000;
 
-async function validateApiKey(tool: AgenticToolName, key: string): Promise<boolean> {
+async function validateApiKey(tool: string, key: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
   try {
     let url: string;
     const headers: Record<string, string> = {};
@@ -51,6 +53,8 @@ async function validateApiKey(tool: AgenticToolName, key: string): Promise<boole
         break;
       }
       case 'copilot': {
+        // Validates the GitHub token is accepted. Note: does NOT verify Copilot
+        // entitlement or model access — just that the token is a valid GitHub credential.
         url = 'https://api.github.com/user';
         headers['Authorization'] = `token ${key}`;
         headers['Accept'] = 'application/vnd.github.v3+json';
@@ -60,17 +64,19 @@ async function validateApiKey(tool: AgenticToolName, key: string): Promise<boole
         return true;
     }
 
-    const res = await fetch(url, { method: 'GET', headers });
+    const res = await fetch(url, { method: 'GET', headers, signal: controller.signal });
     return res.ok;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
 export function createCheckAuthService(db: Database) {
   return {
     async create(
-      data: { tool: AgenticToolName; apiKey?: string },
+      data: { tool: string; apiKey?: string },
       params?: AuthenticatedParams
     ): Promise<AuthCheckResult> {
       const { tool, apiKey: rawKey } = data;
@@ -81,7 +87,7 @@ export function createCheckAuthService(db: Database) {
         return { authenticated: true, method: 'native' };
       }
 
-      const keyName = TOOL_KEY_NAMES[tool];
+      const keyName = TOOL_API_KEY_NAMES[tool as keyof typeof TOOL_API_KEY_NAMES];
       if (!keyName) {
         return { authenticated: false, method: 'none', hint: 'Unsupported tool' };
       }
@@ -92,16 +98,27 @@ export function createCheckAuthService(db: Database) {
         return {
           authenticated: ok,
           method: 'api-key',
-          hint: ok ? undefined : 'Key rejected by provider — double-check and try again.',
+          hint: ok
+            ? undefined
+            : tool === 'copilot'
+              ? 'GitHub token rejected — check the token has not expired or been revoked.'
+              : 'Key rejected by provider — double-check and try again.',
         };
       }
 
       // Otherwise resolve from stored credentials (user > config.yaml > env > native).
-      const { apiKey, useNativeAuth } = await resolveApiKey(keyName as ApiKeyName, {
-        userId,
-        db,
-        tool,
-      });
+      const { apiKey, useNativeAuth, decryptionFailed } = await resolveApiKey(
+        keyName as ApiKeyName,
+        { userId, db, tool: tool as AgenticToolName }
+      );
+
+      if (decryptionFailed) {
+        return {
+          authenticated: false,
+          method: 'none',
+          hint: 'Stored key could not be decrypted (master-secret mismatch). Re-enter it in Settings → Agent Setup.',
+        };
+      }
 
       if (apiKey) {
         const ok = await validateApiKey(tool, apiKey);
@@ -114,9 +131,9 @@ export function createCheckAuthService(db: Database) {
         };
       }
 
-      if (useNativeAuth) {
-        // OAuth / CLI session auth — cannot validate without spawning the CLI.
-        // Return optimistic true; the SDK will surface auth errors at session start.
+      if (useNativeAuth && NATIVE_AUTH_TOOLS.has(tool)) {
+        // claude-code supports `claude auth login` — optimistic success.
+        // The SDK will surface auth errors at session start if CLI login is absent.
         return {
           authenticated: true,
           method: 'oauth',

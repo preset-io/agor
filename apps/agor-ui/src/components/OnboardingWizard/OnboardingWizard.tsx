@@ -11,6 +11,7 @@
 import type {
   AgenticToolName,
   AssistantConfig,
+  AuthCheckResult,
   Board,
   CreateLocalRepoRequest,
   CreateRepoRequest,
@@ -20,7 +21,7 @@ import type {
   UserPreferences,
   Worktree,
 } from '@agor-live/client';
-import { normalizeRepoUrl } from '@agor-live/client';
+import { normalizeRepoUrl, TOOL_API_KEY_NAMES } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloudDownloadOutlined,
@@ -106,12 +107,9 @@ export interface OnboardingWizardProps {
     }
   ) => Promise<Worktree | null>;
   onCreateSession: (config: NewSessionConfig, boardId: string) => Promise<string | null>;
-  onUpdateUser: (userId: string, updates: UpdateUserInput) => void;
-  onUpdateWorktree?: (worktreeId: string, updates: Partial<Worktree>) => void;
-  onCheckAuth?: (
-    tool: AgenticToolName,
-    apiKey?: string
-  ) => Promise<{ authenticated: boolean; method: string; hint?: string }>;
+  onUpdateUser: (userId: string, updates: UpdateUserInput) => Promise<void>;
+  onUpdateWorktree?: (worktreeId: string, updates: Partial<Worktree>) => Promise<void>;
+  onCheckAuth?: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
 
   // Config from health endpoint
   assistantPending?: boolean;
@@ -154,20 +152,9 @@ function getStepIndex(steps: WizardStep[], step: WizardStep): number {
 }
 
 function apiKeyNameForAgent(agent: AgenticToolName): string {
-  switch (agent) {
-    case 'claude-code':
-      return 'ANTHROPIC_API_KEY';
-    case 'codex':
-      return 'OPENAI_API_KEY';
-    case 'gemini':
-      return 'GEMINI_API_KEY';
-    case 'copilot':
-      return 'COPILOT_GITHUB_TOKEN';
-    case 'opencode':
-      return 'ANTHROPIC_API_KEY';
-    default:
-      return 'ANTHROPIC_API_KEY';
-  }
+  // opencode has no canonical key of its own; wizard collects an Anthropic key
+  // and routes it to the claude-code bucket (see handleSaveApiKey).
+  return TOOL_API_KEY_NAMES[agent] ?? 'ANTHROPIC_API_KEY';
 }
 
 function apiKeyPlaceholder(agent: AgenticToolName): string {
@@ -291,11 +278,7 @@ export function OnboardingWizard({
   const [apiKey, setApiKey] = useState('');
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName>('claude-code');
   const [testAuthLoading, setTestAuthLoading] = useState(false);
-  const [testAuthResult, setTestAuthResult] = useState<{
-    authenticated: boolean;
-    method: string;
-    hint?: string;
-  } | null>(null);
+  const [testAuthResult, setTestAuthResult] = useState<AuthCheckResult | null>(null);
 
   // Created resource IDs
   const [createdRepoId, setCreatedRepoId] = useState<string | null>(null);
@@ -894,7 +877,7 @@ export function OnboardingWizard({
       const keyName = apiKeyNameForAgent(selectedAgent);
       const targetTool: AgenticToolName =
         selectedAgent === 'opencode' ? 'claude-code' : selectedAgent;
-      onUpdateUser(user.user_id, {
+      await onUpdateUser(user.user_id, {
         agentic_tools: {
           [targetTool]: { [keyName]: apiKey.trim() },
         } as UpdateUserInput['agentic_tools'],
