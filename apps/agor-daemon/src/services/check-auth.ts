@@ -13,7 +13,7 @@
  *   user encrypted key → config.yaml → env var → native auth
  */
 
-import { type ApiKeyName, resolveApiKey } from '@agor/core/config';
+import { resolveApiKey } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
 import type {
   AgenticToolName,
@@ -61,7 +61,7 @@ async function validateApiKey(tool: string, key: string): Promise<boolean> {
         break;
       }
       default:
-        return true;
+        return false;
     }
 
     const res = await fetch(url, { method: 'GET', headers, signal: controller.signal });
@@ -107,10 +107,11 @@ export function createCheckAuthService(db: Database) {
       }
 
       // Otherwise resolve from stored credentials (user > config.yaml > env > native).
-      const { apiKey, useNativeAuth, decryptionFailed } = await resolveApiKey(
-        keyName as ApiKeyName,
-        { userId, db, tool: tool as AgenticToolName }
-      );
+      const { apiKey, useNativeAuth, decryptionFailed } = await resolveApiKey(keyName, {
+        userId,
+        db,
+        tool: tool as AgenticToolName,
+      });
 
       if (decryptionFailed) {
         return {

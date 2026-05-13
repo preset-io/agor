@@ -3,6 +3,20 @@
 import type { AgenticToolID } from './id';
 
 /**
+ * The set of credential env-var names the resolver knows how to look up.
+ * Kept as an explicit union so callers can't accidentally use an unrelated var.
+ * Lives in types (not config) so it is accessible to the browser bundle and
+ * executor without creating a circular config→types dependency.
+ */
+export type ApiKeyName =
+  | 'ANTHROPIC_API_KEY'
+  | 'ANTHROPIC_AUTH_TOKEN'
+  | 'CLAUDE_CODE_OAUTH_TOKEN'
+  | 'OPENAI_API_KEY'
+  | 'GEMINI_API_KEY'
+  | 'COPILOT_GITHUB_TOKEN';
+
+/**
  * Agentic coding tool names
  *
  * These are the external agentic CLI/IDE tools that connect to Agor:
@@ -169,7 +183,7 @@ export interface AuthCheckResult {
  * Single source of truth — used by the daemon check-auth service, the executor tool registry,
  * and the onboarding wizard's API-key step.
  */
-export const TOOL_API_KEY_NAMES: Partial<Record<AgenticToolName, string>> = {
+export const TOOL_API_KEY_NAMES: Partial<Record<AgenticToolName, ApiKeyName>> = {
   'claude-code': 'ANTHROPIC_API_KEY',
   codex: 'OPENAI_API_KEY',
   gemini: 'GEMINI_API_KEY',

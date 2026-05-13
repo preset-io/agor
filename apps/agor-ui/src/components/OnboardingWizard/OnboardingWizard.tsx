@@ -834,7 +834,7 @@ export function OnboardingWizard({
             frameworkRepo: FRAMEWORK_REPO_SLUG,
             createdViaOnboarding: true,
           };
-          onUpdateWorktree(worktree.worktree_id, {
+          await onUpdateWorktree(worktree.worktree_id, {
             custom_context: { ...worktree.custom_context, assistant: assistantConfig },
           });
         }

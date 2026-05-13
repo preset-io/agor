@@ -7,6 +7,7 @@
 
 import { loadConfig } from '@agor/core/config';
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import { TOOL_API_KEY_NAMES } from '@agor/core/types';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { PermissionService } from '../../permissions/permission-service.js';
 import { CopilotTool } from '../../sdk-handlers/copilot/index.js';
@@ -48,7 +49,7 @@ export async function executeCopilotTask(params: {
     // Execute using base helper with Copilot-specific factory
     await executeToolTask({
       ...params,
-      apiKeyEnvVar: 'COPILOT_GITHUB_TOKEN',
+      apiKeyEnvVar: TOOL_API_KEY_NAMES['copilot']!,
       toolName: 'copilot',
       createTool: (repos, apiKey, useNativeAuth) =>
         new CopilotTool(

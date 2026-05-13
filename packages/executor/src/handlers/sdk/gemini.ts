@@ -5,6 +5,7 @@
  */
 
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import { TOOL_API_KEY_NAMES } from '@agor/core/types';
 import { GeminiTool } from '../../sdk-handlers/gemini/index.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 
@@ -28,7 +29,7 @@ export async function executeGeminiTask(params: {
   // Execute using base helper with Gemini-specific factory
   await executeToolTask({
     ...params,
-    apiKeyEnvVar: 'GEMINI_API_KEY',
+    apiKeyEnvVar: TOOL_API_KEY_NAMES['gemini']!,
     toolName: 'gemini',
     createTool: (repos, apiKey, useNativeAuth) =>
       new GeminiTool(

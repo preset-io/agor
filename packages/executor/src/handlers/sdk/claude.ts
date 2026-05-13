@@ -6,6 +6,7 @@
 
 import { loadConfig } from '@agor/core/config';
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import { TOOL_API_KEY_NAMES } from '@agor/core/types';
 import { globalInputRequestManager } from '../../input-requests/input-request-manager.js';
 import { InputRequestService } from '../../input-requests/input-request-service.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
@@ -56,7 +57,7 @@ export async function executeClaudeCodeTask(params: {
     // Execute using base helper with Claude-specific factory
     await executeToolTask({
       ...params,
-      apiKeyEnvVar: 'ANTHROPIC_API_KEY',
+      apiKeyEnvVar: TOOL_API_KEY_NAMES['claude-code']!,
       toolName: 'claude-code',
       createTool: (repos, apiKey, useNativeAuth) =>
         new ClaudeTool(

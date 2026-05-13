@@ -247,7 +247,8 @@ function AppContent() {
 
     if (!currentUser) return;
 
-    // Silent: the wizard closing + navigation is the confirmation here.
+    // Silent + fire-and-forget: wizard closing + navigation is the confirmation here.
+    // Non-critical — if the preference save fails the wizard just re-opens on next login.
     handleUpdateUser(
       currentUser.user_id,
       {
@@ -263,7 +264,7 @@ function AppContent() {
         },
       },
       { silent: true }
-    );
+    ).catch(() => {});
 
     // Clear the assistant pending flag if applicable
     if (result.path === 'assistant' && client) {
@@ -647,7 +648,12 @@ function AppContent() {
         showSuccess('User updated successfully!');
       }
     } catch (error) {
-      showError(`Failed to update user: ${error instanceof Error ? error.message : String(error)}`);
+      if (!options.silent) {
+        showError(
+          `Failed to update user: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+      throw error;
     }
   };
 

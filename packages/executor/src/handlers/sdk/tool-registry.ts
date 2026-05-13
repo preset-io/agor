@@ -6,6 +6,7 @@
  */
 
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import { TOOL_API_KEY_NAMES } from '@agor/core/types';
 import type { AgorClient } from '../../services/feathers-client.js';
 
 /**
@@ -126,7 +127,7 @@ export async function initializeToolRegistry(): Promise<void> {
   ToolRegistry.register({
     tool: 'claude-code',
     name: 'Claude Code',
-    apiKeyEnvVar: 'ANTHROPIC_API_KEY',
+    apiKeyEnvVar: TOOL_API_KEY_NAMES['claude-code']!,
     runner: claude.executeClaudeCodeTask,
   });
 
@@ -134,7 +135,7 @@ export async function initializeToolRegistry(): Promise<void> {
   ToolRegistry.register({
     tool: 'codex',
     name: 'Codex',
-    apiKeyEnvVar: 'OPENAI_API_KEY',
+    apiKeyEnvVar: TOOL_API_KEY_NAMES['codex']!,
     runner: codex.executeCodexTask,
   });
 
@@ -142,7 +143,7 @@ export async function initializeToolRegistry(): Promise<void> {
   ToolRegistry.register({
     tool: 'gemini',
     name: 'Gemini',
-    apiKeyEnvVar: 'GEMINI_API_KEY',
+    apiKeyEnvVar: TOOL_API_KEY_NAMES['gemini']!,
     runner: gemini.executeGeminiTask,
   });
 
@@ -158,7 +159,7 @@ export async function initializeToolRegistry(): Promise<void> {
   ToolRegistry.register({
     tool: 'copilot',
     name: 'GitHub Copilot',
-    apiKeyEnvVar: 'COPILOT_GITHUB_TOKEN', // or GH_TOKEN / GITHUB_TOKEN
+    apiKeyEnvVar: TOOL_API_KEY_NAMES['copilot']!, // Note: execution also accepts GH_TOKEN / GITHUB_TOKEN aliases
     runner: copilot.executeCopilotTask,
   });
 }

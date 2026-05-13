@@ -2,24 +2,12 @@ import { decryptApiKey, eq } from '../db';
 import type { Database } from '../db/client';
 import { select } from '../db/database-wrapper';
 import { users } from '../db/schema';
-import type { AgenticToolName, StoredAgenticTools, UserID } from '../types';
+import type { AgenticToolName, ApiKeyName, StoredAgenticTools, UserID } from '../types';
 import { getCredential, isConfigCredentialKey } from './config-manager';
 
-/**
- * The set of credential env-var names the resolver knows how to look up at the
- * per-user (`agentic_tools[tool][keyName]`), config.yaml, and OS-env layers.
- *
- * Kept as an explicit union (rather than `string`) so callers can't accidentally
- * ask the resolver for an unrelated env var like `PATH` or `AGOR_MASTER_SECRET`.
- * Add new entries here when a tool's per-tool field config grows.
- */
-export type ApiKeyName =
-  | 'ANTHROPIC_API_KEY'
-  | 'ANTHROPIC_AUTH_TOKEN'
-  | 'CLAUDE_CODE_OAUTH_TOKEN'
-  | 'OPENAI_API_KEY'
-  | 'GEMINI_API_KEY'
-  | 'COPILOT_GITHUB_TOKEN';
+// ApiKeyName is defined in @agor/core/types so it is accessible to the browser
+// bundle and executor without a config→types circular dependency.
+export type { ApiKeyName } from '../types';
 
 export interface KeyResolutionContext {
   /** User ID for per-user key lookup */
