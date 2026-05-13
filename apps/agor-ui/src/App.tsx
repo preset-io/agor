@@ -23,6 +23,7 @@ import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-ro
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
 import { App as AgorApp } from './components/App';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
+import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
 import { MobileApp } from './components/mobile/MobileApp';
 import { OnboardingWizard } from './components/OnboardingWizard';
@@ -31,12 +32,12 @@ import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ServicesConfigContext } from './contexts/ServicesConfigContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import {
-  INITIAL_LOAD_ITEMS,
   useAgorClient,
   useAgorData,
   useAuth,
   useAuthConfig,
   useBoardActions,
+  useInitialLoaderPhase,
   useServerVersion,
   useSessionActions,
 } from './hooks';
@@ -194,15 +195,6 @@ function AppContent() {
   // This prevents UI from unmounting during reconnections
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
-  // Phase machine for the initial loading screen.
-  // Using explicit phases (instead of deriving from connecting/loading/hasLoadedOnce)
-  // keeps the screen in the DOM through the hold and fade even after loading flips
-  // false — otherwise React unmounts it the same tick data arrives.
-  //   loading  → data arrives → complete → (250ms hold) → fading → (280ms) → done
-  const [loaderPhase, setLoaderPhase] = useState<'loading' | 'complete' | 'fading' | 'done'>(
-    'loading'
-  );
-
   // Mark as loaded once the initial fetch completes (regardless of whether the
   // workspace is empty — checking map sizes failed for fresh instances with no
   // sessions/boards/repos yet).
@@ -212,37 +204,14 @@ function AppContent() {
     }
   }, [loading, loadingItems, dataError]);
 
-  // Effect 1: advance 'loading' → 'complete' (or straight to 'done' on error /
-  // when data fetching is disabled). The loadingItems guard prevents advancing
-  // during the pre-fetch window: when the socket first connects, useAgorData
-  // briefly has loading:false (set by the null-client path) before fetchData
-  // runs and sets loading:true. Without the guard the 250ms hold would start
-  // before any checkmarks appeared. Error / must_change_password skip the hold.
   const mustChangePassword = !!user?.must_change_password;
-  useEffect(() => {
-    if (!connecting && !loading && loaderPhase === 'loading') {
-      if (dataError || mustChangePassword) {
-        setLoaderPhase('done');
-      } else if (Object.keys(loadingItems).length > 0) {
-        setLoaderPhase('complete');
-      }
-      // else: pre-fetch window (loadingItems still empty) — wait
-    }
-  }, [connecting, loading, loaderPhase, dataError, mustChangePassword, loadingItems]);
-
-  // Effect 2: timed complete → fading → done.
-  // Isolated to [loaderPhase] so the holdTimer is only cancelled when the phase
-  // actually changes — not on every unrelated dep change (that was the prior bug).
-  useEffect(() => {
-    if (loaderPhase === 'complete') {
-      const t = setTimeout(() => setLoaderPhase('fading'), 250);
-      return () => clearTimeout(t);
-    }
-    if (loaderPhase === 'fading') {
-      const t = setTimeout(() => setLoaderPhase('done'), 280);
-      return () => clearTimeout(t);
-    }
-  }, [loaderPhase]);
+  const loaderPhase = useInitialLoaderPhase({
+    connecting,
+    loading,
+    dataError,
+    mustChangePassword,
+    loadingItems,
+  });
 
   // Get current user from users Map (real-time updates via WebSocket)
   // This ensures we get the latest onboarding_completed status
@@ -446,53 +415,12 @@ function AppContent() {
   // Show loading state ONLY on initial load, not during reconnections
   // Once data is loaded, keep UI mounted and show connection status in header instead
   if (loaderPhase !== 'done') {
-    const statusMessage = connecting ? 'Connecting to daemon…' : 'Loading workspace…';
     return (
-      <div
-        style={{
-          height: '100vh',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: token.colorBgLayout,
-          opacity: loaderPhase === 'fading' ? 0 : 1,
-          transition: 'opacity 280ms ease-out',
-        }}
-      >
-        <Spin size="large" />
-        <div style={{ marginTop: 16, color: 'rgba(255, 255, 255, 0.65)' }}>{statusMessage}</div>
-        {!connecting && (
-          <div style={{ marginTop: 24, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {INITIAL_LOAD_ITEMS.map(({ key, label }) => {
-              const done = !!loadingItems[key];
-              return (
-                <div
-                  key={key}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 10,
-                    color: done ? 'rgba(255,255,255,0.65)' : 'rgba(255,255,255,0.35)',
-                  }}
-                >
-                  <span
-                    style={{
-                      width: 16,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    {done ? <span style={{ color: '#52c41a' }}>✓</span> : <Spin size="small" />}
-                  </span>
-                  <span style={{ fontSize: 13 }}>{label}</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      <InitialLoadingScreen
+        phase={loaderPhase}
+        connecting={connecting}
+        loadingItems={loadingItems}
+      />
     );
   }
 

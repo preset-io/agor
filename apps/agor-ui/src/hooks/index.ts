@@ -11,6 +11,7 @@ export * from './useAgorData';
 export * from './useAuth';
 export * from './useAuthConfig';
 export * from './useBoardActions';
+export * from './useInitialLoaderPhase';
 export * from './useLocalStorage';
 export * from './useMessages';
 export * from './usePermissions';
