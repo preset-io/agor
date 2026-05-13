@@ -815,13 +815,26 @@ export class SDKMessageProcessor {
 
   /**
    * System message subtypes to suppress (log-only, don't surface to users).
-   * Everything NOT in this set (and not already handled) is surfaced by default.
+   *
+   * Blacklist philosophy: surface unknown subtypes by default so newly added
+   * SDK events (e.g. `mirror_error`, `notification`, `api_retry`, `memory_recall`,
+   * `plugin_install`) reach users without code changes. Only entries we have
+   * confirmed are pure lifecycle telemetry belong here. The fall-through path
+   * at L741 logs every unhandled subtype, which is how we'd notice a new one.
+   *
+   * History:
+   *   - PR #1116 added the `status='requesting'` predicate (handled separately
+   *     above, since `status` is a value, not a subtype).
+   *   - Follow-up to #1116 added `task_updated`, completing the `task_*` family
+   *     after it started leaking through and rendering as
+   *     "SDK event: system/task_updated" blurbs in transcripts.
    */
   private static readonly SUPPRESSED_SYSTEM_SUBTYPES = new Set([
     'files_persisted', // Internal SDK bookkeeping
     'session_state_changed', // Internal SDK state transitions
     'task_started', // SDK task lifecycle — no user-facing value
     'task_progress', // SDK task lifecycle — fires repeatedly, very noisy
+    'task_updated', // SDK task lifecycle — fires on every task state patch
     'task_notification', // SDK task lifecycle notification
   ]);
 

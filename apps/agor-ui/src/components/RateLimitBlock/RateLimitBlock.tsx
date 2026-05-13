@@ -32,21 +32,29 @@ export const RateLimitBlock: React.FC<RateLimitBlockProps> = ({ message, agentic
   const block = rateLimitBlock || apiWaitBlock || sdkEventBlock;
   if (!block) return null;
 
-  // Defensive filter: hide already-persisted system/status messages with status='requesting'.
-  // Server-side filter in message-processor.ts drops these going forward; this catches noise
-  // already in the DB from sessions created between the SDK bump and this fix.
+  // Defensive filter: hide already-persisted noisy SDK lifecycle events.
+  // The server-side filter in message-processor.ts drops these going forward;
+  // this catches noise already in the DB from sessions created before each fix.
+  //   - system/status (status='requesting'): PR #1116, fires on every API call
+  //   - system/task_updated (follow-up to #1116): fires on every task state patch
   if (
     block.type === 'sdk_event' &&
     'sdkType' in block &&
     block.sdkType === 'system' &&
-    'sdkSubtype' in block &&
-    block.sdkSubtype === 'status' &&
-    'metadata' in block &&
-    typeof block.metadata === 'object' &&
-    block.metadata !== null &&
-    (block.metadata as { status?: unknown }).status === 'requesting'
+    'sdkSubtype' in block
   ) {
-    return null;
+    if (
+      block.sdkSubtype === 'status' &&
+      'metadata' in block &&
+      typeof block.metadata === 'object' &&
+      block.metadata !== null &&
+      (block.metadata as { status?: unknown }).status === 'requesting'
+    ) {
+      return null;
+    }
+    if (block.sdkSubtype === 'task_updated') {
+      return null;
+    }
   }
 
   const text = ('text' in block ? block.text : '') as string;
