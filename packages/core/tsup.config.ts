@@ -39,6 +39,7 @@ export default defineConfig({
     'models/index': 'src/models/index.ts', // Model metadata (browser-safe)
     'sessions/index': 'src/sessions/index.ts', // Session config defaults resolution
     'sdk/index': 'src/sdk/index.ts', // AI SDK re-exports (Claude, Codex, Gemini, OpenCode)
+    'sdk/claude-system-suppression': 'src/sdk/claude-system-suppression.ts', // Browser-safe Claude system event suppression rules
     'tools/mcp/jwt-auth': 'src/tools/mcp/jwt-auth.ts', // MCP JWT authentication utilities
     'tools/mcp/oauth-auth': 'src/tools/mcp/oauth-auth.ts', // MCP OAuth 2.0 authentication utilities
     'tools/mcp/oauth-mcp-transport': 'src/tools/mcp/oauth-mcp-transport.ts', // MCP OAuth 2.1 protocol transport

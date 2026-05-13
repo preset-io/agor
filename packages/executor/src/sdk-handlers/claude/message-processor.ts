@@ -21,6 +21,10 @@ import type {
   SDKUserMessage,
   SDKUserMessageReplay,
 } from '@agor/core/sdk';
+import {
+  SUPPRESSED_CLAUDE_STATUSES,
+  SUPPRESSED_CLAUDE_SYSTEM_SUBTYPES,
+} from '@agor/core/sdk/claude-system-suppression';
 import type { SessionID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 
@@ -683,10 +687,14 @@ export class SDKMessageProcessor {
       ];
     }
 
-    // Suppress status='requesting' — pure API-call lifecycle telemetry, fires on every request.
-    // Other status subtype variants (null, permissionMode change, compact_result/error) still flow
-    // through and get surfaced as generic sdk_event messages below.
-    if ('status' in msg && msg.status === 'requesting') {
+    // Suppress noisy status values (e.g. 'requesting' — fires on every API call).
+    // Other status variants (null, permissionMode change, compact_result/error) still
+    // flow through and get surfaced as generic sdk_event messages below.
+    if (
+      'status' in msg &&
+      typeof msg.status === 'string' &&
+      SUPPRESSED_CLAUDE_STATUSES.has(msg.status)
+    ) {
       return [];
     }
 
@@ -733,7 +741,7 @@ export class SDKMessageProcessor {
     const subtype =
       ('subtype' in msg ? (msg as { subtype?: string }).subtype : undefined) || 'unknown';
 
-    if (SDKMessageProcessor.SUPPRESSED_SYSTEM_SUBTYPES.has(subtype)) {
+    if ((SUPPRESSED_CLAUDE_SYSTEM_SUBTYPES as ReadonlySet<string>).has(subtype)) {
       console.debug(`🔇 Suppressed system subtype: ${subtype}`);
       return [];
     }
@@ -811,31 +819,6 @@ export class SDKMessageProcessor {
   private static readonly SUPPRESSED_MESSAGE_TYPES = new Set([
     'tool_progress', // Fires constantly during tool execution — extremely noisy
     'prompt_suggestion', // End-of-conversation suggestions, not relevant in Agor
-  ]);
-
-  /**
-   * System message subtypes to suppress (log-only, don't surface to users).
-   *
-   * Blacklist philosophy: surface unknown subtypes by default so newly added
-   * SDK events (e.g. `mirror_error`, `notification`, `api_retry`, `memory_recall`,
-   * `plugin_install`) reach users without code changes. Only entries we have
-   * confirmed are pure lifecycle telemetry belong here. The fall-through path
-   * at L741 logs every unhandled subtype, which is how we'd notice a new one.
-   *
-   * History:
-   *   - PR #1116 added the `status='requesting'` predicate (handled separately
-   *     above, since `status` is a value, not a subtype).
-   *   - Follow-up to #1116 added `task_updated`, completing the `task_*` family
-   *     after it started leaking through and rendering as
-   *     "SDK event: system/task_updated" blurbs in transcripts.
-   */
-  private static readonly SUPPRESSED_SYSTEM_SUBTYPES = new Set([
-    'files_persisted', // Internal SDK bookkeeping
-    'session_state_changed', // Internal SDK state transitions
-    'task_started', // SDK task lifecycle — no user-facing value
-    'task_progress', // SDK task lifecycle — fires repeatedly, very noisy
-    'task_updated', // SDK task lifecycle — fires on every task state patch
-    'task_notification', // SDK task lifecycle notification
   ]);
 
   /**
