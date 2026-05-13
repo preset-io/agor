@@ -152,7 +152,7 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
       ]}
     >
       <ErrorBoundary fallbackTitle="Couldn't render the logs viewer." resetKey={logs?.timestamp}>
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
           {/* Timestamp and truncation warning */}
           {logs && !logs.error && (
             <div>

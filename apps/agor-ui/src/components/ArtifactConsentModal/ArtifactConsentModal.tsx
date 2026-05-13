@@ -232,7 +232,7 @@ export function ArtifactConsentModal({
           Trust scope
         </Typography.Title>
         <Radio.Group value={scope} onChange={(e) => setScope(e.target.value)}>
-          <Space direction="vertical">
+          <Space orientation="vertical">
             <Radio value="session">Just once (in-memory; cleared when daemon restarts)</Radio>
             <Radio value="artifact">This artifact only</Radio>
             <Radio value="author" disabled={requestsAgorToken}>
