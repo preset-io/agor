@@ -1125,6 +1125,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [requireAuth],
       create: [
         requireMinimumRole(ROLES.ADMIN, 'create gateway channels'),
+        injectCreatedBy(),
         // Encrypt env var values at rest (same pattern as user env vars / API keys)
         async (context: HookContext) => {
           const data = context.data as Record<string, unknown> | undefined;
