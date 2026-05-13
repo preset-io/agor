@@ -39,6 +39,9 @@ export const INITIAL_LOAD_ITEMS = [
 
 export type InitialLoadItemKey = (typeof INITIAL_LOAD_ITEMS)[number]['key'];
 
+export const allInitialLoadItemsDone = (items: Partial<Record<InitialLoadItemKey, true>>) =>
+  INITIAL_LOAD_ITEMS.every(({ key }) => items[key]);
+
 interface UseAgorDataResult {
   sessionById: Map<string, Session>; // O(1) lookups by session_id - efficient, stable references
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree-scoped filtering

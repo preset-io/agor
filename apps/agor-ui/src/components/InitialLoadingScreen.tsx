@@ -1,6 +1,6 @@
 import { Spin, theme } from 'antd';
 import type { InitialLoadItemKey, LoaderPhase } from '../hooks';
-import { INITIAL_LOAD_ITEMS } from '../hooks/useAgorData';
+import { INITIAL_LOAD_ITEMS } from '../hooks';
 
 interface Props {
   phase: LoaderPhase;

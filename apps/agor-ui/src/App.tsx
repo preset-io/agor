@@ -32,6 +32,7 @@ import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ServicesConfigContext } from './contexts/ServicesConfigContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import {
+  allInitialLoadItemsDone,
   useAgorClient,
   useAgorData,
   useAuth,
@@ -199,7 +200,7 @@ function AppContent() {
   // workspace is empty — checking map sizes failed for fresh instances with no
   // sessions/boards/repos yet).
   useEffect(() => {
-    if (!loading && !dataError && Object.keys(loadingItems).length > 0) {
+    if (!loading && !dataError && allInitialLoadItemsDone(loadingItems)) {
       setHasLoadedOnce(true);
     }
   }, [loading, loadingItems, dataError]);

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { InitialLoadItemKey } from './useAgorData';
+import { allInitialLoadItemsDone } from './useAgorData';
 
 export type LoaderPhase = 'loading' | 'complete' | 'fading' | 'done';
 
@@ -36,7 +37,7 @@ export function useInitialLoaderPhase({
     if (!connecting && !loading && loaderPhase === 'loading') {
       if (dataError || mustChangePassword) {
         setLoaderPhase('done');
-      } else if (Object.keys(loadingItems).length > 0) {
+      } else if (allInitialLoadItemsDone(loadingItems)) {
         setLoaderPhase('complete');
       }
     }
