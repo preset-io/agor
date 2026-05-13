@@ -363,6 +363,29 @@ export function useAgorData(
     [client, enabled]
   );
 
+  // Clear all data when client goes away (logout / token revocation).
+  // Without this, the previous user's Maps linger in memory and briefly
+  // flash to the next user who logs in before fetchData() repopulates them.
+  useEffect(() => {
+    if (client) return;
+    setSessionById(new Map());
+    setSessionsByWorktree(new Map());
+    setBoardById(new Map());
+    setBoardObjectById(new Map());
+    setCommentById(new Map());
+    setCardById(new Map());
+    setCardTypeById(new Map());
+    setRepoById(new Map());
+    setWorktreeById(new Map());
+    setUserById(new Map());
+    setMcpServerById(new Map());
+    setGatewayChannelById(new Map());
+    setArtifactById(new Map());
+    setSessionMcpServerIds(new Map());
+    setUserAuthenticatedMcpServerIds(new Set());
+    setHasInitiallyFetched(false);
+  }, [client]);
+
   // Subscribe to real-time updates
   useEffect(() => {
     if (!client || !enabled) {

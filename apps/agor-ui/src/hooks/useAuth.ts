@@ -374,17 +374,8 @@ export function useAuth(): UseAuthReturn {
     }
   };
 
-  /**
-   * Logout
-   *
-   * Clears authentication tokens and forces a full page reload to clear all cached state.
-   * This prevents cached data from one user from leaking to another user on the same browser.
-   */
   const logout = async () => {
-    // Clear tokens from localStorage
     clearTokens();
-
-    // Clear state (will be reset on reload anyway, but good practice)
     setState({
       user: null,
       accessToken: null,
@@ -392,13 +383,6 @@ export function useAuth(): UseAuthReturn {
       loading: false,
       error: null,
     });
-
-    // Force full page reload to clear:
-    // - Feathers client cache
-    // - All React state (sessionById, worktreeById, etc.)
-    // - Any other in-memory cached data
-    // This prevents security issues where User A's data remains visible after User B logs in
-    window.location.href = '/';
   };
 
   return {
