@@ -40,6 +40,7 @@ interface UseAgorDataResult {
   artifactById: Map<string, Artifact>; // O(1) lookups by artifact_id - efficient, stable references
   sessionMcpServerIds: Map<string, string[]>; // O(1) lookups by session_id - efficient, stable references
   userAuthenticatedMcpServerIds: Set<string>; // MCP server IDs where current user has valid per-user OAuth tokens
+  loadingItems: Record<string, boolean>;
   loading: boolean;
   error: string | null;
   refetch: () => Promise<void>;
@@ -80,6 +81,7 @@ export function useAgorData(
   );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [loadingItems, setLoadingItems] = useState<Record<string, boolean>>({});
 
   // Track if we've done initial fetch. The initial fetch happens once on mount;
   // socket reconnects after that re-trigger fetchData() to recover any events
@@ -124,6 +126,7 @@ export function useAgorData(
         if (!silent) {
           setLoading(true);
           setError(null);
+          setLoadingItems({});
         }
 
         // Fetch sessions, boards, board-objects, comments, repos, worktrees, users, mcp servers, session-mcp relationships in parallel.
@@ -144,27 +147,77 @@ export function useAgorData(
           artifactsList,
           oauthStatusResult,
         ] = await Promise.all([
-          client.service('sessions').findAll({
-            query: { archived: false, $limit: PAGINATION.DEFAULT_LIMIT, $sort: { updated_at: -1 } },
-          }),
-          client.service('boards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          client
+            .service('sessions')
+            .findAll({
+              query: {
+                archived: false,
+                $limit: PAGINATION.DEFAULT_LIMIT,
+                $sort: { updated_at: -1 },
+              },
+            })
+            .then((r) => {
+              setLoadingItems((prev) => ({ ...prev, sessions: true }));
+              return r;
+            }),
+          client
+            .service('boards')
+            .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+            .then((r) => {
+              setLoadingItems((prev) => ({ ...prev, boards: true }));
+              return r;
+            }),
           client.service('board-objects').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
           client.service('board-comments').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          client.service('cards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          client
+            .service('cards')
+            .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+            .then((r) => {
+              setLoadingItems((prev) => ({ ...prev, cards: true }));
+              return r;
+            }),
           client.service('card-types').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          client.service('repos').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          client
+            .service('repos')
+            .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+            .then((r) => {
+              setLoadingItems((prev) => ({ ...prev, repos: true }));
+              return r;
+            }),
           client
             .service('worktrees')
-            .findAll({ query: { archived: false, $limit: PAGINATION.DEFAULT_LIMIT } }),
-          client.service('users').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          client.service('mcp-servers').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+            .findAll({ query: { archived: false, $limit: PAGINATION.DEFAULT_LIMIT } })
+            .then((r) => {
+              setLoadingItems((prev) => ({ ...prev, worktrees: true }));
+              return r;
+            }),
+          client
+            .service('users')
+            .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+            .then((r) => {
+              setLoadingItems((prev) => ({ ...prev, users: true }));
+              return r;
+            }),
+          client
+            .service('mcp-servers')
+            .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+            .then((r) => {
+              setLoadingItems((prev) => ({ ...prev, 'mcp-servers': true }));
+              return r;
+            }),
           client
             .service('session-mcp-servers')
             .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
           client
             .service('gateway-channels')
             .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          client.service('artifacts').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          client
+            .service('artifacts')
+            .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+            .then((r) => {
+              setLoadingItems((prev) => ({ ...prev, artifacts: true }));
+              return r;
+            }),
           client
             .service('mcp-servers/oauth-status')
             .find()
@@ -1124,6 +1177,7 @@ export function useAgorData(
     artifactById,
     sessionMcpServerIds,
     userAuthenticatedMcpServerIds,
+    loadingItems,
     loading,
     error,
     refetch: fetchData,

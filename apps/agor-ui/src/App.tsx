@@ -43,6 +43,17 @@ import { StreamdownDemoPage } from './pages/StreamdownDemoPage';
 import { isMobileDevice } from './utils/deviceDetection';
 import { useThemedMessage } from './utils/message';
 
+const LOADING_ITEMS = [
+  { key: 'sessions', label: 'Sessions' },
+  { key: 'boards', label: 'Boards' },
+  { key: 'worktrees', label: 'Worktrees' },
+  { key: 'repos', label: 'Repos' },
+  { key: 'users', label: 'Users' },
+  { key: 'cards', label: 'Cards' },
+  { key: 'mcp-servers', label: 'MCP servers' },
+  { key: 'artifacts', label: 'Artifacts' },
+];
+
 /**
  * DeviceRouter - Redirects users to mobile or desktop site based on device detection
  * Responds to window resize events for responsive switching
@@ -155,6 +166,7 @@ function AppContent() {
     artifactById,
     sessionMcpServerIds,
     userAuthenticatedMcpServerIds,
+    loadingItems,
     loading,
     error: dataError,
   } = useAgorData(connected ? client : null, {
@@ -401,6 +413,7 @@ function AppContent() {
   // Show loading state ONLY on initial load, not during reconnections
   // Once data is loaded, keep UI mounted and show connection status in header instead
   if ((connecting || loading) && !hasLoadedOnce) {
+    const statusMessage = connecting ? 'Connecting to daemon…' : 'Loading workspace…';
     return (
       <div
         style={{
@@ -413,9 +426,37 @@ function AppContent() {
         }}
       >
         <Spin size="large" />
-        <div style={{ marginTop: 16, color: 'rgba(255, 255, 255, 0.65)' }}>
-          Connecting to daemon...
-        </div>
+        <div style={{ marginTop: 16, color: 'rgba(255, 255, 255, 0.65)' }}>{statusMessage}</div>
+        {!connecting && (
+          <div style={{ marginTop: 24, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {LOADING_ITEMS.map(({ key, label }) => {
+              const done = !!loadingItems[key];
+              return (
+                <div
+                  key={key}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    color: done ? 'rgba(255,255,255,0.65)' : 'rgba(255,255,255,0.35)',
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 16,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    {done ? <span style={{ color: '#52c41a' }}>✓</span> : <Spin size="small" />}
+                  </span>
+                  <span style={{ fontSize: 13 }}>{label}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     );
   }
