@@ -35,7 +35,7 @@ export const RateLimitBlock: React.FC<RateLimitBlockProps> = ({ message, agentic
 
   // Defensive filter for sdk_event rows already in the DB. The server-side
   // suppression in message-processor.ts is forward-only; the shared helper
-  // keeps both sides honest. See @agor/core/sdk/claude-system-suppression.
+  // keeps both sides honest. See @agor/core/client/claude-system-suppression.
   if (shouldHidePersistedClaudeSdkEvent(block)) {
     return null;
   }
