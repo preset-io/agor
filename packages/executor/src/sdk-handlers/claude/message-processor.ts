@@ -11,6 +11,10 @@
  * - Yield structured events for database persistence
  */
 
+import {
+  SUPPRESSED_CLAUDE_STATUSES,
+  SUPPRESSED_CLAUDE_SYSTEM_SUBTYPES,
+} from '@agor/core/client/claude-system-suppression';
 import type {
   SDKAssistantMessage,
   SDKCompactBoundaryMessage,
@@ -21,10 +25,6 @@ import type {
   SDKUserMessage,
   SDKUserMessageReplay,
 } from '@agor/core/sdk';
-import {
-  SUPPRESSED_CLAUDE_STATUSES,
-  SUPPRESSED_CLAUDE_SYSTEM_SUBTYPES,
-} from '@agor/core/sdk/claude-system-suppression';
 import type { SessionID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 
@@ -693,7 +693,7 @@ export class SDKMessageProcessor {
     if (
       'status' in msg &&
       typeof msg.status === 'string' &&
-      SUPPRESSED_CLAUDE_STATUSES.has(msg.status)
+      (SUPPRESSED_CLAUDE_STATUSES as ReadonlySet<string>).has(msg.status)
     ) {
       return [];
     }

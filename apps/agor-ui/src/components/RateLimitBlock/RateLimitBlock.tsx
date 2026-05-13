@@ -7,7 +7,7 @@
  * - sdk_event → Shows unhandled SDK events (blacklist approach: surface by default)
  */
 
-import { shouldHidePersistedClaudeSdkEvent } from '@agor/core/sdk/claude-system-suppression';
+import { shouldHidePersistedClaudeSdkEvent } from '@agor/core/client/claude-system-suppression';
 import type { Message } from '@agor-live/client';
 import { ClockCircleOutlined, InfoCircleOutlined, WarningOutlined } from '@ant-design/icons';
 import { Space, Typography, theme } from 'antd';

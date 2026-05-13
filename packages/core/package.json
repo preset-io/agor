@@ -238,11 +238,11 @@
       "import": "./dist/sdk/index.js",
       "require": "./dist/sdk/index.cjs"
     },
-    "./sdk/claude-system-suppression": {
-      "source": "./src/sdk/claude-system-suppression.ts",
-      "types": "./dist/sdk/claude-system-suppression.d.ts",
-      "import": "./dist/sdk/claude-system-suppression.js",
-      "require": "./dist/sdk/claude-system-suppression.cjs"
+    "./client/claude-system-suppression": {
+      "source": "./src/client/claude-system-suppression.ts",
+      "types": "./dist/client/claude-system-suppression.d.ts",
+      "import": "./dist/client/claude-system-suppression.js",
+      "require": "./dist/client/claude-system-suppression.cjs"
     },
     "./tools/mcp/jwt-auth": {
       "source": "./src/tools/mcp/jwt-auth.ts",

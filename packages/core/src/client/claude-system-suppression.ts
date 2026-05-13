@@ -31,6 +31,15 @@ import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 export type ClaudeSystemSubtype = Extract<SDKMessage, { type: 'system' }>['subtype'];
 
 /**
+ * The `status` values an `SDKStatusMessage` can carry, again derived from the
+ * SDK union so an upstream rename trips typecheck instead of silently leaking.
+ */
+export type ClaudeSystemStatus = Extract<
+  SDKMessage,
+  { type: 'system'; subtype: 'status' }
+>['status'];
+
+/**
  * System subtypes we suppress on sight — pure lifecycle telemetry that has no
  * user-meaningful content on its own.
  *
@@ -52,11 +61,14 @@ export const SUPPRESSED_CLAUDE_SYSTEM_SUBTYPES: ReadonlySet<ClaudeSystemSubtype>
 /**
  * `SDKStatusMessage.status` values we suppress. `requesting` fires on every
  * API call; `compacting` is handled separately in the executor (it renders as
- * a real SYSTEM "Compacting…" message). Other status values — including
- * `null`, which carries permissionMode/compact_result transitions — are
- * intentionally allowed to fall through to the generic sdk_event surfacer.
+ * a real SYSTEM "Compacting…" message). Other status values — `null` (the SDK's
+ * "no active status" sentinel, often co-occurring with `permissionMode` or
+ * `compact_result` fields) and any future additions — are intentionally allowed
+ * to fall through to the generic sdk_event surfacer.
  */
-export const SUPPRESSED_CLAUDE_STATUSES: ReadonlySet<string> = new Set(['requesting']);
+export const SUPPRESSED_CLAUDE_STATUSES: ReadonlySet<NonNullable<ClaudeSystemStatus>> = new Set([
+  'requesting',
+] as const);
 
 /**
  * Block shape persisted on `sdk_event` content blocks. Loose by design: this
@@ -89,7 +101,10 @@ export function shouldHidePersistedClaudeSdkEvent(block: PersistedSdkEventBlock)
       typeof block.metadata === 'object' && block.metadata !== null
         ? (block.metadata as { status?: unknown }).status
         : undefined;
-    if (typeof status === 'string' && SUPPRESSED_CLAUDE_STATUSES.has(status)) {
+    if (
+      typeof status === 'string' &&
+      (SUPPRESSED_CLAUDE_STATUSES as ReadonlySet<string>).has(status)
+    ) {
       return true;
     }
   }
