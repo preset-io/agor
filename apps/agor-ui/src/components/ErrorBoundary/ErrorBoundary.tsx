@@ -43,7 +43,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         <Alert
           type="error"
           showIcon
-          message={this.props.fallbackTitle ?? 'Something went wrong rendering this view.'}
+          title={this.props.fallbackTitle ?? 'Something went wrong rendering this view.'}
           description={error.message || String(error)}
         />
       );

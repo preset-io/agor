@@ -137,7 +137,7 @@ export function ArtifactConsentModal({
         showIcon
         icon={<WarningOutlined />}
         style={{ marginBottom: 16 }}
-        message="Read the source before granting trust"
+        title="Read the source before granting trust"
         description="Granting trust injects your env-var values and any requested daemon capabilities into this artifact's runtime. The artifact's JS can read those values. Secrets never enter LLM context — but the artifact iframe can still exfiltrate them via fetch()."
       />
 
@@ -221,7 +221,7 @@ export function ArtifactConsentModal({
             type="info"
             showIcon
             style={{ marginTop: 8 }}
-            message="agor_token is artifact-scoped only"
+            title="agor_token is artifact-scoped only"
             description="Author and instance grants do NOT cover agor_token — granting it here only affects this artifact, regardless of the scope you pick below."
           />
         )}
