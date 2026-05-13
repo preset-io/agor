@@ -419,9 +419,9 @@ export function OnboardingWizard({
   useEffect(() => {
     if (path === 'own-repo' && !worktreeNameInitRef.current) {
       worktreeNameInitRef.current = true;
-      setWorktreeName('my-worktree');
+      setWorktreeName(sanitizeBranchName(branchName) || 'my-worktree');
     }
-  }, [path]);
+  }, [path, branchName]);
 
   // ─── Auto-advance: Watch repoById for clone completion ──
   useEffect(() => {
@@ -808,7 +808,7 @@ export function OnboardingWizard({
     setError(null);
     setLoading(true);
 
-    const wtName = path === 'assistant' ? 'assistant' : worktreeName;
+    const wtName = path === 'assistant' ? sanitizeBranchName(branchName) : worktreeName;
     const ref = sanitizeBranchName(branchName);
 
     try {
