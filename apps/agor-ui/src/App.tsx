@@ -31,6 +31,7 @@ import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ServicesConfigContext } from './contexts/ServicesConfigContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import {
+  INITIAL_LOAD_ITEMS,
   useAgorClient,
   useAgorData,
   useAuth,
@@ -42,17 +43,6 @@ import {
 import { StreamdownDemoPage } from './pages/StreamdownDemoPage';
 import { isMobileDevice } from './utils/deviceDetection';
 import { useThemedMessage } from './utils/message';
-
-const LOADING_ITEMS = [
-  { key: 'sessions', label: 'Sessions' },
-  { key: 'boards', label: 'Boards' },
-  { key: 'worktrees', label: 'Worktrees' },
-  { key: 'repos', label: 'Repos' },
-  { key: 'users', label: 'Users' },
-  { key: 'cards', label: 'Cards' },
-  { key: 'mcp-servers', label: 'MCP servers' },
-  { key: 'artifacts', label: 'Artifacts' },
-];
 
 /**
  * DeviceRouter - Redirects users to mobile or desktop site based on device detection
@@ -208,17 +198,19 @@ function AppContent() {
   // Using explicit phases (instead of deriving from connecting/loading/hasLoadedOnce)
   // keeps the screen in the DOM through the hold and fade even after loading flips
   // false — otherwise React unmounts it the same tick data arrives.
-  //   loading  → data arrives → complete → (400ms hold) → fading → (280ms) → done
+  //   loading  → data arrives → complete → (250ms hold) → fading → (280ms) → done
   const [loaderPhase, setLoaderPhase] = useState<'loading' | 'complete' | 'fading' | 'done'>(
     'loading'
   );
 
-  // Mark as loaded once we have data
+  // Mark as loaded once the initial fetch completes (regardless of whether the
+  // workspace is empty — checking map sizes failed for fresh instances with no
+  // sessions/boards/repos yet).
   useEffect(() => {
-    if (!loading && (sessionById.size > 0 || boardById.size > 0 || repoById.size > 0)) {
+    if (!loading && !dataError && Object.keys(loadingItems).length > 0) {
       setHasLoadedOnce(true);
     }
-  }, [loading, sessionById.size, boardById.size, repoById.size]);
+  }, [loading, loadingItems, dataError]);
 
   // Effect 1: advance 'loading' → 'complete' (or straight to 'done' on error /
   // when data fetching is disabled). The loadingItems guard prevents advancing
@@ -472,7 +464,7 @@ function AppContent() {
         <div style={{ marginTop: 16, color: 'rgba(255, 255, 255, 0.65)' }}>{statusMessage}</div>
         {!connecting && (
           <div style={{ marginTop: 24, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {LOADING_ITEMS.map(({ key, label }) => {
+            {INITIAL_LOAD_ITEMS.map(({ key, label }) => {
               const done = !!loadingItems[key];
               return (
                 <div
