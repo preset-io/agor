@@ -42,22 +42,49 @@ export type InitialLoadItemKey = (typeof INITIAL_LOAD_ITEMS)[number]['key'];
 export const allInitialLoadItemsDone = (items: Partial<Record<InitialLoadItemKey, true>>) =>
   INITIAL_LOAD_ITEMS.every(({ key }) => items[key]);
 
-interface UseAgorDataResult {
-  sessionById: Map<string, Session>; // O(1) lookups by session_id - efficient, stable references
-  sessionsByWorktree: Map<string, Session[]>; // O(1) worktree-scoped filtering
-  boardById: Map<string, Board>; // O(1) lookups by board_id - efficient, stable references
-  boardObjectById: Map<string, BoardEntityObject>; // O(1) lookups by object_id - efficient, stable references
-  commentById: Map<string, BoardComment>; // O(1) lookups by comment_id - efficient, stable references
-  cardById: Map<string, CardWithType>; // O(1) lookups by card_id - efficient, stable references
-  cardTypeById: Map<string, CardType>; // O(1) lookups by card_type_id - efficient, stable references
-  repoById: Map<string, Repo>; // O(1) lookups by repo_id - efficient, stable references
-  worktreeById: Map<string, Worktree>; // Primary storage - efficient lookups, stable references
-  userById: Map<string, User>; // O(1) lookups by user_id - efficient, stable references
-  mcpServerById: Map<string, MCPServer>; // O(1) lookups by mcp_server_id - efficient, stable references
-  gatewayChannelById: Map<string, GatewayChannel>; // O(1) lookups by id - efficient, stable references
-  artifactById: Map<string, Artifact>; // O(1) lookups by artifact_id - efficient, stable references
-  sessionMcpServerIds: Map<string, string[]>; // O(1) lookups by session_id - efficient, stable references
-  userAuthenticatedMcpServerIds: Set<string>; // MCP server IDs where current user has valid per-user OAuth tokens
+/**
+ * All server-backed data maps held in a single state object.
+ *
+ * Adding a new map here + to EMPTY_MAPS is all that's required —
+ * `setMaps(EMPTY_MAPS)` in the reset effect covers every field automatically.
+ */
+type DataMaps = {
+  sessionById: Map<string, Session>;
+  sessionsByWorktree: Map<string, Session[]>;
+  boardById: Map<string, Board>;
+  boardObjectById: Map<string, BoardEntityObject>;
+  commentById: Map<string, BoardComment>;
+  cardById: Map<string, CardWithType>;
+  cardTypeById: Map<string, CardType>;
+  repoById: Map<string, Repo>;
+  worktreeById: Map<string, Worktree>;
+  userById: Map<string, User>;
+  mcpServerById: Map<string, MCPServer>;
+  gatewayChannelById: Map<string, GatewayChannel>;
+  artifactById: Map<string, Artifact>;
+  sessionMcpServerIds: Map<string, string[]>;
+  userAuthenticatedMcpServerIds: Set<string>;
+};
+
+const EMPTY_MAPS: DataMaps = {
+  sessionById: new Map(),
+  sessionsByWorktree: new Map(),
+  boardById: new Map(),
+  boardObjectById: new Map(),
+  commentById: new Map(),
+  cardById: new Map(),
+  cardTypeById: new Map(),
+  repoById: new Map(),
+  worktreeById: new Map(),
+  userById: new Map(),
+  mcpServerById: new Map(),
+  gatewayChannelById: new Map(),
+  artifactById: new Map(),
+  sessionMcpServerIds: new Map(),
+  userAuthenticatedMcpServerIds: new Set(),
+};
+
+interface UseAgorDataResult extends DataMaps {
   loadingItems: Partial<Record<InitialLoadItemKey, true>>;
   loading: boolean;
   error: string | null;
@@ -78,25 +105,56 @@ export function useAgorData(
   options?: { enabled?: boolean }
 ): UseAgorDataResult {
   const enabled = options?.enabled ?? true;
-  const [sessionById, setSessionById] = useState<Map<string, Session>>(new Map());
-  const [sessionsByWorktree, setSessionsByWorktree] = useState<Map<string, Session[]>>(new Map());
-  const [boardById, setBoardById] = useState<Map<string, Board>>(new Map());
-  const [boardObjectById, setBoardObjectById] = useState<Map<string, BoardEntityObject>>(new Map());
-  const [commentById, setCommentById] = useState<Map<string, BoardComment>>(new Map());
-  const [cardById, setCardById] = useState<Map<string, CardWithType>>(new Map());
-  const [cardTypeById, setCardTypeById] = useState<Map<string, CardType>>(new Map());
-  const [repoById, setRepoById] = useState<Map<string, Repo>>(new Map());
-  const [worktreeById, setWorktreeById] = useState<Map<string, Worktree>>(new Map());
-  const [userById, setUserById] = useState<Map<string, User>>(new Map());
-  const [mcpServerById, setMcpServerById] = useState<Map<string, MCPServer>>(new Map());
-  const [gatewayChannelById, setGatewayChannelById] = useState<Map<string, GatewayChannel>>(
-    new Map()
-  );
-  const [artifactById, setArtifactById] = useState<Map<string, Artifact>>(new Map());
-  const [sessionMcpServerIds, setSessionMcpServerIds] = useState<Map<string, string[]>>(new Map());
-  const [userAuthenticatedMcpServerIds, setUserAuthenticatedMcpServerIds] = useState<Set<string>>(
-    new Set()
-  );
+  // Single state for all server-backed maps — reset is setMaps(EMPTY_MAPS), one call, can't miss a field.
+  const [maps, setMaps] = useState<DataMaps>(EMPTY_MAPS);
+
+  // Per-field setter helpers with the same functional-update API as individual useState setters.
+  // Plain functions are fine — they only close over setMaps which is a stable useState setter.
+  // Biome can't statically prove stability so fetchData and the subscribe effect below carry
+  // a biome-ignore instead of listing every setter in the dep arrays.
+  const setSessionById = (v) =>
+    setMaps((m) => ({ ...m, sessionById: typeof v === 'function' ? v(m.sessionById) : v }));
+  const setSessionsByWorktree = (v) =>
+    setMaps((m) => ({
+      ...m,
+      sessionsByWorktree: typeof v === 'function' ? v(m.sessionsByWorktree) : v,
+    }));
+  const setBoardById = (v) =>
+    setMaps((m) => ({ ...m, boardById: typeof v === 'function' ? v(m.boardById) : v }));
+  const setBoardObjectById = (v) =>
+    setMaps((m) => ({ ...m, boardObjectById: typeof v === 'function' ? v(m.boardObjectById) : v }));
+  const setCommentById = (v) =>
+    setMaps((m) => ({ ...m, commentById: typeof v === 'function' ? v(m.commentById) : v }));
+  const setCardById = (v) =>
+    setMaps((m) => ({ ...m, cardById: typeof v === 'function' ? v(m.cardById) : v }));
+  const setCardTypeById = (v) =>
+    setMaps((m) => ({ ...m, cardTypeById: typeof v === 'function' ? v(m.cardTypeById) : v }));
+  const setRepoById = (v) =>
+    setMaps((m) => ({ ...m, repoById: typeof v === 'function' ? v(m.repoById) : v }));
+  const setWorktreeById = (v) =>
+    setMaps((m) => ({ ...m, worktreeById: typeof v === 'function' ? v(m.worktreeById) : v }));
+  const setUserById = (v) =>
+    setMaps((m) => ({ ...m, userById: typeof v === 'function' ? v(m.userById) : v }));
+  const setMcpServerById = (v) =>
+    setMaps((m) => ({ ...m, mcpServerById: typeof v === 'function' ? v(m.mcpServerById) : v }));
+  const setGatewayChannelById = (v) =>
+    setMaps((m) => ({
+      ...m,
+      gatewayChannelById: typeof v === 'function' ? v(m.gatewayChannelById) : v,
+    }));
+  const setArtifactById = (v) =>
+    setMaps((m) => ({ ...m, artifactById: typeof v === 'function' ? v(m.artifactById) : v }));
+  const setSessionMcpServerIds = (v) =>
+    setMaps((m) => ({
+      ...m,
+      sessionMcpServerIds: typeof v === 'function' ? v(m.sessionMcpServerIds) : v,
+    }));
+  const setUserAuthenticatedMcpServerIds = (v) =>
+    setMaps((m) => ({
+      ...m,
+      userAuthenticatedMcpServerIds:
+        typeof v === 'function' ? v(m.userAuthenticatedMcpServerIds) : v,
+    }));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [loadingItems, setLoadingItems] = useState<Partial<Record<InitialLoadItemKey, true>>>({});
@@ -134,6 +192,7 @@ export function useAgorData(
   // bubbled up. Silent failures are logged for observability; the UI continues
   // to render whatever byId state was last successfully fetched, and the next
   // reconnect or token refresh gets another shot.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: setter helpers only close over stable setMaps; listing them would add noise without preventing stale closures
   const fetchData = useCallback(
     async ({ silent = false }: { silent?: boolean } = {}) => {
       if (!client || !enabled) {
@@ -364,29 +423,16 @@ export function useAgorData(
   );
 
   // Clear all data when client goes away (logout / token revocation).
-  // Without this, the previous user's Maps linger in memory and briefly
-  // flash to the next user who logs in before fetchData() repopulates them.
+  // EMPTY_MAPS covers every field — adding a new map to DataMaps automatically
+  // includes it here without any extra code.
   useEffect(() => {
     if (client) return;
-    setSessionById(new Map());
-    setSessionsByWorktree(new Map());
-    setBoardById(new Map());
-    setBoardObjectById(new Map());
-    setCommentById(new Map());
-    setCardById(new Map());
-    setCardTypeById(new Map());
-    setRepoById(new Map());
-    setWorktreeById(new Map());
-    setUserById(new Map());
-    setMcpServerById(new Map());
-    setGatewayChannelById(new Map());
-    setArtifactById(new Map());
-    setSessionMcpServerIds(new Map());
-    setUserAuthenticatedMcpServerIds(new Set());
+    setMaps(EMPTY_MAPS);
     setHasInitiallyFetched(false);
   }, [client]);
 
   // Subscribe to real-time updates
+  // biome-ignore lint/correctness/useExhaustiveDependencies: setter helpers only close over stable setMaps; listing them would add noise without preventing stale closures
   useEffect(() => {
     if (!client || !enabled) {
       // No client or disabled = not ready for data fetch, set loading to false
@@ -1189,21 +1235,7 @@ export function useAgorData(
   }, [client, enabled, fetchData, hasInitiallyFetched]);
 
   return {
-    sessionById,
-    sessionsByWorktree,
-    boardById,
-    boardObjectById,
-    commentById,
-    cardById,
-    cardTypeById,
-    repoById,
-    worktreeById,
-    userById,
-    mcpServerById,
-    gatewayChannelById,
-    artifactById,
-    sessionMcpServerIds,
-    userAuthenticatedMcpServerIds,
+    ...maps,
     loadingItems,
     loading,
     error,
