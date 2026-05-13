@@ -204,12 +204,53 @@ function AppContent() {
   // This prevents UI from unmounting during reconnections
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
+  // Phase machine for the initial loading screen.
+  // Using explicit phases (instead of deriving from connecting/loading/hasLoadedOnce)
+  // keeps the screen in the DOM through the hold and fade even after loading flips
+  // false — otherwise React unmounts it the same tick data arrives.
+  //   loading  → data arrives → complete → (400ms hold) → fading → (280ms) → done
+  const [loaderPhase, setLoaderPhase] = useState<'loading' | 'complete' | 'fading' | 'done'>(
+    'loading'
+  );
+
   // Mark as loaded once we have data
   useEffect(() => {
     if (!loading && (sessionById.size > 0 || boardById.size > 0 || repoById.size > 0)) {
       setHasLoadedOnce(true);
     }
   }, [loading, sessionById.size, boardById.size, repoById.size]);
+
+  // Effect 1: advance 'loading' → 'complete' (or straight to 'done' on error /
+  // when data fetching is disabled). The loadingItems guard prevents advancing
+  // during the pre-fetch window: when the socket first connects, useAgorData
+  // briefly has loading:false (set by the null-client path) before fetchData
+  // runs and sets loading:true. Without the guard the 250ms hold would start
+  // before any checkmarks appeared. Error / must_change_password skip the hold.
+  const mustChangePassword = !!user?.must_change_password;
+  useEffect(() => {
+    if (!connecting && !loading && loaderPhase === 'loading') {
+      if (dataError || mustChangePassword) {
+        setLoaderPhase('done');
+      } else if (Object.keys(loadingItems).length > 0) {
+        setLoaderPhase('complete');
+      }
+      // else: pre-fetch window (loadingItems still empty) — wait
+    }
+  }, [connecting, loading, loaderPhase, dataError, mustChangePassword, loadingItems]);
+
+  // Effect 2: timed complete → fading → done.
+  // Isolated to [loaderPhase] so the holdTimer is only cancelled when the phase
+  // actually changes — not on every unrelated dep change (that was the prior bug).
+  useEffect(() => {
+    if (loaderPhase === 'complete') {
+      const t = setTimeout(() => setLoaderPhase('fading'), 250);
+      return () => clearTimeout(t);
+    }
+    if (loaderPhase === 'fading') {
+      const t = setTimeout(() => setLoaderPhase('done'), 280);
+      return () => clearTimeout(t);
+    }
+  }, [loaderPhase]);
 
   // Get current user from users Map (real-time updates via WebSocket)
   // This ensures we get the latest onboarding_completed status
@@ -412,7 +453,7 @@ function AppContent() {
 
   // Show loading state ONLY on initial load, not during reconnections
   // Once data is loaded, keep UI mounted and show connection status in header instead
-  if ((connecting || loading) && !hasLoadedOnce) {
+  if (loaderPhase !== 'done') {
     const statusMessage = connecting ? 'Connecting to daemon…' : 'Loading workspace…';
     return (
       <div
@@ -423,6 +464,8 @@ function AppContent() {
           alignItems: 'center',
           justifyContent: 'center',
           backgroundColor: token.colorBgLayout,
+          opacity: loaderPhase === 'fading' ? 0 : 1,
+          transition: 'opacity 280ms ease-out',
         }}
       >
         <Spin size="large" />
