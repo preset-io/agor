@@ -193,8 +193,8 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
   if (affectedSessionIds.size > 0) {
     const restartType = wasGraceful ? 'daemon_restart' : ('daemon_crash' as const);
     const messageText = wasGraceful
-      ? 'The Agor daemon was restarted. Your session was paused at this point. Tell the agent to resume your work, or pick up where you left off.'
-      : 'The Agor daemon stopped unexpectedly. Your session was paused at this point. Tell the agent to resume your work, or pick up where you left off. If this keeps happening, contact your administrator.';
+      ? 'The Agor daemon was restarted while this session was running. Ask the agent to resume where it left off.'
+      : 'The Agor daemon restarted unexpectedly while this session was running. Ask the agent to resume where it left off.';
 
     // Build session → last orphaned task map so we can attach notices to a task_id.
     // Prefer orphaned tasks (they were the active tasks at shutdown); fall back to
