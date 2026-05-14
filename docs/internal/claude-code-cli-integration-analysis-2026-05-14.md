@@ -21,7 +21,7 @@
 
 5. **What we lose vs the SDK adapter, and how to live with it:**
    - **No structured permission prompts.** User answers inline in the terminal. Mitigate by exposing `--permission-mode` as a per-session setting; `acceptEdits` is a reasonable default for subscriber UX. Agor's permission-modal subsystem is inert for this tool.
-   - **No `total_cost_usd` aggregation event** — JSONL has per-turn `usage` but no rolled-up cost. Mitigate with a price table × token counts (existing pattern). For subscribers this is informational anyway (flat-rate).
+   - **No `total_cost_usd` aggregation event** — JSONL has per-turn `usage` but no rolled-up cost. Mitigate with a price table × token counts, **dedup'd by `message.id`** (the cumulative-snapshot footgun: assistant lines repeat the same cumulative `usage` once per content block — naive sum over-counts ~6×; verified in the live session). For subscribers cost is informational anyway (flat-rate). See Appendix C for prior-art (ccusage / claude-code-parser) and build-vs-adopt analysis.
    - **No `rate_limit_event` in JSONL.** Real gap. v1.5 investigation: does `--debug-file` log them?
    - **No fine-grained streaming of token-level deltas** (the `stream_event` type is print-only). Acceptable — interactive UI renders directly in xterm; the message-row update on `assistant` turn completion is fast enough for the conversation pane.
 
@@ -111,6 +111,14 @@ stream_event      token-level partial-message deltas (requires --include-partial
 
 **We do not get these for free in interactive mode.** Mitigations in the Capability Mapping section. (Aside: `--debug-file <path>` may log some of this in interactive mode — worth a v1.5 spike but not load-bearing for v1.)
 
+### Cost extraction: yes, but dedup-by-`message.id` is mandatory
+
+**Footgun verified live in this session.** The same `message.id` (e.g. `msg_01ULxJHPur6nS1o2wuLaG4ri`) appears across **five sequential `assistant` JSONL lines**, each carrying identical `usage`. This happens because the CLI writes one JSONL line per content block emitted during a turn (one per `text`, `thinking`, `tool_use` block), and each line snapshots the cumulative turn usage. Naively summing `.message.usage` across all lines in this session: 27M tokens. Dedup'd by `message.id`: 4M tokens. **6× over-count without dedup.**
+
+Confirmed by `requestId` correlation too — events sharing a `message.id` always share a `requestId`. Either field works as the dedup key; `message.id` is more semantically anchored to the Anthropic API surface.
+
+The dedup rule, plus the cache-tier price math (`cache_creation` priced at base input × 1.25 for 5m and × 2 for 1h; `cache_read` at base input × 0.1), is precisely what existing community tools (notably **ccusage**) have already reverse-engineered. See Appendix D for the prior-art survey and our build-vs-adopt decision.
+
 ### `assistant.message.usage` shape (interactive, captured live)
 
 ```json
@@ -127,6 +135,24 @@ stream_event      token-level partial-message deltas (requires --include-partial
 ```
 
 Per-turn cost is a deterministic function of these fields × the published price table for `message.model`. Agor already does this kind of normalization for Codex (`packages/executor/src/sdk-handlers/codex/codex-tool.ts`), so a `claude-code-cli` cost calculator is reuse, not net-new code.
+
+### Session state tracking: all the signals we need are in the JSONL
+
+Confirmed live: every `user` / `assistant` / `attachment` event carries `cwd`, `gitBranch`, `sessionId`, `version`. User events additionally carry `permissionMode`. Assistant events carry `message.model`, `message.stop_reason`, `requestId`.
+
+| Session attribute | JSONL source |
+|---|---|
+| Active model | latest `assistant.message.model` (could change mid-session via `/model`) |
+| Permission mode | latest `user.permissionMode` |
+| Working dir / git branch | latest `cwd` / `gitBranch` on any event |
+| Total tokens & cost | sum of `assistant.message.usage` × prices, **dedup'd by `message.id`** |
+| Turn lifecycle | `queue-operation` enqueue → dequeue → `assistant` line(s) → end-of-turn (`stop_reason: "end_turn"`) |
+| Mid-turn waiting on permission | latest `assistant.stop_reason: "tool_use"` with no matching `toolUseResult` in subsequent `user` events for > N seconds (heuristic) |
+| Session is alive | the watcher sees new lines OR the spawned `claude` PTY is still attached |
+| Compaction occurred | (TBD) `/compact` triggers an event in the JSONL — verify by running once during implementation |
+| Auto-title | `ai-title.aiTitle` (CLI auto-generates) — opt-in surface as Agor session title |
+
+This is enough to drive the existing `tasks` / `messages` / `session` UI surfaces without re-implementing what the SDK callback path gives us.
 
 ### Content blocks observed
 
@@ -216,11 +242,22 @@ Writing bytes to a PTY is not the same as forging API requests, but it *is* a fo
 
 **Stance:** ship it default-on, behind a per-session opt-out, with clear copy. If Anthropic clarifies later, we can flip the default.
 
-### 4. Cost is computed locally, not aggregated by the CLI (KNOWN GAP, EASY FIX)
+### 4. Cost is computed locally, not aggregated by the CLI — with a dedup footgun (KNOWN GAP, BAKED FIX)
 
 The on-disk JSONL has `assistant.message.usage` per turn but no `total_cost_usd`. Aggregation is on us.
 
-**Mitigation:** new `packages/executor/src/sdk-handlers/claude-cli/cost-calculator.ts` that takes the per-turn `usage` blocks + `message.model` and returns USD. Pull prices from `packages/core/src/models/claude.ts` (or wherever — add a price field if missing). For subscription users: caption "estimated, covered by subscription" in the UI; for API-key users: same numbers, no caption. Reuse the price logic for both adapters where possible.
+**Non-obvious wrinkle (verified live):** every `assistant` JSONL line for a single turn carries the **cumulative** `usage` for that turn, not a delta. The CLI writes one line per content block (`text` / `thinking` / `tool_use`) and each line repeats the cumulative snapshot. Naive `sum(.message.usage.*)` across all assistant lines in this session overshoots by ~6×. **Mandatory dedup key: `assistant.message.id`** (the API's `msg_…` ID; `requestId` is also 1:1). Both `ccusage` and `claude-code-parser` document and handle this same case.
+
+**Cache-tier pricing:** `cache_creation_input_tokens` splits between `ephemeral_5m_input_tokens` (1.25× base input) and `ephemeral_1h_input_tokens` (2× base input). `cache_read_input_tokens` is 0.1× base input. Without per-tier accounting, cache-heavy sessions misprice substantially.
+
+**Mitigation:** new `packages/executor/src/sdk-handlers/claude-cli/cost-calculator.ts` that:
+1. Dedupes assistant turns by `message.id` before aggregating.
+2. Applies cache-tier price ratios per the table above.
+3. Reads model→price from a new field on `packages/core/src/models/claude.ts` (or pull a small JSON price table). Source values from Anthropic's public pricing page; cross-check with ccusage's embedded prices.
+
+For subscription users: caption "estimated, covered by subscription" in the UI. For API-key users: same numbers, no caption.
+
+See **Appendix C** for the prior-art survey and the build-vs-adopt analysis on `ccusage`/`claude-code-parser`.
 
 ### 5. No rate-limit event in the JSONL (REAL GAP)
 
@@ -478,7 +515,7 @@ Subagent JSONL (from an Explore agent call earlier in this analysis):
 
 These two files together demonstrate every event type the watcher needs to handle. Schema is identical between SDK-launched and CLI-launched sessions (the only distinguishing field would have to be added by us — `entrypoint` is always `"sdk-ts"`).
 
-## Appendix B: CLI flag reference (v2.1.132, interactive-mode subset)
+## Appendix B: CLI flag reference (v2.1.132, interactive-mode subset, this is what the spawn command uses)
 
 Only flags safe and useful in the interactive (no-`-p`) path:
 
@@ -513,7 +550,48 @@ Print-only flags we deliberately do NOT use for `claude-code-cli`:
 --replay-user-messages        Only works with --print+stream-json
 ```
 
-## Appendix C: Sources
+## Appendix C: Prior art — existing JSONL wrappers and our build-vs-adopt call
+
+A surprisingly mature ecosystem already exists. Survey of what we considered, what they handle, and the recommendation.
+
+### Tools surveyed
+
+| Tool | Type | Stars/health | Watcher? | Dedup? | Price table? | Cache tiers? | License |
+|---|---|---|---|---|---|---|---|
+| [**ccusage**](https://github.com/ryoppippi/ccusage) (`@ryoppippi`) | CLI + monorepo of internal packages | 14,176★, updated 2026-05-14, very active | No (batch) | Yes (embedded) | Yes (embedded) | Yes | MIT (npm) / NOASSERTION (GitHub classifier) — verify LICENSE file |
+| [**pixelhq-bridge**](https://github.com/waynedev9598/PixelHQ-bridge) | TS bridge: chokidar → JSONL parser → adapter → WebSocket | Niche, iOS-app oriented | **Yes (chokidar)** | (presumed; not documented) | N/A | N/A | (verify) |
+| [**claude-code-parser**](https://github.com/udhaykumarbala/claude-code-parser) | TS parser for `--output-format=stream-json` stdout | Zero deps, 11 KB | No (parses streams) | **Yes (stateful Translator class for cumulative-snapshot dedup)** | No | No | (verify) |
+| [**@constellos/claude-code-kit**](https://www.npmjs.com/package/@constellos/claude-code-kit) | Zod schemas + `parseTranscript` | npm page 403'd at fetch time — recheck | No | (unknown) | (unknown) | (unknown) | (verify) |
+| token-dashboard, claude-code-usage-tracker, Claude-Code-Usage-Monitor, claude-code-dashboard | Full apps / dashboards | Not libraries | Mixed | App-internal | App-internal | App-internal | Various |
+
+**Most useful as a reference:** ccusage for the price table + dedup-by-`message.id` rule + cache-tier math. claude-code-parser for its public protocol documentation (the only such doc that exists) — invaluable when the JSONL/stream-json formats drift between CLI versions.
+
+### Build vs adopt
+
+**Adopt-runtime-dep** (e.g., import `ccusage/internal`): faster delivery, battle-tested logic. But:
+- Couples Agor's executor to a community lib's release cadence. When Anthropic changes the JSONL schema, we're waiting on the upstream maintainer.
+- ccusage's `packages/internal` is not advertised as a public API. The shape can change without semver discipline (it's a monorepo private dep).
+- License classifier on GitHub returns NOASSERTION — needs LICENSE-file verification before we depend on it.
+- Doesn't include a real-time file watcher (batch mode).
+
+**Vendor-our-own** (build parser + dedup + price calc inside `packages/executor/src/sdk-handlers/claude-cli/`, with ccusage as a copy-from-this reference): a bit more upfront work but:
+- Matches the existing per-tool normalizer pattern (`packages/executor/src/sdk-handlers/codex/`).
+- We control schema-drift handling: when Anthropic changes a field, we patch our parser the same day instead of waiting.
+- Easy to add the watcher and the per-session offset bookkeeping that ccusage doesn't provide.
+- No license risk; no transitive dependency surface.
+
+**Recommendation: vendor-our-own.** Treat ccusage's source as documentation (price table values, dedup rule, cache-tier math). Cite the reference in the parser file's header. The build cost is bounded — the dedup rule is one `Set<messageId>`, the price math is a small lookup table — but the operational control it gives us when the schema drifts is significant.
+
+Budget impact on the phased plan: net-zero. We'd be writing the cost calc and event translator anyway as part of v1; the prior-art survey just tells us what edge cases to handle (dedup, cache tiers) without rediscovering them.
+
+### Two specific intricacies to lift verbatim from ccusage/claude-code-parser
+
+1. **Cumulative-snapshot dedup.** Every `assistant` JSONL line for a single turn carries the cumulative-to-that-point `usage`. Naive sum across lines inflates 5-10× depending on content-block count. Dedup by `message.id` is mandatory.
+2. **Cache-creation tier pricing.** `cache_creation_input_tokens` is split between `ephemeral_5m_input_tokens` (price ratio 1.25× base input) and `ephemeral_1h_input_tokens` (price ratio 2× base input). `cache_read_input_tokens` is at 0.1× base input. Without per-tier accounting, cache-heavy sessions either over- or under-price.
+
+Both are non-obvious from the field names. Bake them into the parser unit tests with a fixture from `~/.claude/projects/` so regressions show up loudly.
+
+## Appendix D: Sources (Anthropic policy + community references)
 
 - Anthropic official headless docs (notes June 15 change): https://code.claude.com/docs/en/headless
 - Anthropic support article on Agent SDK credits: https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan
