@@ -25,7 +25,7 @@
    - **5-hour billing-window tracking** — ccusage's `loadSessionBlockData` already computes this from the JSONL across sessions, which is the rate-limit signal subscribers care about most. The `rate_limit_event` (only in `-p` stream-json mode) we still don't get, but the practical metric is largely covered.
    - **No fine-grained streaming of token-level deltas** (the `stream_event` type is print-only). Acceptable — interactive UI renders directly in xterm; the message-row update on `assistant` turn completion is fast enough for the conversation pane.
 
-6. **Effort estimate: ~5-6 days for v1** (revised after committing the view toggle + Defaults panel + backgroundable spawn as v1 scope; still net-lower than the original 5-7-day estimate thanks to ccusage adoption). Two views per CLI session (conversation view rebuilt from JSONL, terminal view = the xterm modal scoped to the Zellij pane) with a toggle in the session pane header — both useful for users, both essential for debugging the integration. Backgrounded sessions land in detached Zellij panes that the user "latches on" by opening the modal; `agor_sessions_spawn` / fork / subsession all work via this mechanism.
+6. **Effort estimate: ~7-10 days for v1, shipped as a big-bang POC** that pushes the approach as far as we can in one PR (per Max). Bundles spawn + watcher + view toggle + Defaults panel + auth UX + subagent ingestion + backgrounded MCP spawn + co-use sync. v2 is reserved for follow-up niceties (session import, mid-session model switch). No remaining open questions block implementation.
 
 ---
 
@@ -555,7 +555,7 @@ Adjacent to each adapter card in the picker, plain prose:
 
 > **Claude Agent SDK** — Per-token billing via your Anthropic API key. Full Agor integration: structured permission prompts, mid-conversation pane editing, all features. Recommended if you have an API key.
 >
-> **Claude Code CLI** *(beta)* — Wraps the `claude` binary in your web terminal. Works with your Claude Pro/Max subscription's normal interactive limits (NOT the separate Agent SDK credit pool that starts June 15, 2026). Tradeoff: less integrated UX — permission prompts happen inside the terminal, some features land in v1.5/v2.
+> **Claude Code CLI** *(beta)* — Wraps the `claude` binary in your web terminal. Works with your Claude Pro/Max subscription's normal interactive limits (NOT the separate Agent SDK credit pool that starts June 15, 2026). Tradeoff: less integrated UX — permission prompts are answered inside the terminal, not in an Agor modal. Mid-session model switch and session import are v2.
 
 ### Claude Code CLI Defaults panel (User Settings → Claude Code CLI → Defaults)
 
@@ -584,43 +584,56 @@ Proposed fields:
 
 ## Phased delivery plan
 
-### v1 — Spawn + watcher + structured bridge + view toggle (~5-6 days)
+### v1 — Big-bang POC (~7-10 days)
 
-Revised up from 3-5 days after locking in the conversation/terminal view toggle and the Defaults panel as v1 scope. Still net-lower than the original 5-7 estimate (ccusage adoption took 1-2 days off the parser/cost work).
+Push the integration as far as we can in one PR. Per Max: *"effectively a POC that pushes how far we can push this approach."* v1.5 effectively folds into v1; v2 is reserved for genuine follow-ups.
 
-- Add `'claude-code-cli'` to type unions and tool registry.
-- Add `ccusage` runtime dep; thin translator from `ccusage` types → Agor `ProcessedEvent`.
-- New executor adapter `packages/executor/src/sdk-handlers/claude-cli/` (translator + spawn config; cost calc delegated to `ccusage/data-loader.calculateCostForEntry`).
-- Daemon-side `claude-cli-watcher` service: `fs.watch` per session, calls `ccusage/data-loader.loadSessionUsageById` on each new chunk, dedupes with `createUniqueHash`, translates, pushes through MessagesService/TasksService.
+**Core integration**
+- Add `'claude-code-cli'` to `AgenticToolName` (`packages/core/src/types/agentic-tool.ts:18`), `Tool` registry (`packages/executor/src/handlers/sdk/tool-registry.ts:14`), and `AGENTIC_TOOL_CAPABILITIES` map.
+- Add `ccusage` as a runtime dep.
+- New executor adapter `packages/executor/src/sdk-handlers/claude-cli/` — spawn config builder, ccusage→`ProcessedEvent` translator, session-lifecycle bridge.
+- Daemon-side `claude-cli-watcher` service (`apps/agor-daemon/src/services/claude-cli-watcher.ts`): `fs.watch` per active CLI session + parent slug dir for subagent discovery. Calls `ccusage/data-loader.loadSessionUsageById` on each new chunk, dedupes with `createUniqueHash`, translates, pushes through MessagesService / TasksService.
+- Sync markers persisted on the `sessions` row: `cli_watcher_offset` (bytes), `cli_last_event_ts`, `cli_last_event_uuid`. Co-use sync is silent — any process can append to the JSONL and we ingest equivalently.
+
+**Spawn + PTY**
 - Zellij pane spawn for CLI sessions, including detached panes for backgrounded MCP-driven spawns (extend `packages/executor/src/commands/zellij.ts`).
-- Zellij `action write-chars` wiring for PTY injection from the Agor textarea and MCP calls.
-- Rename `claude-code` → `claude-agent-sdk` (DB migration + UI labels). Add "Beta" label to `claude-code-cli` in `AgentSelectionGrid`.
-- **Claude Code CLI Defaults panel** (User Settings) with spawn-time-only flags: model, effort, permission-mode, `--dangerously-skip-permissions` checkbox, `--add-dir` extras, append-system-prompt, auth mode.
-- New `ClaudeCliConfigForm` (per-session overrides of the defaults above).
-- **Conversation view ↔ Terminal view toggle** in session pane header. Both views populated by v1.
-- `billing_mode` column + UI caption; same cost-UI shape as the SDK adapter.
+- Zellij `action write-chars` wiring for PTY injection from the Agor textarea, MCP calls, and `agor_sessions_prompt(mode:"fork" / "subsession")` starting prompts.
+- In-memory per-session FIFO queue for PTY injections; drain on `stop_reason: "end_turn"`.
+- MCP backgrounded spawn for `agor_sessions_spawn` and `agor_sessions_prompt(mode:"fork" / "subsession")` — always `bypassPermissions` (no human at the terminal).
+- "Latching on" UX: clicking a session card opens the xterm modal focused on that session's existing Zellij pane.
+
+**UI**
+- **Conversation view ↔ Terminal view toggle** in the session pane header. Both views populated. Split-view mode for debugging.
+- Rename `claude-code` → `claude-agent-sdk` (DB migration + UI labels).
+- "Beta" label on `claude-code-cli` in `AgentSelectionGrid`; tradeoff copy adjacent to each adapter card at pick time.
+- **Claude Code CLI Defaults panel** (User Settings): model, effort, permission mode (with `Dangerously skip permissions` as a named dropdown option emitting `--dangerously-skip-permissions`), extra `--add-dir`, `--append-system-prompt-file` content, auth mode.
+- New `ClaudeCliConfigForm` for per-session overrides of the Defaults.
+- **Claude Code CLI Auth panel** (User Settings, sibling to the renamed Claude Agent SDK Auth): `~/.claude/.credentials.json` status, "Run `claude auth login`" CTA in a pre-typed terminal modal.
+- Onboarding affordance: missing binary → install instructions; missing auth → `claude auth login`.
+
+**Cost & rate-limit**
+- `billing_mode` column on `sessions` (subscription / api-key / unknown), derived from `apiKeyEnvVar` presence at spawn.
+- Session-total cost UI in the conversation pane bottom, same shape as the SDK adapter.
+- Caption for subscription sessions: "Estimated; covered by your Claude subscription."
 - 5-hour billing-window banner powered by `ccusage/data-loader.loadSessionBlockData()`.
-- Crash recovery via per-session `cli_watcher_offset`.
-- MCP-driven backgrounded spawn for `agor_sessions_spawn`, `agor_sessions_prompt(mode:"fork"\|"subsession")` with `bypassPermissions` default.
-- Integration test: feed a fixture JSONL (this analysis's own session) through ccusage, assert dedup + cost totals — regression alarm if ccusage's behavior shifts.
 
-**Out of scope for v1:** PTY-prompt injection (deferred to v1.5 so we ship the watcher first), `claude auth login` Settings panel (deferred), subagent thread ingestion, session import, rate-limit surfacing.
+**Robustness**
+- Subagent JSONL ingestion (`<session-id>/subagents/agent-<id>.jsonl`) — collapsible internal-subagent rows in the conversation view. Retrofit the SDK adapter to surface these too for UI consistency.
+- Crash recovery: on daemon restart, re-instantiate watchers for every in-flight CLI session from `cli_watcher_offset`.
+- Defensive parser via ccusage's valibot schemas: log + skip unknown event types.
+- Tested-version pin: detect `claude --version` outside known-good range, log a startup warning.
+- Integration tests:
+  - Fixture replay: feed this analysis's own session JSONL through the watcher + ccusage; assert dedup, cost, and event count.
+  - Reconciliation: feed the same conversation through SDK adapter and CLI adapter; assert session cost matches within ε.
+  - PTY-injection round trip: inject a prompt via the daemon API, assert a `user` event appears in the JSONL within reasonable time.
 
-### v1.5 — PTY prompt injection + Auth UX (~2-3 days)
+### v2 — Follow-up niceties (~3-4 days)
 
-- `agor_sessions_prompt(continue)` writes to the running PTY via Zellij `action write-chars` (verify exact flag).
-- Queue injections during in-flight turns; drain on end-of-turn.
-- **Claude Code CLI Auth** Settings panel: `~/.claude/.credentials.json` status, "Run `claude auth login`" CTA in pre-typed terminal.
-- Onboarding affordance for first-run users.
-- Spike: does `--debug-file <path>` log rate-limit info? If yes, add as a secondary watcher source.
+Genuine follow-ups, not v1-scope-cuts.
 
-### v2 — Polish + power features (~3-4 days)
-
-- Subagent (`<session>/subagents/agent-<id>.jsonl`) ingestion as collapsible internal-subagent rows. Also retrofit `claude-agent-sdk` adapter to surface these.
-- Session import: "Adopt existing Claude session" picker that lists `~/.claude/projects/*/`*.jsonl` and ingests one into Agor.
-- Spawn/fork via `agor_sessions_prompt(fork)` (spawn new pane with `--fork-session`).
-- Rate-limit banner if v1.5 spike found a source.
-- Mid-session model switch: respawn `claude --resume --model <new>` after current turn completes.
+- **Session import:** "Adopt existing Claude session" picker that lists `~/.claude/projects/*/`*.jsonl` (filterable by cwd / age) and ingests one into Agor as a new session. Useful for power users who run `claude` outside Agor first.
+- **Mid-session model switch:** respawn `claude --resume --model <new>` after the current turn completes; preserves session-id and JSONL continuity.
+- **"Stuck permission prompt" banner** (post-beta-feedback): if users report confusion about CLI prompts going unanswered, add the mid-turn timeout heuristic with a tested threshold and surface "open terminal to respond" in the conversation view. Deferred per Max: "bulk of input would be done through the CLI itself, except when externally prompting (MCP/API)" — so the heuristic is unlikely to be needed in practice.
 
 ---
 
@@ -637,39 +650,38 @@ Revised up from 3-5 days after locking in the conversation/terminal view toggle 
 
 ## Effort estimate
 
-- v1: **~5-6 days** for one engineer familiar with the executor + terminal architecture. Revised up from 3-5 after committing the view toggle, Defaults panel, backgroundable spawn, and Beta label as v1 scope. Still net-lower than the original 5-7 estimate (ccusage adoption took 1-2 days off the parser/cost work).
-- v1.5: ~1-2 days. `claude auth login` Settings panel polish + onboarding affordance + `--debug-file` rate-limit spike.
-- v2: ~3-4 days. Subagent ingestion, session import, mid-session model switch. No core architecture changes.
-- Tests: fixture JSONL (this analysis's own session file) replayed through ccusage in unit tests so we catch a ccusage regression early. CI smoke test using `--print` and an API key in CI-only env validates the spawn shape end-to-end. Reconciliation test: feed the same conversation through SDK adapter and CLI adapter; assert cost totals match within ε.
+- v1 (big-bang POC): **~7-10 days** for one engineer familiar with the executor + terminal architecture. Bundles what was previously split across v1 / v1.5 / partial-v2, per Max's "push as far as we can in one PR" framing. Net headcount is bounded by:
+  - Watcher + translator + Defaults panel are the bulk of new code.
+  - Subagent ingestion adds ~half a day (the file-watching pattern is the same as the parent JSONL).
+  - View toggle adds 1-2 days for the conversation/terminal split-view component.
+  - Existing patterns (Codex adapter, Zellij tab plumbing, MCP scoping, user settings panels) shortcut maybe 1-2 days.
+- v2 (follow-up niceties): ~3-4 days. Session import + mid-session model switch + optional stuck-prompt banner if beta surfaces the need.
+- Tests are in v1 scope: fixture-replay unit tests, SDK-vs-CLI cost reconciliation, PTY-injection round trip. CI smoke test using `--print` and an API key in CI-only env validates the spawn shape end-to-end.
 
 ---
 
 ## Open questions for Max
 
-### Resolved
+### Resolved (in scoping)
 
-- ~~Auto-detect default adapter on first run~~ → **No auto-detect.** Both adapters always shown in the picker; user picks based on the displayed tradeoffs. CLI carries a "beta" label.
-- ~~PTY injection default on/off / per-session toggle UX~~ → **PTY injection's real purpose is backgrounded calls** (MCP-driven prompts, fork/subsession). User-driven prompts come from the terminal's own REPL prompt. The Agor textarea stays wired through PTY injection in v1 as a beta-testing safety net.
-- ~~Cost UI shape~~ → **Same UI as SDK adapter** (session total at the bottom). Subscription sessions get a caption. Numbers reconcile within ε to the SDK adapter — integration test.
-- ~~Default permission mode for user-driven sessions~~ → **User-defined in the Defaults panel.** Out-of-box value: `acceptEdits`. User can change to any mode, including `Dangerously skip permissions` (which emits the dedicated `--dangerously-skip-permissions` argv). MCP-driven backgrounded spawns always force `bypassPermissions` regardless.
-- ~~Conversation ↔ Terminal view toggle: v1 or v1.5?~~ → **v1.** Side-by-side debugging affordance is essential for catching watcher/translator bugs while the integration is new.
-- ~~`--dangerously-skip-permissions` checkbox vs dropdown entry~~ → **Dropdown entry.** Single control for permission policy, no two-control overlap. The dropdown option named "Dangerously skip permissions" emits `--dangerously-skip-permissions` (not `--permission-mode bypassPermissions`) so Anthropic's telemetry sees the dedicated flag; runtime behavior is the same.
+- **Auto-detect default adapter on first run** → No auto-detect. Both adapters always shown in the picker; user picks based on the displayed tradeoffs. CLI carries a "beta" label.
+- **PTY injection default on/off / per-session toggle UX** → PTY injection's real purpose is backgrounded calls (MCP/API). User-driven prompts come from the terminal's own REPL prompt. Agor textarea stays wired through PTY injection in v1 as a beta-testing safety net.
+- **Cost UI shape** → Same UI as SDK adapter (session total at the bottom). Subscription sessions get a caption. Numbers reconcile within ε to the SDK adapter — integration test.
+- **Default permission mode for user-driven sessions** → User-defined in the Defaults panel. Out-of-box value: `acceptEdits`. User can change to any mode, including `Dangerously skip permissions` (emits the dedicated `--dangerously-skip-permissions` argv). MCP-driven backgrounded spawns always force `bypassPermissions`.
+- **Conversation ↔ Terminal view toggle: v1 or v1.5?** → v1. Side-by-side debugging is essential while the integration is new.
+- **`--dangerously-skip-permissions` checkbox vs dropdown entry** → Single dropdown control. One option emits `--dangerously-skip-permissions` (for Anthropic's telemetry distinction); runtime behavior is the same as `bypassPermissions`.
+- **Prompt-injection queue: in-memory or DB-persisted?** → In-memory for v1. Iterate if we find we need persistence.
+- **Mid-turn timeout for "open terminal to respond" banner** → No banner in v1. Bulk of input flows through the CLI's own REPL (user already looking at the terminal); PTY injection is the niche case for external prompts. Watcher just records what it sees; UI reflects it. If users report confusion during beta, we add a heuristic banner then with a tested threshold.
+- **Co-use detection** → Co-use is a first-class feature; watcher syncs silently regardless of origin. The byte-offset (`cli_watcher_offset`) is the canonical sync marker; we also persist the last processed event's `timestamp` and `uuid` for telemetry / health. No warning UI for "this turn didn't go through `agor_sessions_prompt`" — it's just another turn.
+- **Subagent JSONL ingestion in v1 or v2?** → v1, as part of the big-bang scope below. (See revised phased plan.)
+- **v1 scope philosophy** → Big-bang POC: pull as much of the integration into v1 as possible. v1.5 effectively folds into v1 (auth panel, onboarding affordance, etc.). v2 is reserved for genuine follow-ups (session import, mid-session model switch).
+- **`--debug-file` for live `rate_limit_event`** → Dropped. ccusage's `loadSessionBlockData()` already gives us the 5h-billing-window metric, which is the practical thing subscribers care about. If, in beta, users want a moment-of-rate-limit alert (vs a "how close am I" gauge), we revisit.
+- **Session import** → v2.
+- **PTY injection ToS classification** → Risk acknowledged. We test the boundaries; if users get banned for it, we add an in-product notice and flip the default to off. The watcher and integration stay intact in that case — only the textarea behavior changes.
 
-### Open: watcher-design tactics
+### No remaining open questions
 
-1. **In-memory vs DB-persisted prompt-injection queue.** If `agor_sessions_prompt(continue)` arrives while the session is mid-turn, do we hold the queued prompt in daemon memory (lost on daemon restart) or persist to a `pending_prompts` table (recoverable)? v1 lean: in-memory.
-2. **Mid-turn timeout for "open terminal to respond" banner.** 10s / 30s / configurable? Too short and we nag during legit slow tool calls; too long and a stuck permission prompt sits there. Lean: 15s, not configurable in v1.
-3. **Co-use detection.** If a user runs `claude --resume <id>` outside Agor on the same JSONL, the watcher ingests those prompts. Pure feature, or do we surface a warning ("turn processed without going through `agor_sessions_prompt`")?
-4. **Subagent JSONL ingestion priority** — v1 or v2? Lean: v2. The nested-subagent UI doesn't exist yet, and the watcher base case already needs care.
-
-### Open: deferred investigations
-
-5. **`--debug-file` investigation** — willing to spend v1.5 spike time, or defer to v2? Could give us live `rate_limit_event` (alongside ccusage's 5h-window aggregator we already get for free).
-6. **Session import (v2)** — keep on the roadmap, or drop? Useful for power users who run `claude` outside Agor first.
-
-### Background risk to name
-
-7. **PTY injection's ToS classification.** Defensible as human-in-the-loop (user owns the session, sees the same terminal, can intervene at any time), but no Anthropic statement either way. If they clarify it counts as automation, we flip the default to off in CLI-mode sessions (the user types every prompt manually in the terminal view). The watcher and integration stay; only the textarea behavior changes.
+All scoping decisions are resolved. Implementation worktrees can spawn from this doc. New questions surfacing during implementation get logged to the PR.
 
 ---
 
