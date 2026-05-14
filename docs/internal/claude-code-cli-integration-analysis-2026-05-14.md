@@ -571,13 +571,14 @@ Proposed fields:
 |---|---|---|
 | Default model | `--model <alias>` | Same model list as the SDK adapter (claude-opus-4-7, sonnet, haiku, with `[1m]` variants) |
 | Reasoning effort | `--effort <level>` | low / medium / high / xhigh / max |
-| Permission mode | `--permission-mode <mode>` | default / acceptEdits / bypassPermissions / plan / dontAsk — with banner explaining "Agor cannot intercept prompts; this is the CLI's own mode" |
-| ☐ Dangerously skip permissions | `--dangerously-skip-permissions` | Off by default; warning prose adjacent. Equivalent to `--permission-mode bypassPermissions` but Anthropic uses the dedicated flag for telemetry distinction |
+| Permission mode | `--permission-mode <mode>` OR `--dangerously-skip-permissions` | Single dropdown. Options: `default` / `acceptEdits` (out-of-box default) / `plan` / `dontAsk` / `bypassPermissions` / **`Dangerously skip permissions`**. Last option emits `--dangerously-skip-permissions` (the dedicated argv) instead of `--permission-mode bypassPermissions`; same runtime behavior, distinct telemetry per Anthropic's flag design. Warning copy renders adjacent when this option is selected. |
 | Extra `--add-dir` paths | `--add-dir <dirs...>` | Whitelist of paths beyond the worktree |
 | Append-system-prompt | `--append-system-prompt-file` content | Free text, persisted to a tmp file at spawn |
 | Auth mode | env handling | "Use subscription (default)" / "Use API key" radio |
 
-For MCP-driven background spawns (`agor_sessions_spawn`, fork, subsession), the defaults are overridden to `bypassPermissions` (no human at the terminal to answer prompts — see "Backgroundable sessions" above). This override is per-spawn-origin, not in the defaults UI.
+**Out-of-box default for permission mode: `acceptEdits`** — cautious, ergonomic for typical work, can be loosened by the user any time. The user owns this choice from the Defaults panel forward.
+
+**Override for MCP-driven backgrounded spawns** (`agor_sessions_spawn`, fork, subsession): the user's permission-mode default is ignored and `bypassPermissions` is forced — no human is at the terminal to answer prompts, so anything stricter would just hang. This override is per-spawn-origin, not user-configurable. We could later add a Defaults checkbox "Allow MCP-driven sessions to use my permission mode" if anyone asks, but in practice nobody will want to wire a backgrounded agent that can hang on a prompt.
 
 ---
 
@@ -645,33 +646,30 @@ Revised up from 3-5 days after locking in the conversation/terminal view toggle 
 
 ## Open questions for Max
 
-### Closed in this iteration
+### Resolved
 
 - ~~Auto-detect default adapter on first run~~ → **No auto-detect.** Both adapters always shown in the picker; user picks based on the displayed tradeoffs. CLI carries a "beta" label.
-- ~~PTY injection default on/off / per-session toggle UX~~ → **PTY injection's real purpose is backgrounded calls** (MCP-driven prompts, fork/subsession). User-driven prompts come from the terminal's own REPL prompt. The Agor textarea stays wired through PTY injection in v1 as a beta-testing safety net; once integration is solid we may hide it in CLI-mode sessions.
-- ~~Cost UI shape~~ → **Same UI as SDK adapter** (session total at the bottom). Subscription sessions get a caption ("covered by your subscription"). Numbers reconcile within ε to the SDK adapter's cost for the same conversation — bake this into the integration test.
+- ~~PTY injection default on/off / per-session toggle UX~~ → **PTY injection's real purpose is backgrounded calls** (MCP-driven prompts, fork/subsession). User-driven prompts come from the terminal's own REPL prompt. The Agor textarea stays wired through PTY injection in v1 as a beta-testing safety net.
+- ~~Cost UI shape~~ → **Same UI as SDK adapter** (session total at the bottom). Subscription sessions get a caption. Numbers reconcile within ε to the SDK adapter — integration test.
+- ~~Default permission mode for user-driven sessions~~ → **User-defined in the Defaults panel.** Out-of-box value: `acceptEdits`. User can change to any mode, including `Dangerously skip permissions` (which emits the dedicated `--dangerously-skip-permissions` argv). MCP-driven backgrounded spawns always force `bypassPermissions` regardless.
+- ~~Conversation ↔ Terminal view toggle: v1 or v1.5?~~ → **v1.** Side-by-side debugging affordance is essential for catching watcher/translator bugs while the integration is new.
+- ~~`--dangerously-skip-permissions` checkbox vs dropdown entry~~ → **Dropdown entry.** Single control for permission policy, no two-control overlap. The dropdown option named "Dangerously skip permissions" emits `--dangerously-skip-permissions` (not `--permission-mode bypassPermissions`) so Anthropic's telemetry sees the dedicated flag; runtime behavior is the same.
 
-### Decisions still needed before v1
+### Open: watcher-design tactics
 
-1. **Default `--permission-mode` for user-driven sessions** — `acceptEdits` (recommended; more cautious) or `bypassPermissions` (matches what our internal SDK sessions use today; more ergonomic). MCP-driven backgrounded spawns always get `bypassPermissions` regardless of this choice.
-2. **Conversation view vs Terminal view — ship the toggle in v1 or v1.5?** v1 means we build the view-switcher upfront; v1.5 means CLI sessions launch in terminal-only view first, conversation view follows. My lean: **ship both views in v1**, even if conversation view starts a bit rough — debugging the integration without the side-by-side comparison is going to be painful, and it's the view that makes a CLI session feel like an Agor session.
-3. **"Dangerously skip permissions" checkbox in the Defaults panel — expose it?** It's just an alias for `bypassPermissions` from the user's perspective, but the explicit `--dangerously-skip-permissions` flag is what power users searching docs will look for. Expose with strong warning copy, or rely on the permission-mode dropdown alone?
+1. **In-memory vs DB-persisted prompt-injection queue.** If `agor_sessions_prompt(continue)` arrives while the session is mid-turn, do we hold the queued prompt in daemon memory (lost on daemon restart) or persist to a `pending_prompts` table (recoverable)? v1 lean: in-memory.
+2. **Mid-turn timeout for "open terminal to respond" banner.** 10s / 30s / configurable? Too short and we nag during legit slow tool calls; too long and a stuck permission prompt sits there. Lean: 15s, not configurable in v1.
+3. **Co-use detection.** If a user runs `claude --resume <id>` outside Agor on the same JSONL, the watcher ingests those prompts. Pure feature, or do we surface a warning ("turn processed without going through `agor_sessions_prompt`")?
+4. **Subagent JSONL ingestion priority** — v1 or v2? Lean: v2. The nested-subagent UI doesn't exist yet, and the watcher base case already needs care.
 
-### Watcher-design questions
+### Open: deferred investigations
 
-4. **In-memory vs DB-persisted prompt-injection queue.** If `agor_sessions_prompt(continue)` arrives while the session is mid-turn, do we hold the queued prompt in daemon memory (lost on daemon restart) or persist to a `pending_prompts` table (recoverable)? v1 lean: in-memory.
-5. **Mid-turn timeout for "open terminal to respond" banner.** 10s / 30s / configurable? Too short and we nag during legit slow tool calls; too long and a stuck permission prompt sits there. Lean: 15s, not configurable in v1.
-6. **Co-use detection.** If a user runs `claude --resume <id>` outside Agor on the same JSONL, the watcher ingests those prompts. Pure feature, or do we surface a warning ("turn processed without going through `agor_sessions_prompt`")?
-7. **Subagent JSONL ingestion priority** — v1 or v2? Lean: v2. The nested-subagent UI doesn't exist yet, and the watcher base case already needs care.
-
-### Already-flagged investigations
-
-8. **`--debug-file` investigation** — willing to spend v1.5 spike time, or defer to v2? Could give us live `rate_limit_event` (alongside ccusage's 5h-window aggregator we already get for free).
-9. **Session import (v2)** — keep on the roadmap, or drop? Useful for power users who run `claude` outside Agor first.
+5. **`--debug-file` investigation** — willing to spend v1.5 spike time, or defer to v2? Could give us live `rate_limit_event` (alongside ccusage's 5h-window aggregator we already get for free).
+6. **Session import (v2)** — keep on the roadmap, or drop? Useful for power users who run `claude` outside Agor first.
 
 ### Background risk to name
 
-10. **PTY injection's ToS classification.** Defensible as human-in-the-loop (user owns the session, sees the same terminal, can intervene at any time), but no Anthropic statement either way. If they clarify it counts as automation, we flip the default to off in CLI-mode sessions (the user types every prompt manually in the terminal view). The watcher and integration stay; only the textarea behavior changes.
+7. **PTY injection's ToS classification.** Defensible as human-in-the-loop (user owns the session, sees the same terminal, can intervene at any time), but no Anthropic statement either way. If they clarify it counts as automation, we flip the default to off in CLI-mode sessions (the user types every prompt manually in the terminal view). The watcher and integration stay; only the textarea behavior changes.
 
 ---
 
