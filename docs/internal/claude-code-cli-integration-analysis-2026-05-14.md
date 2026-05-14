@@ -334,21 +334,97 @@ New for `claude-code-cli`:
 
 ### Watcher
 
-A new daemon-side service `apps/agor-daemon/src/services/claude-cli-watcher.ts` (working name) that:
-- On `claude-code-cli` session creation: registers the JSONL path `~/.claude/projects/<slug>/<session-id>.jsonl` plus the subagent subdir.
-- Uses `fs.watch` (Linux: inotify) on the JSONL file. On each new chunk, splits by `\n`, parses each complete line as JSON.
-- Translates each event into a `ProcessedEvent` (the same shape the SDK adapter produces) and pushes it through the existing `MessagesService.create/patch` and `TasksService.patch` pipeline.
-- Maintains a per-session byte offset for crash recovery.
-- Polls subagent subdir every N seconds; spawns child watchers for new sidechain JSONLs.
+**TL;DR — no polling.** Linux's `fs.watch` (inotify) is event-driven: the watcher sleeps with zero CPU until the kernel notifies it that the file changed. The daemon doesn't spin a polling loop; the kernel does the work. A single daemon process can comfortably manage hundreds of concurrent CLI-session watchers without measurable overhead.
 
-Translation rules summary:
-- `user` event with no `toolUseResult` → user message row.
-- `user` event with `toolUseResult` → patch the matching pending tool-call row with the result.
-- `assistant` event → upsert assistant message row by `assistant.uuid`. Content blocks (`text`, `thinking`, `tool_use`) populate `message.content` and create empty child tool-call rows (later patched when their result arrives).
-- End-of-turn detection: `assistant.message.stop_reason in ('end_turn', 'tool_use', 'stop_sequence')` → roll up `message.usage` into `tasks.cost_usd` + `tokens_*` deltas via the cost calculator.
-- `attachment` of type `pendingMcpServers` → log; no action.
-- `queue-operation` enqueue → mark task `running`. `queue-operation` dequeue or absence of new events for N seconds after end-of-turn → mark task `idle`.
-- `ai-title` → optionally use as session title if user hasn't set one.
+#### Where the watcher lives
+
+`apps/agor-daemon/src/services/claude-cli-watcher.ts` (working name) — a daemon-side service, NOT in the executor. Rationale:
+- Daemon already has the DB, MessagesService, TasksService, and WebSocket fanout.
+- One executor per user (the Zellij wrapper) runs as a long-lived per-user process; session lifecycles are shorter than that. Watcher state belongs with the session row.
+- Crash recovery is simpler: on daemon restart, we re-instantiate watchers from the `sessions` table in one place.
+
+Sibling existing pattern: `apps/agor-daemon/src/services/terminals.ts` (per-user PTY orchestration) — we add `claude-cli-watcher.ts` next to it, with a similar lifecycle.
+
+#### `fs.watch` vs chokidar vs polling
+
+| Option | Pick? | Why |
+|---|---|---|
+| `node:fs.watch` (inotify on Linux) | **Yes** | Event-driven, zero CPU when idle, in the Node stdlib, no transitive dep |
+| `chokidar` | No | Solves cross-platform inconsistencies we don't have (Agor deploys on Linux). Adds a non-trivial dep. Rejected. |
+| `fs.watchFile` (polling fallback) | No | Polls `stat` every N ms. Wasteful for our scale. |
+| Periodic `loadSessionUsageById` re-runs | No | Bypasses the kernel notification; defeats the point. |
+
+Trade-off acknowledged: `fs.watch` on macOS (via `kqueue`) is less reliable than on Linux. Agor's production deployments are Linux; this is acceptable. If we ever support macOS dev workflows that need this, we slot in chokidar behind the same interface.
+
+#### Watcher lifecycle
+
+```
+Session created (agentic_tool === 'claude-code-cli')
+  ↓
+Compute path: ~/.claude/projects/<slug>/<claudeSessionId>.jsonl
+  ↓
+File doesn't exist yet (claude is still starting):
+  retry fs.stat with 100ms backoff up to 5s, then give up and surface an error
+  (Empirically claude writes the first `queue-operation` line within <100ms of spawn.)
+  ↓
+File exists → fs.openSync(path, 'r') and seek to position cli_watcher_offset (0 on first start)
+  ↓
+fs.watch(path, { persistent: false }) → on every change event:
+  1. Stat the file; if size hasn't grown, ignore (mtime touch).
+  2. Read from cli_watcher_offset to end into a buffer.
+  3. Split on '\n'. Last fragment (if no trailing newline) is held over for next event.
+  4. For each complete line: parse JSON, run through ccusage's transcriptMessageSchema
+     (defensive: log + skip unknown shapes), translate to ProcessedEvent, push through
+     MessagesService.create/patch and TasksService.patch.
+  5. Advance cli_watcher_offset.
+  6. Persist cli_watcher_offset to the sessions row every M lines OR every T seconds,
+     whichever comes first. (Cheap; SQLite handles 100s of writes/sec.)
+  ↓
+Also fs.watch the parent slug directory for the subagent subdir
+(~/.claude/projects/<slug>/<claudeSessionId>/subagents/). When that dir appears or
+gets new agent-<id>.jsonl files, spawn a child watcher for each.
+  ↓
+Session ends OR PTY exits:
+  close watchers, flush final offset, mark session.status accordingly.
+```
+
+#### Triggers (what makes the watcher do something)
+
+The watcher is **purely reactive**. It doesn't fire on a timer. The triggers are:
+
+1. **Kernel inotify event** → process new bytes (the only steady-state trigger).
+2. **Session create with `agentic_tool === 'claude-code-cli'`** → instantiate a new watcher instance.
+3. **Daemon startup** → for every `sessions` row where `agentic_tool === 'claude-code-cli'` AND `status IN ('running', 'idle')`, re-instantiate watcher from persisted `cli_watcher_offset`.
+4. **Session ends / PTY exit / user runs `/exit`** → tear down watcher.
+5. **Mid-turn timeout heuristic** (only for `--permission-mode default`/`dontAsk`) → if no new event arrives for >10s after a `stop_reason: "tool_use"` whose tool_result hasn't appeared, surface "open the terminal to respond" banner. This is the one timer in the system, and it's a one-shot scheduled on the watcher's "last event seen" timestamp, not a poll loop.
+
+#### End-of-turn detection
+
+Three signals, in priority order:
+1. **`assistant.message.stop_reason === "end_turn"`** — canonical, fires when Claude is done.
+2. **`assistant.message.stop_reason === "tool_use"` + matching `user` event with `toolUseResult` for every `tool_use.id` in the assistant turn** — the turn is "complete" pending follow-up, agent will continue automatically.
+3. **`queue-operation: dequeue`** — useful as a coarse signal but lags actual end-of-turn.
+
+For the prompt-injection queue (below), we drain on signal #1 only. Signal #2 means the agent is still working and shouldn't be interrupted.
+
+#### Translation rules (ccusage event → Agor `ProcessedEvent`)
+
+- `user` with no `toolUseResult` → `messages` row, role `user`.
+- `user` with `toolUseResult` → patch the pending tool-call row matched by `sourceToolAssistantUUID`.
+- `assistant` → upsert `messages` row by `assistant.message.id` (the API msg_… ID, NOT the JSONL line's `uuid` — multiple JSONL lines share one `message.id`). Content blocks (`text`/`thinking`/`tool_use`) hydrate `message.content`.
+- On `assistant` event: run `ccusage/data-loader.createUniqueHash` against an in-memory `seen` Set; skip dedup'd duplicates so MessagesService doesn't double-write.
+- On end-of-turn: pull aggregated cost from `ccusage/data-loader.calculateCostForEntry` and patch `tasks.cost_usd` + token totals.
+- `attachment` types: `pendingMcpServers`, `skill_listing`, `budget_usd`, `deferred_tools_delta` → log only, no DB write in v1.
+- `queue-operation` → drive `task.status`: enqueue → `running`, dequeue → `idle` (after end-of-turn).
+- `ai-title` → if the session still has a placeholder/empty title, set it.
+
+#### Inotify operational note
+
+Linux `inotify_max_user_watches` defaults to 8192 per user. Each `claude-code-cli` session uses 2 watches (the JSONL file + the parent slug dir for subagent discovery), plus one per active subagent file. A user with 50 concurrent CLI sessions and ~3 subagents-per-session active uses ~250 watches — well under the limit. Document for operators running Agor at scale (>500 concurrent sessions per Unix user): bump `fs.inotify.max_user_watches` via sysctl.
+
+#### Co-use (user runs `claude` outside Agor on the same JSONL)
+
+Worth flagging: if a user runs `claude --resume <agor-session-id>` in their own terminal while Agor's watcher is tailing, both interleave. The user's prompts get appended to the same JSONL → the watcher ingests them as if they came through Agor's session pane → Agor's UI sees turns it didn't initiate. This is technically a feature (cross-environment continuity) but can surprise. Document. The cleanest defense is the `--session-id` namespacing we already use: a normal Agor user won't accidentally guess a UUIDv4 to resume.
 
 ### External prompt injection (PTY write)
 
@@ -492,12 +568,28 @@ In the new agent description and in onboarding modals:
 
 ## Open questions for Max
 
-1. **Default permission mode** — `acceptEdits` (recommend) or `bypassPermissions` (matches what our internal SDK sessions use today)?
-2. **Cost UI for subscription sessions** — show estimated $ with a caption, or hide and show only token usage?
-3. **First-run default** — if both adapters are available, which is the default agentic tool for a new Claude session? My recommendation: detect at run time. If `claude auth status` shows subscription → default `claude-code-cli`. If only `ANTHROPIC_API_KEY` is configured → default `claude-agent-sdk`. If both → ask once and store in user prefs.
-4. **PTY injection toggle UX** — per-session opt-out checkbox? User-level setting? Default-on or default-off?
-5. **`--debug-file` investigation** — willing to spend v1.5 spike time, or defer to v2?
-6. **Session import (v2)** — keep on the roadmap, or drop?
+### Decisions needed before v1
+
+1. **Default permission mode** — `acceptEdits` (recommend) or `bypassPermissions` (matches what our internal SDK sessions use today)? Affects the user's first-session feel: `acceptEdits` is more cautious but means the user will sometimes need to focus the terminal to approve a Bash command; `bypassPermissions` is frictionless but ToS-grey in some interpretations.
+2. **First-run default adapter** — if both `claude-agent-sdk` and `claude-code-cli` are available, which wins by default for a new Claude session? Recommendation: auto-detect — `~/.claude/.credentials.json` present and valid → default `claude-code-cli`; only `ANTHROPIC_API_KEY` configured → default `claude-agent-sdk`; both → one-time onboarding question.
+3. **PTY injection toggle UX** — per-session opt-out checkbox? User-level setting? Default-on or default-off? My lean: default-on with a per-session toggle, similar to how Codex's `approvalPolicy` is per-session.
+4. **Cost UI for subscription sessions** — show estimated $ with a caption ("covered by subscription"), or hide and show only token usage? List-price numbers might mislead users about what their subscription actually costs.
+
+### Watcher-design open questions (new this iteration)
+
+5. **In-memory vs DB-persisted prompt-injection queue.** If a user sends `agor_sessions_prompt(continue)` while the session is mid-turn, do we hold the queued prompt in the daemon's memory (lost on restart) or persist to a `pending_prompts` table (recoverable)? v1-recommendation: in-memory; persistence is easy to add later if needed.
+6. **Mid-turn timeout for "open terminal to respond" banner.** 10s? 30s? Configurable? Too short and we nag during legit slow tool calls; too long and a stuck permission prompt sits there.
+7. **What happens if a user runs `claude --resume <id>` outside Agor and prompts interleave?** Documented as "co-use is technically a feature." Do we want a defensive check (warn if external-origin prompts appear, e.g., a turn was processed without going through `agor_sessions_prompt`)?
+8. **Subagent JSONL ingestion priority** — v1 (right alongside the main watcher) or v2 (after we ship the basics)? My lean: v2. Adds engineering surface, and the conversation-pane UI for displaying nested subagent threads doesn't exist yet.
+
+### Already-flagged investigations
+
+9. **`--debug-file` investigation** — willing to spend v1.5 spike time, or defer to v2? Could give us the live `rate_limit_event` we currently get from ccusage's 5h-window aggregator only. Bonus, not load-bearing.
+10. **Session import (v2)** — keep on the roadmap, or drop? Useful for power users who run `claude` outside Agor first; small extra code on top of ccusage.
+
+### Background risk we should at least name
+
+11. **PTY injection's ToS classification** — defensible as human-in-the-loop (user owns the session, sees the same terminal, can intervene), but no Anthropic statement either way. If Anthropic clarifies later that PTY-injection counts as automation, we flip the default to off and the architecture still works (user types every prompt manually); the regression is purely UX.
 
 ---
 
