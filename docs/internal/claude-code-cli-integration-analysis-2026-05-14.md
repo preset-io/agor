@@ -22,10 +22,10 @@
 5. **What we lose vs the SDK adapter, and how to live with it:**
    - **No structured permission prompts.** User answers inline in the terminal. Mitigate by exposing `--permission-mode` as a per-session setting; `acceptEdits` is a reasonable default for subscriber UX. Agor's permission-modal subsystem is inert for this tool.
    - **No `total_cost_usd` aggregation event** — JSONL has per-turn `usage` but no rolled-up cost. Mitigate with a price table × token counts, **dedup'd by `message.id`** (the cumulative-snapshot footgun: assistant lines repeat the same cumulative `usage` once per content block — naive sum over-counts ~6×; verified in the live session). For subscribers cost is informational anyway (flat-rate). See Appendix C for prior-art (ccusage / claude-code-parser) and build-vs-adopt analysis.
-   - **No `rate_limit_event` in JSONL.** Real gap. v1.5 investigation: does `--debug-file` log them?
+   - **5-hour billing-window tracking** — ccusage's `loadSessionBlockData` already computes this from the JSONL across sessions, which is the rate-limit signal subscribers care about most. The `rate_limit_event` (only in `-p` stream-json mode) we still don't get, but the practical metric is largely covered.
    - **No fine-grained streaming of token-level deltas** (the `stream_event` type is print-only). Acceptable — interactive UI renders directly in xterm; the message-row update on `assistant` turn completion is fast enough for the conversation pane.
 
-6. **Effort estimate: ~5-7 days for v1.** Most novel work is the watcher, the PTY-injection prompt path, the new `claude auth` status UI panel, and the rename of `claude-code` → `claude-agent-sdk`. The Zellij + xterm.js plumbing is already mostly there for the user-shell terminal; we extend it to spawn `claude` with the right flags.
+6. **Effort estimate: ~3-5 days for v1** (revised down from 5-7 after the ccusage adoption decision). Remaining novel work is the watcher, the ccusage→Agor translator, the PTY-injection prompt path, the `claude auth` status UI panel, and the rename of `claude-code` → `claude-agent-sdk`. Zellij + xterm.js plumbing already mostly exists for the user-shell terminal.
 
 ---
 
@@ -250,23 +250,18 @@ The on-disk JSONL has `assistant.message.usage` per turn but no `total_cost_usd`
 
 **Cache-tier pricing:** `cache_creation_input_tokens` splits between `ephemeral_5m_input_tokens` (1.25× base input) and `ephemeral_1h_input_tokens` (2× base input). `cache_read_input_tokens` is 0.1× base input. Without per-tier accounting, cache-heavy sessions misprice substantially.
 
-**Mitigation:** new `packages/executor/src/sdk-handlers/claude-cli/cost-calculator.ts` that:
-1. Dedupes assistant turns by `message.id` before aggregating.
-2. Applies cache-tier price ratios per the table above.
-3. Reads model→price from a new field on `packages/core/src/models/claude.ts` (or pull a small JSON price table). Source values from Anthropic's public pricing page; cross-check with ccusage's embedded prices.
+**Mitigation:** adopt **`ccusage`** as a runtime dep (MIT, well-maintained, ESM-compatible with our daemon). Use `ccusage/data-loader.createUniqueHash` for dedup, `ccusage/data-loader.calculateCostForEntry` for per-entry cost (which already handles the cache-tier ratios above), and `ccusage/data-loader.loadSessionUsageById(sessionId)` for batch loading at session resume / crash recovery. We wrap these with our own `fs.watch` layer for real-time tailing. See **Appendix C** for the full surface, why this beats vendoring, and the small risks (transitive deps, multi-tool coupling, semver).
 
-For subscription users: caption "estimated, covered by subscription" in the UI. For API-key users: same numbers, no caption.
+For subscription users: caption cost "estimated, covered by subscription" in the UI. For API-key users: same numbers, no caption.
 
-See **Appendix C** for the prior-art survey and the build-vs-adopt analysis on `ccusage`/`claude-code-parser`.
+### 5. No `rate_limit_event` in the JSONL — but the 5-hour billing window IS computable (MOSTLY MITIGATED)
 
-### 5. No rate-limit event in the JSONL (REAL GAP)
-
-The CLI emits `rate_limit_event` only in stream-json output. Interactive mode appears to handle limits internally without writing them to the JSONL (verify in v1.5 spike).
+The CLI emits `rate_limit_event` only in `-p`/stream-json output. Interactive mode does not write that event to the JSONL.
 
 **Mitigations:**
-- v1: accept the gap; no rate-limit banner for `claude-code-cli` sessions.
-- v1.5: spike `--debug-file <path>` to see if rate-limit info appears in debug logs. If yes, watch the debug file too.
-- v2: if `--debug-file` doesn't give it to us, consider parsing the terminal output (xterm escapes) for the "rate limit reached" string. Fragile, last resort.
+- v1: use `ccusage/data-loader.loadSessionBlockData()`, which computes the 5-hour billing-window aggregate across all sessions on disk. This is the rate-limit metric subscribers actually care about — "how close am I to my 5h cap?" — and ccusage already handles it.
+- v1.5: spike `--debug-file <path>` to see if any structured rate-limit info appears there as a secondary signal.
+- The fast-path event-driven `rate_limit_event` (with `resetsAt` etc.) remains unavailable in interactive mode. Document as a minor gap; UI can still show "X% of 5h window consumed" without it.
 
 ### 6. JSONL is written by `claude`, not by Agor — schema can change between versions (RISK)
 
@@ -441,18 +436,19 @@ In the new agent description and in onboarding modals:
 
 ## Phased delivery plan
 
-### v1 — Spawn + watcher + structured bridge (~5-7 days)
+### v1 — Spawn + watcher + structured bridge (~3-5 days)
 
 - Add `'claude-code-cli'` to type unions and tool registry.
-- New executor adapter `packages/executor/src/sdk-handlers/claude-cli/` (cost-calculator, message-processor mirroring SDK shape, but reads JSONL instead of SDK callbacks).
-- Daemon-side `claude-cli-watcher` service using `fs.watch` on the JSONL.
+- Add `ccusage` runtime dep; thin translator from `ccusage` types → Agor `ProcessedEvent`.
+- New executor adapter `packages/executor/src/sdk-handlers/claude-cli/` (mostly translator + spawn config; cost calc delegated to `ccusage/data-loader.calculateCostForEntry`).
+- Daemon-side `claude-cli-watcher` service: `fs.watch` per session, calls `ccusage/data-loader.loadSessionUsageById` on each new chunk, dedupes with `createUniqueHash`, translates, pushes through MessagesService/TasksService.
 - Zellij tab spawn for CLI sessions (extend `packages/executor/src/commands/zellij.ts`).
 - Rename `claude-code` → `claude-agent-sdk` (DB migration + UI labels).
 - New `ClaudeCliConfigForm` (model, effort, permission-mode picker).
-- Cost calculator from `assistant.message.usage` + price table.
 - `billing_mode` column + UI caption.
+- 5-hour billing-window banner powered by `ccusage/data-loader.loadSessionBlockData()`.
 - Crash recovery via per-session `cli_watcher_offset`.
-- Defensive parser: log + ignore unknown event types.
+- Integration test: feed a fixture JSONL through ccusage, assert dedup + cost totals — regression alarm if ccusage's behavior shifts.
 
 **Out of scope for v1:** PTY-prompt injection (deferred to v1.5 so we ship the watcher first), `claude auth login` Settings panel (deferred), subagent thread ingestion, session import, rate-limit surfacing.
 
@@ -487,10 +483,10 @@ In the new agent description and in onboarding modals:
 
 ## Effort estimate
 
-- v1: ~5-7 days for one engineer familiar with the executor + terminal architecture. The watcher is the most novel piece; everything else is parallel to existing patterns (Codex adapter, Zellij tab plumbing, MCP scoping).
+- v1: **~3-5 days** for one engineer familiar with the executor + terminal architecture. Reduced from the earlier 5-7-day estimate by adopting `ccusage` (parser, dedup, price table, 5h window all delegated). Remaining novel work: the watcher (`fs.watch` + offset bookkeeping), the ccusage→`ProcessedEvent` translator, Zellij tab spawn for CLI sessions, and the rename.
 - v1.5: ~2-3 days. PTY-injection plumbing + auth panel.
 - v2: ~3-4 days. Power features, no core architecture changes.
-- Tests: build a small fixture JSONL replay harness so unit tests don't need to spawn `claude`. CI smoke test using `--print` and an API key in CI-only env can validate one round-trip.
+- Tests: fixture JSONL (this analysis's own session file) replayed through ccusage in unit tests so we catch a ccusage regression early. CI smoke test using `--print` and an API key in CI-only env validates the spawn shape end-to-end.
 
 ---
 
@@ -550,46 +546,88 @@ Print-only flags we deliberately do NOT use for `claude-code-cli`:
 --replay-user-messages        Only works with --print+stream-json
 ```
 
-## Appendix C: Prior art — existing JSONL wrappers and our build-vs-adopt call
+## Appendix C: Prior art — adopt `ccusage` as a runtime dep
 
-A surprisingly mature ecosystem already exists. Survey of what we considered, what they handle, and the recommendation.
+**Decision: adopt `ccusage` from npm.** Earlier in this doc's drafting I recommended vendoring our own parser; that was wrong, based on an incomplete read of ccusage's published surface. Spelling out the analysis honestly:
 
-### Tools surveyed
+### What ccusage actually publishes
 
-| Tool | Type | Stars/health | Watcher? | Dedup? | Price table? | Cache tiers? | License |
-|---|---|---|---|---|---|---|---|
-| [**ccusage**](https://github.com/ryoppippi/ccusage) (`@ryoppippi`) | CLI + monorepo of internal packages | 14,176★, updated 2026-05-14, very active | No (batch) | Yes (embedded) | Yes (embedded) | Yes | MIT (npm) / NOASSERTION (GitHub classifier) — verify LICENSE file |
-| [**pixelhq-bridge**](https://github.com/waynedev9598/PixelHQ-bridge) | TS bridge: chokidar → JSONL parser → adapter → WebSocket | Niche, iOS-app oriented | **Yes (chokidar)** | (presumed; not documented) | N/A | N/A | (verify) |
-| [**claude-code-parser**](https://github.com/udhaykumarbala/claude-code-parser) | TS parser for `--output-format=stream-json` stdout | Zero deps, 11 KB | No (parses streams) | **Yes (stateful Translator class for cumulative-snapshot dedup)** | No | No | (verify) |
-| [**@constellos/claude-code-kit**](https://www.npmjs.com/package/@constellos/claude-code-kit) | Zod schemas + `parseTranscript` | npm page 403'd at fetch time — recheck | No | (unknown) | (unknown) | (unknown) | (verify) |
-| token-dashboard, claude-code-usage-tracker, Claude-Code-Usage-Monitor, claude-code-dashboard | Full apps / dashboards | Not libraries | Mixed | App-internal | App-internal | App-internal | Various |
+`ccusage` (the npm package, version 18.0.11 as of 2026-05-14, MIT license confirmed in repo `LICENSE`) deliberately exports reusable internals via its `package.json`:
 
-**Most useful as a reference:** ccusage for the price table + dedup-by-`message.id` rule + cache-tier math. claude-code-parser for its public protocol documentation (the only such doc that exists) — invaluable when the JSONL/stream-json formats drift between CLI versions.
+```json
+"exports": {
+  ".":                  "./dist/index.js",
+  "./calculate-cost":   "./dist/calculate-cost.js",
+  "./data-loader":      "./dist/data-loader.js",
+  "./debug":            "./dist/debug.js",
+  "./logger":           "./dist/logger.js"
+}
+```
 
-### Build vs adopt
+This is not a private monorepo dep accidentally leaked — these are intentional public exports. The package serves both the `ccusage` CLI and downstream consumers building on it.
 
-**Adopt-runtime-dep** (e.g., import `ccusage/internal`): faster delivery, battle-tested logic. But:
-- Couples Agor's executor to a community lib's release cadence. When Anthropic changes the JSONL schema, we're waiting on the upstream maintainer.
-- ccusage's `packages/internal` is not advertised as a public API. The shape can change without semver discipline (it's a monorepo private dep).
-- License classifier on GitHub returns NOASSERTION — needs LICENSE-file verification before we depend on it.
-- Doesn't include a real-time file watcher (batch mode).
+### Exports we'd actually use
 
-**Vendor-our-own** (build parser + dedup + price calc inside `packages/executor/src/sdk-handlers/claude-cli/`, with ccusage as a copy-from-this reference): a bit more upfront work but:
-- Matches the existing per-tool normalizer pattern (`packages/executor/src/sdk-handlers/codex/`).
-- We control schema-drift handling: when Anthropic changes a field, we patch our parser the same day instead of waiting.
-- Easy to add the watcher and the per-session offset bookkeeping that ccusage doesn't provide.
-- No license risk; no transitive dependency surface.
+From `ccusage/data-loader`:
 
-**Recommendation: vendor-our-own.** Treat ccusage's source as documentation (price table values, dedup rule, cache-tier math). Cite the reference in the parser file's header. The build cost is bounded — the dedup rule is one `Set<messageId>`, the price math is a small lookup table — but the operational control it gives us when the schema drifts is significant.
+| Export | Purpose for Agor |
+|---|---|
+| `transcriptMessageSchema`, `usageDataSchema` | Valibot schemas we validate JSONL lines against — schema-drift detection comes for free; an unrecognized field surfaces as a validation warning |
+| `createUniqueHash(data)` | **The dedup helper.** Returns a stable hash from `message.id + requestId` or `null` if neither present. Drop this directly into our watcher's `seen` set |
+| `calculateCostForEntry(data, ...)` | Per-entry USD cost calc that already handles `cache_creation.ephemeral_5m_input_tokens` × 1.25, `ephemeral_1h_input_tokens` × 2, `cache_read_input_tokens` × 0.1 |
+| `loadSessionUsageById(sessionId, options)` | Per-session batch load — exactly the shape we need for crash recovery and "adopt existing session" import (v2) |
+| `loadSessionBlockData(options)` | **Five-hour billing-window tracking.** This fills Blind Spot #5 (rate-limit signal) almost for free: subscribers care most about hitting the 5h window, and ccusage already computes it from the JSONL |
+| `calculateContextTokens()` | Context-window utilization tracking |
+| `getClaudePaths()`, `extractProjectFromPath()` | Slug rule + multi-path discovery — saves us reimplementing slug logic from scratch (and shields us if Anthropic changes it) |
 
-Budget impact on the phased plan: net-zero. We'd be writing the cost calc and event translator anyway as part of v1; the prior-art survey just tells us what edge cases to handle (dedup, cache tiers) without rediscovering them.
+From `ccusage/calculate-cost`:
+- `calculateTotals(...)`, `getTotalTokens(...)` — aggregation helpers (session-level and global totals).
 
-### Two specific intricacies to lift verbatim from ccusage/claude-code-parser
+### What we still own
 
-1. **Cumulative-snapshot dedup.** Every `assistant` JSONL line for a single turn carries the cumulative-to-that-point `usage`. Naive sum across lines inflates 5-10× depending on content-block count. Dedup by `message.id` is mandatory.
-2. **Cache-creation tier pricing.** `cache_creation_input_tokens` is split between `ephemeral_5m_input_tokens` (price ratio 1.25× base input) and `ephemeral_1h_input_tokens` (price ratio 2× base input). `cache_read_input_tokens` is at 0.1× base input. Without per-tier accounting, cache-heavy sessions either over- or under-price.
+- The **file watcher** (`fs.watch` per active session's JSONL, plus the subagent subdir). ccusage is batch-mode; we wrap its loader functions with line-tail logic.
+- The **translation layer**: ccusage emits its own `UsageData` / `SessionUsage` shape; we translate that to our existing `ProcessedEvent` shape so the rest of the executor pipeline (MessagesService, TasksService, cost rollup on `task.cost_usd`) stays unchanged.
+- **Per-session offset bookkeeping** for crash recovery (bytes consumed on each JSONL).
+- **PTY integration** (Zellij + xterm.js) — entirely outside ccusage's scope.
+- **Agor session ↔ Claude session ID mapping**, MCP injection, auth panel, UI — all Agor-side.
 
-Both are non-obvious from the field names. Bake them into the parser unit tests with a fixture from `~/.claude/projects/` so regressions show up loudly.
+### Why this is the right call
+
+1. **Maintenance economics.** ccusage absorbs the schema-drift cost (14k stars + multi-tool coverage means many users discover breakage fast). Vendoring puts that on us.
+2. **Bonus capability.** `loadSessionBlockData` gives us a subscriber-relevant rate-limit signal we'd otherwise be doing without (Blind Spot #5).
+3. **Multi-tool reuse.** ccusage also exports Codex / OpenCode / Amp / Pi parsers in sibling apps — if we like the pattern for Claude, we can converge our Codex cost normalizer onto the same library later.
+4. **Schema source-of-truth.** Valibot schemas are tighter than our internal types; reusing them prunes a class of bugs (silently-tolerated unknown fields).
+5. **ESM compat checked.** Agor's `apps/agor-daemon`, `packages/executor`, `packages/core` are all `"type": "module"` — ccusage's ESM-only shape lands cleanly. Engines: ccusage requires Node ≥22.11; Agor's package.json should be checked but no daemon I've seen runs below 20.
+6. **License is MIT** — verified in the repo's `LICENSE` file; the GitHub classifier's NOASSERTION readout I cited earlier was a false alarm.
+
+### Concrete risks (small, manageable)
+
+1. **Transitive deps.** ccusage pulls in `valibot`, `consola`, `@praha/byethrow`. Light, no native compilation. Lockfile drift is normal pnpm hygiene.
+2. **Multi-tool coupling.** ccusage's `data-loader` also globs Codex/OpenCode files in `~/.claude/projects/` siblings. We restrict our usage to per-session APIs (`loadSessionUsageById`) so the multi-tool surface doesn't leak in unexpectedly.
+3. **Breaking changes.** ccusage is at v18 — they've had majors. Pin a major (`"ccusage": "^18.0.0"`); read the release notes before upgrading.
+4. **Anthropic ships a CLI version with a new event type.** ccusage's valibot schemas validate against known shapes; new fields are passed through and we keep going. Schema-breaking changes show up as validation errors which we surface to logs (not silent corruption).
+
+### Effort impact
+
+v1 estimate drops by **~1-2 days**. The parser, dedup, price table, and 5-hour-window logic are off our plate. We focus on: spawn-in-Zellij, watcher around ccusage's loader, translation to `ProcessedEvent`, PTY injection, auth UI, and the rename. Revised v1 estimate: **~3-5 days** (was 5-7).
+
+### The dedup + cache-tier intricacies we'd have built ourselves
+
+For posterity (and so the unit tests live in the right place), the two non-obvious things ccusage handles internally:
+
+1. **Cumulative-snapshot dedup.** Every `assistant` JSONL line for a single turn carries the cumulative-to-that-point `usage`. Naive sum across lines inflates ~6× in our live session sample (verified). Dedup by `message.id` + `requestId` is mandatory. ccusage's `createUniqueHash` does this.
+2. **Cache-creation tier pricing.** `cache_creation_input_tokens` splits between `ephemeral_5m_input_tokens` (1.25× base input) and `ephemeral_1h_input_tokens` (2× base input). `cache_read_input_tokens` is 0.1× base input. ccusage's `calculateCostForEntry` does this.
+
+We still add an integration test that feeds a known fixture JSONL (e.g., this analysis's own session file) through ccusage and asserts the totals, so a ccusage regression breaks our CI loudly rather than silently mispricing.
+
+### Tools considered and not adopted
+
+| Tool | Why not |
+|---|---|
+| [**pixelhq-bridge**](https://github.com/waynedev9598/PixelHQ-bridge) | Watcher pattern is right, but it's iOS-app-oriented with a WebSocket broadcast layer + privacy-stripping we don't want. ccusage + our own watcher is cleaner. |
+| [**claude-code-parser**](https://github.com/udhaykumarbala/claude-code-parser) | For `--output-format=stream-json` stdout (`-p` path). Not our path. But its [public protocol documentation](https://udhaykumarbala.github.io/claude-code-parser/) is the best-in-class reference for the JSONL/stream-json formats — keep it bookmarked for when ccusage's behavior is unclear. |
+| [**@constellos/claude-code-kit**](https://www.npmjs.com/package/@constellos/claude-code-kit) | npm page 403'd at fetch time; not enough signal to recommend, and ccusage covers our needs. |
+| token-dashboard, claude-code-usage-tracker, Claude-Code-Usage-Monitor, claude-code-dashboard | Full applications, not libraries. Worth reading for UX ideas (especially Stargx/claude-code-dashboard's real-time multi-session view) but not consumable as dependencies. |
 
 ## Appendix D: Sources (Anthropic policy + community references)
 
