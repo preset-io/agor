@@ -44,6 +44,7 @@ import type {
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
+import { forkCodexThreadViaAppServer } from './app-server-client.js';
 import { DEFAULT_CODEX_MODEL } from './models.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
 
@@ -746,6 +747,57 @@ export class CodexPromptService {
   }
 
   /**
+   * Fork a Codex thread for an Agor forked session.
+   *
+   * The public TypeScript Codex SDK does not currently expose fork(), but the
+   * local Codex App Server does expose `thread/fork`. Keep this as a tiny
+   * sidecar: create the forked thread id, persist it to Agor, then continue
+   * through the normal SDK `resumeThread(...).runStreamed(...)` path.
+   */
+  private async ensureForkedCodexThread(
+    sessionId: SessionID,
+    session: {
+      genealogy?: { forked_from_session_id?: SessionID };
+      sdk_session_id?: string | null;
+    }
+  ): Promise<void> {
+    if (session.sdk_session_id) return;
+
+    const parentSessionId = session.genealogy?.forked_from_session_id;
+    if (!parentSessionId) return;
+
+    const parentSession = await this.sessionsRepo.findById(parentSessionId);
+    if (!parentSession?.sdk_session_id) {
+      console.warn(
+        `⚠️  [Codex] Fork requested from parent ${parentSessionId.substring(0, 8)}, but parent has no Codex thread id; starting fresh`
+      );
+      return;
+    }
+
+    console.log(
+      `🍴 [Codex] Forking from parent thread ${parentSession.sdk_session_id.substring(0, 8)} via app-server thread/fork`
+    );
+
+    const appServerEnv: NodeJS.ProcessEnv = { ...process.env };
+    if (this.useNativeAuth && !this.apiKey) {
+      delete appServerEnv.OPENAI_API_KEY;
+      delete appServerEnv.CODEX_API_KEY;
+    } else if (this.apiKey) {
+      appServerEnv.CODEX_API_KEY = this.apiKey;
+    }
+
+    const forkedThreadId = await forkCodexThreadViaAppServer(parentSession.sdk_session_id, {
+      env: appServerEnv,
+    });
+    await this.sessionsRepo.update(sessionId, { sdk_session_id: forkedThreadId });
+    session.sdk_session_id = forkedThreadId;
+
+    console.log(
+      `✅ [Codex] Forked thread ${parentSession.sdk_session_id.substring(0, 8)} → ${forkedThreadId.substring(0, 8)}`
+    );
+  }
+
+  /**
    * Execute prompt with streaming support
    *
    * Uses Codex SDK's runStreamed() method for real-time event streaming.
@@ -843,6 +895,8 @@ export class CodexPromptService {
     }
 
     console.log(`   Working directory: ${worktree.path}`);
+
+    await this.ensureForkedCodexThread(sessionId, session);
 
     // Build thread options. approvalPolicy + networkAccessEnabled flow through
     // here (not config.toml); ThreadOptions override matching `--config` keys.

@@ -198,7 +198,7 @@ export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapab
     supportsStatelessFsMode: true,
   },
   codex: {
-    supportsSessionFork: false,
+    supportsSessionFork: true,
     supportsChildSpawn: true,
     supportsSessionImport: false,
     supportsStatelessFsMode: true,

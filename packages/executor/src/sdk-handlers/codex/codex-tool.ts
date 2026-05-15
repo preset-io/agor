@@ -114,7 +114,7 @@ export class CodexTool implements ITool {
       supportsSessionImport: false, // ❌ Deferred until we have real JSONL format
       supportsSessionCreate: false, // ❌ Not exposed (handled via executeTask)
       supportsLiveExecution: true, // ✅ Via Codex SDK
-      supportsSessionFork: false,
+      supportsSessionFork: true,
       supportsChildSpawn: false,
       supportsGitState: false, // Agor manages git state
       supportsStreaming: true, // ✅ Via runStreamed()

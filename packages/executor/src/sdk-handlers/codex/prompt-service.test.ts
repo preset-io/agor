@@ -16,6 +16,11 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const appServerMocks = vi.hoisted(() => ({
+  forkCodexThreadViaAppServer: vi.fn(),
+}));
+
 import { CodexPromptService } from './prompt-service.js';
 
 // Track how many Codex instances were created (module-level state)
@@ -32,6 +37,8 @@ async function* streamMockEvents() {
 }
 
 // Mock @agor/core/sdk to avoid spawning real Codex CLI processes
+vi.mock('./app-server-client.js', () => appServerMocks);
+
 vi.mock('@agor/core/sdk', () => {
   class MockCodexClient {
     apiKey: string;
@@ -73,6 +80,7 @@ vi.mock('@agor/core/sdk', () => {
 const mockMessagesRepo = {} as any;
 const mockSessionsRepo = {
   findById: vi.fn(),
+  update: vi.fn(),
 } as any;
 const mockSessionMCPServerRepo = {
   listServers: vi.fn().mockResolvedValue([]),
@@ -89,6 +97,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
     mockStreamEvents = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
+    appServerMocks.forkCodexThreadViaAppServer.mockReset();
   });
 
   it('should create exactly one Codex instance on initialization', () => {
@@ -241,6 +250,94 @@ describe('CodexPromptService - OPENAI_BASE_URL handling', () => {
     (service as any).refreshClient('stable-key');
     expect(mockInstanceCount).toBe(countAfterInit + 2);
     expect(mockInstanceBaseUrls.at(-1)).toBeUndefined();
+  });
+});
+
+describe('CodexPromptService - forked sessions', () => {
+  beforeEach(() => {
+    mockInstanceCount = 0;
+    mockInstanceBaseUrls = [];
+    mockStreamEvents = [];
+    delete process.env.OPENAI_BASE_URL;
+    vi.clearAllMocks();
+    appServerMocks.forkCodexThreadViaAppServer.mockReset();
+  });
+
+  it('forks the parent Codex thread via app-server before resuming the child thread', async () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockWorktreesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+
+    const serviceWithPrivates = service as any;
+    serviceWithPrivates.ensureCodexInstructionsFile = vi
+      .fn()
+      .mockResolvedValue('/tmp/agor-codex-instructions-child.md');
+    serviceWithPrivates.buildMcpServersConfig = vi
+      .fn()
+      .mockResolvedValue({ servers: {}, total: 0 });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    const childSession = {
+      session_id: 'child-session',
+      worktree_id: 'worktree-1',
+      created_at: new Date().toISOString(),
+      sdk_session_id: null,
+      genealogy: { forked_from_session_id: 'parent-session' },
+      permission_config: { codex: {} },
+      model_config: {},
+      mcp_token: 'test-token',
+    };
+    const parentSession = {
+      session_id: 'parent-session',
+      worktree_id: 'worktree-1',
+      created_at: new Date().toISOString(),
+      sdk_session_id: 'parent-thread-id',
+      permission_config: { codex: {} },
+      model_config: {},
+      mcp_token: 'test-token',
+    };
+
+    mockSessionsRepo.findById.mockImplementation(async (id: string) => {
+      if (id === 'child-session') return childSession;
+      if (id === 'parent-session') return parentSession;
+      return null;
+    });
+    mockSessionsRepo.update.mockResolvedValue(undefined);
+    mockWorktreesRepo.findById.mockResolvedValue({
+      worktree_id: 'worktree-1',
+      path: process.cwd(),
+    });
+    appServerMocks.forkCodexThreadViaAppServer.mockResolvedValue('forked-thread-id');
+
+    mockStreamEvents = [
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+      },
+    ];
+
+    const emitted: Array<Record<string, unknown>> = [];
+    for await (const event of service.promptSessionStreaming('child-session' as any, 'continue')) {
+      emitted.push(event as Record<string, unknown>);
+    }
+
+    expect(appServerMocks.forkCodexThreadViaAppServer).toHaveBeenCalledWith(
+      'parent-thread-id',
+      expect.objectContaining({ env: expect.any(Object) })
+    );
+    expect(mockSessionsRepo.update).toHaveBeenCalledWith('child-session', {
+      sdk_session_id: 'forked-thread-id',
+    });
+    expect(emitted.find((event) => event.type === 'complete')).toMatchObject({
+      threadId: 'forked-thread-id',
+    });
   });
 });
 
