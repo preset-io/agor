@@ -1,36 +1,28 @@
 # Heavy checks — full Node-version matrix + agor-live publish smoke.
 #
 # Runs on:
-#   * push to `main`     — catches regressions on merge
 #   * nightly cron @ 04:00 UTC — catches drift (engine bumps, registry tarball
 #                                rot, transitive dep changes) that nothing
 #                                else would surface until a release
-#   * workflow_dispatch  — ad-hoc full-matrix runs without opening a PR
-#                          (`gh workflow run heavy-checks.yml` or the
-#                          Actions tab "Run workflow" button)
+#   * workflow_dispatch  — ad-hoc full-matrix runs (e.g. as a pre-release
+#                          gate against a tag or branch:
+#                          `gh workflow run heavy-checks.yml --ref <ref>`,
+#                          or the Actions tab "Run workflow" button)
 #
-# Why this isn't on every PR push:
-#   The matrix is engine-compat insurance that moves slowly. Running it on
-#   every PR push costs ~3 CI minutes per push for very little signal: the
-#   PR-fast `ci.yml` already exercises Node 22, and `agor-live-smoke.yml`
-#   already does an `npm install` of the packed tarball on Node 22 when
-#   publish-relevant paths change. The 24/25 forward-compat legs only need
-#   to run before merging to main (which they do, here, on push) and once
-#   a day to catch ecosystem drift.
+# Why this isn't on every PR push OR every merge to main:
+#   The matrix is engine-compat insurance that moves slowly. PR-push and
+#   merge-to-main both rely on the same fast `ci.yml` lane (~3 min wall).
+#   This workflow is the slow lane: a daily drift check and an on-demand
+#   pre-release gate. If a merge to main breaks the matrix, the next
+#   nightly catches it within ~24h and opens a tracking issue.
 #
 # On nightly failure: a tracking issue is opened / commented on with the
 # `ci-nightly-failure` label so it shows up in normal GitHub notifications.
-# We deliberately do NOT open issues on push-to-main failures — the maintainer
-# is already watching that lane (it shows up in the Actions UI on the commit).
+# `workflow_dispatch` runs do NOT open issues — a human clicked the button
+# and is watching the run.
 name: Heavy checks (matrix + publish smoke)
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - 'apps/agor-docs/**'
-      - '*.md'
-      - 'context/**'
   schedule:
     # 04:00 UTC daily — off-peak, well after typical US/EU dev hours.
     - cron: '0 4 * * *'
