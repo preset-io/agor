@@ -316,6 +316,28 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   console.log(`${logPrefix} Spawning executor at: ${executorPath}`);
   console.log(`${logPrefix} Command: ${payload.command}`);
 
+  // Replace the OS-level `spawn /usr/local/bin/node ENOENT` (which reports
+  // against the executable path, even when the real culprit is a missing
+  // cwd) with a clear log line. Issue #1109: caller paths that resolve a
+  // worktree's `cwd` to a directory that no longer exists shouldn't make
+  // node-child-process die with a misleading error. Pre-flight callers
+  // (`assertWorktreeFsAvailable`) catch the common cases earlier and throw
+  // a structured error — this is the belt-and-braces log for any spawn we
+  // didn't pre-check, plus a defence against race conditions where the
+  // directory vanishes between the check and the spawn.
+  if (cwd && !existsSync(cwd)) {
+    console.error(
+      `${logPrefix} Refusing to spawn: cwd does not exist on disk: ${cwd}. ` +
+        `This usually means a worktree or repo's filesystem path was deleted ` +
+        `out-of-band (e.g. K8s pod redeploy with ephemeral $HOME). ` +
+        `See issue #1109.`
+    );
+    // Surface the failure through the normal exit-code path so onExit
+    // handlers (e.g. clone-safety-net in repos.ts) run as expected.
+    options.onExit?.(127);
+    return;
+  }
+
   const executorProcess = spawn(cmd, args, {
     cwd,
     env: asUser ? undefined : { ...envWithDaemonUrl }, // When impersonating, env is in the command; otherwise pass to spawn

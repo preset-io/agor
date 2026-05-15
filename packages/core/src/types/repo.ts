@@ -150,12 +150,30 @@ export interface Repo {
    */
   clone_error?: RepoCloneError;
 
+  /**
+   * Filesystem drift status (issue #1109).
+   *
+   * - `'ready'` / `undefined`: `local_path` exists on disk (or hasn't been
+   *   reconciled yet — legacy rows).
+   * - `'missing'`: DB row exists but `local_path` no longer exists on disk.
+   *   Typical in K8s when `$HOME` is ephemeral but the DB persists across
+   *   pod restarts. Set by the startup reconciliation pass or by the
+   *   spawn-time pre-flight check. Recovery: `agor_repos_recreate` re-runs
+   *   `git clone` and cascades worktree recreation.
+   *
+   * Distinct from `clone_status`, which describes the original clone
+   * lifecycle and is set only at row-creation time.
+   */
+  filesystem_status?: RepoFilesystemStatus;
+
   /** Repository metadata */
   created_at: string;
   last_updated: string;
 }
 
 export type RepoCloneStatus = 'cloning' | 'ready' | 'failed';
+
+export type RepoFilesystemStatus = 'ready' | 'missing';
 
 export type RepoCloneErrorCategory = 'auth_failed' | 'not_found' | 'network' | 'unknown';
 

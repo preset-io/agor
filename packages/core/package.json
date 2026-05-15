@@ -280,6 +280,12 @@
       "import": "./dist/unix/index.js",
       "require": "./dist/unix/index.cjs"
     },
+    "./fs": {
+      "source": "./src/fs/index.ts",
+      "types": "./dist/fs/index.d.ts",
+      "import": "./dist/fs/index.js",
+      "require": "./dist/fs/index.cjs"
+    },
     "./mcp": {
       "source": "./src/mcp/index.ts",
       "types": "./dist/mcp/index.d.ts",

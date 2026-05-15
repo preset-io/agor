@@ -2309,6 +2309,26 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
+  // Recreate a remote repo's on-disk filesystem after drift (issue #1109).
+  // Same role gate as cloning: a member who could clone the repo originally
+  // can re-clone it after the directory has been lost (typical K8s redeploy
+  // with ephemeral $HOME).
+  registerAuthenticatedRoute(
+    app,
+    '/repos/:id/recreate-filesystem',
+    {
+      async create(_data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Repo ID required');
+        return reposService.recreateFilesystem(id, params);
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'recreate repository filesystem' },
+    },
+    requireAuth
+  );
+
   registerAuthenticatedRoute(
     app,
     '/repos/:id/worktrees/:name',
@@ -2714,6 +2734,66 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
                 throw new Forbidden(
                   'You must be the worktree owner or a global admin to unarchive worktrees'
+                );
+              }
+              return context;
+            },
+      ],
+    },
+  });
+
+  // ============================================================================
+  // Recreate worktree filesystem (issue #1109)
+  // ============================================================================
+  // Rerun `git.worktree.add` for a worktree whose directory has disappeared
+  // from disk (typically because $HOME was ephemeral in K8s). Auth tier
+  // matches archive/delete — operators with 'all' on the worktree.
+  app.use('/worktrees/:id/recreate-filesystem', {
+    async create(_data: unknown, params: RouteParams) {
+      const id = params.route?.id;
+      if (!id) throw new BadRequest('Worktree ID required');
+      return worktreesService.recreateFilesystem(
+        id as import('@agor/core/types').WorktreeID,
+        params
+      );
+    },
+  });
+
+  app.service('/worktrees/:id/recreate-filesystem').hooks({
+    before: {
+      create: [
+        requireAuth,
+        requireMinimumRole(ROLES.MEMBER, 'recreate worktree filesystem'),
+        async (context: HookContext) => {
+          const id = context.params.route?.id;
+          if (!id) throw new Error('Worktree ID required');
+
+          const worktree = await worktreeRepository.findById(id);
+          if (!worktree) {
+            throw new Forbidden(`Worktree not found: ${id}`);
+          }
+
+          const userId = context.params.user?.user_id as
+            | import('@agor/core/types').UUID
+            | undefined;
+          const isOwner = userId
+            ? await worktreeRepository.isOwner(worktree.worktree_id, userId)
+            : false;
+
+          context.params.worktree = worktree;
+          context.params.isWorktreeOwner = isOwner;
+
+          return context;
+        },
+        worktreeRbacEnabled
+          ? ensureWorktreePermission('all', 'recreate worktree filesystem', superadminOpts)
+          : (context: HookContext) => {
+              const isOwner = context.params.isWorktreeOwner;
+              const userRole = context.params.user?.role;
+
+              if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
+                throw new Forbidden(
+                  'You must be the worktree owner or a global admin to recreate the worktree filesystem'
                 );
               }
               return context;

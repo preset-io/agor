@@ -19,6 +19,7 @@ import { createHealthMonitor } from './services/health-monitor.js';
 import { SchedulerService } from './services/scheduler.js';
 import type { TerminalsService } from './services/terminals.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
+import { reconcileFilesystemStatus } from './utils/fs-reconciliation.js';
 
 // ---------------------------------------------------------------------------
 // Context
@@ -356,6 +357,36 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
   // 1. Cleanup orphaned tasks/sessions from previous daemon instance
   await cleanupOrphans(ctx);
+
+  // 1b. Reconcile filesystem drift (issue #1109)
+  // K8s deployments with persistent DB + ephemeral $HOME leave the DB pointing
+  // at repo/worktree paths that no longer exist. Mark them as
+  // `filesystem_status: 'missing'` here so the UI can render a Reclone/Delete
+  // banner before the user tries to open a terminal or run a prompt and hits
+  // a misleading `spawn ... ENOENT` from node-child-process.
+  try {
+    const stats = await reconcileFilesystemStatus(db);
+    if (
+      stats.worktrees_marked_missing > 0 ||
+      stats.repos_marked_missing > 0 ||
+      stats.worktrees_restored > 0 ||
+      stats.repos_restored > 0
+    ) {
+      console.log(
+        `📂 FS reconciliation: ` +
+          `${stats.repos_marked_missing} repo(s) missing, ` +
+          `${stats.repos_restored} repo(s) restored; ` +
+          `${stats.worktrees_marked_missing} worktree(s) missing, ` +
+          `${stats.worktrees_restored} worktree(s) restored ` +
+          `(checked ${stats.repos_checked} repo(s), ${stats.worktrees_checked} worktree(s))`
+      );
+    }
+  } catch (err) {
+    console.warn(
+      '⚠️  FS reconciliation pass failed (non-fatal):',
+      err instanceof Error ? err.message : String(err)
+    );
+  }
 
   // 2. Initialize Health Monitor for periodic environment health checks
   const healthMonitor = await createHealthMonitor(app);

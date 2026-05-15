@@ -347,6 +347,173 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   }
 
   /**
+   * Custom method: Recreate a repo's on-disk filesystem (issue #1109).
+   *
+   * Reruns `git clone` for a `remote`-type repo whose `local_path` has
+   * disappeared from disk (typical K8s drift: `$HOME` is ephemeral, the DB
+   * row persists). Local-type repos are user-managed paths and cannot be
+   * recreated by Agor — those throw an explicit error so the operator
+   * understands they need to restore the directory themselves.
+   *
+   * On clone success, cascades into every non-archived worktree of this repo
+   * that is also `filesystem_status: 'missing'`, recreating each by calling
+   * `worktrees.recreateFilesystem`.
+   *
+   * Returns immediately (fire-and-forget). Callers poll the row's
+   * `clone_status` / `filesystem_status` to discover the outcome.
+   */
+  async recreateFilesystem(
+    id: string,
+    params?: RepoParams
+  ): Promise<{ status: 'pending' | 'noop'; repo_id: string; slug: string }> {
+    const repo = (await this.get(id, params)) as Repo;
+
+    if (repo.repo_type !== 'remote' || !repo.remote_url) {
+      throw new Error(
+        `Cannot recreate filesystem for ${repo.slug}: only remote repositories can be recloned. ` +
+          `Restore the directory at ${repo.local_path} manually for local-type repos.`
+      );
+    }
+
+    if (existsSync(repo.local_path)) {
+      // Idempotent: nothing to recreate. Clear the 'missing' marker so the
+      // UI banner disappears.
+      if (repo.filesystem_status === 'missing') {
+        await this.patch(repo.repo_id, { filesystem_status: 'ready' }, { provider: undefined });
+      }
+      return { status: 'noop', repo_id: repo.repo_id, slug: repo.slug };
+    }
+
+    console.log(
+      `📂 [repos.recreateFilesystem] Reclone requested for ${repo.slug} (${repo.repo_id.slice(0, 8)}): ${repo.local_path}`
+    );
+
+    // Mark the row as cloning so the UI shows a spinner instead of the
+    // missing-banner during the operation. Clear filesystem_status so the
+    // missing-banner goes away; the executor will set clone_status -> 'ready'
+    // on success and our onExit handler will stamp filesystem_status: 'ready'
+    // to keep the two fields in sync.
+    await this.patch(
+      repo.repo_id,
+      {
+        clone_status: 'cloning',
+        clone_error: undefined,
+        filesystem_status: undefined,
+      },
+      { provider: undefined }
+    );
+
+    const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
+    const rbacEnabled = isWorktreeRbacEnabled();
+    const asUser =
+      rbacEnabled && userId ? await resolveGitImpersonationForUser(this.db, userId) : undefined;
+
+    const sessionToken = generateSessionToken(
+      this.app as unknown as { settings: { authentication?: { secret?: string } } }
+    );
+
+    const app = this.app;
+    const reposService = this.app.service('repos');
+    const slug = repo.slug;
+    const repoId = repo.repo_id;
+    const remoteUrl = repo.remote_url;
+
+    spawnExecutorFireAndForget(
+      {
+        command: 'git.clone',
+        sessionToken,
+        daemonUrl: getDaemonUrl(),
+        params: {
+          url: remoteUrl,
+          slug,
+          repoId,
+          ...(repo.default_branch ? { default_branch: repo.default_branch } : {}),
+          createDbRecord: true,
+          userId: userId as string | undefined,
+          initUnixGroup: rbacEnabled,
+        },
+      },
+      {
+        logPrefix: `[recreate ${slug}]`,
+        asUser,
+        onExit: (code) => {
+          if (code === 0) {
+            // Clone succeeded: stamp filesystem_status: 'ready' and cascade
+            // recreation to every missing worktree of this repo. Use the
+            // service layer (no params → internal) so the patched event fires.
+            void (async () => {
+              try {
+                await reposService.patch(repoId, { filesystem_status: 'ready' });
+                console.log(`[recreate ${slug}] Repo reclone succeeded; cascading to worktrees`);
+
+                const worktreesService = app.service(
+                  'worktrees'
+                ) as unknown as import('../declarations.js').WorktreesServiceImpl;
+                // `paginate: false` always returns an array.
+                const worktreeRows = (await worktreesService.find({
+                  query: { repo_id: repoId, archived: false, $limit: 1000 },
+                  paginate: false,
+                })) as unknown as Worktree[];
+                const missingWorktrees = worktreeRows.filter(
+                  (w) => w.filesystem_status === 'missing' || !existsSync(w.path)
+                );
+                if (missingWorktrees.length > 0) {
+                  console.log(
+                    `[recreate ${slug}] Recreating ${missingWorktrees.length} missing worktree(s)`
+                  );
+                }
+                for (const wt of missingWorktrees) {
+                  try {
+                    await worktreesService.recreateFilesystem(wt.worktree_id);
+                  } catch (err) {
+                    console.warn(
+                      `[recreate ${slug}] Failed to recreate worktree ${wt.name}:`,
+                      err instanceof Error ? err.message : String(err)
+                    );
+                  }
+                }
+              } catch (err) {
+                console.warn(
+                  `[recreate ${slug}] Failed cascading worktree recreation:`,
+                  err instanceof Error ? err.message : String(err)
+                );
+              }
+            })();
+            return;
+          }
+
+          // Clone failed: the executor itself patches `clone_status: 'failed'`
+          // on errors it catches. The safety net here covers crash-without-
+          // patch (lost daemon connection) — mirror the cloneRepository
+          // pattern.
+          void (async () => {
+            try {
+              const current = (await reposService.get(repoId)) as Repo;
+              if (current.clone_status === 'cloning') {
+                await reposService.patch(repoId, {
+                  clone_status: 'failed',
+                  clone_error: {
+                    exit_code: code ?? 1,
+                    category: 'unknown',
+                    message: `Reclone exited with code ${code} before reporting an error.`,
+                  },
+                });
+              }
+            } catch (err) {
+              console.error(
+                `[recreate ${slug}] Failed to mark repo as failed in onExit safety net:`,
+                err instanceof Error ? err.message : String(err)
+              );
+            }
+          })();
+        },
+      }
+    );
+
+    return { status: 'pending', repo_id: repoId, slug };
+  }
+
+  /**
    * Custom method: Initialize Unix group for a repo (daemon-side privileged operation).
    *
    * Called by the executor via Feathers RPC after cloning a repo, so that

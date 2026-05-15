@@ -201,4 +201,34 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
       return textResult(updated);
     }
   );
+
+  // Tool 6: agor_repos_recreate_filesystem (issue #1109)
+  //
+  // Recovery action when a repo's on-disk directory is missing — typical in
+  // K8s with persistent DB + ephemeral $HOME. Reruns `git clone` and then
+  // cascades to recreate every worktree of this repo that's also missing.
+  server.registerTool(
+    'agor_repos_recreate_filesystem',
+    {
+      description:
+        'Reclone a remote repository whose on-disk directory has disappeared ' +
+        '(typical K8s drift: persistent DB + ephemeral $HOME). Only works for ' +
+        '`repo_type: "remote"` repos — local-type repos point at user-managed ' +
+        'paths and must be restored manually. Returns immediately with ' +
+        '`{ status: "pending" | "noop", repo_id, slug }`. On clone success, ' +
+        "cascades to recreate every non-archived worktree of this repo that's " +
+        "also marked `filesystem_status: 'missing'`. Poll `agor_repos_get(repo_id)` " +
+        "for `clone_status: 'ready'` (then `filesystem_status: 'ready'`).",
+      inputSchema: z.object({
+        repoId: z.string().describe('Repository ID (UUIDv7 or short ID)'),
+      }),
+    },
+    async (args) => {
+      const repoId = coerceString(args.repoId);
+      if (!repoId) throw new Error('repoId is required');
+      const reposService = ctx.app.service('repos') as unknown as ReposServiceImpl;
+      const result = await reposService.recreateFilesystem(repoId, ctx.baseServiceParams);
+      return textResult(result);
+    }
+  );
 }

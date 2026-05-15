@@ -328,6 +328,13 @@ export interface Worktree {
    * - 'ready': Worktree fully created and ready to use
    * - 'failed': Worktree creation failed (git worktree add error)
    *
+   * Drift state (issue #1109):
+   * - 'missing': DB row exists but `path` no longer exists on disk
+   *   (typical in K8s where `$HOME` is ephemeral but the DB persists).
+   *   Set by the startup reconciliation pass or the spawn-time pre-flight
+   *   check. The recreate action (`agor_worktrees_recreate`) reruns
+   *   `git.worktree.add` and transitions back to 'ready'.
+   *
    * Archive states (set when worktree is archived):
    * - 'preserved': Filesystem left untouched
    * - 'cleaned': git clean -fdx run (removes node_modules, build artifacts)
@@ -335,7 +342,14 @@ export interface Worktree {
    *
    * Note: null/undefined means 'ready' for backward compatibility
    */
-  filesystem_status?: 'creating' | 'ready' | 'failed' | 'preserved' | 'cleaned' | 'deleted';
+  filesystem_status?:
+    | 'creating'
+    | 'ready'
+    | 'failed'
+    | 'missing'
+    | 'preserved'
+    | 'cleaned'
+    | 'deleted';
 
   /**
    * Error message when filesystem_status is 'failed'

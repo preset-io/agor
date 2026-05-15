@@ -83,6 +83,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       environment_config,
       clone_status: data.clone_status,
       clone_error: data.clone_error,
+      filesystem_status: data.filesystem_status,
     };
   }
 
@@ -137,6 +138,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         // coerce that to `undefined` here so the stored value matches the
         // `clone_error?: RepoCloneError` invariant (set only when failed).
         clone_error: repo.clone_error || undefined,
+        filesystem_status: repo.filesystem_status,
       },
     };
   }

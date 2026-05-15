@@ -161,6 +161,11 @@ export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersP
     data: { worktree_id: string },
     params?: FeathersParams
   ): Promise<{ path: string }>;
+  /** Reclone a remote repo's on-disk directory after FS drift (issue #1109). */
+  recreateFilesystem(
+    id: string,
+    params?: FeathersParams
+  ): Promise<{ status: 'pending' | 'noop'; repo_id: string; slug: string }>;
 }
 
 /**
@@ -246,4 +251,6 @@ export interface WorktreesServiceImpl extends Service<Worktree, Partial<Worktree
     options?: { boardId?: import('@agor/core/types').BoardID },
     params?: FeathersParams
   ): Promise<Worktree>;
+  /** Recreate a worktree's on-disk directory after FS drift (issue #1109). */
+  recreateFilesystem(id: WorktreeID, params?: FeathersParams): Promise<Worktree>;
 }

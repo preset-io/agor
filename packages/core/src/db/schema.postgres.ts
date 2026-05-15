@@ -462,6 +462,11 @@ export const repos = pgTable(
           category: 'auth_failed' | 'not_found' | 'network' | 'unknown';
           message: string;
         };
+        // FS drift state (issue #1109). 'missing' when local_path doesn't exist
+        // on disk despite the row existing. Set by the startup reconciliation
+        // pass or the spawn-time pre-flight check; recovered via
+        // agor_repos_recreate. Undefined ≡ not-yet-reconciled.
+        filesystem_status?: 'ready' | 'missing';
         // v2 environment config — source of truth. Named variants + optional
         // deployment-local template_overrides. See RepoEnvironment in
         // packages/core/src/types/worktree.ts.
@@ -564,7 +569,7 @@ export const worktrees = pgTable(
     archived_at: t.timestamp('archived_at'),
     archived_by: varchar('archived_by', { length: 36 }),
     filesystem_status: text('filesystem_status', {
-      enum: ['creating', 'ready', 'failed', 'preserved', 'cleaned', 'deleted'],
+      enum: ['creating', 'ready', 'failed', 'missing', 'preserved', 'cleaned', 'deleted'],
     }),
 
     // RBAC: App-layer permissions (rbac.md)

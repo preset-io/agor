@@ -925,6 +925,32 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
     }
   );
 
+  // Tool 8b: agor_worktrees_recreate_filesystem (issue #1109)
+  server.registerTool(
+    'agor_worktrees_recreate_filesystem',
+    {
+      description:
+        "Recreate a worktree's on-disk directory after filesystem drift (e.g., K8s pod redeploy with ephemeral $HOME but persistent DB). Reruns `git.worktree.add` so the directory comes back on the same branch. Use when `filesystem_status` is `'missing'`. If the parent repo's directory is also missing, recreate the repo first via `agor_repos_recreate_filesystem`.",
+      inputSchema: z.object({
+        worktreeId: z.string().describe('Worktree ID to recreate (UUIDv7 or short ID)'),
+      }),
+    },
+    async (args) => {
+      const worktreeId = await resolveWorktreeId(ctx, coerceString(args.worktreeId)!);
+      const worktreesService = ctx.app.service('worktrees') as unknown as WorktreesServiceImpl;
+      const result = await worktreesService.recreateFilesystem(
+        worktreeId as WorktreeID,
+        ctx.baseServiceParams
+      );
+      return textResult({
+        success: true,
+        worktree: result,
+        message:
+          'Worktree filesystem recreation triggered. Poll `agor_worktrees_get` for `filesystem_status: "ready"` (or `"failed"` with `error_message`).',
+      });
+    }
+  );
+
   // Tool 9: agor_assistants_list
   server.registerTool(
     'agor_assistants_list',

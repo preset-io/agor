@@ -32,6 +32,7 @@ import {
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import {
+  Alert,
   App,
   Badge,
   Button,
@@ -331,6 +332,39 @@ const WorktreeCardComponent = ({
   // Check if worktree is still being created on filesystem
   const isCreating = worktree.filesystem_status === 'creating';
   const isFailed = worktree.filesystem_status === 'failed';
+  // FS drift state (issue #1109). 'missing' means the DB row references a
+  // path that no longer exists on disk — typically a K8s ephemeral $HOME
+  // combined with a persistent DB. Recovery is either reclone or delete.
+  const isWorktreeMissing = worktree.filesystem_status === 'missing';
+  const isRepoMissing = repo?.filesystem_status === 'missing';
+  const isMissing = isWorktreeMissing || isRepoMissing;
+  const [recreating, setRecreating] = useState(false);
+  const handleRecreateFilesystem = useCallback(async () => {
+    if (!client) return;
+    setRecreating(true);
+    try {
+      if (isRepoMissing) {
+        await client.service(`repos/${worktree.repo_id}/recreate-filesystem`).create({});
+        showSuccess(`Reclone of ${repo?.slug ?? 'repository'} started.`);
+      } else {
+        await client.service(`worktrees/${worktree.worktree_id}/recreate-filesystem`).create({});
+        showSuccess(`Recreating worktree ${worktree.name}...`);
+      }
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Failed to trigger filesystem recreation.');
+    } finally {
+      setRecreating(false);
+    }
+  }, [
+    client,
+    isRepoMissing,
+    worktree.repo_id,
+    worktree.worktree_id,
+    worktree.name,
+    repo?.slug,
+    showSuccess,
+    showError,
+  ]);
 
   // Check if this worktree is a persisted agent
   const assistantConfig = useMemo(() => getAssistantConfig(worktree), [worktree]);
@@ -975,6 +1009,67 @@ const WorktreeCardComponent = ({
               {notesExpanded ? 'See less' : 'See more'}
             </Button>
           )}
+        </div>
+      )}
+
+      {/* Filesystem-missing banner (issue #1109).
+          Renders above the sessions list so it's visible regardless of whether
+          the worktree has active sessions. Two flavours:
+          - Repo path missing: must reclone the repo first; worktrees will
+            cascade automatically.
+          - Worktree path missing (repo present): recreate the worktree
+            directly. */}
+      {isMissing && (
+        <div className="nodrag" style={{ marginBottom: 8 }}>
+          <Alert
+            type="warning"
+            showIcon
+            message={
+              isRepoMissing
+                ? `Repository ${repo?.slug ?? worktree.repo_id.substring(0, 8)} is missing on disk`
+                : `Worktree ${worktree.name} is missing on disk`
+            }
+            description={
+              isRepoMissing
+                ? 'The repository directory no longer exists on disk (common after K8s redeploys with ephemeral $HOME). Reclone to restore it — worktrees will be recreated automatically.'
+                : 'The worktree directory no longer exists on disk (common after K8s redeploys with ephemeral $HOME). Recreate to restore it, or archive/delete the record if it is no longer needed.'
+            }
+            action={
+              <Space direction="vertical" size="small">
+                <Button
+                  size="small"
+                  type="primary"
+                  loading={recreating}
+                  disabled={!client || connectionDisabled}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleRecreateFilesystem();
+                  }}
+                >
+                  {isRepoMissing ? 'Reclone repository' : 'Recreate worktree'}
+                </Button>
+                {onArchiveOrDelete && !isRepoMissing && (
+                  <Button
+                    size="small"
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      // FS is already gone, so 'preserved' is the only sane
+                      // filesystemAction — there's nothing on disk to clean
+                      // or re-delete.
+                      onArchiveOrDelete(worktree.worktree_id, {
+                        metadataAction: 'delete',
+                        filesystemAction: 'preserved',
+                      });
+                    }}
+                  >
+                    Delete record
+                  </Button>
+                )}
+              </Space>
+            }
+          />
         </div>
       )}
 

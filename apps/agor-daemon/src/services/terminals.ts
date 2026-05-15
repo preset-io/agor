@@ -30,6 +30,7 @@ import {
 import { type Database, formatShortId, UsersRepository, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { Forbidden } from '@agor/core/feathers';
+import { assertWorktreeFsAvailable, isMissingPathError } from '@agor/core/fs';
 import type { AuthenticatedParams, UserID, WorktreeID } from '@agor/core/types';
 import {
   resolveUnixUserForImpersonation,
@@ -366,6 +367,51 @@ export class TerminalsService {
       const worktree = await worktreeRepo.findById(data.worktreeId);
       if (worktree) {
         worktreeName = worktree.name;
+
+        // Pre-flight FS check (issue #1109): refuse to spawn Zellij into a
+        // missing cwd. Without this the executor dies with `chdir(2) failed:
+        // No such file or directory` and the user sees a generic "terminal
+        // failed to open" error. We surface a structured MissingPathError so
+        // the UI can render a Reclone/Delete card.
+        let repo: import('@agor/core/types').Repo | null = null;
+        try {
+          repo = (await this.app.service('repos').get(worktree.repo_id, { provider: undefined })) as
+            | import('@agor/core/types').Repo
+            | null;
+        } catch (err) {
+          console.warn(
+            `[terminals] Could not load parent repo ${worktree.repo_id} for FS pre-flight check:`,
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+        try {
+          assertWorktreeFsAvailable({ worktree, repo });
+        } catch (err) {
+          if (isMissingPathError(err)) {
+            try {
+              if (err.data.subject === 'worktree') {
+                await this.app
+                  .service('worktrees')
+                  .patch(
+                    worktree.worktree_id,
+                    { filesystem_status: 'missing' },
+                    { provider: undefined }
+                  );
+              } else if (err.data.subject === 'repo' && repo) {
+                await this.app
+                  .service('repos')
+                  .patch(repo.repo_id, { filesystem_status: 'missing' }, { provider: undefined });
+              }
+            } catch (patchErr) {
+              console.warn(
+                `[terminals] Failed to mark ${err.data.subject} as missing in DB:`,
+                patchErr instanceof Error ? patchErr.message : String(patchErr)
+              );
+            }
+          }
+          throw err;
+        }
+
         if (finalUnixUser) {
           const symlinkPath = `/home/${finalUnixUser}/agor/worktrees/${worktree.name}`;
           cwd = fs.existsSync(symlinkPath) ? symlinkPath : worktree.path;

@@ -852,6 +852,132 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   }
 
   /**
+   * Custom method: Recreate the worktree's filesystem directory (issue #1109).
+   *
+   * Use case: a deployment lost its $HOME (typical K8s emptyDir behaviour
+   * combined with persistent Postgres). The DB row is still valid; the
+   * directory is gone. We rerun `git.worktree.add` with `restoreMode: true`
+   * so it checks the remote for an existing branch and either checks it out
+   * or creates a fresh one from `base_ref` — the same logic the unarchive
+   * flow uses for `filesystemAction: 'deleted'` worktrees.
+   *
+   * Pre-conditions checked:
+   * - Worktree row exists and is not archived (recreating an archived
+   *   worktree should go through unarchive instead).
+   * - Parent repo's `local_path` exists on disk. If the repo's filesystem is
+   *   also gone, the caller must `agor_repos_recreate(repo_id)` first —
+   *   we throw a `MissingPathError` pointing at the repo in that case.
+   *
+   * Side effects:
+   * - Patches `filesystem_status: 'creating'` synchronously so the UI sees
+   *   the transition.
+   * - Spawns the executor fire-and-forget; the executor patches the row to
+   *   `'ready'` (or `'failed'` with an error_message) on completion.
+   */
+  async recreateFilesystem(
+    id: WorktreeID,
+    params?: WorktreeParams
+  ): Promise<WorktreeWithZoneAndSessions> {
+    const worktree = await this.get(id, params);
+
+    if (worktree.archived) {
+      throw new Error(
+        `Cannot recreate filesystem for archived worktree ${worktree.name}. Unarchive first.`
+      );
+    }
+
+    const reposService = this.app.service('repos');
+    const repo = (await reposService.get(worktree.repo_id, { provider: undefined })) as Repo;
+
+    // Repo missing → caller must recreate the repo first. Surface a
+    // MissingPathError so the UI offers the right action.
+    if (!existsSync(repo.local_path)) {
+      const { MissingPathError } = await import('@agor/core/fs');
+      throw new MissingPathError({
+        code: 'REPO_PATH_MISSING',
+        subject: 'repo',
+        message:
+          `Cannot recreate worktree ${worktree.name}: its repository ${repo.slug} is also missing ` +
+          `from disk (${repo.local_path}). Recreate the repository first.`,
+        path: repo.local_path,
+        action: 'reclone_or_delete',
+        repo_id: repo.repo_id,
+        worktree_id: worktree.worktree_id,
+      });
+    }
+
+    if (existsSync(worktree.path)) {
+      // Idempotent: nothing to recreate. Clear the 'missing' marker if it was
+      // set so the UI banner disappears.
+      if (worktree.filesystem_status === 'missing') {
+        await this.patch(
+          id,
+          { filesystem_status: 'ready', error_message: undefined },
+          { provider: undefined }
+        );
+      }
+      return this.get(id, params);
+    }
+
+    console.log(`📂 Recreating worktree filesystem: ${worktree.path}`);
+    await this.patch(
+      id,
+      { filesystem_status: 'creating', error_message: undefined },
+      { provider: undefined }
+    );
+
+    const rbacEnabled = isWorktreeRbacEnabled();
+    const { getDaemonUser } = await import('@agor/core/config');
+    const daemonUser = getDaemonUser();
+
+    try {
+      const sessionToken = generateSessionToken(
+        this.app as unknown as { settings: { authentication?: { secret?: string } } }
+      );
+      spawnExecutor(
+        {
+          command: 'git.worktree.add',
+          sessionToken,
+          daemonUrl: getDaemonUrl(),
+          params: {
+            worktreeId: worktree.worktree_id,
+            repoId: repo.repo_id,
+            repoPath: repo.local_path,
+            worktreeName: worktree.name,
+            worktreePath: worktree.path,
+            branch: worktree.ref,
+            refType: worktree.ref_type || 'branch',
+            createBranch: false,
+            restoreMode: true,
+            sourceBranch: worktree.base_ref || repo.default_branch || 'main',
+            initUnixGroup: rbacEnabled,
+            othersAccess: worktree.others_fs_access || 'read',
+            daemonUser,
+            repoUnixGroup: repo.unix_group,
+          },
+        },
+        {
+          logPrefix: `[WorktreesService.recreate ${worktree.name}]`,
+        }
+      );
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.error(`⚠️  Failed to spawn executor for worktree recreation:`, errMsg);
+      await this.patch(
+        id,
+        {
+          filesystem_status: 'failed',
+          error_message: `Failed to spawn executor: ${errMsg}`,
+        },
+        { provider: undefined }
+      );
+      throw error;
+    }
+
+    return this.get(id, params);
+  }
+
+  /**
    * Custom method: Find worktree by repo_id and name
    */
   async findByRepoAndName(

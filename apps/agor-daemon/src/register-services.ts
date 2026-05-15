@@ -24,6 +24,7 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { NotAuthenticated } from '@agor/core/feathers';
+import { assertWorktreeFsAvailable } from '@agor/core/fs';
 import type {
   AuthenticatedParams,
   HookContext,
@@ -570,14 +571,56 @@ function createExecuteHandler(
     const taskId = data.taskId;
 
     // Get worktree path
+    // Pre-flight FS check (issue #1109): if the worktree row exists but its
+    // path is gone (typical K8s drift — ephemeral $HOME, persistent DB), throw
+    // a structured MissingPathError so the UI can render a Reclone/Delete
+    // card instead of letting node-child-process die with a misleading
+    // `spawn /usr/local/bin/node ENOENT`.
     let cwd = process.cwd();
     if (session.worktree_id) {
+      const worktree = await app.service('worktrees').get(session.worktree_id, params);
+      let repo: import('@agor/core/types').Repo | null = null;
       try {
-        const worktree = await app.service('worktrees').get(session.worktree_id, params);
-        cwd = worktree.path;
-      } catch (error) {
-        console.warn(`Could not get worktree path for ${session.worktree_id}:`, error);
+        repo = (await app.service('repos').get(worktree.repo_id, params)) as
+          | import('@agor/core/types').Repo
+          | null;
+      } catch (err) {
+        console.warn(
+          `[prompt] Could not load parent repo ${worktree.repo_id} for FS pre-flight check:`,
+          err instanceof Error ? err.message : String(err)
+        );
       }
+      try {
+        assertWorktreeFsAvailable({ worktree, repo });
+      } catch (err) {
+        // Persist drift state on the worktree (and repo, if it was the miss)
+        // so subsequent UI reads can surface the banner without re-spawning.
+        const { isMissingPathError } = await import('@agor/core/fs');
+        if (isMissingPathError(err)) {
+          try {
+            if (err.data.subject === 'worktree') {
+              await app
+                .service('worktrees')
+                .patch(
+                  worktree.worktree_id,
+                  { filesystem_status: 'missing' },
+                  { provider: undefined }
+                );
+            } else if (err.data.subject === 'repo' && repo) {
+              await app
+                .service('repos')
+                .patch(repo.repo_id, { filesystem_status: 'missing' }, { provider: undefined });
+            }
+          } catch (patchErr) {
+            console.warn(
+              `[prompt] Failed to mark ${err.data.subject} as missing in DB:`,
+              patchErr instanceof Error ? patchErr.message : String(patchErr)
+            );
+          }
+        }
+        throw err;
+      }
+      cwd = worktree.path;
     }
 
     // Find executor binary
