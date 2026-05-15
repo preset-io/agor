@@ -10,6 +10,13 @@
  * simple`) no supplemental groups are ever created, so wrapping in sudo is
  * pure overhead AND breaks for users who never configured passwordless
  * sudoers (#1140). Return undefined in that case so callers spawn directly.
+ *
+ * The gate lives HERE on purpose: every caller that resolves impersonation
+ * needs the same check, and dropping it at a call site is exactly how the
+ * sister bug (#1143, `git.worktree.remove`) regressed after #1141 added
+ * inline `rbacEnabled ? ... : undefined` boilerplate at only two of three
+ * caller paths. Callers can spawn directly with the result; no extra gating
+ * required.
  */
 
 import type { Database } from '@agor/core/db';
@@ -20,11 +27,14 @@ import { validateResolvedUnixUser } from '@agor/core/unix';
  * Resolve Unix user for git operations.
  *
  * Returns the daemon user when group refresh via `sudo -u` is needed
- * (RBAC enabled or non-simple unix_user_mode). Returns `undefined` when
- * no supplemental groups exist, signalling callers to skip sudo entirely.
+ * (RBAC enabled or non-simple unix_user_mode — see
+ * `isUnixGroupRefreshNeeded`). Returns `undefined` in the open-access
+ * default so callers spawn directly without sudo wrap (#1140).
  *
- * @param db - Database instance (unused, kept for API compatibility)
- * @param userId - User ID (unused, kept for API compatibility)
+ * @param db - Database instance (unused today, kept on the signature for
+ *             the planned per-user resolution refactor)
+ * @param userId - User ID (same — unused today, reserved for per-user
+ *                 impersonation in strict mode)
  * @returns Daemon username when sudo wrap is needed, otherwise undefined
  */
 export async function resolveGitImpersonationForUser(
@@ -34,7 +44,7 @@ export async function resolveGitImpersonationForUser(
   const { getDaemonUser, isUnixGroupRefreshNeeded } = await import('@agor/core/config');
 
   // No supplemental groups → no need for sudo. Avoids requiring sudoers
-  // for users on the default open-access setup. (#1140)
+  // for users on the default open-access setup. (#1140, #1143)
   if (!isUnixGroupRefreshNeeded()) {
     return undefined;
   }

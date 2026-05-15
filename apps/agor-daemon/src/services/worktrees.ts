@@ -477,11 +477,11 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     if (deleteFromFilesystem) {
       console.log(`🗑️  Spawning executor to remove worktree from filesystem: ${worktree.path}`);
 
-      // Resolve Unix user for impersonation (handles simple/insulated/strict modes)
-      const rbacEnabled = isWorktreeRbacEnabled();
-      const asUser = rbacEnabled
-        ? await resolveGitImpersonationForWorktree(this.db, worktree)
-        : undefined;
+      // Resolve Unix user for sudo wrap. Returns undefined in simple/no-RBAC
+      // mode so we don't try to sudo on hosts without passwordless sudoers
+      // (#1140 root cause; #1143 fixed the worktree-remove sister bug by
+      // centralizing the gate inside the resolver itself).
+      const asUser = await resolveGitImpersonationForWorktree(this.db, worktree);
 
       // Generate session token for executor authentication. Hook chain
       // enforces auth before we get here, so non-null assertion is safe.

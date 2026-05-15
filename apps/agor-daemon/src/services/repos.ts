@@ -213,12 +213,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       this.app as unknown as { settings: { authentication?: { secret?: string } } }
     );
 
-    // Check if Unix group isolation should be initialized
+    // Unix group initialization gates on RBAC explicitly.
     const rbacEnabled = isWorktreeRbacEnabled();
 
-    // Resolve Unix user for impersonation (handles simple/insulated/strict modes)
-    const asUser =
-      rbacEnabled && userId ? await resolveGitImpersonationForUser(this.db, userId) : undefined;
+    // Sudo wrap (asUser) is gated inside the resolver — returns undefined
+    // in simple/no-RBAC mode so hosts without passwordless sudoers work
+    // (#1140, #1143). Callers no longer duplicate the gate.
+    const asUser = userId ? await resolveGitImpersonationForUser(this.db, userId) : undefined;
 
     // Pre-create the repo row with `clone_status: 'cloning'` so failures stay
     // queryable via `agor_repos_get(repoId)`. Pre-#1126 the row was only
@@ -900,12 +901,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         this.app as unknown as { settings: { authentication?: { secret?: string } } }
       );
 
-      // Check if Unix group isolation should be initialized
+      // Unix group initialization gates on RBAC explicitly.
       const rbacEnabled = isWorktreeRbacEnabled();
 
-      // Resolve Unix user for impersonation (handles simple/insulated/strict modes)
-      const asUser =
-        rbacEnabled && userId ? await resolveGitImpersonationForUser(this.db, userId) : undefined;
+      // Sudo wrap (asUser) is gated inside the resolver — returns undefined
+      // in simple/no-RBAC mode so hosts without passwordless sudoers work
+      // (#1140, #1143). Callers no longer duplicate the gate.
+      const asUser = userId ? await resolveGitImpersonationForUser(this.db, userId) : undefined;
 
       spawnExecutorFireAndForget(
         {
