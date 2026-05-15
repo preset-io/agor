@@ -2,29 +2,43 @@
   "$schema": "https://unpkg.com/knip@5/schema.json",
   "workspaces": {
     ".": {
+      "entry": ["scripts/**/*.{ts,mjs}"],
       "ignore": []
     },
     "apps/agor-cli": {
-      "entry": ["src/index.ts", "src/commands/**/*.ts", "src/hooks/**/*.ts"],
+      "entry": ["src/index.ts", "src/commands/**/*.ts", "src/hooks/**/*.ts", "src/**/*.test.ts"],
       "ignore": [],
       "ignoreDependencies": ["@oclif/plugin-help"]
     },
     "apps/agor-daemon": {
-      "entry": ["src/index.ts"],
+      "entry": ["src/index.ts", "src/**/*.test.ts"],
       "ignore": []
     },
     "apps/agor-ui": {
-      "entry": ["src/main.tsx"],
+      "entry": ["src/main.tsx", "src/**/*.test.{ts,tsx}", "src/test/setup.ts"],
       "ignore": []
     },
     "apps/agor-docs": {
-      "entry": ["pages/**/*.{md,mdx}", "theme.config.tsx"],
+      "entry": ["pages/**/*.{md,mdx}", "theme.config.tsx", "next-sitemap.config.cjs"],
       "ignore": ["components/**"],
       "ignoreDependencies": ["nextra-theme-docs"]
     },
     "packages/core": {
-      "entry": ["src/index.ts"],
+      "entry": [
+        "src/index.ts",
+        "src/**/*.test.ts",
+        "drizzle.sqlite.config.ts",
+        "drizzle.postgres.config.ts"
+      ],
       "ignore": ["src/db/scripts/**"]
+    },
+    "packages/executor": {
+      "entry": ["src/**/*.test.ts"],
+      "ignore": []
+    },
+    "packages/client": {
+      "entry": ["src/index.ts"],
+      "ignore": []
     }
   }
 }

@@ -105,7 +105,7 @@ Run `npm uninstall -g agor-live` to remove your local build and fall back to wha
 
 ## Committing from inside Docker
 
-When the daemon runs in Docker, `pnpm install` populates `node_modules/` with **Linux** binaries (`turbo-linux-arm64`, `eslint-linux`, etc.). If you commit from the host, Husky pre-commit hooks try to execute those Linux binaries and fail.
+When the daemon runs in Docker, `pnpm install` populates `node_modules/` with **Linux** binaries (`turbo-linux-arm64`, `@biomejs/cli-linux-x64`, etc.). If you commit from the host, Husky pre-commit hooks try to execute those Linux binaries and fail.
 
 Two fixes:
 

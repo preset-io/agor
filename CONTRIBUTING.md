@@ -59,7 +59,7 @@ git checkout -b feat/your-feature-name
 **Code style:**
 
 - TypeScript strict mode
-- ESLint + Prettier (run `pnpm lint` before committing)
+- Biome (linter + TS formatter) + Prettier (markdown/yaml/json only) — run `pnpm lint` before committing
 - Meaningful variable names
 - Comments for non-obvious logic
 - Place all imports at the top of the file - avoid inline `import('...')` type assertions
@@ -190,13 +190,13 @@ PR pushes and merges to `main` both run the same fast, opinionated lane. The
 slower cross-Node-version matrix runs once a day (nightly) and on demand —
 it's not gating either PR merge or merge-to-`main`.
 
-| When | Workflow | What runs |
-|------|----------|-----------|
-| Every PR push **and** every push to `main` | `ci.yml` | install, typecheck, lint, build, unit tests — all on Node 22 |
-| PR / main push that touches `pnpm-lock.yaml` or any `package.json` | `audit.yml` | `pnpm audit` (CRITICAL prod-tree advisories block; HIGH advisory) |
-| PR push (publish-relevant paths only) | `agor-live-smoke.yml` | Pack the published tarball, install with `npm`, boot the daemon, curl `/ui/` |
-| Nightly at 04:00 UTC | `heavy-checks.yml` | Node 22/24/25 install-compat matrix + full `agor-live-smoke` + `audit` (catches ambient CVEs against unchanged deps). On failure, auto-opens / comments on a tracking issue labelled `ci-nightly-failure` |
-| On demand (pre-release etc.) | `heavy-checks.yml` | Same as nightly, triggered via `gh workflow run` or the Actions UI |
+| When                                                               | Workflow              | What runs                                                                                                                                                                                                 |
+| ------------------------------------------------------------------ | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Every PR push **and** every push to `main`                         | `ci.yml`              | install, typecheck, lint, build, unit tests — all on Node 22                                                                                                                                              |
+| PR / main push that touches `pnpm-lock.yaml` or any `package.json` | `audit.yml`           | `pnpm audit` (CRITICAL prod-tree advisories block; HIGH advisory)                                                                                                                                         |
+| PR push (publish-relevant paths only)                              | `agor-live-smoke.yml` | Pack the published tarball, install with `npm`, boot the daemon, curl `/ui/`                                                                                                                              |
+| Nightly at 04:00 UTC                                               | `heavy-checks.yml`    | Node 22/24/25 install-compat matrix + full `agor-live-smoke` + `audit` (catches ambient CVEs against unchanged deps). On failure, auto-opens / comments on a tracking issue labelled `ci-nightly-failure` |
+| On demand (pre-release etc.)                                       | `heavy-checks.yml`    | Same as nightly, triggered via `gh workflow run` or the Actions UI                                                                                                                                        |
 
 **Triggering an ad-hoc heavy run** (e.g. before cutting a release):
 
@@ -204,7 +204,7 @@ it's not gating either PR merge or merge-to-`main`.
 gh workflow run heavy-checks.yml --ref <ref>
 ```
 
-or use the *Run workflow* button on the Actions tab. The same goes for
+or use the _Run workflow_ button on the Actions tab. The same goes for
 `agor-live-smoke.yml` if you only want to test the publish path on a
 specific branch.
 

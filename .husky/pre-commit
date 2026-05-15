@@ -1,5 +1,1 @@
-echo "🔍 Running typecheck..."
-pnpm typecheck
-
-echo "✨ Running lint..."
-pnpm lint
+pnpm exec lint-staged
