@@ -423,6 +423,15 @@ export function useAgorData(
   );
 
   // Clear all data when client goes away (logout / token revocation).
+  //
+  // IMPORTANT: this fires when `client` is null — which must NOT be the case
+  // during a transient socket disconnect. The caller (App.tsx) passes the
+  // client reference straight through; useAgorClient only nulls its ref on
+  // logout, not on a socket drop. If a future caller re-introduces a gate
+  // like `connected ? client : null`, every transient drop will wipe the
+  // board (and downstream, the URL) — see the comment on the useAgorData
+  // call in App.tsx for the full failure chain.
+  //
   // EMPTY_MAPS covers every field — adding a new map to DataMaps automatically
   // includes it here without any extra code.
   useEffect(() => {

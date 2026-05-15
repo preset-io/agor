@@ -395,8 +395,17 @@ export const App: React.FC<AppProps> = ({
     [currentBoardId]
   );
 
-  // If the stored board no longer exists (e.g., deleted), fallback to first board
+  // If the stored board no longer exists (e.g., deleted), fallback to first board.
+  //
+  // Skip the reset entirely when `boardById` is empty. An empty map normally
+  // means data hasn't arrived yet (or briefly wiped on a transient drop); in
+  // either case, clearing `currentBoardId` to '' here is what causes the
+  // `/b/<id>` URL to collapse to `/` once useUrlState re-syncs state → URL
+  // (`buildUrl('', null)` returns '/'). Leaving the id sticky keeps the URL
+  // intact and lets the fallback fire only when we actually have boards to
+  // fall back to.
   useEffect(() => {
+    if (boardById.size === 0) return;
     if (currentBoardId && !boardById.has(currentBoardId)) {
       const fallback = mapToArray(boardById)[0]?.board_id || '';
       setCurrentBoardId(fallback);
