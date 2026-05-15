@@ -23,7 +23,7 @@ export const SessionStatus = {
   RUNNING: 'running',
   STOPPING: 'stopping', // Stop requested, waiting for task to stop
   AWAITING_PERMISSION: 'awaiting_permission',
-  AWAITING_INPUT: 'awaiting_input', // Agent asked user a question (AskUserQuestion tool)
+  AWAITING_INPUT: 'awaiting_input', // Legacy / pre-#1177: AskUserQuestion was disallowed at the SDK; new sessions never enter this state, kept for historical rows
   TIMED_OUT: 'timed_out', // Permission/input request timed out, executor exited — user must re-prompt
   COMPLETED: 'completed',
   FAILED: 'failed',

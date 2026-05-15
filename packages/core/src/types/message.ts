@@ -136,8 +136,12 @@ export interface PermissionRequestContent {
 }
 
 /**
- * Input request status
- * Used when type === 'input_request' (AskUserQuestion tool)
+ * Input request status (legacy / pre-#1177).
+ *
+ * The `AskUserQuestion` tool was disallowed at the SDK layer in #1177
+ * because it hung the executor in gateway channels. New sessions never
+ * produce `input_request` messages; this enum is kept so historical rows
+ * still type-check when read from the DB.
  */
 export enum InputRequestStatus {
   PENDING = 'pending',
@@ -145,18 +149,14 @@ export enum InputRequestStatus {
   TIMED_OUT = 'timed_out',
 }
 
-/**
- * Input request question option
- */
+/** Input request question option (legacy / pre-#1177, see `InputRequestStatus`). */
 export interface InputRequestOption {
   label: string;
   description: string;
   markdown?: string;
 }
 
-/**
- * Input request question
- */
+/** Input request question (legacy / pre-#1177, see `InputRequestStatus`). */
 export interface InputRequestQuestion {
   question: string;
   header: string;
@@ -164,10 +164,7 @@ export interface InputRequestQuestion {
   multiSelect: boolean;
 }
 
-/**
- * Input request content
- * Used when type === 'input_request' (AskUserQuestion tool)
- */
+/** Input request content (legacy / pre-#1177, see `InputRequestStatus`). */
 export interface InputRequestContent {
   request_id: string;
   task_id?: TaskID;

@@ -360,7 +360,6 @@ export async function setupQuery(
     queryOptions.canUseTool = createCanUseToolCallback(sessionId, taskId, {
       permissionService: deps.permissionService,
       tasksService: deps.tasksService!,
-      sessionsRepo: deps.sessionsRepo,
       messagesRepo: deps.messagesRepo!,
       messagesService: deps.messagesService,
       sessionsService: deps.sessionsService,
