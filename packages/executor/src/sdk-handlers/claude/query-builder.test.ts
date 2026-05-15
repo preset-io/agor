@@ -55,17 +55,27 @@ describe('setupQuery - Local Settings Support', () => {
     );
   });
 
-  // Regression for #1177: AskUserQuestion's `canUseTool` callback blocked
-  // the executor waiting for a UI answer that never arrives in gateway
-  // channels (Slack). The full disallow list also covers ExitPlanMode and
-  // EnterWorktree/ExitWorktree — see `constants.ts` for the rationale.
+  // Pin the literal disallow list so a stray edit to the constant
+  // (e.g. dropping `ExitWorktree`) trips this test, not just the plumbing one.
+  // See `constants.ts` for why each name is on the list — #1177 covers
+  // AskUserQuestion; the rest were operator-approved at the same time.
+  it('locks the disallowed-tools list to the four operator-approved names', () => {
+    expect(CLAUDE_CODE_DISALLOWED_TOOLS).toEqual([
+      'AskUserQuestion',
+      'ExitPlanMode',
+      'EnterWorktree',
+      'ExitWorktree',
+    ]);
+  });
+
+  // Plumbing: whatever's in the constant must reach the SDK.
   it('passes the Claude Code disallowed-tools list to the SDK', async () => {
     const deps = createMockDeps();
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
     const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
-    expect(callArgs.options.disallowedTools).toEqual(CLAUDE_CODE_DISALLOWED_TOOLS);
+    expect(callArgs.options.disallowedTools).toEqual([...CLAUDE_CODE_DISALLOWED_TOOLS]);
   });
 });
 

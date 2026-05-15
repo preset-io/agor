@@ -34,4 +34,4 @@ export const CLAUDE_CODE_DISALLOWED_TOOLS = [
   'ExitPlanMode',
   'EnterWorktree',
   'ExitWorktree',
-];
+] as const satisfies readonly string[];

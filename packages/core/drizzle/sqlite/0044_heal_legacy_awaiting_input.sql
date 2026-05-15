@@ -6,13 +6,19 @@
 -- disallowed at the SDK layer the answer route is also gone, so any row still
 -- in that state at upgrade has no path back to running. Mark them
 -- `timed_out` so the user can re-prompt and the worktree's "active session"
--- counter doesn't pin on them forever.
+-- counter doesn't pin on them forever. We also stamp `data.report` so the
+-- upgraded user can see *why* the task timed out instead of guessing.
 --
 -- Mirrors postgres/0035_heal_legacy_awaiting_input.sql.
 
 UPDATE `tasks`
 SET `status` = 'timed_out',
-    `completed_at` = COALESCE(`completed_at`, unixepoch() * 1000)
+    `completed_at` = COALESCE(`completed_at`, unixepoch() * 1000),
+    `data` = json_set(
+      `data`,
+      '$.report',
+      'Legacy AskUserQuestion timed out — the interactive question tool was removed in #1177 because it hung the executor in gateway channels. Re-prompt the agent to continue.'
+    )
 WHERE `status` = 'awaiting_input';
 --> statement-breakpoint
 

@@ -268,7 +268,8 @@ export async function setupQuery(
       append: agorSystemPrompt, // Append rich Agor context (session, worktree, repo)
     },
     settingSources: ['user', 'project', 'local'], // Load user + project + local permissions, auto-loads CLAUDE.md
-    disallowedTools: CLAUDE_CODE_DISALLOWED_TOOLS,
+    // Defensive copy — the const is readonly but the SDK option is typed `string[]`.
+    disallowedTools: [...CLAUDE_CODE_DISALLOWED_TOOLS],
     model, // Use configured model or default
     pathToClaudeCodeExecutable: claudeCodePath,
     // Allow access to common directories outside CWD (e.g., /tmp)

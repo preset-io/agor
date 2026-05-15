@@ -24,35 +24,28 @@ describe('createCanUseToolCallback', () => {
 
   function createBaseDeps() {
     return {
-      // biome-ignore lint/suspicious/noExplicitAny: test fixture, full Service surface not required
       permissionService: {
         emitRequest: vi.fn(),
         waitForDecision: vi.fn(),
         cancelPendingRequests: vi.fn(),
       } as any,
-      // biome-ignore lint/suspicious/noExplicitAny: test fixture
       tasksService: {
         patch: vi.fn().mockResolvedValue(undefined),
       } as any,
-      // biome-ignore lint/suspicious/noExplicitAny: test fixture
       messagesRepo: {
         findBySessionId: vi.fn().mockResolvedValue([]),
       } as any,
-      // biome-ignore lint/suspicious/noExplicitAny: test fixture
       messagesService: {
         create: vi.fn().mockResolvedValue(undefined),
         patch: vi.fn().mockResolvedValue(undefined),
       } as any,
-      // biome-ignore lint/suspicious/noExplicitAny: test fixture
       sessionsService: {
         patch: vi.fn().mockResolvedValue(undefined),
       } as any,
       permissionLocks: new Map<SessionID, Promise<void>>(),
-      // biome-ignore lint/suspicious/noExplicitAny: test fixture
       mcpServerRepo: {
         findById: vi.fn(),
       } as any,
-      // biome-ignore lint/suspicious/noExplicitAny: test fixture
       sessionMCPRepo: {
         findBySessionId: vi.fn().mockResolvedValue([]),
       } as any,
