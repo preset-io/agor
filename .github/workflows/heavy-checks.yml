@@ -104,15 +104,24 @@ jobs:
     name: agor-live publish smoke
     uses: ./.github/workflows/agor-live-smoke.yml
 
+  audit:
+    name: pnpm audit (ambient CVE check)
+    # Invoke the same audit workflow that runs on dep-changing PRs.
+    # On a quiet day with no dep PRs this is the only place audit runs,
+    # so a new advisory against an existing dep can't sit silent.
+    uses: ./.github/workflows/audit.yml
+
   notify-failure:
     name: Open / update nightly-failure tracking issue
-    needs: [node-compat, agor-live-smoke]
+    needs: [node-compat, agor-live-smoke, audit]
     # Only notify on scheduled failures — push-to-main and workflow_dispatch
     # already have a human in the loop (a merger or whoever clicked Run).
     if: |
       always() &&
       github.event_name == 'schedule' &&
-      (needs.node-compat.result == 'failure' || needs.agor-live-smoke.result == 'failure')
+      (needs.node-compat.result == 'failure'
+        || needs.agor-live-smoke.result == 'failure'
+        || needs.audit.result == 'failure')
     runs-on: ubuntu-latest
     steps:
       - name: Open or comment on nightly-failure issue
@@ -120,6 +129,7 @@ jobs:
         env:
           NODE_COMPAT_RESULT: ${{ needs.node-compat.result }}
           SMOKE_RESULT: ${{ needs.agor-live-smoke.result }}
+          AUDIT_RESULT: ${{ needs.audit.result }}
         with:
           script: |
             const title = 'Nightly CI failure — heavy-checks workflow';
@@ -127,11 +137,13 @@ jobs:
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const nodeResult = process.env.NODE_COMPAT_RESULT;
             const smokeResult = process.env.SMOKE_RESULT;
+            const auditResult = process.env.AUDIT_RESULT;
             const body = [
               `Nightly heavy-checks run failed at ${new Date().toISOString()}.`,
               ``,
               `- \`node-compat\` matrix: **${nodeResult}**`,
               `- \`agor-live-smoke\`:    **${smokeResult}**`,
+              `- \`audit\`:               **${auditResult}**`,
               ``,
               `Run: ${runUrl}`,
               ``,

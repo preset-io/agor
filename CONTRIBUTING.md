@@ -192,9 +192,10 @@ it's not gating either PR merge or merge-to-`main`.
 
 | When | Workflow | What runs |
 |------|----------|-----------|
-| Every PR push **and** every push to `main` | `ci.yml` | install, typecheck, lint, build, unit tests, security audit — all on Node 22 |
+| Every PR push **and** every push to `main` | `ci.yml` | install, typecheck, lint, build, unit tests — all on Node 22 |
+| PR / main push that touches `pnpm-lock.yaml` or any `package.json` | `audit.yml` | `pnpm audit` (CRITICAL prod-tree advisories block; HIGH advisory) |
 | PR push (publish-relevant paths only) | `agor-live-smoke.yml` | Pack the published tarball, install with `npm`, boot the daemon, curl `/ui/` |
-| Nightly at 04:00 UTC | `heavy-checks.yml` | `npm install agor-live` compat on Node 22, 24, 25 + a full `agor-live-smoke`. On failure, auto-opens / comments on a tracking issue labelled `ci-nightly-failure` |
+| Nightly at 04:00 UTC | `heavy-checks.yml` | Node 22/24/25 install-compat matrix + full `agor-live-smoke` + `audit` (catches ambient CVEs against unchanged deps). On failure, auto-opens / comments on a tracking issue labelled `ci-nightly-failure` |
 | On demand (pre-release etc.) | `heavy-checks.yml` | Same as nightly, triggered via `gh workflow run` or the Actions UI |
 
 **Triggering an ad-hoc heavy run** (e.g. before cutting a release):
