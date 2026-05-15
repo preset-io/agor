@@ -106,12 +106,6 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
       form: claudeForm,
     },
     {
-      key: 'claude-code-cli',
-      label: 'Claude Code CLI',
-      tool: 'claude-code-cli',
-      form: claudeCliForm,
-    },
-    {
       key: 'codex',
       label: 'Codex',
       tool: 'codex',
@@ -134,6 +128,12 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
       label: 'GitHub Copilot',
       tool: 'copilot',
       form: copilotForm,
+    },
+    {
+      key: 'claude-code-cli',
+      label: 'Claude Code CLI',
+      tool: 'claude-code-cli',
+      form: claudeCliForm,
     },
   ];
 

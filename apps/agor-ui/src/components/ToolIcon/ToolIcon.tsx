@@ -6,6 +6,7 @@
 
 import { theme } from 'antd';
 import ccLogo from '../../assets/tools/cc.png';
+import claudeCodeCliLogo from '../../assets/tools/claude-code-cli.png';
 import codexLogo from '../../assets/tools/codex.png';
 import copilotLogo from '../../assets/tools/copilot.png';
 import geminiLogo from '../../assets/tools/gemini.png';
@@ -24,6 +25,7 @@ export interface ToolIconProps {
 
 const toolLogos: Record<string, string> = {
   'claude-code': ccLogo,
+  'claude-code-cli': claudeCodeCliLogo,
   codex: codexLogo,
   gemini: geminiLogo,
   opencode: opencodeLogo,
