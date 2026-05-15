@@ -20,7 +20,13 @@ export type ApiKeyName =
  * Agentic coding tool names
  *
  * These are the external agentic CLI/IDE tools that connect to Agor:
- * - claude-code: Anthropic's Claude Code CLI
+ * - claude-code: Anthropic's Claude Code via the Agent SDK (API-key path).
+ *   Renaming to 'claude-agent-sdk' is staged for a follow-up commit; the
+ *   string value stays 'claude-code' for backward compatibility with
+ *   existing DB rows until a coordinated DB+UI migration ships.
+ * - claude-code-cli: The `claude` shell binary running interactively in a
+ *   Zellij pane, JSONL-tailed by the daemon. Subscription-auth friendly.
+ *   See docs/internal/claude-code-cli-integration-analysis-2026-05-14.md.
  * - codex: OpenAI's Codex CLI
  * - gemini: Google's Gemini Code Assist
  * - opencode: Open-source terminal-based AI assistant with 75+ LLM providers
@@ -29,7 +35,13 @@ export type ApiKeyName =
  * Not to be confused with "execution tools" (Bash, Write, Read, etc.)
  * which are the primitives that agentic tools use to perform work.
  */
-export type AgenticToolName = 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot';
+export type AgenticToolName =
+  | 'claude-code'
+  | 'claude-code-cli'
+  | 'codex'
+  | 'gemini'
+  | 'opencode'
+  | 'copilot';
 
 /**
  * Agentic tool metadata for UI display
@@ -196,6 +208,18 @@ export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapab
     supportsChildSpawn: true,
     supportsSessionImport: true,
     supportsStatelessFsMode: true,
+  },
+  'claude-code-cli': {
+    // First-class CLI flag: `claude --resume <id> --fork-session`
+    supportsSessionFork: true,
+    // New `claude --session-id <new uuid>` in a fresh Zellij pane
+    supportsChildSpawn: true,
+    // v1: false. The on-disk JSONL is ingestable but the "adopt existing
+    // session" UI flow is deferred to v2 (see analysis doc § Phased delivery).
+    supportsSessionImport: false,
+    // CLI sessions live in long-running PTYs; state is on disk in the JSONL,
+    // not a serializable filesystem snapshot the daemon manages.
+    supportsStatelessFsMode: false,
   },
   codex: {
     supportsSessionFork: true,

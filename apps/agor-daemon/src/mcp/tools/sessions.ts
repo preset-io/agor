@@ -474,7 +474,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .optional()
           .describe('Optional title for the session (defaults to first 100 chars of prompt)'),
         agenticTool: z
-          .enum(['claude-code', 'codex', 'gemini', 'opencode'])
+          .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode'])
           .optional()
           .describe('Which agent to use for the subsession (defaults to same as parent)'),
         enableCallback: z
@@ -557,7 +557,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             'How to route the work: continue (add to existing session), fork (create sibling session), subsession (create child session), btw (ephemeral fork — works even on running sessions, auto-callbacks result to caller, auto-archives when done)'
           ),
         agenticTool: z
-          .enum(['claude-code', 'codex', 'gemini'])
+          .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini'])
           .optional()
           .describe(
             'Agent for subsession (subsession mode only, defaults to parent agent). Fork mode always uses parent agent.'
@@ -711,7 +711,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       inputSchema: z.object({
         worktreeId: z.string().describe('Worktree ID where the session will run (required)'),
         agenticTool: z
-          .enum(['claude-code', 'codex', 'gemini'])
+          .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini'])
           .describe('Which agent to use for this session (required)'),
         title: z.string().optional().describe('Session title (optional)'),
         description: z.string().optional().describe('Session description (optional)'),
@@ -1309,7 +1309,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         agenticTool: z
-          .enum(['claude-code', 'codex', 'copilot', 'gemini'])
+          .enum(['claude-code', 'claude-code-cli', 'codex', 'copilot', 'gemini'])
           .optional()
           .describe('Filter to a single agentic tool. Omit to return all tools.'),
       }),

@@ -15,6 +15,14 @@ export const AVAILABLE_AGENTS: AgenticToolOption[] = [
     description: 'Anthropic Claude coding agent',
   },
   {
+    id: 'claude-code-cli',
+    name: 'Claude Code CLI',
+    icon: '🤖',
+    description:
+      'Wraps the `claude` shell binary in your web terminal. Best with a Claude Pro/Max subscription — uses your normal interactive limits, not the Agent SDK credit pool.',
+    beta: true,
+  },
+  {
     id: 'codex',
     name: 'Codex',
     icon: '💻',

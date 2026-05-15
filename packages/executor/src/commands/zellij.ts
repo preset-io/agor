@@ -19,6 +19,8 @@
  */
 
 import { spawn } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { IPty } from 'node-pty';
 import type { ExecutorResult, ZellijAttachPayload, ZellijTabPayload } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
@@ -119,7 +121,6 @@ export async function handleZellijAttach(
     // Get actual home directory and shell for current user from passwd
     // os.homedir() doesn't work correctly with sudo impersonation - it returns the original user's home
     // We must use getent passwd to get the correct values for the impersonated user
-    const fs = await import('node:fs');
     const { execSync } = await import('node:child_process');
 
     let actualHome = '/tmp'; // Fallback
@@ -222,10 +223,28 @@ export async function handleZellijAttach(
       }
     });
 
-    // Listen for tab commands (from daemon when user switches worktrees)
-    socket.on('terminal:tab', async (data: { action: string; tabName: string; cwd?: string }) => {
-      await handleTabAction(data.action, data.tabName, data.cwd);
-    });
+    // Listen for tab commands (from daemon when user switches worktrees
+    // OR when a `claude-code-cli` session is created — the daemon passes
+    // `command` + `commandArgs` so the new tab spawns the `claude` binary
+    // directly into its foreground process).
+    socket.on(
+      'terminal:tab',
+      async (data: {
+        action: string;
+        tabName: string;
+        cwd?: string;
+        command?: string;
+        commandArgs?: string[];
+      }) => {
+        await handleTabAction(
+          data.action,
+          data.tabName,
+          data.cwd,
+          data.command,
+          data.commandArgs
+        );
+      }
+    );
 
     // Listen for redraw requests (when client reconnects)
     // Trigger resize to force Zellij to redraw via SIGWINCH
@@ -300,7 +319,7 @@ export async function handleZellijTab(
   payload: ZellijTabPayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
-  const { action, tabName, cwd } = payload.params;
+  const { action, tabName, cwd, command, commandArgs } = payload.params;
 
   // Dry run mode
   if (options.dryRun) {
@@ -312,6 +331,8 @@ export async function handleZellijTab(
         action,
         tabName,
         cwd,
+        tabCommand: command,
+        tabCommandArgs: commandArgs,
       },
     };
   }
@@ -328,13 +349,14 @@ export async function handleZellijTab(
   }
 
   try {
-    await handleTabAction(action, tabName, cwd);
+    await handleTabAction(action, tabName, cwd, command, commandArgs);
 
     return {
       success: true,
       data: {
         action,
         tabName,
+        spawnedCommand: command,
       },
     };
   } catch (error) {
@@ -408,8 +430,21 @@ async function queryTabNames(): Promise<string[]> {
  *
  * Uses `zellij action` CLI to control the running session.
  * For 'create' action, checks if tab exists first and focuses instead.
+ *
+ * When `command` is supplied on a `create` action, the new tab spawns
+ * the named binary instead of the user's default shell. This is how the
+ * Claude Code CLI adapter drops the user into an interactive `claude`
+ * REPL inside a Zellij pane — see
+ * docs/internal/claude-code-cli-integration-analysis-2026-05-14.md §
+ * "Spawn shape".
  */
-async function handleTabAction(action: string, tabName: string, cwd?: string): Promise<void> {
+async function handleTabAction(
+  action: string,
+  tabName: string,
+  cwd?: string,
+  command?: string,
+  commandArgs?: string[]
+): Promise<void> {
   if (!currentSessionName) {
     console.error('[zellij.tab] No session name set, cannot perform tab action');
     return;
@@ -435,8 +470,26 @@ async function handleTabAction(action: string, tabName: string, cwd?: string): P
       if (cwd) {
         actionArgs.push('--cwd', cwd);
       }
+      if (command) {
+        // Zellij's `action new-tab` does NOT accept `--command` directly
+        // (its only flags are `--name`, `--cwd`, `--layout`). To spawn a
+        // specific binary as the new tab's foreground pane we materialize
+        // a tiny per-tab KDL layout file declaring a single pane that
+        // runs the command, then pass `--layout <file>`. The layout file
+        // lives under /tmp and is best-effort cleaned at handler return —
+        // Zellij has already parsed and started the pane by then.
+        const layoutPath = writeClaudeLayoutFile(tabName, cwd, command, commandArgs ?? []);
+        actionArgs.push('--layout', layoutPath);
+      }
     } else if (action === 'focus') {
       // Focus existing tab by name
+      actionArgs = ['go-to-tab-name', tabName];
+    } else if (action === 'close') {
+      // Close-by-name isn't a Zellij action directly; the safe sequence
+      // is `go-to-tab-name <X>` followed by `close-tab`. If the tab
+      // doesn't exist `go-to-tab-name` errors and we just skip the
+      // close — Zellij prints a warning, not a fatal error.
+      // Implemented as two sequential `zellij action ...` calls below.
       actionArgs = ['go-to-tab-name', tabName];
     } else {
       reject(new Error(`Unknown tab action: ${action}`));
@@ -468,10 +521,52 @@ async function handleTabAction(action: string, tabName: string, cwd?: string): P
       clearTimeout(timeout);
       if (code === 0) {
         console.log(`[zellij.tab] Tab action succeeded: ${action} ${tabName}`);
-        resolve();
+        // 'close' is a two-phase action: focus the tab, then close-tab.
+        // Run the second phase here so the caller's promise resolves
+        // when the tab is actually gone.
+        if (action === 'close') {
+          const closeProc = spawn(
+            'zellij',
+            ['--session', sessionName, 'action', 'close-tab'],
+            { stdio: ['ignore', 'pipe', 'pipe'] }
+          );
+          let closeStderr = '';
+          closeProc.stderr?.on('data', (d: Buffer) => {
+            closeStderr += d.toString();
+          });
+          const closeTimeout = setTimeout(() => {
+            closeProc.kill();
+            console.warn(`[zellij.tab] close-tab timed out for ${tabName}`);
+            resolve();
+          }, 3000);
+          closeProc.on('exit', (closeCode) => {
+            clearTimeout(closeTimeout);
+            if (closeCode !== 0) {
+              console.warn(`[zellij.tab] close-tab failed (code ${closeCode}): ${closeStderr}`);
+            } else {
+              console.log(`[zellij.tab] Tab closed: ${tabName}`);
+            }
+            resolve();
+          });
+          closeProc.on('error', () => {
+            clearTimeout(closeTimeout);
+            resolve();
+          });
+        } else {
+          resolve();
+        }
       } else {
         console.error(`[zellij.tab] Tab action failed: ${stderr}`);
-        reject(new Error(`zellij action failed with code ${code}: ${stderr}`));
+        // 'close' is best-effort — don't fail the caller's promise if
+        // the target tab was already gone.
+        if (action === 'close') {
+          console.warn(
+            `[zellij.tab] close action failed (likely tab "${tabName}" didn't exist) — proceeding`
+          );
+          resolve();
+        } else {
+          reject(new Error(`zellij action failed with code ${code}: ${stderr}`));
+        }
       }
     });
 
@@ -480,6 +575,51 @@ async function handleTabAction(action: string, tabName: string, cwd?: string): P
       reject(error);
     });
   });
+}
+
+/**
+ * Materialize a Zellij KDL layout file describing one pane that runs a
+ * specific binary with the given argv. Used by the Claude Code CLI
+ * adapter to spawn `claude` into a freshly-created tab.
+ *
+ * Layout shape (KDL):
+ *
+ *   layout {
+ *     pane command="claude" cwd="..." {
+ *       args "--session-id" "..." "-n" "cli-..." "--permission-mode" "acceptEdits" ...
+ *     }
+ *   }
+ *
+ * Returns the absolute path of the written file. The file is left on disk
+ * after Zellij parses it — Zellij reads it synchronously during the
+ * `action new-tab --layout <file>` call, so cleanup is optional. We keep
+ * it under `/tmp/agor-zellij-layouts/` for easy diagnosis if a spawn
+ * misbehaves.
+ */
+function writeClaudeLayoutFile(
+  tabName: string,
+  cwd: string | undefined,
+  command: string,
+  commandArgs: string[]
+): string {
+  const dir = '/tmp/agor-zellij-layouts';
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  const filePath = path.join(dir, `${tabName}-${Date.now()}.kdl`);
+  // KDL string-escaping: backslashes and double-quotes only. Each argv
+  // element becomes a separate quoted token inside `args`.
+  const escape = (s: string) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  const argsLine =
+    commandArgs.length > 0 ? `        args ${commandArgs.map(escape).join(' ')}\n` : '';
+  const cwdAttr = cwd ? ` cwd=${escape(cwd)}` : '';
+  const layout = `layout {
+    pane command=${escape(command)}${cwdAttr} {
+${argsLine}    }
+}
+`;
+  fs.writeFileSync(filePath, layout, { mode: 0o600 });
+  return filePath;
 }
 
 /**

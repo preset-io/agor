@@ -71,7 +71,14 @@ const GitUrlSchema = z.string().refine(isGitUrl, {
 /**
  * Tool types supported by the prompt command
  */
-export const ToolTypeSchema = z.enum(['claude-code', 'gemini', 'codex', 'opencode', 'copilot']);
+export const ToolTypeSchema = z.enum([
+  'claude-code',
+  'claude-code-cli',
+  'gemini',
+  'codex',
+  'opencode',
+  'copilot',
+]);
 export type ToolType = z.infer<typeof ToolTypeSchema>;
 
 /**
@@ -514,14 +521,35 @@ export const ZellijTabPayloadSchema = BasePayloadSchema.extend({
   sessionToken: z.string(),
 
   params: z.object({
-    /** Action: create new tab or focus existing */
-    action: z.enum(['create', 'focus']),
+    /** Action: create new tab, focus existing, or close-by-name */
+    action: z.enum(['create', 'focus', 'close']),
 
     /** Tab name (worktree name) */
     tabName: z.string(),
 
     /** Working directory (for 'create' action) */
     cwd: z.string().optional(),
+
+    /**
+     * Optional binary to run inside the new tab.
+     * Maps to `zellij action new-tab --command <bin>`.
+     *
+     * Use case: spawn the `claude` shell binary directly into a tab so
+     * its REPL is the tab's foreground process. Without this the tab
+     * opens a default shell.
+     *
+     * Only honored when `action === 'create'`.
+     */
+    command: z.string().optional(),
+
+    /**
+     * Argv passed to `command`. Each element produces a separate
+     * `--args <one>` repetition on the `zellij action new-tab` invocation
+     * (Zellij requires this rather than space-separated argv).
+     *
+     * Ignored when `command` is omitted.
+     */
+    commandArgs: z.array(z.string()).optional(),
   }),
 });
 

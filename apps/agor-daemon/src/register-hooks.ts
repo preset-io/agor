@@ -1840,6 +1840,33 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
       create: [
+        // Claude Code CLI: register watcher + persist cli_state + dispatch
+        // the Zellij tab spawn. No-op for other agentic tools.
+        async (context) => {
+          const session = context.result as Session;
+          if (session.agentic_tool !== 'claude-code-cli') return context;
+          try {
+            const worktree = await context.app
+              .service('worktrees')
+              .get(session.worktree_id, { provider: undefined });
+            const cwd = (worktree as { path?: string } | undefined)?.path;
+            if (cwd) {
+              const { onCliSessionCreated } = await import(
+                './services/claude-cli-integration.js'
+              );
+              await onCliSessionCreated(context.app, session, cwd);
+            } else {
+              console.warn(
+                `[claude-cli-integration] no worktree.path for session ${session.session_id}; skipping spawn`
+              );
+            }
+          } catch (err) {
+            // Never fail the session create on integration errors — the
+            // session row is still useful even if the watcher misfires.
+            console.error('[claude-cli-integration] onCliSessionCreated failed:', err);
+          }
+          return context;
+        },
         async (context) => {
           // Skip MCP setup if MCP server is disabled
           if (config.daemon?.mcpEnabled === false) {

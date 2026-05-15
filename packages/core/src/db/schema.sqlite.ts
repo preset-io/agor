@@ -74,7 +74,7 @@ export const sessions = sqliteTable(
       ],
     }).notNull(),
     agentic_tool: text('agentic_tool', {
-      enum: ['claude-code', 'codex', 'gemini', 'opencode', 'copilot'],
+      enum: ['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'copilot'],
     }).notNull(),
     board_id: text('board_id', { length: 36 }), // NULL = no board
 
@@ -166,6 +166,39 @@ export const sessions = sqliteTable(
             };
           };
         };
+
+        // Claude Code CLI adapter state (only set when agentic_tool === 'claude-code-cli').
+        // Persisted so the daemon can re-instantiate the JSONL watcher across
+        // daemon restarts without losing offset. See
+        // apps/agor-daemon/src/services/claude-cli-watcher.ts and
+        // docs/internal/claude-code-cli-integration-analysis-2026-05-14.md.
+        cli_state?: {
+          // Bytes consumed from the JSONL — resume point on watcher restart.
+          watcher_offset?: number;
+          // Last processed JSONL line's `timestamp` (ISO 8601). Telemetry only.
+          last_event_ts?: string;
+          // Last processed JSONL line's `uuid`. Used for "did we miss anything?"
+          // sanity checks against `loadSessionUsageById` on resume.
+          last_event_uuid?: string;
+          // The slugged JSONL directory under ~/.claude/projects/. Cached at
+          // spawn time so we don't recompute the slug on every event.
+          slug?: string;
+          // Absolute path to the JSONL file the watcher tails.
+          jsonl_path?: string;
+          // Zellij pane handle so PTY injection (Zellij `action write-chars`)
+          // can target this session specifically.
+          zellij_pane_id?: string;
+          zellij_tab_name?: string;
+        };
+
+        // Billing model for this session.
+        // - 'subscription': running against the user's Claude Pro/Max
+        //   subscription's interactive limits (CLI adapter, default).
+        // - 'api-key': ANTHROPIC_API_KEY was set at spawn → per-token billing.
+        // - 'unknown': legacy rows or pre-flag detection.
+        // Drives the cost-UI caption ("Estimated; covered by your subscription")
+        // and any future 5h-billing-window banner.
+        billing_mode?: 'subscription' | 'api-key' | 'unknown';
       }>()
       .notNull(),
   },
@@ -634,7 +667,13 @@ export const worktrees = sqliteTable(
         schedule?: {
           timezone: string; // IANA timezone (default: 'UTC')
           prompt_template: string; // Handlebars template
-          agentic_tool: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot';
+          agentic_tool:
+            | 'claude-code'
+            | 'claude-code-cli'
+            | 'codex'
+            | 'gemini'
+            | 'opencode'
+            | 'copilot';
           retention: number; // How many sessions to keep (0 = keep forever)
           permission_mode?: string; // Permission mode for spawned sessions
           model_config?: {
@@ -753,6 +792,16 @@ export const users = sqliteTable(
             ANTHROPIC_AUTH_TOKEN?: string;
             ANTHROPIC_BASE_URL?: string;
           };
+          'claude-code-cli'?: {
+            // Mirrors 'claude-code' — the CLI accepts the same Anthropic env
+            // vars on the api-key path. Subscription auth reads
+            // ~/.claude/.credentials.json (managed by `claude auth login`),
+            // not these env vars.
+            ANTHROPIC_API_KEY?: string;
+            CLAUDE_CODE_OAUTH_TOKEN?: string;
+            ANTHROPIC_AUTH_TOKEN?: string;
+            ANTHROPIC_BASE_URL?: string;
+          };
           codex?: {
             OPENAI_API_KEY?: string;
             OPENAI_BASE_URL?: string;
@@ -789,6 +838,15 @@ export const users = sqliteTable(
         // Default agentic tool configuration (prepopulates session creation forms)
         default_agentic_config?: {
           'claude-code'?: {
+            modelConfig?: {
+              mode?: 'alias' | 'exact';
+              model?: string;
+              effort?: EffortLevel;
+            };
+            permissionMode?: string;
+            mcpServerIds?: string[];
+          };
+          'claude-code-cli'?: {
             modelConfig?: {
               mode?: 'alias' | 'exact';
               model?: string;

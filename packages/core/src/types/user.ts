@@ -88,6 +88,7 @@ export interface DefaultAgenticToolConfig {
  */
 export interface DefaultAgenticConfig {
   'claude-code'?: DefaultAgenticToolConfig;
+  'claude-code-cli'?: DefaultAgenticToolConfig;
   codex?: DefaultAgenticToolConfig;
   gemini?: DefaultAgenticToolConfig;
   opencode?: DefaultAgenticToolConfig;
@@ -127,6 +128,11 @@ export interface CopilotConfig {
  */
 export interface AgenticToolsConfig {
   'claude-code'?: ClaudeCodeConfig;
+  // claude-code-cli wraps the `claude` shell binary. Same Anthropic env vars
+  // apply as the SDK path (ANTHROPIC_API_KEY, OAuth token, base URL); the
+  // subscription path doesn't use env vars at all — it reads
+  // ~/.claude/.credentials.json managed by `claude auth login`.
+  'claude-code-cli'?: ClaudeCodeConfig;
   codex?: CodexConfig;
   gemini?: GeminiConfig;
   copilot?: CopilotConfig;
@@ -222,6 +228,7 @@ export const AGENTIC_TOOLS_PUBLIC_FIELDS: {
   >;
 } = {
   'claude-code': ['ANTHROPIC_BASE_URL'],
+  'claude-code-cli': ['ANTHROPIC_BASE_URL'],
   codex: ['OPENAI_BASE_URL'],
 } as const;
 

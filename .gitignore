@@ -43,3 +43,6 @@ yarn-error.log*
 # Agor specific
 .agor/
 apps/agor-desktop/out/
+
+# Playwright MCP tool artifacts
+.playwright-mcp/

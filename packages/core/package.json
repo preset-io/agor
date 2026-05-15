@@ -52,6 +52,12 @@
       "import": "./dist/claude/index.js",
       "require": "./dist/claude/index.cjs"
     },
+    "./claude-cli": {
+      "source": "./src/claude-cli/index.ts",
+      "types": "./dist/claude-cli/index.d.ts",
+      "import": "./dist/claude-cli/index.js",
+      "require": "./dist/claude-cli/index.cjs"
+    },
     "./config": {
       "source": "./src/config/index.ts",
       "types": "./dist/config/index.d.ts",
