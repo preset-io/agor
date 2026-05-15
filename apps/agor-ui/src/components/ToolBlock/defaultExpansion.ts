@@ -10,13 +10,20 @@
 
 /**
  * Tool names whose ToolBlock body is the primary payload of the call
- * (i.e. you almost always want to see it without a click).
+ * (i.e. you almost always want to see it without a click). In practice
+ * that's file writes / edits, where the diff IS the content.
  *
  * Includes cross-agent equivalents:
- * - Claude Code: `Write`
+ * - Claude Code: `Write`, `Edit`, `MultiEdit`, `NotebookEdit`
  * - Codex: `edit_files`
  */
-const TOOLS_EXPANDED_BY_DEFAULT = new Set<string>(['Write', 'edit_files']);
+const TOOLS_EXPANDED_BY_DEFAULT = new Set<string>([
+  'Write',
+  'Edit',
+  'MultiEdit',
+  'NotebookEdit',
+  'edit_files',
+]);
 
 /**
  * Whether a tool call should render its ToolBlock body expanded by default.
