@@ -763,9 +763,18 @@ const WorktreeCardComponent = ({
           justifyContent: 'space-between',
           alignItems: 'center',
           marginBottom: 12,
+          gap: 8,
         }}
       >
-        <Space size={8} align="center">
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flex: 1,
+            minWidth: 0,
+          }}
+        >
           {!inPopover && (
             <div
               className="drag-handle"
@@ -776,6 +785,7 @@ const WorktreeCardComponent = ({
                 width: 32,
                 height: 32,
                 justifyContent: 'center',
+                flexShrink: 0,
               }}
             >
               {isCreating || hasRunningSession ? (
@@ -799,17 +809,27 @@ const WorktreeCardComponent = ({
               )}
             </div>
           )}
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <Typography.Text strong className="nodrag">
+          <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
+            <Typography.Text
+              strong
+              className="nodrag"
+              ellipsis={{ tooltip: assistantConfig?.displayName ?? worktree.name }}
+            >
               {assistantConfig?.displayName ?? worktree.name}
             </Typography.Text>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            <Typography.Text
+              type="secondary"
+              style={{ fontSize: 12 }}
+              ellipsis={{
+                tooltip: assistantConfig ? `${repo.slug} / ${worktree.name}` : repo.slug,
+              }}
+            >
               {assistantConfig ? `${repo.slug} / ${worktree.name}` : repo.slug}
             </Typography.Text>
           </div>
-        </Space>
+        </div>
 
-        <Space size={4}>
+        <Space size={4} style={{ flexShrink: 0 }}>
           {!inPopover && isPinned && (
             <Tooltip
               title={
