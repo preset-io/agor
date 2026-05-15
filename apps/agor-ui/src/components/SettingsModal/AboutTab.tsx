@@ -3,7 +3,7 @@
  */
 
 import type { AgorClient, UnixUserMode } from '@agor-live/client';
-import { Card, Descriptions, Space, Tag, Tooltip, Typography } from 'antd';
+import { Button, Card, Descriptions, Space, Tag, Tooltip, Typography } from 'antd';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useConnectionState } from '../../contexts/ConnectionContext';
@@ -25,6 +25,19 @@ export interface AboutTabProps {
 
 interface WindowWithAgorConfig extends Window {
   AGOR_DAEMON_URL?: string;
+}
+
+// Renders nothing — just throws on mount. Used by the admin Crash Test
+// button to verify the global ErrorBoundary catches render-phase crashes
+// and renders the friendly crash screen. React error boundaries do NOT
+// catch errors thrown from event handlers, which is why we flip a state
+// flag and let this component throw during the next render instead of
+// throwing from the button's onClick directly.
+function CrashTestBomb(): never {
+  throw new Error(
+    'Crash test: this is a synthetic render-phase error from About → Crash Test. ' +
+      "If you're seeing the friendly crash screen, the global ErrorBoundary works."
+  );
 }
 
 interface HealthInfo {
@@ -76,6 +89,9 @@ export const AboutTab: React.FC<AboutTabProps> = ({
   const daemonUrl = getDaemonUrl();
   const [detectionMethod, setDetectionMethod] = useState<string>('');
   const [healthInfo, setHealthInfo] = useState<HealthInfo | null>(null);
+  // Admin-only crash-test toggle: flipping this true makes <CrashTestBomb />
+  // mount and throw on the next render, which trips the global ErrorBoundary.
+  const [crashTest, setCrashTest] = useState(false);
   // SHA captured at tab-load time (resets on hard reload). Provider-owned in
   // App.tsx via useServerVersion so this and the banner stay in lockstep.
   const { capturedSha } = useConnectionState();
@@ -356,6 +372,17 @@ export const AboutTab: React.FC<AboutTabProps> = ({
                   </Descriptions.Item>
                   <Descriptions.Item label="Path">
                     <code>{window.location.pathname}</code>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Crash Test">
+                    <Space>
+                      <Button danger size="small" onClick={() => setCrashTest(true)}>
+                        Trigger render crash
+                      </Button>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        Throws during render to verify the global error boundary. Reload to recover.
+                      </Typography.Text>
+                    </Space>
+                    {crashTest && <CrashTestBomb />}
                   </Descriptions.Item>
                 </Descriptions>
               </Card>

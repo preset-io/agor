@@ -23,6 +23,7 @@ import { useEffect, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
 import { App as AgorApp } from './components/App';
+import { ErrorBoundary, setCrashContext } from './components/ErrorBoundary';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
@@ -219,6 +220,17 @@ function AppContent() {
   // This ensures we get the latest onboarding_completed status
   // Fall back to user from auth if users Map hasn't loaded yet
   const currentUser = user ? userById.get(user.user_id) || user : null;
+
+  // Keep the global ErrorBoundary's crash context populated so a render
+  // crash anywhere below us can produce a useful report (build SHA + signed-in
+  // user). The boundary is a class component that lives ABOVE this tree, so
+  // it can't read hooks — a module-level setter is the bridge.
+  useEffect(() => {
+    setCrashContext({
+      buildSha: capturedSha,
+      userEmail: currentUser?.email ?? null,
+    });
+  }, [capturedSha, currentUser?.email]);
 
   // Onboarding wizard state
   const [onboardingWizardOpen, setOnboardingWizardOpen] = useState(false);
@@ -1637,7 +1649,9 @@ function AppWrapper() {
   return (
     <ConfigProvider theme={getCurrentThemeConfig()}>
       <AntApp>
-        <AppContent />
+        <ErrorBoundary variant="global">
+          <AppContent />
+        </ErrorBoundary>
       </AntApp>
     </ConfigProvider>
   );
