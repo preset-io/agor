@@ -28,7 +28,7 @@ import type { PermissionService } from '../../permissions/permission-service.js'
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID } from '../../types.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
-import type { MessagesService, SessionsService, TasksService } from '../claude/claude-tool.js';
+import type { MessagesService, SessionsPatchClient, TasksService } from '../claude/claude-tool.js';
 import type { CopilotSessionEvents } from './event-mapper.js';
 import { DEFAULT_COPILOT_MODEL } from './models.js';
 import { createPermissionHandler, type PermissionDeps } from './permission-mapper.js';
@@ -110,7 +110,7 @@ export class CopilotPromptService {
   private messagesRepo: MessagesRepository;
   private messagesService?: MessagesService;
   private tasksService?: TasksService;
-  private sessionsService?: SessionsService;
+  private sessionsService?: SessionsPatchClient;
   private permissionLocks = new Map<SessionID, Promise<void>>();
 
   constructor(
@@ -125,7 +125,7 @@ export class CopilotPromptService {
     permissionService?: PermissionService,
     messagesService?: MessagesService,
     tasksService?: TasksService,
-    sessionsService?: SessionsService
+    sessionsService?: SessionsPatchClient
   ) {
     this.apiKey = apiKey;
     this.messagesRepo = messagesRepo;

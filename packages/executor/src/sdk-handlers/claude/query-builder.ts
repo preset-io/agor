@@ -29,7 +29,7 @@ import type {
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { MCPServersConfig, SessionID, TaskID, UserID } from '../../types.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
-import type { MessagesService, SessionsService, TasksService } from './claude-tool.js';
+import type { MessagesService, SessionsPatchClient, TasksService } from './claude-tool.js';
 import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
 import { parseModelWithBetas } from './model-utils.js';
 import { DEFAULT_CLAUDE_MODEL } from './models.js';
@@ -108,7 +108,7 @@ export interface QuerySetupDeps {
   mcpServerRepo?: MCPServerRepository;
   permissionService?: PermissionService;
   tasksService?: TasksService;
-  sessionsService?: SessionsService;
+  sessionsService?: SessionsPatchClient;
   messagesService?: MessagesService;
   worktreesRepo?: WorktreeRepository;
   usersRepo?: UsersRepository;

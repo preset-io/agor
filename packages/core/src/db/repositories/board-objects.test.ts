@@ -5,6 +5,7 @@
  */
 
 import type { BoardID, UUID, WorktreeID } from '@agor/core/types';
+import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -921,7 +922,7 @@ describe('BoardObjectRepository FK constraints', () => {
     });
 
     // Delete the board
-    await (db as any).delete(boards).where(require('drizzle-orm').eq(boards.board_id, boardId));
+    await (db as any).delete(boards).where(eq(boards.board_id, boardId));
 
     // Board object should be cascade deleted
     const found = await boRepo.findByWorktreeId(worktree.worktree_id);

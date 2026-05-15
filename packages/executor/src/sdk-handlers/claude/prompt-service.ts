@@ -17,7 +17,7 @@ import type {
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { SessionID, TaskID } from '../../types.js';
 import { MessageRole } from '../../types.js';
-import type { SessionsService, TasksService } from './claude-tool.js';
+import type { SessionsPatchClient, TasksService } from './claude-tool.js';
 import { type ProcessedEvent, SDKMessageProcessor } from './message-processor.js';
 import { setupQuery } from './query-builder.js';
 
@@ -61,7 +61,7 @@ export class ClaudePromptService {
     private mcpServerRepo?: MCPServerRepository,
     private permissionService?: PermissionService,
     private tasksService?: TasksService,
-    private sessionsService?: SessionsService, // FeathersJS Sessions service for WebSocket broadcasting
+    private sessionsService?: SessionsPatchClient, // FeathersJS Sessions service for WebSocket broadcasting
     private worktreesRepo?: WorktreeRepository,
     private reposRepo?: import('../../db/feathers-repositories').RepoRepository,
     private messagesService?: import('./claude-tool').MessagesService, // FeathersJS Messages service for creating permission requests

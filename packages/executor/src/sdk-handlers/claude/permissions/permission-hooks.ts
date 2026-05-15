@@ -21,7 +21,7 @@ import type {
   SessionMCPServerRepository,
 } from '../../../db/feathers-repositories.js';
 import type { PermissionService } from '../../../permissions/permission-service.js';
-import type { MessagesService, SessionsService, TasksService } from '../claude-tool.js';
+import type { MessagesService, SessionsPatchClient, TasksService } from '../claude-tool.js';
 
 /**
  * Create canUseTool callback for permission handling
@@ -38,7 +38,7 @@ export function createCanUseToolCallback(
     tasksService: TasksService;
     messagesRepo: MessagesRepository;
     messagesService?: MessagesService;
-    sessionsService?: SessionsService;
+    sessionsService?: SessionsPatchClient;
     permissionLocks: Map<SessionID, Promise<void>>;
     mcpServerRepo: MCPServerRepository;
     sessionMCPRepo: SessionMCPServerRepository;

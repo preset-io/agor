@@ -142,8 +142,11 @@ export interface TasksStreamingService {
 /**
  * Service interface for updating sessions via FeathersJS
  * This ensures WebSocket events are emitted when sessions are updated (e.g., permission config)
+ *
+ * Named `SessionsPatchClient` to avoid shadowing the canonical `SessionsService`
+ * exported from `@agor/core/client`.
  */
-export interface SessionsService {
+export interface SessionsPatchClient {
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service accepts partial session updates
   patch(id: string, data: Partial<any>): Promise<any>;
 }
@@ -164,7 +167,7 @@ export class ClaudeTool implements ITool {
     permissionService?: PermissionService,
     private tasksService?: TasksService,
     private tasksStreamingService?: TasksStreamingService,
-    sessionsService?: SessionsService,
+    sessionsService?: SessionsPatchClient,
     worktreesRepo?: WorktreeRepository,
     reposRepo?: RepoRepository,
     mcpEnabled?: boolean,

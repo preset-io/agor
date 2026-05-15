@@ -8,7 +8,8 @@
  * Port/host are set via config.yaml (daemon.port / daemon.host) or env vars (PORT).
  */
 
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { AgorConfig } from '@agor/core/config';
 import { loadConfig, loadConfigFromFile } from '@agor/core/config';
 import { validateAllowedTiers, validateServiceDependencies } from '@agor-live/client';
@@ -191,11 +192,8 @@ export default class DaemonStart extends Command {
     this.log(chalk.yellow('Starting daemon without watch mode...'));
 
     // Resolve to compiled daemon entrypoint
-    const { fileURLToPath } = require('node:url');
-    const path = require('node:path');
-    const dirname =
-      typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
-    return resolve(dirname, '../../../agor-daemon/dist/main.js');
+    const here = dirname(fileURLToPath(import.meta.url));
+    return resolve(here, '../../../agor-daemon/dist/main.js');
   }
 
   private async loadConfigFromPath(configPath: string): Promise<AgorConfig> {

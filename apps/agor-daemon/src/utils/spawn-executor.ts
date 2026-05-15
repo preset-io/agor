@@ -562,32 +562,8 @@ export function createConfiguredSpawner(executionConfig?: ExecutorConfig) {
   };
 }
 
-// ============================================================================
-// DEPRECATED: Legacy exports for backward compatibility during migration
-// These will be removed once all callers are updated
-// ============================================================================
-
-/**
- * @deprecated Use spawnExecutor instead. This alias exists for backward compatibility.
- */
+// `spawnExecutorFireAndForget` is the canonical name used by ~10 call sites
+// across daemon/services and daemon/register-hooks. We keep it as the public
+// name because that's what callers expect; `spawnExecutor` remains the
+// underlying implementation.
 export const spawnExecutorFireAndForget = spawnExecutor;
-
-/**
- * @deprecated SpawnExecutorResult is no longer used since we don't wait for results.
- * Kept for backward compatibility during migration.
- */
-export interface SpawnExecutorResult {
-  success: boolean;
-  data?: Record<string, unknown>;
-  error?: {
-    code: string;
-    message: string;
-    details?: Record<string, unknown>;
-  };
-}
-
-/**
- * @deprecated FireAndForgetOptions is now just SpawnExecutorOptions.
- * Kept for backward compatibility during migration.
- */
-export type FireAndForgetOptions = SpawnExecutorOptions;

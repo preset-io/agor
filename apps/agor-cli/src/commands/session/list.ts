@@ -4,20 +4,13 @@
  * Displays sessions in a beautiful table with filters.
  */
 
+import type { PaginatedResult } from '@agor/core/types';
 import type { Session } from '@agor-live/client';
 import { formatShortId, PAGINATION, SessionStatus } from '@agor-live/client';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';
 import Table from 'cli-table3';
 import { BaseCommand } from '../../base-command';
-
-// Type for paginated responses
-interface Paginated<T> {
-  total: number;
-  limit: number;
-  skip: number;
-  data: T[];
-}
 
 export default class SessionList extends BaseCommand {
   static description = 'List all sessions';
@@ -141,8 +134,8 @@ export default class SessionList extends BaseCommand {
       const sessionsService = client.service('sessions');
       const result = await sessionsService.find({ query });
       const isPaginated = !Array.isArray(result);
-      const sessions = Array.isArray(result) ? result : (result as Paginated<Session>).data;
-      const total = isPaginated ? (result as Paginated<Session>).total : sessions.length;
+      const sessions = Array.isArray(result) ? result : (result as PaginatedResult<Session>).data;
+      const total = isPaginated ? (result as PaginatedResult<Session>).total : sessions.length;
 
       if (!Array.isArray(sessions) || sessions.length === 0) {
         this.log(chalk.dim('No sessions found.'));

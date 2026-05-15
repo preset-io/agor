@@ -345,20 +345,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // `/authentication` above — by the time we reach this hook the limiter
   // has already 429'd any over-quota request.
   authService.hooks({
-    before: {
-      create: [
-        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS context type not fully typed
-        async (context: any) => {
-          const data = Array.isArray(context.data) ? context.data[0] : context.data;
-          console.log('🔐 Authentication attempt:', {
-            strategy: data?.strategy,
-            email: data?.email,
-            hasPassword: !!data?.password,
-          });
-          return context;
-        },
-      ],
-    },
     after: {
       create: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS context type not fully typed
