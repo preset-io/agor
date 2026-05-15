@@ -34,6 +34,7 @@
  *   - Subagent JSONL discovery
  */
 
+import * as fs from 'node:fs';
 import os from 'node:os';
 import {
   buildClaudeCliSpawn,
@@ -42,9 +43,16 @@ import {
   claudeSessionJsonlPath,
   slugForCwd,
 } from '@agor/core/claude-cli';
-import { SessionRepository } from '@agor/core/db';
+import { SessionRepository, TaskRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { Session, SessionID } from '@agor/core/types';
+import {
+  type Session,
+  type SessionID,
+  SessionStatus,
+  type Task,
+  type TaskID,
+  TaskStatus,
+} from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import {
   ClaudeCliWatcherRegistry,
@@ -101,9 +109,63 @@ export function buildCliPersister(app: Application): CliWatcherStatePersister {
  * the same watcher lifetime. Cross-restart dedup relies on the persisted
  * `cli_state.watcher_offset` — we resume past previously-written bytes.
  */
+/**
+ * Cross-module hand-off from the `/sessions/:id/prompt` route to the watcher.
+ *
+ * When the user prompts via Agor's textarea (or MCP `agor_sessions_prompt`),
+ * the route creates a `tasks` row + writes the user message with that task_id
+ * — same flow as the SDK adapter. It then PTY-injects the prompt text into
+ * claude's REPL and stashes the pending task_id here. The watcher consumes it
+ * on the next `user_message` JSONL line, links subsequent assistant/tool
+ * messages to that same task_id, and closes the task on `turn_end`.
+ *
+ * Terminal-direct prompts (user types in the embedded xterm bypassing Agor's
+ * textarea) don't hit /prompt, so the map is empty when their `user_message`
+ * arrives — the watcher mints a task itself in that branch.
+ *
+ * One entry per session by design: the REPL is single-flight (claude doesn't
+ * accept a new prompt while a turn is mid-stream), so we never need to queue
+ * multiple pending tasks here.
+ */
+const pendingCliTask = new Map<SessionID, { taskId: TaskID; userMessageIndex: number }>();
+
+/** Set by `/sessions/:id/prompt` for CLI sessions right before PTY-injection. */
+export function setPendingCliTask(
+  sessionId: SessionID,
+  taskId: TaskID,
+  userMessageIndex: number
+): void {
+  pendingCliTask.set(sessionId, { taskId, userMessageIndex });
+}
+
+/**
+ * Build the event sink — translates the JSONL watcher's structured events
+ * into `tasks` + `messages` rows so the read-only Agor conversation tab
+ * renders CLI-driven turns through the same path as SDK-driven turns.
+ *
+ * Task lifecycle:
+ *   - On `user_message`: claim the pending task (textarea path) OR mint a new
+ *     task with status=RUNNING (terminal-direct path). Stamp every subsequent
+ *     message for this session with that task_id.
+ *   - On `assistant_message` / `tool_result`: tag with the active task_id.
+ *   - On `turn_end` (assistant `stop_reason === 'end_turn'`): patch the task
+ *     to COMPLETED + final `message_range`, patch the session back to IDLE.
+ *
+ * Index allocation: per-session in-memory counter primed from `countMessages`
+ * on first use. Cross-restart correctness comes from the persisted
+ * `cli_state.watcher_offset` — we resume past previously-written bytes.
+ */
 export function buildCliEventSink(app: Application): CliWatcherEventSink {
   // Per-session next-index cache. Primed from countMessages on first use.
   const indexBySession = new Map<string, number>();
+
+  // Per-session active turn — set on `user_message`, cleared on `turn_end`.
+  // The watcher uses this to stamp subsequent assistant/tool messages with
+  // the right task_id without re-reading the DB.
+  const activeCliTurn = new Map<
+    string,
+    { taskId: TaskID; userMessageIndex: number; lastIndex: number; lastTimestamp: string }
+  >();
 
   const nextIndex = async (sessionId: SessionID): Promise<number> => {
     const cached = indexBySession.get(sessionId);
@@ -140,6 +202,74 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
     }
   };
 
+  /** Get the DB handle; null if not yet initialized (test harness etc). */
+  const getDb = ():
+    | ConstructorParameters<typeof SessionRepository>[0]
+    | undefined =>
+    (app.get('database') ?? app.get('db')) as
+      | ConstructorParameters<typeof SessionRepository>[0]
+      | undefined;
+
+  /**
+   * Terminal-direct path: there's no pending task from /prompt, so mint one
+   * ourselves with status=RUNNING. Also patches the session row so the queue
+   * gate behaves and `session.tasks` shows the new id in the worktree pill.
+   */
+  const mintTaskForOrphanTurn = async (
+    sessionId: SessionID,
+    prompt: string,
+    userMessageIndex: number,
+    timestamp: string
+  ): Promise<TaskID | null> => {
+    const db = getDb();
+    if (!db) return null;
+    try {
+      const sessionRepo = new SessionRepository(db);
+      const session = await sessionRepo.findById(sessionId).catch(() => null);
+      if (!session) return null;
+      const taskRepo = new TaskRepository(db);
+      const task = (await taskRepo.create({
+        session_id: sessionId,
+        created_by: session.created_by,
+        full_prompt: prompt,
+        status: TaskStatus.RUNNING,
+        started_at: timestamp,
+        message_range: {
+          start_index: userMessageIndex,
+          end_index: userMessageIndex,
+          start_timestamp: timestamp,
+          end_timestamp: timestamp,
+        },
+        git_state: {
+          ref_at_start: session.git_state?.ref ?? '',
+          sha_at_start: session.git_state?.current_sha ?? '',
+        },
+        tool_use_count: 0,
+        metadata: { source: 'cli-repl' },
+      })) as Task;
+      app.service('tasks').emit('created', task);
+      // Patch session: RUNNING + append task id. The watcher's turn_end
+      // handler flips it back to IDLE.
+      await app
+        .service('sessions')
+        .patch(sessionId, {
+          status: SessionStatus.RUNNING,
+          ready_for_prompt: false,
+          tasks: [...session.tasks, task.task_id],
+        })
+        .catch((err: unknown) => {
+          console.warn(
+            '[claude-cli-watcher.sink] session patch (RUNNING) failed',
+            err
+          );
+        });
+      return task.task_id as TaskID;
+    } catch (err) {
+      console.warn('[claude-cli-watcher.sink] mintTaskForOrphanTurn failed', err);
+      return null;
+    }
+  };
+
   return async (sessionId, event) => {
     try {
       const messagesSvc = app.service('messages') as unknown as {
@@ -149,17 +279,77 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
 
       if (event.type === 'user_message') {
         if (event.isSidechain) return; // subagent rows skipped in v1
-        const idx = await nextIndex(sessionId);
+        const promptText =
+          typeof event.content === 'string'
+            ? event.content
+            : (() => {
+                try {
+                  return JSON.stringify(event.content);
+                } catch {
+                  return String(event.content ?? '');
+                }
+              })();
+        const ts = event.timestamp ?? baseTs;
+
+        // Textarea / MCP path: /prompt already created the task AND wrote the
+        // user message at userMessageIndex. We just need to prime the active
+        // turn tracker so subsequent assistant/tool messages get linked.
+        const pending = pendingCliTask.get(sessionId as SessionID);
+        if (pending) {
+          pendingCliTask.delete(sessionId as SessionID);
+          // Re-seed the index cache so our next write follows /prompt's user row.
+          indexBySession.set(sessionId, pending.userMessageIndex + 1);
+          activeCliTurn.set(sessionId, {
+            taskId: pending.taskId,
+            userMessageIndex: pending.userMessageIndex,
+            lastIndex: pending.userMessageIndex,
+            lastTimestamp: ts,
+          });
+          return;
+        }
+
+        // Terminal-direct path: mint a fresh task + write the user message
+        // ourselves. Index is allocated first so the task's message_range
+        // points at the row we're about to write.
+        const userIdx = await nextIndex(sessionId);
+        const taskId = await mintTaskForOrphanTurn(
+          sessionId as SessionID,
+          promptText,
+          userIdx,
+          ts
+        );
+        if (!taskId) {
+          // Couldn't mint task — write an orphan so we at least don't lose data.
+          await messagesSvc.create({
+            message_id: cryptoUuid(),
+            session_id: sessionId,
+            type: 'user',
+            role: 'user',
+            index: userIdx,
+            timestamp: ts,
+            content_preview: previewFor(event.content),
+            content: typeof event.content === 'string' ? event.content : (event.content ?? ''),
+            metadata: { source: 'cli-repl', original_id: event.uuid ?? undefined },
+          });
+          return;
+        }
         await messagesSvc.create({
           message_id: cryptoUuid(),
           session_id: sessionId,
+          task_id: taskId,
           type: 'user',
           role: 'user',
-          index: idx,
-          timestamp: event.timestamp ?? baseTs,
+          index: userIdx,
+          timestamp: ts,
           content_preview: previewFor(event.content),
           content: typeof event.content === 'string' ? event.content : (event.content ?? ''),
-          metadata: { source: 'agor', original_id: event.uuid ?? undefined },
+          metadata: { source: 'cli-repl', original_id: event.uuid ?? undefined },
+        });
+        activeCliTurn.set(sessionId, {
+          taskId,
+          userMessageIndex: userIdx,
+          lastIndex: userIdx,
+          lastTimestamp: ts,
         });
         return;
       }
@@ -168,13 +358,16 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         if (event.turn.isSidechain) return; // subagent v1 skip
         const idx = await nextIndex(sessionId);
         const content = event.turn.content;
+        const ts = event.turn.timestamp ?? baseTs;
+        const active = activeCliTurn.get(sessionId);
         await messagesSvc.create({
           message_id: cryptoUuid(),
           session_id: sessionId,
+          task_id: active?.taskId,
           type: 'assistant',
           role: 'assistant',
           index: idx,
-          timestamp: event.turn.timestamp ?? baseTs,
+          timestamp: ts,
           content_preview: previewFor(content),
           content,
           metadata: {
@@ -191,19 +384,26 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
               : undefined,
           },
         });
+        if (active) {
+          active.lastIndex = idx;
+          active.lastTimestamp = ts;
+        }
         return;
       }
 
       if (event.type === 'tool_result') {
         if (event.isSidechain) return;
         const idx = await nextIndex(sessionId);
+        const ts = event.timestamp ?? baseTs;
+        const active = activeCliTurn.get(sessionId);
         await messagesSvc.create({
           message_id: cryptoUuid(),
           session_id: sessionId,
+          task_id: active?.taskId,
           type: 'user',
           role: 'user',
           index: idx,
-          timestamp: event.timestamp ?? baseTs,
+          timestamp: ts,
           content_preview: previewFor(event.result),
           content: [
             {
@@ -214,11 +414,65 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
           ],
           metadata: { original_id: event.uuid ?? undefined },
         });
+        if (active) {
+          active.lastIndex = idx;
+          active.lastTimestamp = ts;
+        }
         return;
       }
 
-      // Other events — `turn_start` / `turn_end` / `ai_title` / `attachment` /
-      // `unknown` / `last_prompt` — surface as a single-line log for now.
+      if (event.type === 'turn_end') {
+        const active = activeCliTurn.get(sessionId);
+        if (!active) {
+          console.log(
+            JSON.stringify({
+              layer: 'claude-cli-watcher.sink',
+              sessionId,
+              eventType: 'turn_end',
+              note: 'no active turn — skipping close',
+            })
+          );
+          return;
+        }
+        activeCliTurn.delete(sessionId);
+        const ts = event.timestamp ?? active.lastTimestamp ?? baseTs;
+        // Patch task to COMPLETED with the full message_range now that we
+        // know the last index of the turn.
+        try {
+          await app.service('tasks').patch(active.taskId, {
+            status: TaskStatus.COMPLETED,
+            completed_at: ts,
+            message_range: {
+              start_index: active.userMessageIndex,
+              end_index: active.lastIndex,
+              end_timestamp: ts,
+            },
+          });
+        } catch (err) {
+          console.warn('[claude-cli-watcher.sink] task close failed', {
+            sessionId,
+            taskId: active.taskId,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+        // Flip the session back to IDLE so the prompt-queue gate stops
+        // routing prompts into the queue.
+        try {
+          await app.service('sessions').patch(sessionId, {
+            status: SessionStatus.IDLE,
+            ready_for_prompt: true,
+          });
+        } catch (err) {
+          console.warn('[claude-cli-watcher.sink] session IDLE patch failed', {
+            sessionId,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+        return;
+      }
+
+      // Other events — `turn_start` / `ai_title` / `attachment` / `unknown`
+      // / `last_prompt` — surface as a single-line log for now.
       console.log(
         JSON.stringify({
           layer: 'claude-cli-watcher.sink',
@@ -309,8 +563,18 @@ export function buildSpawnConfigForSession(
   session: Session,
   worktreeCwd: string
 ): ClaudeCliSpawnConfig {
+  // If the JSONL transcript for this session id already exists on disk,
+  // `claude --session-id <X>` errors out with "Session ID is already in
+  // use." — claude's --session-id is strictly "create-new." On Restart /
+  // reload-after-crash we want continuity, not a hard error, so switch
+  // to `--resume <X>` whenever the transcript file is present. claude
+  // treats --resume as idempotent across launches and preserves history.
+  const homeDir = resolveHomeDirForCliSession(session);
+  const jsonlPath = claudeSessionJsonlPath(homeDir, worktreeCwd, session.session_id);
+  const transcriptExists = fs.existsSync(jsonlPath);
   return {
-    sessionId: session.session_id,
+    sessionId: transcriptExists ? undefined : session.session_id,
+    resumeSessionId: transcriptExists ? session.session_id : undefined,
     displayName: `cli-${session.session_id.slice(0, 8)}`,
     model: session.model_config?.model,
     effort: session.model_config?.effort as ClaudeCliSpawnConfig['effort'] | undefined,

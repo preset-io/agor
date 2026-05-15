@@ -45,6 +45,7 @@ import type {
   SessionID,
   StreamingEventType,
   Task,
+  TaskID,
   User,
   UUID,
   WorktreeID,
@@ -1038,6 +1039,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // this code path; for CLI sessions we short-circuit before
     // `executeTask` and emit `terminal:input` instead.
     if (session.agentic_tool === 'claude-code-cli') {
+      // Hand the task off to the watcher BEFORE we PTY-inject. The watcher
+      // claims this task on the next `user_message` JSONL line and links
+      // every subsequent assistant/tool message to it — then closes it on
+      // `turn_end`. Without this stash, the watcher would mint a *new*
+      // task on that user line and we'd end up with two task rows per
+      // turn (the empty one from /prompt + the one the watcher minted).
+      //
+      // Import lazily to avoid pulling claude-cli-integration into the
+      // hot-path of every non-CLI prompt.
+      const { setPendingCliTask } = await import('./services/claude-cli-integration.js');
+      setPendingCliTask(
+        sessionId as SessionID,
+        taskId as TaskID,
+        messageStartIndex
+      );
+
       setImmediate(async () => {
         try {
           const targetUserId = session.created_by;
@@ -1076,29 +1093,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           console.log(
             `[claude-cli] PTY-injected prompt into ${channel} → tab ${tabName} (task ${taskId.substring(0, 8)}, ${promptForExecutor.length} chars)`
           );
-          // V1 lifecycle: the watcher writes turn events but does NOT yet
-          // bridge `turn_end` back to the task. Mark the task completed
-          // here so the session returns to IDLE and the next prompt can
-          // be enqueued. Once the watcher → TasksService bridge lands,
-          // this should be removed and the task should close on
-          // `assistant.stop_reason === 'end_turn'` instead.
-          await safePatch(
-            'tasks',
-            taskId,
-            {
-              status: TaskStatus.COMPLETED,
-              completed_at: new Date().toISOString(),
-            },
-            'Task',
-            params
-          );
-          await app
-            .service('sessions')
-            .patch(
-              sessionId,
-              { status: SessionStatus.IDLE, ready_for_prompt: true },
-              params
-            );
+          // Task lifecycle is now owned by the watcher's sink: it closes
+          // the task and patches the session back to IDLE on `turn_end`.
+          // We deliberately do NOT pre-complete here.
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           console.error(
@@ -1115,6 +1112,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             'Task',
             params
           );
+          // Failure path: also flip the session back to IDLE so the user
+          // can retry. The success path lets the watcher handle this on
+          // turn_end.
+          await app
+            .service('sessions')
+            .patch(
+              sessionId,
+              { status: SessionStatus.IDLE, ready_for_prompt: true },
+              params
+            )
+            .catch(() => {
+              /* best-effort */
+            });
         }
       });
       return updatedTask;
