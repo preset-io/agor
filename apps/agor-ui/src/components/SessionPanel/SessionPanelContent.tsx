@@ -9,7 +9,7 @@ import {
 import { Button, Divider, Space, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
-import { useAppEntityData } from '../../contexts/AppDataContext';
+import { useAppMcpData, useAppRepoData, useAppUserData } from '../../contexts/AppDataContext';
 import { copyToClipboard } from '../../utils/clipboard';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
@@ -60,9 +60,12 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     const { token } = theme.useToken();
     const { showSuccess, showError } = useThemedMessage();
 
-    // Get data from entity context only — keeps this panel insulated from
-    // session/worktree/board patches flowing through AppLiveDataContext.
-    const { userById, repoById, mcpServerById, userAuthenticatedMcpServerIds } = useAppEntityData();
+    // Subscribe only to the entity families this panel needs. This keeps the
+    // panel insulated from session/worktree/board patches and avoids unrelated
+    // entity churn (e.g. repo edits invalidating user/MCP consumers).
+    const { userById } = useAppUserData();
+    const { repoById } = useAppRepoData();
+    const { mcpServerById, userAuthenticatedMcpServerIds } = useAppMcpData();
 
     // Get actions from context
     const {

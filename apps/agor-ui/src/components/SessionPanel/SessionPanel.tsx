@@ -32,7 +32,7 @@ import { Alert, App, Badge, Button, Space, Spin, Tooltip, Typography, theme } fr
 import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
-import { useAppEntityData } from '../../contexts/AppDataContext';
+import { useAppMcpData, useAppUserData } from '../../contexts/AppDataContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { getContextWindowGradient } from '../../utils/contextWindow';
@@ -227,10 +227,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const { showSuccess, showInfo, showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
 
-  // Get data from entity context only — SessionPanel intentionally does NOT
-  // subscribe to live (sessions / worktrees / boards) data here, so streaming
-  // session patches don't trigger re-renders of this panel through context.
-  const { userById, mcpServerById, userAuthenticatedMcpServerIds } = useAppEntityData();
+  // Subscribe only to the entity families this panel needs. SessionPanel
+  // intentionally does NOT subscribe to live (sessions / worktrees / boards)
+  // data here, so streaming session patches don't trigger re-renders through
+  // context; user and MCP updates are also isolated from repo edits.
+  const { userById } = useAppUserData();
+  const { mcpServerById, userAuthenticatedMcpServerIds } = useAppMcpData();
 
   // Get actions from context
   const {

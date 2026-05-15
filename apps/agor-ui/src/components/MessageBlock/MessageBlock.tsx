@@ -230,8 +230,7 @@ function getAgentAvatar({
 // here because callers pass:
 //   - `message`: stable per message_id (only the actively streaming message
 //     gets a new ref each chunk — correct: it should re-render)
-//   - `userById`: from AppEntityDataContext (PR #1095 — stable across session
-//     patches)
+//   - `userById`: from AppUserDataContext (stable across session patches)
 //   - `currentUserId`, `agentic_tool`, `sessionId`, `taskId`, `assistantEmoji`,
 //     `isTaskRunning`, `isLatestMessage`, `isFirstPending*`: primitives or
 //     stable derived values
