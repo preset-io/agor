@@ -142,20 +142,11 @@ function AppContent() {
   // rows). Mounted exactly once so all consumers share the same baseline.
   const { capturedSha, currentSha, outOfSync } = useServerVersion(client);
 
-  // Fetch data and subscribe to real-time updates.
-  //
-  // We pass `client` directly rather than gating on `connected` — the client
-  // reference is stable across transient socket disconnects (the ref in
-  // useAgorClient only nulls out on logout, not on a socket drop). Gating on
-  // `connected` would null out `client` on every grace-period flip, which in
-  // turn triggered the "clear on logout" effect inside useAgorData and wiped
-  // every byId map. That cascaded into AgorApp's "stored board no longer
-  // exists → set currentBoardId('')" fallback, then on reconnect useUrlState
-  // built `/` from the empty board id and navigate()'d the user off `/b/<id>`.
-  // useAgorData handles transient disconnects internally: events stop arriving
-  // while down, then `client.io.on('connect')` runs a silent refetch on
-  // reconnect — so stale state survives the gap and gets refreshed seamlessly.
-  // Skip data fetch if user needs to change password - the ForcePasswordChangeModal will handle that.
+  // Pass the stable client lifetime, not `connected ? client : null`:
+  // useAgorData owns reconnect refetches and `null` is reserved for logout /
+  // token removal. See the reset-effect comment in useAgorData.ts for the full
+  // failure chain we're avoiding.
+  // Skip data fetch if user needs to change password — the ForcePasswordChangeModal handles that.
   const {
     sessionById,
     sessionsByWorktree,

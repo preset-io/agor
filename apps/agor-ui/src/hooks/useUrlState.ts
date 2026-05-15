@@ -199,11 +199,19 @@ export function useUrlState(options: UseUrlStateOptions) {
       lastUrlSessionParamRef.current = urlSessionParam;
     }
 
-    // Skip if URL hasn't changed AND we've already successfully resolved everything
-    // For board+session URLs, we need both to be resolved before stopping retries
+    // Skip if URL hasn't changed AND we've already resolved everything AND state
+    // still matches the URL. The `stateMatchesUrl` clause is the self-healing
+    // bit: if some upstream effect ever clears `currentBoardId` / `currentSessionId`
+    // (e.g. a stale wipe-on-disconnect regression), we re-resolve and restore
+    // state from the URL on the next data tick instead of letting the state→URL
+    // effect collapse `/b/<id>` to `/`. The `boardChanged`/`sessionChanged`
+    // checks below keep this idempotent on stable state.
     const fullyResolved =
       urlParamsResolvedRef.current.board && urlParamsResolvedRef.current.session;
-    if (!urlParamsChanged && fullyResolved) {
+    const stateMatchesUrl =
+      (!urlBoardParam || !!currentBoardIdRef.current) &&
+      (!urlSessionParam || !!currentSessionIdRef.current);
+    if (!urlParamsChanged && fullyResolved && stateMatchesUrl) {
       return;
     }
 
