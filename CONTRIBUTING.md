@@ -181,8 +181,33 @@ Closes #123
 
 - Reviews usually happen within 2-3 days
 - Maintainers may request changes or ask questions
-- CI checks must pass (linting, type checking)
+- CI checks must pass (see [CI shape](#ci-shape) below)
 - At least one maintainer approval required
+
+### CI shape
+
+PR pushes run a fast, opinionated set of checks; the slower / cross-Node-version
+matrix runs on merge to `main` and nightly.
+
+| When | Workflow | What runs |
+|------|----------|-----------|
+| Every PR push | `ci.yml` | install, typecheck, lint, build, unit tests, security audit — all on Node 22 |
+| Every PR push (publish-relevant paths) | `agor-live-smoke.yml` | Pack the published tarball, install with `npm`, boot the daemon, curl `/ui/` |
+| Push to `main` | `ci.yml` + `heavy-checks.yml` | Everything above **plus** `npm install agor-live` compat on Node 22, 24, 25 and an unconditional `agor-live-smoke` |
+| Nightly at 04:00 UTC | `heavy-checks.yml` | Same as the main-push heavy block. On failure, auto-opens / comments on a tracking issue labelled `ci-nightly-failure` |
+
+**Triggering an ad-hoc full run:** push the branch and run
+
+```bash
+gh workflow run heavy-checks.yml --ref <your-branch>
+```
+
+or use the *Run workflow* button on the Actions tab. The same goes for
+`agor-live-smoke.yml` if you only want to test the publish path.
+
+**Finding nightly failures:** filter issues by the `ci-nightly-failure` label —
+the auto-managed tracking issue collects every failed nightly until someone
+closes it after the run goes green.
 
 **Making changes:**
 

@@ -35,6 +35,10 @@ on:
       - 'pnpm-lock.yaml'
       - '.github/workflows/agor-live-smoke.yml'
   workflow_dispatch:
+  # Allow `heavy-checks.yml` (nightly + push-to-main) to invoke this
+  # unconditionally — bypasses the path filter so we catch regressions
+  # that slip in via paths the filter doesn't cover.
+  workflow_call:
 
 env:
   PNPM_VERSION: '9.15.1'

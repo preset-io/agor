@@ -1,3 +1,8 @@
+# Fast PR + main checks.
+#
+# Everything in this workflow is expected to pass on every PR push.
+# The slow / cross-Node-version / publish-path stuff lives in
+# `heavy-checks.yml` and runs on push-to-main + nightly cron, not per-PR.
 name: CI
 
 on:
@@ -186,68 +191,8 @@ jobs:
         if: always()
         run: pnpm audit --audit-level=high || true
 
-  node-compat:
-    name: Node ${{ matrix.node }} install compat
-    # Reproduces the user-facing #278 path: `npm install agor-live` on a
-    # given Node version. We isolate agor-live's runtime dependencies into
-    # a temp project (skipping the workspace:* @agor-live/client link, which
-    # only resolves at publish time) and run `npm install` so we get the
-    # real `EBADENGINE` warnings npm emits — pnpm uses different warning
-    # text and only reports the root manifest's engines, not transitive
-    # ones. We then dynamically load `node-pty` to confirm the native
-    # binary actually loads on the matrix Node version.
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        node: ['22', '24', '25']
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: ${{ matrix.node }}
-
-      - name: npm install agor-live's runtime deps in isolation
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/agor-compat"
-          cd "$RUNNER_TEMP/agor-compat"
-          node -e '
-            const fs = require("fs");
-            const pkg = require(process.env.GITHUB_WORKSPACE + "/packages/agor-live/package.json");
-            const deps = Object.fromEntries(
-              Object.entries(pkg.dependencies || {})
-                .filter(([_, v]) => !String(v).startsWith("workspace:"))
-            );
-            fs.writeFileSync("package.json", JSON.stringify({
-              name: "agor-compat", version: "0.0.0", private: true, dependencies: deps,
-            }, null, 2));
-          '
-          npm install --no-fund --no-audit 2>&1 | tee install.log
-          if grep -q "EBADENGINE" install.log; then
-            echo "::error::EBADENGINE warning on Node ${{ matrix.node }}"
-            grep -A 3 "EBADENGINE" install.log
-            exit 1
-          fi
-
-      - name: Load node-pty native binary on Node ${{ matrix.node }}
-        run: |
-          cd "$RUNNER_TEMP/agor-compat"
-          node -e '
-            (async () => {
-              const m = await import("node-pty");
-              if (typeof m.spawn !== "function") {
-                console.error("node-pty.spawn not a function"); process.exit(1);
-              }
-              const p = m.spawn("/bin/echo", ["ok"], {
-                name: "xterm", cols: 80, rows: 24, cwd: process.cwd(), env: process.env,
-              });
-              let out = "";
-              p.onData(d => { out += d; });
-              p.onExit(({ exitCode }) => {
-                console.log("exit:", exitCode, "stdout:", JSON.stringify(out));
-                process.exit(exitCode === 0 && out.includes("ok") ? 0 : 1);
-              });
-            })().catch(e => { console.error(e); process.exit(1); });
-          '
+  # The Node-version matrix (`npm install agor-live` compat across 22/24/25)
+  # used to live here. It now runs on push-to-main + nightly cron in
+  # `heavy-checks.yml`. PR pushes rely on the agor-live publish smoke test
+  # (which itself does `npm install` of the packed tarball on Node 22) to
+  # catch publish-path regressions when publish-relevant paths change.
