@@ -13,6 +13,7 @@ vi.mock('../../config.js', () => ({
 }));
 
 import { Claude } from '@agor/core/sdk';
+import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
 import { type QuerySetupDeps, setupQuery } from './query-builder.js';
 
 describe('setupQuery - Local Settings Support', () => {
@@ -56,18 +57,15 @@ describe('setupQuery - Local Settings Support', () => {
 
   // Regression for #1177: AskUserQuestion's `canUseTool` callback blocked
   // the executor waiting for a UI answer that never arrives in gateway
-  // channels (Slack). EnterWorktree/ExitWorktree conflict with Agor's
-  // worktree management; ExitPlanMode only makes sense in Claude Code's
-  // interactive plan-mode UX. All four are removed from the model context.
-  it('disallows interactive / Agor-incompatible built-in tools', async () => {
+  // channels (Slack). The full disallow list also covers ExitPlanMode and
+  // EnterWorktree/ExitWorktree — see `constants.ts` for the rationale.
+  it('passes the Claude Code disallowed-tools list to the SDK', async () => {
     const deps = createMockDeps();
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
     const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
-    expect(callArgs.options.disallowedTools).toEqual(
-      expect.arrayContaining(['AskUserQuestion', 'ExitPlanMode', 'EnterWorktree', 'ExitWorktree'])
-    );
+    expect(callArgs.options.disallowedTools).toEqual(CLAUDE_CODE_DISALLOWED_TOOLS);
   });
 });
 
