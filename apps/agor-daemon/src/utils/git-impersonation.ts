@@ -24,6 +24,35 @@ import type { UserID, Worktree } from '@agor/core/types';
 import { validateResolvedUnixUser } from '@agor/core/unix';
 
 /**
+ * Resolve the validated daemon user for `sudo -u` group-refresh wrapping,
+ * or `undefined` when no wrap is needed.
+ *
+ * This is the core primitive: pure config + validation, no user/db state.
+ * Used both by git-execute spawn paths (via `resolveGitImpersonationForUser`)
+ * and by in-process shell capture (`git-shell-capture.ts`). Keeping a
+ * single source of truth prevents the drift that caused #1143 — the same
+ * stale gate copy-pasted across files.
+ *
+ * Dynamic config import is intentional: `loadConfigSync` reads from disk
+ * and we don't want to pay that cost at module-load time.
+ */
+export async function resolveDaemonUserForGroupRefresh(): Promise<string | undefined> {
+  const { getDaemonUser, isUnixGroupRefreshNeeded } = await import('@agor/core/config');
+
+  // No supplemental groups → no need for sudo. Avoids requiring sudoers
+  // for users on the default open-access setup. (#1140, #1143)
+  if (!isUnixGroupRefreshNeeded()) {
+    return undefined;
+  }
+
+  const daemonUser = getDaemonUser();
+  if (daemonUser) {
+    validateResolvedUnixUser('simple', daemonUser);
+  }
+  return daemonUser;
+}
+
+/**
  * Resolve Unix user for git operations.
  *
  * Returns the daemon user when group refresh via `sudo -u` is needed
@@ -44,19 +73,7 @@ export async function resolveGitImpersonationForUser(
   _db: Database,
   _userId: UserID | undefined
 ): Promise<string | undefined> {
-  const { getDaemonUser, isUnixGroupRefreshNeeded } = await import('@agor/core/config');
-
-  // No supplemental groups → no need for sudo. Avoids requiring sudoers
-  // for users on the default open-access setup. (#1140, #1143)
-  if (!isUnixGroupRefreshNeeded()) {
-    return undefined;
-  }
-
-  const daemonUser = getDaemonUser();
-  if (daemonUser) {
-    validateResolvedUnixUser('simple', daemonUser);
-  }
-  return daemonUser;
+  return resolveDaemonUserForGroupRefresh();
 }
 
 /**

@@ -11,32 +11,13 @@
  * access default (no RBAC, simple mode) no such groups exist, so we run the
  * git command directly — this avoids requiring sudoers config (#1140).
  *
- * @see git-impersonation.ts for the same pattern used in git clone/worktree operations
+ * Gating uses the shared `resolveDaemonUserForGroupRefresh` primitive from
+ * `git-impersonation.ts` so there is one source of truth (#1143 hoisted
+ * the gate into that primitive).
  */
 
-import { runAsUser, validateResolvedUnixUser } from '@agor/core/unix';
-
-/**
- * Resolve and validate the daemon user for sudo -u impersonation.
- *
- * Returns `undefined` when no supplemental groups exist (no RBAC, simple
- * unix mode), so `runAsUser` runs the command directly without sudo. This
- * matches the gating in {@link ../utils/git-impersonation.ts} and avoids
- * the "user not in sudoers" failure on default open-access setups (#1140).
- *
- * @returns Validated daemon username, or undefined if no group refresh is needed
- */
-async function resolveValidatedDaemonUser(): Promise<string | undefined> {
-  const { getDaemonUser, isUnixGroupRefreshNeeded } = await import('@agor/core/config');
-  if (!isUnixGroupRefreshNeeded()) {
-    return undefined;
-  }
-  const daemonUser = getDaemonUser();
-  if (daemonUser) {
-    validateResolvedUnixUser('simple', daemonUser);
-  }
-  return daemonUser;
-}
+import { runAsUser } from '@agor/core/unix';
+import { resolveDaemonUserForGroupRefresh } from './git-impersonation.js';
 
 /**
  * Capture git SHA and branch ref via shell commands
@@ -51,7 +32,7 @@ async function resolveValidatedDaemonUser(): Promise<string | undefined> {
 export async function captureGitStateViaShell(
   worktreePath: string
 ): Promise<{ sha: string; ref: string }> {
-  const daemonUser = await resolveValidatedDaemonUser();
+  const daemonUser = await resolveDaemonUserForGroupRefresh();
   const runOpts = { asUser: daemonUser, timeout: 10000 };
 
   let sha = 'unknown';
