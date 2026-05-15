@@ -72,7 +72,6 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
       onNukeEnvironment,
       onViewLogs,
       onPermissionDecision,
-      onInputResponse,
     } = useAppActions();
 
     // Get repo from worktree
@@ -168,7 +167,6 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
           currentUserId={currentUserId}
           onScrollRef={handleScrollRef}
           onPermissionDecision={onPermissionDecision}
-          onInputResponse={onInputResponse}
           worktreeName={worktree?.name}
           scheduledFromWorktree={session.scheduled_from_worktree}
           scheduledRunAt={session.scheduled_run_at}

@@ -331,9 +331,6 @@ export interface AgorExecutionSettings {
   /** Permission request timeout in ms (default: 600000 = 10 minutes). When a permission request is not resolved within this time, the agent is notified and can continue. */
   permission_timeout_ms?: number;
 
-  /** Input request timeout in ms (default: 1800000 = 30 minutes). Applies to AskUserQuestion widgets. When the user does not respond within this time, the request is resolved as `timedOut` and the agent continues. */
-  input_request_timeout_ms?: number;
-
   /**
    * Stateless filesystem mode for headless/k8s deployments without persistent volumes.
    *

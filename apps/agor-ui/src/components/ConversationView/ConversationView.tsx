@@ -93,17 +93,6 @@ export interface ConversationViewProps {
   ) => void;
 
   /**
-   * Input response handler (AskUserQuestion answers)
-   */
-  onInputResponse?: (
-    sessionId: string,
-    requestId: string,
-    taskId: string,
-    answers: Record<string, string>,
-    annotations?: Record<string, { markdown?: string; notes?: string }>
-  ) => void;
-
-  /**
    * Worktree name for hiding redundant branch names
    */
   worktreeName?: string;
@@ -156,7 +145,6 @@ export const ConversationView = React.memo<ConversationViewProps>(
     currentUserId,
     onScrollRef,
     onPermissionDecision,
-    onInputResponse,
     worktreeName,
     scheduledFromWorktree,
     scheduledRunAt,
@@ -480,7 +468,6 @@ export const ConversationView = React.memo<ConversationViewProps>(
             onExpandChange={expandHandlers.get(task.task_id)!}
             sessionId={sessionId}
             onPermissionDecision={onPermissionDecision}
-            onInputResponse={onInputResponse}
             worktreeName={worktreeName}
             scheduledFromWorktree={scheduledFromWorktree}
             scheduledRunAt={scheduledRunAt}

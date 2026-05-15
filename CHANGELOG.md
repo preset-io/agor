@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- **Stop AskUserQuestion from hanging gateway sessions (#1177)** — disallow `AskUserQuestion`, `ExitPlanMode`, `EnterWorktree`, and `ExitWorktree` at the SDK layer via `disallowedTools` so the model never invokes them. The interactive question widget previously blocked the executor waiting for a UI response that never arrives in Slack/gateway channels; the agent now inlines its choices in normal text and the user replies as a regular turn. Removes the `InputRequestService`/`InputRequestManager`/`InputRequestBlock` machinery, the `/sessions/:id/input-response` daemon route, the `input_resolved` Feathers event, and the `execution.input_request_timeout_ms` config option. Disallowed tools are unioned with whatever `~/.claude/settings.json`'s `permissions.deny` already contains.
+
 ## 0.16.1 (2026-04-04)
 
 ### Features

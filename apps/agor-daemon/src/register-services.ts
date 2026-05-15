@@ -225,7 +225,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       'thinking:chunk',
       'thinking:end',
       'permission_resolved',
-      'input_resolved',
     ],
     docs: {
       description: 'Conversation messages within AI agent sessions',

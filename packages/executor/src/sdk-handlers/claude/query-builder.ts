@@ -35,6 +35,26 @@ import { DEFAULT_CLAUDE_MODEL } from './models.js';
 import { createCanUseToolCallback } from './permissions/permission-hooks.js';
 
 /**
+ * Built-in Claude SDK tools that don't fit Agor's execution model.
+ *
+ * Agor sessions run non-interactively — there's no TTY, no shell-bound user,
+ * and (in gateway channels like Slack) no UI to render an inline prompt. Tools
+ * that require synchronous user interaction or that compete with Agor's own
+ * worktree management have to be removed from the model's context entirely.
+ *
+ * - AskUserQuestion: blocks the executor waiting for an out-of-band answer.
+ *   Hangs silently in Slack (#1177); the agent should inline its A/B/C
+ *   choices in normal text and let the user reply as a new turn.
+ * - ExitPlanMode: only meaningful inside Claude Code's interactive plan-mode
+ *   UX. Agor doesn't expose plan-mode approval; the agent should produce
+ *   plans as text in its response.
+ * - EnterWorktree / ExitWorktree: Agor owns worktree lifecycle. Letting the
+ *   agent create/switch/remove worktrees from inside its own session would
+ *   nest worktrees on the same branch and could delete the session's CWD.
+ */
+const AGOR_DISALLOWED_TOOLS = ['AskUserQuestion', 'ExitPlanMode', 'EnterWorktree', 'ExitWorktree'];
+
+/**
  * Summarize MCP config for logging without exposing sensitive env values.
  * Returns a safe object showing server names and transport types only.
  */
@@ -106,7 +126,6 @@ export interface QuerySetupDeps {
   sessionMCPRepo?: SessionMCPServerRepository;
   mcpServerRepo?: MCPServerRepository;
   permissionService?: PermissionService;
-  inputRequestService?: import('../../input-requests/input-request-service.js').InputRequestService;
   tasksService?: TasksService;
   sessionsService?: SessionsService;
   messagesService?: MessagesService;
@@ -268,6 +287,9 @@ export async function setupQuery(
       append: agorSystemPrompt, // Append rich Agor context (session, worktree, repo)
     },
     settingSources: ['user', 'project', 'local'], // Load user + project + local permissions, auto-loads CLAUDE.md
+    // Disallowed tools are unioned with whatever settings.json's permissions.deny
+    // already contains — the SDK removes them from the model's context entirely.
+    disallowedTools: AGOR_DISALLOWED_TOOLS,
     model, // Use configured model or default
     pathToClaudeCodeExecutable: claudeCodePath,
     // Allow access to common directories outside CWD (e.g., /tmp)
@@ -321,22 +343,22 @@ export async function setupQuery(
     console.log(`🔬 Beta flags: ${betas.join(', ')}`);
   }
 
-  // Add canUseTool callback if permission service is available and taskId provided
-  // This enables Agor's custom permission UI (WebSocket-based) when SDK would show a prompt
-  // Fires AFTER SDK checks settings.json - respects user's existing Claude CLI permissions!
+  // Add canUseTool callback if permission service is available and taskId provided.
+  // This enables Agor's custom permission UI (WebSocket-based) when the SDK would
+  // show a prompt. Fires AFTER the SDK checks settings.json — respects user's
+  // existing Claude CLI permissions.
   //
-  // We register canUseTool even in `bypassPermissions` mode. AskUserQuestion's tool
-  // descriptor sets `requiresUserInteraction: true`, which makes the SDK's permission
-  // resolver return `{behavior: "ask", message: "Answer questions?"}` BEFORE checking
-  // the bypass-mode shortcut (see @anthropic-ai/claude-agent-sdk 0.2.x). With no
-  // canUseTool registered, the SDK's default deny fires and the model receives
-  // "Answer questions?" as the tool error — bypassing Agor's input-request UI.
-  // The callback itself fast-paths non-AskUserQuestion tools to `allow` when in
-  // bypass mode so the rest of bypass semantics are preserved.
-  if (deps.permissionService && taskId && deps.sessionMCPRepo && deps.mcpServerRepo) {
+  // Skip in bypassPermissions mode: the SDK skips canUseTool there anyway, and
+  // we no longer need a workaround to intercept AskUserQuestion (now disallowed).
+  if (
+    deps.permissionService &&
+    taskId &&
+    deps.sessionMCPRepo &&
+    deps.mcpServerRepo &&
+    effectivePermissionMode !== 'bypassPermissions'
+  ) {
     queryOptions.canUseTool = createCanUseToolCallback(sessionId, taskId, {
       permissionService: deps.permissionService,
-      inputRequestService: deps.inputRequestService,
       tasksService: deps.tasksService!,
       sessionsRepo: deps.sessionsRepo,
       messagesRepo: deps.messagesRepo!,
@@ -345,11 +367,8 @@ export async function setupQuery(
       permissionLocks: deps.permissionLocks,
       mcpServerRepo: deps.mcpServerRepo,
       sessionMCPRepo: deps.sessionMCPRepo,
-      permissionMode: effectivePermissionMode,
     });
     console.log(`✅ canUseTool callback added (permission mode: ${effectivePermissionMode})`);
-    console.log(`   SDK will check settings.json first, then call Agor UI if needed`);
-    console.log(`   Using SDK's built-in permission persistence (updatedPermissions)`);
   }
 
   // Add optional apiKey if provided

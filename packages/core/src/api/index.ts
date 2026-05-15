@@ -192,7 +192,7 @@ export interface AgorService<
   // Event emitter methods (for real-time updates)
   // Standard CRUD events use the service entity type T
   on(event: 'created' | 'updated' | 'patched' | 'removed', handler: (data: T) => void): void;
-  // Custom events (e.g. permission_resolved, input_resolved, queued)
+  // Custom events (e.g. permission_resolved, queued)
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS event handlers have varied signatures
   on(event: string, handler: (...args: any[]) => void): void;
   off(event: 'created' | 'updated' | 'patched' | 'removed', handler: (data: T) => void): void;

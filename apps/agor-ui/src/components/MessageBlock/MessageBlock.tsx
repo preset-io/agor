@@ -12,8 +12,6 @@
 import {
   type ContentBlock as CoreContentBlock,
   type DiffEnrichment,
-  type InputRequestContent,
-  InputRequestStatus,
   type Message,
   type PermissionRequestContent,
   PermissionScope,
@@ -31,7 +29,6 @@ import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
 import { AgorAvatar } from '../AgorAvatar';
 import { CollapsibleMarkdown } from '../CollapsibleText/CollapsibleMarkdown';
 import { CopyableContent } from '../CopyableContent';
-import { InputRequestBlock } from '../InputRequestBlock';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { PermissionRequestBlock } from '../PermissionRequestBlock';
 import { SystemMessage } from '../SystemMessage';
@@ -84,7 +81,6 @@ interface MessageBlockProps {
   sessionId?: string | null;
   taskId?: string;
   isFirstPendingPermission?: boolean; // For sequencing permission requests
-  isFirstPendingInput?: boolean; // For sequencing input requests
   isLatestMessage?: boolean; // Whether this is the most recent message (don't collapse by default)
   allMessages?: Message[]; // All messages for aggregation (e.g., finding matching compaction events)
   assistantEmoji?: string; // Emoji override for assistant avatar (replaces tool icon)
@@ -94,13 +90,6 @@ interface MessageBlockProps {
     taskId: string,
     allow: boolean,
     scope: PermissionScope
-  ) => void;
-  onInputResponse?: (
-    sessionId: string,
-    requestId: string,
-    taskId: string,
-    answers: Record<string, string>,
-    annotations?: Record<string, { markdown?: string; notes?: string }>
   ) => void;
 }
 
@@ -245,11 +234,9 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
   sessionId,
   taskId,
   isFirstPendingPermission = false,
-  isFirstPendingInput = false,
   isLatestMessage = false,
   allMessages = [],
   onPermissionDecision,
-  onInputResponse,
   assistantEmoji,
 }) => {
   const { token } = theme.useToken();
@@ -295,28 +282,11 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
     );
   }
 
-  // Handle input request messages (AskUserQuestion)
+  // Legacy `input_request` messages (from before AskUserQuestion was disallowed
+  // in #1177) are skipped — the interactive widget no longer ships, and the
+  // surrounding agent text already carries the question/answer context.
   if (message.type === 'input_request') {
-    const content = message.content as InputRequestContent;
-    const isPending = content.status === InputRequestStatus.PENDING;
-    const canInteract = isPending && isFirstPendingInput;
-
-    return (
-      <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>
-        <InputRequestBlock
-          message={message}
-          content={content}
-          isActive={canInteract}
-          onSubmit={
-            canInteract && onInputResponse && sessionId && taskId
-              ? (_messageId, answers, annotations) => {
-                  onInputResponse(sessionId, content.request_id, taskId, answers, annotations);
-                }
-              : undefined
-          }
-        />
-      </div>
-    );
+    return null;
   }
 
   // Check if this is a Task tool prompt or result (agent-generated, but has user role)

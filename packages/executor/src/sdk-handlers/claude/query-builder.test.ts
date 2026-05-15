@@ -53,6 +53,22 @@ describe('setupQuery - Local Settings Support', () => {
       expect.arrayContaining(['user', 'project', 'local'])
     );
   });
+
+  // Regression for #1177: AskUserQuestion's `canUseTool` callback blocked
+  // the executor waiting for a UI answer that never arrives in gateway
+  // channels (Slack). EnterWorktree/ExitWorktree conflict with Agor's
+  // worktree management; ExitPlanMode only makes sense in Claude Code's
+  // interactive plan-mode UX. All four are removed from the model context.
+  it('disallows interactive / Agor-incompatible built-in tools', async () => {
+    const deps = createMockDeps();
+
+    await setupQuery('test-session' as SessionID, 'test prompt', deps);
+
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    expect(callArgs.options.disallowedTools).toEqual(
+      expect.arrayContaining(['AskUserQuestion', 'ExitPlanMode', 'EnterWorktree', 'ExitWorktree'])
+    );
+  });
 });
 
 describe('setupQuery - canUseTool registration', () => {
@@ -82,17 +98,15 @@ describe('setupQuery - canUseTool registration', () => {
       tasksService: {} as any,
       messagesService: {} as any,
       sessionsService: {} as any,
-      inputRequestService: {} as any,
       permissionLocks: new Map(),
     };
   }
 
-  // Regression guard for the AskUserQuestion widget bug: the SDK's
-  // `requiresUserInteraction` short-circuit forces AskUserQuestion through
-  // canUseTool even in `bypassPermissions` mode. If we don't register the
-  // callback, the SDK falls back to its default deny and surfaces
-  // "Answer questions?" to the model instead of routing to Agor's UI.
-  it('registers canUseTool when permissionMode is "bypassPermissions"', async () => {
+  // With AskUserQuestion now disallowed (#1177), the SDK no longer needs
+  // canUseTool registered in bypass mode — the previous workaround that
+  // forced registration to intercept AskUserQuestion is gone. Bypass mode
+  // should now skip canUseTool entirely, matching SDK semantics.
+  it('does not register canUseTool when permissionMode is "bypassPermissions"', async () => {
     const deps = createPermissionDeps();
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps, {
@@ -101,7 +115,7 @@ describe('setupQuery - canUseTool registration', () => {
     });
 
     const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
-    expect(callArgs.options.canUseTool).toBeTypeOf('function');
+    expect(callArgs.options.canUseTool).toBeUndefined();
     expect(callArgs.options.permissionMode).toBe('bypassPermissions');
   });
 

@@ -11,8 +11,6 @@
 
 import type { StreamingMessageState } from '@agor-live/client';
 import {
-  type InputRequestContent,
-  InputRequestStatus,
   type Message,
   type MessageID,
   MessageRole,
@@ -83,13 +81,6 @@ interface TaskBlockProps {
     taskId: string,
     allow: boolean,
     scope: PermissionScope
-  ) => void;
-  onInputResponse?: (
-    sessionId: string,
-    requestId: string,
-    taskId: string,
-    answers: Record<string, string>,
-    annotations?: Record<string, { markdown?: string; notes?: string }>
   ) => void;
   worktreeName?: string;
   scheduledFromWorktree?: boolean;
@@ -361,7 +352,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     onExpandChange,
     sessionId,
     onPermissionDecision,
-    onInputResponse,
     worktreeName,
     scheduledFromWorktree,
     scheduledRunAt,
@@ -631,23 +621,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                         }
                       }
 
-                      // Find if this is an input request and if it's the first pending one
-                      const isInputRequest = block.message.type === 'input_request';
-                      let isFirstPendingInput = false;
-
-                      if (isInputRequest) {
-                        const content = block.message.content as InputRequestContent;
-                        if (content.status === InputRequestStatus.PENDING) {
-                          isFirstPendingInput = !blocks.slice(0, blockIndex).some((b) => {
-                            if (b.type === 'message' && b.message.type === 'input_request') {
-                              const c = b.message.content as InputRequestContent;
-                              return c.status === InputRequestStatus.PENDING;
-                            }
-                            return false;
-                          });
-                        }
-                      }
-
                       // Render SDK status messages (rate limit, API wait, etc.) with dedicated component
                       if (isSdkStatusMessage(block.message)) {
                         return (
@@ -674,9 +647,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                           isTaskRunning={task.status === TaskStatus.RUNNING}
                           sessionId={sessionId}
                           onPermissionDecision={onPermissionDecision}
-                          onInputResponse={onInputResponse}
                           isFirstPendingPermission={isFirstPending}
-                          isFirstPendingInput={isFirstPendingInput}
                           isLatestMessage={isLatestMessage}
                           taskId={task.task_id}
                           allMessages={messages}

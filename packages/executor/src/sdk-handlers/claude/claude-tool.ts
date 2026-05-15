@@ -169,7 +169,6 @@ export class ClaudeTool implements ITool {
     reposRepo?: RepoRepository,
     mcpEnabled?: boolean,
     _useNativeAuth?: boolean, // Claude supports `claude login` OAuth, but no special handling needed in tool
-    inputRequestService?: import('../../input-requests/input-request-service').InputRequestService,
     usersRepo?: import('../../db/feathers-repositories').UsersRepository
   ) {
     if (messagesRepo && sessionsRepo) {
@@ -186,7 +185,6 @@ export class ClaudeTool implements ITool {
         reposRepo,
         messagesService,
         mcpEnabled,
-        inputRequestService,
         usersRepo
       );
     }

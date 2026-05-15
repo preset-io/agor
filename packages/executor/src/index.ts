@@ -15,7 +15,6 @@ import type {
   SessionID,
   TaskID,
 } from '@agor/core/types';
-import { globalInputRequestManager } from './input-requests/input-request-manager.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
 
@@ -122,30 +121,6 @@ export class AgorExecutor {
           remember: event.remember,
           scope: event.scope as PermissionScope,
           decidedBy: event.decidedBy,
-        });
-      }
-    });
-
-    // Listen for input_resolved events (AskUserQuestion responses)
-    this.client.service('messages').on('input_resolved', (data: unknown) => {
-      const event = data as {
-        requestId: string;
-        taskId: string;
-        sessionId: string;
-        answers: Record<string, string>;
-        annotations?: Record<string, { markdown?: string; notes?: string }>;
-        respondedBy: string;
-      };
-      console.log('[executor] Received input_resolved event:', event);
-
-      if (event.taskId === this.config.taskId) {
-        // Forward to global input request manager
-        globalInputRequestManager.resolveInput({
-          requestId: event.requestId,
-          taskId: event.taskId as TaskID,
-          answers: event.answers,
-          annotations: event.annotations,
-          respondedBy: event.respondedBy,
         });
       }
     });

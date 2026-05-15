@@ -24,13 +24,6 @@ export interface AppActionsContextValue {
     allow: boolean,
     scope: PermissionScope
   ) => void;
-  onInputResponse?: (
-    sessionId: string,
-    requestId: string,
-    taskId: string,
-    answers: Record<string, string>,
-    annotations?: Record<string, { markdown?: string; notes?: string }>
-  ) => void;
 
   // Worktree/Environment actions
   onStartEnvironment?: (worktreeId: string) => void;

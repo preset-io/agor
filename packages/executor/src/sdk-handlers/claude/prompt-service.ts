@@ -66,7 +66,6 @@ export class ClaudePromptService {
     private reposRepo?: import('../../db/feathers-repositories').RepoRepository,
     private messagesService?: import('./claude-tool').MessagesService, // FeathersJS Messages service for creating permission requests
     private mcpEnabled?: boolean,
-    private inputRequestService?: import('../../input-requests/input-request-service').InputRequestService,
     private usersRepo?: UsersRepository
   ) {
     // No client initialization needed - Agent SDK is stateless
@@ -185,7 +184,6 @@ If you continue to see authentication errors, please contact your Agor administr
         sessionMCPRepo: this.sessionMCPRepo,
         mcpServerRepo: this.mcpServerRepo,
         permissionService: this.permissionService,
-        inputRequestService: this.inputRequestService,
         tasksService: this.tasksService,
         mcpEnabled: this.mcpEnabled,
         sessionsService: this.sessionsService,
@@ -354,7 +352,6 @@ If you continue to see authentication errors, please contact your Agor administr
         sessionMCPRepo: this.sessionMCPRepo,
         mcpServerRepo: this.mcpServerRepo,
         permissionService: this.permissionService,
-        inputRequestService: this.inputRequestService,
         tasksService: this.tasksService,
         mcpEnabled: this.mcpEnabled,
         sessionsService: this.sessionsService,

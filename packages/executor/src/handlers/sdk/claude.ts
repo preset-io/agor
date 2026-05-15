@@ -7,8 +7,6 @@
 import { loadConfig } from '@agor/core/config';
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import { TOOL_API_KEY_NAMES } from '@agor/core/types';
-import { globalInputRequestManager } from '../../input-requests/input-request-manager.js';
-import { InputRequestService } from '../../input-requests/input-request-service.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { PermissionService } from '../../permissions/permission-service.js';
 import { ClaudeTool } from '../../sdk-handlers/claude/claude-tool.js';
@@ -33,10 +31,9 @@ export async function executeClaudeCodeTask(params: {
   // Import base executor helper
   const { executeToolTask } = await import('./base-executor.js');
 
-  // Load config for permission + input-request timeouts
+  // Load config for permission timeout
   const config = await loadConfig();
   const permissionTimeoutMs = config.execution?.permission_timeout_ms ?? 600_000; // default: 10 minutes
-  const inputRequestTimeoutMs = config.execution?.input_request_timeout_ms ?? 1_800_000; // default: 30 minutes
 
   // Create PermissionService that emits via Feathers WebSocket
   const permissionService = new PermissionService(async (event, data) => {
@@ -44,14 +41,8 @@ export async function executeClaudeCodeTask(params: {
     client.service('sessions').emit(event, data);
   }, permissionTimeoutMs);
 
-  // Create InputRequestService that emits via Feathers WebSocket
-  const inputRequestService = new InputRequestService(async (event, data) => {
-    client.service('sessions').emit(event, data);
-  }, inputRequestTimeoutMs);
-
-  // Register with global managers
+  // Register with global manager
   globalPermissionManager.register(sessionId, permissionService);
-  globalInputRequestManager.register(sessionId, inputRequestService);
 
   try {
     // Execute using base helper with Claude-specific factory
@@ -75,13 +66,10 @@ export async function executeClaudeCodeTask(params: {
           repos.repos,
           true, // mcpEnabled
           useNativeAuth, // Flag for Claude CLI OAuth (`claude login`)
-          inputRequestService,
           repos.users
         ),
     });
   } finally {
-    // Unregister from global managers
     globalPermissionManager.unregister(sessionId);
-    globalInputRequestManager.unregister(sessionId);
   }
 }
