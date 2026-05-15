@@ -219,7 +219,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Sudo wrap (asUser) is gated inside the resolver — returns undefined
     // in simple/no-RBAC mode so hosts without passwordless sudoers work
     // (#1140, #1143). Callers no longer duplicate the gate.
-    const asUser = userId ? await resolveGitImpersonationForUser(this.db, userId) : undefined;
+    const asUser = await resolveGitImpersonationForUser(this.db, userId);
 
     // Pre-create the repo row with `clone_status: 'cloning'` so failures stay
     // queryable via `agor_repos_get(repoId)`. Pre-#1126 the row was only
@@ -907,7 +907,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       // Sudo wrap (asUser) is gated inside the resolver — returns undefined
       // in simple/no-RBAC mode so hosts without passwordless sudoers work
       // (#1140, #1143). Callers no longer duplicate the gate.
-      const asUser = userId ? await resolveGitImpersonationForUser(this.db, userId) : undefined;
+      const asUser = await resolveGitImpersonationForUser(this.db, userId);
 
       spawnExecutorFireAndForget(
         {

@@ -83,6 +83,20 @@ describe('resolveGitImpersonationForUser', () => {
     const result = await resolveGitImpersonationForUser(fakeDb, fakeUserId);
     expect(result).toBeUndefined();
   });
+
+  // The resolver is the SOLE gate — callers (including service-account paths
+  // that don't carry a userId) should be able to invoke it unconditionally.
+  // This pins that contract so a future caller that drops the inline
+  // `userId ?` check (as repos.ts did in #1143) doesn't regress.
+  it('accepts an undefined userId and still applies the group-refresh gate', async () => {
+    mockIsUnixGroupRefreshNeeded.mockReturnValue(false);
+    const noUser = await resolveGitImpersonationForUser(fakeDb, undefined);
+    expect(noUser).toBeUndefined();
+
+    mockIsUnixGroupRefreshNeeded.mockReturnValue(true);
+    const refreshNeeded = await resolveGitImpersonationForUser(fakeDb, undefined);
+    expect(refreshNeeded).toBe('agorpg');
+  });
 });
 
 describe('resolveGitImpersonationForWorktree', () => {

@@ -33,13 +33,16 @@ import { validateResolvedUnixUser } from '@agor/core/unix';
  *
  * @param db - Database instance (unused today, kept on the signature for
  *             the planned per-user resolution refactor)
- * @param userId - User ID (same — unused today, reserved for per-user
- *                 impersonation in strict mode)
+ * @param userId - User ID, optional. Reserved for per-user impersonation in
+ *                 strict mode. Optional today because the resolver is the
+ *                 sole gate; callers without an authenticated user (service
+ *                 accounts, etc.) can still call us — we'll correctly fall
+ *                 through to the daemon-user / undefined branches.
  * @returns Daemon username when sudo wrap is needed, otherwise undefined
  */
 export async function resolveGitImpersonationForUser(
   _db: Database,
-  _userId: UserID
+  _userId: UserID | undefined
 ): Promise<string | undefined> {
   const { getDaemonUser, isUnixGroupRefreshNeeded } = await import('@agor/core/config');
 
