@@ -375,6 +375,17 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       );
     }
 
+    // Idempotency guard: a clone already in flight (initial create, or a
+    // previous recreate that hasn't finished) wins. Reporting 'noop' is
+    // honest — we did not start a new clone — and the caller can keep
+    // polling `clone_status` for the in-flight executor's outcome.
+    if (repo.clone_status === 'cloning') {
+      console.log(
+        `📂 [repos.recreateFilesystem] Clone already in flight for ${repo.slug}; skipping`
+      );
+      return { status: 'noop', repo_id: repo.repo_id, slug: repo.slug };
+    }
+
     if (existsSync(repo.local_path)) {
       // Idempotent: nothing to recreate. Clear the 'missing' marker so the
       // UI banner disappears.

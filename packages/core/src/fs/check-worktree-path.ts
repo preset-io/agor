@@ -38,37 +38,39 @@ export function assertWorktreeFsAvailable({
   repo,
 }: AssertWorktreeFsAvailableInput): void {
   if (repo && repo.local_path && !existsSync(repo.local_path)) {
-    throw new MissingPathError({
-      code: 'REPO_PATH_MISSING',
-      subject: 'repo',
-      message:
-        `Repository ${repo.slug || repo.name || repo.repo_id.slice(0, 8)} is registered ` +
+    throw new MissingPathError(
+      `Repository ${repo.slug || repo.name || repo.repo_id.slice(0, 8)} is registered ` +
         `in the database but its directory ${repo.local_path} no longer exists on disk. ` +
         `This typically happens in Kubernetes when $HOME is ephemeral but the database ` +
         `persists across restarts. Reclone the repository or delete the database record ` +
         `to recover.`,
-      path: repo.local_path,
-      action: 'reclone_or_delete',
-      repo_id: repo.repo_id,
-      worktree_id: worktree.worktree_id,
-    });
+      {
+        code: 'REPO_PATH_MISSING',
+        subject: 'repo',
+        path: repo.local_path,
+        action: 'reclone_or_delete',
+        repo_id: repo.repo_id,
+        worktree_id: worktree.worktree_id,
+      }
+    );
   }
 
   if (!existsSync(worktree.path)) {
-    throw new MissingPathError({
-      code: 'WORKTREE_PATH_MISSING',
-      subject: 'worktree',
-      message:
-        `Worktree ${worktree.name || worktree.worktree_id.slice(0, 8)} is registered ` +
+    throw new MissingPathError(
+      `Worktree ${worktree.name || worktree.worktree_id.slice(0, 8)} is registered ` +
         `in the database but its directory ${worktree.path} no longer exists on disk. ` +
         `This typically happens in Kubernetes when $HOME is ephemeral but the database ` +
         `persists across restarts. Recreate the worktree or delete the database record ` +
         `to recover.`,
-      path: worktree.path,
-      action: 'reclone_or_delete',
-      worktree_id: worktree.worktree_id,
-      repo_id: worktree.repo_id,
-    });
+      {
+        code: 'WORKTREE_PATH_MISSING',
+        subject: 'worktree',
+        path: worktree.path,
+        action: 'reclone_or_delete',
+        worktree_id: worktree.worktree_id,
+        repo_id: worktree.repo_id,
+      }
+    );
   }
 }
 
@@ -84,11 +86,25 @@ export function detectWorktreeFsDrift({
   worktree,
   repo,
 }: AssertWorktreeFsAvailableInput): { subject: 'worktree' | 'repo'; path: string } | null {
-  if (repo && repo.local_path && !existsSync(repo.local_path)) {
-    return { subject: 'repo', path: repo.local_path };
+  const repoDrift = repo ? detectRepoFsDrift(repo) : null;
+  if (repoDrift) {
+    return { subject: 'repo', path: repoDrift.path };
   }
   if (!existsSync(worktree.path)) {
     return { subject: 'worktree', path: worktree.path };
   }
   return null;
+}
+
+/**
+ * Pure predicate for repo-level FS drift. Returns `{ path }` of the missing
+ * directory, or `null` when the repo is present on disk.
+ *
+ * Used by the startup reconciliation pass to mark `Repo.filesystem_status`
+ * independently of any worktree context, and composed inside
+ * `detectWorktreeFsDrift` so both call sites resolve drift the same way.
+ */
+export function detectRepoFsDrift(repo: Pick<Repo, 'local_path'>): { path: string } | null {
+  if (!repo.local_path) return null;
+  return existsSync(repo.local_path) ? null : { path: repo.local_path };
 }

@@ -593,31 +593,10 @@ function createExecuteHandler(
       try {
         assertWorktreeFsAvailable({ worktree, repo });
       } catch (err) {
-        // Persist drift state on the worktree (and repo, if it was the miss)
+        // Persist drift state on the worktree (or repo, if it was the miss)
         // so subsequent UI reads can surface the banner without re-spawning.
-        const { isMissingPathError } = await import('@agor/core/fs');
-        if (isMissingPathError(err)) {
-          try {
-            if (err.data.subject === 'worktree') {
-              await app
-                .service('worktrees')
-                .patch(
-                  worktree.worktree_id,
-                  { filesystem_status: 'missing' },
-                  { provider: undefined }
-                );
-            } else if (err.data.subject === 'repo' && repo) {
-              await app
-                .service('repos')
-                .patch(repo.repo_id, { filesystem_status: 'missing' }, { provider: undefined });
-            }
-          } catch (patchErr) {
-            console.warn(
-              `[prompt] Failed to mark ${err.data.subject} as missing in DB:`,
-              patchErr instanceof Error ? patchErr.message : String(patchErr)
-            );
-          }
-        }
+        const { markMissingPathDrift } = await import('./utils/mark-fs-drift.js');
+        await markMissingPathDrift(app, err, repo, '[prompt]');
         throw err;
       }
       cwd = worktree.path;

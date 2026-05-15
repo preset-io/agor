@@ -1118,7 +1118,11 @@ const WorktreeCardComponent = ({
               <Button
                 type="primary"
                 icon={<PlusOutlined />}
-                disabled={connectionDisabled}
+                // Disable when the worktree (or its repo) is missing on disk:
+                // the spawn-time pre-flight check would reject the resulting
+                // prompt anyway, and the banner above already offers the
+                // recovery action.
+                disabled={connectionDisabled || isMissing}
                 onClick={(e) => {
                   e.stopPropagation();
                   onCreateSession(worktree.worktree_id);

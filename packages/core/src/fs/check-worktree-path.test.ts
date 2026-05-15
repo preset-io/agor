@@ -59,12 +59,12 @@ describe('assertWorktreeFsAvailable', () => {
     }
     expect(isMissingPathError(thrown)).toBe(true);
     const e = thrown as MissingPathError;
-    expect(e.data.code).toBe('REPO_PATH_MISSING');
-    expect(e.data.subject).toBe('repo');
-    expect(e.data.path).toBe(repo.local_path);
-    expect(e.data.action).toBe('reclone_or_delete');
-    expect(e.data.repo_id).toBe(repo.repo_id);
-    expect(e.data.worktree_id).toBe(worktree.worktree_id);
+    expect(e.payload.code).toBe('REPO_PATH_MISSING');
+    expect(e.payload.subject).toBe('repo');
+    expect(e.payload.path).toBe(repo.local_path);
+    expect(e.payload.action).toBe('reclone_or_delete');
+    expect(e.payload.repo_id).toBe(repo.repo_id);
+    expect(e.payload.worktree_id).toBe(worktree.worktree_id);
     // surfaceable through Feathers as 422
     expect(e.code).toBe(422);
   });
@@ -80,11 +80,11 @@ describe('assertWorktreeFsAvailable', () => {
     }
     expect(isMissingPathError(thrown)).toBe(true);
     const e = thrown as MissingPathError;
-    expect(e.data.code).toBe('WORKTREE_PATH_MISSING');
-    expect(e.data.subject).toBe('worktree');
-    expect(e.data.path).toBe(worktree.path);
-    expect(e.data.worktree_id).toBe(worktree.worktree_id);
-    expect(e.data.repo_id).toBe(worktree.repo_id);
+    expect(e.payload.code).toBe('WORKTREE_PATH_MISSING');
+    expect(e.payload.subject).toBe('worktree');
+    expect(e.payload.path).toBe(worktree.path);
+    expect(e.payload.worktree_id).toBe(worktree.worktree_id);
+    expect(e.payload.repo_id).toBe(worktree.repo_id);
   });
 
   it('throws WORKTREE_PATH_MISSING when repo is unknown but worktree is gone', () => {

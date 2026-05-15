@@ -23,10 +23,12 @@ export { LocalStrategy } from '@feathersjs/authentication-local';
 export {
   BadRequest,
   Conflict,
+  FeathersError,
   Forbidden,
   NotAuthenticated,
   NotFound,
   TooManyRequests,
+  Unprocessable,
 } from '@feathersjs/errors';
 export type { Application as ExpressApplication } from '@feathersjs/express';
 // Express Integration

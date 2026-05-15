@@ -158,7 +158,7 @@ export interface Repo {
    * - `'missing'`: DB row exists but `local_path` no longer exists on disk.
    *   Typical in K8s when `$HOME` is ephemeral but the DB persists across
    *   pod restarts. Set by the startup reconciliation pass or by the
-   *   spawn-time pre-flight check. Recovery: `agor_repos_recreate` re-runs
+   *   spawn-time pre-flight check. Recovery: `agor_repos_recreate_filesystem` re-runs
    *   `git clone` and cascades worktree recreation.
    *
    * Distinct from `clone_status`, which describes the original clone

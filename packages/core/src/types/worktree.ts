@@ -332,7 +332,7 @@ export interface Worktree {
    * - 'missing': DB row exists but `path` no longer exists on disk
    *   (typical in K8s where `$HOME` is ephemeral but the DB persists).
    *   Set by the startup reconciliation pass or the spawn-time pre-flight
-   *   check. The recreate action (`agor_worktrees_recreate`) reruns
+   *   check. The recreate action (`agor_worktrees_recreate_filesystem`) reruns
    *   `git.worktree.add` and transitions back to 'ready'.
    *
    * Archive states (set when worktree is archived):

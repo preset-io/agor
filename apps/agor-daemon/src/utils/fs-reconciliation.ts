@@ -21,10 +21,9 @@
  * (`preserved` / `cleaned` / `deleted`) — those have their own lifecycle and
  * a missing path is expected/intentional for them.
  */
-import { existsSync } from 'node:fs';
-
 import type { Database } from '@agor/core/db';
 import { RepoRepository, WorktreeRepository } from '@agor/core/db';
+import { detectRepoFsDrift, detectWorktreeFsDrift } from '@agor/core/fs';
 import type { Repo, Worktree } from '@agor/core/types';
 
 export interface ReconciliationStats {
@@ -87,17 +86,17 @@ async function reconcileRepo(repo: Repo, repoRepo: RepoRepository): Promise<Reco
     return 'skipped';
   }
 
-  const onDisk = existsSync(repo.local_path);
+  const drift = detectRepoFsDrift(repo);
   const wasMissing = repo.filesystem_status === 'missing';
 
-  if (!onDisk && !wasMissing) {
+  if (drift && !wasMissing) {
     await repoRepo.update(repo.repo_id, { filesystem_status: 'missing' });
     console.warn(
-      `[fs-reconciliation] Repo ${repo.slug} (${repo.repo_id.slice(0, 8)}) marked 'missing': ${repo.local_path}`
+      `[fs-reconciliation] Repo ${repo.slug} (${repo.repo_id.slice(0, 8)}) marked 'missing': ${drift.path}`
     );
     return 'newly_missing';
   }
-  if (onDisk && wasMissing) {
+  if (!drift && wasMissing) {
     await repoRepo.update(repo.repo_id, { filesystem_status: 'ready' });
     console.log(
       `[fs-reconciliation] Repo ${repo.slug} (${repo.repo_id.slice(0, 8)}) restored: ${repo.local_path}`
@@ -118,17 +117,23 @@ async function reconcileWorktree(
     return 'skipped';
   }
 
-  const onDisk = existsSync(worktree.path);
+  // Reconciliation runs the worktree pass independently of the repo pass;
+  // both call sites use `detectWorktreeFsDrift` / `detectRepoFsDrift` from
+  // `@agor/core/fs` to keep the predicate honest in exactly one place.
+  // (We don't pass `repo` here because repo drift is handled in its own pass
+  // — checking parent-repo presence again would be a wasted lookup per
+  // worktree.)
+  const drift = detectWorktreeFsDrift({ worktree });
   const wasMissing = worktree.filesystem_status === 'missing';
 
-  if (!onDisk && !wasMissing) {
+  if (drift && !wasMissing) {
     await worktreeRepo.update(worktree.worktree_id, { filesystem_status: 'missing' });
     console.warn(
-      `[fs-reconciliation] Worktree ${worktree.name} (${worktree.worktree_id.slice(0, 8)}) marked 'missing': ${worktree.path}`
+      `[fs-reconciliation] Worktree ${worktree.name} (${worktree.worktree_id.slice(0, 8)}) marked 'missing': ${drift.path}`
     );
     return 'newly_missing';
   }
-  if (onDisk && wasMissing) {
+  if (!drift && wasMissing) {
     await worktreeRepo.update(worktree.worktree_id, { filesystem_status: 'ready' });
     console.log(
       `[fs-reconciliation] Worktree ${worktree.name} (${worktree.worktree_id.slice(0, 8)}) restored: ${worktree.path}`

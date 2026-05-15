@@ -9,10 +9,16 @@
  * directory` with an actionable message + machine-readable code so the UI can
  * render a "Reclone / Delete record" card.
  *
- * The shape mirrors the `clone_error` / `repo:cloneError` precedent from PR
- * #1126: `code` + `message` for humans, plus IDs/path so the UI knows which
- * record to act on.
+ * Extends Feathers' `Unprocessable` (HTTP 422) so it propagates through the
+ * standard error middleware unchanged: the `data` payload is serialised onto
+ * the wire response — which is how the UI gets the structured envelope —
+ * and `name` / `code` / `className` follow Feathers conventions for free.
+ * 422 (Unprocessable Entity) is the right status: the request itself is
+ * well-formed, the precondition just isn't satisfied. 404 would imply "no
+ * such session/worktree", which is misleading — the row exists, the on-disk
+ * artefact does not.
  */
+import { Unprocessable } from '../feathers';
 import type { RepoID, WorktreeID } from '../types/id';
 
 export type MissingPathSubject = 'worktree' | 'repo';
@@ -24,8 +30,6 @@ export interface MissingPathErrorPayload {
   code: 'WORKTREE_PATH_MISSING' | 'REPO_PATH_MISSING';
   /** Subject ("worktree" or "repo"). Convenience for UI routing. */
   subject: MissingPathSubject;
-  /** Human-readable message safe to surface in the UI. */
-  message: string;
   /** Absolute path that was expected to exist but doesn't. */
   path: string;
   /** Suggested user action. Currently only one value, but kept open for future. */
@@ -40,30 +44,32 @@ export interface MissingPathErrorPayload {
 
 /**
  * Thrown when the daemon refuses to spawn (terminal / executor / git op)
- * because the resolved filesystem path is gone.
- *
- * Subclass of `Error` so it propagates through FeathersJS error handling
- * unchanged; the `data` property is serialised onto the wire response, which
- * is how the UI gets at the structured envelope.
+ * because the resolved filesystem path is gone. See module docstring for
+ * rationale.
  */
-export class MissingPathError extends Error {
-  readonly name = 'MissingPathError' as const;
-  readonly data: MissingPathErrorPayload;
-  /**
-   * Feathers' error middleware copies `error.code` (numeric HTTP-ish status)
-   * onto the response. We use 422 (Unprocessable Entity) because the request
-   * itself is well-formed — the precondition just isn't satisfied. 404 would
-   * imply "no such session/worktree", which is misleading; the row exists,
-   * the on-disk artefact does not.
-   */
-  readonly code = 422;
+export class MissingPathError extends Unprocessable {
+  // Sentinel for `isMissingPathError` — Feathers' error middleware
+  // serializes own-properties onto the wire response, so callers that only
+  // see the serialized envelope can still discriminate.
+  readonly _missingPath = true as const;
 
-  constructor(payload: MissingPathErrorPayload) {
-    super(payload.message);
-    this.data = payload;
+  constructor(message: string, data: MissingPathErrorPayload) {
+    super(message, data);
+    // Override Feathers' default name so error.name reflects the structured
+    // semantics instead of the generic 'Unprocessable'.
+    this.name = 'MissingPathError';
+  }
+
+  get payload(): MissingPathErrorPayload {
+    return this.data as MissingPathErrorPayload;
   }
 }
 
 export function isMissingPathError(err: unknown): err is MissingPathError {
-  return err instanceof MissingPathError;
+  return (
+    err instanceof MissingPathError ||
+    (typeof err === 'object' &&
+      err !== null &&
+      (err as { _missingPath?: unknown })._missingPath === true)
+  );
 }

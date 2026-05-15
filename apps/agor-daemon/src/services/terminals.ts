@@ -30,7 +30,7 @@ import {
 import { type Database, formatShortId, UsersRepository, WorktreeRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { Forbidden } from '@agor/core/feathers';
-import { assertWorktreeFsAvailable, isMissingPathError } from '@agor/core/fs';
+import { assertWorktreeFsAvailable } from '@agor/core/fs';
 import type { AuthenticatedParams, UserID, WorktreeID } from '@agor/core/types';
 import {
   resolveUnixUserForImpersonation,
@@ -38,6 +38,7 @@ import {
   UnixUserNotFoundError,
   validateResolvedUnixUser,
 } from '@agor/core/unix';
+import { markMissingPathDrift } from '../utils/mark-fs-drift.js';
 import { generateSessionToken, spawnExecutorFireAndForget } from '../utils/spawn-executor.js';
 import { hasWorktreePermission } from '../utils/worktree-authorization.js';
 
@@ -387,28 +388,7 @@ export class TerminalsService {
         try {
           assertWorktreeFsAvailable({ worktree, repo });
         } catch (err) {
-          if (isMissingPathError(err)) {
-            try {
-              if (err.data.subject === 'worktree') {
-                await this.app
-                  .service('worktrees')
-                  .patch(
-                    worktree.worktree_id,
-                    { filesystem_status: 'missing' },
-                    { provider: undefined }
-                  );
-              } else if (err.data.subject === 'repo' && repo) {
-                await this.app
-                  .service('repos')
-                  .patch(repo.repo_id, { filesystem_status: 'missing' }, { provider: undefined });
-              }
-            } catch (patchErr) {
-              console.warn(
-                `[terminals] Failed to mark ${err.data.subject} as missing in DB:`,
-                patchErr instanceof Error ? patchErr.message : String(patchErr)
-              );
-            }
-          }
+          await markMissingPathDrift(this.app, err, repo, '[terminals]');
           throw err;
         }
 

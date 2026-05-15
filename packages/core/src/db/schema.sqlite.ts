@@ -457,7 +457,7 @@ export const repos = sqliteTable(
         // FS drift state (issue #1109). 'missing' when local_path doesn't exist
         // on disk despite the row existing. Set by the startup reconciliation
         // pass or the spawn-time pre-flight check; recovered via
-        // agor_repos_recreate. Undefined ≡ not-yet-reconciled.
+        // agor_repos_recreate_filesystem. Undefined ≡ not-yet-reconciled.
         filesystem_status?: 'ready' | 'missing';
         // v2 environment config — source of truth. Named variants + optional
         // deployment-local template_overrides. See RepoEnvironment in
