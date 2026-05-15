@@ -316,6 +316,32 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   console.log(`${logPrefix} Spawning executor at: ${executorPath}`);
   console.log(`${logPrefix} Command: ${payload.command}`);
 
+  // Detect missing-cwd up front (issue #1109). Without this, node's
+  // child_process surfaces `spawn /usr/local/bin/node ENOENT` — reported
+  // against the executable path, not the cwd that's actually gone — and
+  // operators end up debugging the wrong layer. The most common cause is
+  // running with a persistent database while `$HOME` is on an ephemeral
+  // volume (e.g. Kubernetes emptyDir): on pod redeploy the DB still
+  // references worktree/repo paths that no longer exist on disk. We
+  // surface that clearly here; recovery is left to the operator
+  // (restore the volume, or use the worktree/repo lifecycle commands to
+  // remove the orphan rows).
+  if (cwd && !existsSync(cwd)) {
+    console.error(
+      `${logPrefix} Refusing to spawn: cwd does not exist on disk: ${cwd}. ` +
+        `This usually means the worktree or repo directory was deleted ` +
+        `out-of-band — for example a Kubernetes pod redeploy with an ` +
+        `ephemeral $HOME but a persistent database. Verify that the volume ` +
+        `backing $HOME persists across restarts. See issue #1109.`
+    );
+    // Surface failure through the normal exit-code path so onExit handlers
+    // (e.g. the clone-safety-net in repos.ts) run as expected. 127 is the
+    // conventional "command not found" exit code; close enough semantically
+    // for "the cwd is gone" without inventing a new one.
+    options.onExit?.(127);
+    return;
+  }
+
   const executorProcess = spawn(cmd, args, {
     cwd,
     env: asUser ? undefined : { ...envWithDaemonUrl }, // When impersonating, env is in the command; otherwise pass to spawn

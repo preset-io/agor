@@ -186,6 +186,36 @@ For production Agor deployments with containerized execution, we recommend:
 
 ## Shared Filesystem Setup
 
+### Persistence Must Match the Database
+
+This is the single most common deployment foot-gun and worth calling out
+before the rest of the storage discussion.
+
+**If the Agor database is persistent, then `$HOME` (or whichever directory
+holds `repos/` and `worktrees/`) MUST also be persistent.** The database
+stores absolute paths to every repository clone and every worktree on
+disk. If the database survives a pod restart but the filesystem does not
+— for example, the database is backed by a `PersistentVolumeClaim` while
+`$HOME` is an `emptyDir` — then on redeploy the daemon will reference
+paths that no longer exist. Opening a terminal or running a session will
+fail when the executor tries to `chdir` into a directory that's gone.
+
+The daemon will surface a clear error in this state (`cwd does not exist
+on disk: ...` — see [issue
+\#1109](https://github.com/preset-io/agor/issues/1109)), but the only
+real fix is to restore the volume or, if the volume is unrecoverable,
+clean up the orphan database rows using
+`agor worktree remove` / `agor repo remove` before re-cloning.
+
+Safe configurations:
+
+- **Both persistent**: Database on PVC, `$HOME` (or `data_home`) on
+  PVC/EFS/NFS. Recommended for production.
+- **Both ephemeral**: Database on `emptyDir`, `$HOME` on `emptyDir`. Fine
+  for short-lived test pods — everything resets together.
+- **Avoid mixing**: Persistent database + ephemeral filesystem is the
+  broken state described above.
+
 ### Why Shared Storage?
 
 Agor's development model requires:
