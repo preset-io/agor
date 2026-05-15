@@ -12,7 +12,7 @@
  */
 
 import { Typography, theme } from 'antd';
-import type React from 'react';
+import React from 'react';
 import { Streamdown } from 'streamdown';
 import { highlightMentionsInMarkdown } from '../../utils/highlightMentions';
 import { isDarkTheme } from '../../utils/theme';
@@ -48,7 +48,14 @@ interface MarkdownRendererProps {
   showControls?: boolean;
 }
 
-export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
+// Memoized: Streamdown does meaningful per-render work (syntax highlighting,
+// Mermaid, KaTeX) and this component is rendered once per text block in every
+// message. During streaming, the conversation pane's parent re-renders on
+// every chunk; without memo, every prior message's MarkdownRenderer re-ran
+// even though its `content` was unchanged. Default shallow compare is fine —
+// all props are primitives or stable refs at call sites in the conversation
+// pane (MessageBlock, ThinkingBlock, CollapsibleMarkdown).
+const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
   content,
   inline = false,
   style,
@@ -104,3 +111,6 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
     </Typography>
   );
 };
+
+export const MarkdownRenderer = React.memo(MarkdownRendererInner);
+MarkdownRenderer.displayName = 'MarkdownRenderer';

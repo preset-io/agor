@@ -75,7 +75,12 @@ interface TaskBlockProps {
   userById?: Map<string, User>;
   currentUserId?: string;
   isExpanded: boolean;
-  onExpandChange: (expanded: boolean) => void;
+  /**
+   * Called when the user toggles this task's expand state. Receives the
+   * `taskId` so the parent can use a single stable callback shared across
+   * every TaskBlock — see ConversationView's `handleTaskExpandChange`.
+   */
+  onExpandChange: (taskId: string, expanded: boolean) => void;
   sessionId?: SessionID | null;
   onPermissionDecision?: (
     sessionId: string,
@@ -575,7 +580,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     return (
       <Collapse
         activeKey={isExpanded ? ['task-content'] : []}
-        onChange={(keys) => onExpandChange(keys.length > 0)}
+        onChange={(keys) => onExpandChange(task.task_id, keys.length > 0)}
         expandIcon={() => null}
         style={{ background: 'transparent', margin: `${token.sizeUnit * 3}px 0` }}
         items={[
@@ -679,7 +684,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                           isFirstPendingInput={isFirstPendingInput}
                           isLatestMessage={isLatestMessage}
                           taskId={task.task_id}
-                          allMessages={messages}
                           assistantEmoji={assistantEmoji}
                         />
                       );

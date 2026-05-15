@@ -24,7 +24,7 @@ import { RobotOutlined, SyncOutlined, WarningOutlined } from '@ant-design/icons'
 import { Bubble } from '@ant-design/x';
 import { Tooltip, theme } from 'antd';
 
-import type React from 'react';
+import React from 'react';
 import { formatTimestampWithRelative } from '../../utils/time';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
@@ -86,7 +86,6 @@ interface MessageBlockProps {
   isFirstPendingPermission?: boolean; // For sequencing permission requests
   isFirstPendingInput?: boolean; // For sequencing input requests
   isLatestMessage?: boolean; // Whether this is the most recent message (don't collapse by default)
-  allMessages?: Message[]; // All messages for aggregation (e.g., finding matching compaction events)
   assistantEmoji?: string; // Emoji override for assistant avatar (replaces tool icon)
   onPermissionDecision?: (
     sessionId: string,
@@ -236,7 +235,20 @@ function getAgentAvatar({
   );
 }
 
-export const MessageBlock: React.FC<MessageBlockProps> = ({
+// Memoized: every text block / tool block of every message in the conversation
+// re-rendered on every streaming chunk because TaskBlock's `messages` array
+// gets a fresh reference each tick. Default shallow compare is sufficient
+// here because callers pass:
+//   - `message`: stable per message_id (only the actively streaming message
+//     gets a new ref each chunk — correct: it should re-render)
+//   - `userById`: from AppEntityDataContext (PR #1095 — stable across session
+//     patches)
+//   - `currentUserId`, `agentic_tool`, `sessionId`, `taskId`, `assistantEmoji`,
+//     `isTaskRunning`, `isLatestMessage`, `isFirstPending*`: primitives or
+//     stable derived values
+//   - `onPermissionDecision`, `onInputResponse`: useCallback-wrapped in App.tsx
+//     and passed through useMemo'd AppActionsContext
+const MessageBlockInner: React.FC<MessageBlockProps> = ({
   message,
   userById = new Map(),
   currentUserId,
@@ -247,7 +259,6 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
   isFirstPendingPermission = false,
   isFirstPendingInput = false,
   isLatestMessage = false,
-  allMessages = [],
   onPermissionDecision,
   onInputResponse,
   assistantEmoji,
@@ -795,3 +806,6 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
     </>
   );
 };
+
+export const MessageBlock = React.memo(MessageBlockInner);
+MessageBlock.displayName = 'MessageBlock';

@@ -12,6 +12,7 @@
 
 import type {
   AgorClient,
+  Message,
   MessageID,
   PermissionScope,
   SessionID,
@@ -28,6 +29,10 @@ import { TaskBlock } from '../TaskBlock';
 
 const { Text } = Typography;
 const EMPTY_STREAMING_MESSAGES = new Map();
+// Shared empty-array sentinel so TaskBlock's `taskMessages` prop keeps a stable
+// reference for tasks whose messages haven't been loaded — otherwise `|| []`
+// would mint a fresh array on every render and thrash TaskBlock's React.memo.
+const EMPTY_MESSAGES: Message[] = [];
 
 /**
  * Check if two Maps are equal (same keys and same content)
@@ -210,7 +215,15 @@ export const ConversationView = React.memo<ConversationViewProps>(
     // haven't run yet — there's no message_range, no user-message row, no
     // assistant output to render — so showing them here as TaskBlocks just
     // duplicates what the queue panel already shows.
-    const tasks = (reactiveState?.tasks || []).filter((t) => t.status !== TaskStatus.QUEUED);
+    //
+    // Memoized so the filtered array's identity is stable across re-renders
+    // when the underlying reactive `tasks` list hasn't changed. Without this,
+    // every streaming chunk produced a fresh array → every downstream useMemo
+    // depending on `tasks` would invalidate and rebuild.
+    const tasks = useMemo(
+      () => (reactiveState?.tasks || []).filter((t) => t.status !== TaskStatus.QUEUED),
+      [reactiveState?.tasks]
+    );
     const allStreamingMessages = reactiveState?.streamingMessages || EMPTY_STREAMING_MESSAGES;
     const loading = reactiveState ? reactiveState.loading : !!sessionId;
     const error = reactiveState?.error || null;
@@ -268,8 +281,10 @@ export const ConversationView = React.memo<ConversationViewProps>(
     // When a new task arrives (i.e. the *last* task id changes), collapse
     // whatever was open and expand the new one. We deliberately depend on
     // `lastTaskId` rather than `tasks` so that:
-    //   1. unrelated re-renders don't fire this effect (tasks array gets a
-    //      new reference on every render thanks to the QUEUED filter), and
+    //   1. unrelated re-renders don't fire this effect (`tasks` still gets
+    //      a new reference whenever any task patch lands — the useMemo bails
+    //      out only when the *upstream* `reactiveState.tasks` array is
+    //      identity-stable), and
     //   2. if the user collapses the current last task, we don't immediately
     //      re-open it — that "auto re-expand on empty" behavior fought the
     //      user and showed up as a flicker.
@@ -285,7 +300,10 @@ export const ConversationView = React.memo<ConversationViewProps>(
       });
     }, [lastTaskId, scrollToBottom]);
 
-    // Handle task expand/collapse
+    // Handle task expand/collapse. Single stable callback shared by every
+    // TaskBlock — the callback takes `taskId` so we don't need to mint a
+    // per-task closure (which previously rebuilt on every render and broke
+    // TaskBlock's React.memo for the entire task list).
     const handleTaskExpandChange = useCallback((taskId: string, expanded: boolean) => {
       setExpandedTaskIds((prev) => {
         const next = new Set(prev);
@@ -298,16 +316,25 @@ export const ConversationView = React.memo<ConversationViewProps>(
       });
     }, []);
 
-    // Memoize expand handlers per task to keep stable references
-    const expandHandlers = useMemo(() => {
-      const handlerMap = new Map<string, (expanded: boolean) => void>();
-      for (const task of tasks) {
-        handlerMap.set(task.task_id, (expanded: boolean) =>
-          handleTaskExpandChange(task.task_id, expanded)
-        );
-      }
-      return handlerMap;
-    }, [tasks, handleTaskExpandChange]);
+    // Stable load/unload callbacks. The previous inline arrows were minted on
+    // every ConversationView render → every TaskBlock saw new `onLoadTaskMessages`
+    // / `onUnloadTaskMessages` refs → memo bailout failed for every TaskBlock,
+    // including ones whose messages weren't changing.
+    const handleLoadTaskMessages = useCallback(
+      (taskId: string) => {
+        if (!reactiveSession) return;
+        return reactiveSession.loadTaskMessages(taskId).then(() => undefined);
+      },
+      [reactiveSession]
+    );
+
+    const handleUnloadTaskMessages = useCallback(
+      (taskId: string) => {
+        if (!reactiveSession) return;
+        reactiveSession.unloadTaskMessages(taskId);
+      },
+      [reactiveSession]
+    );
 
     // Auto-scroll to bottom when streaming messages arrive (only if user is already at bottom)
     // biome-ignore lint/correctness/useExhaustiveDependencies: We want to scroll on streaming change
@@ -477,7 +504,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
             userById={userById}
             currentUserId={currentUserId}
             isExpanded={expandedTaskIds.has(task.task_id)}
-            onExpandChange={expandHandlers.get(task.task_id)!}
+            onExpandChange={handleTaskExpandChange}
             sessionId={sessionId}
             onPermissionDecision={onPermissionDecision}
             onInputResponse={onInputResponse}
@@ -485,16 +512,10 @@ export const ConversationView = React.memo<ConversationViewProps>(
             scheduledFromWorktree={scheduledFromWorktree}
             scheduledRunAt={scheduledRunAt}
             streamingMessages={streamingMessagesByTask.get(task.task_id)}
-            taskMessages={reactiveState?.messagesByTask.get(task.task_id) || []}
+            taskMessages={reactiveState?.messagesByTask.get(task.task_id) || EMPTY_MESSAGES}
             taskMessagesLoaded={!!reactiveState?.loadedTaskIds.has(task.task_id)}
-            onLoadTaskMessages={(taskId: string) => {
-              if (!reactiveSession) return;
-              return reactiveSession.loadTaskMessages(taskId).then(() => undefined);
-            }}
-            onUnloadTaskMessages={(taskId: string) => {
-              if (!reactiveSession) return;
-              reactiveSession.unloadTaskMessages(taskId);
-            }}
+            onLoadTaskMessages={handleLoadTaskMessages}
+            onUnloadTaskMessages={handleUnloadTaskMessages}
             assistantEmoji={assistantEmoji}
             isLatestTask={taskIndex === tasks.length - 1}
           />
