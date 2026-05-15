@@ -32,9 +32,15 @@ const toolLogos: Record<string, string> = {
   copilot: copilotLogo,
 };
 
+// Tools whose logos are drawn on a transparent / light background and need
+// a white plate rather than the default black to read well. The pixel-bot
+// CLI mascot already has its own white outline — black would clip it.
+const LIGHT_BG_TOOLS = new Set(['claude-code-cli']);
+
 export const ToolIcon: React.FC<ToolIconProps> = ({ tool, size = 32, className = '' }) => {
   const { token } = useToken();
   const logoSrc = toolLogos[tool];
+  const bg = LIGHT_BG_TOOLS.has(tool) ? '#fff' : '#000';
 
   // Fallback to emoji if no logo available
   const fallbackEmoji: Record<string, string> = {
@@ -54,7 +60,7 @@ export const ToolIcon: React.FC<ToolIconProps> = ({ tool, size = 32, className =
           width: size,
           height: size,
           borderRadius: '50%',
-          background: '#000',
+          background: bg,
           border: `1px solid ${token.colorBorder}`,
           display: 'flex',
           alignItems: 'center',
@@ -75,7 +81,7 @@ export const ToolIcon: React.FC<ToolIconProps> = ({ tool, size = 32, className =
         width: size,
         height: size,
         borderRadius: '50%',
-        background: '#000',
+        background: bg,
         border: `1px solid ${token.colorBorder}`,
         display: 'flex',
         alignItems: 'center',
