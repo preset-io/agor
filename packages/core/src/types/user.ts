@@ -317,6 +317,8 @@ export interface EventStreamPreferences {
 export interface OnboardingState {
   /** Which path the user took */
   path?: 'assistant' | 'own-repo' | 'persisted-agent';
+  /** The repo ID associated with this onboarding (framework repo or user's repo) */
+  repoId?: string;
   /** The worktree ID created during onboarding */
   worktreeId?: string;
   /** The board ID created for this user */

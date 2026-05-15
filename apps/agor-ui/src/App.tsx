@@ -848,6 +848,7 @@ function AppContent() {
         `Failed to add local repository: ${error instanceof Error ? error.message : String(error)}`,
         { key: 'add-local-repo' }
       );
+      throw error;
     }
   };
 

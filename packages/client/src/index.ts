@@ -61,6 +61,7 @@ export type {
 export * from '@agor/core/client';
 // Re-export full browser-safe type/runtime surface for UI consumers.
 export { toShortId as formatShortId } from '@agor/core/client';
+export { isValidSlug, REPO_SLUG_PATTERN } from '@agor/core/config/browser';
 export * from './models';
 
 export function createClient(...args: Parameters<typeof createCoreClient>): ReactiveAgorClient {
