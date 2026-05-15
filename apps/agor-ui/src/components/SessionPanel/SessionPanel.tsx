@@ -313,6 +313,17 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [effortLevel, setEffortLevel] = React.useState<EffortLevel>(
     session?.model_config?.effort || 'high'
   );
+  /**
+   * Claude Code CLI view toggle: 'terminal' shows the embedded `claude`
+   * REPL full-height (with the Agor textarea hidden, since `claude` has
+   * its own input prompt); 'conversation' shows Agor's standard message
+   * feed rebuilt from the JSONL by the daemon watcher.
+   *
+   * Only meaningful when `session.agentic_tool === 'claude-code-cli'`.
+   * Defaults to 'terminal' so users see the live REPL on first open.
+   * Persisting this per-session as a UI preference is a v1.5 follow-up.
+   */
+  const [cliViewMode, setCliViewMode] = React.useState<'terminal' | 'conversation'>('terminal');
   const [scrollToBottom, setScrollToBottom] = React.useState<(() => void) | null>(null);
   const [scrollToTop, setScrollToTop] = React.useState<(() => void) | null>(null);
   const [queuedTasks, setQueuedTasks] = React.useState<Task[]>([]);
@@ -1007,6 +1018,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </Tooltip>
           </Space>
         </div>
+
       </div>
 
       {/* Body - Scrollable content */}
@@ -1036,11 +1048,18 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           onSpawnModalConfirm={handleSpawnModalConfirm}
           inputValueRef={inputValueRef}
           isOpen={open}
+          cliViewMode={cliViewMode}
+          setCliViewMode={setCliViewMode}
         />
 
         {/* Footer Controls — rendered outside SessionPanelContent so that
-            keystroke-driven re-renders don't propagate to ConversationView */}
-        {footerControls}
+            keystroke-driven re-renders don't propagate to ConversationView.
+            Hidden for CLI sessions in 'terminal' view because the embedded
+            `claude` REPL has its own input prompt; the Agor textarea is
+            redundant (and would inject via PTY anyway, racy with whatever
+            the user is typing into the REPL directly). */}
+        {!(session.agentic_tool === 'claude-code-cli' && cliViewMode === 'terminal') &&
+          footerControls}
 
         {/* File upload modal */}
         {session && (

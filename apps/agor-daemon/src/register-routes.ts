@@ -711,6 +711,109 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   );
 
   /**
+   * Restart the Zellij pane for a Claude Code CLI session.
+   *
+   * Closes the existing `cli-<short>` tab (if any) and re-spawns `claude`
+   * inside a fresh tab against the same JSONL. The session's
+   * `cli_state.watcher_offset` is preserved so the watcher resumes
+   * tailing from wherever it left off — no events are lost across the
+   * restart.
+   *
+   * Use this when claude has crashed / been Ctrl-C'd inside the pane,
+   * when auth changes and you want a clean process, or when the Zellij
+   * pane's foreground has fallen back to bash after `claude` exited.
+   */
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/restart-cli',
+    {
+      async create(_data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Session ID required');
+        const session = await sessionsService.get(id, params);
+        if (session.agentic_tool !== 'claude-code-cli') {
+          throw new Error(
+            `Restart is only supported for claude-code-cli sessions; this session is ${session.agentic_tool}`
+          );
+        }
+        const targetUserId = session.created_by;
+        if (!targetUserId) throw new Error('Session has no created_by — cannot route restart');
+
+        const tabName = `cli-${session.session_id.slice(0, 8)}`;
+        const channel = `user/${targetUserId}/terminal`;
+
+        // 1) Hard-kill any live `claude --session-id <uuid>` process.
+        //    Zellij's `close-tab` SHOULD propagate SIGHUP to its
+        //    foreground, but in practice claude sometimes survives the
+        //    pane death long enough to collide on session-id uniqueness
+        //    ("Session ID … is already in use") when the new spawn
+        //    fires. `pkill -f` against the exact argv pattern is the
+        //    reliable kill.
+        try {
+          const { spawn: spawnProc } = await import('node:child_process');
+          const killProc = spawnProc(
+            'pkill',
+            ['-f', `claude --session-id ${session.session_id}`],
+            { stdio: 'ignore' }
+          );
+          await new Promise<void>((resolve) => {
+            killProc.on('exit', () => resolve());
+            killProc.on('error', () => resolve());
+            // Defensive cap — pkill should be <100ms.
+            setTimeout(() => {
+              try {
+                killProc.kill();
+              } catch {
+                /* already exited */
+              }
+              resolve();
+            }, 2000);
+          });
+        } catch (err) {
+          console.warn('[claude-cli-integration] pkill failed, proceeding anyway', err);
+        }
+
+        // 2) Close the old tab (best-effort — if not present the executor
+        //    just no-ops on the close action).
+        const io = (
+          app as unknown as { io?: { to(r: string): { emit(ev: string, p: unknown): void } } }
+        ).io;
+        if (io) {
+          io.to(channel).emit('terminal:tab', {
+            userId: targetUserId,
+            action: 'close',
+            tabName,
+          });
+        }
+
+        // 3) Re-run the on-created hook to spawn a fresh layout. Slight
+        //    delay so Zellij finishes the close before the create AND so
+        //    any lingering claude-process file locks on the JSONL clear.
+        const worktree = (await app
+          .service('worktrees')
+          .get(session.worktree_id, params)) as { path?: string };
+        const cwd = worktree?.path;
+        if (!cwd) throw new Error('Worktree has no path; cannot restart');
+        setTimeout(async () => {
+          try {
+            const { onCliSessionCreated } = await import('./services/claude-cli-integration.js');
+            await onCliSessionCreated(app, session, cwd);
+          } catch (err) {
+            console.error('[claude-cli-integration] restart re-spawn failed', err);
+          }
+        }, 800);
+
+        return { ok: true, tabName };
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS route handler type mismatch
+    } as any,
+    {
+      create: { role: ROLES.MEMBER, action: 'restart claude CLI session' },
+    },
+    requireAuth
+  );
+
+  /**
    * Per-session "turn" lock — single source of truth for "who's allowed to
    * spawn an executor for this session right now" mutual exclusion. Shared
    * by `/sessions/:id/prompt`'s idle branch, `/tasks/:id/run`, and the
@@ -924,6 +1027,98 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const useStreaming = options.stream !== false;
     const sessionId = task.session_id;
     const taskId = task.task_id;
+
+    // Claude Code CLI: there is no in-process executor. The `claude` REPL
+    // is already running in the user's Zellij pane. "Prompting" the
+    // session = injecting the prompt text + a newline into that pane's
+    // PTY stdin, exactly as if the user typed it. The watcher (which is
+    // already tailing the session's JSONL) picks up the resulting turn.
+    //
+    // The Agor textarea + MCP `agor_sessions_prompt` both flow through
+    // this code path; for CLI sessions we short-circuit before
+    // `executeTask` and emit `terminal:input` instead.
+    if (session.agentic_tool === 'claude-code-cli') {
+      setImmediate(async () => {
+        try {
+          const targetUserId = session.created_by;
+          if (!targetUserId) {
+            throw new Error('CLI session has no created_by — cannot route PTY injection');
+          }
+          const channel = `user/${targetUserId}/terminal`;
+          const tabName = `cli-${session.session_id.slice(0, 8)}`;
+          const io = (
+            app as unknown as {
+              io?: { to(r: string): { emit(ev: string, p: unknown): void } };
+            }
+          ).io;
+
+          // Focus the session's tab BEFORE injecting input. Zellij sends
+          // terminal:input to whichever pane is currently focused, so
+          // without this step a prompt typed in the Agor textarea while
+          // the user happens to be viewing a sibling tab (e.g. the
+          // worktree's `test-worktree` bash) would land in bash and
+          // produce `bash: hello: command not found`. The 150ms delay
+          // gives Zellij time to process the focus before the input
+          // bytes arrive.
+          io?.to(channel).emit('terminal:tab', {
+            userId: targetUserId,
+            action: 'focus',
+            tabName,
+          });
+          await new Promise((r) => setTimeout(r, 150));
+
+          // Append \r so the REPL submits. Zellij forwards raw bytes
+          // unchanged to claude's pseudo-tty. If the user is currently
+          // mid-typing into the REPL, the bytes interleave — documented
+          // race per the analysis doc § Blind spot #2.
+          const payload = `${promptForExecutor}\r`;
+          io?.to(channel).emit('terminal:input', { userId: targetUserId, input: payload });
+          console.log(
+            `[claude-cli] PTY-injected prompt into ${channel} → tab ${tabName} (task ${taskId.substring(0, 8)}, ${promptForExecutor.length} chars)`
+          );
+          // V1 lifecycle: the watcher writes turn events but does NOT yet
+          // bridge `turn_end` back to the task. Mark the task completed
+          // here so the session returns to IDLE and the next prompt can
+          // be enqueued. Once the watcher → TasksService bridge lands,
+          // this should be removed and the task should close on
+          // `assistant.stop_reason === 'end_turn'` instead.
+          await safePatch(
+            'tasks',
+            taskId,
+            {
+              status: TaskStatus.COMPLETED,
+              completed_at: new Date().toISOString(),
+            },
+            'Task',
+            params
+          );
+          await app
+            .service('sessions')
+            .patch(
+              sessionId,
+              { status: SessionStatus.IDLE, ready_for_prompt: true },
+              params
+            );
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(
+            `[claude-cli] PTY injection failed for task ${taskId.substring(0, 8)}: ${msg}`
+          );
+          await safePatch(
+            'tasks',
+            taskId,
+            {
+              status: TaskStatus.FAILED,
+              completed_at: new Date().toISOString(),
+              error_message: `PTY injection failed: ${msg}`,
+            },
+            'Task',
+            params
+          );
+        }
+      });
+      return updatedTask;
+    }
 
     // Background spawn + failure handling. Returning the patched Task to the
     // caller before this resolves matches the previous behavior — the HTTP

@@ -44,6 +44,13 @@ interface CreateTerminalData {
   rows?: number;
   cols?: number;
   worktreeId?: WorktreeID; // Worktree context for Zellij integration
+  /**
+   * Optional Zellij tab name to focus once the executor is up. Used by
+   * the Claude Code CLI adapter's in-pane EmbeddedTerminal to land on
+   * the session's `cli-<short>` tab. Server-only emit (browsers can't
+   * publish `terminal:tab` directly).
+   */
+  focusTabName?: string;
 }
 
 /**
@@ -222,6 +229,7 @@ export class TerminalsService {
         worktreeId: data.worktreeId,
         cols: data.cols,
         rows: data.rows,
+        focusTabName: data.focusTabName,
       },
       params
     );
@@ -261,6 +269,15 @@ export class TerminalsService {
       worktreeId?: WorktreeID;
       cols?: number;
       rows?: number;
+      /**
+       * Optional Zellij tab name to focus once the executor is up. Used by
+       * the Claude Code CLI adapter's in-pane EmbeddedTerminal to land on
+       * the session's `cli-<short>` tab rather than the worktree default.
+       *
+       * The focus emit happens server-side because browser sockets are not
+       * allowed to publish on `terminal:tab` (only service tokens may).
+       */
+      focusTabName?: string;
     },
     params?: AuthenticatedParams
   ): Promise<{
@@ -294,6 +311,19 @@ export class TerminalsService {
             tabName: worktree.name,
             cwd: worktree.path,
           });
+
+          // If a CLI-specific tab focus was requested, layer it on top so
+          // the embedded view lands on the session's claude tab rather
+          // than the worktree default.
+          if (data.focusTabName && data.focusTabName !== worktree.name) {
+            setTimeout(() => {
+              this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
+                userId,
+                action: 'focus',
+                tabName: data.focusTabName,
+              });
+            }, 300);
+          }
 
           // Request screen redraw after a short delay to let client join channel first
           setTimeout(() => {
@@ -427,6 +457,21 @@ export class TerminalsService {
       activeWorktrees: new Set([data.worktreeId || 'default']),
       startedAt: new Date(),
     });
+
+    // Cold-start path: if a CLI tab focus was requested, the executor
+    // hasn't yet attached to its Feathers channel. Defer the focus emit
+    // so Zellij finishes booting first. ~1.5s is enough on this hardware;
+    // we don't gate on a deterministic ready signal because the executor's
+    // `zellij attach` PTY itself sends the initial draw async.
+    if (data.focusTabName) {
+      setTimeout(() => {
+        this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
+          userId,
+          action: 'focus',
+          tabName: data.focusTabName,
+        });
+      }, 1500);
+    }
 
     return {
       userId,

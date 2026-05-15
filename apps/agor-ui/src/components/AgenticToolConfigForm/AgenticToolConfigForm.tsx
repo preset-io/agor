@@ -97,7 +97,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
         <PermissionModeSelector agentic_tool={agenticTool} compact={compact} />
       </Form.Item>
 
-      {agenticTool === 'claude-code' && (
+      {(agenticTool === 'claude-code' || agenticTool === 'claude-code-cli') && (
         <Form.Item
           name="effort"
           label="Reasoning Effort"
