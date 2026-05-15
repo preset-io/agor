@@ -325,7 +325,6 @@
     "@feathersjs/typebox": "^5.0.44",
     "@google/gemini-cli-core": "^0.31.0",
     "@google/genai": "^1.43.0",
-    "@iarna/toml": "^2.2.5",
     "@libsql/client": "^0.17.3",
     "@octokit/auth-app": "^8.2.0",
     "@octokit/rest": "^22.0.1",
@@ -348,7 +347,6 @@
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
-    "@types/iarna__toml": "^2.0.5",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.6.0",
     "@vitest/coverage-v8": "^4.1.5",

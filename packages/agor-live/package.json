@@ -61,7 +61,6 @@
     "@github/copilot-sdk": "^0.2.2",
     "@google/gemini-cli-core": "^0.31.0",
     "@google/genai": "^1.43.0",
-    "@iarna/toml": "^2.2.5",
     "@libsql/client": "^0.17.3",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@oclif/core": "^4.8.3",

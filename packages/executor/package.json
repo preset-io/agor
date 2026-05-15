@@ -18,7 +18,6 @@
   "dependencies": {
     "@agor/core": "workspace:*",
     "@github/copilot-sdk": "^0.2.2",
-    "@iarna/toml": "^2.2.5",
     "@opencode-ai/sdk": "^1.2.20",
     "diff": "^7.0.0",
     "node-pty": "^1.2.0-beta.12",
