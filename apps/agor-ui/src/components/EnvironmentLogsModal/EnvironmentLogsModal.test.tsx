@@ -13,10 +13,16 @@
  */
 
 import type { AgorClient, Worktree } from '@agor-live/client';
-import { render, waitFor, within } from '@testing-library/react';
+import { render, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { Ansi } from '../AnsiText';
 import { EnvironmentLogsModal } from './EnvironmentLogsModal';
+
+// antd Modal mounts via portal + async content render; the default 1000ms
+// findBy* poll is tight under CI cold-start and was tripping flakes when
+// wrapped inside an extra waitFor() (nested polling compounded the timeout).
+// 3s gives the portal headroom without making real failures slow.
+const FIND_BY_TIMEOUT = { timeout: 3000 };
 
 const mockWorktree: Partial<Worktree> = {
   worktree_id: 'wt-test' as Worktree['worktree_id'],
@@ -57,10 +63,10 @@ describe('EnvironmentLogsModal', () => {
 
     // The log body is rendered inside an antd Modal portal, so query against
     // the document and assert the content (and importantly, no crash).
-    await waitFor(async () => {
-      const node = await findByText(/Server started on port 3000/);
-      expect(node).toBeInTheDocument();
-    });
+    // findByText already polls — don't wrap it in waitFor (nested timeouts).
+    expect(
+      await findByText(/Server started on port 3000/, undefined, FIND_BY_TIMEOUT)
+    ).toBeInTheDocument();
   });
 
   it('renders ANSI-coloured log content without crashing', async () => {
@@ -82,10 +88,7 @@ describe('EnvironmentLogsModal', () => {
       />
     );
 
-    await waitFor(async () => {
-      const info = await findByText(/INFO/);
-      expect(info).toBeInTheDocument();
-    });
+    expect(await findByText(/INFO/, undefined, FIND_BY_TIMEOUT)).toBeInTheDocument();
   });
 
   it('renders the empty-logs placeholder when logs string is empty', async () => {
@@ -103,10 +106,7 @@ describe('EnvironmentLogsModal', () => {
       />
     );
 
-    await waitFor(async () => {
-      const node = await findByText(/\(no logs\)/);
-      expect(node).toBeInTheDocument();
-    });
+    expect(await findByText(/\(no logs\)/, undefined, FIND_BY_TIMEOUT)).toBeInTheDocument();
   });
 
   it('renders error state with the daemon-supplied error message', async () => {
