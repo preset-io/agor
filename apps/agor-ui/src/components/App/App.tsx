@@ -708,6 +708,7 @@ export const App: React.FC<AppProps> = ({
       onNukeEnvironment,
       onViewLogs: (worktreeId: string) => setLogsModalWorktreeId(worktreeId),
       onOpenSettings: (sessionId: string) => setSessionSettingsId(sessionId),
+      onSessionClick: handleSessionClick,
       onOpenWorktree: (worktreeId: string, tab?: WorktreeModalTab) => {
         setWorktreeModalWorktreeId(worktreeId);
         setWorktreeModalTab(tab);
@@ -725,6 +726,7 @@ export const App: React.FC<AppProps> = ({
       onStartEnvironment,
       onStopEnvironment,
       onNukeEnvironment,
+      handleSessionClick,
       handleOpenTerminal,
       canOpenTerminal,
     ]

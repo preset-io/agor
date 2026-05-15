@@ -40,6 +40,7 @@ import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import { CallbackToggleButton } from '../CallbackToggleButton';
 import { EffortSelector } from '../EffortSelector';
 import { FileUpload, FileUploadButton } from '../FileUpload';
 import { MCPServerPill } from '../MCPServer';
@@ -833,6 +834,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               size="small"
             />
             {isRunning && <Spin size="small" />}
+            <CallbackToggleButton session={session} />
             <Space.Compact>
               <Tooltip
                 title={

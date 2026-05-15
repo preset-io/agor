@@ -31,7 +31,9 @@ import React from 'react';
 import { AdvancedSettingsForm } from '../AdvancedSettingsForm';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { CallbackConfigForm } from '../CallbackConfigForm';
+import { CallbackTargetDisplay } from '../CallbackToggleButton';
 import { CodexSettingsForm } from '../CodexSettingsForm';
+import { ErrorBoundary } from '../ErrorBoundary';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 import { SessionMetadataForm } from '../SessionMetadataForm';
 
@@ -308,7 +310,12 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         Callbacks
       </Typography.Text>
     ),
-    children: <CallbackConfigForm showHelpText />,
+    children: (
+      <>
+        <CallbackTargetDisplay session={session} onNavigate={onClose} />
+        <CallbackConfigForm showHelpText />
+      </>
+    ),
   });
 
   secondaryItems.push({
@@ -319,7 +326,14 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         Advanced
       </Typography.Text>
     ),
-    children: <AdvancedSettingsForm showHelpText />,
+    children: (
+      <ErrorBoundary
+        fallbackTitle="Failed to load Advanced settings."
+        resetKey={session.session_id}
+      >
+        <AdvancedSettingsForm showHelpText />
+      </ErrorBoundary>
+    ),
   });
 
   return (
