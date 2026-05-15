@@ -21,20 +21,25 @@
 
 import type { Database } from '@agor/core/db';
 import type { UserID, Worktree } from '@agor/core/types';
-import { validateResolvedUnixUser } from '@agor/core/unix';
 
 /**
- * Resolve the validated daemon user for `sudo -u` group-refresh wrapping,
+ * Resolve the configured daemon user for `sudo -u` group-refresh wrapping,
  * or `undefined` when no wrap is needed.
  *
- * This is the core primitive: pure config + validation, no user/db state.
- * Used both by git-execute spawn paths (via `resolveGitImpersonationForUser`)
+ * This is the core primitive: pure config lookup, no user/db state. Used
+ * both by git-execute spawn paths (via `resolveGitImpersonationForUser`)
  * and by in-process shell capture (`git-shell-capture.ts`). Keeping a
  * single source of truth prevents the drift that caused #1143 — the same
  * stale gate copy-pasted across files.
  *
  * Dynamic config import is intentional: `loadConfigSync` reads from disk
  * and we don't want to pay that cost at module-load time.
+ *
+ * Note: existence-validation of the returned daemon user (e.g. via
+ * `validateResolvedUnixUser`) is the responsibility of strict/insulated
+ * impersonation paths, which know the active mode. This primitive only
+ * answers "do we need a wrap, and if so, as whom?" — it does not vouch
+ * for the resolved user.
  */
 export async function resolveDaemonUserForGroupRefresh(): Promise<string | undefined> {
   const { getDaemonUser, isUnixGroupRefreshNeeded } = await import('@agor/core/config');
@@ -45,11 +50,7 @@ export async function resolveDaemonUserForGroupRefresh(): Promise<string | undef
     return undefined;
   }
 
-  const daemonUser = getDaemonUser();
-  if (daemonUser) {
-    validateResolvedUnixUser('simple', daemonUser);
-  }
-  return daemonUser;
+  return getDaemonUser();
 }
 
 /**

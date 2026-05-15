@@ -31,17 +31,6 @@ vi.mock('@agor/core/config', async () => {
   };
 });
 
-// validateResolvedUnixUser is a no-op for `simple` mode (the resolver always
-// passes that), but stub it anyway so the test never depends on real Unix
-// user lookups via getent/id, even if the production call switches modes.
-vi.mock('@agor/core/unix', async () => {
-  const actual = await vi.importActual<Record<string, unknown>>('@agor/core/unix');
-  return {
-    ...actual,
-    validateResolvedUnixUser: vi.fn(),
-  };
-});
-
 import {
   resolveGitImpersonationForUser,
   resolveGitImpersonationForWorktree,
