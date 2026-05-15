@@ -7,7 +7,7 @@
 
 import { isForeignKeyConstraintError } from '@agor/core/db';
 import type { Message } from '@agor/core/types';
-import type { MessagesService } from './claude-tool.js';
+import type { MessagesService } from '../base/index.js';
 
 /**
  * Safely create a message, handling FK constraint errors gracefully.

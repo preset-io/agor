@@ -32,7 +32,7 @@ import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService } from '../adapters/drizzle';
 import { ensureCanTriggerManagedEnv, ensureMinimumRole } from '../utils/authorization.js';
 import { resolveGitImpersonationForWorktree } from '../utils/git-impersonation.js';
-import { parseTruncationLength } from '../utils/parse-pagination.js';
+import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import { generateSessionToken, getDaemonUrl, spawnExecutor } from '../utils/spawn-executor.js';
 import type { InternalEnrichmentParams } from './sessions';
 
@@ -330,7 +330,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
       // Only enrich with session activity if explicitly requested
       if (params?.query?.include_sessions === true || params?.query?.include_sessions === 'true') {
-        const truncationLength = parseTruncationLength(
+        const truncationLength = parseLastMessageTruncationLength(
           params?.query?.last_message_truncation_length
         );
         return this.worktreeRepo.enrichWithSessionActivity(withZone, truncationLength);
@@ -379,7 +379,9 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
     // Only enrich with session activity if explicitly requested
     if (params?.query?.include_sessions === true || params?.query?.include_sessions === 'true') {
-      const truncationLength = parseTruncationLength(params?.query?.last_message_truncation_length);
+      const truncationLength = parseLastMessageTruncationLength(
+        params?.query?.last_message_truncation_length
+      );
       return this.worktreeRepo.enrichWithSessionActivity(withZone, truncationLength);
     }
 
@@ -404,7 +406,9 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     if (includeSessions === true || includeSessions === 'true') {
       const truncationLengthQuery = params?.query?.last_message_truncation_length;
       const truncationLengthRoot = params?._last_message_truncation_length;
-      const truncationLength = parseTruncationLength(truncationLengthRoot ?? truncationLengthQuery);
+      const truncationLength = parseLastMessageTruncationLength(
+        truncationLengthRoot ?? truncationLengthQuery
+      );
       const result = await this.worktreeRepo.enrichWithSessionActivity(withZone, truncationLength);
       return result;
     }

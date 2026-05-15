@@ -181,7 +181,7 @@ async function validateApiKey(tool: string, key: string): Promise<boolean> {
       }
       case 'codex': {
         url = 'https://api.openai.com/v1/models';
-        headers['Authorization'] = `Bearer ${key}`;
+        headers.Authorization = `Bearer ${key}`;
         break;
       }
       case 'gemini': {
@@ -192,8 +192,8 @@ async function validateApiKey(tool: string, key: string): Promise<boolean> {
         // Validates the GitHub token is accepted. Note: does NOT verify Copilot
         // entitlement or model access — just that the token is a valid GitHub credential.
         url = 'https://api.github.com/user';
-        headers['Authorization'] = `token ${key}`;
-        headers['Accept'] = 'application/vnd.github.v3+json';
+        headers.Authorization = `token ${key}`;
+        headers.Accept = 'application/vnd.github.v3+json';
         break;
       }
       default:

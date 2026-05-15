@@ -21,7 +21,7 @@ import type {
   SessionMCPServerRepository,
 } from '../../../db/feathers-repositories.js';
 import type { PermissionService } from '../../../permissions/permission-service.js';
-import type { MessagesService, SessionsPatchClient, TasksService } from '../claude-tool.js';
+import type { MessagesService, SessionsPatchClient, TasksService } from '../../base/index.js';
 
 /**
  * Create canUseTool callback for permission handling

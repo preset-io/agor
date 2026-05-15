@@ -28,6 +28,7 @@ import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-resp
 import { enrichContentBlocks } from '../base/diff-enrichment.js';
 import type {
   CreateSessionConfig,
+  MessagesService,
   SessionHandle,
   SessionMetadata,
   StreamingCallbacks,
@@ -53,20 +54,6 @@ interface SessionContext {
   worktreePath?: string;
   /** MCP token for Agor MCP server injection */
   mcpToken?: string;
-}
-
-/**
- * Service interface for creating messages via FeathersJS
- */
-export interface MessagesService {
-  create(data: Partial<Message>): Promise<Message>;
-}
-
-/**
- * Service interface for updating tasks via FeathersJS
- */
-export interface TasksService {
-  patch(id: string, data: Partial<{ status: string }>): Promise<unknown>;
 }
 
 export class OpenCodeTool implements ITool {

@@ -44,6 +44,8 @@ export type {
   WorktreesService,
 } from '@agor/core/client';
 
+export type { PaginatedResult } from '@agor/core/types';
+
 export type {
   ReactiveAgorClient,
   ReactiveLoadedTaskIds,

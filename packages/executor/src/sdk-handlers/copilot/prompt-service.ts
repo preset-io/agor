@@ -27,8 +27,8 @@ import type {
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID } from '../../types.js';
+import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
-import type { MessagesService, SessionsPatchClient, TasksService } from '../claude/claude-tool.js';
 import type { CopilotSessionEvents } from './event-mapper.js';
 import { DEFAULT_COPILOT_MODEL } from './models.js';
 import { createPermissionHandler, type PermissionDeps } from './permission-mapper.js';

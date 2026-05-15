@@ -95,7 +95,7 @@ export function resolveProbeServerTemplates(
     ] as const;
     for (const field of oauthTemplatedFields) {
       const original = serverConfig.auth[field];
-      if (original && original.includes('{{') && !result.server.auth?.[field]) {
+      if (original?.includes('{{') && !result.server.auth?.[field]) {
         unresolvedAuth.push(`auth.${field}`);
       }
     }

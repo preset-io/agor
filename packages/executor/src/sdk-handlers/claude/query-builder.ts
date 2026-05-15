@@ -28,8 +28,8 @@ import type {
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { MCPServersConfig, SessionID, TaskID, UserID } from '../../types.js';
+import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
-import type { MessagesService, SessionsPatchClient, TasksService } from './claude-tool.js';
 import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
 import { parseModelWithBetas } from './model-utils.js';
 import { DEFAULT_CLAUDE_MODEL } from './models.js';

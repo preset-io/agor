@@ -9,7 +9,7 @@ import { generateId } from '@agor/core';
 import type { Message, MessageID, MessageSource, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import type { TokenUsage } from '../../types/token-usage.js';
-import type { MessagesService, TasksService } from './claude-tool.js';
+import type { MessagesService, TasksService } from '../base/index.js';
 import { DEFAULT_CLAUDE_MODEL } from './models.js';
 
 /**

@@ -32,7 +32,7 @@ import type {
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { PermissionMode } from '../../types.js';
-import type { MessagesService, SessionsPatchClient, TasksService } from '../claude/claude-tool.js';
+import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 
 /**
  * Re-export SDK types for convenience

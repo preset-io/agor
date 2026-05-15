@@ -4,8 +4,7 @@
  * Displays repositories in a beautiful table.
  */
 
-import type { PaginatedResult } from '@agor/core/types';
-import type { Repo } from '@agor-live/client';
+import type { PaginatedResult, Repo } from '@agor-live/client';
 import { formatShortId, PAGINATION } from '@agor-live/client';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';

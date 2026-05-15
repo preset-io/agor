@@ -2,7 +2,7 @@ import { generateId } from '@agor/core';
 import type { MessageID, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import type { MessagesService, TasksService } from './claude-tool.js';
+import type { MessagesService, TasksService } from '../base/index.js';
 import {
   createAssistantMessage,
   createUserMessage,

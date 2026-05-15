@@ -33,8 +33,13 @@ import {
   type TaskID,
 } from '../../types.js';
 import { enrichContentBlocks } from '../base/diff-enrichment.js';
-import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base/index.js';
-import type { MessagesService, TasksService } from '../claude/claude-tool.js';
+import type {
+  ITool,
+  MessagesService,
+  StreamingCallbacks,
+  TasksService,
+  ToolCapabilities,
+} from '../base/index.js';
 import { createUserMessage } from '../claude/message-builder.js';
 import { DEFAULT_GEMINI_MODEL } from './models.js';
 import { GeminiPromptService } from './prompt-service.js';

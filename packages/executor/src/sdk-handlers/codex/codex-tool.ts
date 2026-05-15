@@ -34,12 +34,14 @@ import {
   enrichContentBlocks,
   registerToolInvocationStart,
 } from '../base/diff-enrichment.js';
-import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base/index.js';
 import type {
+  ITool,
   MessagesService,
+  StreamingCallbacks,
   TasksService,
   TasksStreamingService,
-} from '../claude/claude-tool.js';
+  ToolCapabilities,
+} from '../base/index.js';
 import { createUserMessage } from '../claude/message-builder.js';
 import { DEFAULT_CODEX_MODEL } from './models.js';
 import { CodexPromptService } from './prompt-service.js';

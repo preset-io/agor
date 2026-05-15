@@ -26,7 +26,6 @@ import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-resp
 // Removed import of calculateModelContextWindowUsage - inlined instead
 import type { TokenUsage } from '../../types/token-usage.js';
 import {
-  type Message,
   type MessageID,
   MessageRole,
   type MessageSource,
@@ -36,7 +35,16 @@ import {
   TaskStatus,
 } from '../../types.js';
 import { enrichToolResults, registerToolUses } from '../base/diff-enrichment.js';
-import type { ImportOptions, ITool, SessionData, ToolCapabilities } from '../base/index.js';
+import type {
+  ImportOptions,
+  ITool,
+  MessagesService,
+  SessionData,
+  SessionsPatchClient,
+  TasksService,
+  TasksStreamingService,
+  ToolCapabilities,
+} from '../base/index.js';
 import { loadClaudeSession } from './import/load-session.js';
 import { transcriptsToMessages } from './import/message-converter.js';
 import {
@@ -108,47 +116,6 @@ async function withFeathersSessionGuard<T>(
   }
 
   return operation();
-}
-
-/**
- * Service interface for creating and updating messages via FeathersJS
- * This ensures WebSocket events are emitted when messages are created or updated
- */
-export interface MessagesService {
-  create(data: Partial<Message>): Promise<Message>;
-  patch(id: string, data: Partial<Message>): Promise<Message>;
-}
-
-/**
- * Service interface for updating tasks via FeathersJS
- * This ensures WebSocket events are emitted when tasks are updated
- * Note: emit() is called directly on the service (socket.io EventEmitter feature)
- */
-export interface TasksService {
-  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service returns dynamic task data
-  get(id: string): Promise<any>;
-  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service accepts partial task updates
-  patch(id: string, data: Partial<any>): Promise<any>;
-  emit(event: string, data: unknown): void;
-}
-
-export interface TasksStreamingService {
-  create(data: {
-    event: 'tool:start' | 'tool:complete' | 'thinking:chunk';
-    data: Record<string, unknown>;
-  }): Promise<unknown>;
-}
-
-/**
- * Service interface for updating sessions via FeathersJS
- * This ensures WebSocket events are emitted when sessions are updated (e.g., permission config)
- *
- * Named `SessionsPatchClient` to avoid shadowing the canonical `SessionsService`
- * exported from `@agor/core/client`.
- */
-export interface SessionsPatchClient {
-  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service accepts partial session updates
-  patch(id: string, data: Partial<any>): Promise<any>;
 }
 
 export class ClaudeTool implements ITool {

@@ -28,7 +28,7 @@ import type {
 } from '@agor/core/types';
 import { ROLES, SessionStatus } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
-import { parseTruncationLength } from '../utils/parse-pagination.js';
+import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import {
   determineSpawnIdentity,
   isSuperAdmin,
@@ -702,7 +702,9 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     if (includeLastMessage === true || includeLastMessage === 'true') {
       const truncationLengthQuery = params?.query?.last_message_truncation_length;
       const truncationLengthRoot = params?._last_message_truncation_length;
-      const truncationLength = parseTruncationLength(truncationLengthRoot ?? truncationLengthQuery);
+      const truncationLength = parseLastMessageTruncationLength(
+        truncationLengthRoot ?? truncationLengthQuery
+      );
       const result = await this.sessionRepo.enrichWithLastMessage(
         session as Session,
         truncationLength
