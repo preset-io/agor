@@ -1,4 +1,4 @@
-import type { ActiveUser, Board, BoardID, User, Worktree } from '@agor-live/client';
+import type { ActiveUser, Board, BoardID, Notification, User, Worktree } from '@agor-live/client';
 import {
   ApiOutlined,
   CommentOutlined,
@@ -26,9 +26,11 @@ import { useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BrandLogo } from '../BrandLogo';
+import { AnnouncementBanner } from '../AnnouncementBanner';
 import { ConnectionStatus } from '../ConnectionStatus';
 import { Facepile } from '../Facepile';
 import { MarkdownRenderer } from '../MarkdownRenderer';
+import { NotificationBell } from '../NotificationBell';
 import { ThemeSwitcher } from '../ThemeSwitcher';
 
 const { Header } = Layout;
@@ -68,6 +70,15 @@ export interface AppHeaderProps {
   instanceLabel?: string;
   /** Instance description (markdown) shown in popover around the instance label */
   instanceDescription?: string;
+  /** Notifications panel state (durable per-user inbox). */
+  notifications?: Notification[];
+  notificationUnreadCount?: number;
+  activeBanner?: Notification | null;
+  onNotificationMarkRead?: (id: string) => void;
+  onNotificationDismiss?: (id: string) => void;
+  onNotificationMarkAllRead?: () => void;
+  onNotificationOpen?: (notification: Notification) => void;
+  onBannerDismiss?: (notification: Notification) => void;
 }
 
 const RecentBoardPills: React.FC<{
@@ -136,6 +147,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   recentBoards = [],
   instanceLabel,
   instanceDescription,
+  notifications = [],
+  notificationUnreadCount = 0,
+  activeBanner = null,
+  onNotificationMarkRead,
+  onNotificationDismiss,
+  onNotificationMarkAllRead,
+  onNotificationOpen,
+  onBannerDismiss,
 }) => {
   const { token } = theme.useToken();
   // Single source of truth for "is the daemon usable right now?". Captures
@@ -293,6 +312,21 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         )}
       </Space>
 
+      {/* Center slot — sticky admin announcement banner (collapses when empty) */}
+      <div
+        style={{
+          flex: '0 1 auto',
+          minWidth: 0,
+          display: 'flex',
+          justifyContent: 'center',
+        }}
+      >
+        <AnnouncementBanner
+          notification={activeBanner}
+          onDismiss={(n) => onBannerDismiss?.(n)}
+        />
+      </div>
+
       <Space>
         <ConnectionStatus
           connected={connected}
@@ -314,6 +348,15 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
           </>
         )}
+        <NotificationBell
+          notifications={notifications}
+          unreadCount={notificationUnreadCount}
+          onMarkRead={(id) => onNotificationMarkRead?.(id)}
+          onDismiss={(id) => onNotificationDismiss?.(id)}
+          onMarkAllRead={() => onNotificationMarkAllRead?.()}
+          onOpen={onNotificationOpen}
+          disabled={mutationDisabled}
+        />
         {eventStreamEnabled && (
           <Tooltip title="Live Event Stream" placement="bottom">
             <Button

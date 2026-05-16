@@ -37,6 +37,7 @@ import { useBoardTitle } from '../../hooks/useBoardTitle';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useFaviconStatus } from '../../hooks/useFaviconStatus';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
+import { useNotifications } from '../../hooks/useNotifications';
 import { usePresence } from '../../hooks/usePresence';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
@@ -641,6 +642,16 @@ export const App: React.FC<AppProps> = ({
     globalPresence: true,
   });
 
+  // Notifications inbox — drives bell counter, panel, and sticky banner.
+  const {
+    notifications,
+    unreadCount: notificationUnreadCount,
+    activeBanner,
+    markRead: markNotificationRead,
+    dismiss: dismissNotification,
+    markAllRead: markAllNotificationsRead,
+  } = useNotifications(client, user?.user_id);
+
   // Include current user in the global facepile (always first)
   // Filter out current user from globalActiveUsers to avoid duplication
   const allActiveUsers = user
@@ -781,6 +792,21 @@ export const App: React.FC<AppProps> = ({
               boards={mapToArray(boardById)}
               currentBoardId={currentBoardId}
               onBoardChange={setCurrentBoardId}
+              notifications={notifications}
+              notificationUnreadCount={notificationUnreadCount}
+              activeBanner={activeBanner}
+              onNotificationMarkRead={markNotificationRead}
+              onNotificationDismiss={dismissNotification}
+              onNotificationMarkAllRead={markAllNotificationsRead}
+              onNotificationOpen={(n) => {
+                if (n.source_board_id && n.source_board_id !== currentBoardId) {
+                  setCurrentBoardId(n.source_board_id);
+                }
+                if (n.source_session_id) {
+                  setSelectedSessionId(n.source_session_id);
+                }
+              }}
+              onBannerDismiss={(n) => dismissNotification(n.notification_id)}
               worktreeById={worktreeById}
               boardById={boardById}
               onUserClick={(
