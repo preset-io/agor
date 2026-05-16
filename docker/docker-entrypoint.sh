@@ -198,6 +198,16 @@ echo "👤 Ensuring default admin user exists..."
 ADMIN_OUTPUT=$(pnpm --filter @agor/cli exec tsx bin/dev.ts user create-admin --force 2>&1)
 echo "$ADMIN_OUTPUT"
 
+# In strict mode the daemon validates that a session creator's unix_username exists as a
+# real OS account before spawning the executor. The admin DB user is created above via the
+# CLI (direct DB write, no Feathers hook), so the normal after-create hook that calls
+# unix.sync-user never fires. Provision the OS account explicitly here while we still have
+# a clean pre-daemon window and sudoers access.
+if [ "$AGOR_SET_UNIX_MODE" = "strict" ]; then
+  echo "🔒 Provisioning bootstrap admin OS user (strict mode)..."
+  pnpm agor admin ensure-user --username admin || echo "⚠️  Could not provision admin OS user — check sudoers"
+fi
+
 # Get FULL admin user UUID from database (the CLI only shows short ID)
 # Use dedicated script to query the database
 echo "🔍 Querying admin user ID from database..."
