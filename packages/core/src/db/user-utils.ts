@@ -83,7 +83,7 @@ export async function createUser(db: Database, data: CreateUserData): Promise<Us
   const user_id = generateId() as UserID;
 
   const role = data.role || 'member';
-  const defaultEmoji = role === 'admin' ? '⭐' : '👤';
+  const defaultEmoji = role === 'superadmin' || role === 'admin' ? '⭐' : '👤';
 
   // For PostgreSQL, we need to use ISO strings for timestamps
   // For SQLite, Date objects work because of timestamp_ms mode
@@ -144,7 +144,8 @@ export const DEFAULT_ADMIN_USER = {
   email: 'admin@agor.live',
   password: 'admin',
   name: 'Admin',
-  role: 'admin' as const,
+  role: 'superadmin' as const,
+  unix_username: 'admin',
 };
 
 /**
