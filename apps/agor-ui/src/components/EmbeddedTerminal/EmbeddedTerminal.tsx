@@ -152,7 +152,7 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
       xtermEl.style.height = '100%';
     }
 
-    const fit = () => {
+    const fitToContainer = () => {
       if (!terminalRef.current || !containerRef.current) return;
       // biome-ignore lint/suspicious/noExplicitAny: tap xterm internals for cell metrics
       const core = (terminalRef.current as any)._core;
@@ -186,29 +186,29 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
     //      where cell metrics flip from default → real after paint.
     let renderHandlerOff: { dispose(): void } | null = null;
     try {
-      renderHandlerOff = terminal.onRender(() => fit());
+      renderHandlerOff = terminal.onRender(() => fitToContainer());
     } catch {
       /* xterm v5 onRender signature variations — fall back to rAF only */
     }
     requestAnimationFrame(() => {
-      fit();
-      requestAnimationFrame(fit);
+      fitToContainer();
+      requestAnimationFrame(fitToContainer);
     });
     // Burst fit for 1.5s so the terminal definitively reaches its
     // container size by the time the user is ready to read it.
-    const fitBurst = setInterval(fit, 100);
+    const fitBurst = setInterval(fitToContainer, 100);
     const fitBurstStop = setTimeout(() => clearInterval(fitBurst), 1500);
     // Also re-fit when web fonts finish loading — Menlo / Monaco may
     // arrive late and shift cellWidth.
     if (typeof document !== 'undefined' && 'fonts' in document) {
       (document as unknown as { fonts: { ready: Promise<void> } }).fonts.ready
-        .then(() => fit())
+        .then(() => fitToContainer())
         .catch(() => {
           /* ignore */
         });
     }
 
-    const ro = new ResizeObserver(() => fit());
+    const ro = new ResizeObserver(() => fitToContainer());
     ro.observe(containerRef.current);
 
     (async () => {
@@ -284,7 +284,7 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
       setConnected(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, userId, worktreeId, focusTabName]);
+  }, [client, userId, worktreeId, focusTabName, ensureCliSessionId]);
 
   /**
    * Refocus tab when the embedded view becomes visible. Two cases:
@@ -332,9 +332,7 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
         background: '#000',
         padding: 8,
         borderRadius: 4,
-        ...(fill
-          ? { flex: 1, minHeight: 0, height: '100%' }
-          : { minHeight: height }),
+        ...(fill ? { flex: 1, minHeight: 0, height: '100%' } : { minHeight: height }),
       }}
     >
       <div

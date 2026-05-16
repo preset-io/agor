@@ -8,7 +8,11 @@ describe('JsonlEventTranslator', () => {
     const t = new JsonlEventTranslator();
     expect(
       t.translateLine(
-        JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp: '2026-05-14T00:00:00Z' })
+        JSON.stringify({
+          type: 'queue-operation',
+          operation: 'enqueue',
+          timestamp: '2026-05-14T00:00:00Z',
+        })
       )
     ).toEqual([{ type: 'turn_start', timestamp: '2026-05-14T00:00:00Z' }]);
   });
@@ -37,7 +41,9 @@ describe('JsonlEventTranslator', () => {
       { type: 'assistant', uuid: 'b', timestamp: 't2', message: sharedMsg },
       { type: 'assistant', uuid: 'c', timestamp: 't3', message: sharedMsg },
     ];
-    const events = lines.flatMap((l) => t.translateParsed(l as Parameters<typeof t.translateParsed>[0]));
+    const events = lines.flatMap((l) =>
+      t.translateParsed(l as Parameters<typeof t.translateParsed>[0])
+    );
     const assistantEvents = events.filter((e) => e.type === 'assistant_message');
     expect(assistantEvents).toHaveLength(1);
     expect(t.getSeenMessageIds().size).toBe(1);

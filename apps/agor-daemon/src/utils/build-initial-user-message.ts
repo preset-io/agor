@@ -23,7 +23,8 @@
  */
 
 import { generateId } from '@agor/core/db';
-import type { Message, MessageType, SessionID, TaskID, UUID } from '@agor/core/types';
+import type { ContentBlock, Message, MessageType, SessionID, TaskID, UUID } from '@agor/core/types';
+import { MessageRole } from '@agor/core/types';
 
 const CONTENT_PREVIEW_MAX_CHARS = 200;
 
@@ -36,7 +37,7 @@ export interface BuildInitialUserMessageInput {
   /** ISO 8601. */
   timestamp: string;
   /** Raw prompt content. String for textarea/CLI; array for callbacks. */
-  content: string | unknown[];
+  content: string | ContentBlock[];
   /**
    * `'user'` for normal prompts, `'system'` for the Agor-callback
    * variant. The role is always `'user'` regardless.
@@ -56,7 +57,7 @@ export function buildInitialUserMessage(input: BuildInitialUserMessageInput): Me
     session_id: input.sessionId,
     task_id: input.taskId,
     type: input.type ?? 'user',
-    role: 'user',
+    role: MessageRole.USER,
     index: input.index,
     timestamp: input.timestamp,
     content_preview: preview,

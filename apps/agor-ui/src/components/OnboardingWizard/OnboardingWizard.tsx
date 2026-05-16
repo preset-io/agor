@@ -182,6 +182,7 @@ function apiKeyPlaceholder(agent: AgenticToolName): string {
 
 const AGENT_LABELS: Record<AgenticToolName, string> = {
   'claude-code': 'Claude Code',
+  'claude-code-cli': 'Claude Code CLI',
   codex: 'Codex (OpenAI)',
   gemini: 'Gemini',
   opencode: 'OpenCode',
@@ -242,6 +243,8 @@ function findMatchingRepoId(
 
 const AGENT_KEY_CONSOLES: Record<AgenticToolName, { label: string; url: string } | null> = {
   'claude-code': { label: 'console.anthropic.com', url: 'https://console.anthropic.com/' },
+  // Claude Code CLI uses the same Anthropic credentials.
+  'claude-code-cli': { label: 'console.anthropic.com', url: 'https://console.anthropic.com/' },
   codex: { label: 'platform.openai.com', url: 'https://platform.openai.com/api-keys' },
   gemini: { label: 'aistudio.google.com', url: 'https://aistudio.google.com/apikey' },
   copilot: { label: 'github.com/features/copilot', url: 'https://github.com/features/copilot' },

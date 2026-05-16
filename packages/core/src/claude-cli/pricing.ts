@@ -149,8 +149,7 @@ export function computeCost(
   const M = 1_000_000;
   const inputCost = ((usage.input_tokens ?? 0) * price.inputPerMTok) / M;
   const outputCost = ((usage.output_tokens ?? 0) * price.outputPerMTok) / M;
-  const cacheWriteCost =
-    ((usage.cache_creation_input_tokens ?? 0) * price.cacheWritePerMTok) / M;
+  const cacheWriteCost = ((usage.cache_creation_input_tokens ?? 0) * price.cacheWritePerMTok) / M;
   const cacheReadCost = ((usage.cache_read_input_tokens ?? 0) * price.cacheReadPerMTok) / M;
   const webSearchCost = price.webSearchPerRequest
     ? (usage.server_tool_use?.web_search_requests ?? 0) * price.webSearchPerRequest

@@ -75,6 +75,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   // Separate forms for each agentic tool tab
   const [claudeForm] = Form.useForm();
+  const [claudeCliForm] = Form.useForm();
   const [codexForm] = Form.useForm();
   const [geminiForm] = Form.useForm();
   const [opencodeForm] = Form.useForm();
@@ -86,6 +87,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // each time the modal opens.
   const [agenticToolStatus, setAgenticToolStatus] = useState<Record<AgenticToolName, FieldStatus>>({
     'claude-code': {},
+    'claude-code-cli': {},
     codex: {},
     gemini: {},
     opencode: {},
@@ -100,6 +102,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // Saving state for agentic tool tabs
   const [savingAgenticConfig, setSavingAgenticConfig] = useState<Record<AgenticToolName, boolean>>({
     'claude-code': false,
+    'claude-code-cli': false,
     codex: false,
     gemini: false,
     opencode: false,
@@ -154,6 +157,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     const next: Record<AgenticToolName, FieldStatus> = {
       'claude-code': {},
+      'claude-code-cli': {},
       codex: {},
       gemini: {},
       opencode: {},
@@ -348,8 +352,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const handleAgenticConfigSave = async (tool: AgenticToolName) => {
     if (!user) return;
 
-    const formMap = {
+    const formMap: Record<AgenticToolName, ReturnType<typeof Form.useForm>[0]> = {
       'claude-code': claudeForm,
+      'claude-code-cli': claudeCliForm,
       codex: codexForm,
       gemini: geminiForm,
       opencode: opencodeForm,
@@ -359,7 +364,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     try {
       setSavingAgenticConfig((prev) => ({ ...prev, [tool]: true }));
 
-      const values = formMap[tool].getFieldsValue();
+      const values = formMap[tool].getFieldsValue() as Parameters<
+        typeof buildConfigFromFormValues
+      >[1];
       const newConfig = {
         ...user.default_agentic_config,
         [tool]: buildConfigFromFormValues(tool, values),
@@ -380,8 +387,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   // Handle agentic tool config clear
   const handleAgenticConfigClear = (tool: AgenticToolName) => {
-    const formMap = {
+    const formMap: Record<AgenticToolName, ReturnType<typeof Form.useForm>[0]> = {
       'claude-code': claudeForm,
+      'claude-code-cli': claudeCliForm,
       codex: codexForm,
       gemini: geminiForm,
       opencode: opencodeForm,
@@ -641,13 +649,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       case 'personal-api-keys':
         return <PersonalApiKeysTab client={client} />;
       case 'claude-code':
+      case 'claude-code-cli':
       case 'codex':
       case 'gemini':
       case 'opencode':
       case 'copilot': {
         const toolName = activeTab as AgenticToolName;
-        const formMap = {
+        const formMap: Record<AgenticToolName, ReturnType<typeof Form.useForm>[0]> = {
           'claude-code': claudeForm,
+          'claude-code-cli': claudeCliForm,
           codex: codexForm,
           gemini: geminiForm,
           opencode: opencodeForm,
@@ -656,6 +666,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         const currentForm = formMap[toolName];
         const displayNames: Record<AgenticToolName, string> = {
           'claude-code': 'Claude Code',
+          'claude-code-cli': 'Claude Code CLI',
           codex: 'Codex',
           gemini: 'Gemini',
           opencode: 'OpenCode',

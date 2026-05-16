@@ -44,9 +44,9 @@ import {
   UnixUserNotFoundError,
   validateResolvedUnixUser,
 } from '@agor/core/unix';
-import { buildSpawnConfigForSession, isClaudeRunningFor } from './claude-cli-integration.js';
 import { generateSessionToken, spawnExecutorFireAndForget } from '../utils/spawn-executor.js';
 import { hasWorktreePermission } from '../utils/worktree-authorization.js';
+import { buildSpawnConfigForSession, isClaudeRunningFor } from './claude-cli-integration.js';
 
 interface CreateTerminalData {
   rows?: number;

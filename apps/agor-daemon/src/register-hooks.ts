@@ -1851,9 +1851,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               .get(session.worktree_id, { provider: undefined });
             const cwd = (worktree as { path?: string } | undefined)?.path;
             if (cwd) {
-              const { onCliSessionCreated } = await import(
-                './services/claude-cli-integration.js'
-              );
+              const { onCliSessionCreated } = await import('./services/claude-cli-integration.js');
               await onCliSessionCreated(context.app, session, cwd);
             } else {
               console.warn(

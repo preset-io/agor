@@ -141,7 +141,7 @@ describe('formatAsShellCommand', () => {
     expect(rendered).toMatch(/^claude --session-id abc/);
   });
 
-  it("escapes embedded single quotes", () => {
+  it('escapes embedded single quotes', () => {
     const built = buildClaudeCliSpawn({
       sessionId: "with'quote",
     });

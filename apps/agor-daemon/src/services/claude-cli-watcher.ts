@@ -32,7 +32,7 @@
  *     can act on them.
  */
 
-import { promises as fsp, type FSWatcher, watch } from 'node:fs';
+import { type FSWatcher, promises as fsp, watch } from 'node:fs';
 import path from 'node:path';
 import {
   claudeSessionJsonlPath,
@@ -104,9 +104,7 @@ const PARENT_DIR_CHECK_INTERVAL_MS = 30_000;
  */
 export class ClaudeCliWatcher {
   private readonly translator = new JsonlEventTranslator();
-  private readonly opts: Required<
-    Omit<CliWatcherOptions, 'startOffset' | 'log'>
-  > & {
+  private readonly opts: Required<Omit<CliWatcherOptions, 'startOffset' | 'log'>> & {
     startOffset: number;
     log: Pick<Console, 'warn' | 'info' | 'error' | 'debug'>;
   };
@@ -146,16 +144,8 @@ export class ClaudeCliWatcher {
       log: options.log ?? console,
     };
     this.offset = this.opts.startOffset;
-    this.jsonlPath = claudeSessionJsonlPath(
-      this.opts.homeDir,
-      this.opts.cwd,
-      this.opts.sessionId
-    );
-    this.subagentsDir = claudeSubagentsDir(
-      this.opts.homeDir,
-      this.opts.cwd,
-      this.opts.sessionId
-    );
+    this.jsonlPath = claudeSessionJsonlPath(this.opts.homeDir, this.opts.cwd, this.opts.sessionId);
+    this.subagentsDir = claudeSubagentsDir(this.opts.homeDir, this.opts.cwd, this.opts.sessionId);
   }
 
   /** Absolute path to the JSONL we're watching. */
@@ -240,12 +230,14 @@ export class ClaudeCliWatcher {
     this.watcher = watch(this.jsonlPath, { persistent: false }, () => {
       // Don't await — kernel events can interleave. Chain through
       // `this.busy` so reads serialize.
-      this.busy = this.busy.then(() => this.readAndDispatch()).catch((err) => {
-        this.opts.log.error('[claude-cli-watcher] read error', {
-          sessionId: this.opts.sessionId,
-          err,
+      this.busy = this.busy
+        .then(() => this.readAndDispatch())
+        .catch((err) => {
+          this.opts.log.error('[claude-cli-watcher] read error', {
+            sessionId: this.opts.sessionId,
+            err,
+          });
         });
-      });
     });
 
     // Schedule the periodic flush. One-shot timer rescheduled after each
@@ -579,4 +571,3 @@ function sleep(ms: number): Promise<void> {
     t.unref?.();
   });
 }
-

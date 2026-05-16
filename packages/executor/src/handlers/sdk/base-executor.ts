@@ -308,7 +308,7 @@ export async function executeToolTask(params: {
   abortController: AbortController;
   apiKeyEnvVar: ApiKeyName;
   toolName: AgenticToolName;
-  messageSource?: 'gateway' | 'agor';
+  messageSource?: MessageSource;
   createTool: (
     repos: ReturnType<typeof createFeathersBackedRepositories>,
     apiKey: string,

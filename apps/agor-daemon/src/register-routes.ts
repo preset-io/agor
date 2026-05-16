@@ -83,12 +83,12 @@ import { registerProxies } from './setup/proxies.js';
 import { applyTierHooks } from './setup/service-tiers.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { buildAuthRateLimitKey } from './utils/auth-rate-limit-key.js';
-import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
 import {
   ensureMinimumRole,
   registerAuthenticatedRoute,
   requireMinimumRole,
 } from './utils/authorization.js';
+import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import {
@@ -795,14 +795,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // with the freshly-built claude argv — atomic in the
         // executor's tab-event loop. No timer, no surviving stale
         // tab, no auto-converse. Restart actually restarts.
-        const worktree = (await app
-          .service('worktrees')
-          .get(session.worktree_id, params)) as { path?: string };
+        const worktree = (await app.service('worktrees').get(session.worktree_id, params)) as {
+          path?: string;
+        };
         const cwd = worktree?.path;
         if (!cwd) throw new Error('Worktree has no path; cannot restart');
-        const { buildSpawnConfigForSession } = await import(
-          './services/claude-cli-integration.js'
-        );
+        const { buildSpawnConfigForSession } = await import('./services/claude-cli-integration.js');
         const { buildClaudeCliSpawn } = await import('@agor/core/claude-cli');
         const spawnCfg = buildSpawnConfigForSession(session, cwd);
         const built = buildClaudeCliSpawn(spawnCfg);
@@ -1060,11 +1058,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // Import lazily to avoid pulling claude-cli-integration into the
       // hot-path of every non-CLI prompt.
       const { setPendingCliTask } = await import('./services/claude-cli-integration.js');
-      setPendingCliTask(
-        sessionId as SessionID,
-        taskId as TaskID,
-        messageStartIndex
-      );
+      setPendingCliTask(sessionId as SessionID, taskId as TaskID, messageStartIndex);
 
       setImmediate(async () => {
         try {
@@ -1128,11 +1122,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // turn_end.
           await app
             .service('sessions')
-            .patch(
-              sessionId,
-              { status: SessionStatus.IDLE, ready_for_prompt: true },
-              params
-            )
+            .patch(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true }, params)
             .catch(() => {
               /* best-effort */
             });

@@ -24,13 +24,7 @@ export interface ModelSelectorProps {
   value?: ModelConfig;
   onChange?: (config: ModelConfig) => void;
   agent?: 'claude-code' | 'claude-code-cli' | 'codex' | 'gemini' | 'opencode' | 'copilot'; // Kept as 'agent' for backwards compat in prop name
-  agentic_tool?:
-    | 'claude-code'
-    | 'claude-code-cli'
-    | 'codex'
-    | 'gemini'
-    | 'opencode'
-    | 'copilot';
+  agentic_tool?: 'claude-code' | 'claude-code-cli' | 'codex' | 'gemini' | 'opencode' | 'copilot';
   /**
    * Optional Feathers client. When provided AND the agentic tool is Copilot,
    * the picker fetches the live model list from /copilot-models (which calls

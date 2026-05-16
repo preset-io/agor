@@ -37,6 +37,11 @@ const GLOBAL_TOOL_FIELDS: Record<AgenticToolName, AgenticToolFieldConfig[]> = {
   'claude-code': TOOL_FIELD_CONFIGS['claude-code'].filter(
     (f) => f.field !== 'CLAUDE_CODE_OAUTH_TOKEN'
   ),
+  // Claude Code CLI shares credentials with the SDK path. Same filter
+  // (OAUTH_TOKEN is per-user only).
+  'claude-code-cli': TOOL_FIELD_CONFIGS['claude-code-cli'].filter(
+    (f) => f.field !== 'CLAUDE_CODE_OAUTH_TOKEN'
+  ),
   // OPENAI_BASE_URL is per-user only: in multiplayer Agor instances hosting
   // multiple companies, a global override would silently route every user's
   // Codex traffic through one tenant's endpoint. Each user sets their own.

@@ -486,7 +486,10 @@ async function queryTabNames(): Promise<string[]> {
  * server is wedged and we'd rather time out than hang the executor's
  * tab-event loop.
  */
-function runZellij(sessionName: string, actionArgs: string[]): Promise<{ code: number | null; stderr: string }> {
+function runZellij(
+  sessionName: string,
+  actionArgs: string[]
+): Promise<{ code: number | null; stderr: string }> {
   return new Promise((resolve) => {
     const args = ['--session', sessionName, 'action', ...actionArgs];
     console.log(`[zellij.tab] Executing: zellij ${args.join(' ')}`);
@@ -565,9 +568,7 @@ async function closeAllTabsNamed(sessionName: string, tabName: string): Promise<
     }
     closed += 1;
   }
-  console.log(
-    `[zellij.tab] Closed ${closed} of ${initialMatches} tab(s) named "${tabName}"`
-  );
+  console.log(`[zellij.tab] Closed ${closed} of ${initialMatches} tab(s) named "${tabName}"`);
 }
 
 /**
@@ -658,13 +659,7 @@ async function handleTabAction(
   // accept `--command` directly — we materialize a per-tab KDL layout
   // file declaring one pane that runs it (see writeClaudeLayoutFile).
   if (command) {
-    const result = await createTabWithLayout(
-      sessionName,
-      tabName,
-      cwd,
-      command,
-      commandArgs ?? []
-    );
+    const result = await createTabWithLayout(sessionName, tabName, cwd, command, commandArgs ?? []);
     if (result.code !== 0) {
       throw new Error(`zellij new-tab failed with code ${result.code}: ${result.stderr}`);
     }
@@ -712,13 +707,15 @@ function writeClaudeLayoutFile(
   }
   const filePath = path.join(dir, `${tabName}-${Date.now()}.kdl`);
   // KDL string-escaping: backslashes and double-quotes only. Each argv
-  // element becomes a separate quoted token inside `args`.
-  const escape = (s: string) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  // element becomes a separate quoted token inside `args`. Named
+  // `quoteKdl` (not `escape`) to avoid shadowing the global
+  // `escape()` URL-encoder.
+  const quoteKdl = (s: string) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
   const argsLine =
-    commandArgs.length > 0 ? `        args ${commandArgs.map(escape).join(' ')}\n` : '';
-  const cwdAttr = cwd ? ` cwd=${escape(cwd)}` : '';
+    commandArgs.length > 0 ? `        args ${commandArgs.map(quoteKdl).join(' ')}\n` : '';
+  const cwdAttr = cwd ? ` cwd=${quoteKdl(cwd)}` : '';
   const layout = `layout {
-    pane command=${escape(command)}${cwdAttr} {
+    pane command=${quoteKdl(command)}${cwdAttr} {
 ${argsLine}    }
 }
 `;

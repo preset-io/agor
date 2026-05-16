@@ -219,9 +219,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                   icon={<ReloadOutlined />}
                   onClick={async () => {
                     try {
-                      await client
-                        .service(`sessions/${session.session_id}/restart-cli`)
-                        .create({});
+                      await client.service(`sessions/${session.session_id}/restart-cli`).create({});
                       showSuccess('Restarting claude…');
                     } catch (err) {
                       showError(
@@ -303,7 +301,6 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             currentUserId={currentUserId}
             onScrollRef={handleScrollRef}
             onPermissionDecision={onPermissionDecision}
-            onInputResponse={onInputResponse}
             worktreeName={worktree?.name}
             scheduledFromWorktree={session.scheduled_from_worktree}
             scheduledRunAt={session.scheduled_run_at}

@@ -40,6 +40,7 @@ import os from 'node:os';
 import {
   type AssistantUsage,
   buildClaudeCliSpawn,
+  type ClaudeCliModelUsageEntry,
   type ClaudeCliNormalizedSdkResponse,
   type ClaudeCliRawSdkResponse,
   type ClaudeCliSpawnConfig,
@@ -138,9 +139,7 @@ async function persistActiveTurnSnapshot(
   const repo = new SessionRepository(db);
   const row = await repo.findById(sessionId);
   if (!row) {
-    throw new Error(
-      `persistActiveTurnSnapshot: session not found: ${sessionId.slice(0, 8)}`
-    );
+    throw new Error(`persistActiveTurnSnapshot: session not found: ${sessionId.slice(0, 8)}`);
   }
   const patch = {
     cli_state: {
@@ -164,10 +163,7 @@ async function persistActiveTurnSnapshot(
  * documented "clear this field" signal — see
  * `packages/core/src/db/repositories/merge-utils.ts`.
  */
-async function clearActiveTurnSnapshot(
-  app: Application,
-  sessionId: SessionID
-): Promise<void> {
+async function clearActiveTurnSnapshot(app: Application, sessionId: SessionID): Promise<void> {
   const db = getDb(app);
   if (!db) return;
   try {
@@ -525,10 +521,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
           tasks: [...session.tasks, task.task_id],
         })
         .catch((err: unknown) => {
-          console.warn(
-            '[claude-cli-watcher.sink] session patch (RUNNING) failed',
-            err
-          );
+          console.warn('[claude-cli-watcher.sink] session patch (RUNNING) failed', err);
         });
       return task.task_id as TaskID;
     } catch (err) {
@@ -592,12 +585,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         // ourselves. Index is allocated first so the task's message_range
         // points at the row we're about to write.
         const userIdx = await nextIndex(sessionId);
-        const taskId = await mintTaskForOrphanTurn(
-          sessionId as SessionID,
-          promptText,
-          userIdx,
-          ts
-        );
+        const taskId = await mintTaskForOrphanTurn(sessionId as SessionID, promptText, userIdx, ts);
         // Both branches (orphan-fallback when task minting failed, and the
         // normal "linked to a freshly-minted task" case) share the same
         // row shape via `buildInitialUserMessage` — same helper the
@@ -609,7 +597,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
           index: userIdx,
           timestamp: ts,
           content:
-            typeof event.content === 'string' ? event.content : (event.content ?? '') as string,
+            typeof event.content === 'string' ? event.content : ((event.content ?? '') as string),
           metadata: { source: 'cli-repl', original_id: event.uuid ?? undefined },
         });
         await app.service('messages').create(userMessage);
@@ -770,7 +758,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         let totalOutput = 0;
         let totalCacheCreation = 0;
         let totalCacheRead = 0;
-        let totalCostUsd: number | undefined = undefined;
+        let totalCostUsd: number | undefined;
         let primaryModel: string | undefined;
         for (const turn of active.assistantTurns) {
           const modelId = turn.model ?? 'unknown';
@@ -842,10 +830,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
             cacheCreationTokens: totalCacheCreation,
           },
           contextWindowLimit:
-            Math.max(
-              0,
-              ...Object.values(modelUsageMap).map((m) => m.contextWindow)
-            ) || 200_000,
+            Math.max(0, ...Object.values(modelUsageMap).map((m) => m.contextWindow)) || 200_000,
           costUsd: totalCostUsd,
           primaryModel,
           durationMs,
@@ -1184,10 +1169,7 @@ export async function onCliSessionCreated(
  * Hook for the sessions service to invoke when a CLI session ends (status
  * → completed/failed/archived OR the PTY exits).
  */
-export async function onCliSessionEnded(
-  app: Application,
-  sessionId: SessionID
-): Promise<void> {
+export async function onCliSessionEnded(app: Application, sessionId: SessionID): Promise<void> {
   const reg = getCliWatcherRegistry(app);
   await reg.unregister(sessionId);
   // Belt-and-suspenders: tear down the watchdog if it's still alive.
@@ -1247,5 +1229,6 @@ export async function rehydrateCliWatchers(
 
 // Re-export for convenience.
 export { ClaudeCliWatcherRegistry } from './claude-cli-watcher.js';
+
 // Silence unused-import warning if DrizzleService is reserved for a follow-up.
 void DrizzleService;

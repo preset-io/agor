@@ -42,10 +42,7 @@ export function slugForCwd(cwd: string): string {
  * The directory exists as soon as the first session for that cwd has written
  * any data, but we never create it ourselves — the CLI does.
  */
-export function claudeProjectDir(
-  homeDir: string,
-  cwd: string
-): { slug: string; dir: string } {
+export function claudeProjectDir(homeDir: string, cwd: string): { slug: string; dir: string } {
   const slug = slugForCwd(cwd);
   return {
     slug,
@@ -64,11 +61,7 @@ export function claudeProjectDir(
  *                      Same value that goes to `--add-dir` / the spawn cwd.
  * @param sessionId     The UUID passed to `claude --session-id <uuid>`.
  */
-export function claudeSessionJsonlPath(
-  homeDir: string,
-  cwd: string,
-  sessionId: string
-): string {
+export function claudeSessionJsonlPath(homeDir: string, cwd: string, sessionId: string): string {
   const { dir } = claudeProjectDir(homeDir, cwd);
   return path.join(dir, `${sessionId}.jsonl`);
 }
@@ -81,11 +74,7 @@ export function claudeSessionJsonlPath(
  * files appear) is how we surface internal Task() sub-agents in the
  * conversation view. See § Subagent JSONL ingestion in the analysis doc.
  */
-export function claudeSubagentsDir(
-  homeDir: string,
-  cwd: string,
-  sessionId: string
-): string {
+export function claudeSubagentsDir(homeDir: string, cwd: string, sessionId: string): string {
   const { dir } = claudeProjectDir(homeDir, cwd);
   return path.join(dir, sessionId, 'subagents');
 }

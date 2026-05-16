@@ -1350,6 +1350,13 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           default: DEFAULT_CLAUDE_MODEL,
           models: claudeModels,
         },
+        // Claude Code CLI shares the same Anthropic model lineup as the
+        // SDK path; surface the same list so MCP clients can pass any
+        // valid claude id to either adapter.
+        'claude-code-cli': {
+          default: DEFAULT_CLAUDE_MODEL,
+          models: claudeModels,
+        },
         codex: {
           default: DEFAULT_CODEX_MODEL,
           models: codexModels,

@@ -105,6 +105,26 @@ export const TOOL_FIELD_CONFIGS: Record<AgenticToolName, AgenticToolFieldConfig[
     },
   ],
   opencode: [],
+  // Claude Code CLI uses the same Anthropic credentials as the SDK
+  // path — surface the same fields so the Defaults panel renders
+  // them under the CLI tab too. Backed by the same `user.agentic_tools`
+  // sub-key, so a key set under either tab is visible from the other.
+  'claude-code-cli': [
+    {
+      field: 'ANTHROPIC_API_KEY',
+      label: 'Anthropic API Key',
+      description: '(pay-as-you-go / Console)',
+      placeholder: 'sk-ant-api03-...',
+      docUrl: 'https://console.anthropic.com',
+    },
+    {
+      field: 'CLAUDE_CODE_OAUTH_TOKEN',
+      label: 'Claude Subscription Token',
+      description: '(Pro / Max plan)',
+      placeholder: 'sk-ant-oat01-...',
+      docUrl: 'https://docs.claude.com/en/docs/claude-code/setup',
+    },
+  ],
 };
 
 /** Map field name → presence flag (true if the user has a value stored). */

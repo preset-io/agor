@@ -1018,7 +1018,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </Tooltip>
           </Space>
         </div>
-
       </div>
 
       {/* Body - Scrollable content */}

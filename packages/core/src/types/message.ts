@@ -20,8 +20,11 @@ export enum MessageRole {
  * Message source - where the message originated
  * - 'gateway': Message came from external platform (Slack, Discord, etc.)
  * - 'agor': Message originated from Agor UI
+ * - 'cli-repl': Message originated from a Claude Code CLI REPL turn that
+ *   the user typed directly into the embedded xterm (not via Agor's
+ *   textarea / /prompt route). Written by the JSONL watcher.
  */
-export type MessageSource = 'gateway' | 'agor';
+export type MessageSource = 'gateway' | 'agor' | 'cli-repl';
 
 /**
  * Message type

@@ -20,7 +20,9 @@ describe('slugForCwd', () => {
 
   it('matches the live analysis-worktree sample', () => {
     expect(
-      slugForCwd('/var/lib/agor/home/agorpg/.agor/worktrees/preset-io/agor/analyze-claude-code-cli-integration')
+      slugForCwd(
+        '/var/lib/agor/home/agorpg/.agor/worktrees/preset-io/agor/analyze-claude-code-cli-integration'
+      )
     ).toBe(
       '-var-lib-agor-home-agorpg--agor-worktrees-preset-io-agor-analyze-claude-code-cli-integration'
     );

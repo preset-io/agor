@@ -181,11 +181,12 @@ describe('ClaudeCliWatcherRegistry', () => {
     const sid = 'abc' as SessionID;
     await fsp.writeFile(path.join(dir, `${sid}.jsonl`), '', 'utf-8');
 
-    const reg = new ClaudeCliWatcherRegistry(
-      { async saveOffset() {} },
-      () => {},
-      { warn: () => {}, info: () => {}, error: () => {}, debug: () => {} }
-    );
+    const reg = new ClaudeCliWatcherRegistry({ async saveOffset() {} }, () => {}, {
+      warn: () => {},
+      info: () => {},
+      error: () => {},
+      debug: () => {},
+    });
 
     const a = await reg.register({ sessionId: sid, cwd, homeDir });
     const b = await reg.register({ sessionId: sid, cwd, homeDir });
@@ -207,11 +208,12 @@ describe('ClaudeCliWatcherRegistry', () => {
     );
 
     const save = vi.fn();
-    const reg = new ClaudeCliWatcherRegistry(
-      { saveOffset: save },
-      () => {},
-      { warn: () => {}, info: () => {}, error: () => {}, debug: () => {} }
-    );
+    const reg = new ClaudeCliWatcherRegistry({ saveOffset: save }, () => {}, {
+      warn: () => {},
+      info: () => {},
+      error: () => {},
+      debug: () => {},
+    });
     await reg.register({ sessionId: sid, cwd, homeDir });
     await reg.unregister(sid);
     expect(reg.size).toBe(0);
