@@ -121,9 +121,12 @@ const activeCliTurn = new Map<string, ActiveCliTurn>();
 /**
  * Write the recoverable subset of an active turn to `cli_state.active_turn`
  * so a daemon restart can rehydrate the task linkage. Called on
- * `user_message`. Best-effort — DB failure logs but doesn't throw, since
- * the in-memory state is already set and the worst case is "post-restart
- * messages orphan."
+ * `user_message`. **Throws on failure** — the caller awaits this before
+ * returning from the sink so the watcher's offset-on-success contract
+ * stays honest: byte offset only advances after `active_turn` is durable.
+ *
+ * "No DB available" (test harness without `app.set('database', db)`) is
+ * the only soft path — returns silently. Everything else throws.
  */
 async function persistActiveTurnSnapshot(
   app: Application,
@@ -132,24 +135,24 @@ async function persistActiveTurnSnapshot(
 ): Promise<void> {
   const db = getDb(app);
   if (!db) return;
-  try {
-    const repo = new SessionRepository(db);
-    const row = await repo.findById(sessionId).catch(() => null);
-    if (!row) return;
-    const patch = {
-      cli_state: {
-        ...(row.cli_state ?? {}),
-        active_turn: {
-          task_id: turn.taskId,
-          user_message_index: turn.userMessageIndex,
-          started_at_ms: turn.startedAtMs,
-        },
-      },
-    } satisfies Partial<Session>;
-    await repo.update(sessionId, patch);
-  } catch (err) {
-    console.warn('[claude-cli-integration] persistActiveTurnSnapshot failed', err);
+  const repo = new SessionRepository(db);
+  const row = await repo.findById(sessionId);
+  if (!row) {
+    throw new Error(
+      `persistActiveTurnSnapshot: session not found: ${sessionId.slice(0, 8)}`
+    );
   }
+  const patch = {
+    cli_state: {
+      ...(row.cli_state ?? {}),
+      active_turn: {
+        task_id: turn.taskId,
+        user_message_index: turn.userMessageIndex,
+        started_at_ms: turn.startedAtMs,
+      },
+    },
+  } satisfies Partial<Session>;
+  await repo.update(sessionId, patch);
 }
 
 /**
@@ -252,16 +255,25 @@ const watchdogTimers = new Map<string, NodeJS.Timeout>();
 
 /**
  * Check whether a `claude` process is running for this Agor session id.
- * Uses `pgrep -f 'claude --session-id <X>'` so the match works regardless
- * of impersonated Unix user (the argv is visible to the daemon user via
- * `/proc`). Resolves `true` on transient pgrep errors so a misbehaving
- * binary doesn't trigger spurious task-close events.
+ *
+ * **Both spawn forms must match.** `buildSpawnConfigForSession` emits
+ * `--session-id <X>` on first launch but switches to `--resume <X>`
+ * once the JSONL exists (idempotent restart). The watchdog was missing
+ * resumed processes and false-positive-ing them as dead — closing
+ * healthy in-flight tasks after the 90s idle threshold.
+ *
+ * Uses `pgrep -f` so the match works across impersonated Unix users
+ * (the argv is visible to the daemon user via `/proc`). The regex
+ * tolerates either flag and any argv ordering. Resolves `true` on
+ * transient pgrep errors so a misbehaving binary doesn't trigger
+ * spurious task-close events.
  */
 function isClaudeRunningFor(sessionId: SessionID): Promise<boolean> {
   return new Promise((resolve) => {
-    const proc = spawnProcess('pgrep', ['-f', `claude --session-id ${sessionId}`], {
-      stdio: 'ignore',
-    });
+    // pgrep uses extended regex with -f. `(--session-id|--resume) <id>`
+    // covers both spawn forms `buildClaudeCliSpawn` emits.
+    const pattern = `claude .*(--session-id|--resume) ${sessionId}`;
+    const proc = spawnProcess('pgrep', ['-f', pattern], { stdio: 'ignore' });
     proc.on('exit', (code) => resolve(code === 0));
     proc.on('error', () => resolve(true));
     setTimeout(() => {
@@ -562,10 +574,14 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
             toolUseCount: 0,
           };
           activeCliTurn.set(sessionId, turn);
-          // Persist the recoverable subset so a daemon restart mid-turn
-          // doesn't orphan downstream messages. Fire-and-forget — the
-          // in-memory entry is already valid for the live process.
-          void persistActiveTurnSnapshot(app, sessionId as SessionID, turn);
+          // Persist the recoverable subset BEFORE returning so the
+          // watcher's offset-on-success guarantee holds: if we commit
+          // the byte offset past the user_message line, the DB has the
+          // active_turn snapshot needed to rehydrate post-restart.
+          // Fire-and-forget here would race: a daemon crash between the
+          // offset persist and the active_turn persist orphans every
+          // subsequent assistant turn for this session.
+          await persistActiveTurnSnapshot(app, sessionId as SessionID, turn);
           // Start the stale-turn watchdog. Closes the task if claude
           // dies without writing `end_turn` (Ctrl-D, kill -9, crash).
           startTaskWatchdog(app, sessionId as SessionID);
@@ -609,7 +625,9 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
           toolUseCount: 0,
         };
         activeCliTurn.set(sessionId, turn);
-        void persistActiveTurnSnapshot(app, sessionId as SessionID, turn);
+        // Await — see comment on the textarea path above. Same
+        // offset-on-success durability contract.
+        await persistActiveTurnSnapshot(app, sessionId as SessionID, turn);
         startTaskWatchdog(app, sessionId as SessionID);
         return;
       }
@@ -903,11 +921,20 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         })
       );
     } catch (err) {
-      console.warn('[claude-cli-watcher.sink] write failed', {
+      // Re-throw so the watcher's `readAndDispatch` loop sees the
+      // failure and **does not advance the byte offset**. Without
+      // re-throwing, the offset-on-success guarantee in
+      // claude-cli-watcher.ts is illusory — DB/service errors would
+      // silently consume JSONL bytes that were never durably
+      // recorded. The watcher logs the error at its own catch site
+      // and pauses progress on this line; next `fs.watch` tick
+      // re-reads + re-attempts.
+      console.warn('[claude-cli-watcher.sink] write failed (re-throwing)', {
         sessionId,
         eventType: event.type,
         err: err instanceof Error ? err.message : String(err),
       });
+      throw err;
     }
   };
 

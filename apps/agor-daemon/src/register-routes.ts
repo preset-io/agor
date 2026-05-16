@@ -744,18 +744,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const tabName = `cli-${session.session_id.slice(0, 8)}`;
         const channel = `user/${targetUserId}/terminal`;
 
-        // 1) Hard-kill any live `claude --session-id <uuid>` process.
+        // 1) Hard-kill any live `claude` process bound to this session.
         //    Zellij's `close-tab` SHOULD propagate SIGHUP to its
         //    foreground, but in practice claude sometimes survives the
         //    pane death long enough to collide on session-id uniqueness
         //    ("Session ID … is already in use") when the new spawn
-        //    fires. `pkill -f` against the exact argv pattern is the
-        //    reliable kill.
+        //    fires. `pkill -f` against the argv pattern is the reliable
+        //    kill. Match BOTH `--session-id <X>` (first launch) and
+        //    `--resume <X>` (post-restart spawn) — same code path
+        //    `buildClaudeCliSpawn` emits.
         try {
           const { spawn: spawnProc } = await import('node:child_process');
           const killProc = spawnProc(
             'pkill',
-            ['-f', `claude --session-id ${session.session_id}`],
+            ['-f', `claude .*(--session-id|--resume) ${session.session_id}`],
             { stdio: 'ignore' }
           );
           await new Promise<void>((resolve) => {

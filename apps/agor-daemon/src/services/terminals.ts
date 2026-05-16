@@ -257,8 +257,19 @@ export class TerminalsService {
     // server side. The browser asks "make sure the cli tab for session
     // X exists" — it doesn't know (and shouldn't know) the actual
     // `claude --session-id <X> --add-dir <cwd> --permission-mode <Y>`
-    // argv. RBAC was already checked above via the worktreeId path.
-    const cliEnsure = await this.resolveEnsureCliTab(data.ensureCliSessionId);
+    // argv.
+    //
+    // RBAC: enforced inside `resolveEnsureCliTab` against the
+    // **session's actual worktree** (not the caller-supplied
+    // `data.worktreeId`, which may differ or be omitted). Without this
+    // check a caller could pass an `ensureCliSessionId` for a session
+    // whose worktree they don't have `'session'` permission on and get
+    // the daemon to spawn a CLI tab on their behalf.
+    const cliEnsure = await this.resolveEnsureCliTab(
+      data.ensureCliSessionId,
+      data.worktreeId,
+      params
+    );
 
     return this.createExecutorTerminal(
       {
@@ -307,12 +318,22 @@ export class TerminalsService {
    * the SessionRepository + worktreeRepository lookups + builds the
    * `claude` argv via `buildSpawnConfigForSession`/`buildClaudeCliSpawn`.
    *
+   * **RBAC**: enforces `'session'`-level `hasWorktreePermission` against
+   * the **session's actual worktree** (not the caller-supplied
+   * `claimedWorktreeId`). Without this, a caller could ask the daemon
+   * to ensure-create a CLI tab for a session whose worktree they
+   * shouldn't access. Also throws `Forbidden` when `claimedWorktreeId`
+   * is supplied AND mismatches the session's worktree — defense against
+   * "spoof the worktree to bypass the upstream worktreeId check".
+   *
    * Returns `null` when the input is undefined, the session doesn't
    * exist, isn't a CLI session, or its worktree path can't be resolved.
    * Caller falls back to the prior focus-only behavior in those cases.
    */
   private async resolveEnsureCliTab(
-    sessionId: string | undefined
+    sessionId: string | undefined,
+    claimedWorktreeId: WorktreeID | undefined,
+    params?: AuthenticatedParams
   ): Promise<{
     tabName: string;
     cwd: string;
@@ -324,6 +345,44 @@ export class TerminalsService {
       const sessionRepo = new SessionRepository(this.db);
       const session = await sessionRepo.findById(sessionId).catch(() => null);
       if (!session || session.agentic_tool !== 'claude-code-cli') return null;
+      // Worktree-spoofing guard: when the caller supplied a worktreeId,
+      // it MUST match the session's. Otherwise the upstream RBAC
+      // (gated on `data.worktreeId`) checked a different worktree than
+      // the one we're about to spawn into.
+      if (claimedWorktreeId && claimedWorktreeId !== session.worktree_id) {
+        throw new Forbidden(
+          `ensureCliSessionId session belongs to a different worktree than the one provided.`
+        );
+      }
+      // Run the same `'session'` permission check the upstream caller
+      // did, but against the *session's* worktree id. This catches the
+      // case where the caller omitted `worktreeId` entirely (so the
+      // upstream check was skipped) and only passed `ensureCliSessionId`.
+      if (params?.provider) {
+        const config = await loadConfig();
+        const rbacEnabled = config.execution?.worktree_rbac === true;
+        if (rbacEnabled) {
+          const callerUserId = params?.user?.user_id as UserID | undefined;
+          if (!callerUserId) {
+            throw new Forbidden('Authentication required to ensure a CLI tab');
+          }
+          const worktreeRepo = new WorktreeRepository(this.db);
+          const wt = await worktreeRepo.findById(session.worktree_id);
+          if (!wt) {
+            throw new Forbidden(`Session's worktree not found: ${session.worktree_id}`);
+          }
+          const isOwner = await worktreeRepo.isOwner(wt.worktree_id, callerUserId);
+          const allowSuperadmin = config.execution?.allow_superadmin === true;
+          const userRole = params?.user?.role as string | undefined;
+          if (
+            !hasWorktreePermission(wt, callerUserId, isOwner, 'session', userRole, allowSuperadmin)
+          ) {
+            throw new Forbidden(
+              `You need 'session' permission on the session's worktree to ensure its CLI tab.`
+            );
+          }
+        }
+      }
       const worktreeRepo = new WorktreeRepository(this.db);
       const worktree = await worktreeRepo.findById(session.worktree_id);
       if (!worktree?.path) return null;
@@ -340,6 +399,10 @@ export class TerminalsService {
         commandArgs: built.args,
       };
     } catch (err) {
+      // Re-throw Forbidden so the caller sees the auth failure — only
+      // swallow unexpected errors (DB hiccup etc.) into a graceful
+      // "no ensure-create" fallback.
+      if (err instanceof Forbidden) throw err;
       console.warn('[TerminalsService] resolveEnsureCliTab failed', err);
       return null;
     }
