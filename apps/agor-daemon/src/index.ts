@@ -552,6 +552,13 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   const allowSuperadmin = config.execution?.allow_superadmin === true;
   const superadminOpts = { allowSuperadmin };
 
+  // Stash the shared Drizzle handle on the Feathers app so utilities
+  // that don't get db passed as a constructor arg (Claude Code CLI
+  // watcher sink/persister, lifecycle hooks fired from after.create
+  // contexts) can resolve it via `getDb(app)`. Existing services that
+  // already receive `db` via constructor injection are unaffected.
+  app.set('database', db);
+
   // --------------------------------------------------------------------------
   // Phase 1: Register services
   // --------------------------------------------------------------------------
