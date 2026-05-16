@@ -38,13 +38,17 @@ export type NotificationsParams = QueryParams<{
 }> &
   AuthenticatedParams;
 
+type AppWithIO = Application & {
+  io?: { to: (room: string) => { emit: (event: string, payload: unknown) => void }; emit: (event: string, payload: unknown) => void };
+};
+
 export class NotificationsService extends DrizzleService<
   Notification,
   Partial<Notification>,
   NotificationsParams
 > {
   private notifRepo: NotificationsRepository;
-  private app: Application;
+  private app: AppWithIO;
 
   constructor(db: Database, app: Application) {
     const notifRepo = new NotificationsRepository(db);
@@ -58,7 +62,7 @@ export class NotificationsService extends DrizzleService<
       multi: ['patch', 'remove'],
     });
     this.notifRepo = notifRepo;
-    this.app = app;
+    this.app = app as AppWithIO;
   }
 
   /** FeathersJS hook helper — derives the current user's id from auth params. */
