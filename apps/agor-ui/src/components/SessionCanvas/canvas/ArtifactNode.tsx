@@ -586,9 +586,7 @@ export const ArtifactNode = ({
       ? 'processing'
       : 'success';
   const headerBadgeTitle = error ? 'Failed to load' : loading ? 'Reloading...' : 'Live';
-  const trustBadge = payload
-    ? renderTrustBadge(payload, () => setConsentOpen(true))
-    : null;
+  const trustBadge = payload ? renderTrustBadge(payload, () => setConsentOpen(true)) : null;
   // A loaded payload that's also in the error state is stale — the body
   // renders the error placeholder, so the header shouldn't expose
   // payload-acting controls (Export / Interact / Consent) that operate
