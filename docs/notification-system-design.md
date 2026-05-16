@@ -722,8 +722,8 @@ For the implementer:
 
 | Concern | Location |
 |---|---|
-| Schema | `packages/core/src/db/schema.{sqlite,postgres}.ts` (new `notifications` table) |
-| Drizzle migration | `packages/core/drizzle/sqlite/0042_add_notifications.sql` + matching postgres `0032_add_notifications.sql` |
+| Schema | `packages/core/src/db/schema.{sqlite,postgres}.ts` (new `notifications` table). **Update both files.** Only 3 column types differ across dialects (timestamp / bool / json) per [`context/guides/creating-database-migrations.md`](../context/guides/creating-database-migrations.md). |
+| Drizzle migration | `packages/core/drizzle/sqlite/0042_add_notifications.sql` + matching postgres `0032_add_notifications.sql`. **Generate inside Docker** (`docker exec … pnpm db:generate:sqlite` and `…:postgres`), then `docker cp` files + `meta/` directories back. Full workflow in [`context/guides/creating-database-migrations.md`](../context/guides/creating-database-migrations.md). |
 | Type | `packages/core/src/types/notification.ts` (new) |
 | Repository | `packages/core/src/db/repositories/notifications.ts` (new) |
 | Service | `apps/agor-daemon/src/services/notifications.ts` (new) |
