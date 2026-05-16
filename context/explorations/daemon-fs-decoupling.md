@@ -1,6 +1,6 @@
 # Daemon Filesystem Decoupling
 
-**Status:** 🔬 Exploration / design. Phase-1 hygiene work (§1.5) is scoped and ready to start; Phases 2–4 are still position-paper.
+**Status:** 🔬 Exploration / design. **Phase 1A (config hygiene, §1.5) is shipping in this PR** (H1–H4). Phase 1B and Phases 2–4 are still position-paper. **H5 (CLI config separation) is split to a follow-up worktree** to keep Phase 1A focused and reviewable.
 **Created:** 2026-05-16
 **Companion exploration docs:** [`executor-expansion.md`](./executor-expansion.md), [`executor-isolation.md`](./executor-isolation.md), and the user-facing [`containerized-execution`](../../apps/agor-docs/pages/guide/containerized-execution.mdx) guide.
 
@@ -10,11 +10,11 @@
 
 **The daemon is much closer to FS-free than the prompt assumed, but the gap is concentrated in three places that all reduce to the same root: the daemon believes it shares a filesystem with the worktrees it manages.** That belief is encoded in (a) artifact landing, (b) upload handling, and (c) environment spawning — the third being the one that hits the ACL/`--watch` wall.
 
-**Recommended target: Option D — a hybrid where the daemon stays single-host FS-coupled for self-hosted / `unix_user_mode: simple`, and becomes FS-free in hosted multi-tenant deployments by treating worktrees as remote resources owned by per-worktree executor pods.** Local watch-mode envs survive in self-hosted (single host, single uid namespace) and are explicitly *not supported* on hosted — long-lived watch envs in hosted become **remote env pods that share the worktree volume with the executor, not with the daemon**. This avoids the ACL coordination problem Max already hit, keeps the self-hosted UX intact, and gives hosted a clean horizontal scale story.
+**Recommended target: Option D — a hybrid where the daemon stays single-host FS-coupled for self-hosted / `unix_user_mode: simple`, and becomes FS-free in hosted multi-tenant deployments by treating worktrees as remote resources owned by per-worktree executor pods.** Local watch-mode envs survive in self-hosted (single host, single uid namespace) and are explicitly _not supported_ on hosted — long-lived watch envs in hosted become **remote env pods that share the worktree volume with the executor, not with the daemon**. This avoids the ACL coordination problem Max already hit, keeps the self-hosted UX intact, and gives hosted a clean horizontal scale story.
 
 **Estimated to v1 of hosted-ready posture: ~15 eng-weeks**, with the easy slice (config hygiene + Postgres-only + log centralization + artifact-via-executor + upload-via-executor) ~4–5 weeks, and the hard slice (env-pod model, executor-as-volume-owner) ~10 weeks.
 
-**Phase 1A — Config hygiene — is scoped at ~8 eng-days and is what this worktree intends to take on first.** Daemon stays the only authority on `~/.agor/config.yaml` (its file, its concern, packaging-wise fine); executor and UI stop reading it directly and ask the daemon instead; CLI gets its own small config (URL + auth from `agor login`) so it can be on a different machine than the daemon without drift. See §1.5.
+**Phase 1A — Config hygiene — shipped in this PR (H1–H4).** Daemon stays the only authority on `~/.agor/config.yaml`; executor stops reading it directly (resolved-slice payload); shutdown sentinel + secret bootstrap degrade gracefully on read-only mounts (capability-driven, no deployment-mode flag). H5 (CLI config separation) is split to a follow-up worktree. See §1.5.
 
 ---
 
@@ -26,94 +26,94 @@ The daemon process (only `apps/agor-daemon/src/**`) directly touches the FS in t
 
 #### Config + secrets
 
-| Touchpoint | R/W | Frequency | File:line | Decoupling path |
-|---|---|---|---|---|
-| `~/.agor/config.yaml` (load) | R | startup-once | `index.ts:135-139` via `packages/core/src/config/config-manager.ts:60` | Already mostly env-overrideable (`AGOR_HOME`, `AGOR_DATA_HOME`, `PORT`, etc.). For hosted: load from env + ConfigMap / DB-backed Config service. **Easy.** |
-| `~/.agor/config.yaml` (write JWT secret) | W | startup-once if absent | `index.ts:502-506` | Persist in DB (`auth_state` row) or require operator-provided secret in hosted. |
-| `~/.agor/config.yaml` (write AGOR_MASTER_SECRET) | W | startup-once if absent | `startup.ts:329` | Same. |
-| `~/.agor/admin-credentials` | W | first-run-once | `setup/first-run-admin.ts:67` | Stdout/log in hosted; no file. |
-| `~/.agor/daemon-shutdown-clean.flag` (sentinel) | R/W | shutdown + startup | `startup.ts:57-83` | DB row (`daemon_runs`) or drop the feature in containers (k8s restart counts are already known). |
-| Auth file (used by check-auth) | R | per-request rate-limited | `services/check-auth.ts:128` | Mostly already DB-driven; this is a fallback path — fine in simple mode, irrelevant in hosted. |
+| Touchpoint                                       | R/W | Frequency                | File:line                                                              | Decoupling path                                                                                                                                            |
+| ------------------------------------------------ | --- | ------------------------ | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `~/.agor/config.yaml` (load)                     | R   | startup-once             | `index.ts:135-139` via `packages/core/src/config/config-manager.ts:60` | Already mostly env-overrideable (`AGOR_HOME`, `AGOR_DATA_HOME`, `PORT`, etc.). For hosted: load from env + ConfigMap / DB-backed Config service. **Easy.** |
+| `~/.agor/config.yaml` (write JWT secret)         | W   | startup-once if absent   | `index.ts:502-506`                                                     | Persist in DB (`auth_state` row) or require operator-provided secret in hosted.                                                                            |
+| `~/.agor/config.yaml` (write AGOR_MASTER_SECRET) | W   | startup-once if absent   | `startup.ts:329`                                                       | Same.                                                                                                                                                      |
+| `~/.agor/admin-credentials`                      | W   | first-run-once           | `setup/first-run-admin.ts:67`                                          | Stdout/log in hosted; no file.                                                                                                                             |
+| `~/.agor/daemon-shutdown-clean.flag` (sentinel)  | R/W | shutdown + startup       | `startup.ts:57-83`                                                     | DB row (`daemon_runs`) or drop the feature in containers (k8s restart counts are already known).                                                           |
+| Auth file (used by check-auth)                   | R   | per-request rate-limited | `services/check-auth.ts:128`                                           | Mostly already DB-driven; this is a fallback path — fine in simple mode, irrelevant in hosted.                                                             |
 
 #### Database (SQLite file mode)
 
-| Touchpoint | R/W | Frequency | File:line | Decoupling path |
-|---|---|---|---|---|
+| Touchpoint        | R/W | Frequency     | File:line                                                           | Decoupling path                                                                                                |
+| ----------------- | --- | ------------- | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | `~/.agor/agor.db` | R/W | every request | `setup/database.ts:31-127` via `packages/core/src/db/client.ts:286` | **Already solved.** Postgres path exists today (`packages/core/src/db/client.ts:293`). Hosted = Postgres-only. |
 
 #### UI / build artifacts (read-only, optional)
 
-| Touchpoint | R/W | Frequency | File:line | Decoupling path |
-|---|---|---|---|---|
-| UI bundle `dist/ui/` existsSync | R | startup-once | `index.ts:425-456` | Don't ship the UI from the daemon in hosted — serve via separate static host (Cloudfront, Vercel, etc.). Already a planned split. |
-| Static assets | R | startup-once | `index.ts:462-469` | Same. |
-| `.build-info` | R | startup-once | `setup/build-info.ts:53-65` | Inject as env var at image build. |
-| `git rev-parse --short HEAD` | exec | startup-once | `setup/build-info.ts:73` | Same — env var. |
+| Touchpoint                      | R/W  | Frequency    | File:line                   | Decoupling path                                                                                                                   |
+| ------------------------------- | ---- | ------------ | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| UI bundle `dist/ui/` existsSync | R    | startup-once | `index.ts:425-456`          | Don't ship the UI from the daemon in hosted — serve via separate static host (Cloudfront, Vercel, etc.). Already a planned split. |
+| Static assets                   | R    | startup-once | `index.ts:462-469`          | Same.                                                                                                                             |
+| `.build-info`                   | R    | startup-once | `setup/build-info.ts:53-65` | Inject as env var at image build.                                                                                                 |
+| `git rev-parse --short HEAD`    | exec | startup-once | `setup/build-info.ts:73`    | Same — env var.                                                                                                                   |
 
 #### Repo + worktree directories (the big ones)
 
-| Touchpoint | R/W | Frequency | File:line | Decoupling path |
-|---|---|---|---|---|
-| `~/.agor/repos/<slug>/` existsSync, isValidGitRepo, listWorktrees | R | per-request | `services/repos.ts:238, 489, 641, 701, 713` | These reads exist to **orient before delegating to executor**. In a daemon-FS-free world, the orient step needs to become an executor probe (`git.repo.inspect`) or come from cached DB state. |
-| `~/.agor/repos/<slug>/.git/config` (realign origin) | W | per-request | `utils/realign-repo-origin.ts:31` | Already small — move to executor (`git.repo.realign-origin`). One day. |
-| `~/.agor/worktrees/<r>/<wt>/` existsSync | R | per-request | `services/worktrees.ts:706`, `services/repos.ts:701`, `services/zone-trigger.ts:87-89` | Replace with `worktree.filesystem_status` cached in DB, refreshed by executor probe. Today this is already partly done — PR #1109 added "FS-drift detection" but it's still daemon-side. |
-| `~/.agor/worktrees/<r>/<wt>/` git state read | R | per-task creation | `mcp/tools/sessions.ts:775-777`, `services/zone-trigger.ts:87-89` (`getGitState()`, `getCurrentBranch()`) | Snapshot SHA/ref. Move to executor probe or cache in DB at create/refresh time. |
-| Worktree dir contents (`git ls-files`) | R | per-request (file autocomplete) | `services/files.ts:73-84` | `services/files.ts` runs `git ls-files` in-process via simple-git. Tiny op, but it's the daemon-touches-worktree pattern. Route through executor (`worktree.files.list`). |
-| Worktree dir cleanup | W | per-delete | `services/repos.ts:1098-1142` | Already executor-routed for `git.worktree.remove`; the `deleteRepoDirectory` path uses `fs.rm` via core helpers — already done as `sudo -u` shell wrapper, but the entry point is daemon-side. Move into executor as `repo.delete`. |
+| Touchpoint                                                        | R/W | Frequency                       | File:line                                                                                                 | Decoupling path                                                                                                                                                                                                                     |
+| ----------------------------------------------------------------- | --- | ------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `~/.agor/repos/<slug>/` existsSync, isValidGitRepo, listWorktrees | R   | per-request                     | `services/repos.ts:238, 489, 641, 701, 713`                                                               | These reads exist to **orient before delegating to executor**. In a daemon-FS-free world, the orient step needs to become an executor probe (`git.repo.inspect`) or come from cached DB state.                                      |
+| `~/.agor/repos/<slug>/.git/config` (realign origin)               | W   | per-request                     | `utils/realign-repo-origin.ts:31`                                                                         | Already small — move to executor (`git.repo.realign-origin`). One day.                                                                                                                                                              |
+| `~/.agor/worktrees/<r>/<wt>/` existsSync                          | R   | per-request                     | `services/worktrees.ts:706`, `services/repos.ts:701`, `services/zone-trigger.ts:87-89`                    | Replace with `worktree.filesystem_status` cached in DB, refreshed by executor probe. Today this is already partly done — PR #1109 added "FS-drift detection" but it's still daemon-side.                                            |
+| `~/.agor/worktrees/<r>/<wt>/` git state read                      | R   | per-task creation               | `mcp/tools/sessions.ts:775-777`, `services/zone-trigger.ts:87-89` (`getGitState()`, `getCurrentBranch()`) | Snapshot SHA/ref. Move to executor probe or cache in DB at create/refresh time.                                                                                                                                                     |
+| Worktree dir contents (`git ls-files`)                            | R   | per-request (file autocomplete) | `services/files.ts:73-84`                                                                                 | `services/files.ts` runs `git ls-files` in-process via simple-git. Tiny op, but it's the daemon-touches-worktree pattern. Route through executor (`worktree.files.list`).                                                           |
+| Worktree dir cleanup                                              | W   | per-delete                      | `services/repos.ts:1098-1142`                                                                             | Already executor-routed for `git.worktree.remove`; the `deleteRepoDirectory` path uses `fs.rm` via core helpers — already done as `sudo -u` shell wrapper, but the entry point is daemon-side. Move into executor as `repo.delete`. |
 
 #### Artifacts (the surprise — pure daemon FS writes)
 
-| Touchpoint | R/W | Frequency | File:line | Decoupling path |
-|---|---|---|---|---|
-| `<worktree>/.agor/artifacts/<name>/agor.artifact.json` sidecar read | R | per-request | `services/artifacts.ts:172-200` | Cache sidecar metadata in DB; if missing, executor probe. |
-| `<worktree>/.agor/artifacts/<name>/` recursive land (mkdir + writeFile per file) | W | per-land | `services/artifacts.ts:717-812` | **Pure FS write done in-daemon-process.** Move to executor as `artifact.land(artifactId, worktreePath, subpath)`. |
-| `<worktree>/.agor/artifacts/<name>/` rm | W | per-overwrite | `services/artifacts.ts:775` | Same — executor. |
-| Recursive readdir of artifact folder (introspection) | R | per-request | `services/artifacts.ts:1758-1794` | Same — executor probe. |
+| Touchpoint                                                                       | R/W | Frequency     | File:line                         | Decoupling path                                                                                                   |
+| -------------------------------------------------------------------------------- | --- | ------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `<worktree>/.agor/artifacts/<name>/agor.artifact.json` sidecar read              | R   | per-request   | `services/artifacts.ts:172-200`   | Cache sidecar metadata in DB; if missing, executor probe.                                                         |
+| `<worktree>/.agor/artifacts/<name>/` recursive land (mkdir + writeFile per file) | W   | per-land      | `services/artifacts.ts:717-812`   | **Pure FS write done in-daemon-process.** Move to executor as `artifact.land(artifactId, worktreePath, subpath)`. |
+| `<worktree>/.agor/artifacts/<name>/` rm                                          | W   | per-overwrite | `services/artifacts.ts:775`       | Same — executor.                                                                                                  |
+| Recursive readdir of artifact folder (introspection)                             | R   | per-request   | `services/artifacts.ts:1758-1794` | Same — executor probe.                                                                                            |
 
 #### Uploads
 
-| Touchpoint | R/W | Frequency | File:line | Decoupling path |
-|---|---|---|---|---|
-| `<worktree>/.agor/uploads/`, `/tmp/agor-uploads/`, `~/.agor/uploads/` mkdir + write | W | per-upload | `utils/upload.ts:118-260` | Either move write into executor, or stage to S3 / object store and have executor pull on demand. Easier for hosted: **object store from day one**. |
+| Touchpoint                                                                          | R/W | Frequency  | File:line                 | Decoupling path                                                                                                                                    |
+| ----------------------------------------------------------------------------------- | --- | ---------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<worktree>/.agor/uploads/`, `/tmp/agor-uploads/`, `~/.agor/uploads/` mkdir + write | W   | per-upload | `utils/upload.ts:118-260` | Either move write into executor, or stage to S3 / object store and have executor pull on demand. Easier for hosted: **object store from day one**. |
 
 #### Terminals
 
-| Touchpoint | R/W | Frequency | File:line | Decoupling path |
-|---|---|---|---|---|
-| `/tmp/agor-env-<userId>.sh` writeFileSync + sudo chown | W | per-attach | `services/terminals.ts:104-119` | Move env-file creation **into the impersonating boundary** (executor / `zellij.attach` payload). Today the env file is written by the daemon (as `agorpg`) and chowned to the target user via sudo — a privileged daemon-side operation that wouldn't survive a multi-pod split. |
-| `which zellij` execSync | exec | startup-once | `services/terminals.ts:54` | Move check to executor health probe. |
+| Touchpoint                                             | R/W  | Frequency    | File:line                       | Decoupling path                                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------ | ---- | ------------ | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/tmp/agor-env-<userId>.sh` writeFileSync + sudo chown | W    | per-attach   | `services/terminals.ts:104-119` | Move env-file creation **into the impersonating boundary** (executor / `zellij.attach` payload). Today the env file is written by the daemon (as `agorpg`) and chowned to the target user via sudo — a privileged daemon-side operation that wouldn't survive a multi-pod split. |
+| `which zellij` execSync                                | exec | startup-once | `services/terminals.ts:54`      | Move check to executor health probe.                                                                                                                                                                                                                                             |
 
 #### Other daemon→FS exec / spawn paths
 
-| Touchpoint | R/W | Frequency | File:line | Decoupling path |
-|---|---|---|---|---|
-| `spawn(executor)` from daemon | exec | per-task | `utils/spawn-executor.ts:329-412`, `register-services.ts:787` | Already the right pattern; in hosted, the spawn becomes `kubectl run` / pod template (see `executor-expansion.md` §6). |
-| `existsSync(executor binary)` | R | startup-once | `utils/spawn-executor.ts:25, 196` | Replace with image-bundled binary path. |
+| Touchpoint                    | R/W  | Frequency    | File:line                                                     | Decoupling path                                                                                                        |
+| ----------------------------- | ---- | ------------ | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `spawn(executor)` from daemon | exec | per-task     | `utils/spawn-executor.ts:329-412`, `register-services.ts:787` | Already the right pattern; in hosted, the spawn becomes `kubectl run` / pod template (see `executor-expansion.md` §6). |
+| `existsSync(executor binary)` | R    | startup-once | `utils/spawn-executor.ts:25, 196`                             | Replace with image-bundled binary path.                                                                                |
 
 #### Environments (the watch-mode wall)
 
-| Touchpoint | R/W | Frequency | File:line | Decoupling path |
-|---|---|---|---|---|
-| `spawnEnvironmentCommand()` — long-lived child process spawned from daemon | exec | per-env-start; lifetime = env lifetime | `services/worktrees.ts:1013-1170` → `packages/core/src/unix/environment-command-spawn.ts:8, 231` | **In-daemon-process child process. Its uid/cwd/inotify all assume the daemon shares the worktree FS.** This is the hardest one. See §3. |
-| `environment.log` write | W | continuous | `services/worktrees.ts:1007` (log file path joined relative to worktree) | Move to executor / env-pod stdout, captured by k8s. |
-| `process.kill(pid)` from daemon | signal | per-env-stop | `services/worktrees.ts:1166` | Requires daemon and env to share PID namespace — true today, not in pods. Replace with executor / env-pod RPC. |
+| Touchpoint                                                                 | R/W    | Frequency                              | File:line                                                                                        | Decoupling path                                                                                                                         |
+| -------------------------------------------------------------------------- | ------ | -------------------------------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `spawnEnvironmentCommand()` — long-lived child process spawned from daemon | exec   | per-env-start; lifetime = env lifetime | `services/worktrees.ts:1013-1170` → `packages/core/src/unix/environment-command-spawn.ts:8, 231` | **In-daemon-process child process. Its uid/cwd/inotify all assume the daemon shares the worktree FS.** This is the hardest one. See §3. |
+| `environment.log` write                                                    | W      | continuous                             | `services/worktrees.ts:1007` (log file path joined relative to worktree)                         | Move to executor / env-pod stdout, captured by k8s.                                                                                     |
+| `process.kill(pid)` from daemon                                            | signal | per-env-stop                           | `services/worktrees.ts:1166`                                                                     | Requires daemon and env to share PID namespace — true today, not in pods. Replace with executor / env-pod RPC.                          |
 
 ### 1.2 Where the daemon already isn't FS-coupled
 
 A material chunk of the work is done. The executor (`packages/executor/src/`) already handles 10 commands via `spawnExecutor` from `utils/spawn-executor.ts`:
 
-| Command | Daemon caller | Status |
-|---|---|---|
-| `prompt` (SDK execution) | session/task creation paths | Fully routed |
-| `git.clone` | `services/repos.ts:262` | Fully routed |
-| `git.worktree.add` | `services/worktrees.ts:731` | Fully routed |
-| `git.worktree.remove` | `services/worktrees.ts:477, 592` | Fully routed |
-| `git.worktree.clean` | `services/worktrees.ts:562` | Fully routed |
-| `unix.sync-worktree` | `register-hooks.ts:862, 891, 1926` | Fully routed |
-| `unix.sync-repo` | (inferred) | Fully routed |
-| `unix.sync-user` | `register-hooks.ts:1518, 1566` | Fully routed |
-| `zellij.attach` | `services/terminals.ts:400` | Fully routed |
-| `zellij.tab` | in-executor | Fully routed |
+| Command                  | Daemon caller                      | Status       |
+| ------------------------ | ---------------------------------- | ------------ |
+| `prompt` (SDK execution) | session/task creation paths        | Fully routed |
+| `git.clone`              | `services/repos.ts:262`            | Fully routed |
+| `git.worktree.add`       | `services/worktrees.ts:731`        | Fully routed |
+| `git.worktree.remove`    | `services/worktrees.ts:477, 592`   | Fully routed |
+| `git.worktree.clean`     | `services/worktrees.ts:562`        | Fully routed |
+| `unix.sync-worktree`     | `register-hooks.ts:862, 891, 1926` | Fully routed |
+| `unix.sync-repo`         | (inferred)                         | Fully routed |
+| `unix.sync-user`         | `register-hooks.ts:1518, 1566`     | Fully routed |
+| `zellij.attach`          | `services/terminals.ts:400`        | Fully routed |
+| `zellij.tab`             | in-executor                        | Fully routed |
 
 The **gap list** (operations daemon does directly today, candidates for executor):
 
@@ -133,7 +133,8 @@ The daemon writes its own DB. SQLite via libsql today, Postgres supported via `p
 
 The existing exploration doc (Max, 2025-12-17) **already articulates this exact picture** under "Target Architecture": daemon never touches `AGOR_DATA_HOME`, executor as single isolation boundary, JSON-over-stdin, `kubectl run` for remote. The `getAgorDataHome()` / `AGOR_DATA_HOME` / `paths.data_home` plumbing is **already implemented** in `packages/core/src/config/config-manager.ts:623-759`. The shell exists. The execution is partial.
 
-What was *not* delivered:
+What was _not_ delivered:
+
 - Artifact + upload + env paths still daemon-FS-coupled.
 - No remote-execution template surface — `spawnExecutor` is still local-only `child_process.spawn`.
 - No DB-backed config service.
@@ -153,26 +154,31 @@ This is the right shape regardless of which topology option (A/B/C/D) we end up 
 
 #### Today's reality (verified)
 
-| Process | What it reads from `config.yaml` today | File:line |
-|---|---|---|
-| Daemon | Everything; per-request `loadConfig()` in 10+ hot paths | `services/worktrees.ts:107,206,1639`, `services/artifacts.ts:1123,1233`, `services/terminals.ts:195,327`, `register-routes.ts:3118,3185`, `mcp/tools/proxies.ts:131,154`, `services/config.ts:62,70,153` |
-| Executor | SDK credentials, OpenCode URL, GitHub token, git config | `executor/handlers/sdk/claude.ts:35`, `executor/handlers/sdk/opencode.ts:56`, `executor/handlers/sdk/copilot.ts:36`, `executor/commands/git.ts:392` |
-| Executor (under impersonation) | **Tries to read but fails** — mode 0600 + different uid. Daemon hand-picks credentials into env vars as a workaround | `utils/spawn-executor.ts:265-289` ("Add DAEMON_URL to env so executor doesn't try to read config.yaml") |
-| CLI | `daemon.port` / `daemon.base_url` to find the daemon; credentials and other config via the same `loadConfig()` machinery | `packages/core/src/config/config-manager.ts:337-412` (`getDaemonUrl()`, `getDaemonBaseUrl()`) |
+| Process                        | What it reads from `config.yaml` today                                                                                   | File:line                                                                                                                                                                                                |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Daemon                         | Everything; per-request `loadConfig()` in 10+ hot paths                                                                  | `services/worktrees.ts:107,206,1639`, `services/artifacts.ts:1123,1233`, `services/terminals.ts:195,327`, `register-routes.ts:3118,3185`, `mcp/tools/proxies.ts:131,154`, `services/config.ts:62,70,153` |
+| Executor                       | SDK credentials, OpenCode URL, GitHub token, git config                                                                  | `executor/handlers/sdk/claude.ts:35`, `executor/handlers/sdk/opencode.ts:56`, `executor/handlers/sdk/copilot.ts:36`, `executor/commands/git.ts:392`                                                      |
+| Executor (under impersonation) | **Tries to read but fails** — mode 0600 + different uid. Daemon hand-picks credentials into env vars as a workaround     | `utils/spawn-executor.ts:265-289` ("Add DAEMON_URL to env so executor doesn't try to read config.yaml")                                                                                                  |
+| CLI                            | `daemon.port` / `daemon.base_url` to find the daemon; credentials and other config via the same `loadConfig()` machinery | `packages/core/src/config/config-manager.ts:337-412` (`getDaemonUrl()`, `getDaemonBaseUrl()`)                                                                                                            |
 
 The comment in `spawn-executor.ts:265-266` is the smoking gun: this gap is **already biting**, has already been worked around for the credentials path, but the executor still does direct disk reads everywhere else.
 
-#### Phase-1 hygiene work (this worktree's intended scope)
+#### Phase-1A hygiene work — shipped in this PR
 
-| # | Work item | Files touched | Eng-days | Notes |
-|---|---|---|---|---|
-| **H1** | **Stop executor from reading `config.yaml`** — add a `resolvedConfig` slice on the executor payload; daemon resolves once and passes only what each command needs (typed sub-schema per command). | `packages/executor/src/payload-types.ts`, the 4 executor handlers above, `apps/agor-daemon/src/utils/spawn-executor.ts` | ~3 | Mechanical. Each command's slice is a small zod schema. Replaces the ad-hoc env-var hand-picking on lines 270–289. |
-| **H2** | **Cache `loadConfig()` in the daemon** — in-memory cache with `fs.watch` invalidation. Preserves the hot-reload UX (UI changes apply immediately) without paying YAML parse cost per request. | `packages/core/src/config/config-manager.ts` | ~1 | ~50 lines. Single seam — every call site in §1.5 picks it up for free. |
-| **H3** | **Capability-driven secret resolution** for `AGOR_JWT_SECRET`, `AGOR_MASTER_SECRET`, and `~/.agor/admin-credentials`. Order: (1) env var present → use it, don't read/write; (2) value in `config.yaml` → use it; (3) `config.yaml` writable → generate + write (today's behavior); (4) none of the above → fail-fast with a clear message naming the env var to set or the file to make writable. **No mode flag.** Read-only `config.yaml` mounts work without ceremony — caller just provides env vars. | `apps/agor-daemon/src/index.ts:502-506`, `apps/agor-daemon/src/startup.ts:329`, `apps/agor-daemon/src/setup/first-run-admin.ts` | ~1 | Removes the persistent-vs-ephemeral-volume footgun for any deploy that mounts `config.yaml` read-only. |
-| **H4** | **Make the shutdown sentinel skip silently when its path isn't writable.** `daemon-shutdown-clean.flag` is the daemon's homemade "did I crash" detector. If `~/.agor/` is read-only or absent, log debug and move on; don't crash. | `apps/agor-daemon/src/startup.ts:57-83` | ~0.25 | Trivial. |
-| **H5** | **CLI gets its own config file.** New `~/.agor/cli.yaml` (or similar) populated by `agor login`. Stores: daemon URL, auth token, default username. The CLI no longer reads `~/.agor/config.yaml`. On first use with no configured daemon: prompt for URL (default `http://localhost:3030`) and persist. Existing single-host installs: one-time migration that reads `daemon.port` from the daemon's `config.yaml` on first run, writes to the new CLI config, then stops touching the daemon's file. | `apps/agor-cli/src/`, `packages/core/src/config/config-manager.ts` (split out CLI vs daemon resolvers) | ~3 | The most substantive item. The risk is migration breakage for existing CLI users; gate behind the migration shim. |
+H1–H4 are landing together in this worktree. H5 (CLI config separation) is split to a follow-up worktree to keep the review surface focused.
 
-**Phase 1 subtotal: ~8 eng-days.** Each item is independently shippable and defensible without committing to any topology decision. Order to land: **H2 → H1 → H4 → H3 → H5** (cheapest-and-safest first, CLI separation last because it has the most design surface).
+| #      | Work item                                                                                                                                                                                                                                                         | Status     | Files touched                                                                                                                                   | Notes                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **H2** | **Stat-validated cache for `loadConfig()` / `loadConfigSync()`** — daemon's hot paths (10+ per request) skip the YAML re-parse when the file hasn't changed. `saveConfig()` invalidates so writes are visible on next read. Async and sync paths share the cache. | ✅ Shipped | `packages/core/src/config/config-manager.ts` (+ 6 cache tests)                                                                                  | First because every later item benefits — `loadConfigSync()` in `spawn-executor.ts` (H1) is now negligible cost.                                                                                                                                                                                                                                                                                                      |
+| **H1** | **`resolvedConfig` payload slice — executor stops reading `config.yaml`**                                                                                                                                                                                         | ✅ Shipped | `packages/executor/src/payload-types.ts`, the 4 executor handlers, `apps/agor-daemon/src/utils/spawn-executor.ts` (+ 5 contract tests)          | Daemon resolves a strict subset of `AgorConfig` (`execution.permission_timeout_ms`, `opencode.serverUrl`, `daemon.host_ip_address`) and embeds it in `BasePayloadSchema.resolvedConfig`. Replaces the ad-hoc env-var credential hand-picking on `spawn-executor.ts:270-289`.                                                                                                                                          |
+| **H4** | **Shutdown sentinel logs once and degrades silently**                                                                                                                                                                                                             | ✅ Shipped | `apps/agor-daemon/src/startup.ts`                                                                                                               | The write path already swallowed errors; this commit adds a single log line so operators debugging crash classification on read-only AGOR_HOME deployments have signal. Read path keeps its silent catch (correct semantics, noisy if logged).                                                                                                                                                                        |
+| **H3** | **Capability-driven secret resolution** for `AGOR_JWT_SECRET`, `AGOR_MASTER_SECRET`, `AGOR_ADMIN_PASSWORD`                                                                                                                                                        | ✅ Shipped | `apps/agor-daemon/src/index.ts`, `apps/agor-daemon/src/startup.ts`, `apps/agor-daemon/src/setup/first-run-admin.ts` (+ 5 admin-bootstrap tests) | Order: (1) env var → use it, don't touch FS; (2) persisted value → use it; (3) path writable → generate + persist; (4) fail-fast with concrete remediation. No mode flag. JWT secret gained env-var precedence (previously ignored). MASTER_SECRET gained fail-fast message. Admin bootstrap gained `AGOR_ADMIN_PASSWORD` env-var path; the stderr banner points at the env var when no credentials file was written. |
+
+| **H5 (split)** | **CLI gets its own config file** — `~/.agor/cli.yaml` from `agor login`; CLI stops reading the daemon's `config.yaml`; first-use prompts for URL when no default is reachable. | 📋 Follow-up worktree | `apps/agor-cli/src/`, possible refactor in `packages/core/src/config/config-manager.ts` | Most substantive item. Migration shim for existing single-host installs. Risk: CLI UX regression. Worth its own PR. |
+
+**Phase 1A actual cost:** ~1 eng-day across the four items (significantly faster than the ~5.25-day estimate because the existing code was closer to capability-driven than the analysis assumed — H4 was nearly a no-op, H1's surface was smaller than estimated). 21 new tests across the three packages; 3261 total tests pass with zero regressions.
+
+**Order landed:** H2 → H1 → H4 → H3, exactly as planned.
 
 #### Out of scope for Phase 1
 
@@ -195,12 +201,14 @@ Take three actors:
 All three need read+write to the same worktree dir at `$AGOR_DATA_HOME/worktrees/<repo>/<wt>/`.
 
 **Today's scheme** (`packages/core/src/unix/group-manager.ts:185-240`):
+
 - Worktree dir is owned by a per-worktree group `agor_wt_<id>`.
 - DEFAULT POSIX ACLs (`setfacl -d -m g:agor_wt_<id>:rwX`) ensure new files inherit group write.
 - Users with `others_can: all` permission are `usermod -aG`'d into the group.
 - Setgid bit + ACL mask (`m::rwX`) round out the scheme.
 
 This works **on a single host** because:
+
 1. There is one uid namespace (kernel-shared).
 2. There is one `/etc/group` (or one NSS source).
 3. `setfacl` / `chown` succeed because `sudo` is available locally and one box owns the FS.
@@ -211,7 +219,7 @@ It breaks under any topology where:
    The daemon's `process.kill(pid)` on `services/worktrees.ts:1166` requires shared PID namespace. The env's stdout / stderr piping back to the daemon's `environment.log` write requires the daemon to share the FS. Neither holds across pods.
 
 2. **inotify / `chokidar` / `fsevents` don't fan out cleanly across NFS or EFS.**
-   `vite --watch` watches the worktree directly. On a single host: kernel inotify → done. On EFS: events may only fire on the writer side. An agent writing from a *different* pod via the same EFS volume may not deliver inotify events to the env pod. Vite's `usePolling: true` fallback works but burns CPU.
+   `vite --watch` watches the worktree directly. On a single host: kernel inotify → done. On EFS: events may only fire on the writer side. An agent writing from a _different_ pod via the same EFS volume may not deliver inotify events to the env pod. Vite's `usePolling: true` fallback works but burns CPU.
 
 3. **uid/gid locality.**
    uid 1001 inside pod A is not the same human as uid 1001 inside pod B unless an NSS source (LDAP/sssd) bridges them. `apps/agor-docs/pages/guide/containerized-execution.mdx:90-180` already mandates this for the executor model — it's a real, hard prereq, not a footnote.
@@ -226,6 +234,7 @@ The single hardest question in hosted-Agor topology is: **where do `--watch`-mod
 If they run on the daemon's host → daemon stays FS-coupled, end of story.
 
 If they run anywhere else → you need either:
+
 - **(a)** a shared FS with cross-pod ACL coordination + inotify-poll fallback (Option B), or
 - **(b)** an env-pod that owns the worktree volume itself, with the daemon as RPC client only (Option C / D), or
 - **(c)** no local watch mode at all, every env is "remote" (Option C strict).
@@ -285,6 +294,7 @@ This is the option Max walked off from last time. **Do not pick this unless you'
 ### Option D — Hybrid (self-hosted = A, hosted = C)
 
 **Shape:** Same codebase, two deployment shapes.
+
 - **Self-hosted:** Option A. Single pod, local FS, watch envs are direct daemon children. Today's UX preserved.
 - **Hosted:** Option C. Daemon FS-free, env-pods own worktree volumes, executor-only FS access.
 
@@ -325,14 +335,14 @@ This is what this worktree intends to take on first. See §1.5 for the H1–H5 b
 
 The remaining hygiene work, sequenced after Phase 1A because the executor payload schema (touched by H1) is more stable once the config slices are in place.
 
-| Work item | Files touched | Eng-weeks | Risk |
-|---|---|---|---|
-| **Postgres-only enforced for hosted** | `setup/database.ts`, `db/client.ts`, deployment manifests | 0.5 | Low — Postgres support exists |
-| **Artifact landing → executor** — new `artifact.land` payload type, move `services/artifacts.ts:717-812` body into executor handler | `services/artifacts.ts`, `packages/executor/src/handlers/artifact.ts` (new) | 1.0 | Medium — must preserve sidecar metadata semantics |
-| **Upload write → S3 / object store** (hosted-only; self-hosted keeps local) | `utils/upload.ts`, new `storage` adapter | 1.0 | Medium |
-| **Realign-repo-origin → executor** — `executor:git.repo.realign-origin` | `utils/realign-repo-origin.ts`, executor | 0.25 | Low |
-| **Drop daemon's `git ls-files` autocomplete** (or route via executor) | `services/files.ts` | 0.25 | Low — degraded UX in hosted only |
-| **UI bundle removed from daemon image** | `index.ts`, build scripts | 0.25 | Low |
+| Work item                                                                                                                           | Files touched                                                               | Eng-weeks | Risk                                              |
+| ----------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | --------- | ------------------------------------------------- |
+| **Postgres-only enforced for hosted**                                                                                               | `setup/database.ts`, `db/client.ts`, deployment manifests                   | 0.5       | Low — Postgres support exists                     |
+| **Artifact landing → executor** — new `artifact.land` payload type, move `services/artifacts.ts:717-812` body into executor handler | `services/artifacts.ts`, `packages/executor/src/handlers/artifact.ts` (new) | 1.0       | Medium — must preserve sidecar metadata semantics |
+| **Upload write → S3 / object store** (hosted-only; self-hosted keeps local)                                                         | `utils/upload.ts`, new `storage` adapter                                    | 1.0       | Medium                                            |
+| **Realign-repo-origin → executor** — `executor:git.repo.realign-origin`                                                             | `utils/realign-repo-origin.ts`, executor                                    | 0.25      | Low                                               |
+| **Drop daemon's `git ls-files` autocomplete** (or route via executor)                                                               | `services/files.ts`                                                         | 0.25      | Low — degraded UX in hosted only                  |
+| **UI bundle removed from daemon image**                                                                                             | `index.ts`, build scripts                                                   | 0.25      | Low                                               |
 
 **Subtotal: ~3 eng-weeks. All landable as discrete PRs.**
 
@@ -340,12 +350,12 @@ The remaining hygiene work, sequenced after Phase 1A because the executor payloa
 
 Extract the abstraction. Don't change behavior yet.
 
-| Work item | Eng-weeks |
-|---|---|
-| Define `EnvironmentRuntime` interface: `start(worktree, command) → handle`; `stop(handle)`; `tailLogs(handle, since) → AsyncIterable`; `kill(handle)`; `attachTerminal(handle, cwd) → ZellijHandle`. | 0.5 |
-| Implement `LocalProcessEnvironmentRuntime` as today's `spawnEnvironmentCommand` behind that interface. | 0.5 |
-| Wire `services/worktrees.ts:start/stop/restart` through it. | 0.25 |
-| Tests + docs. | 0.5 |
+| Work item                                                                                                                                                                                            | Eng-weeks |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| Define `EnvironmentRuntime` interface: `start(worktree, command) → handle`; `stop(handle)`; `tailLogs(handle, since) → AsyncIterable`; `kill(handle)`; `attachTerminal(handle, cwd) → ZellijHandle`. | 0.5       |
+| Implement `LocalProcessEnvironmentRuntime` as today's `spawnEnvironmentCommand` behind that interface.                                                                                               | 0.5       |
+| Wire `services/worktrees.ts:start/stop/restart` through it.                                                                                                                                          | 0.25      |
+| Tests + docs.                                                                                                                                                                                        | 0.5       |
 
 **Subtotal: ~1.5 eng-weeks.** Pure refactor. No user-visible change. Self-hosted behavior identical.
 
@@ -353,25 +363,25 @@ Extract the abstraction. Don't change behavior yet.
 
 This is the option C build.
 
-| Work item | Eng-weeks |
-|---|---|
-| `KubernetesEnvironmentRuntime` — `start()` issues `kubectl apply` for a per-env Deployment + Service; `stop()` deletes; `tailLogs()` streams via `kubectl logs --follow`. | 2.0 |
-| Per-worktree volume scheduling: one EBS PVC per worktree (or one big EFS partitioned — pick one; recommendation: per-worktree EBS for clean failure isolation, accept the cost). | 1.5 |
-| Env-pod image: includes git, the relevant runtimes (node/python/etc — pick a baseline + customer extends), the agor-executor CLI for in-env ops. | 1.0 |
-| RPC channel: daemon → env-pod for "exec in env" / "attach terminal" / "land artifact in env" / etc. Probably an authenticated WebSocket the env-pod opens back to the daemon (mirroring how executor connects today). | 1.5 |
-| Executor pods that are *not* env-pods: short-lived per-task `kubectl run` for `git.clone`, `git.worktree.add`, etc. These don't need a persistent volume — they take a volume claim from the worktree's env-pod (if it exists) or attach the worktree EBS directly. | 1.5 |
+| Work item                                                                                                                                                                                                                                                                | Eng-weeks                                         |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------- |
+| `KubernetesEnvironmentRuntime` — `start()` issues `kubectl apply` for a per-env Deployment + Service; `stop()` deletes; `tailLogs()` streams via `kubectl logs --follow`.                                                                                                | 2.0                                               |
+| Per-worktree volume scheduling: one EBS PVC per worktree (or one big EFS partitioned — pick one; recommendation: per-worktree EBS for clean failure isolation, accept the cost).                                                                                         | 1.5                                               |
+| Env-pod image: includes git, the relevant runtimes (node/python/etc — pick a baseline + customer extends), the agor-executor CLI for in-env ops.                                                                                                                         | 1.0                                               |
+| RPC channel: daemon → env-pod for "exec in env" / "attach terminal" / "land artifact in env" / etc. Probably an authenticated WebSocket the env-pod opens back to the daemon (mirroring how executor connects today).                                                    | 1.5                                               |
+| Executor pods that are _not_ env-pods: short-lived per-task `kubectl run` for `git.clone`, `git.worktree.add`, etc. These don't need a persistent volume — they take a volume claim from the worktree's env-pod (if it exists) or attach the worktree EBS directly.      | 1.5                                               |
 | Agent ↔ env-pod live FS: agent runs inside the env-pod (or in a peer pod that mounts the same EBS). **Decision: keep agent + env in the same pod for hosted.** Avoids cross-pod FS sharing for the live edit case entirely. Worktree's "agent" and "env" are co-located. | 0.5 — design only; impl folded into env-pod build |
-| Migration: existing self-hosted users unaffected. Hosted is opt-in via deployment manifest selection. | 0.5 |
+| Migration: existing self-hosted users unaffected. Hosted is opt-in via deployment manifest selection.                                                                                                                                                                    | 0.5                                               |
 
 **Subtotal: ~8 eng-weeks.** Major.
 
 #### Phase 4 — "Consolidate to Option D" (~1 week)
 
-| Work item | Eng-weeks |
-|---|---|
-| Docs: `containerized-execution.mdx` updated to describe both shapes. | 0.25 |
-| Operator picks `runtime: local-process` or `runtime: kubernetes` in deployment config. | 0.25 |
-| Test matrix: ensure both modes run a baseline test suite. | 0.5 |
+| Work item                                                                              | Eng-weeks |
+| -------------------------------------------------------------------------------------- | --------- |
+| Docs: `containerized-execution.mdx` updated to describe both shapes.                   | 0.25      |
+| Operator picks `runtime: local-process` or `runtime: kubernetes` in deployment config. | 0.25      |
+| Test matrix: ensure both modes run a baseline test suite.                              | 0.5       |
 
 **Subtotal: ~1 eng-week.**
 
@@ -381,7 +391,7 @@ In **self-hosted Option A path:** unchanged from today. Single host, single uid 
 
 In **hosted Option C path:** the agent and the env-process **share a pod** (same uid namespace, same FS). The daemon never mounts the worktree volume at all — it only knows the EBS handle and tells the cluster to attach it to the right env-pod. **Daemon ↔ FS is decoupled.** Cross-pod ACL coordination is unnecessary because the daemon doesn't share the FS.
 
-The thing that *replaces* the wall is "operator must set up a k8s cluster with PVCs and a node group capable of mounting them." This is real work but it's *standard* operator work, not a novel coordination problem.
+The thing that _replaces_ the wall is "operator must set up a k8s cluster with PVCs and a node group capable of mounting them." This is real work but it's _standard_ operator work, not a novel coordination problem.
 
 ### What we lose (honest)
 
@@ -395,20 +405,20 @@ The thing that *replaces* the wall is "operator must set up a k8s cluster with P
 
 ## 5. Effort estimate
 
-| Phase | Eng-weeks | Risk |
-|---|---|---|
-| 1A — Config hygiene (this worktree) | ~1.5 (8 eng-days) | Low |
-| 1B — Other FS hygiene | ~3 | Low–Medium |
-| 2 — `EnvironmentRuntime` abstraction | 1.5 | Low |
-| 3 — Hosted env-pods (Option C build) | 8 | High |
-| 4 — Consolidate | 1 | Low |
-| **Total to v1 hosted-ready** | **~15** | — |
+| Phase                                | Eng-weeks         | Risk       |
+| ------------------------------------ | ----------------- | ---------- |
+| 1A — Config hygiene (this worktree)  | ~1.5 (8 eng-days) | Low        |
+| 1B — Other FS hygiene                | ~3                | Low–Medium |
+| 2 — `EnvironmentRuntime` abstraction | 1.5               | Low        |
+| 3 — Hosted env-pods (Option C build) | 8                 | High       |
+| 4 — Consolidate                      | 1                 | Low        |
+| **Total to v1 hosted-ready**         | **~15**           | —          |
 
 **Hard-risk items:**
 
 - **Per-worktree volume orchestration.** EBS provisioning, attach/detach, cleanup of orphaned PVCs after worktree deletion, cost reporting. (Phase 3, ~2 weeks of the budget.) The first incident here will be a "we leaked $4K of EBS" post-mortem if we're not careful.
 - **Env-pod RPC channel auth + reconnect.** The current executor↔daemon WebSocket is short-lived and pre-authed via session token. Env-pods are long-lived. Token rotation, reconnect-after-pod-restart, and ensuring the daemon's view of "env state" doesn't drift from the pod's actual state — this is a multi-week subsystem on its own. (Phase 3, ~1.5 weeks.)
-- **Agent + env co-location in one pod.** Means the pod needs both the agent SDK image *and* the user's chosen runtime (node, python, etc.). Image size, image variants per customer-language preference, "what if customer wants their own custom env image" — this is its own product surface. (Phase 3, ~1 week, plus ongoing.)
+- **Agent + env co-location in one pod.** Means the pod needs both the agent SDK image _and_ the user's chosen runtime (node, python, etc.). Image size, image variants per customer-language preference, "what if customer wants their own custom env image" — this is its own product surface. (Phase 3, ~1 week, plus ongoing.)
 - **Self-hosted regression risk during Phase 2.** Extracting `EnvironmentRuntime` is a refactor but it touches the long-lived child-process model. One bad refactor and watch-mode breaks for every self-hosted user. Strong tests required.
 
 ### Where the prior "complexity wall" sits and how this avoids it
@@ -443,33 +453,33 @@ These would shift the recommendation if their answers were surprising.
 
 Same as §1.1, presented in the table format the prompt requested:
 
-| # | Touchpoint | R/W | Frequency | Current owner | Decoupling path | Phase |
-|---|---|---|---|---|---|---|
-| 1 | `~/.agor/config.yaml` (load) | R | startup-once | daemon | env+ConfigMap | 1 |
-| 2 | `~/.agor/config.yaml` (write secrets) | W | startup-once | daemon | DB row or operator-provided | 1 |
-| 3 | `~/.agor/admin-credentials` | W | first-run | daemon | stdout in hosted | 1 |
-| 4 | `daemon-shutdown-clean.flag` | R/W | shutdown+startup | daemon | DB or drop in containers | 1 |
-| 5 | `~/.agor/agor.db` (SQLite file) | R/W | every-req | daemon | Postgres-only for hosted | 1 |
-| 6 | UI bundle `dist/ui/` | R | startup | daemon | separate static host | 1 |
-| 7 | `.build-info` + `git rev-parse` | R | startup | daemon | env var at image build | 1 |
-| 8 | `~/.agor/repos/<slug>/` probe reads | R | per-req | daemon | executor probe + DB cache | 2/3 |
-| 9 | `.git/config` realign-origin | W | per-req | daemon | executor | 1 |
-| 10 | `~/.agor/worktrees/<r>/<wt>/` existsSync | R | per-req | daemon | DB cache + executor probe | 2/3 |
-| 11 | Worktree git-state read | R | per-task | daemon | executor probe | 3 |
-| 12 | `git ls-files` autocomplete | R | per-req | daemon | executor or drop in hosted | 1 |
-| 13 | Repo dir cleanup `fs.rm` | W | per-delete | daemon | executor | 1 |
-| 14 | Artifact sidecar read | R | per-req | daemon | DB cache + executor | 1 |
-| 15 | Artifact land (mkdir + writeFile) | W | per-land | daemon | **executor `artifact.land`** | 1 |
-| 16 | Artifact rm (overwrite) | W | per-land | daemon | executor | 1 |
-| 17 | Artifact recursive readdir | R | per-req | daemon | executor | 1 |
-| 18 | Upload write (3 destinations) | W | per-upload | daemon | object store + executor | 1 |
-| 19 | `/tmp/agor-env-<uid>.sh` write + chown | W | per-attach | daemon | fold into `zellij.attach` | 2 |
-| 20 | `which zellij` execSync | exec | startup | daemon | executor health probe | 1 |
-| 21 | Executor binary existsSync | R | startup | daemon | image-bundled path | 1 |
-| 22 | `spawn(executor)` (local-only) | exec | per-task | daemon | template / `kubectl run` for hosted | 3 |
-| 23 | `spawnEnvironmentCommand` env child | exec (long-lived) | per-env | daemon | `EnvironmentRuntime` interface; env-pod in hosted | 2/3 |
-| 24 | `environment.log` continuous write | W | continuous | daemon | env-pod stdout, k8s captures | 3 |
-| 25 | `process.kill(env pid)` | signal | per-stop | daemon | env-pod RPC | 3 |
+| #   | Touchpoint                               | R/W               | Frequency        | Current owner | Decoupling path                                   | Phase |
+| --- | ---------------------------------------- | ----------------- | ---------------- | ------------- | ------------------------------------------------- | ----- |
+| 1   | `~/.agor/config.yaml` (load)             | R                 | startup-once     | daemon        | env+ConfigMap                                     | 1     |
+| 2   | `~/.agor/config.yaml` (write secrets)    | W                 | startup-once     | daemon        | DB row or operator-provided                       | 1     |
+| 3   | `~/.agor/admin-credentials`              | W                 | first-run        | daemon        | stdout in hosted                                  | 1     |
+| 4   | `daemon-shutdown-clean.flag`             | R/W               | shutdown+startup | daemon        | DB or drop in containers                          | 1     |
+| 5   | `~/.agor/agor.db` (SQLite file)          | R/W               | every-req        | daemon        | Postgres-only for hosted                          | 1     |
+| 6   | UI bundle `dist/ui/`                     | R                 | startup          | daemon        | separate static host                              | 1     |
+| 7   | `.build-info` + `git rev-parse`          | R                 | startup          | daemon        | env var at image build                            | 1     |
+| 8   | `~/.agor/repos/<slug>/` probe reads      | R                 | per-req          | daemon        | executor probe + DB cache                         | 2/3   |
+| 9   | `.git/config` realign-origin             | W                 | per-req          | daemon        | executor                                          | 1     |
+| 10  | `~/.agor/worktrees/<r>/<wt>/` existsSync | R                 | per-req          | daemon        | DB cache + executor probe                         | 2/3   |
+| 11  | Worktree git-state read                  | R                 | per-task         | daemon        | executor probe                                    | 3     |
+| 12  | `git ls-files` autocomplete              | R                 | per-req          | daemon        | executor or drop in hosted                        | 1     |
+| 13  | Repo dir cleanup `fs.rm`                 | W                 | per-delete       | daemon        | executor                                          | 1     |
+| 14  | Artifact sidecar read                    | R                 | per-req          | daemon        | DB cache + executor                               | 1     |
+| 15  | Artifact land (mkdir + writeFile)        | W                 | per-land         | daemon        | **executor `artifact.land`**                      | 1     |
+| 16  | Artifact rm (overwrite)                  | W                 | per-land         | daemon        | executor                                          | 1     |
+| 17  | Artifact recursive readdir               | R                 | per-req          | daemon        | executor                                          | 1     |
+| 18  | Upload write (3 destinations)            | W                 | per-upload       | daemon        | object store + executor                           | 1     |
+| 19  | `/tmp/agor-env-<uid>.sh` write + chown   | W                 | per-attach       | daemon        | fold into `zellij.attach`                         | 2     |
+| 20  | `which zellij` execSync                  | exec              | startup          | daemon        | executor health probe                             | 1     |
+| 21  | Executor binary existsSync               | R                 | startup          | daemon        | image-bundled path                                | 1     |
+| 22  | `spawn(executor)` (local-only)           | exec              | per-task         | daemon        | template / `kubectl run` for hosted               | 3     |
+| 23  | `spawnEnvironmentCommand` env child      | exec (long-lived) | per-env          | daemon        | `EnvironmentRuntime` interface; env-pod in hosted | 2/3   |
+| 24  | `environment.log` continuous write       | W                 | continuous       | daemon        | env-pod stdout, k8s captures                      | 3     |
+| 25  | `process.kill(env pid)`                  | signal            | per-stop         | daemon        | env-pod RPC                                       | 3     |
 
 (Some sub-touchpoints from §1.1 collapsed into "Repo dir cleanup" / "probe reads" for readability.)
 
