@@ -12,6 +12,7 @@ import type {
   CodexSandboxMode,
   EffortLevel,
   Message,
+  NotificationData,
   PermissionMode,
   SandpackConfig,
   Session,
@@ -1505,6 +1506,91 @@ export const sessionEnvSelections = sqliteTable(
 );
 
 /**
+ * Notifications - Durable per-user inbox.
+ *
+ * Each row is addressed to exactly one user. Global admin broadcasts fan out
+ * (one row per user) so the panel and counter queries stay single-table and
+ * recipient-scoped.
+ *
+ * Dismiss is a hard-delete (no soft-delete column) — see
+ * `docs/notification-system-design.md` §5.3.
+ */
+export const notifications = sqliteTable(
+  'notifications',
+  {
+    notification_id: text('notification_id', { length: 36 }).primaryKey(),
+    created_at: t.timestamp('created_at').notNull(),
+
+    recipient_user_id: text('recipient_user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+
+    type: text('type', {
+      enum: ['mention', 'session_returned', 'global_admin'],
+    }).notNull(),
+
+    title: text('title').notNull(),
+    preview: text('preview'),
+    link_url: text('link_url'),
+
+    source_session_id: text('source_session_id', { length: 36 }).references(
+      () => sessions.session_id,
+      { onDelete: 'set null' }
+    ),
+    source_worktree_id: text('source_worktree_id', { length: 36 }).references(
+      () => worktrees.worktree_id,
+      { onDelete: 'set null' }
+    ),
+    source_board_id: text('source_board_id', { length: 36 }).references(
+      () => boards.board_id,
+      { onDelete: 'set null' }
+    ),
+    source_comment_id: text('source_comment_id', { length: 36 }).references(
+      () => boardComments.comment_id,
+      { onDelete: 'set null' }
+    ),
+    // Tasks can be ephemeral / cleaned up; intentionally no FK.
+    source_task_id: text('source_task_id', { length: 36 }),
+    source_user_id: text('source_user_id', { length: 36 }).references(
+      () => users.user_id,
+      { onDelete: 'set null' }
+    ),
+
+    read_at: t.timestamp('read_at'),
+    expires_at: t.timestamp('expires_at'),
+
+    scope: text('scope', { enum: ['user', 'global'] }).notNull().default('user'),
+
+    data: t.json<NotificationData>('data').notNull().default(sql`'{}'`),
+  },
+  (table) => ({
+    // Panel list: "newest notifs for this user"
+    recipientCreatedIdx: index('notifications_recipient_created_idx').on(
+      table.recipient_user_id,
+      table.created_at
+    ),
+    // Unread counter + mark-all-read sweep
+    recipientReadIdx: index('notifications_recipient_read_idx').on(
+      table.recipient_user_id,
+      table.read_at
+    ),
+    // Collapse lookup for session_returned (recipient, session, type).
+    // NOT unique on purpose — mentions on the same session must coexist, and
+    // session_returned collapse is enforced in the repository inside a
+    // SELECT-then-INSERT-or-UPDATE transaction (see NotificationsRepository).
+    recipientSourceTypeIdx: index('notifications_recipient_source_type_idx').on(
+      table.recipient_user_id,
+      table.source_session_id,
+      table.type
+    ),
+    // Archive cleanup: DELETE WHERE source_session_id = ?
+    sourceSessionIdx: index('notifications_source_session_idx').on(table.source_session_id),
+    // Archive cleanup: DELETE WHERE source_worktree_id = ?
+    sourceWorktreeIdx: index('notifications_source_worktree_idx').on(table.source_worktree_id),
+  })
+);
+
+/**
  * Type exports for use with Drizzle ORM
  */
 export type SessionRow = typeof sessions.$inferSelect;
@@ -1543,6 +1629,8 @@ export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
 export type SerializedSessionRow = typeof serializedSessions.$inferSelect;
 export type SerializedSessionInsert = typeof serializedSessions.$inferInsert;
+export type NotificationRow = typeof notifications.$inferSelect;
+export type NotificationInsert = typeof notifications.$inferInsert;
 
 /**
  * Drizzle Relations for Relational Queries

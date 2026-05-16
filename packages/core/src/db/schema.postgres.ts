@@ -12,6 +12,7 @@ import type {
   CodexSandboxMode,
   EffortLevel,
   Message,
+  NotificationData,
   PermissionMode,
   SandpackConfig,
   Session,
@@ -1473,6 +1474,75 @@ export const sessionEnvSelections = pgTable(
 );
 
 /**
+ * Notifications - Durable per-user inbox. See sqlite schema for full docs.
+ */
+export const notifications = pgTable(
+  'notifications',
+  {
+    notification_id: varchar('notification_id', { length: 36 }).primaryKey(),
+    created_at: t.timestamp('created_at').notNull(),
+
+    recipient_user_id: varchar('recipient_user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+
+    type: text('type', {
+      enum: ['mention', 'session_returned', 'global_admin'],
+    }).notNull(),
+
+    title: text('title').notNull(),
+    preview: text('preview'),
+    link_url: text('link_url'),
+
+    source_session_id: varchar('source_session_id', { length: 36 }).references(
+      () => sessions.session_id,
+      { onDelete: 'set null' }
+    ),
+    source_worktree_id: varchar('source_worktree_id', { length: 36 }).references(
+      () => worktrees.worktree_id,
+      { onDelete: 'set null' }
+    ),
+    source_board_id: varchar('source_board_id', { length: 36 }).references(
+      () => boards.board_id,
+      { onDelete: 'set null' }
+    ),
+    source_comment_id: varchar('source_comment_id', { length: 36 }).references(
+      () => boardComments.comment_id,
+      { onDelete: 'set null' }
+    ),
+    source_task_id: varchar('source_task_id', { length: 36 }),
+    source_user_id: varchar('source_user_id', { length: 36 }).references(
+      () => users.user_id,
+      { onDelete: 'set null' }
+    ),
+
+    read_at: t.timestamp('read_at'),
+    expires_at: t.timestamp('expires_at'),
+
+    scope: text('scope', { enum: ['user', 'global'] }).notNull().default('user'),
+
+    data: t.json<NotificationData>('data').notNull().default(sql`'{}'`),
+  },
+  (table) => ({
+    recipientCreatedIdx: index('notifications_recipient_created_idx').on(
+      table.recipient_user_id,
+      table.created_at
+    ),
+    recipientReadIdx: index('notifications_recipient_read_idx').on(
+      table.recipient_user_id,
+      table.read_at
+    ),
+    recipientSourceTypeIdx: index('notifications_recipient_source_type_idx').on(
+      table.recipient_user_id,
+      table.source_session_id,
+      table.type
+    ),
+    sourceSessionIdx: index('notifications_source_session_idx').on(table.source_session_id),
+    sourceWorktreeIdx: index('notifications_source_worktree_idx').on(table.source_worktree_id),
+  })
+);
+
+/**
  * Type exports for use with Drizzle ORM
  */
 export type SessionRow = typeof sessions.$inferSelect;
@@ -1511,6 +1581,8 @@ export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
 export type SerializedSessionRow = typeof serializedSessions.$inferSelect;
 export type SerializedSessionInsert = typeof serializedSessions.$inferInsert;
+export type NotificationRow = typeof notifications.$inferSelect;
+export type NotificationInsert = typeof notifications.$inferInsert;
 
 /**
  * Drizzle Relations for Relational Queries
