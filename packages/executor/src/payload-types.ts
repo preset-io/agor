@@ -550,6 +550,20 @@ export const ZellijTabPayloadSchema = BasePayloadSchema.extend({
      * Ignored when `command` is omitted.
      */
     commandArgs: z.array(z.string()).optional(),
+
+    /**
+     * Force-recreate semantics for `action: 'create'`. Closes EVERY tab
+     * matching `tabName` before issuing `new-tab` — bypasses the
+     * default "tab exists → focus instead" auto-converse.
+     *
+     * Used by:
+     *   - `/sessions/:id/restart-cli` — always wants a fresh `claude`.
+     *   - The ensure-create path when the daemon detected the in-tab
+     *     `claude` is dead (pgrep returned no match).
+     *
+     * Ignored when `action !== 'create'`.
+     */
+    forceRecreate: z.boolean().optional(),
   }),
 });
 

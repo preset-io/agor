@@ -44,7 +44,7 @@ import {
   UnixUserNotFoundError,
   validateResolvedUnixUser,
 } from '@agor/core/unix';
-import { buildSpawnConfigForSession } from './claude-cli-integration.js';
+import { buildSpawnConfigForSession, isClaudeRunningFor } from './claude-cli-integration.js';
 import { generateSessionToken, spawnExecutorFireAndForget } from '../utils/spawn-executor.js';
 import { hasWorktreePermission } from '../utils/worktree-authorization.js';
 
@@ -291,6 +291,31 @@ export class TerminalsService {
   }
 
   /**
+   * Look for a running `zellij attach <sessionName>` process. Used at
+   * cold-start to detect executors that survived a daemon restart so
+   * we adopt instead of spawning a duplicate.
+   *
+   * **Anchored regex**: `^[^ ]*zellij attach <sessionName>`. Without
+   * the `^` anchor, `pgrep -f` false-positives on ANY process whose
+   * full command line contains the search string — including, e.g., a
+   * sibling `bash -c 'something something zellij attach agor-X'` that
+   * happens to mention it. The anchor restricts the match to processes
+   * whose first argv element is the `zellij` binary (with optional
+   * path prefix).
+   */
+  private async detectExistingExecutor(sessionName: string): Promise<boolean> {
+    try {
+      execSync(`pgrep -f '^[^ ]*zellij attach ${sessionName}'`, {
+        stdio: 'ignore',
+        timeout: 1500,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Active executor processes per user
    * Key: userId, Value: { process pid, sessionName, worktrees }
    */
@@ -339,6 +364,7 @@ export class TerminalsService {
     cwd: string;
     command: string;
     commandArgs: string[];
+    sessionId: string;
   } | null> {
     if (!sessionId) return null;
     try {
@@ -397,6 +423,7 @@ export class TerminalsService {
         cwd: worktree.path,
         command: built.bin,
         commandArgs: built.args,
+        sessionId: session.session_id,
       };
     } catch (err) {
       // Re-throw Forbidden so the caller sees the auth failure — only
@@ -437,6 +464,14 @@ export class TerminalsService {
         cwd: string;
         command: string;
         commandArgs: string[];
+        /**
+         * Agor session id — used to pgrep for a live `claude` process
+         * bound to it. When the process is dead (Ctrl-D, kill -9, etc.)
+         * we emit `forceRecreate: true` so the executor closes the
+         * stale tab + respawns claude fresh. When alive, we emit a
+         * plain `focus` and preserve scrollback.
+         */
+        sessionId: string;
       } | null;
     },
     params?: AuthenticatedParams
@@ -450,6 +485,31 @@ export class TerminalsService {
     const userId = params?.user?.user_id as UserID;
     if (!userId) {
       throw new Error('Authentication required for executor terminal');
+    }
+
+    // Cold-start adoption: after a daemon restart, `executorTerminals`
+    // is empty but the browser's PRIOR `zellij attach agor-<short>`
+    // process is still alive (Zellij keeps the session). Without this
+    // check, every browser reload post-restart spawns ANOTHER executor
+    // → multiple processes listening on `user/<id>/terminal` → every
+    // `terminal:tab create` event runs N times → duplicate tabs.
+    //
+    // Detect any running `zellij attach agor-<sessionName>` and adopt
+    // it into the Map so subsequent dispatch reuses the existing
+    // executor instead of fork-bombing.
+    const expectedSessionName = `agor-${formatShortId(userId)}`;
+    if (!this.executorTerminals.get(userId)) {
+      const adopted = await this.detectExistingExecutor(expectedSessionName);
+      if (adopted) {
+        console.log(
+          `[TerminalsService] adopting existing zellij executor for user ${userId.slice(0, 8)} (sessionName=${expectedSessionName})`
+        );
+        this.executorTerminals.set(userId, {
+          sessionName: expectedSessionName,
+          activeWorktrees: new Set(),
+          startedAt: new Date(),
+        });
+      }
     }
 
     // Check if user already has an executor running
@@ -473,23 +533,45 @@ export class TerminalsService {
           });
 
           // Ensure-create the CLI tab when an `ensureCliSessionId` was
-          // supplied — the executor's `handleTabAction('create')` is
-          // idempotent (auto-converts to focus if the tab exists), so
-          // we fire create-with-command unconditionally.
+          // supplied.
           //
-          // Falls back to the old behavior (plain focus emit) when the
-          // caller provided a `focusTabName` without an `ensureCliSessionId`
-          // — older code paths still rely on that semantics.
+          // Server-side claude liveness check decides the action:
+          //   - `claude` alive ⇒ `focus` (preserves scrollback)
+          //   - `claude` dead  ⇒ `create` + `forceRecreate: true`
+          //     (closes every stale duplicate of the tab name, then
+          //     spawns fresh with the layout-file claude argv)
+          //
+          // Without this branching, reopening a session whose
+          // foreground claude exited (Ctrl-D, kill -9, post-restart-
+          // before-watchdog-fires) left the user staring at a bash
+          // prompt — the executor's default "tab exists ⇒ focus"
+          // auto-converse focused the stale tab instead of respawning.
+          //
+          // Falls back to the old plain-focus behavior when the caller
+          // provided a `focusTabName` without an `ensureCliSessionId`.
           if (data.cliEnsure && data.cliEnsure.tabName !== worktree.name) {
+            const ensure = data.cliEnsure;
+            const alive = await isClaudeRunningFor(
+              ensure.sessionId as unknown as import('@agor/core/types').SessionID
+            );
             setTimeout(() => {
-              this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
-                userId,
-                action: 'create',
-                tabName: data.cliEnsure?.tabName,
-                cwd: data.cliEnsure?.cwd,
-                command: data.cliEnsure?.command,
-                commandArgs: data.cliEnsure?.commandArgs,
-              });
+              if (alive) {
+                this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
+                  userId,
+                  action: 'focus',
+                  tabName: ensure.tabName,
+                });
+              } else {
+                this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
+                  userId,
+                  action: 'create',
+                  tabName: ensure.tabName,
+                  cwd: ensure.cwd,
+                  command: ensure.command,
+                  commandArgs: ensure.commandArgs,
+                  forceRecreate: true,
+                });
+              }
             }, 300);
           } else if (data.focusTabName && data.focusTabName !== worktree.name) {
             setTimeout(() => {
@@ -637,20 +719,32 @@ export class TerminalsService {
     // Cold-start path: the executor hasn't yet attached to its Feathers
     // channel, so the `onCliSessionCreated` dispatch (if any) landed in
     // an empty room and was dropped. Re-emit after the executor boots
-    // (~1.5s). When `ensureCliSessionId` was supplied we have the full
-    // spawn config in `cliEnsure` and emit create-with-command so the
-    // cli tab actually exists with `claude` running inside — closing
-    // the first-run race that previously left users staring at bash.
+    // (~1.5s). Same liveness branching as the warm path — `claude`
+    // alive ⇒ focus, dead ⇒ forceRecreate (close any stale tab from
+    // an earlier daemon instance, then spawn fresh).
     if (data.cliEnsure) {
+      const ensure = data.cliEnsure;
+      const alive = await isClaudeRunningFor(
+        ensure.sessionId as unknown as import('@agor/core/types').SessionID
+      );
       setTimeout(() => {
-        this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
-          userId,
-          action: 'create',
-          tabName: data.cliEnsure?.tabName,
-          cwd: data.cliEnsure?.cwd,
-          command: data.cliEnsure?.command,
-          commandArgs: data.cliEnsure?.commandArgs,
-        });
+        if (alive) {
+          this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
+            userId,
+            action: 'focus',
+            tabName: ensure.tabName,
+          });
+        } else {
+          this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
+            userId,
+            action: 'create',
+            tabName: ensure.tabName,
+            cwd: ensure.cwd,
+            command: ensure.command,
+            commandArgs: ensure.commandArgs,
+            forceRecreate: true,
+          });
+        }
       }, 1500);
     } else if (data.focusTabName) {
       setTimeout(() => {

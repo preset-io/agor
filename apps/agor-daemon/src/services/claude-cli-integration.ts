@@ -268,7 +268,7 @@ const watchdogTimers = new Map<string, NodeJS.Timeout>();
  * transient pgrep errors so a misbehaving binary doesn't trigger
  * spurious task-close events.
  */
-function isClaudeRunningFor(sessionId: SessionID): Promise<boolean> {
+export function isClaudeRunningFor(sessionId: SessionID): Promise<boolean> {
   return new Promise((resolve) => {
     // pgrep uses extended regex with -f. `(--session-id|--resume) <id>`
     // covers both spawn forms `buildClaudeCliSpawn` emits.

@@ -777,35 +777,46 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           console.warn('[claude-cli-integration] pkill failed, proceeding anyway', err);
         }
 
-        // 2) Close the old tab (best-effort — if not present the executor
-        //    just no-ops on the close action).
-        const io = (
-          app as unknown as { io?: { to(r: string): { emit(ev: string, p: unknown): void } } }
-        ).io;
-        if (io) {
-          io.to(channel).emit('terminal:tab', {
-            userId: targetUserId,
-            action: 'close',
-            tabName,
-          });
-        }
-
-        // 3) Re-run the on-created hook to spawn a fresh layout. Slight
-        //    delay so Zellij finishes the close before the create AND so
-        //    any lingering claude-process file locks on the JSONL clear.
+        // 2) Atomic close-all + create-with-command via `forceRecreate`.
+        //
+        // Previous implementation emitted `close` then waited 800ms
+        // then re-ran `onCliSessionCreated` which emitted `create`.
+        // Two problems:
+        //   - `close` only closed the focused tab (one of potentially
+        //     several duplicates from earlier racing executors), so
+        //     the subsequent `create` would see surviving siblings
+        //     and auto-converse to `focus` — restart "succeeded" but
+        //     claude never actually respawned.
+        //   - The 800ms timer was a guess against an uncoordinated
+        //     race between executors.
+        //
+        // With `forceRecreate: true` the executor closes EVERY tab
+        // matching `tabName` first, then issues `new-tab --layout`
+        // with the freshly-built claude argv — atomic in the
+        // executor's tab-event loop. No timer, no surviving stale
+        // tab, no auto-converse. Restart actually restarts.
         const worktree = (await app
           .service('worktrees')
           .get(session.worktree_id, params)) as { path?: string };
         const cwd = worktree?.path;
         if (!cwd) throw new Error('Worktree has no path; cannot restart');
-        setTimeout(async () => {
-          try {
-            const { onCliSessionCreated } = await import('./services/claude-cli-integration.js');
-            await onCliSessionCreated(app, session, cwd);
-          } catch (err) {
-            console.error('[claude-cli-integration] restart re-spawn failed', err);
-          }
-        }, 800);
+        const { buildSpawnConfigForSession } = await import(
+          './services/claude-cli-integration.js'
+        );
+        const { buildClaudeCliSpawn } = await import('@agor/core/claude-cli');
+        const spawnCfg = buildSpawnConfigForSession(session, cwd);
+        const built = buildClaudeCliSpawn(spawnCfg);
+        if (app.io) {
+          app.io.to(channel).emit('terminal:tab', {
+            userId: targetUserId,
+            action: 'create',
+            tabName,
+            cwd,
+            command: built.bin,
+            commandArgs: built.args,
+            forceRecreate: true,
+          });
+        }
 
         return { ok: true, tabName };
       },
