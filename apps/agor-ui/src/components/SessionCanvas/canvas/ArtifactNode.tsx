@@ -586,7 +586,9 @@ export const ArtifactNode = ({
       ? 'processing'
       : 'success';
   const headerBadgeTitle = error ? 'Failed to load' : loading ? 'Reloading...' : 'Live';
-  const trustBadge = payload ? renderTrustBadge(payload) : null;
+  const trustBadge = payload
+    ? renderTrustBadge(payload, () => setConsentOpen(true))
+    : null;
   // A loaded payload that's also in the error state is stale — the body
   // renders the error placeholder, so the header shouldn't expose
   // payload-acting controls (Export / Interact / Consent) that operate
@@ -919,7 +921,7 @@ export const ArtifactNode = ({
   );
 };
 
-function renderTrustBadge(payload: ArtifactPayload) {
+function renderTrustBadge(payload: ArtifactPayload, onTrustClick?: () => void) {
   const state = payload.trust_state;
   if (state === 'no_secrets_needed') return null;
   if (state === 'self') {
@@ -946,10 +948,31 @@ function renderTrustBadge(payload: ArtifactPayload) {
       </Tooltip>
     );
   }
-  // 'untrusted'
+  // 'untrusted' — the badge itself is the affordance. `nodrag nopan` is
+  // required because React Flow's drag handler arms on mousedown at the
+  // parent node level, which would swallow the click before onClick fires
+  // (stopPropagation on click is too late, same gotcha as the controls
+  // row above).
   return (
-    <Tooltip title="Render is missing secrets — click the lock icon to grant trust">
-      <Tag color="orange" icon={<LockOutlined />} style={{ fontSize: 10, marginLeft: 4 }}>
+    <Tooltip title="Click to review and grant trust so secrets are injected">
+      <Tag
+        color="orange"
+        icon={<LockOutlined />}
+        className={onTrustClick ? 'nodrag nopan' : undefined}
+        style={{
+          fontSize: 10,
+          marginLeft: 4,
+          cursor: onTrustClick ? 'pointer' : undefined,
+        }}
+        onClick={
+          onTrustClick
+            ? (e) => {
+                e.stopPropagation();
+                onTrustClick();
+              }
+            : undefined
+        }
+      >
         Untrusted
       </Tag>
     </Tooltip>
