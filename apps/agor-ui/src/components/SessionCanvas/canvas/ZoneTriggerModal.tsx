@@ -94,9 +94,8 @@ export const ZoneTriggerModal = ({
   // Editable rendered template (user can modify before executing)
   const [editableTemplate, setEditableTemplate] = useState<string>('');
 
-  // True while the daemon is rendering the template. Drives a Spin overlay
-  // on the textarea so the user doesn't see the raw `{{...}}` source flash
-  // before the final rendered content arrives.
+  // Drives a Spin overlay so the user doesn't see the raw `{{...}}` flash
+  // before the daemon's rendered content arrives.
   const [isRendering, setIsRendering] = useState<boolean>(true);
 
   // Explicit state for session config (survives form mount/unmount cycles)
@@ -303,6 +302,7 @@ export const ZoneTriggerModal = ({
       onCancel={onCancel}
       onOk={handleExecute}
       okText="Execute Trigger"
+      okButtonProps={{ disabled: isRendering }}
       cancelText="Cancel"
       width={700}
     >
@@ -450,8 +450,7 @@ export const ZoneTriggerModal = ({
           <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
             Prompt (editable)
           </Typography.Text>
-          {/* `delay` so the spinner doesn't flash on sub-perceptible renders. */}
-          <Spin spinning={isRendering} delay={200} tip="Rendering template…">
+          <Spin spinning={isRendering} delay={200} description="Rendering template…">
             <Input.TextArea
               value={editableTemplate}
               onChange={(e) => setEditableTemplate(e.target.value)}
