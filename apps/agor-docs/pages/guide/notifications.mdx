@@ -1,0 +1,129 @@
+---
+title: Notifications
+description: Agor's durable per-user inbox — the bell, the panel, the toast-vs-notification rule, and admin announcements.
+---
+
+# Notifications
+
+**One bell, one panel, one counter.** Agor has rich real-time *events* (an agent finishes, a teammate `@`-mentions you, an admin posts an announcement), but events disappear the moment you blink. The notifications system is the durable record of "things that happened while you were away."
+
+A bell icon lives on the right side of the navbar. The badge counts unread notifications across every board, session, and tab. Click it to open the panel.
+
+---
+
+## What triggers a notification
+
+Three types in v1, each with a clear rule:
+
+| Type | Trigger | Recipients | Card glyph |
+|---|---|---|---|
+| **Mention** | A board comment whose `data.mentions[]` includes you (excluding self-mentions). | You only | 💬 |
+| **Session returned** | A task on a session you created or prompted reaches `COMPLETED` or `FAILED`. Skipped when the session or its worktree is archived. | Session creator + everyone who prompted it | 🤖 |
+| **Global announcement** | An admin posts an announcement from **Settings → Announcements**. | Every authenticated user | ⚠️ |
+
+The unit for `session_returned` is the **task**, not the message. A chatty agent that emits 50 messages produces one notification (or zero, if you've already got an unread row for that session — see *Collapse*).
+
+---
+
+## Toasts vs notifications — the rule
+
+Agor has two parallel signals: short-lived **toasts** (Ant Design `message` calls) and durable **notifications**. They serve different jobs, and the rule is:
+
+> **Use a toast when…**
+> - The user just took an action and you're confirming it ("Saved", "Copied").
+> - There's an error tied to the user's *current* action that won't be retried automatically.
+> - The information has no value 5 minutes from now.
+>
+> **Use a notification when…**
+> - The event happened *to* the user, not *because of* the user (an agent finished, a teammate tagged them).
+> - The user might miss it because they're on another board / tab / device.
+> - It needs to be actionable later, not just acknowledged now.
+
+Concrete examples:
+
+| Event | Toast or notification? |
+|---|---|
+| "Worktree saved" | Toast |
+| "Failed to connect to daemon" (current request) | Toast |
+| "Session 'X' returned with PR" | Notification |
+| "Alice mentioned you in a comment" | Notification |
+| "Deploying at noon PST" (admin broadcast) | Notification (+ optional sticky banner) |
+| "Copied to clipboard" | Toast |
+| "OAuth flow completed in another tab" | Toast (handled by the `oauth:completed` socket event) |
+
+When both apply (e.g. a long-running task returns while you happen to be looking), the **client suppresses the toast** if you're already viewing the source page — the notification is the durable record, the toast would just be noise. The bell badge still updates either way. The rule lives in `apps/agor-ui/src/hooks/useNotificationToastSuppression.ts`.
+
+---
+
+## Panel mechanics
+
+- **Sort**: newest first, strict by `created_at`.
+- **Mark read**: hovering an item for 1.5s **or** clicking it marks it read. Opening the panel does *not* mark everything read — that affordance is the explicit "Mark all read" button in the header.
+- **Dismiss**: the `[×]` hard-deletes the row. No soft-delete state; dismissed = gone.
+- **Cross-tab**: every tab sees the same panel because both subscribe to the same `user/<id>` socket room and read the same backing table. No extra sync logic.
+- **Reconnect**: if the socket reconnects, the panel re-fetches in the background to catch any events that fired while disconnected.
+- **Retention**: read notifications older than 90 days are swept nightly.
+
+### Collapse
+
+For `session_returned` only, multiple completions on the same session collapse into a single row keyed on `(recipient, session, type)`. The newest task wins — preview and timestamp refresh, and the row floats back to the top with `read_at` cleared.
+
+Mentions and admin broadcasts **do not collapse** — each is a distinct fact.
+
+---
+
+## Subscription model
+
+You're auto-subscribed to a session's `session_returned` notifications if you either:
+
+1. **Created** the session, or
+2. **Prompted** the session (any task in it has `created_by = you`).
+
+You stay subscribed until the session or worktree is archived — at which point pending notifications for that scope are swept too. There's no per-session opt-in / opt-out toggle in v1; mute affordances land in v1.5.
+
+This is interaction-based on purpose. In a multi-user instance, "every session you can see" would mean every teammate's run pings you. Interaction-based means walking past someone's session doesn't subscribe you.
+
+---
+
+## Admin announcements
+
+Users with role `admin` or higher get a **Settings → Announcements** tab. From there:
+
+- **Compose**: title (~80 chars), optional preview (~160 chars), optional sticky banner, optional auto-expire.
+- **List active**: every still-active broadcast, with recipient count and expiry.
+- **Expire now**: bulk-set `expires_at` on every row in a broadcast group; the banner disappears in real time.
+
+When a broadcast has the **sticky banner** toggle on, it renders in the navbar's center slot as a one-line `⚠️` row with an inline dismiss. Only one banner is shown at a time — the most recent wins; older ones live in the panel only.
+
+Each broadcast fans out one row per active user (cheap at typical instance sizes). All rows in a broadcast share a `data.broadcast_group_id` so bulk operations stay atomic.
+
+---
+
+## What's not in v1
+
+- **Email / push / SMS**: web-only delivery.
+- **Per-type subscription UI**: opt-out lives at the *scope* level (archive = unsub). Mute affordances land in v1.5.
+- **Navbar message ticker**: cut. Distraction-to-utility ratio is poor and the center slot belongs to the banner.
+- **Notification grouping in the panel**: flat sort by recency. Grouping adds modes without adding clarity in a 20-row list.
+- **Slack/Discord integration**: gateway-channels still ships in the gateway layer; the inbox is in-app only.
+
+---
+
+## For implementers
+
+| Concern | Location |
+|---|---|
+| Type definition | `packages/core/src/types/notification.ts` |
+| Schema (sqlite + postgres) | `packages/core/src/db/schema.{sqlite,postgres}.ts` |
+| Migrations | `packages/core/drizzle/{sqlite,postgres}/004?_add_notifications.sql` |
+| Repository | `packages/core/src/db/repositories/notifications.ts` |
+| Service | `apps/agor-daemon/src/services/notifications.ts` |
+| Producers | `apps/agor-daemon/src/services/tasks.ts` (`session_returned`), `apps/agor-daemon/src/services/board-comments.ts` (`mention`) |
+| Archive sweep | `apps/agor-daemon/src/register-hooks.ts` (after-patch on `sessions` + `worktrees`) |
+| UI hook | `apps/agor-ui/src/hooks/useNotifications.ts` |
+| Bell + panel | `apps/agor-ui/src/components/NotificationBell/` |
+| Sticky banner | `apps/agor-ui/src/components/AnnouncementBanner/` |
+| Admin tab | `apps/agor-ui/src/components/SettingsModal/AnnouncementsTab.tsx` |
+| Toast suppression rule | `apps/agor-ui/src/hooks/useNotificationToastSuppression.ts` |
+
+The design doc with rationale, scope cuts, and decisions made is `docs/notification-system-design.md` at the root of the repo.

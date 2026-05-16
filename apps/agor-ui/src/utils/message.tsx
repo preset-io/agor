@@ -19,6 +19,27 @@
  *   };
  * }
  * ```
+ *
+ * ## Toast vs Notification — when to use which
+ *
+ * Toasts (this util) are for the user's *current* action and have no value
+ * five minutes from now. Notifications (the bell panel) are the durable
+ * record of things that happened *to* the user, especially while they were
+ * away. The rule:
+ *
+ * - **Toast**: action confirmations, form errors, "Copied", connection
+ *   warnings tied to the current request, anything the user is looking at
+ *   *right now*.
+ * - **Notification**: an agent finished, a teammate `@`-mentioned them,
+ *   an admin posted an announcement. Things the user might miss because
+ *   they're on another board / tab / device.
+ *
+ * If both apply (long-running task returns while the user is looking),
+ * the notification system suppresses the toast when the user is already
+ * viewing the source page — see
+ * `apps/agor-ui/src/hooks/useNotificationToastSuppression.ts`.
+ *
+ * Full rule + examples: `apps/agor-docs/pages/guide/notifications.mdx`.
  */
 
 import { CheckOutlined, CloseCircleOutlined, CopyOutlined } from '@ant-design/icons';
