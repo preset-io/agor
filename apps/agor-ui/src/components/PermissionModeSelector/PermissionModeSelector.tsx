@@ -1,4 +1,5 @@
 import type { CodexApprovalPolicy, CodexSandboxMode, PermissionMode } from '@agor-live/client';
+import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
 import {
   EditOutlined,
   ExperimentOutlined,
@@ -238,19 +239,6 @@ const getModesForTool = (tool: PermissionModeSelectorProps['agentic_tool']): Mod
   }
 };
 
-/** Get the default permission mode for a given agentic tool */
-const getDefaultMode = (tool: PermissionModeSelectorProps['agentic_tool']): PermissionMode => {
-  switch (tool) {
-    case 'codex':
-      return 'auto';
-    case 'gemini':
-    case 'opencode':
-      return 'autoEdit';
-    default:
-      return 'acceptEdits';
-  }
-};
-
 export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   value,
   onChange,
@@ -258,13 +246,19 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   compact = false,
   iconOnly = false,
   size = 'middle',
-  codexSandboxMode = 'workspace-write',
-  codexApprovalPolicy = 'on-request',
+  codexSandboxMode,
+  codexApprovalPolicy,
   onCodexChange,
 }) => {
   const { token } = theme.useToken();
   const modes = getModesForTool(agentic_tool);
-  const effectiveValue = value || getDefaultMode(agentic_tool);
+  const effectiveValue = value || getDefaultPermissionMode(agentic_tool);
+  // Fill Codex prop defaults from the resolved mode so the dropdown shows
+  // the same values the executor will actually run with for a session
+  // missing explicit sub-config.
+  const codexDefaults = mapToCodexPermissionConfig(effectiveValue);
+  const effectiveCodexSandboxMode = codexSandboxMode ?? codexDefaults.sandboxMode;
+  const effectiveCodexApprovalPolicy = codexApprovalPolicy ?? codexDefaults.approvalPolicy;
 
   // Compact mode: render as Select dropdown(s)
   if (compact) {
@@ -274,8 +268,8 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
       return (
         <Space size={4}>
           <Select
-            value={codexSandboxMode}
-            onChange={(val) => onCodexChange(val, codexApprovalPolicy)}
+            value={effectiveCodexSandboxMode}
+            onChange={(val) => onCodexChange(val, effectiveCodexApprovalPolicy)}
             size={size}
             placeholder="Sandbox"
             popupMatchSelectWidth={false}
@@ -296,8 +290,8 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
             )}
           />
           <Select
-            value={codexApprovalPolicy}
-            onChange={(val) => onCodexChange(codexSandboxMode, val)}
+            value={effectiveCodexApprovalPolicy}
+            onChange={(val) => onCodexChange(effectiveCodexSandboxMode, val)}
             size={size}
             placeholder="Approval"
             popupMatchSelectWidth={false}

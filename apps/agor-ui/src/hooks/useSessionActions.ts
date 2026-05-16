@@ -12,7 +12,11 @@ import type {
   SessionID,
   SpawnConfig,
 } from '@agor-live/client';
-import { getDefaultPermissionMode, SessionStatus } from '@agor-live/client';
+import {
+  getDefaultPermissionMode,
+  mapToCodexPermissionConfig,
+  SessionStatus,
+} from '@agor-live/client';
 import { useState } from 'react';
 import type { NewSessionConfig } from '../components/NewSessionModal';
 
@@ -67,10 +71,14 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       };
 
       if (agenticTool === 'codex') {
+        // Fill any missing field from the mode-derived defaults so the UI
+        // doesn't silently restore the old `on-request` / network-off
+        // behavior when advanced fields aren't expanded.
+        const codexDefaults = mapToCodexPermissionConfig(permissionMode);
         permissionConfig.codex = {
-          sandboxMode: config.codexSandboxMode || 'workspace-write',
-          approvalPolicy: config.codexApprovalPolicy || 'on-request',
-          networkAccess: config.codexNetworkAccess ?? false,
+          sandboxMode: config.codexSandboxMode ?? codexDefaults.sandboxMode,
+          approvalPolicy: config.codexApprovalPolicy ?? codexDefaults.approvalPolicy,
+          networkAccess: config.codexNetworkAccess ?? codexDefaults.networkAccess,
         };
       }
 

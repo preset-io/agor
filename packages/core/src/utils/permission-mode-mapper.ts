@@ -11,7 +11,13 @@
  * - Codex: ask, auto, on-failure, allow-all
  */
 
-import type { AgenticToolName, PermissionMode } from '../types';
+import type {
+  AgenticToolName,
+  CodexApprovalPolicy,
+  CodexSandboxMode,
+  PermissionMode,
+} from '../types';
+import { getDefaultPermissionMode } from '../types/session.js';
 
 /**
  * Maps a permission mode when spawning a child session of a different agent type.
@@ -122,48 +128,50 @@ export function mapPermissionMode(
 }
 
 /**
- * Converts a unified PermissionMode to Codex-specific dual configuration.
+ * Codex sub-config derived from a unified PermissionMode. Used as the
+ * single source of truth for default sandbox / approval / network
+ * settings across the daemon resolver, executor fallback, and UI flows.
  *
- * Codex uses a two-part permission system:
- * - sandboxMode: Controls WHERE Codex can write (filesystem boundaries)
- * - approvalPolicy: Controls WHETHER Codex asks before executing
- *
- * @param mode - The unified permission mode
- * @returns Codex-specific config { sandboxMode, approvalPolicy }
+ * `networkAccess` is yoked to `approvalPolicy === 'never'`: the "trust the
+ * sandbox" mode is the only one we treat as permissive enough to enable
+ * outbound network by default. Restrictive / asking modes keep it off so
+ * users who intentionally tighten approvals don't get network on top.
  */
-export function mapToCodexPermissionConfig(mode: PermissionMode): {
-  sandboxMode: 'read-only' | 'workspace-write';
-  approvalPolicy: 'untrusted' | 'on-request' | 'on-failure' | 'never';
-} {
+export interface CodexPermissionDefaults {
+  sandboxMode: CodexSandboxMode;
+  approvalPolicy: CodexApprovalPolicy;
+  networkAccess: boolean;
+}
+
+/**
+ * Convert a unified PermissionMode to a Codex sub-config (sandbox + approval
+ * + network). The mapping table lives here so the daemon resolver, executor
+ * fallback, and every UI surface that needs to display "what would happen
+ * if this session ran now" all agree on the answer.
+ */
+export function mapToCodexPermissionConfig(mode: PermissionMode): CodexPermissionDefaults {
   // First map to Codex-compatible mode
   const codexMode = mapPermissionMode(mode, 'codex');
 
   switch (codexMode) {
     case 'ask':
-      return {
-        sandboxMode: 'read-only',
-        approvalPolicy: 'untrusted', // Ask for everything
-      };
+      return { sandboxMode: 'read-only', approvalPolicy: 'untrusted', networkAccess: false };
     case 'auto':
-      return {
-        sandboxMode: 'workspace-write',
-        approvalPolicy: 'on-request', // Auto-approve safe ops, ask for dangerous
-      };
+      return { sandboxMode: 'workspace-write', approvalPolicy: 'on-request', networkAccess: false };
     case 'on-failure':
-      return {
-        sandboxMode: 'workspace-write',
-        approvalPolicy: 'on-failure', // Ask only when tools fail
-      };
+      return { sandboxMode: 'workspace-write', approvalPolicy: 'on-failure', networkAccess: false };
     case 'allow-all':
-      return {
-        sandboxMode: 'workspace-write',
-        approvalPolicy: 'never', // Never ask
-      };
+      return { sandboxMode: 'workspace-write', approvalPolicy: 'never', networkAccess: true };
     default:
-      // Fallback to safe default (ask for everything)
-      return {
-        sandboxMode: 'read-only',
-        approvalPolicy: 'untrusted',
-      };
+      return { sandboxMode: 'read-only', approvalPolicy: 'untrusted', networkAccess: false };
   }
+}
+
+/**
+ * Codex sub-config for the system default permission mode. Convenience
+ * wrapper for the common "I have no source mode in hand — give me what a
+ * brand-new session would get" case.
+ */
+export function getDefaultCodexPermissionConfig(): CodexPermissionDefaults {
+  return mapToCodexPermissionConfig(getDefaultPermissionMode('codex'));
 }
