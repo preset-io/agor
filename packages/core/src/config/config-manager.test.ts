@@ -8,6 +8,7 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  __resetConfigCacheForTests,
   expandHomePath,
   getAgorHome,
   getConfigPath,
@@ -20,6 +21,7 @@ import {
   getWorktreesDir,
   initConfig,
   loadConfig,
+  loadConfigSync,
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
   saveConfig,
@@ -182,6 +184,97 @@ describe('loadConfig', () => {
     expect(loaded.daemon?.port).toBe(4040);
     expect(loaded.defaults).toBeUndefined();
     expect(loaded.display).toBeUndefined();
+  });
+});
+
+describe('loadConfig cache', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-cache-'));
+    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
+    __resetConfigCacheForTests();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+    __resetConfigCacheForTests();
+  });
+
+  async function writeConfigFile(data: AgorConfig): Promise<string> {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(configPath, yaml.dump(data), 'utf-8');
+    return configPath;
+  }
+
+  it('returns the same cached object on repeated calls when the file is unchanged', async () => {
+    await writeConfigFile({ daemon: { port: 4000 } });
+    const first = await loadConfig();
+    const second = await loadConfig();
+    // Object identity proves we skipped the parse — a fresh yaml.load would
+    // return a structurally-equal but distinct object.
+    expect(second).toBe(first);
+    expect(first.daemon?.port).toBe(4000);
+  });
+
+  it('loadConfigSync shares the same cache as loadConfig', async () => {
+    await writeConfigFile({ daemon: { port: 5555 } });
+    const fromAsync = await loadConfig();
+    const fromSync = loadConfigSync();
+    expect(fromSync).toBe(fromAsync);
+  });
+
+  it('saveConfig invalidates the cache so the next read returns the new value', async () => {
+    await saveConfig({ daemon: { port: 4000 } } as AgorConfig);
+    const before = await loadConfig();
+    expect(before.daemon?.port).toBe(4000);
+
+    await saveConfig({ daemon: { port: 9999 } } as AgorConfig);
+    const after = await loadConfig();
+    expect(after.daemon?.port).toBe(9999);
+  });
+
+  it('picks up external file mutations via mtime change', async () => {
+    const configPath = await writeConfigFile({ daemon: { port: 4000 } });
+    expect((await loadConfig()).daemon?.port).toBe(4000);
+
+    // Force a distinct mtime — on filesystems with millisecond resolution,
+    // back-to-back writes can collide.
+    await new Promise((r) => setTimeout(r, 20));
+    await fs.writeFile(configPath, yaml.dump({ daemon: { port: 7777 } }), 'utf-8');
+
+    expect((await loadConfig()).daemon?.port).toBe(7777);
+  });
+
+  it('returns defaults when the file is missing, then re-reads after the file is created', async () => {
+    // No file yet → defaults are cached under the NO_FILE sentinel.
+    const before = await loadConfig();
+    expect(before).toEqual(getDefaultConfig());
+
+    // Create the file. The cached NO_FILE sentinel no longer matches stat,
+    // so the next load re-reads.
+    await writeConfigFile({ daemon: { port: 6666 } });
+    const after = await loadConfig();
+    expect(after.daemon?.port).toBe(6666);
+  });
+
+  it('does not poison the cache on parse error', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(configPath, 'invalid: yaml: [content', 'utf-8');
+
+    await expect(loadConfig()).rejects.toThrow('Failed to load config');
+
+    // After fixing the file, the next call should succeed (we never cached
+    // a partial / broken value).
+    await new Promise((r) => setTimeout(r, 20));
+    await fs.writeFile(configPath, yaml.dump({ daemon: { port: 8888 } }), 'utf-8');
+    const recovered = await loadConfig();
+    expect(recovered.daemon?.port).toBe(8888);
   });
 });
 
