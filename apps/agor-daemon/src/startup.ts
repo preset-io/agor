@@ -321,28 +321,46 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function ensureMasterSecret(config: AgorConfig): Promise<void> {
-  if (!process.env.AGOR_MASTER_SECRET) {
-    // Check if we have a saved secret in config
-    const savedSecret = config.daemon?.masterSecret;
-
-    if (savedSecret) {
-      process.env.AGOR_MASTER_SECRET = savedSecret;
-      console.log('🔐 Using saved AGOR_MASTER_SECRET from config');
-    } else {
-      // Auto-generate a random master secret and persist it in config
-      const { randomBytes } = await import('node:crypto');
-      const { setConfigValue } = await import('@agor/core/config');
-
-      const generatedSecret = randomBytes(32).toString('hex');
-      await setConfigValue('daemon.masterSecret', generatedSecret);
-      process.env.AGOR_MASTER_SECRET = generatedSecret;
-
-      console.log('🔐 Generated and saved AGOR_MASTER_SECRET for API key encryption');
-      console.log('   Secret stored in ~/.agor/config.yaml');
-    }
-  } else {
+  // AGOR_MASTER_SECRET resolution — capability-driven, no deployment-mode flag:
+  //   1. AGOR_MASTER_SECRET env var       → use it (read-only AGOR_HOME ok)
+  //   2. config.daemon.masterSecret       → use it
+  //   3. config.yaml writable             → generate + persist
+  //   4. None of the above                → fail-fast with concrete remediation
+  //
+  // Same fail-fast reasoning as the JWT path: a fresh master secret on every
+  // restart corrupts every stored encrypted API key.
+  if (process.env.AGOR_MASTER_SECRET) {
     console.log('🔐 API key encryption enabled (AGOR_MASTER_SECRET set)');
+    return;
   }
+
+  const savedSecret = config.daemon?.masterSecret;
+  if (savedSecret) {
+    process.env.AGOR_MASTER_SECRET = savedSecret;
+    console.log('🔐 Using saved AGOR_MASTER_SECRET from config');
+    return;
+  }
+
+  const { randomBytes } = await import('node:crypto');
+  const { setConfigValue } = await import('@agor/core/config');
+  const generatedSecret = randomBytes(32).toString('hex');
+  try {
+    await setConfigValue('daemon.masterSecret', generatedSecret);
+  } catch (error) {
+    throw new Error(
+      'AGOR_MASTER_SECRET is required for API key encryption and ' +
+        'config.yaml is not writable.\n' +
+        '\n' +
+        'Set the AGOR_MASTER_SECRET environment variable to a hex-encoded\n' +
+        '32-byte value (e.g. `openssl rand -hex 32`), or make\n' +
+        '~/.agor/config.yaml writable so the daemon can persist one.\n' +
+        '\n' +
+        `Underlying error: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  process.env.AGOR_MASTER_SECRET = generatedSecret;
+  console.log('🔐 Generated and saved AGOR_MASTER_SECRET for API key encryption');
+  console.log('   Secret stored in ~/.agor/config.yaml');
 }
 
 // ---------------------------------------------------------------------------

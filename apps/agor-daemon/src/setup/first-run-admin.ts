@@ -123,7 +123,16 @@ export interface DaemonBootstrapResult extends AdminBootstrapResult {
  * Run the first-run admin bootstrap with filesystem-aware credential
  * persistence and rollback. Idempotent — safe on every daemon start.
  *
- * Atomicity:
+ * Password resolution — capability-driven, no deployment-mode flag:
+ *   1. AGOR_ADMIN_PASSWORD env var      → use it; no file is written
+ *      (caller is presumed to know the value out-of-band, e.g. a k8s
+ *      Secret mounted into the daemon's env)
+ *   2. Credentials file is writable     → generate + write a 0600 file
+ *      with O_EXCL, then create the user (today's flow)
+ *   3. Neither                          → fail-fast with a clear error
+ *      naming the env var to set or the directory to make writable
+ *
+ * Atomicity (file path only):
  *   1. Generate the password.
  *   2. Open the credentials file with O_CREAT|O_EXCL|O_WRONLY mode 0600.
  *      Fails fast if the file already exists.
@@ -139,11 +148,46 @@ export async function runFirstRunAdminBootstrap(
   options: { credentialsBaseDir?: string } = {}
 ): Promise<DaemonBootstrapResult> {
   const credentialsPath = getAdminCredentialsPath(options.credentialsBaseDir);
+  const envPassword = process.env.AGOR_ADMIN_PASSWORD;
   let credentialsWritten = false;
 
   const result = await bootstrapFirstRunAdmin(db, async () => {
+    // 1) Env-var path: use the operator-provided password verbatim. No file
+    // touch, no rollback to worry about.
+    if (envPassword && envPassword.length > 0) {
+      return await createUser(db, {
+        email: BOOTSTRAP_ADMIN_EMAIL,
+        password: envPassword,
+        name: 'Admin',
+        role: 'admin',
+        must_change_password: true,
+      });
+    }
+
+    // 2) File path: generate + write 0600 with O_EXCL.
     const password = generateAdminPassword();
-    await writeCredentialsExclusive(credentialsPath, BOOTSTRAP_ADMIN_EMAIL, password);
+    try {
+      await writeCredentialsExclusive(credentialsPath, BOOTSTRAP_ADMIN_EMAIL, password);
+    } catch (err) {
+      // 3) EEXIST is operator-recoverable and surfaced by writeCredentialsExclusive
+      // with its own clear message. For any other write failure (e.g. read-only
+      // mount, missing parent directory), point operators at the env-var escape
+      // hatch so they don't have to spelunk the credential file.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EEXIST') throw err;
+      throw new Error(
+        [
+          `Failed to write admin credentials file at ${credentialsPath}.`,
+          '',
+          'Set the AGOR_ADMIN_PASSWORD environment variable to skip the',
+          'credentials file entirely (the password you provide is used to',
+          'create the bootstrap admin), or make the parent directory',
+          'writable so the daemon can persist a generated password.',
+          '',
+          `Underlying error: ${err instanceof Error ? err.message : String(err)}`,
+        ].join('\n')
+      );
+    }
     credentialsWritten = true;
     try {
       return await createUser(db, {
@@ -175,13 +219,20 @@ export async function runFirstRunAdminBootstrap(
  * always renders the same message.
  */
 export function logFirstRunAdminBootstrap(result: DaemonBootstrapResult): void {
-  if (result.createdAdmin && result.credentialsPath && result.admin) {
+  if (result.createdAdmin && result.admin) {
     process.stderr.write('\n');
     process.stderr.write('================================================================\n');
     process.stderr.write('🔐  First-run admin user created\n');
     process.stderr.write('----------------------------------------------------------------\n');
     process.stderr.write(`    Email:     ${result.admin.email}\n`);
-    process.stderr.write(`    Password:  see ${result.credentialsPath} (mode 0600)\n`);
+    if (result.credentialsPath) {
+      process.stderr.write(`    Password:  see ${result.credentialsPath} (mode 0600)\n`);
+    } else {
+      // Env-var path (AGOR_ADMIN_PASSWORD). Don't print the password — the
+      // operator set it themselves; logging it would unnecessarily duplicate
+      // a secret into capture systems (k8s logs, journald, etc.).
+      process.stderr.write('    Password:  set via the AGOR_ADMIN_PASSWORD env var\n');
+    }
     process.stderr.write('\n');
     process.stderr.write('    You will be prompted to change the password on first login.\n');
     process.stderr.write('================================================================\n');
