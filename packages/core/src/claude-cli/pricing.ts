@@ -1,3 +1,5 @@
+import type { AssistantUsage } from './event-types';
+
 /**
  * Per-token pricing for Claude models, used by the CLI adapter to compute
  * cost from JSONL `usage` fields at `turn_end`.
@@ -123,16 +125,6 @@ export function getModelPricing(modelId: string | null | undefined): ClaudeModel
   return best?.price ?? null;
 }
 
-export interface TokenUsage {
-  input_tokens?: number;
-  output_tokens?: number;
-  cache_creation_input_tokens?: number;
-  cache_read_input_tokens?: number;
-  server_tool_use?: {
-    web_search_requests?: number;
-  };
-}
-
 /**
  * Compute total cost in USD for one assistant turn's usage.
  *
@@ -144,10 +136,13 @@ export interface TokenUsage {
  *
  * Returns `undefined` when pricing is unknown — never returns 0 as a
  * "missing data" signal because legitimate small turns can cost ~$0.
+ *
+ * The `usage` parameter is the JSONL transcript's `assistant.message.usage`
+ * shape — `AssistantUsage` from `./event-types`.
  */
 export function computeCost(
   modelId: string | null | undefined,
-  usage: TokenUsage | null | undefined
+  usage: AssistantUsage | null | undefined
 ): number | undefined {
   const price = getModelPricing(modelId);
   if (!price || !usage) return undefined;

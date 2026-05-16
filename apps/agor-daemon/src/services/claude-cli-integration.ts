@@ -34,9 +34,11 @@
  *   - Subagent JSONL discovery
  */
 
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import os from 'node:os';
 import {
+  type AssistantUsage,
   buildClaudeCliSpawn,
   type ClaudeCliPermissionMode,
   type ClaudeCliSpawnConfig,
@@ -45,9 +47,10 @@ import {
   getContextWindowLimit,
   slugForCwd,
 } from '@agor/core/claude-cli';
-import { SessionRepository, TaskRepository } from '@agor/core/db';
+import { type Database, SessionRepository, TaskRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import {
+  type PermissionMode,
   type Session,
   type SessionID,
   SessionStatus,
@@ -63,6 +66,99 @@ import {
 } from './claude-cli-watcher.js';
 
 /**
+ * Typed accessor for the daemon's shared Drizzle handle. The Feathers
+ * `Application` exposes `app.get(key)` as `any`, so the handful of call
+ * sites in this file used to cast inline — now they share this helper
+ * and the cast lives in exactly one place. Returns `null` rather than
+ * throwing because the test harness wires apps without a DB.
+ */
+function getDb(app: Application): Database | null {
+  const db = (app.get('database') ?? app.get('db')) as Database | undefined;
+  return db ?? null;
+}
+
+/**
+ * Shape we write to `task.data.raw_sdk_response` for CLI-driven turns.
+ * Deliberately mirrors `SDKResultMessage` from `@anthropic-ai/claude-agent-sdk`
+ * — same `modelUsage` / `usage` / `duration_ms` / `total_cost_usd` fields —
+ * so the existing `ClaudeCodeNormalizer` and downstream cost-/token-card
+ * consumers render CLI turns through the same path as SDK turns.
+ *
+ * `_cli_provenance` is the one CLI-specific addition: a debugging breadcrumb
+ * so "did we miss `end_turn`?" investigations don't have to re-read the
+ * JSONL. Nothing in the UI depends on it; it's structurally additive.
+ */
+export interface ClaudeCliRawSdkResponse {
+  type: 'result';
+  subtype: 'success';
+  session_id: string;
+  duration_ms: number;
+  total_cost_usd: number | undefined;
+  modelUsage: Record<string, ClaudeCliModelUsageEntry>;
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens: number;
+    cache_creation_input_tokens: number;
+  };
+  _cli_provenance: {
+    adapter: 'claude-code-cli';
+    assistantTurns: number;
+    lastAssistantSnapshot: unknown;
+  };
+}
+
+export interface ClaudeCliModelUsageEntry {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
+  contextWindow: number;
+}
+
+/**
+ * Normalized rollup we write to `task.data.normalized_sdk_response`.
+ * Shape matches `NormalizedSdkData` in
+ * `packages/executor/src/sdk-handlers/base/normalizer.interface.ts`
+ * — we don't import from there because the daemon shouldn't depend on
+ * the executor package, but the field names are kept in lockstep.
+ */
+export interface ClaudeCliNormalizedSdkResponse {
+  tokenUsage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
+  };
+  contextWindowLimit: number;
+  costUsd: number | undefined;
+  primaryModel: string | undefined;
+  durationMs: number;
+}
+
+/** Per-turn accumulator used by the sink between `user_message` and `turn_end`. */
+interface AssistantTurnData {
+  model: string | null;
+  usage: AssistantUsage | null;
+  messageId: string;
+  timestamp: string | null;
+  stopReason: string | null;
+}
+
+/** In-flight turn state — one entry per active CLI session. */
+interface ActiveCliTurn {
+  taskId: TaskID;
+  userMessageIndex: number;
+  lastIndex: number;
+  lastTimestamp: string;
+  startedAtMs: number;
+  assistantTurns: AssistantTurnData[];
+  lastAssistantRaw: unknown;
+  toolUseCount: number;
+}
+
+/**
  * Build a persister that writes watcher offset / last-event markers back to
  * the session row's `cli_state` field.
  *
@@ -75,22 +171,21 @@ import {
 export function buildCliPersister(app: Application): CliWatcherStatePersister {
   return {
     async saveOffset(sessionId, update) {
-      const db = (app.get('database') ?? app.get('db')) as
-        | ConstructorParameters<typeof SessionRepository>[0]
-        | undefined;
+      const db = getDb(app);
       if (!db) return;
       const repo = new SessionRepository(db);
       const row = await repo.findById(sessionId).catch(() => null);
       if (!row) return;
       const existing = row.cli_state ?? {};
-      await repo.update(sessionId, {
+      const patch = {
         cli_state: {
           ...existing,
           watcher_offset: update.watcher_offset,
           last_event_ts: update.last_event_ts ?? existing.last_event_ts,
           last_event_uuid: update.last_event_uuid ?? existing.last_event_uuid,
         },
-      } as unknown as Partial<Session>);
+      } satisfies Partial<Session>;
+      await repo.update(sessionId, patch);
     },
   };
 }
@@ -171,35 +266,10 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
   // SDKResultMessage-shaped `raw_sdk_response` when `turn_end` fires.
   // `toolUseCount` increments for every `tool_use` content block seen so
   // the task's analytics card surfaces tool activity.
-  interface AssistantTurnData {
-    model: string | null;
-    usage: {
-      input_tokens?: number;
-      output_tokens?: number;
-      cache_creation_input_tokens?: number;
-      cache_read_input_tokens?: number;
-      server_tool_use?: {
-        web_search_requests?: number;
-        web_fetch_requests?: number;
-      };
-    } | null;
-    messageId: string;
-    timestamp: string | null;
-    stopReason: string | null;
-  }
-  const activeCliTurn = new Map<
-    string,
-    {
-      taskId: TaskID;
-      userMessageIndex: number;
-      lastIndex: number;
-      lastTimestamp: string;
-      startedAtMs: number;
-      assistantTurns: AssistantTurnData[];
-      lastAssistantRaw: unknown;
-      toolUseCount: number;
-    }
-  >();
+  //
+  // Shape is exported at the module top as `ActiveCliTurn` so tests can
+  // construct fixtures without re-deriving the layout.
+  const activeCliTurn = new Map<string, ActiveCliTurn>();
 
   const nextIndex = async (sessionId: SessionID): Promise<number> => {
     const cached = indexBySession.get(sessionId);
@@ -208,9 +278,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
       return cached;
     }
     try {
-      const db = (app.get('database') ?? app.get('db')) as
-        | ConstructorParameters<typeof SessionRepository>[0]
-        | undefined;
+      const db = getDb(app);
       if (!db) {
         indexBySession.set(sessionId, 1);
         return 0;
@@ -236,14 +304,6 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
     }
   };
 
-  /** Get the DB handle; null if not yet initialized (test harness etc). */
-  const getDb = ():
-    | ConstructorParameters<typeof SessionRepository>[0]
-    | undefined =>
-    (app.get('database') ?? app.get('db')) as
-      | ConstructorParameters<typeof SessionRepository>[0]
-      | undefined;
-
   /**
    * Terminal-direct path: there's no pending task from /prompt, so mint one
    * ourselves with status=RUNNING. Also patches the session row so the queue
@@ -255,7 +315,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
     userMessageIndex: number,
     timestamp: string
   ): Promise<TaskID | null> => {
-    const db = getDb();
+    const db = getDb(app);
     if (!db) return null;
     try {
       const sessionRepo = new SessionRepository(db);
@@ -306,9 +366,6 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
 
   return async (sessionId, event) => {
     try {
-      const messagesSvc = app.service('messages') as unknown as {
-        create: (m: Record<string, unknown>) => Promise<unknown>;
-      };
       const baseTs = new Date().toISOString();
 
       if (event.type === 'user_message') {
@@ -358,7 +415,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         );
         if (!taskId) {
           // Couldn't mint task — write an orphan so we at least don't lose data.
-          await messagesSvc.create({
+          await app.service('messages').create({
             message_id: cryptoUuid(),
             session_id: sessionId,
             type: 'user',
@@ -371,7 +428,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
           });
           return;
         }
-        await messagesSvc.create({
+        await app.service('messages').create({
           message_id: cryptoUuid(),
           session_id: sessionId,
           task_id: taskId,
@@ -402,7 +459,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         const content = event.turn.content;
         const ts = event.turn.timestamp ?? baseTs;
         const active = activeCliTurn.get(sessionId);
-        await messagesSvc.create({
+        await app.service('messages').create({
           message_id: cryptoUuid(),
           session_id: sessionId,
           task_id: active?.taskId,
@@ -432,18 +489,11 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
           // Accumulate the assistant turn for the analytics rollup at
           // turn_end. The translator already drops cumulative-snapshot
           // duplicates by message.id, so every entry here is a real new
-          // chunk of usage/output.
+          // chunk of usage/output. `event.turn.usage` is already
+          // `AssistantUsage` from the translator — keep it as-is.
           active.assistantTurns.push({
             model: event.turn.model ?? null,
-            usage: event.turn.usage
-              ? {
-                  input_tokens: event.turn.usage.input_tokens,
-                  output_tokens: event.turn.usage.output_tokens,
-                  cache_creation_input_tokens: event.turn.usage.cache_creation_input_tokens,
-                  cache_read_input_tokens: event.turn.usage.cache_read_input_tokens,
-                  server_tool_use: event.turn.usage.server_tool_use,
-                }
-              : null,
+            usage: event.turn.usage ?? null,
             messageId: event.turn.messageId,
             timestamp: event.turn.timestamp ?? null,
             stopReason: event.turn.stopReason ?? null,
@@ -482,7 +532,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         const idx = await nextIndex(sessionId);
         const ts = event.timestamp ?? baseTs;
         const active = activeCliTurn.get(sessionId);
-        await messagesSvc.create({
+        await app.service('messages').create({
           message_id: cryptoUuid(),
           session_id: sessionId,
           task_id: active?.taskId,
@@ -532,16 +582,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         // The Claude Agent SDK exposes per-model usage as a `modelUsage`
         // object — we build the same map by summing each assistant turn's
         // usage under its model id.
-        const modelUsageMap: Record<
-          string,
-          {
-            inputTokens: number;
-            outputTokens: number;
-            cacheCreationInputTokens: number;
-            cacheReadInputTokens: number;
-            contextWindow: number;
-          }
-        > = {};
+        const modelUsageMap: Record<string, ClaudeCliModelUsageEntry> = {};
         let totalInput = 0;
         let totalOutput = 0;
         let totalCacheCreation = 0;
@@ -583,7 +624,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         // total_cost_usd) rather than just dumping the last JSONL line
         // verbatim — the existing `ClaudeCodeNormalizer` reads this
         // shape, so downstream UIs see CLI turns the same as SDK turns.
-        const rawSdkResponse = {
+        const rawSdkResponse: ClaudeCliRawSdkResponse = {
           type: 'result',
           subtype: 'success',
           session_id: sessionId,
@@ -609,7 +650,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         // Precompute the normalized shape so the UI's cost / token cards
         // light up without depending on the executor-side normalizer
         // factory (which we don't import from the daemon).
-        const normalizedSdkResponse = {
+        const normalizedSdkResponse: ClaudeCliNormalizedSdkResponse = {
           tokenUsage: {
             inputTokens: totalInput,
             outputTokens: totalOutput,
@@ -668,7 +709,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         // row so the worktree pill's "X% of context" pill shows the
         // right number across reload boundaries.
         try {
-          const patch: Record<string, unknown> = {
+          const patch: Partial<Session> = {
             status: SessionStatus.IDLE,
             ready_for_prompt: true,
           };
@@ -708,8 +749,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
 
 /** Cheap UUIDv4 — avoids importing the full uuid lib in this hot path. */
 function cryptoUuid(): string {
-  // Use Node's `crypto.randomUUID()` (available since Node 19).
-  return (globalThis as unknown as { crypto: { randomUUID(): string } }).crypto.randomUUID();
+  return randomUUID();
 }
 
 /**
@@ -755,13 +795,27 @@ export function getCliWatcherRegistry(app: Application): ClaudeCliWatcherRegistr
  * CLI will fall back to its own default (`default`). For backgrounded
  * MCP-driven spawns the caller should pass `bypassPermissions` explicitly.
  */
+/**
+ * Static map from the SDK-wide `PermissionMode` union to the CLI's
+ * argv flag. Anything not in this table (e.g. Gemini/Codex modes that
+ * leak through `permission_config.mode`) returns `undefined`, which
+ * `buildClaudeCliSpawn` treats as "don't emit the flag" — claude
+ * falls back to its own default (`default` / prompt-on-every-tool).
+ *
+ * Sourced from the analysis doc § Claude Code CLI Defaults panel.
+ */
+const PERMISSION_MODE_MAP: Partial<Record<PermissionMode, ClaudeCliPermissionMode>> = {
+  default: 'default',
+  acceptEdits: 'acceptEdits',
+  bypassPermissions: 'bypassPermissions',
+  plan: 'plan',
+  dontAsk: 'dontAsk',
+};
+
 function permissionModeForCli(session: Session): ClaudeCliPermissionMode | undefined {
   const mode = session.permission_config?.mode;
   if (!mode) return 'acceptEdits'; // v1 default for user-driven sessions
-  // The SDK union `PermissionMode` overlaps with the CLI's accepted values
-  // for the modes we care about. Anything we don't recognize gets dropped
-  // (silently) by `buildClaudeCliSpawn`.
-  return mode as unknown as ClaudeCliPermissionMode;
+  return PERMISSION_MODE_MAP[mode];
 }
 
 /**
@@ -824,10 +878,8 @@ function dispatchZellijClaudeTab(
   commandArgs: string[]
 ): boolean {
   if (!userId) return false;
-  const io = (app as unknown as { io?: { to(room: string): { emit(ev: string, p: unknown): void } } })
-    .io;
-  if (!io) return false;
-  io.to(`user/${userId}/terminal`).emit('terminal:tab', {
+  if (!app.io) return false;
+  app.io.to(`user/${userId}/terminal`).emit('terminal:tab', {
     userId,
     action: 'create',
     tabName,
@@ -867,7 +919,7 @@ export async function onCliSessionCreated(
 
   // 1) Persist cli_state for diagnostics + restart recovery.
   const persister = buildCliPersister(app);
-  await persister.saveOffset(session.session_id as unknown as SessionID, {
+  await persister.saveOffset(session.session_id, {
     watcher_offset: 0,
     last_event_ts: null,
     last_event_uuid: null,
@@ -881,14 +933,12 @@ export async function onCliSessionCreated(
   // do NOT wrap in `{ data: { ... } }` — that mis-writes the whole
   // denormalized row into the JSON blob.
   try {
-    const db = (app.get('database') ?? app.get('db')) as
-      | ConstructorParameters<typeof SessionRepository>[0]
-      | undefined;
+    const db = getDb(app);
     if (db) {
       const repo = new SessionRepository(db);
       const row = await repo.findById(session.session_id).catch(() => null);
       if (row) {
-        await repo.update(session.session_id, {
+        const patch = {
           sdk_session_id: session.session_id,
           cli_state: {
             ...(row.cli_state ?? {}),
@@ -896,7 +946,8 @@ export async function onCliSessionCreated(
             jsonl_path: jsonlPath,
             zellij_tab_name: tabName,
           },
-        } as unknown as Partial<Session>);
+        } satisfies Partial<Session>;
+        await repo.update(session.session_id, patch);
       }
     }
   } catch (err) {
@@ -907,7 +958,7 @@ export async function onCliSessionCreated(
   try {
     const reg = getCliWatcherRegistry(app);
     await reg.register({
-      sessionId: session.session_id as unknown as SessionID,
+      sessionId: session.session_id,
       cwd: worktreeCwd,
       homeDir,
       startOffset: session.cli_state?.watcher_offset ?? 0,
@@ -964,16 +1015,14 @@ export async function rehydrateCliWatchers(
   app: Application,
   worktreeCwdLookup: (worktreeId: string) => Promise<string | null>
 ): Promise<void> {
-  const db = (app.get('database') ?? app.get('db')) as
-    | ConstructorParameters<typeof SessionRepository>[0]
-    | undefined;
+  const db = getDb(app);
   if (!db) return;
   const repo = new SessionRepository(db);
 
   // Scan for active CLI sessions. We don't have a direct "give me active
   // claude-code-cli sessions" query, so do the simple thing: list all
   // sessions, filter in memory. Numbers are small (hundreds at most).
-  const all = (await repo.list({}).catch(() => [])) as unknown as Session[];
+  const all = await repo.list({}).catch(() => [] as Session[]);
   const reg = getCliWatcherRegistry(app);
   let rehydrated = 0;
   for (const session of all) {
@@ -984,7 +1033,7 @@ export async function rehydrateCliWatchers(
     if (!cwd) continue;
     try {
       await reg.register({
-        sessionId: session.session_id as unknown as SessionID,
+        sessionId: session.session_id,
         cwd,
         homeDir: resolveHomeDirForCliSession(session),
         startOffset: session.cli_state?.watcher_offset ?? 0,
