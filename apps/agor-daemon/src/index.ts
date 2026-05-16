@@ -643,4 +643,29 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     sessionsService: services.sessionsService,
     terminalsService: services.terminalsService,
   });
+
+  // --------------------------------------------------------------------------
+  // Phase 5: Re-instantiate Claude Code CLI watchers for in-flight sessions.
+  //
+  // Has to run AFTER services are up (we use `app.service('worktrees')` to
+  // resolve cwds + `app.service('messages')` indirectly via the sink) and
+  // AFTER `app.set('database', db)` (the watcher persister uses
+  // `getDb(app)`). Sessions that were mid-turn at the previous daemon
+  // shutdown get their `cli_state.active_turn` rehydrated AND their
+  // stale-task watchdog re-started, so a Ctrl-D'd REPL that straddled
+  // the restart is detected and the task is closed.
+  // --------------------------------------------------------------------------
+  try {
+    const { rehydrateCliWatchers } = await import('./services/claude-cli-integration.js');
+    await rehydrateCliWatchers(app, async (worktreeId) => {
+      try {
+        const worktree = (await app.service('worktrees').get(worktreeId)) as { path?: string };
+        return worktree?.path ?? null;
+      } catch {
+        return null;
+      }
+    });
+  } catch (err) {
+    console.warn('[startup] rehydrateCliWatchers failed (non-fatal):', err);
+  }
 }

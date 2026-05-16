@@ -34,6 +34,7 @@
  *   - Subagent JSONL discovery
  */
 
+import { spawn as spawnProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import os from 'node:os';
 import {
@@ -188,7 +189,7 @@ async function clearActiveTurnSnapshot(
  * `lastAssistantRaw`, `toolUseCount`) start fresh — see the doc on
  * `activeCliTurn`.
  */
-export function primeActiveCliTurnFromSession(session: Session): void {
+export function primeActiveCliTurnFromSession(app: Application, session: Session): void {
   const persisted = session.cli_state?.active_turn;
   if (!persisted) return;
   // Don't clobber an in-memory entry — if a turn happens to be active
@@ -204,6 +205,13 @@ export function primeActiveCliTurnFromSession(session: Session): void {
     lastAssistantRaw: null,
     toolUseCount: 0,
   });
+  // Restart the stale-turn watchdog. If the pre-restart turn closed
+  // cleanly the persisted snapshot would already have been cleared,
+  // so reaching this branch means either claude is still mid-turn
+  // (legitimate, the watchdog's idle-time guard handles it) or claude
+  // died before the daemon could observe it (the watchdog closes the
+  // task on the next tick).
+  startTaskWatchdog(app, session.session_id as SessionID);
 }
 
 /**
@@ -216,6 +224,110 @@ export function primeActiveCliTurnFromSession(session: Session): void {
  * wrapper. The earlier `{ data: { …row, cli_state } }` shape silently
  * mis-wrote the entire denormalized row back into the data blob's body.
  */
+/**
+ * Stale-task watchdog.
+ *
+ * The watcher closes tasks on `turn_end` JSONL events (any non-`tool_use`
+ * `stop_reason`). It does NOT see "the user typed Ctrl-D in the REPL" or
+ * "claude was killed externally" — those terminate the process without
+ * writing a final assistant line. Without this watchdog, a session whose
+ * REPL got killed sits in `RUNNING` forever, and the worktree pill shows
+ * "running" until the user notices and hits Restart.
+ *
+ * Design: one `setInterval` per active turn. Tick every WATCHDOG_TICK_MS;
+ * if the active turn has been idle (no new JSONL events) for
+ * WATCHDOG_IDLE_THRESHOLD_MS *and* `pgrep -f 'claude --session-id <X>'`
+ * returns no match, the watchdog closes the turn via `closeActiveTurn`
+ * with a synthetic timestamp = "now". Started on `user_message`, cleared
+ * on `turn_end` and on session unregister.
+ *
+ * Idle guard is critical — a turn that's legitimately mid-stream (claude
+ * thinking, multi-tool back-and-forth) MUST NOT be closed prematurely.
+ * 90s is comfortably longer than any normal silence inside a turn and
+ * still tight enough that users don't see "running" forever.
+ */
+const WATCHDOG_TICK_MS = 60_000;
+const WATCHDOG_IDLE_THRESHOLD_MS = 90_000;
+const watchdogTimers = new Map<string, NodeJS.Timeout>();
+
+/**
+ * Check whether a `claude` process is running for this Agor session id.
+ * Uses `pgrep -f 'claude --session-id <X>'` so the match works regardless
+ * of impersonated Unix user (the argv is visible to the daemon user via
+ * `/proc`). Resolves `true` on transient pgrep errors so a misbehaving
+ * binary doesn't trigger spurious task-close events.
+ */
+function isClaudeRunningFor(sessionId: SessionID): Promise<boolean> {
+  return new Promise((resolve) => {
+    const proc = spawnProcess('pgrep', ['-f', `claude --session-id ${sessionId}`], {
+      stdio: 'ignore',
+    });
+    proc.on('exit', (code) => resolve(code === 0));
+    proc.on('error', () => resolve(true));
+    setTimeout(() => {
+      try {
+        proc.kill();
+      } catch {
+        /* already exited */
+      }
+      resolve(true);
+    }, 3_000);
+  });
+}
+
+function stopTaskWatchdog(sessionId: string): void {
+  const t = watchdogTimers.get(sessionId);
+  if (t) {
+    clearInterval(t);
+    watchdogTimers.delete(sessionId);
+  }
+}
+
+/**
+ * Forward-declared close-active-turn dispatcher. Populated by
+ * `buildCliEventSink` so the watchdog and the `turn_end` branch share
+ * one close path. Done as a module-level variable rather than an export
+ * because the close logic depends on the sink's per-instance closures
+ * (index cache, etc.) — at construction time the sink installs itself
+ * here for the watchdog to call.
+ */
+let closeActiveTurnDispatch:
+  | ((sessionId: SessionID, reason: 'turn_end' | 'claude_exited', ts: string) => Promise<void>)
+  | null = null;
+
+function startTaskWatchdog(app: Application, sessionId: SessionID): void {
+  stopTaskWatchdog(sessionId);
+  const timer = setInterval(async () => {
+    const active = activeCliTurn.get(sessionId);
+    if (!active) {
+      // Turn already closed by some other path — stop watching.
+      stopTaskWatchdog(sessionId);
+      return;
+    }
+    const idleMs = Date.now() - (Date.parse(active.lastTimestamp) || active.startedAtMs);
+    if (idleMs < WATCHDOG_IDLE_THRESHOLD_MS) return;
+    const alive = await isClaudeRunningFor(sessionId);
+    if (alive) return;
+    console.log(
+      JSON.stringify({
+        layer: 'claude-cli-watcher.watchdog',
+        sessionId,
+        idleMs,
+        note: 'claude process not running — closing stale turn',
+      })
+    );
+    try {
+      await closeActiveTurnDispatch?.(sessionId, 'claude_exited', new Date().toISOString());
+    } catch (err) {
+      console.warn('[claude-cli-watcher.watchdog] close dispatch failed', err);
+    }
+    stopTaskWatchdog(sessionId);
+  }, WATCHDOG_TICK_MS);
+  // Don't keep the event loop alive just for the watchdog.
+  timer.unref?.();
+  watchdogTimers.set(sessionId, timer);
+}
+
 export function buildCliPersister(app: Application): CliWatcherStatePersister {
   return {
     async saveOffset(sessionId, update) {
@@ -413,7 +525,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
     }
   };
 
-  return async (sessionId, event) => {
+  const sink: CliWatcherEventSink = async (sessionId, event) => {
     try {
       const baseTs = new Date().toISOString();
 
@@ -454,6 +566,9 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
           // doesn't orphan downstream messages. Fire-and-forget — the
           // in-memory entry is already valid for the live process.
           void persistActiveTurnSnapshot(app, sessionId as SessionID, turn);
+          // Start the stale-turn watchdog. Closes the task if claude
+          // dies without writing `end_turn` (Ctrl-D, kill -9, crash).
+          startTaskWatchdog(app, sessionId as SessionID);
           return;
         }
 
@@ -495,6 +610,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         };
         activeCliTurn.set(sessionId, turn);
         void persistActiveTurnSnapshot(app, sessionId as SessionID, turn);
+        startTaskWatchdog(app, sessionId as SessionID);
         return;
       }
 
@@ -619,6 +735,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         // Clear the persisted snapshot so a daemon restart after this
         // point doesn't try to rehydrate a turn that has already closed.
         void clearActiveTurnSnapshot(app, sessionId as SessionID);
+        stopTaskWatchdog(sessionId);
         const ts = event.timestamp ?? active.lastTimestamp ?? baseTs;
         const endedAtMs = Date.parse(ts) || Date.now();
         const durationMs = Math.max(0, endedAtMs - active.startedAtMs);
@@ -793,6 +910,25 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
       });
     }
   };
+
+  // Install the watchdog → sink bridge. The watchdog has no business
+  // knowing the close-task-and-flip-session details — it just synthesizes
+  // a `turn_end` event and lets the sink's existing branch handle it.
+  // Same code path = same analytics + DB writes whether the close was
+  // triggered by claude itself or by the watchdog noticing claude died.
+  closeActiveTurnDispatch = async (
+    sessionId: SessionID,
+    _reason: 'turn_end' | 'claude_exited',
+    ts: string
+  ) => {
+    await sink(sessionId, {
+      type: 'turn_end',
+      messageId: 'watchdog-synthetic',
+      timestamp: ts,
+    });
+  };
+
+  return sink;
 }
 
 /**
@@ -1027,6 +1163,11 @@ export async function onCliSessionEnded(
 ): Promise<void> {
   const reg = getCliWatcherRegistry(app);
   await reg.unregister(sessionId);
+  // Belt-and-suspenders: tear down the watchdog if it's still alive.
+  // Normal turn_end already does this; covers the "session archived
+  // mid-turn" path.
+  stopTaskWatchdog(sessionId);
+  activeCliTurn.delete(sessionId);
 }
 
 /**
@@ -1045,7 +1186,7 @@ export async function rehydrateCliWatchers(
   // Scan for active CLI sessions. We don't have a direct "give me active
   // claude-code-cli sessions" query, so do the simple thing: list all
   // sessions, filter in memory. Numbers are small (hundreds at most).
-  const all = await repo.list({}).catch(() => [] as Session[]);
+  const all = await repo.findAll().catch(() => [] as Session[]);
   const reg = getCliWatcherRegistry(app);
   let rehydrated = 0;
   for (const session of all) {
@@ -1056,7 +1197,7 @@ export async function rehydrateCliWatchers(
     if (!cwd) continue;
     // Prime the in-memory active turn BEFORE registering the watcher so
     // the very first post-restart event sees the right task linkage.
-    primeActiveCliTurnFromSession(session);
+    primeActiveCliTurnFromSession(app, session);
     try {
       await reg.register({
         sessionId: session.session_id,
