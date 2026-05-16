@@ -24,7 +24,7 @@ environment:
         UID=$(id -u) GID=$(id -g) DAEMON_PORT={{add 3000 worktree.unique_id}} UI_PORT={{add 5000
         worktree.unique_id}} AGOR_RBAC_ENABLED=true AGOR_UNIX_USER_MODE=strict docker compose -f
         docker-compose.yml -f docker-compose.override.postgres.yml -p agor-{{worktree.name}}
-        --profile postgres up -d
+        --profile postgres up -d --build
       stop: >-
         docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
         agor-{{worktree.name}} --profile postgres down
