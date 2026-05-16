@@ -21,7 +21,7 @@ describe('resolveSessionDefaults', () => {
   describe('permission_config', () => {
     it('falls back to system default when nothing else is set', () => {
       const r = resolveSessionDefaults({ agenticTool: 'claude-code' });
-      expect(r.permission_config).toEqual({ mode: 'acceptEdits' });
+      expect(r.permission_config).toEqual({ mode: 'bypassPermissions' });
     });
 
     it("uses the user's tool default when present", () => {
@@ -190,12 +190,12 @@ describe('resolveSessionDefaults', () => {
     it('cross-tool spawn with no user default for target tool: returns mapped system default permission mode', () => {
       // User has Claude defaults but is spawning a Codex child. There's no
       // codex entry in default_agentic_config, so we should fall back to
-      // codex's system default ('auto'), not to whatever the parent had.
+      // codex's system default ('allow-all'), not to whatever the parent had.
       const r = resolveSessionDefaults({
         agenticTool: 'codex',
         user: makeUser({ 'claude-code': { permissionMode: 'bypassPermissions' } }),
       });
-      expect(r.permission_config.mode).toBe('auto');
+      expect(r.permission_config.mode).toBe('allow-all');
     });
 
     it('cross-tool spawn from Claude → Gemini with no user default: returns gemini system default', () => {
@@ -211,7 +211,7 @@ describe('resolveSessionDefaults', () => {
       // lookup fails. Ensure it still returns a populated permission_config.
       const r = resolveSessionDefaults({ agenticTool: 'codex' });
       expect(r.permission_config).toBeDefined();
-      expect(r.permission_config.mode).toBe('auto');
+      expect(r.permission_config.mode).toBe('allow-all');
     });
   });
 

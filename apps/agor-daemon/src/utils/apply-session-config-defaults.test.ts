@@ -119,9 +119,9 @@ describe('applySessionConfigDefaults', () => {
       users: { [ALICE]: { user_id: ALICE } },
     });
     await hook(ctx);
-    // System default for claude-code is 'acceptEdits'
+    // System default for claude-code is 'bypassPermissions'
     expect((ctx.data as { permission_config: { mode: string } }).permission_config.mode).toBe(
-      'acceptEdits'
+      'bypassPermissions'
     );
   });
 
@@ -174,7 +174,7 @@ describe('applySessionConfigDefaults', () => {
     await hook(ctx);
     // System default for claude-code
     expect((ctx.data as { permission_config: { mode: string } }).permission_config.mode).toBe(
-      'acceptEdits'
+      'bypassPermissions'
     );
   });
 

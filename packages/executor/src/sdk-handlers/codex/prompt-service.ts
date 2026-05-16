@@ -841,10 +841,18 @@ export class CodexPromptService {
     // - MCP servers + model_instructions_file: per-Codex-instance via CodexOptions.config
     // ThreadOptions are emitted AFTER `--config` flags, so for keys that overlap
     // (approval_policy, sandbox_workspace_write.network_access) ThreadOptions win.
+    //
+    // System defaults (`never` + `workspace-write` + network on) assume Agor's
+    // environment-level sandbox (worktree FS scoping, Unix impersonation in
+    // insulated/strict modes, executor process isolation) is the actual
+    // defense — per-call approval prompts are friction without benefit in
+    // an MCP-heavy session where every Agor self-call would otherwise gate.
+    // Users / parent sessions / per-session overrides still flow through
+    // resolvePermissionConfig and trump these defaults.
     const codexConfig = session.permission_config?.codex;
     const sandboxMode = codexConfig?.sandboxMode || 'workspace-write';
-    const approvalPolicy = codexConfig?.approvalPolicy || 'on-request';
-    const networkAccess = codexConfig?.networkAccess ?? false;
+    const approvalPolicy = codexConfig?.approvalPolicy || 'never';
+    const networkAccess = codexConfig?.networkAccess ?? true;
 
     console.log(
       `   Using Codex permissions: sandboxMode=${sandboxMode}, approvalPolicy=${approvalPolicy}, networkAccess=${networkAccess}`

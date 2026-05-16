@@ -1377,50 +1377,87 @@ export function OnboardingWizard({
     // e.g. the user already ran `claude auth login` outside the wizard.
     const isAuthenticated = hasKey || !!testAuthResult?.authenticated;
 
+    // Surfaces Agor's relaxed permission defaults so users see what they're
+    // agreeing to during onboarding instead of discovering it via behavior.
+    // Defense-in-depth comes from the worktree sandbox + (optional) Unix
+    // impersonation, not from per-call prompts in an MCP-heavy session.
+    const renderSecurityDefaultsNote = (tool: 'claude-code' | 'codex') => {
+      const description =
+        tool === 'claude-code' ? (
+          <span>
+            New sessions run in <Text strong>bypassPermissions</Text> mode — Claude won't prompt for
+            each file edit or tool call. Safety comes from Agor's worktree sandbox; you can tighten
+            per session in <Text strong>Session Settings</Text>.
+          </span>
+        ) : (
+          <span>
+            New sessions run as <Text strong>workspace-write</Text> + approval{' '}
+            <Text strong>never</Text> with network access on — Codex won't prompt for each action.
+            Safety comes from Agor's worktree sandbox; you can tighten per session in{' '}
+            <Text strong>Session Settings</Text>.
+          </span>
+        );
+      return (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16, textAlign: 'left' }}
+          message="Permission defaults"
+          description={description}
+        />
+      );
+    };
+
     const renderAuthHint = () => {
       if (selectedAgent === 'claude-code') {
         return (
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 16, textAlign: 'left' }}
-            description={
-              <span>
-                You have three ways to authenticate Claude Code: paste an{' '}
-                <Text code style={{ fontSize: 12 }}>
-                  ANTHROPIC_API_KEY
-                </Text>{' '}
-                below, run{' '}
-                <Text code style={{ fontSize: 12 }}>
-                  claude auth login
-                </Text>{' '}
-                in the terminal Agor runs as, or set up a Pro/Max session token from{' '}
-                <Text strong>User Settings → Claude Code</Text> (best for Claude subscribers).
-              </span>
-            }
-          />
+          <>
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16, textAlign: 'left' }}
+              description={
+                <span>
+                  You have three ways to authenticate Claude Code: paste an{' '}
+                  <Text code style={{ fontSize: 12 }}>
+                    ANTHROPIC_API_KEY
+                  </Text>{' '}
+                  below, run{' '}
+                  <Text code style={{ fontSize: 12 }}>
+                    claude auth login
+                  </Text>{' '}
+                  in the terminal Agor runs as, or set up a Pro/Max session token from{' '}
+                  <Text strong>User Settings → Claude Code</Text> (best for Claude subscribers).
+                </span>
+              }
+            />
+            {renderSecurityDefaultsNote('claude-code')}
+          </>
         );
       }
       if (selectedAgent === 'codex') {
         return (
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 16, textAlign: 'left' }}
-            description={
-              <span>
-                Paste an{' '}
-                <Text code style={{ fontSize: 12 }}>
-                  OPENAI_API_KEY
-                </Text>{' '}
-                below, or authenticate via{' '}
-                <Text code style={{ fontSize: 12 }}>
-                  codex
-                </Text>{' '}
-                in the terminal Agor runs as.
-              </span>
-            }
-          />
+          <>
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16, textAlign: 'left' }}
+              description={
+                <span>
+                  Paste an{' '}
+                  <Text code style={{ fontSize: 12 }}>
+                    OPENAI_API_KEY
+                  </Text>{' '}
+                  below, or authenticate via{' '}
+                  <Text code style={{ fontSize: 12 }}>
+                    codex
+                  </Text>{' '}
+                  in the terminal Agor runs as.
+                </span>
+              }
+            />
+            {renderSecurityDefaultsNote('codex')}
+          </>
         );
       }
       if (AGENT_KEY_CONSOLES[selectedAgent]) {

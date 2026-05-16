@@ -65,14 +65,14 @@ describe('resolveChildSessionConfig', () => {
       expect(r.model_config?.model).toBe('gpt-5.4');
     });
 
-    it('uses mapped codex permission default (auto), not parent acceptEdits', () => {
+    it('uses mapped codex permission default (allow-all), not parent acceptEdits', () => {
       const r = resolveChildSessionConfig({
         parent,
         effectiveTool: 'codex',
         user: makeUser({}),
         now,
       });
-      expect(r.permission_config.mode).toBe('auto');
+      expect(r.permission_config.mode).toBe('allow-all');
     });
 
     it('explicit override wins even on cross-tool spawn', () => {
@@ -182,7 +182,7 @@ describe('resolveChildSessionConfig', () => {
         user: null,
         now,
       });
-      expect(r.permission_config.mode).toBe('auto');
+      expect(r.permission_config.mode).toBe('allow-all');
     });
   });
 
@@ -236,7 +236,7 @@ describe('resolveChildSessionConfig', () => {
 
     it('cross-tool spawn TO codex with no user default emits no codex sub-config', () => {
       // User has no codex defaults → no sandboxMode + approvalPolicy pair → no sub-config.
-      // The mapped permission mode still resolves (to 'auto').
+      // The mapped permission mode still resolves (to 'allow-all').
       const parent = makeParent({ agentic_tool: 'claude-code' });
       const r = resolveChildSessionConfig({
         parent,
@@ -244,7 +244,7 @@ describe('resolveChildSessionConfig', () => {
         user: makeUser({}),
         now,
       });
-      expect(r.permission_config.mode).toBe('auto');
+      expect(r.permission_config.mode).toBe('allow-all');
       expect(r.permission_config.codex).toBeUndefined();
     });
 

@@ -84,24 +84,31 @@ export type {
 /**
  * Get the default permission mode for a given agentic tool
  *
- * Returns the native SDK default for each tool:
- * - Claude Code: 'acceptEdits' (auto-accept file edits, prompt for other tools)
- * - Gemini: 'autoEdit' (native ApprovalMode.AUTO_EDIT - auto-approve file edits)
- * - Codex: 'auto' (auto-approve safe operations, ask for dangerous ones)
- * - OpenCode: 'autoEdit' (auto-approve, similar to Gemini)
+ * Claude Code / Codex defaults assume Agor's environment-level sandbox
+ * (worktree FS scoping, Unix impersonation in insulated/strict modes,
+ * executor process isolation) is the actual defense — per-call approval
+ * prompts are friction without benefit in an MCP-heavy session where
+ * every Agor self-call would otherwise gate. Users / parent sessions /
+ * per-session overrides still trump these defaults via resolvePermissionConfig.
+ *
+ * Per tool:
+ * - Claude Code: 'bypassPermissions' (no per-call prompts; sandbox is the defense)
+ * - Codex: 'allow-all' — maps to sandbox `workspace-write` + approval `never`
+ * - Gemini: 'autoEdit' (unchanged — pending separate audit)
+ * - OpenCode: 'autoEdit' (unchanged — pending separate audit)
  */
 export function getDefaultPermissionMode(agenticTool: AgenticToolName): PermissionMode {
   switch (agenticTool) {
     case 'gemini':
       return 'autoEdit'; // Native Gemini SDK mode
     case 'codex':
-      return 'auto'; // Native Codex SDK mode
+      return 'allow-all'; // Maps to Codex sandbox=workspace-write + approval=never
     case 'opencode':
       return 'autoEdit'; // OpenCode auto-approves, similar to Gemini
     case 'copilot':
-      return 'acceptEdits'; // Copilot uses same semantics as Claude Code
+      return 'bypassPermissions'; // Copilot uses same semantics as Claude Code
     default:
-      return 'acceptEdits'; // Claude Code native mode
+      return 'bypassPermissions'; // Claude Code
   }
 }
 
