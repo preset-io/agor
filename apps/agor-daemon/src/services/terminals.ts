@@ -22,12 +22,19 @@ import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { buildClaudeCliSpawn } from '@agor/core/claude-cli';
 import {
   createUserProcessEnvironment,
   loadConfig,
   resolveUserEnvironment,
 } from '@agor/core/config';
-import { type Database, formatShortId, UsersRepository, WorktreeRepository } from '@agor/core/db';
+import {
+  type Database,
+  formatShortId,
+  SessionRepository,
+  UsersRepository,
+  WorktreeRepository,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { Forbidden } from '@agor/core/feathers';
 import type { AuthenticatedParams, UserID, WorktreeID } from '@agor/core/types';
@@ -37,6 +44,7 @@ import {
   UnixUserNotFoundError,
   validateResolvedUnixUser,
 } from '@agor/core/unix';
+import { buildSpawnConfigForSession } from './claude-cli-integration.js';
 import { generateSessionToken, spawnExecutorFireAndForget } from '../utils/spawn-executor.js';
 import { hasWorktreePermission } from '../utils/worktree-authorization.js';
 
@@ -51,6 +59,27 @@ interface CreateTerminalData {
    * publish `terminal:tab` directly).
    */
   focusTabName?: string;
+  /**
+   * For `claude-code-cli` sessions: the Agor session id whose tab the
+   * caller wants opened. When set, the server looks up the session,
+   * builds the `claude` spawn config from `cli_state` + session config,
+   * and emits a **create-with-command** `terminal:tab` event so the
+   * cli-XXX tab exists with `claude` running inside even on cold start.
+   *
+   * Without this, the cold-start path emits a `focus` event for a tab
+   * that doesn't exist yet (since `onCliSessionCreated`'s dispatch lands
+   * in an empty room when no executor is connected at session create
+   * time) — the user-visible bug is "I created a CLI session and the
+   * embedded terminal is just a bash prompt". `ensureCliSessionId`
+   * closes that race: the embedded terminal can be the bootstrap
+   * trigger for the `claude` REPL itself.
+   *
+   * Browsers pass the session id; the server is the only thing that
+   * knows how to assemble safe argv. The tab name we use is
+   * `cli_state.zellij_tab_name` if set (canonical), else derived
+   * deterministically from the session id.
+   */
+  ensureCliSessionId?: string;
 }
 
 /**
@@ -224,12 +253,20 @@ export class TerminalsService {
       }
     }
 
+    // Resolve `ensureCliSessionId` into a concrete spawn config on the
+    // server side. The browser asks "make sure the cli tab for session
+    // X exists" — it doesn't know (and shouldn't know) the actual
+    // `claude --session-id <X> --add-dir <cwd> --permission-mode <Y>`
+    // argv. RBAC was already checked above via the worktreeId path.
+    const cliEnsure = await this.resolveEnsureCliTab(data.ensureCliSessionId);
+
     return this.createExecutorTerminal(
       {
         worktreeId: data.worktreeId,
         cols: data.cols,
         rows: data.rows,
-        focusTabName: data.focusTabName,
+        focusTabName: data.focusTabName ?? cliEnsure?.tabName,
+        cliEnsure,
       },
       params
     );
@@ -264,6 +301,50 @@ export class TerminalsService {
    *
    * The browser should join the user's terminal channel to receive output.
    */
+  /**
+   * Resolve `ensureCliSessionId` into the spawn args we need to emit at
+   * the executor — `tabName`, `cwd`, `command`, `commandArgs`. Performs
+   * the SessionRepository + worktreeRepository lookups + builds the
+   * `claude` argv via `buildSpawnConfigForSession`/`buildClaudeCliSpawn`.
+   *
+   * Returns `null` when the input is undefined, the session doesn't
+   * exist, isn't a CLI session, or its worktree path can't be resolved.
+   * Caller falls back to the prior focus-only behavior in those cases.
+   */
+  private async resolveEnsureCliTab(
+    sessionId: string | undefined
+  ): Promise<{
+    tabName: string;
+    cwd: string;
+    command: string;
+    commandArgs: string[];
+  } | null> {
+    if (!sessionId) return null;
+    try {
+      const sessionRepo = new SessionRepository(this.db);
+      const session = await sessionRepo.findById(sessionId).catch(() => null);
+      if (!session || session.agentic_tool !== 'claude-code-cli') return null;
+      const worktreeRepo = new WorktreeRepository(this.db);
+      const worktree = await worktreeRepo.findById(session.worktree_id);
+      if (!worktree?.path) return null;
+      const spawnCfg = buildSpawnConfigForSession(session, worktree.path);
+      const built = buildClaudeCliSpawn(spawnCfg);
+      const tabName =
+        session.cli_state?.zellij_tab_name ??
+        spawnCfg.displayName ??
+        `cli-${session.session_id.slice(0, 8)}`;
+      return {
+        tabName,
+        cwd: worktree.path,
+        command: built.bin,
+        commandArgs: built.args,
+      };
+    } catch (err) {
+      console.warn('[TerminalsService] resolveEnsureCliTab failed', err);
+      return null;
+    }
+  }
+
   private async createExecutorTerminal(
     data: {
       worktreeId?: WorktreeID;
@@ -278,6 +359,22 @@ export class TerminalsService {
        * allowed to publish on `terminal:tab` (only service tokens may).
        */
       focusTabName?: string;
+      /**
+       * Resolved CLI spawn for `ensureCliSessionId`. When set, both the
+       * warm-executor and cold-start paths emit a **create-with-command**
+       * `terminal:tab` event so the cli-XXX tab exists with `claude`
+       * running inside, instead of a plain `focus` that no-ops on a tab
+       * that was never spawned (the original cold-start race). The
+       * executor's `handleTabAction('create')` is already idempotent
+       * (auto-converts to focus when the tab exists), so we can fire
+       * this on every call without worrying about double-spawn.
+       */
+      cliEnsure?: {
+        tabName: string;
+        cwd: string;
+        command: string;
+        commandArgs: string[];
+      } | null;
     },
     params?: AuthenticatedParams
   ): Promise<{
@@ -312,10 +409,26 @@ export class TerminalsService {
             cwd: worktree.path,
           });
 
-          // If a CLI-specific tab focus was requested, layer it on top so
-          // the embedded view lands on the session's claude tab rather
-          // than the worktree default.
-          if (data.focusTabName && data.focusTabName !== worktree.name) {
+          // Ensure-create the CLI tab when an `ensureCliSessionId` was
+          // supplied — the executor's `handleTabAction('create')` is
+          // idempotent (auto-converts to focus if the tab exists), so
+          // we fire create-with-command unconditionally.
+          //
+          // Falls back to the old behavior (plain focus emit) when the
+          // caller provided a `focusTabName` without an `ensureCliSessionId`
+          // — older code paths still rely on that semantics.
+          if (data.cliEnsure && data.cliEnsure.tabName !== worktree.name) {
+            setTimeout(() => {
+              this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
+                userId,
+                action: 'create',
+                tabName: data.cliEnsure?.tabName,
+                cwd: data.cliEnsure?.cwd,
+                command: data.cliEnsure?.command,
+                commandArgs: data.cliEnsure?.commandArgs,
+              });
+            }, 300);
+          } else if (data.focusTabName && data.focusTabName !== worktree.name) {
             setTimeout(() => {
               this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
                 userId,
@@ -458,12 +571,25 @@ export class TerminalsService {
       startedAt: new Date(),
     });
 
-    // Cold-start path: if a CLI tab focus was requested, the executor
-    // hasn't yet attached to its Feathers channel. Defer the focus emit
-    // so Zellij finishes booting first. ~1.5s is enough on this hardware;
-    // we don't gate on a deterministic ready signal because the executor's
-    // `zellij attach` PTY itself sends the initial draw async.
-    if (data.focusTabName) {
+    // Cold-start path: the executor hasn't yet attached to its Feathers
+    // channel, so the `onCliSessionCreated` dispatch (if any) landed in
+    // an empty room and was dropped. Re-emit after the executor boots
+    // (~1.5s). When `ensureCliSessionId` was supplied we have the full
+    // spawn config in `cliEnsure` and emit create-with-command so the
+    // cli tab actually exists with `claude` running inside — closing
+    // the first-run race that previously left users staring at bash.
+    if (data.cliEnsure) {
+      setTimeout(() => {
+        this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
+          userId,
+          action: 'create',
+          tabName: data.cliEnsure?.tabName,
+          cwd: data.cliEnsure?.cwd,
+          command: data.cliEnsure?.command,
+          commandArgs: data.cliEnsure?.commandArgs,
+        });
+      }, 1500);
+    } else if (data.focusTabName) {
       setTimeout(() => {
         this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
           userId,

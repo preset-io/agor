@@ -259,6 +259,13 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
               userId={currentUserId}
               worktreeId={session.worktree_id}
               focusTabName={`cli-${session.session_id.slice(0, 8)}`}
+              // Server-side ensure-create — if the cli tab doesn't yet
+              // exist (cold-start race where `onCliSessionCreated`'s
+              // dispatch landed in an empty room), terminals.create
+              // builds the safe spawn argv from the session row and
+              // creates it. Idempotent: already-running tabs no-op
+              // into focus.
+              ensureCliSessionId={session.session_id}
               fill
               visible={cliViewMode === 'terminal'}
             />

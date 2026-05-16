@@ -42,6 +42,18 @@ export interface EmbeddedTerminalProps {
   /** When provided, the embedded view emits a Zellij `focus` on this tab name
    *  once connected. Use the CLI session's `cli-<short>` tab name. */
   focusTabName?: string;
+  /**
+   * For `claude-code-cli` sessions: pass the Agor session id here. The
+   * server looks up `cli_state` + `model_config`, builds the safe
+   * `claude --session-id <X> ...` argv, and emits a create-with-command
+   * `terminal:tab` event — guaranteeing the cli-XXX tab exists with
+   * `claude` running inside even on first-run / cold-start. Without
+   * this, the cold-start path emits a `focus` for a tab that may not
+   * yet exist (because `onCliSessionCreated`'s dispatch raced an
+   * absent executor) and the user sees a bash prompt instead of the
+   * REPL. Browser never sees raw argv — the daemon builds it server-side.
+   */
+  ensureCliSessionId?: string;
   /** Fixed pixel height. Default 480. Ignored when `fill` is true. */
   height?: number;
   /** When true, the terminal flexes to fill its parent's available
@@ -68,6 +80,7 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
   userId,
   worktreeId,
   focusTabName,
+  ensureCliSessionId,
   height = 480,
   fill = false,
   visible = true,
@@ -209,6 +222,7 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
           cols: terminal.cols,
           worktreeId,
           focusTabName,
+          ensureCliSessionId,
         })) as {
           userId: UserID;
           channel: string;
@@ -296,6 +310,7 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
           cols: terminalRef.current?.cols ?? 140,
           worktreeId,
           focusTabName,
+          ensureCliSessionId,
         });
       } catch (err) {
         if (cancelled) return;
@@ -306,7 +321,7 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [visible, client, userId, worktreeId, focusTabName]);
+  }, [visible, client, userId, worktreeId, focusTabName, ensureCliSessionId]);
 
   return (
     <div
