@@ -62,8 +62,16 @@ async function writeCleanShutdownSentinel(signal: string): Promise<void> {
       JSON.stringify(sentinel),
       'utf8'
     );
-  } catch {
-    // Non-fatal — worst case, startup treats this restart as unexpected
+  } catch (error) {
+    // Non-fatal — worst case, startup treats the next restart as unexpected
+    // and triggers orphan cleanup, which is the safer default. We surface
+    // a single log line so operators debugging crash-classification in
+    // read-only AGOR_HOME deployments (e.g. ConfigMap-mounted) can see
+    // why the sentinel isn't doing anything.
+    console.log(
+      '[startup] Could not write shutdown sentinel — next restart will be classified as a crash. ' +
+        `Cause: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 }
 
