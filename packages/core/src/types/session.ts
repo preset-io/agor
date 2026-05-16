@@ -263,6 +263,23 @@ export interface Session {
     zellij_pane_id?: string;
     /** Zellij tab name (`cli-<short>` by convention). */
     zellij_tab_name?: string;
+    /**
+     * In-flight turn snapshot. Written on `user_message`, set to `null`
+     * on `turn_end` (not undefined — `deepMerge` in
+     * `SessionRepository.update` skips undefined, so an explicit `null`
+     * is the documented "clear this field" signal). Lets the watcher
+     * rehydrate the task linkage for assistant/tool messages that
+     * arrive after a daemon restart — without this, post-restart events
+     * would orphan and `turn_end` would skip closing the task.
+     * Analytics accumulated mid-turn (per-message usage,
+     * lastAssistantRaw) are *not* persisted; only the linkage is
+     * recovered.
+     */
+    active_turn?: {
+      task_id: string;
+      user_message_index: number;
+      started_at_ms: number;
+    } | null;
   };
 
   /**

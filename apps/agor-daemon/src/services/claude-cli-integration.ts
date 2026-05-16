@@ -34,23 +34,23 @@
  *   - Subagent JSONL discovery
  */
 
-import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import os from 'node:os';
 import {
   type AssistantUsage,
   buildClaudeCliSpawn,
-  type ClaudeCliPermissionMode,
+  type ClaudeCliNormalizedSdkResponse,
+  type ClaudeCliRawSdkResponse,
   type ClaudeCliSpawnConfig,
   claudeSessionJsonlPath,
   computeCost,
   getContextWindowLimit,
+  permissionModeForCli,
   slugForCwd,
 } from '@agor/core/claude-cli';
-import { type Database, SessionRepository, TaskRepository } from '@agor/core/db';
+import { type Database, generateId, SessionRepository, TaskRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import {
-  type PermissionMode,
   type Session,
   type SessionID,
   SessionStatus,
@@ -77,66 +77,6 @@ function getDb(app: Application): Database | null {
   return db ?? null;
 }
 
-/**
- * Shape we write to `task.data.raw_sdk_response` for CLI-driven turns.
- * Deliberately mirrors `SDKResultMessage` from `@anthropic-ai/claude-agent-sdk`
- * — same `modelUsage` / `usage` / `duration_ms` / `total_cost_usd` fields —
- * so the existing `ClaudeCodeNormalizer` and downstream cost-/token-card
- * consumers render CLI turns through the same path as SDK turns.
- *
- * `_cli_provenance` is the one CLI-specific addition: a debugging breadcrumb
- * so "did we miss `end_turn`?" investigations don't have to re-read the
- * JSONL. Nothing in the UI depends on it; it's structurally additive.
- */
-export interface ClaudeCliRawSdkResponse {
-  type: 'result';
-  subtype: 'success';
-  session_id: string;
-  duration_ms: number;
-  total_cost_usd: number | undefined;
-  modelUsage: Record<string, ClaudeCliModelUsageEntry>;
-  usage: {
-    input_tokens: number;
-    output_tokens: number;
-    cache_read_input_tokens: number;
-    cache_creation_input_tokens: number;
-  };
-  _cli_provenance: {
-    adapter: 'claude-code-cli';
-    assistantTurns: number;
-    lastAssistantSnapshot: unknown;
-  };
-}
-
-export interface ClaudeCliModelUsageEntry {
-  inputTokens: number;
-  outputTokens: number;
-  cacheCreationInputTokens: number;
-  cacheReadInputTokens: number;
-  contextWindow: number;
-}
-
-/**
- * Normalized rollup we write to `task.data.normalized_sdk_response`.
- * Shape matches `NormalizedSdkData` in
- * `packages/executor/src/sdk-handlers/base/normalizer.interface.ts`
- * — we don't import from there because the daemon shouldn't depend on
- * the executor package, but the field names are kept in lockstep.
- */
-export interface ClaudeCliNormalizedSdkResponse {
-  tokenUsage: {
-    inputTokens: number;
-    outputTokens: number;
-    totalTokens: number;
-    cacheReadTokens: number;
-    cacheCreationTokens: number;
-  };
-  contextWindowLimit: number;
-  costUsd: number | undefined;
-  primaryModel: string | undefined;
-  durationMs: number;
-}
-
 /** Per-turn accumulator used by the sink between `user_message` and `turn_end`. */
 interface AssistantTurnData {
   model: string | null;
@@ -156,6 +96,113 @@ interface ActiveCliTurn {
   assistantTurns: AssistantTurnData[];
   lastAssistantRaw: unknown;
   toolUseCount: number;
+}
+
+/**
+ * Per-session in-flight turn state. Lifted to module scope (was closure-
+ * local) so:
+ *   - the watcher's rehydration path (`primeActiveCliTurnFromSession`) can
+ *     prime it after a daemon restart, BEFORE the sink processes any
+ *     post-restart event;
+ *   - the persister can write its DB-recoverable subset (task id, user
+ *     message index, start time) to `cli_state.active_turn` and clear it
+ *     on `turn_end`.
+ *
+ * Analytics accumulated mid-turn (`assistantTurns`, `lastAssistantRaw`,
+ * `toolUseCount`) are *not* persisted — they re-accumulate from the
+ * post-restart half of the JSONL. A turn straddling a restart will under-
+ * report cost/tokens for the pre-restart half. The task linkage is what
+ * matters for not orphaning messages.
+ */
+const activeCliTurn = new Map<string, ActiveCliTurn>();
+
+/**
+ * Write the recoverable subset of an active turn to `cli_state.active_turn`
+ * so a daemon restart can rehydrate the task linkage. Called on
+ * `user_message`. Best-effort — DB failure logs but doesn't throw, since
+ * the in-memory state is already set and the worst case is "post-restart
+ * messages orphan."
+ */
+async function persistActiveTurnSnapshot(
+  app: Application,
+  sessionId: SessionID,
+  turn: ActiveCliTurn
+): Promise<void> {
+  const db = getDb(app);
+  if (!db) return;
+  try {
+    const repo = new SessionRepository(db);
+    const row = await repo.findById(sessionId).catch(() => null);
+    if (!row) return;
+    const patch = {
+      cli_state: {
+        ...(row.cli_state ?? {}),
+        active_turn: {
+          task_id: turn.taskId,
+          user_message_index: turn.userMessageIndex,
+          started_at_ms: turn.startedAtMs,
+        },
+      },
+    } satisfies Partial<Session>;
+    await repo.update(sessionId, patch);
+  } catch (err) {
+    console.warn('[claude-cli-integration] persistActiveTurnSnapshot failed', err);
+  }
+}
+
+/**
+ * Clear `cli_state.active_turn` on `turn_end`. Best-effort.
+ *
+ * We pass `null` rather than omitting the field because
+ * `SessionRepository.update`'s deepMerge skips undefined values
+ * (preserves the existing entry). Explicit `null` is the codebase's
+ * documented "clear this field" signal — see
+ * `packages/core/src/db/repositories/merge-utils.ts`.
+ */
+async function clearActiveTurnSnapshot(
+  app: Application,
+  sessionId: SessionID
+): Promise<void> {
+  const db = getDb(app);
+  if (!db) return;
+  try {
+    const repo = new SessionRepository(db);
+    const patch = {
+      cli_state: { active_turn: null },
+    } satisfies Partial<Session>;
+    await repo.update(sessionId, patch);
+  } catch (err) {
+    console.warn('[claude-cli-integration] clearActiveTurnSnapshot failed', err);
+  }
+}
+
+/**
+ * Rehydrate the in-memory `activeCliTurn` entry for a session from
+ * its persisted `cli_state.active_turn`. Called by `onCliSessionCreated`
+ * and `rehydrateCliWatchers` *before* the watcher starts dispatching
+ * post-restart events, so the very first post-restart assistant message
+ * inherits the right task_id.
+ *
+ * Per-turn analytics that weren't persisted (`assistantTurns`,
+ * `lastAssistantRaw`, `toolUseCount`) start fresh — see the doc on
+ * `activeCliTurn`.
+ */
+export function primeActiveCliTurnFromSession(session: Session): void {
+  const persisted = session.cli_state?.active_turn;
+  if (!persisted) return;
+  // Don't clobber an in-memory entry — if a turn happens to be active
+  // right now in this process, that one is the source of truth.
+  if (activeCliTurn.has(session.session_id)) return;
+  activeCliTurn.set(session.session_id, {
+    taskId: persisted.task_id as TaskID,
+    userMessageIndex: persisted.user_message_index,
+    lastIndex: persisted.user_message_index,
+    lastTimestamp: new Date(persisted.started_at_ms).toISOString(),
+    startedAtMs: persisted.started_at_ms,
+    assistantTurns: [],
+    lastAssistantRaw: null,
+    toolUseCount: 0,
+  });
 }
 
 /**
@@ -267,9 +314,10 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
   // `toolUseCount` increments for every `tool_use` content block seen so
   // the task's analytics card surfaces tool activity.
   //
-  // Shape is exported at the module top as `ActiveCliTurn` so tests can
-  // construct fixtures without re-deriving the layout.
-  const activeCliTurn = new Map<string, ActiveCliTurn>();
+  // Shape is exported at the module top as `ActiveCliTurn`. The Map
+  // itself is module-level (see top of file) so the rehydration path
+  // (`primeActiveCliTurnFromSession`) can populate it before the sink
+  // fires post-restart.
 
   const nextIndex = async (sessionId: SessionID): Promise<number> => {
     const cached = indexBySession.get(sessionId);
@@ -390,7 +438,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
           pendingCliTask.delete(sessionId as SessionID);
           // Re-seed the index cache so our next write follows /prompt's user row.
           indexBySession.set(sessionId, pending.userMessageIndex + 1);
-          activeCliTurn.set(sessionId, {
+          const turn: ActiveCliTurn = {
             taskId: pending.taskId,
             userMessageIndex: pending.userMessageIndex,
             lastIndex: pending.userMessageIndex,
@@ -399,7 +447,12 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
             assistantTurns: [],
             lastAssistantRaw: null,
             toolUseCount: 0,
-          });
+          };
+          activeCliTurn.set(sessionId, turn);
+          // Persist the recoverable subset so a daemon restart mid-turn
+          // doesn't orphan downstream messages. Fire-and-forget — the
+          // in-memory entry is already valid for the live process.
+          void persistActiveTurnSnapshot(app, sessionId as SessionID, turn);
           return;
         }
 
@@ -416,7 +469,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         if (!taskId) {
           // Couldn't mint task — write an orphan so we at least don't lose data.
           await app.service('messages').create({
-            message_id: cryptoUuid(),
+            message_id: generateId(),
             session_id: sessionId,
             type: 'user',
             role: 'user',
@@ -429,7 +482,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
           return;
         }
         await app.service('messages').create({
-          message_id: cryptoUuid(),
+          message_id: generateId(),
           session_id: sessionId,
           task_id: taskId,
           type: 'user',
@@ -440,7 +493,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
           content: typeof event.content === 'string' ? event.content : (event.content ?? ''),
           metadata: { source: 'cli-repl', original_id: event.uuid ?? undefined },
         });
-        activeCliTurn.set(sessionId, {
+        const turn: ActiveCliTurn = {
           taskId,
           userMessageIndex: userIdx,
           lastIndex: userIdx,
@@ -449,7 +502,9 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
           assistantTurns: [],
           lastAssistantRaw: null,
           toolUseCount: 0,
-        });
+        };
+        activeCliTurn.set(sessionId, turn);
+        void persistActiveTurnSnapshot(app, sessionId as SessionID, turn);
         return;
       }
 
@@ -460,7 +515,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         const ts = event.turn.timestamp ?? baseTs;
         const active = activeCliTurn.get(sessionId);
         await app.service('messages').create({
-          message_id: cryptoUuid(),
+          message_id: generateId(),
           session_id: sessionId,
           task_id: active?.taskId,
           type: 'assistant',
@@ -533,7 +588,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         const ts = event.timestamp ?? baseTs;
         const active = activeCliTurn.get(sessionId);
         await app.service('messages').create({
-          message_id: cryptoUuid(),
+          message_id: generateId(),
           session_id: sessionId,
           task_id: active?.taskId,
           type: 'user',
@@ -571,6 +626,9 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
           return;
         }
         activeCliTurn.delete(sessionId);
+        // Clear the persisted snapshot so a daemon restart after this
+        // point doesn't try to rehydrate a turn that has already closed.
+        void clearActiveTurnSnapshot(app, sessionId as SessionID);
         const ts = event.timestamp ?? active.lastTimestamp ?? baseTs;
         const endedAtMs = Date.parse(ts) || Date.now();
         const durationMs = Math.max(0, endedAtMs - active.startedAtMs);
@@ -747,23 +805,31 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
   };
 }
 
-/** Cheap UUIDv4 — avoids importing the full uuid lib in this hot path. */
-function cryptoUuid(): string {
-  return randomUUID();
-}
-
 /**
- * Resolve the `$HOME` of the Unix user who owns the `~/.claude/` tree for a
- * given session.
+ * Resolve the `$HOME` of the Unix user who owns the `~/.claude/` tree for
+ * a given session.
  *
- * - `unix_user_mode: simple` / `insulated` → daemon user's home (one shared
+ * - `unix_user_mode: simple` → daemon user's home (one shared
  *   credentials.json across all CLI sessions).
- * - `unix_user_mode: strict` → session owner's home (per-user credentials).
+ * - `unix_user_mode: insulated` → daemon user's home (executor runs as
+ *   a shared `executor_unix_user`, but the daemon still owns the
+ *   `~/.claude/` tree — credentials are shared, transcripts live under
+ *   the daemon HOME the executor `sudo -u`'s into).
+ * - `unix_user_mode: strict` → session creator's home. Each user has
+ *   their own `~/.claude/projects/<slug>/<session-id>.jsonl`, so the
+ *   watcher must tail under THAT user's HOME, not the daemon's.
  *
- * v1: just return the daemon's home. Strict-mode wiring lives with the
- * Unix-impersonation utilities and lands when RBAC mode is exercised.
+ * `session.unix_username` is the impersonated user — stamped at session
+ * create time by the `setSessionUnixUsername` hook. When non-null we
+ * trust the canonical `/home/<username>` convention used everywhere
+ * else in the daemon (see `terminals.ts`'s `symlinkPath`); querying
+ * `/etc/passwd` from inside the daemon would require a sudo escalation
+ * and isn't worth it for v1.
  */
-export function resolveHomeDirForCliSession(_session: Session): string {
+export function resolveHomeDirForCliSession(session: Session): string {
+  if (session.unix_username) {
+    return `/home/${session.unix_username}`;
+  }
   return os.homedir();
 }
 
@@ -783,39 +849,6 @@ export function getCliWatcherRegistry(app: Application): ClaudeCliWatcherRegistr
     );
   }
   return registrySingleton;
-}
-
-/**
- * Map an Agor session's permission_config.mode to the CLI's permission
- * flag. The CLI accepts the same set as the SDK plus `auto` and the
- * synthetic `dangerously-skip-permissions` (which emits the dedicated
- * argv flag instead of `--permission-mode bypassPermissions`).
- *
- * Returns `undefined` to mean "don't emit a permission flag at all" — the
- * CLI will fall back to its own default (`default`). For backgrounded
- * MCP-driven spawns the caller should pass `bypassPermissions` explicitly.
- */
-/**
- * Static map from the SDK-wide `PermissionMode` union to the CLI's
- * argv flag. Anything not in this table (e.g. Gemini/Codex modes that
- * leak through `permission_config.mode`) returns `undefined`, which
- * `buildClaudeCliSpawn` treats as "don't emit the flag" — claude
- * falls back to its own default (`default` / prompt-on-every-tool).
- *
- * Sourced from the analysis doc § Claude Code CLI Defaults panel.
- */
-const PERMISSION_MODE_MAP: Partial<Record<PermissionMode, ClaudeCliPermissionMode>> = {
-  default: 'default',
-  acceptEdits: 'acceptEdits',
-  bypassPermissions: 'bypassPermissions',
-  plan: 'plan',
-  dontAsk: 'dontAsk',
-};
-
-function permissionModeForCli(session: Session): ClaudeCliPermissionMode | undefined {
-  const mode = session.permission_config?.mode;
-  if (!mode) return 'acceptEdits'; // v1 default for user-driven sessions
-  return PERMISSION_MODE_MAP[mode];
 }
 
 /**
@@ -848,7 +881,7 @@ export function buildSpawnConfigForSession(
     displayName: `cli-${session.session_id.slice(0, 8)}`,
     model: session.model_config?.model,
     effort: session.model_config?.effort as ClaudeCliSpawnConfig['effort'] | undefined,
-    permissionMode: permissionModeForCli(session),
+    permissionMode: permissionModeForCli(session.permission_config?.mode),
     addDirs: [worktreeCwd],
     // mcpConfigPath: lands once MCP scoping is plumbed for the CLI adapter.
     // appendSystemPromptFile: lands once session-context rendering is wired.
@@ -1031,6 +1064,9 @@ export async function rehydrateCliWatchers(
     if (session.archived) continue;
     const cwd = await worktreeCwdLookup(session.worktree_id);
     if (!cwd) continue;
+    // Prime the in-memory active turn BEFORE registering the watcher so
+    // the very first post-restart event sees the right task linkage.
+    primeActiveCliTurnFromSession(session);
     try {
       await reg.register({
         sessionId: session.session_id,

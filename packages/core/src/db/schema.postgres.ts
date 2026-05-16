@@ -192,6 +192,11 @@ export const sessions = pgTable(
           jsonl_path?: string;
           zellij_pane_id?: string;
           zellij_tab_name?: string;
+          active_turn?: {
+            task_id: string;
+            user_message_index: number;
+            started_at_ms: number;
+          } | null;
         };
 
         // Billing model for this session.

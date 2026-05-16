@@ -379,40 +379,95 @@ export class ClaudeCliWatcher {
 
     const fh = await fsp.open(this.jsonlPath, 'r');
     try {
-      const chunkSize = stat.size - this.offset;
+      const readFrom = this.offset;
+      const chunkSize = stat.size - readFrom;
       const buf = Buffer.alloc(chunkSize);
-      const { bytesRead } = await fh.read(buf, 0, chunkSize, this.offset);
-      this.offset += bytesRead;
+      const { bytesRead } = await fh.read(buf, 0, chunkSize, readFrom);
 
-      // Append to held-over fragment, then split.
+      // Append to held-over fragment, then split. `bufferStartsAt` is the
+      // file-byte offset where `combined`'s payload begins — used below to
+      // compute the per-line "successful commit" position. The held-over
+      // fragment was already counted in a previous tick's read, so the
+      // chunk we just read starts at readFrom; `combined` includes those
+      // bytes plus the lineBuffer fragment whose byte length we track.
+      const fragmentBytes = Buffer.byteLength(this.lineBuffer, 'utf-8');
       const combined = this.lineBuffer + buf.subarray(0, bytesRead).toString('utf-8');
       const lines = combined.split('\n');
       // Last element is either '' (clean newline-terminated read) or a
       // fragment to hold over.
-      this.lineBuffer = lines.pop() ?? '';
+      const trailing = lines.pop() ?? '';
 
+      // ── Offset-on-success-only ──
+      //
+      // The previous implementation advanced `this.offset` to
+      // `readFrom + bytesRead` *before* dispatching the sink, then
+      // caught + swallowed sink failures. A transient sink error (DB
+      // hiccup, schema drift, etc.) silently lost those JSONL lines —
+      // the byte cursor would persist past them and they'd never be
+      // re-read.
+      //
+      // Now we walk line-by-line, advance `this.offset` only after the
+      // sink resolves for the full line, and on failure we **break out
+      // of the loop**, leaving `this.offset` at the last successful
+      // line. The next `fs.watch` tick re-reads the failing line from
+      // disk and re-attempts; a persistent failure pauses progress
+      // visibly (operator-actionable) instead of dropping data.
+      //
+      // `lineStart` is the file-byte offset of the line we're about to
+      // process. After success we add `byteLength(line) + 1` (for the
+      // `\n` terminator we split on).
+      let lineStart = readFrom - fragmentBytes;
+      let sinkFailed = false;
       for (const line of lines) {
-        if (!line.trim()) continue;
+        const lineBytes = Buffer.byteLength(line, 'utf-8');
+        const lineEnd = lineStart + lineBytes + 1; // +1 for the consumed \n
+        if (!line.trim()) {
+          // Blank line: commit position so we don't re-process it on
+          // every subsequent tick. Treated as a no-op success.
+          this.offset = lineEnd;
+          this.lineBuffer = '';
+          lineStart = lineEnd;
+          continue;
+        }
         const events = this.translator.translateLine(line);
+        let allSucceeded = true;
         for (const event of events) {
           try {
-            // Update the "last seen" markers from line-bearing events.
             if ('uuid' in event && event.uuid) this.lastEventUuid = event.uuid;
             if ('timestamp' in event && event.timestamp) this.lastEventTs = event.timestamp;
             await this.opts.sink(this.opts.sessionId, event);
           } catch (err) {
-            this.opts.log.error('[claude-cli-watcher] sink error', {
+            this.opts.log.error('[claude-cli-watcher] sink error — stopping at line', {
               sessionId: this.opts.sessionId,
               eventType: event.type,
+              byteOffset: lineStart,
               err,
             });
+            allSucceeded = false;
+            sinkFailed = true;
+            break;
           }
         }
+        if (!allSucceeded) break;
+        // Commit this line: cursor + held-over fragment cleared.
+        this.offset = lineEnd;
+        this.lineBuffer = '';
+        lineStart = lineEnd;
         this.linesSinceFlush++;
         if (this.linesSinceFlush >= this.opts.persistEveryNLines) {
-          // Fire-and-forget; ordering doesn't matter for offset writes.
           void this.persistOffset();
         }
+      }
+      // Only hold the trailing fragment if we processed every line
+      // successfully. On sink failure we keep `this.offset` at the
+      // failed line's start; the next read re-fetches everything from
+      // there (and the fragment, if any, is part of that re-read).
+      if (!sinkFailed) {
+        this.lineBuffer = trailing;
+        // `this.offset` should sit just past the last complete line;
+        // bytes for the trailing fragment have been "read" but not
+        // "committed" — they live in lineBuffer and will be rejoined on
+        // the next read from `this.offset`.
       }
     } finally {
       await fh.close();

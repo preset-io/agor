@@ -189,6 +189,14 @@ export const sessions = sqliteTable(
           // can target this session specifically.
           zellij_pane_id?: string;
           zellij_tab_name?: string;
+          // In-flight turn snapshot for daemon-restart recovery — written
+          // on user_message, cleared on turn_end. See
+          // Session['cli_state']['active_turn'] in types/session.ts.
+          active_turn?: {
+            task_id: string;
+            user_message_index: number;
+            started_at_ms: number;
+          } | null;
         };
 
         // Billing model for this session.

@@ -136,6 +136,37 @@ const PERMISSION_MODE_FLAG_VALUES: ReadonlySet<ClaudeCliPermissionMode> = new Se
 ]);
 
 /**
+ * Static map from the SDK-wide `PermissionMode` union to the CLI's
+ * argv flag. Anything not in this table (e.g. Gemini/Codex modes that
+ * leak through `permission_config.mode`) returns `undefined`, which
+ * `buildClaudeCliSpawn` treats as "don't emit the flag" — claude
+ * falls back to its own default (`default` / prompt-on-every-tool).
+ *
+ * Lives alongside `ClaudeCliPermissionMode` so the type union and its
+ * mapper move in lockstep when Anthropic adds new modes.
+ */
+const PERMISSION_MODE_MAP: Partial<Record<string, ClaudeCliPermissionMode>> = {
+  default: 'default',
+  acceptEdits: 'acceptEdits',
+  bypassPermissions: 'bypassPermissions',
+  plan: 'plan',
+  dontAsk: 'dontAsk',
+};
+
+/**
+ * Resolve the SDK's `permission_config.mode` to the CLI's argv flag.
+ * Returns `acceptEdits` as the v1 default for user-driven sessions when
+ * no mode is configured, mirroring the Defaults-panel out-of-box choice
+ * in the analysis doc.
+ */
+export function permissionModeForCli(
+  mode: string | null | undefined
+): ClaudeCliPermissionMode | undefined {
+  if (!mode) return 'acceptEdits';
+  return PERMISSION_MODE_MAP[mode];
+}
+
+/**
  * Build the spawn invocation for the `claude` binary.
  *
  * Pure function — no fs / process side-effects. Caller (the Zellij command

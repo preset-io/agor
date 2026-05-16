@@ -244,11 +244,22 @@ export class JsonlEventTranslator {
       });
     }
 
-    // Turn-end fires once per `end_turn` — useful even on a duplicate line
-    // because the queue-drain logic listens for the LATEST end_turn, not
-    // first-seen. Emitting both is fine; the watcher's queue drainer is
-    // idempotent.
-    if (line.message?.stop_reason === 'end_turn') {
+    // Turn-end fires for ANY terminal stop reason except `tool_use`:
+    //
+    //   - `end_turn`: normal completion.
+    //   - `max_tokens`: assistant ran out of output budget mid-stream.
+    //   - `stop_sequence`: emitted a configured stop sequence.
+    //   - `refusal`: claude declined to continue.
+    //   - any future top-level terminal value Anthropic adds (string is
+    //     deliberately open in `event-types.ts`).
+    //
+    // Only `tool_use` (and `null`/missing, which means "still streaming")
+    // leaves the turn open — claude returns with another assistant line
+    // once the tool result is reported. Without this widening, a
+    // `max_tokens` turn left the task RUNNING forever and blocked the
+    // session's queue gate.
+    const stop = line.message?.stop_reason;
+    if (stop && stop !== 'tool_use') {
       events.push({
         type: 'turn_end',
         messageId: dedupKey,

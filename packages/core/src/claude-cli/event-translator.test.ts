@@ -43,7 +43,7 @@ describe('JsonlEventTranslator', () => {
     expect(t.getSeenMessageIds().size).toBe(1);
   });
 
-  it('emits turn_end exactly on stop_reason: "end_turn"', () => {
+  it('emits turn_end on any terminal stop_reason except tool_use', () => {
     const t = new JsonlEventTranslator();
     const baseMsg = {
       id: 'msg_endturn',
@@ -51,7 +51,7 @@ describe('JsonlEventTranslator', () => {
       content: [],
       usage: {},
     };
-    // First line: tool_use → no turn_end
+    // First line: tool_use → no turn_end (turn still open)
     const e1 = t.translateParsed({
       type: 'assistant',
       uuid: 'a',
@@ -68,6 +68,29 @@ describe('JsonlEventTranslator', () => {
     } as Parameters<typeof t.translateParsed>[0]);
     const endEvent = e2.find((e) => e.type === 'turn_end');
     expect(endEvent).toEqual({ type: 'turn_end', messageId: 'msg_endturn', timestamp: 't2' });
+  });
+
+  it('emits turn_end on max_tokens / stop_sequence / refusal', () => {
+    // Each terminal stop_reason should close the turn so the task gets
+    // patched COMPLETED and the session returns to IDLE. Without this,
+    // a max-token cutoff would strand the task RUNNING forever.
+    for (const stop of ['max_tokens', 'stop_sequence', 'refusal'] as const) {
+      const t = new JsonlEventTranslator();
+      const events = t.translateParsed({
+        type: 'assistant',
+        uuid: 'a',
+        timestamp: 'ts',
+        message: {
+          id: `msg_${stop}`,
+          role: 'assistant',
+          content: [],
+          usage: {},
+          stop_reason: stop,
+        },
+      } as Parameters<typeof t.translateParsed>[0]);
+      const endEvent = events.find((e) => e.type === 'turn_end');
+      expect(endEvent, `expected turn_end for stop_reason=${stop}`).toBeDefined();
+    }
   });
 
   it('routes user lines with toolUseResult to tool_result events', () => {

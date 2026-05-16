@@ -8,4 +8,5 @@ export * from './event-translator.js';
 export * from './event-types.js';
 export * from './path-utils.js';
 export * from './pricing.js';
+export * from './sdk-response.js';
 export * from './spawn-config.js';
