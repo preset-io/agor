@@ -173,7 +173,11 @@ describe('runFirstRunAdminBootstrap — capability-driven password resolution', 
     expect(createUser).toHaveBeenCalledTimes(1);
     expect(createUser).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ password: 'super-secret-from-secret-store' })
+      expect.objectContaining({
+        password: 'super-secret-from-secret-store',
+        role: 'superadmin',
+        unix_username: 'admin',
+      })
     );
     // No credentials file was written.
     expect(result.credentialsPath).toBeUndefined();
@@ -196,6 +200,10 @@ describe('runFirstRunAdminBootstrap — capability-driven password resolution', 
     });
 
     expect(createUser).toHaveBeenCalledTimes(1);
+    expect(createUser).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ role: 'superadmin', unix_username: 'admin' })
+    );
     expect(result.credentialsPath).toBe(path.join(tempDir, 'admin-credentials'));
     // File exists with mode 0600.
     const stat = await fs.stat(result.credentialsPath as string);

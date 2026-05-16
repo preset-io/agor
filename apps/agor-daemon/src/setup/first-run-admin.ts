@@ -159,7 +159,8 @@ export async function runFirstRunAdminBootstrap(
         email: BOOTSTRAP_ADMIN_EMAIL,
         password: envPassword,
         name: 'Admin',
-        role: 'admin',
+        role: 'superadmin',
+        unix_username: 'admin',
         must_change_password: true,
       });
     }
@@ -194,7 +195,8 @@ export async function runFirstRunAdminBootstrap(
         email: BOOTSTRAP_ADMIN_EMAIL,
         password,
         name: 'Admin',
-        role: 'admin',
+        role: 'superadmin',
+        unix_username: 'admin',
         // Forces the operator to set their own password after first login.
         // Without this the printed/persisted cleartext stays valid forever.
         must_change_password: true,
