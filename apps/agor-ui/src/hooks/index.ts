@@ -11,6 +11,7 @@ export * from './useAgorData';
 export * from './useAuth';
 export * from './useAuthConfig';
 export * from './useBoardActions';
+export * from './useConfirmNukeEnvironment';
 export * from './useInitialLoaderPhase';
 export * from './useLocalStorage';
 export * from './useMessages';

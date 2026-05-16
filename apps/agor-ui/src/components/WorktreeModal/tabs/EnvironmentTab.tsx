@@ -42,6 +42,7 @@ import {
 import { Alert, Button, Card, Select, Space, Spin, Tag, Tooltip, Typography, theme } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuthConfig } from '../../../hooks/useAuthConfig';
+import { useConfirmNukeEnvironment } from '../../../hooks/useConfirmNukeEnvironment';
 import { usePermissions } from '../../../hooks/usePermissions';
 import {
   getEnvironmentState,
@@ -105,6 +106,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
   const { confirm } = useThemedModal();
+  const confirmNuke = useConfirmNukeEnvironment();
   const { isAdmin, hasRole } = usePermissions();
   const { featuresConfig } = useAuthConfig();
 
@@ -244,32 +246,16 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   };
   const handleNuke = () => {
     if (!client) return;
-    confirm({
-      title: 'Nuke Environment?',
-      icon: <FireOutlined style={{ color: '#ff4d4f' }} />,
-      content: (
-        <div>
-          <p>
-            <strong>This is a destructive operation!</strong>
-          </p>
-          <p>This will typically remove all volumes, data, and state for this environment.</p>
-          <p>Are you sure you want to proceed?</p>
-        </div>
-      ),
-      okText: 'Yes, Nuke It',
-      okType: 'danger',
-      cancelText: 'Cancel',
-      onOk: async () => {
-        setIsNuking(true);
-        try {
-          await client.service(`worktrees/${worktree.worktree_id}/nuke`).create({});
-          showSuccess('Environment nuked successfully');
-        } catch (error) {
-          showError(error instanceof Error ? error.message : 'Failed to nuke environment');
-        } finally {
-          setIsNuking(false);
-        }
-      },
+    confirmNuke(async () => {
+      setIsNuking(true);
+      try {
+        await client.service(`worktrees/${worktree.worktree_id}/nuke`).create({});
+        showSuccess('Environment nuked successfully');
+      } catch (error) {
+        showError(error instanceof Error ? error.message : 'Failed to nuke environment');
+      } finally {
+        setIsNuking(false);
+      }
     });
   };
 

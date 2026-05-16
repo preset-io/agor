@@ -10,7 +10,8 @@ import {
   StopOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import { App, Button, Space, Spin, Tooltip, theme } from 'antd';
+import { Button, Space, Spin, Tooltip, theme } from 'antd';
+import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
 import { Tag } from '../Tag';
@@ -37,7 +38,7 @@ export function EnvironmentPill({
   connectionDisabled = false,
 }: EnvironmentPillProps) {
   const { token } = theme.useToken();
-  const { modal } = App.useApp();
+  const confirmNuke = useConfirmNukeEnvironment();
   const effectiveEnv = getEffectiveEnv(repo);
   const hasConfig = effectiveEnv.hasConfig;
   const env = worktree.environment_instance;
@@ -324,18 +325,11 @@ export function EnvironmentPill({
                   type="text"
                   size="small"
                   danger
+                  aria-label="Nuke environment"
                   icon={<FireOutlined />}
                   onClick={(event) => {
                     event.stopPropagation();
-                    modal.confirm({
-                      title: 'Nuke environment?',
-                      content:
-                        'This will stop the environment and DELETE all its volumes. Any data not committed/pushed will be lost.',
-                      okText: 'Nuke',
-                      okType: 'danger',
-                      cancelText: 'Cancel',
-                      onOk: () => onNukeEnvironment(worktree.worktree_id),
-                    });
+                    confirmNuke(() => onNukeEnvironment(worktree.worktree_id));
                   }}
                   disabled={connectionDisabled}
                   style={{
