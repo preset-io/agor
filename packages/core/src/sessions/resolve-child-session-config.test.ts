@@ -234,9 +234,12 @@ describe('resolveChildSessionConfig', () => {
       });
     });
 
-    it('cross-tool spawn TO codex with no user default emits no codex sub-config', () => {
-      // User has no codex defaults → no sandboxMode + approvalPolicy pair → no sub-config.
-      // The mapped permission mode still resolves (to 'allow-all').
+    it('cross-tool spawn TO codex with no user default fills sub-config from the mapped mode', () => {
+      // User has no codex defaults → resolver fills sub-config from
+      // mapToCodexPermissionConfig(getDefaultPermissionMode('codex')).
+      // This used to emit `undefined`, which made the executor's fallback
+      // the de facto source of truth — kept here as a regression to ensure
+      // the daemon-side resolver stays authoritative.
       const parent = makeParent({ agentic_tool: 'claude-code' });
       const r = resolveChildSessionConfig({
         parent,
@@ -244,8 +247,14 @@ describe('resolveChildSessionConfig', () => {
         user: makeUser({}),
         now,
       });
-      expect(r.permission_config.mode).toBe('allow-all');
-      expect(r.permission_config.codex).toBeUndefined();
+      expect(r.permission_config).toEqual({
+        mode: 'allow-all',
+        codex: {
+          sandboxMode: 'workspace-write',
+          approvalPolicy: 'never',
+          networkAccess: true,
+        },
+      });
     });
 
     it('cross-tool spawn TO codex with user codex defaults includes sub-config', () => {

@@ -1382,18 +1382,27 @@ export function OnboardingWizard({
     // Defense-in-depth comes from the worktree sandbox + (optional) Unix
     // impersonation, not from per-call prompts in an MCP-heavy session.
     const renderSecurityDefaultsNote = (tool: 'claude-code' | 'codex') => {
+      const sandboxLink = (
+        <Typography.Link
+          href="https://agor.live/guide/multiplayer-unix-isolation"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Agor's worktree sandbox
+        </Typography.Link>
+      );
       const description =
         tool === 'claude-code' ? (
           <span>
             New sessions run in <Text strong>bypassPermissions</Text> mode — Claude won't prompt for
-            each file edit or tool call. Safety comes from Agor's worktree sandbox; you can tighten
-            per session in <Text strong>Session Settings</Text>.
+            each file edit or tool call. Safety comes from {sandboxLink}; you can tighten per
+            session in <Text strong>Session Settings</Text>.
           </span>
         ) : (
           <span>
             New sessions run as <Text strong>workspace-write</Text> + approval{' '}
             <Text strong>never</Text> with network access on — Codex won't prompt for each action.
-            Safety comes from Agor's worktree sandbox; you can tighten per session in{' '}
+            Safety comes from {sandboxLink}; you can tighten per session in{' '}
             <Text strong>Session Settings</Text>.
           </span>
         );

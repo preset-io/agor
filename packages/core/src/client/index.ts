@@ -44,3 +44,10 @@ export {
   buildZoneTriggerContext,
 } from '../templates/zone-trigger-context.js';
 export * from '../types/index.js';
+// Permission-mode helpers — pure functions, browser-safe.
+export {
+  type CodexPermissionDefaults,
+  getDefaultCodexPermissionConfig,
+  mapPermissionMode,
+  mapToCodexPermissionConfig,
+} from '../utils/permission-mode-mapper.js';

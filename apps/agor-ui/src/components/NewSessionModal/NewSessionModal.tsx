@@ -9,7 +9,7 @@ import type {
   User,
   Worktree,
 } from '@agor-live/client';
-import { getDefaultPermissionMode } from '@agor-live/client';
+import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import { Alert, Collapse, Form, Input, Modal, Typography } from 'antd';
 import { useEffect, useState } from 'react';
@@ -141,6 +141,11 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       const fallbackMcpServerIds =
         worktreeMcpIds && worktreeMcpIds.length > 0 ? worktreeMcpIds : agentDefaults?.mcpServerIds;
 
+      const permissionMode: PermissionMode =
+        (values.permissionMode as PermissionMode | undefined) ??
+        agentDefaults?.permissionMode ??
+        getDefaultPermissionMode(selectedAgent as AgenticToolName);
+
       const config: NewSessionConfig = {
         worktree_id: worktreeId,
         agent: selectedAgent,
@@ -150,24 +155,24 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         modelConfig: values.modelConfig ?? agentDefaults?.modelConfig,
         effort: (values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort,
         mcpServerIds: values.mcpServerIds ?? fallbackMcpServerIds,
-        permissionMode:
-          (values.permissionMode as PermissionMode | undefined) ??
-          agentDefaults?.permissionMode ??
-          getDefaultPermissionMode(selectedAgent as AgenticToolName),
+        permissionMode,
         envVarNames: envVarNames.length > 0 ? envVarNames : undefined,
       };
 
       if (selectedAgent === 'codex') {
+        const codexDefaults = mapToCodexPermissionConfig(permissionMode);
         config.codexSandboxMode =
           (values.codexSandboxMode as CodexSandboxMode | undefined) ??
           agentDefaults?.codexSandboxMode ??
-          ('workspace-write' as CodexSandboxMode);
+          codexDefaults.sandboxMode;
         config.codexApprovalPolicy =
           (values.codexApprovalPolicy as CodexApprovalPolicy | undefined) ??
           agentDefaults?.codexApprovalPolicy ??
-          ('on-request' as CodexApprovalPolicy);
+          codexDefaults.approvalPolicy;
         config.codexNetworkAccess =
-          values.codexNetworkAccess ?? agentDefaults?.codexNetworkAccess ?? false;
+          values.codexNetworkAccess ??
+          agentDefaults?.codexNetworkAccess ??
+          codexDefaults.networkAccess;
       }
 
       onCreate(config);

@@ -31,6 +31,7 @@ import { Codex } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type { EffortLevel } from '@agor/core/types';
+import { getDefaultCodexPermissionConfig } from '@agor/core/utils/permission-mode-mapper';
 import { getDaemonUrl } from '../../config.js';
 import type {
   MCPServerRepository,
@@ -842,17 +843,16 @@ export class CodexPromptService {
     // ThreadOptions are emitted AFTER `--config` flags, so for keys that overlap
     // (approval_policy, sandbox_workspace_write.network_access) ThreadOptions win.
     //
-    // System defaults (`never` + `workspace-write` + network on) assume Agor's
-    // environment-level sandbox (worktree FS scoping, Unix impersonation in
-    // insulated/strict modes, executor process isolation) is the actual
-    // defense — per-call approval prompts are friction without benefit in
-    // an MCP-heavy session where every Agor self-call would otherwise gate.
-    // Users / parent sessions / per-session overrides still flow through
-    // resolvePermissionConfig and trump these defaults.
+    // The daemon resolver (`resolvePermissionConfig`) always emits a full
+    // codex sub-config for new sessions, so this fallback only fires for
+    // legacy sessions in the DB with a partial / missing `permission_config`.
+    // It delegates to `getDefaultCodexPermissionConfig` so we have one source
+    // of truth for what "system default" means across daemon + executor.
     const codexConfig = session.permission_config?.codex;
-    const sandboxMode = codexConfig?.sandboxMode || 'workspace-write';
-    const approvalPolicy = codexConfig?.approvalPolicy || 'never';
-    const networkAccess = codexConfig?.networkAccess ?? true;
+    const defaults = getDefaultCodexPermissionConfig();
+    const sandboxMode = codexConfig?.sandboxMode ?? defaults.sandboxMode;
+    const approvalPolicy = codexConfig?.approvalPolicy ?? defaults.approvalPolicy;
+    const networkAccess = codexConfig?.networkAccess ?? defaults.networkAccess;
 
     console.log(
       `   Using Codex permissions: sandboxMode=${sandboxMode}, approvalPolicy=${approvalPolicy}, networkAccess=${networkAccess}`

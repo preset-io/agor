@@ -14,6 +14,7 @@ import type {
 import {
   AGENTIC_TOOL_CAPABILITIES,
   getDefaultPermissionMode,
+  mapToCodexPermissionConfig,
   SessionStatus,
   TaskStatus,
 } from '@agor-live/client';
@@ -300,15 +301,18 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // shadow that used to live here was stale (missing gemini/opencode/copilot)
   // and silently drifted from the core definition.
 
-  const [permissionMode, setPermissionMode] = React.useState<PermissionMode>(
-    session?.permission_config?.mode ||
-      (session?.agentic_tool ? getDefaultPermissionMode(session.agentic_tool) : 'acceptEdits')
-  );
+  const initialPermissionMode: PermissionMode =
+    session?.permission_config?.mode ??
+    (session?.agentic_tool
+      ? getDefaultPermissionMode(session.agentic_tool)
+      : getDefaultPermissionMode('claude-code'));
+  const initialCodexDefaults = mapToCodexPermissionConfig(initialPermissionMode);
+  const [permissionMode, setPermissionMode] = React.useState<PermissionMode>(initialPermissionMode);
   const [codexSandboxMode, setCodexSandboxMode] = React.useState<CodexSandboxMode>(
-    session?.permission_config?.codex?.sandboxMode || 'workspace-write'
+    session?.permission_config?.codex?.sandboxMode ?? initialCodexDefaults.sandboxMode
   );
   const [codexApprovalPolicy, setCodexApprovalPolicy] = React.useState<CodexApprovalPolicy>(
-    session?.permission_config?.codex?.approvalPolicy || 'on-request'
+    session?.permission_config?.codex?.approvalPolicy ?? initialCodexDefaults.approvalPolicy
   );
   const [effortLevel, setEffortLevel] = React.useState<EffortLevel>(
     session?.model_config?.effort || 'high'

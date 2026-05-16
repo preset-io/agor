@@ -20,7 +20,7 @@ import type {
   Session,
 } from '../types/index.js';
 import { getDefaultPermissionMode } from '../types/session.js';
-import { mapPermissionMode } from '../utils/permission-mode-mapper.js';
+import { mapPermissionMode, mapToCodexPermissionConfig } from '../utils/permission-mode-mapper.js';
 
 /**
  * Common runtime overrides shared by every session-creation flow. Per-flow
@@ -62,9 +62,13 @@ export interface ResolvePermissionConfigArgs {
  * populated object — the system default mapped through `mapPermissionMode`
  * is the final fallback.
  *
- * Codex's dual sub-config (`sandboxMode` + `approvalPolicy` + `networkAccess`)
- * is emitted only on `codex` sessions, and only when both required fields
- * resolve to a value.
+ * For `codex` sessions, the sub-config (`sandboxMode` + `approvalPolicy` +
+ * `networkAccess`) is ALWAYS emitted. Any field not provided by the
+ * override / parent / user layers is filled from `mapToCodexPermissionConfig`
+ * keyed off the resolved permission mode. This prevents partial user
+ * overrides (e.g. just `codexApprovalPolicy: 'untrusted'`) from being
+ * silently dropped and then escalated to the relaxed system default by the
+ * executor's last-line fallback.
  */
 export function resolvePermissionConfig(
   args: ResolvePermissionConfigArgs
@@ -77,9 +81,8 @@ export function resolvePermissionConfig(
     userToolDefaults?.permissionMode ??
     getDefaultPermissionMode(effectiveTool);
 
-  const out: NonNullable<Session['permission_config']> = {
-    mode: mapPermissionMode(requestedMode, effectiveTool),
-  };
+  const effectiveMode: PermissionMode = mapPermissionMode(requestedMode, effectiveTool);
+  const out: NonNullable<Session['permission_config']> = { mode: effectiveMode };
 
   if (effectiveTool === 'codex') {
     const sandboxMode =
@@ -97,13 +100,12 @@ export function resolvePermissionConfig(
           ? parentLayer.codexNetworkAccess
           : userToolDefaults?.codexNetworkAccess;
 
-    if (sandboxMode && approvalPolicy) {
-      out.codex = {
-        sandboxMode,
-        approvalPolicy,
-        ...(networkAccess !== undefined && { networkAccess }),
-      };
-    }
+    const defaults = mapToCodexPermissionConfig(effectiveMode);
+    out.codex = {
+      sandboxMode: sandboxMode ?? defaults.sandboxMode,
+      approvalPolicy: approvalPolicy ?? defaults.approvalPolicy,
+      networkAccess: networkAccess ?? defaults.networkAccess,
+    };
   }
 
   return out;

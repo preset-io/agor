@@ -24,6 +24,7 @@ import type {
   Session,
   User,
 } from '@agor-live/client';
+import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
 import { DownOutlined, KeyOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { CollapseProps } from 'antd';
 import { Collapse, Divider, Form, Modal, Typography } from 'antd';
@@ -74,21 +75,20 @@ interface FormValues {
 }
 
 function buildInitialValues(session: Session, sessionMcpServerIds: string[]): FormValues {
-  const defaultPermissionMode: PermissionMode =
-    session.agentic_tool === 'codex'
-      ? 'auto'
-      : session.agentic_tool === 'gemini' || session.agentic_tool === 'opencode'
-        ? 'autoEdit'
-        : 'acceptEdits';
+  const permissionMode: PermissionMode =
+    session.permission_config?.mode ?? getDefaultPermissionMode(session.agentic_tool);
+  const codexDefaults = mapToCodexPermissionConfig(permissionMode);
 
   return {
     title: session.title || '',
     mcpServerIds: sessionMcpServerIds,
     modelConfig: session.model_config,
-    permissionMode: session.permission_config?.mode || defaultPermissionMode,
-    codexSandboxMode: session.permission_config?.codex?.sandboxMode || 'workspace-write',
-    codexApprovalPolicy: session.permission_config?.codex?.approvalPolicy || 'on-request',
-    codexNetworkAccess: session.permission_config?.codex?.networkAccess ?? false,
+    permissionMode,
+    codexSandboxMode: session.permission_config?.codex?.sandboxMode ?? codexDefaults.sandboxMode,
+    codexApprovalPolicy:
+      session.permission_config?.codex?.approvalPolicy ?? codexDefaults.approvalPolicy,
+    codexNetworkAccess:
+      session.permission_config?.codex?.networkAccess ?? codexDefaults.networkAccess,
     custom_context: session.custom_context ? JSON.stringify(session.custom_context, null, 2) : '',
     callbackConfig: {
       enabled: session.callback_config?.enabled ?? true,

@@ -50,7 +50,7 @@ describe('resolveSessionDefaults', () => {
       expect(r.permission_config.mode).toBe('yolo');
     });
 
-    it('emits codex sub-config when sandboxMode + approvalPolicy both present (user defaults)', () => {
+    it('emits full codex sub-config from user defaults', () => {
       const r = resolveSessionDefaults({
         agenticTool: 'codex',
         user: makeUser({
@@ -66,6 +66,55 @@ describe('resolveSessionDefaults', () => {
         sandboxMode: 'workspace-write',
         approvalPolicy: 'on-request',
         networkAccess: false,
+      });
+    });
+
+    it('always emits codex sub-config for codex sessions, filling missing fields from the mapped mode', () => {
+      // No user defaults — sub-config should be filled from
+      // mapToCodexPermissionConfig(getDefaultPermissionMode('codex')).
+      const r = resolveSessionDefaults({ agenticTool: 'codex' });
+      expect(r.permission_config).toEqual({
+        mode: 'allow-all',
+        codex: {
+          sandboxMode: 'workspace-write',
+          approvalPolicy: 'never',
+          networkAccess: true,
+        },
+      });
+    });
+
+    it("partial user defaults are preserved; missing fields fill from the user's mode (regression: don't escalate to system default)", () => {
+      // User explicitly chose a stricter approval policy but didn't set
+      // sandboxMode or networkAccess. Pre-fix this dropped the sub-config
+      // entirely and the executor fallback escalated approval to 'never'.
+      const r = resolveSessionDefaults({
+        agenticTool: 'codex',
+        user: makeUser({
+          codex: { permissionMode: 'ask', codexApprovalPolicy: 'untrusted' },
+        }),
+      });
+      expect(r.permission_config).toEqual({
+        mode: 'ask',
+        codex: {
+          // sandboxMode + networkAccess fill from mapToCodexPermissionConfig('ask')
+          sandboxMode: 'read-only',
+          approvalPolicy: 'untrusted',
+          networkAccess: false,
+        },
+      });
+    });
+
+    it('partial user defaults (only sandboxMode) — approvalPolicy + networkAccess fill from mode', () => {
+      const r = resolveSessionDefaults({
+        agenticTool: 'codex',
+        user: makeUser({
+          codex: { codexSandboxMode: 'read-only' },
+        }),
+      });
+      expect(r.permission_config.codex).toEqual({
+        sandboxMode: 'read-only',
+        approvalPolicy: 'never', // from default mode 'allow-all'
+        networkAccess: true, // from default mode 'allow-all'
       });
     });
 
