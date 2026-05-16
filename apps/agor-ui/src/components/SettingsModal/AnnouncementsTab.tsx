@@ -7,11 +7,11 @@ import {
   Input,
   InputNumber,
   Modal,
+  message,
   Space,
   Table,
   Tag,
   Typography,
-  message,
   theme,
 } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
@@ -78,9 +78,7 @@ export const AnnouncementsTab: React.FC<AnnouncementsTabProps> = ({ client }) =>
         message.success('Announcement expired');
         refetch();
       } catch (err) {
-        message.error(
-          `Failed to expire: ${err instanceof Error ? err.message : String(err)}`
-        );
+        message.error(`Failed to expire: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
     [client, refetch]
@@ -112,11 +110,7 @@ export const AnnouncementsTab: React.FC<AnnouncementsTabProps> = ({ client }) =>
             Broadcast a message to every user. Optionally pin it as a sticky banner.
           </Text>
         </div>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => setComposeOpen(true)}
-        >
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setComposeOpen(true)}>
           New announcement
         </Button>
       </div>
@@ -144,8 +138,7 @@ export const AnnouncementsTab: React.FC<AnnouncementsTabProps> = ({ client }) =>
           {
             title: 'Preview',
             dataIndex: 'preview',
-            render: (preview?: string) =>
-              preview ? <Text type="secondary">{preview}</Text> : '—',
+            render: (preview?: string) => (preview ? <Text type="secondary">{preview}</Text> : '—'),
           },
           {
             title: 'Banner',
@@ -282,9 +275,7 @@ const ComposeAnnouncementModal: React.FC<ComposeAnnouncementModalProps> = ({
         // Form validation failed — antd already surfaces field errors.
         return;
       }
-      message.error(
-        `Failed to send: ${err instanceof Error ? err.message : String(err)}`
-      );
+      message.error(`Failed to send: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSubmitting(false);
     }
@@ -338,11 +329,7 @@ const ComposeAnnouncementModal: React.FC<ComposeAnnouncementModalProps> = ({
               <InputNumber min={1} placeholder="(never)" style={{ width: 100 }} />
             </Form.Item>
             <Form.Item name="expireUnit" noStyle>
-              <Input
-                style={{ width: 100 }}
-                placeholder="hours"
-                disabled={false}
-              />
+              <Input style={{ width: 100 }} placeholder="hours" disabled={false} />
             </Form.Item>
             <Text type="secondary">(blank = never expires)</Text>
           </Space>

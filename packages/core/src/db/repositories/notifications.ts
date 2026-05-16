@@ -224,10 +224,7 @@ export class NotificationsRepository
     const rows = await select(this.db)
       .from(notifications)
       .where(
-        and(
-          eq(notifications.recipient_user_id, recipientUserId),
-          isNull(notifications.read_at)
-        )
+        and(eq(notifications.recipient_user_id, recipientUserId), isNull(notifications.read_at))
       )
       .all();
     return rows.length;
@@ -239,10 +236,7 @@ export class NotificationsRepository
     const result = await update(this.db, notifications)
       .set({ read_at: now })
       .where(
-        and(
-          eq(notifications.recipient_user_id, recipientUserId),
-          isNull(notifications.read_at)
-        )
+        and(eq(notifications.recipient_user_id, recipientUserId), isNull(notifications.read_at))
       )
       .run();
     return result.rowsAffected;

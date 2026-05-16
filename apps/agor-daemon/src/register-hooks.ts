@@ -822,9 +822,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           if (patchData?.archived === true && worktree?.worktree_id) {
             setImmediate(async () => {
               try {
-                const notificationsService = context.app.service(
-                  'notifications'
-                ) as unknown as {
+                const notificationsService = context.app.service('notifications') as unknown as {
                   cleanupForWorktree?: (worktreeId: string) => Promise<number>;
                 };
                 if (notificationsService?.cleanupForWorktree) {

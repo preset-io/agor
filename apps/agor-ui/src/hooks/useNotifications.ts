@@ -168,10 +168,7 @@ export function useNotifications(
         if (n.expires_at && new Date(n.expires_at).getTime() < Date.now()) return false;
         return true;
       })
-      .sort(
-        (a, b) =>
-          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      );
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   }, [byId]);
 
   const unreadCount = useMemo(() => {

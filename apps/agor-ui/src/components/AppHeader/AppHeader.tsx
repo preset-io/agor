@@ -24,9 +24,9 @@ import {
 } from 'antd';
 import { useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { AnnouncementBanner } from '../AnnouncementBanner';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BrandLogo } from '../BrandLogo';
-import { AnnouncementBanner } from '../AnnouncementBanner';
 import { ConnectionStatus } from '../ConnectionStatus';
 import { Facepile } from '../Facepile';
 import { MarkdownRenderer } from '../MarkdownRenderer';
@@ -321,10 +321,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           justifyContent: 'center',
         }}
       >
-        <AnnouncementBanner
-          notification={activeBanner}
-          onDismiss={(n) => onBannerDismiss?.(n)}
-        />
+        <AnnouncementBanner notification={activeBanner} onDismiss={(n) => onBannerDismiss?.(n)} />
       </div>
 
       <Space>

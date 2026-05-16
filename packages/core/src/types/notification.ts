@@ -9,15 +9,7 @@
  * - `global_admin`: an admin broadcast, fanned out one row per user
  */
 
-import type {
-  BoardID,
-  CommentID,
-  SessionID,
-  TaskID,
-  UserID,
-  UUID,
-  WorktreeID,
-} from './id';
+import type { BoardID, CommentID, SessionID, TaskID, UserID, UUID, WorktreeID } from './id';
 
 export const NotificationType = {
   MENTION: 'mention',

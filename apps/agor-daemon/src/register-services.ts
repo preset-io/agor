@@ -312,7 +312,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       'unreadCount',
     ],
   });
-  const notificationsService = app.service('notifications') as ReturnType<
+  const notificationsService = app.service('notifications') as unknown as ReturnType<
     typeof createNotificationsService
   >;
   // All notification routes require an authenticated user; broadcast routes
@@ -327,18 +327,14 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       create: [ctx.requireAuth],
       patch: [ctx.requireAuth],
       remove: [ctx.requireAuth],
-      // biome-ignore lint/suspicious/noExplicitAny: custom-method hook keys are not in feathers types
-      broadcast: [ctx.requireAuth, requireAdminHook] as any,
-      // biome-ignore lint/suspicious/noExplicitAny: custom-method hook keys are not in feathers types
-      expireBroadcast: [ctx.requireAuth, requireAdminHook] as any,
-      // biome-ignore lint/suspicious/noExplicitAny: custom-method hook keys are not in feathers types
-      listBroadcasts: [ctx.requireAuth, requireAdminHook] as any,
-      // biome-ignore lint/suspicious/noExplicitAny: custom-method hook keys are not in feathers types
-      markAllRead: [ctx.requireAuth] as any,
-      // biome-ignore lint/suspicious/noExplicitAny: custom-method hook keys are not in feathers types
-      unreadCount: [ctx.requireAuth] as any,
+      broadcast: [ctx.requireAuth, requireAdminHook],
+      expireBroadcast: [ctx.requireAuth, requireAdminHook],
+      listBroadcasts: [ctx.requireAuth, requireAdminHook],
+      markAllRead: [ctx.requireAuth],
+      unreadCount: [ctx.requireAuth],
     },
-  });
+    // biome-ignore lint/suspicious/noExplicitAny: custom-method hook keys (broadcast/expireBroadcast/etc.) aren't in feathers' HookTypeMap
+  } as any);
 
   // Nightly retention sweep — drops read notifs older than 90 days.
   // Cheap enough to run every 24h on any reasonable DB size.

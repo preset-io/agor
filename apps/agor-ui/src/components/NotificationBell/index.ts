@@ -1,2 +1,2 @@
-export { NotificationBell } from './NotificationBell';
 export type { NotificationBellProps } from './NotificationBell';
+export { NotificationBell } from './NotificationBell';

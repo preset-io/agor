@@ -30,13 +30,13 @@ export const AnnouncementBanner: React.FC<AnnouncementBannerProps> = ({
 
   if (!notification) return null;
 
-  const title = notification.title.length > MAX_TITLE_CHARS
-    ? `${notification.title.slice(0, MAX_TITLE_CHARS - 1)}…`
-    : notification.title;
+  const title =
+    notification.title.length > MAX_TITLE_CHARS
+      ? `${notification.title.slice(0, MAX_TITLE_CHARS - 1)}…`
+      : notification.title;
 
   return (
-    <div
-      role="status"
+    <output
       aria-live="polite"
       style={{
         display: 'inline-flex',
@@ -51,10 +51,7 @@ export const AnnouncementBanner: React.FC<AnnouncementBannerProps> = ({
       }}
     >
       <WarningOutlined style={{ color: token.colorWarning, flexShrink: 0 }} />
-      <Tooltip
-        title={notification.preview || notification.title}
-        placement="bottom"
-      >
+      <Tooltip title={notification.preview || notification.title} placement="bottom">
         <Text
           ellipsis
           style={{
@@ -66,10 +63,7 @@ export const AnnouncementBanner: React.FC<AnnouncementBannerProps> = ({
           {title}
         </Text>
       </Tooltip>
-      <Tooltip
-        title={formatAbsoluteTime(notification.created_at)}
-        placement="bottom"
-      >
+      <Tooltip title={formatAbsoluteTime(notification.created_at)} placement="bottom">
         <Text
           type="secondary"
           style={{
@@ -88,6 +82,6 @@ export const AnnouncementBanner: React.FC<AnnouncementBannerProps> = ({
         aria-label="Dismiss announcement"
         onClick={() => onDismiss?.(notification)}
       />
-    </div>
+    </output>
   );
 };

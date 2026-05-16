@@ -503,7 +503,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           preview,
           source_session_id: session.session_id,
           source_worktree_id: session.worktree_id,
-          source_board_id: session.board_id ?? undefined,
+          source_board_id: session.worktree_board_id ?? undefined,
           source_task_id: task.task_id,
           scope: 'user',
           data: {

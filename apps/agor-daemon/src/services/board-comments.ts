@@ -171,15 +171,18 @@ export class BoardCommentsService extends DrizzleService<
     previousMentions: string[]
   ): Promise<void> {
     if (!this.app) return;
-    const notifs = this.app.service('notifications') as unknown as {
-      deliver: (notif: unknown) => Promise<unknown>;
-    } | undefined;
+    const notifs = this.app.service('notifications') as unknown as
+      | {
+          deliver: (notif: unknown) => Promise<unknown>;
+        }
+      | undefined;
     if (!notifs?.deliver) return;
 
     const explicitMentions = (comment.mentions ?? []) as string[];
-    const mentions = explicitMentions.length > 0
-      ? explicitMentions
-      : this.extractMentionsFromContent(comment.content);
+    const mentions =
+      explicitMentions.length > 0
+        ? explicitMentions
+        : this.extractMentionsFromContent(comment.content);
 
     if (mentions.length === 0) return;
 

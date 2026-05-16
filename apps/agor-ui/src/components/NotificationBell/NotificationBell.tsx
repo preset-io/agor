@@ -84,17 +84,15 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({
         {visible.length === 0 ? (
           <Empty
             style={{ padding: token.paddingLG }}
-            image={
-              <BellOutlined style={{ fontSize: 48, color: token.colorTextTertiary }} />
-            }
+            image={<BellOutlined style={{ fontSize: 48, color: token.colorTextTertiary }} />}
             imageStyle={{ height: 60 }}
             description={
               <div>
                 <Text type="secondary">You&apos;re all caught up.</Text>
                 <br />
                 <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                  Notifications about sessions you&apos;re working on, mentions, and
-                  announcements appear here.
+                  Notifications about sessions you&apos;re working on, mentions, and announcements
+                  appear here.
                 </Text>
               </div>
             }
@@ -193,83 +191,84 @@ const NotificationCard: React.FC<NotificationCardProps> = ({
       onMouseLeave={handleMouseLeave}
       style={{
         display: 'flex',
-        alignItems: 'flex-start',
-        gap: token.paddingSM,
-        padding: token.paddingSM,
+        alignItems: 'stretch',
+        gap: 0,
         borderLeft: `3px solid ${stripeColor}`,
         backgroundColor: isUnread ? token.colorPrimaryBg : 'transparent',
-        cursor: 'pointer',
         borderBottom: `1px solid ${token.colorBorderSecondary}`,
         position: 'relative',
       }}
-      onClick={onClick}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onClick();
-        }
-      }}
-      role="button"
-      tabIndex={0}
     >
-      <div style={{ flexShrink: 0, marginTop: 2 }}>{icon}</div>
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={label}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: token.paddingSM,
+          padding: token.paddingSM,
+          textAlign: 'left',
+          background: 'transparent',
+          border: 'none',
+          cursor: 'pointer',
+          color: 'inherit',
+          font: 'inherit',
+        }}
+      >
+        <span style={{ flexShrink: 0, marginTop: 2 }}>{icon}</span>
 
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'baseline',
-            justifyContent: 'space-between',
-            gap: token.paddingXS,
-          }}
-        >
-          <Text
-            strong={isUnread}
-            ellipsis
-            style={{ flex: 1, fontSize: token.fontSize }}
-            aria-label={label}
-          >
-            {notification.title}
-          </Text>
-          <Tooltip title={formatAbsoluteTime(notification.created_at)} placement="left">
-            <Text
-              type="secondary"
-              style={{ fontSize: token.fontSizeSM, whiteSpace: 'nowrap' }}
-            >
-              {formatRelativeTime(notification.created_at)}
-            </Text>
-          </Tooltip>
-        </div>
-
-        {notification.preview && (
-          <Text
-            type="secondary"
-            ellipsis
-            style={{ display: 'block', fontSize: token.fontSizeSM }}
-          >
-            {notification.preview}
-          </Text>
-        )}
-
-        {notification.data?.agentic_tool && (
-          <div
+        <span style={{ flex: 1, minWidth: 0, display: 'block' }}>
+          <span
             style={{
               display: 'flex',
-              alignItems: 'center',
-              gap: 4,
-              marginTop: 2,
-              color: token.colorTextTertiary,
-              fontSize: token.fontSizeSM,
+              alignItems: 'baseline',
+              justifyContent: 'space-between',
+              gap: token.paddingXS,
             }}
           >
-            <ToolIcon tool={notification.data.agentic_tool} size={14} />
-            <span>{notification.data.agentic_tool}</span>
-            {typeof notification.data.message_count === 'number' && (
-              <span>· {notification.data.message_count} messages</span>
-            )}
-          </div>
-        )}
-      </div>
+            <Text strong={isUnread} ellipsis style={{ flex: 1, fontSize: token.fontSize }}>
+              {notification.title}
+            </Text>
+            <Tooltip title={formatAbsoluteTime(notification.created_at)} placement="left">
+              <Text type="secondary" style={{ fontSize: token.fontSizeSM, whiteSpace: 'nowrap' }}>
+                {formatRelativeTime(notification.created_at)}
+              </Text>
+            </Tooltip>
+          </span>
+
+          {notification.preview && (
+            <Text
+              type="secondary"
+              ellipsis
+              style={{ display: 'block', fontSize: token.fontSizeSM }}
+            >
+              {notification.preview}
+            </Text>
+          )}
+
+          {notification.data?.agentic_tool && (
+            <span
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                marginTop: 2,
+                color: token.colorTextTertiary,
+                fontSize: token.fontSizeSM,
+              }}
+            >
+              <ToolIcon tool={notification.data.agentic_tool} size={14} />
+              <span>{notification.data.agentic_tool}</span>
+              {typeof notification.data.message_count === 'number' && (
+                <span>· {notification.data.message_count} messages</span>
+              )}
+            </span>
+          )}
+        </span>
+      </button>
 
       <Button
         type="text"
@@ -280,7 +279,7 @@ const NotificationCard: React.FC<NotificationCardProps> = ({
           e.stopPropagation();
           onDismiss();
         }}
-        style={{ marginLeft: token.paddingXS }}
+        style={{ margin: token.paddingSM, alignSelf: 'flex-start' }}
       />
     </div>
   );

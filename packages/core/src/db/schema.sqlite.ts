@@ -1541,25 +1541,25 @@ export const notifications = sqliteTable(
       () => worktrees.worktree_id,
       { onDelete: 'set null' }
     ),
-    source_board_id: text('source_board_id', { length: 36 }).references(
-      () => boards.board_id,
-      { onDelete: 'set null' }
-    ),
+    source_board_id: text('source_board_id', { length: 36 }).references(() => boards.board_id, {
+      onDelete: 'set null',
+    }),
     source_comment_id: text('source_comment_id', { length: 36 }).references(
       () => boardComments.comment_id,
       { onDelete: 'set null' }
     ),
     // Tasks can be ephemeral / cleaned up; intentionally no FK.
     source_task_id: text('source_task_id', { length: 36 }),
-    source_user_id: text('source_user_id', { length: 36 }).references(
-      () => users.user_id,
-      { onDelete: 'set null' }
-    ),
+    source_user_id: text('source_user_id', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
 
     read_at: t.timestamp('read_at'),
     expires_at: t.timestamp('expires_at'),
 
-    scope: text('scope', { enum: ['user', 'global'] }).notNull().default('user'),
+    scope: text('scope', { enum: ['user', 'global'] })
+      .notNull()
+      .default('user'),
 
     data: t.json<NotificationData>('data').notNull().default(sql`'{}'`),
   },

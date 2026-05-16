@@ -17,7 +17,7 @@
  */
 
 import { PAGINATION } from '@agor/core/config';
-import { type Database, NotificationsRepository } from '@agor/core/db';
+import { type Database, generateId, NotificationsRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
@@ -26,7 +26,6 @@ import type {
   NotificationCreate,
   QueryParams,
 } from '@agor/core/types';
-import { generateId } from '@agor/core/db';
 import { DrizzleService } from '../adapters/drizzle';
 import { userRoomName } from '../setup/socketio';
 
@@ -39,7 +38,10 @@ export type NotificationsParams = QueryParams<{
   AuthenticatedParams;
 
 type AppWithIO = Application & {
-  io?: { to: (room: string) => { emit: (event: string, payload: unknown) => void }; emit: (event: string, payload: unknown) => void };
+  io?: {
+    to: (room: string) => { emit: (event: string, payload: unknown) => void };
+    emit: (event: string, payload: unknown) => void;
+  };
 };
 
 export class NotificationsService extends DrizzleService<
@@ -123,7 +125,7 @@ export class NotificationsService extends DrizzleService<
 
     const userId = this.getRequestingUserId(params);
     if (userId && existing.recipient_user_id !== userId) {
-      throw new Error('Cannot patch another user\'s notification');
+      throw new Error("Cannot patch another user's notification");
     }
 
     const result = (await super.patch(id, data, params)) as Notification;
@@ -149,7 +151,7 @@ export class NotificationsService extends DrizzleService<
 
     const userId = this.getRequestingUserId(params);
     if (userId && existing.recipient_user_id !== userId) {
-      throw new Error('Cannot remove another user\'s notification');
+      throw new Error("Cannot remove another user's notification");
     }
 
     const result = (await super.remove(id, params)) as Notification;
@@ -249,9 +251,7 @@ export class NotificationsService extends DrizzleService<
 
     if (this.app.io) {
       for (const row of rows) {
-        this.app.io
-          .to(userRoomName(row.recipient_user_id))
-          .emit('notification:created', row);
+        this.app.io.to(userRoomName(row.recipient_user_id)).emit('notification:created', row);
       }
     }
 
@@ -271,9 +271,7 @@ export class NotificationsService extends DrizzleService<
     if (this.app.io) {
       const rows = await this.notifRepo.findByBroadcastGroup(data.broadcast_group_id);
       for (const row of rows) {
-        this.app.io
-          .to(userRoomName(row.recipient_user_id))
-          .emit('notification:patched', row);
+        this.app.io.to(userRoomName(row.recipient_user_id)).emit('notification:patched', row);
       }
     }
     return { updated };
@@ -344,7 +342,7 @@ export class NotificationsService extends DrizzleService<
   }
 
   /** Direct repository access for producer code that wants finer control. */
-  get repository(): NotificationsRepository {
+  get notificationsRepository(): NotificationsRepository {
     return this.notifRepo;
   }
 
