@@ -32,7 +32,7 @@ import {
   prepareImpersonationEnv,
 } from '@agor/core/unix';
 import jwt from 'jsonwebtoken';
-import { buildResolvedConfigSlice } from './build-resolved-config-slice.js';
+import { withResolvedConfig } from './build-resolved-config-slice.js';
 
 /**
  * Module-level daemon URL configuration.
@@ -229,12 +229,8 @@ export function spawnExecutor(
 
   // Daemon resolves the small config slice the executor needs (permission
   // timeout, opencode URL, host IP override) so the executor never has to
-  // read config.yaml itself. The slice is added under `resolvedConfig` if
-  // the caller didn't already provide one. See payload-types.ts.
-  const payloadWithConfig =
-    'resolvedConfig' in payload
-      ? payload
-      : { ...payload, resolvedConfig: buildResolvedConfigSlice() };
+  // read config.yaml itself. See build-resolved-config-slice.ts.
+  const payloadWithConfig = withResolvedConfig(payload);
 
   // Decide execution mode: templated or local
   if (executorCommandTemplate) {

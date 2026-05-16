@@ -12,6 +12,27 @@
 
 import { loadConfigSync, type ResolvedConfigSlice } from '@agor/core/config';
 
+/**
+ * Inject a daemon-resolved config slice into an executor payload if the
+ * caller didn't already provide one.
+ *
+ * Compares `payload.resolvedConfig !== undefined` rather than using
+ * `'resolvedConfig' in payload`. A caller passing
+ * `{ resolvedConfig: undefined }` should still get the daemon-built slice —
+ * `JSON.stringify()` drops `undefined` anyway, so an `in`-based check would
+ * silently ship an empty payload and the executor would fall back to
+ * handler defaults.
+ *
+ * Returns a NEW payload object when injection happens, otherwise the
+ * original reference unchanged.
+ */
+export function withResolvedConfig<T extends { resolvedConfig?: unknown }>(payload: T): T {
+  if (payload.resolvedConfig !== undefined) {
+    return payload;
+  }
+  return { ...payload, resolvedConfig: buildResolvedConfigSlice() };
+}
+
 export function buildResolvedConfigSlice(): ResolvedConfigSlice {
   try {
     const config = loadConfigSync();

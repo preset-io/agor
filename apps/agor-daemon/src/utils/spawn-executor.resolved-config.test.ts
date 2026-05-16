@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { __resetConfigCacheForTests } from '@agor/core/config';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildResolvedConfigSlice } from './build-resolved-config-slice';
+import { buildResolvedConfigSlice, withResolvedConfig } from './build-resolved-config-slice';
 
 describe('buildResolvedConfigSlice', () => {
   let tempDir: string;
@@ -123,7 +123,7 @@ describe('buildResolvedConfigSlice', () => {
     expect(slice.daemon).not.toHaveProperty('base_url');
   });
 
-  it('survives the executor-side payload schema as-is (no field-name drift)', async () => {
+  it('survives the executor-side payload schema as-is', async () => {
     const { ResolvedConfigSliceSchema } = await import('@agor/core/config');
     await writeConfigYaml(
       [
@@ -137,11 +137,70 @@ describe('buildResolvedConfigSlice', () => {
       ].join('\n')
     );
     const slice = buildResolvedConfigSlice();
-    // The schema is `.strict()` at every level — an unrecognized key
-    // (e.g. a typo from the daemon builder) would fail validation here.
-    // This protects against the daemon producer drifting from the
-    // executor consumer.
     const parsed = ResolvedConfigSliceSchema.parse(slice);
     expect(parsed).toEqual(slice);
+  });
+
+  it('schema tolerates unknown fields (forward compat for version skew)', async () => {
+    // Templated / remote executor mode means the daemon and executor can
+    // run from different image versions. A newer daemon that adds a new
+    // field to ResolvedConfigSlice must NOT crash an older executor that
+    // doesn't know about it — strict() at the schema level would do
+    // exactly that. This test pins the looseness.
+    const { ResolvedConfigSliceSchema } = await import('@agor/core/config');
+    const fromNewerDaemon = {
+      execution: {
+        permission_timeout_ms: 60_000,
+        // hypothetical field added by a newer daemon image:
+        future_field_unknown_to_executor: 'whatever',
+      },
+      // hypothetical brand-new top-level section:
+      future_section: { anything: true },
+    };
+    expect(() => ResolvedConfigSliceSchema.parse(fromNewerDaemon)).not.toThrow();
+  });
+});
+
+describe('withResolvedConfig', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-with-rc-'));
+    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
+    __resetConfigCacheForTests();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+    __resetConfigCacheForTests();
+  });
+
+  it('injects a daemon-resolved slice when the payload has no resolvedConfig', () => {
+    const before = { command: 'prompt' as const };
+    const after = withResolvedConfig(before);
+    expect(after).not.toBe(before);
+    expect(after).toHaveProperty('resolvedConfig');
+  });
+
+  it('injects a daemon-resolved slice when resolvedConfig is explicitly undefined', () => {
+    // Regression: `'resolvedConfig' in payload` used to gate this, which
+    // is true for `{ resolvedConfig: undefined }` — the payload would
+    // skip injection, JSON.stringify would then drop the undefined, and
+    // the executor would receive nothing. The contract is "no slice yet"
+    // not "key absent", so an undefined value must trigger injection too.
+    const before = { command: 'prompt' as const, resolvedConfig: undefined };
+    const after = withResolvedConfig(before);
+    expect(after.resolvedConfig).toBeDefined();
+  });
+
+  it('preserves an existing resolvedConfig untouched', () => {
+    const original = {
+      command: 'prompt' as const,
+      resolvedConfig: { execution: { permission_timeout_ms: 123_456 } },
+    };
+    const after = withResolvedConfig(original);
+    expect(after).toBe(original);
+    expect(after.resolvedConfig).toEqual({ execution: { permission_timeout_ms: 123_456 } });
   });
 });

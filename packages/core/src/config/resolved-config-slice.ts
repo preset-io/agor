@@ -23,32 +23,37 @@
 
 import { z } from 'zod';
 
-export const ResolvedConfigSliceSchema = z
-  .object({
-    /** From `config.execution.*` */
-    execution: z
-      .object({
-        permission_timeout_ms: z.number().int().nonnegative().optional(),
-      })
-      .strict()
-      .optional(),
+// Intentionally NOT `.strict()` at any level. The producer (daemon) and
+// consumer (executor) may end up running from different image versions in
+// templated / remote executor mode — exactly the topology this whole effort
+// is preparing for. A schema that rejects unknown fields would mean a
+// newer daemon adding a resolved-config field crashes every older executor
+// pod, instead of those pods just ignoring the field they don't recognize.
+//
+// Typo-catching on the producer is preserved at compile time by
+// `satisfies ResolvedConfigSlice` in `build-resolved-config-slice.ts`, so
+// we don't lose that property where it actually matters.
+export const ResolvedConfigSliceSchema = z.object({
+  /** From `config.execution.*` */
+  execution: z
+    .object({
+      permission_timeout_ms: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
 
-    /** From `config.opencode.*` */
-    opencode: z
-      .object({
-        serverUrl: z.string().optional(),
-      })
-      .strict()
-      .optional(),
+  /** From `config.opencode.*` */
+  opencode: z
+    .object({
+      serverUrl: z.string().optional(),
+    })
+    .optional(),
 
-    /** From `config.daemon.*` (selected fields only) */
-    daemon: z
-      .object({
-        host_ip_address: z.string().optional(),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict();
+  /** From `config.daemon.*` (selected fields only) */
+  daemon: z
+    .object({
+      host_ip_address: z.string().optional(),
+    })
+    .optional(),
+});
 
 export type ResolvedConfigSlice = z.infer<typeof ResolvedConfigSliceSchema>;
