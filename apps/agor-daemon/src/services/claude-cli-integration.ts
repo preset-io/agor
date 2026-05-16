@@ -59,6 +59,7 @@ import {
   TaskStatus,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import { buildInitialUserMessage } from '../utils/build-initial-user-message.js';
 import {
   ClaudeCliWatcherRegistry,
   type CliWatcherEventSink,
@@ -466,33 +467,22 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
           userIdx,
           ts
         );
-        if (!taskId) {
-          // Couldn't mint task — write an orphan so we at least don't lose data.
-          await app.service('messages').create({
-            message_id: generateId(),
-            session_id: sessionId,
-            type: 'user',
-            role: 'user',
-            index: userIdx,
-            timestamp: ts,
-            content_preview: previewFor(event.content),
-            content: typeof event.content === 'string' ? event.content : (event.content ?? ''),
-            metadata: { source: 'cli-repl', original_id: event.uuid ?? undefined },
-          });
-          return;
-        }
-        await app.service('messages').create({
-          message_id: generateId(),
-          session_id: sessionId,
-          task_id: taskId,
-          type: 'user',
-          role: 'user',
+        // Both branches (orphan-fallback when task minting failed, and the
+        // normal "linked to a freshly-minted task" case) share the same
+        // row shape via `buildInitialUserMessage` — same helper the
+        // /prompt route uses for the daemon-writes path. `task_id` falls
+        // through to `undefined` when we couldn't mint.
+        const userMessage = buildInitialUserMessage({
+          sessionId: sessionId as SessionID,
+          taskId: taskId ?? undefined,
           index: userIdx,
           timestamp: ts,
-          content_preview: previewFor(event.content),
-          content: typeof event.content === 'string' ? event.content : (event.content ?? ''),
+          content:
+            typeof event.content === 'string' ? event.content : (event.content ?? '') as string,
           metadata: { source: 'cli-repl', original_id: event.uuid ?? undefined },
         });
+        await app.service('messages').create(userMessage);
+        if (!taskId) return;
         const turn: ActiveCliTurn = {
           taskId,
           userMessageIndex: userIdx,

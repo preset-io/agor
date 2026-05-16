@@ -83,6 +83,7 @@ import { registerProxies } from './setup/proxies.js';
 import { applyTierHooks } from './setup/service-tiers.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { buildAuthRateLimitKey } from './utils/auth-rate-limit-key.js';
+import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
 import {
   ensureMinimumRole,
   registerAuthenticatedRoute,
@@ -960,20 +961,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           messageMetadata.source = source;
         }
 
-        const userMessage: Message = {
-          message_id: generateId() as UUID,
-          session_id: task.session_id,
+        const userMessage = buildInitialUserMessage({
+          sessionId: task.session_id,
+          taskId: task.task_id,
+          index: messageStartIndex,
+          timestamp: startTimestamp,
+          content: task.full_prompt,
           // Callback messages are typed `system` so the UI shows the special
           // Agor-callback styling. Normal prompts stay `user`.
           type: isCallback ? 'system' : 'user',
-          role: 'user' as Message['role'],
-          index: messageStartIndex,
-          timestamp: startTimestamp,
-          content_preview: task.full_prompt.substring(0, 200),
-          content: task.full_prompt,
-          task_id: task.task_id,
           metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
-        };
+        });
         await app.service('messages').create(userMessage, params);
       } catch (msgErr) {
         // Don't fail the spawn — the executor's createUserMessage fallback
