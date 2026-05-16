@@ -16,6 +16,7 @@ import type {
   ContextFileListItem,
   MCPServer,
   Message,
+  Notification,
   PermissionMode,
   Repo,
   Session,
@@ -167,6 +168,7 @@ export interface ServiceTypes {
   'card-types': CardType; // CardType CRUD
   artifacts: Artifact;
   'mcp-servers': MCPServer;
+  notifications: Notification;
   context: ContextFileListItem | ContextFileDetail; // GET /context returns list, GET /context/:path returns detail
   templates: TemplateRenderResponse;
 }
@@ -483,6 +485,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'card-types'): AgorService<CardType>;
   service(path: 'users'): UsersService;
   service(path: 'mcp-servers'): AgorService<MCPServer>;
+  service(path: 'notifications'): AgorService<Notification>;
   service(path: 'context'): AgorService<ContextFileListItem | ContextFileDetail>;
   service(path: 'templates'): TemplatesService;
 
