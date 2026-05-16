@@ -1,6 +1,4 @@
 import { useEffect, useState } from 'react';
-import type { InitialLoadItemKey } from './useAgorData';
-import { allInitialLoadItemsDone } from './useAgorData';
 
 export type LoaderPhase = 'loading' | 'complete' | 'fading' | 'done';
 
@@ -9,7 +7,7 @@ interface Options {
   loading: boolean;
   dataError: string | null;
   mustChangePassword: boolean;
-  loadingItems: Partial<Record<InitialLoadItemKey, true>>;
+  initialLoadComplete: boolean;
 }
 
 /**
@@ -20,16 +18,16 @@ interface Options {
  * on many deps; Effect 2 drives timers based only on [loaderPhase] so an
  * in-progress holdTimer isn't cancelled by unrelated dep changes.
  *
- * The loadingItems guard in Effect 1 blocks advancing during the pre-fetch
- * window: when the socket first connects, useAgorData briefly returns
- * loading:false (null-client path) before fetchData starts.
+ * The initialLoadComplete guard in Effect 1 blocks advancing during the
+ * pre-fetch window: when the socket first connects, useAgorData briefly
+ * returns loading:false (null-client path) before fetchData starts.
  */
 export function useInitialLoaderPhase({
   connecting,
   loading,
   dataError,
   mustChangePassword,
-  loadingItems,
+  initialLoadComplete,
 }: Options): LoaderPhase {
   const [loaderPhase, setLoaderPhase] = useState<LoaderPhase>('loading');
 
@@ -37,11 +35,11 @@ export function useInitialLoaderPhase({
     if (!connecting && !loading && loaderPhase === 'loading') {
       if (dataError || mustChangePassword) {
         setLoaderPhase('done');
-      } else if (allInitialLoadItemsDone(loadingItems)) {
+      } else if (initialLoadComplete) {
         setLoaderPhase('complete');
       }
     }
-  }, [connecting, loading, loaderPhase, dataError, mustChangePassword, loadingItems]);
+  }, [connecting, loading, loaderPhase, dataError, mustChangePassword, initialLoadComplete]);
 
   useEffect(() => {
     if (loaderPhase === 'complete') {

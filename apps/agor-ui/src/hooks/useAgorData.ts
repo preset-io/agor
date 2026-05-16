@@ -21,12 +21,13 @@ import type {
   Worktree,
 } from '@agor-live/client';
 import { PAGINATION } from '@agor-live/client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 
 // Canonical list of initial-load items tracked by the loading checklist.
-// Exported so App.tsx can render the list without duplicating the keys.
-export const INITIAL_LOAD_ITEMS = [
+// Internal only — consumers receive the derived `initialLoadItems` array
+// (each entry carries label/done/count) rather than the raw key list.
+const INITIAL_LOAD_ITEMS = [
   { key: 'sessions', label: 'Sessions' },
   { key: 'boards', label: 'Boards' },
   { key: 'worktrees', label: 'Worktrees' },
@@ -39,8 +40,15 @@ export const INITIAL_LOAD_ITEMS = [
 
 export type InitialLoadItemKey = (typeof INITIAL_LOAD_ITEMS)[number]['key'];
 
-export const allInitialLoadItemsDone = (items: Partial<Record<InitialLoadItemKey, true>>) =>
-  INITIAL_LOAD_ITEMS.every(({ key }) => items[key]);
+// One row in the loading checklist. `count` is captured atomically with
+// `done` when each tracked fetch resolves — readers never see a green row
+// with a stale 0.
+export interface InitialLoadItem {
+  key: InitialLoadItemKey;
+  label: string;
+  done: boolean;
+  count: number;
+}
 
 /**
  * All server-backed data maps held in a single state object.
@@ -85,7 +93,8 @@ const EMPTY_MAPS: DataMaps = {
 };
 
 interface UseAgorDataResult extends DataMaps {
-  loadingItems: Partial<Record<InitialLoadItemKey, true>>;
+  initialLoadItems: InitialLoadItem[];
+  initialLoadComplete: boolean;
   loading: boolean;
   error: string | null;
   refetch: () => Promise<void>;
@@ -157,7 +166,12 @@ export function useAgorData(
     }));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [loadingItems, setLoadingItems] = useState<Partial<Record<InitialLoadItemKey, true>>>({});
+  // Per-item counts captured at fetch-resolution time. Presence in this
+  // record means the item is "done"; the value is the size of the fetched
+  // list. Done flag and count flip atomically so a row never shows a green
+  // ✓ next to a stale 0 (the byId maps below are only populated after the
+  // full Promise.all resolves).
+  const [itemCounts, setItemCounts] = useState<Partial<Record<InitialLoadItemKey, number>>>({});
 
   // Track if we've done initial fetch. The initial fetch happens once on mount;
   // socket reconnects after that re-trigger fetchData() to recover any events
@@ -203,14 +217,18 @@ export function useAgorData(
         if (!silent) {
           setLoading(true);
           setError(null);
-          setLoadingItems({});
+          setItemCounts({});
         }
 
-        // Marks a tracked item complete when its promise resolves. No-ops on
+        // Marks a tracked item complete (and captures its count from the
+        // resolved list length) when its promise resolves. No-ops on
         // silent (reconnect) refetches so initial-load progress isn't mutated.
-        const track = <T>(key: InitialLoadItemKey, p: Promise<T>): Promise<T> =>
+        const track = <T extends ReadonlyArray<unknown>>(
+          key: InitialLoadItemKey,
+          p: Promise<T>
+        ): Promise<T> =>
           p.then((r) => {
-            if (!silent) setLoadingItems((prev) => ({ ...prev, [key]: true }));
+            if (!silent) setItemCounts((prev) => ({ ...prev, [key]: r.length }));
             return r;
           });
 
@@ -1243,9 +1261,23 @@ export function useAgorData(
     };
   }, [client, enabled, fetchData, hasInitiallyFetched]);
 
+  // Derived render model for the loading checklist. Memoized so the array
+  // identity is stable across renders where no per-item count changed.
+  const initialLoadItems = useMemo<InitialLoadItem[]>(
+    () =>
+      INITIAL_LOAD_ITEMS.map(({ key, label }) => {
+        const count = itemCounts[key];
+        return { key, label, done: count !== undefined, count: count ?? 0 };
+      }),
+    [itemCounts]
+  );
+
+  const initialLoadComplete = INITIAL_LOAD_ITEMS.every(({ key }) => itemCounts[key] !== undefined);
+
   return {
     ...maps,
-    loadingItems,
+    initialLoadItems,
+    initialLoadComplete,
     loading,
     error,
     refetch: fetchData,

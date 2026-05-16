@@ -19,7 +19,7 @@ import type {
 } from '@agor-live/client';
 import { getRepoReferenceOptions } from '@agor-live/client';
 import { Alert, App as AntApp, ConfigProvider, Spin, theme } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
 import { App as AgorApp } from './components/App';
@@ -34,7 +34,6 @@ import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ServicesConfigContext } from './contexts/ServicesConfigContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import {
-  allInitialLoadItemsDone,
   useAgorClient,
   useAgorData,
   useAuth,
@@ -163,7 +162,8 @@ function AppContent() {
     artifactById,
     sessionMcpServerIds,
     userAuthenticatedMcpServerIds,
-    loadingItems,
+    initialLoadItems,
+    initialLoadComplete,
     loading,
     error: dataError,
   } = useAgorData(client, {
@@ -205,10 +205,10 @@ function AppContent() {
   // workspace is empty — checking map sizes failed for fresh instances with no
   // sessions/boards/repos yet).
   useEffect(() => {
-    if (!loading && !dataError && allInitialLoadItemsDone(loadingItems)) {
+    if (!loading && !dataError && initialLoadComplete) {
       setHasLoadedOnce(true);
     }
-  }, [loading, loadingItems, dataError]);
+  }, [loading, initialLoadComplete, dataError]);
 
   const mustChangePassword = !!user?.must_change_password;
   const loaderPhase = useInitialLoaderPhase({
@@ -216,34 +216,8 @@ function AppContent() {
     loading,
     dataError,
     mustChangePassword,
-    loadingItems,
+    initialLoadComplete,
   });
-
-  // Per-item counts for the initial loading checklist. Derived from the same
-  // byId maps the rest of the app uses; sizes update atomically when each
-  // tracked fetch resolves (and again on real-time events thereafter).
-  const initialLoadItemCounts = useMemo(
-    () => ({
-      sessions: sessionById.size,
-      boards: boardById.size,
-      worktrees: worktreeById.size,
-      repos: repoById.size,
-      users: userById.size,
-      cards: cardById.size,
-      'mcp-servers': mcpServerById.size,
-      artifacts: artifactById.size,
-    }),
-    [
-      sessionById.size,
-      boardById.size,
-      worktreeById.size,
-      repoById.size,
-      userById.size,
-      cardById.size,
-      mcpServerById.size,
-      artifactById.size,
-    ]
-  );
 
   // Get current user from users Map (real-time updates via WebSocket)
   // This ensures we get the latest onboarding_completed status
@@ -462,12 +436,7 @@ function AppContent() {
   // Once data is loaded, keep UI mounted and show connection status in header instead
   if (loaderPhase !== 'done') {
     return (
-      <InitialLoadingScreen
-        phase={loaderPhase}
-        connecting={connecting}
-        loadingItems={loadingItems}
-        itemCounts={initialLoadItemCounts}
-      />
+      <InitialLoadingScreen phase={loaderPhase} connecting={connecting} items={initialLoadItems} />
     );
   }
 
