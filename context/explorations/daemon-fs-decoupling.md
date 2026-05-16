@@ -1,8 +1,8 @@
-# Daemon Filesystem Decoupling — Analysis (2026-05-16)
+# Daemon Filesystem Decoupling
 
-**Status:** 🔬 Research / design — no code.
-**Author:** Claude (Opus 4.7), commissioned by Max
-**Companion exploration docs:** [`context/explorations/executor-expansion.md`](../../context/explorations/executor-expansion.md), [`context/explorations/executor-isolation.md`](../../context/explorations/executor-isolation.md), [`apps/agor-docs/pages/guide/containerized-execution.mdx`](../../apps/agor-docs/pages/guide/containerized-execution.mdx)
+**Status:** 🔬 Exploration / design. Phase-1 hygiene work (§1.5) is scoped and ready to start; Phases 2–4 are still position-paper.
+**Created:** 2026-05-16
+**Companion exploration docs:** [`executor-expansion.md`](./executor-expansion.md), [`executor-isolation.md`](./executor-isolation.md), and the user-facing [`containerized-execution`](../../apps/agor-docs/pages/guide/containerized-execution.mdx) guide.
 
 ---
 
@@ -12,7 +12,9 @@
 
 **Recommended target: Option D — a hybrid where the daemon stays single-host FS-coupled for self-hosted / `unix_user_mode: simple`, and becomes FS-free in hosted multi-tenant deployments by treating worktrees as remote resources owned by per-worktree executor pods.** Local watch-mode envs survive in self-hosted (single host, single uid namespace) and are explicitly *not supported* on hosted — long-lived watch envs in hosted become **remote env pods that share the worktree volume with the executor, not with the daemon**. This avoids the ACL coordination problem Max already hit, keeps the self-hosted UX intact, and gives hosted a clean horizontal scale story.
 
-**Estimated to v1 of hosted-ready posture: ~10–14 eng-weeks**, with the easy half (config-as-DB-API, Postgres-only, log centralization, artifact-via-executor, upload-via-executor) ~4 weeks and the hard half (env-pod model, executor-as-volume-owner) ~6–10 weeks.
+**Estimated to v1 of hosted-ready posture: ~15 eng-weeks**, with the easy slice (config hygiene + Postgres-only + log centralization + artifact-via-executor + upload-via-executor) ~4–5 weeks, and the hard slice (env-pod model, executor-as-volume-owner) ~10 weeks.
+
+**Phase 1A — Config hygiene — is scoped at ~8 eng-days and is what this worktree intends to take on first.** Daemon stays the only authority on `~/.agor/config.yaml` (its file, its concern, packaging-wise fine); executor and UI stop reading it directly and ask the daemon instead; CLI gets its own small config (URL + auth from `agor login`) so it can be on a different machine than the daemon without drift. See §1.5.
 
 ---
 
@@ -135,6 +137,48 @@ What was *not* delivered:
 - Artifact + upload + env paths still daemon-FS-coupled.
 - No remote-execution template surface — `spawnExecutor` is still local-only `child_process.spawn`.
 - No DB-backed config service.
+
+### 1.5 Config-system specifics (the Phase-1 scope)
+
+The daemon FS touchpoint table treats `~/.agor/config.yaml` as one row, but the actual situation across the topology has texture worth pulling out, because **the config story is the cleanest, smallest, most landable slice of work** and is what this worktree intends to take on first.
+
+#### Position
+
+1. **The daemon is the only authority on config.** It loads `~/.agor/config.yaml` once (or on first use), caches in memory, and watches for changes.
+2. **`~/.agor/config.yaml` should be readable only by the daemon user.** Other processes (executor, UI, CLI) MUST NOT read it directly.
+3. **Executor and UI ask the daemon for any config they need**, via the existing Feathers connection / a small `/config-for-*` surface.
+4. **CLI gets its own config**, separate from the daemon's. CLI config holds only what the CLI needs to find and authenticate against a daemon (URL + auth state from `agor login`). If no default daemon is reachable, the CLI prompts the user for the URL on first use and stores the answer.
+
+This is the right shape regardless of which topology option (A/B/C/D) we end up with — none of these decisions depend on the env-pod question.
+
+#### Today's reality (verified)
+
+| Process | What it reads from `config.yaml` today | File:line |
+|---|---|---|
+| Daemon | Everything; per-request `loadConfig()` in 10+ hot paths | `services/worktrees.ts:107,206,1639`, `services/artifacts.ts:1123,1233`, `services/terminals.ts:195,327`, `register-routes.ts:3118,3185`, `mcp/tools/proxies.ts:131,154`, `services/config.ts:62,70,153` |
+| Executor | SDK credentials, OpenCode URL, GitHub token, git config | `executor/handlers/sdk/claude.ts:35`, `executor/handlers/sdk/opencode.ts:56`, `executor/handlers/sdk/copilot.ts:36`, `executor/commands/git.ts:392` |
+| Executor (under impersonation) | **Tries to read but fails** — mode 0600 + different uid. Daemon hand-picks credentials into env vars as a workaround | `utils/spawn-executor.ts:265-289` ("Add DAEMON_URL to env so executor doesn't try to read config.yaml") |
+| CLI | `daemon.port` / `daemon.base_url` to find the daemon; credentials and other config via the same `loadConfig()` machinery | `packages/core/src/config/config-manager.ts:337-412` (`getDaemonUrl()`, `getDaemonBaseUrl()`) |
+
+The comment in `spawn-executor.ts:265-266` is the smoking gun: this gap is **already biting**, has already been worked around for the credentials path, but the executor still does direct disk reads everywhere else.
+
+#### Phase-1 hygiene work (this worktree's intended scope)
+
+| # | Work item | Files touched | Eng-days | Notes |
+|---|---|---|---|---|
+| **H1** | **Stop executor from reading `config.yaml`** — add a `resolvedConfig` slice on the executor payload; daemon resolves once and passes only what each command needs (typed sub-schema per command). | `packages/executor/src/payload-types.ts`, the 4 executor handlers above, `apps/agor-daemon/src/utils/spawn-executor.ts` | ~3 | Mechanical. Each command's slice is a small zod schema. Replaces the ad-hoc env-var hand-picking on lines 270–289. |
+| **H2** | **Cache `loadConfig()` in the daemon** — in-memory cache with `fs.watch` invalidation. Preserves the hot-reload UX (UI changes apply immediately) without paying YAML parse cost per request. | `packages/core/src/config/config-manager.ts` | ~1 | ~50 lines. Single seam — every call site in §1.5 picks it up for free. |
+| **H3** | **Stop daemon from *writing* `config.yaml` in container mode** — when `AGOR_HOSTED=1`, require `AGOR_JWT_SECRET` + `AGOR_MASTER_SECRET` as env vars; fail-fast with a clear error if absent. Self-hosted keeps today's auto-bootstrap behavior unchanged. Same treatment for `~/.agor/admin-credentials`. | `apps/agor-daemon/src/index.ts:502-506`, `apps/agor-daemon/src/startup.ts:329`, `apps/agor-daemon/src/setup/first-run-admin.ts` | ~1 | Removes the persistent-vs-ephemeral-volume footgun for hosted deploys. |
+| **H4** | **Drop the shutdown sentinel in container mode.** `daemon-shutdown-clean.flag` is the daemon's homemade "did I crash" detector. K8s already tracks this. No-op when `AGOR_HOSTED=1`. | `apps/agor-daemon/src/startup.ts:57-83` | ~0.25 | Trivial. |
+| **H5** | **CLI gets its own config file.** New `~/.agor/cli.yaml` (or similar) populated by `agor login`. Stores: daemon URL, auth token, default username. The CLI no longer reads `~/.agor/config.yaml`. On first use with no configured daemon: prompt for URL (default `http://localhost:3030`) and persist. Existing single-host installs: one-time migration that reads `daemon.port` from the daemon's `config.yaml` on first run, writes to the new CLI config, then stops touching the daemon's file. | `apps/agor-cli/src/`, `packages/core/src/config/config-manager.ts` (split out CLI vs daemon resolvers) | ~3 | The most substantive item. The risk is migration breakage for existing CLI users; gate behind the migration shim. |
+
+**Phase 1 subtotal: ~8 eng-days.** Each item is independently shippable and defensible without committing to any topology decision. Order to land: **H2 → H1 → H4 → H3 → H5** (cheapest-and-safest first, CLI separation last because it has the most design surface).
+
+#### Out of scope for Phase 1
+
+- Moving non-config FS work (artifacts, uploads, env-spawning) to the executor — that's Phase 1 in the larger plan (§4), but **after** the config work because the executor's payload contract changes in H1 and we want one round of payload-schema churn, not two.
+- Anything topology-shaped (`EnvironmentRuntime` interface, env-pods, k8s templates).
+- DB-backed config service. The position above is that daemon-owns-the-file is fine; we don't need to put config in the DB.
 
 ---
 
@@ -273,22 +317,24 @@ Specifically:
 
 ### Phased delivery plan
 
-#### Phase 1 — "Hygiene" (3–4 weeks, ship to main, no behavior change)
+#### Phase 1A — Config hygiene (the §1.5 work, ~8 eng-days)
 
-These are all defensible on their own merits and ship today.
+This is what this worktree intends to take on first. See §1.5 for the H1–H5 breakdown. No behavior change for existing self-hosted users.
+
+#### Phase 1B — Other FS hygiene (~3 eng-weeks, follow-up worktrees)
+
+The remaining hygiene work, sequenced after Phase 1A because the executor payload schema (touched by H1) is more stable once the config slices are in place.
 
 | Work item | Files touched | Eng-weeks | Risk |
 |---|---|---|---|
 | **Postgres-only enforced for hosted** | `setup/database.ts`, `db/client.ts`, deployment manifests | 0.5 | Low — Postgres support exists |
-| **`AGOR_HOME` config writes become writes-or-no-op** (env-driven config preferred; daemon doesn't *create* `~/.agor/config.yaml` if `AGOR_HOSTED=1`) | `index.ts`, `startup.ts`, `setup/first-run-admin.ts` | 0.5 | Low |
-| **Log centralization** — daemon logs already to stdout; this is documentation + ensuring no rogue `fs.appendFile` for logs. Drop `daemon-shutdown-clean.flag` in container mode | `startup.ts`, docs | 0.25 | Low |
 | **Artifact landing → executor** — new `artifact.land` payload type, move `services/artifacts.ts:717-812` body into executor handler | `services/artifacts.ts`, `packages/executor/src/handlers/artifact.ts` (new) | 1.0 | Medium — must preserve sidecar metadata semantics |
 | **Upload write → S3 / object store** (hosted-only; self-hosted keeps local) | `utils/upload.ts`, new `storage` adapter | 1.0 | Medium |
 | **Realign-repo-origin → executor** — `executor:git.repo.realign-origin` | `utils/realign-repo-origin.ts`, executor | 0.25 | Low |
 | **Drop daemon's `git ls-files` autocomplete** (or route via executor) | `services/files.ts` | 0.25 | Low — degraded UX in hosted only |
 | **UI bundle removed from daemon image** | `index.ts`, build scripts | 0.25 | Low |
 
-**Subtotal: ~4 eng-weeks. All landable as discrete PRs.**
+**Subtotal: ~3 eng-weeks. All landable as discrete PRs.**
 
 #### Phase 2 — "EnvironmentRuntime interface" (1–2 weeks)
 
@@ -351,11 +397,12 @@ The thing that *replaces* the wall is "operator must set up a k8s cluster with P
 
 | Phase | Eng-weeks | Risk |
 |---|---|---|
-| 1 — Hygiene | 4 | Low |
+| 1A — Config hygiene (this worktree) | ~1.5 (8 eng-days) | Low |
+| 1B — Other FS hygiene | ~3 | Low–Medium |
 | 2 — `EnvironmentRuntime` abstraction | 1.5 | Low |
 | 3 — Hosted env-pods (Option C build) | 8 | High |
 | 4 — Consolidate | 1 | Low |
-| **Total to v1 hosted-ready** | **~14.5** | — |
+| **Total to v1 hosted-ready** | **~15** | — |
 
 **Hard-risk items:**
 
