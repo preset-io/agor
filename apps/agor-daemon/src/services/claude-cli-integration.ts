@@ -41,6 +41,8 @@ import {
   type ClaudeCliPermissionMode,
   type ClaudeCliSpawnConfig,
   claudeSessionJsonlPath,
+  computeCost,
+  getContextWindowLimit,
   slugForCwd,
 } from '@agor/core/claude-cli';
 import { SessionRepository, TaskRepository } from '@agor/core/db';
@@ -162,9 +164,41 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
   // Per-session active turn — set on `user_message`, cleared on `turn_end`.
   // The watcher uses this to stamp subsequent assistant/tool messages with
   // the right task_id without re-reading the DB.
+  //
+  // The `assistantTurns` map accumulates dedup'd assistant turn payloads
+  // (one entry per unique `message.id` — the translator already drops
+  // cumulative-snapshot repeats) so we can roll up tokens + cost into an
+  // SDKResultMessage-shaped `raw_sdk_response` when `turn_end` fires.
+  // `toolUseCount` increments for every `tool_use` content block seen so
+  // the task's analytics card surfaces tool activity.
+  interface AssistantTurnData {
+    model: string | null;
+    usage: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
+      server_tool_use?: {
+        web_search_requests?: number;
+        web_fetch_requests?: number;
+      };
+    } | null;
+    messageId: string;
+    timestamp: string | null;
+    stopReason: string | null;
+  }
   const activeCliTurn = new Map<
     string,
-    { taskId: TaskID; userMessageIndex: number; lastIndex: number; lastTimestamp: string }
+    {
+      taskId: TaskID;
+      userMessageIndex: number;
+      lastIndex: number;
+      lastTimestamp: string;
+      startedAtMs: number;
+      assistantTurns: AssistantTurnData[];
+      lastAssistantRaw: unknown;
+      toolUseCount: number;
+    }
   >();
 
   const nextIndex = async (sessionId: SessionID): Promise<number> => {
@@ -304,6 +338,10 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
             userMessageIndex: pending.userMessageIndex,
             lastIndex: pending.userMessageIndex,
             lastTimestamp: ts,
+            startedAtMs: Date.parse(ts) || Date.now(),
+            assistantTurns: [],
+            lastAssistantRaw: null,
+            toolUseCount: 0,
           });
           return;
         }
@@ -350,6 +388,10 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
           userMessageIndex: userIdx,
           lastIndex: userIdx,
           lastTimestamp: ts,
+          startedAtMs: Date.parse(ts) || Date.now(),
+          assistantTurns: [],
+          lastAssistantRaw: null,
+          toolUseCount: 0,
         });
         return;
       }
@@ -387,6 +429,50 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         if (active) {
           active.lastIndex = idx;
           active.lastTimestamp = ts;
+          // Accumulate the assistant turn for the analytics rollup at
+          // turn_end. The translator already drops cumulative-snapshot
+          // duplicates by message.id, so every entry here is a real new
+          // chunk of usage/output.
+          active.assistantTurns.push({
+            model: event.turn.model ?? null,
+            usage: event.turn.usage
+              ? {
+                  input_tokens: event.turn.usage.input_tokens,
+                  output_tokens: event.turn.usage.output_tokens,
+                  cache_creation_input_tokens: event.turn.usage.cache_creation_input_tokens,
+                  cache_read_input_tokens: event.turn.usage.cache_read_input_tokens,
+                  server_tool_use: event.turn.usage.server_tool_use,
+                }
+              : null,
+            messageId: event.turn.messageId,
+            timestamp: event.turn.timestamp ?? null,
+            stopReason: event.turn.stopReason ?? null,
+          });
+          // Snapshot the latest assistant payload for raw_sdk_response.
+          active.lastAssistantRaw = {
+            message: {
+              id: event.turn.messageId,
+              type: 'message',
+              role: 'assistant',
+              model: event.turn.model,
+              content,
+              stop_reason: event.turn.stopReason,
+              usage: event.turn.usage,
+            },
+            timestamp: event.turn.timestamp,
+          };
+          // Count tool_use blocks for the task's tool_use_count field.
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (
+                block &&
+                typeof block === 'object' &&
+                (block as { type?: string }).type === 'tool_use'
+              ) {
+                active.toolUseCount += 1;
+              }
+            }
+          }
         }
         return;
       }
@@ -436,8 +522,125 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         }
         activeCliTurn.delete(sessionId);
         const ts = event.timestamp ?? active.lastTimestamp ?? baseTs;
-        // Patch task to COMPLETED with the full message_range now that we
-        // know the last index of the turn.
+        const endedAtMs = Date.parse(ts) || Date.now();
+        const durationMs = Math.max(0, endedAtMs - active.startedAtMs);
+
+        // Aggregate the dedup'd assistant turns into the SDK-shaped
+        // `raw_sdk_response` (SDKResultMessage) so downstream normalizers,
+        // cost cards, and analytics work the same way as for SDK sessions.
+        //
+        // The Claude Agent SDK exposes per-model usage as a `modelUsage`
+        // object — we build the same map by summing each assistant turn's
+        // usage under its model id.
+        const modelUsageMap: Record<
+          string,
+          {
+            inputTokens: number;
+            outputTokens: number;
+            cacheCreationInputTokens: number;
+            cacheReadInputTokens: number;
+            contextWindow: number;
+          }
+        > = {};
+        let totalInput = 0;
+        let totalOutput = 0;
+        let totalCacheCreation = 0;
+        let totalCacheRead = 0;
+        let totalCostUsd: number | undefined = undefined;
+        let primaryModel: string | undefined;
+        for (const turn of active.assistantTurns) {
+          const modelId = turn.model ?? 'unknown';
+          if (!primaryModel && turn.model) primaryModel = turn.model;
+          const u = turn.usage ?? {};
+          const tIn = u.input_tokens ?? 0;
+          const tOut = u.output_tokens ?? 0;
+          const tCacheC = u.cache_creation_input_tokens ?? 0;
+          const tCacheR = u.cache_read_input_tokens ?? 0;
+          totalInput += tIn;
+          totalOutput += tOut;
+          totalCacheCreation += tCacheC;
+          totalCacheRead += tCacheR;
+          const entry = modelUsageMap[modelId] ?? {
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheCreationInputTokens: 0,
+            cacheReadInputTokens: 0,
+            contextWindow: getContextWindowLimit(turn.model),
+          };
+          entry.inputTokens += tIn;
+          entry.outputTokens += tOut;
+          entry.cacheCreationInputTokens += tCacheC;
+          entry.cacheReadInputTokens += tCacheR;
+          modelUsageMap[modelId] = entry;
+          const turnCost = computeCost(turn.model, u);
+          if (turnCost !== undefined) {
+            totalCostUsd = (totalCostUsd ?? 0) + turnCost;
+          }
+        }
+
+        // Build an SDKResultMessage-shaped raw payload. We deliberately
+        // mirror the SDK's structure (modelUsage / usage / duration_ms /
+        // total_cost_usd) rather than just dumping the last JSONL line
+        // verbatim — the existing `ClaudeCodeNormalizer` reads this
+        // shape, so downstream UIs see CLI turns the same as SDK turns.
+        const rawSdkResponse = {
+          type: 'result',
+          subtype: 'success',
+          session_id: sessionId,
+          duration_ms: durationMs,
+          total_cost_usd: totalCostUsd,
+          modelUsage: modelUsageMap,
+          usage: {
+            input_tokens: totalInput,
+            output_tokens: totalOutput,
+            cache_read_input_tokens: totalCacheRead,
+            cache_creation_input_tokens: totalCacheCreation,
+          },
+          // Provenance: keeping the last assistant payload around helps
+          // debug "did we miss the end_turn?" cases without re-parsing
+          // the JSONL.
+          _cli_provenance: {
+            adapter: 'claude-code-cli',
+            assistantTurns: active.assistantTurns.length,
+            lastAssistantSnapshot: active.lastAssistantRaw,
+          },
+        };
+
+        // Precompute the normalized shape so the UI's cost / token cards
+        // light up without depending on the executor-side normalizer
+        // factory (which we don't import from the daemon).
+        const normalizedSdkResponse = {
+          tokenUsage: {
+            inputTokens: totalInput,
+            outputTokens: totalOutput,
+            totalTokens: totalInput + totalOutput,
+            cacheReadTokens: totalCacheRead,
+            cacheCreationTokens: totalCacheCreation,
+          },
+          contextWindowLimit:
+            Math.max(
+              0,
+              ...Object.values(modelUsageMap).map((m) => m.contextWindow)
+            ) || 200_000,
+          costUsd: totalCostUsd,
+          primaryModel,
+          durationMs,
+        };
+
+        // computed_context_window mirrors the SDK semantics: the
+        // cumulative tokens the next turn would see if it started now.
+        // For the CLI that's the last assistant turn's
+        // (input + cache_creation + cache_read) — output isn't part of
+        // the next turn's *input* so we exclude it. Output is still
+        // available via the tokenUsage rollup.
+        const lastTurn = active.assistantTurns[active.assistantTurns.length - 1];
+        const computedContextWindow = lastTurn?.usage
+          ? (lastTurn.usage.input_tokens ?? 0) +
+            (lastTurn.usage.cache_creation_input_tokens ?? 0) +
+            (lastTurn.usage.cache_read_input_tokens ?? 0)
+          : undefined;
+
+        // Patch task to COMPLETED with the full message_range + analytics.
         try {
           await app.service('tasks').patch(active.taskId, {
             status: TaskStatus.COMPLETED,
@@ -447,6 +650,12 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
               end_index: active.lastIndex,
               end_timestamp: ts,
             },
+            model: primaryModel,
+            duration_ms: durationMs,
+            tool_use_count: active.toolUseCount,
+            raw_sdk_response: rawSdkResponse,
+            normalized_sdk_response: normalizedSdkResponse,
+            computed_context_window: computedContextWindow,
           });
         } catch (err) {
           console.warn('[claude-cli-watcher.sink] task close failed', {
@@ -455,13 +664,20 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
             err: err instanceof Error ? err.message : String(err),
           });
         }
-        // Flip the session back to IDLE so the prompt-queue gate stops
-        // routing prompts into the queue.
+        // Mirror the latest context-usage snapshot up onto the session
+        // row so the worktree pill's "X% of context" pill shows the
+        // right number across reload boundaries.
         try {
-          await app.service('sessions').patch(sessionId, {
+          const patch: Record<string, unknown> = {
             status: SessionStatus.IDLE,
             ready_for_prompt: true,
-          });
+          };
+          if (computedContextWindow !== undefined) {
+            patch.current_context_usage = computedContextWindow;
+            patch.context_window_limit = normalizedSdkResponse.contextWindowLimit;
+            patch.last_context_update_at = ts;
+          }
+          await app.service('sessions').patch(sessionId, patch);
         } catch (err) {
           console.warn('[claude-cli-watcher.sink] session IDLE patch failed', {
             sessionId,
