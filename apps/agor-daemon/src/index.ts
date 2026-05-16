@@ -494,41 +494,35 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // --------------------------------------------------------------------------
   app.configure(rest());
 
-  // JWT secret resolution — capability-driven, no deployment-mode flag:
-  //   1. AGOR_JWT_SECRET env var          → use it (read-only AGOR_HOME ok)
-  //   2. config.daemon.jwtSecret          → use it (today's persistent path)
-  //   3. config.yaml writable             → generate + persist
-  //   4. None of the above                → fail-fast with concrete remediation
+  // JWT secret: env > existing config value > generate-and-persist >
+  // fail-fast with operator-actionable remediation. See setup/persisted-secret.ts
+  // and context/explorations/daemon-fs-decoupling.md §1.5 (H3).
   //
   // Failing-fast is critical: a fresh JWT secret on every restart invalidates
-  // every issued token, which silently breaks every active session. Better to
-  // refuse to start than to thrash credentials.
-  let jwtSecret = process.env.AGOR_JWT_SECRET || config.daemon?.jwtSecret;
-  if (jwtSecret) {
-    // SECURITY: never log any prefix/substring of the secret. Length only.
-    const source = process.env.AGOR_JWT_SECRET ? 'AGOR_JWT_SECRET env var' : 'config';
-    console.log(`🔑 Loaded existing JWT secret from ${source} (length=${jwtSecret.length})`);
-  } else {
-    const crypto = await import('node:crypto');
-    const { setConfigValue } = await import('@agor/core/config');
-    const generated = crypto.randomBytes(32).toString('hex');
-    try {
-      await setConfigValue('daemon.jwtSecret', generated);
-    } catch (error) {
-      throw new Error(
-        'No JWT secret available and config.yaml is not writable.\n' +
-          '\n' +
-          'Set the AGOR_JWT_SECRET environment variable to a hex-encoded\n' +
-          '32-byte value (e.g. `openssl rand -hex 32`), or make\n' +
-          '~/.agor/config.yaml writable so the daemon can persist one.\n' +
-          '\n' +
-          `Underlying error: ${error instanceof Error ? error.message : String(error)}`
+  // every issued token, which silently breaks every active session.
+  const crypto = await import('node:crypto');
+  const { resolvePersistedSecret } = await import('./setup/persisted-secret.js');
+  const jwtResolution = await resolvePersistedSecret({
+    name: 'JWT secret',
+    envVar: 'AGOR_JWT_SECRET',
+    existing: config.daemon?.jwtSecret,
+    configKey: 'daemon.jwtSecret',
+    generate: () => crypto.randomBytes(32).toString('hex'),
+  });
+  const jwtSecret = jwtResolution.value;
+  // SECURITY: never log any prefix/substring of the secret. Length only.
+  switch (jwtResolution.source) {
+    case 'env':
+      console.log(`🔑 Loaded JWT secret from AGOR_JWT_SECRET env var (length=${jwtSecret.length})`);
+      break;
+    case 'config':
+      console.log(`🔑 Loaded JWT secret from config (length=${jwtSecret.length})`);
+      break;
+    case 'generated':
+      console.log(
+        `🔑 Generated and saved persistent JWT secret to config (length=${jwtSecret.length})`
       );
-    }
-    jwtSecret = generated;
-    console.log(
-      `🔑 Generated and saved persistent JWT secret to config (length=${jwtSecret.length})`
-    );
+      break;
   }
 
   const socketIOConfig = createSocketIOConfig(app, {

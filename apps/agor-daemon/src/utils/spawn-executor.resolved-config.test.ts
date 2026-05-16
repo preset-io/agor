@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { __resetConfigCacheForTests } from '@agor/core/config';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildResolvedConfigSlice } from './spawn-executor';
+import { buildResolvedConfigSlice } from './build-resolved-config-slice';
 
 describe('buildResolvedConfigSlice', () => {
   let tempDir: string;
@@ -64,14 +64,31 @@ describe('buildResolvedConfigSlice', () => {
     });
   });
 
-  it('returns the slice shape even when the config file is absent', () => {
-    const slice = buildResolvedConfigSlice() as Record<string, Record<string, unknown>>;
-    // All sections present, all values undefined — handlers apply defaults.
-    expect(slice).toEqual({
-      execution: { permission_timeout_ms: undefined },
-      opencode: { serverUrl: undefined },
-      daemon: { host_ip_address: undefined },
-    });
+  it('returns an empty slice when no relevant fields are configured', () => {
+    // No config file → no fields surface. Sections are omitted entirely
+    // rather than set to objects with undefined values, so the in-memory
+    // shape matches what survives JSON serialization to the executor.
+    const slice = buildResolvedConfigSlice();
+    expect(slice).toEqual({});
+  });
+
+  it('returns the same shape before and after JSON round-trip (wire fidelity)', async () => {
+    await writeConfigYaml(
+      [
+        'execution:',
+        '  permission_timeout_ms: 60000',
+        'opencode:',
+        '  serverUrl: http://opencode.internal:4096',
+        'daemon:',
+        '  host_ip_address: 10.0.0.5',
+        '',
+      ].join('\n')
+    );
+    const slice = buildResolvedConfigSlice();
+    // The slice is shipped to the executor as JSON via stdin; this asserts
+    // the in-memory shape and the wire shape are identical so tests on
+    // either side stay honest.
+    expect(JSON.parse(JSON.stringify(slice))).toEqual(slice);
   });
 
   it('does not leak unrelated config sections into the slice', async () => {
@@ -104,5 +121,27 @@ describe('buildResolvedConfigSlice', () => {
     expect(slice.execution).not.toHaveProperty('unix_user_mode');
     expect(slice.daemon).not.toHaveProperty('port');
     expect(slice.daemon).not.toHaveProperty('base_url');
+  });
+
+  it('survives the executor-side payload schema as-is (no field-name drift)', async () => {
+    const { ResolvedConfigSliceSchema } = await import('@agor/core/config');
+    await writeConfigYaml(
+      [
+        'execution:',
+        '  permission_timeout_ms: 60000',
+        'opencode:',
+        '  serverUrl: http://opencode.internal:4096',
+        'daemon:',
+        '  host_ip_address: 10.0.0.5',
+        '',
+      ].join('\n')
+    );
+    const slice = buildResolvedConfigSlice();
+    // The schema is `.strict()` at every level — an unrecognized key
+    // (e.g. a typo from the daemon builder) would fail validation here.
+    // This protects against the daemon producer drifting from the
+    // executor consumer.
+    const parsed = ResolvedConfigSliceSchema.parse(slice);
+    expect(parsed).toEqual(slice);
   });
 });

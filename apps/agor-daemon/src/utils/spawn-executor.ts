@@ -25,7 +25,6 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfigSync } from '@agor/core/config';
 import {
   attachEnvFileCleanup,
   buildSpawnArgs,
@@ -33,6 +32,7 @@ import {
   prepareImpersonationEnv,
 } from '@agor/core/unix';
 import jwt from 'jsonwebtoken';
+import { buildResolvedConfigSlice } from './build-resolved-config-slice.js';
 
 /**
  * Module-level daemon URL configuration.
@@ -250,31 +250,6 @@ export function spawnExecutor(
     });
   } else {
     spawnExecutorLocal(payloadWithConfig, options);
-  }
-}
-
-/**
- * Build the daemon-resolved config slice that gets embedded in executor
- * payloads. Reads via loadConfigSync() which is stat-cached, so calling
- * this on every spawn is cheap.
- *
- * Exported for tests; not part of the daemon's public surface.
- */
-export function buildResolvedConfigSlice(): Record<string, unknown> {
-  try {
-    const config = loadConfigSync();
-    return {
-      execution: { permission_timeout_ms: config.execution?.permission_timeout_ms },
-      opencode: { serverUrl: config.opencode?.serverUrl },
-      daemon: { host_ip_address: config.daemon?.host_ip_address },
-    };
-  } catch (error) {
-    // Don't fail a spawn over a config read error — handlers have defaults.
-    console.warn(
-      '[Executor] Failed to resolve config slice; handlers will fall back to defaults:',
-      error instanceof Error ? error.message : String(error)
-    );
-    return {};
   }
 }
 

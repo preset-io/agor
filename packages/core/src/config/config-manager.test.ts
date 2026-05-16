@@ -202,29 +202,60 @@ describe('loadConfig cache', () => {
     __resetConfigCacheForTests();
   });
 
-  async function writeConfigFile(data: AgorConfig): Promise<string> {
+  async function writeConfigFile(data: AgorConfig | string): Promise<string> {
     const agorDir = path.join(tempDir, '.agor');
     const configPath = path.join(agorDir, 'config.yaml');
     await fs.mkdir(agorDir, { recursive: true });
-    await fs.writeFile(configPath, yaml.dump(data), 'utf-8');
+    const body = typeof data === 'string' ? data : yaml.dump(data);
+    await fs.writeFile(configPath, body, 'utf-8');
     return configPath;
   }
 
-  it('returns the same cached object on repeated calls when the file is unchanged', async () => {
+  it('serves repeated reads from the cache without re-parsing YAML', async () => {
     await writeConfigFile({ daemon: { port: 4000 } });
+
+    // First call hits the disk and parses; subsequent calls hit the cache.
+    // We prove cache behavior by spying on the YAML parser rather than
+    // relying on object identity (the cache hands out clones, not the
+    // shared object — see "isolated from caller mutation").
+    const yamlLoadSpy = vi.spyOn(yaml, 'load');
     const first = await loadConfig();
+    const callsAfterFirst = yamlLoadSpy.mock.calls.length;
     const second = await loadConfig();
-    // Object identity proves we skipped the parse — a fresh yaml.load would
-    // return a structurally-equal but distinct object.
-    expect(second).toBe(first);
+    const third = await loadConfig();
+
     expect(first.daemon?.port).toBe(4000);
+    expect(second.daemon?.port).toBe(4000);
+    expect(third.daemon?.port).toBe(4000);
+    // No additional yaml.load() invocations after the first.
+    expect(yamlLoadSpy.mock.calls.length).toBe(callsAfterFirst);
   });
 
   it('loadConfigSync shares the same cache as loadConfig', async () => {
     await writeConfigFile({ daemon: { port: 5555 } });
+
+    const yamlLoadSpy = vi.spyOn(yaml, 'load');
     const fromAsync = await loadConfig();
+    const callsAfterAsync = yamlLoadSpy.mock.calls.length;
     const fromSync = loadConfigSync();
-    expect(fromSync).toBe(fromAsync);
+
+    expect(fromAsync.daemon?.port).toBe(5555);
+    expect(fromSync.daemon?.port).toBe(5555);
+    // Sync read also served from cache — no second yaml.load.
+    expect(yamlLoadSpy.mock.calls.length).toBe(callsAfterAsync);
+  });
+
+  it('isolates callers from each other: mutating a returned config does not affect later reads', async () => {
+    await writeConfigFile({ daemon: { port: 4000 } });
+
+    const first = await loadConfig();
+    // Caller mutates the returned object (mimicking setConfigValue style).
+    first.daemon ??= {};
+    first.daemon.port = 9999;
+
+    const second = await loadConfig();
+    // The cache returned a clone, so the mutation didn't leak.
+    expect(second.daemon?.port).toBe(4000);
   });
 
   it('saveConfig invalidates the cache so the next read returns the new value', async () => {
@@ -262,19 +293,34 @@ describe('loadConfig cache', () => {
   });
 
   it('does not poison the cache on parse error', async () => {
-    const agorDir = path.join(tempDir, '.agor');
-    const configPath = path.join(agorDir, 'config.yaml');
-    await fs.mkdir(agorDir, { recursive: true });
-    await fs.writeFile(configPath, 'invalid: yaml: [content', 'utf-8');
+    await writeConfigFile('invalid: yaml: [content');
 
     await expect(loadConfig()).rejects.toThrow('Failed to load config');
 
     // After fixing the file, the next call should succeed (we never cached
     // a partial / broken value).
     await new Promise((r) => setTimeout(r, 20));
-    await fs.writeFile(configPath, yaml.dump({ daemon: { port: 8888 } }), 'utf-8');
+    await writeConfigFile({ daemon: { port: 8888 } });
     const recovered = await loadConfig();
     expect(recovered.daemon?.port).toBe(8888);
+  });
+
+  it('validates on every load path: loadConfigSync rejects deprecated values too', async () => {
+    // Regression guard for the shared-cache bug: if loadConfigSync had a
+    // separate (un-validated) code path, calling it first could populate
+    // the cache with an invalid config that a later loadConfig() would
+    // silently return.
+    //
+    // YAML written as a raw string because `unix_user_mode: 'opportunistic'`
+    // is intentionally not assignable to `AgorConfig.execution.unix_user_mode`
+    // (the value was deprecated and removed from the type) — that's what
+    // validateConfig() catches at runtime for users who still have the value
+    // in their config.yaml.
+    await writeConfigFile('execution:\n  unix_user_mode: opportunistic\n');
+
+    expect(() => loadConfigSync()).toThrow(/opportunistic.*deprecated/s);
+    // And async path stays consistent.
+    await expect(loadConfig()).rejects.toThrow(/opportunistic.*deprecated/s);
   });
 });
 

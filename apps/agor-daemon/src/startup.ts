@@ -65,10 +65,10 @@ async function writeCleanShutdownSentinel(signal: string): Promise<void> {
   } catch (error) {
     // Non-fatal — worst case, startup treats the next restart as unexpected
     // and triggers orphan cleanup, which is the safer default. We surface
-    // a single log line so operators debugging crash-classification in
+    // a single warning so operators debugging crash-classification in
     // read-only AGOR_HOME deployments (e.g. ConfigMap-mounted) can see
     // why the sentinel isn't doing anything.
-    console.log(
+    console.warn(
       '[startup] Could not write shutdown sentinel — next restart will be classified as a crash. ' +
         `Cause: ${error instanceof Error ? error.message : String(error)}`
     );
@@ -321,46 +321,35 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function ensureMasterSecret(config: AgorConfig): Promise<void> {
-  // AGOR_MASTER_SECRET resolution — capability-driven, no deployment-mode flag:
-  //   1. AGOR_MASTER_SECRET env var       → use it (read-only AGOR_HOME ok)
-  //   2. config.daemon.masterSecret       → use it
-  //   3. config.yaml writable             → generate + persist
-  //   4. None of the above                → fail-fast with concrete remediation
+  // AGOR_MASTER_SECRET: env > existing config value > generate-and-persist >
+  // fail-fast. See setup/persisted-secret.ts and the doc §1.5 (H3).
   //
   // Same fail-fast reasoning as the JWT path: a fresh master secret on every
   // restart corrupts every stored encrypted API key.
-  if (process.env.AGOR_MASTER_SECRET) {
-    console.log('🔐 API key encryption enabled (AGOR_MASTER_SECRET set)');
-    return;
-  }
-
-  const savedSecret = config.daemon?.masterSecret;
-  if (savedSecret) {
-    process.env.AGOR_MASTER_SECRET = savedSecret;
-    console.log('🔐 Using saved AGOR_MASTER_SECRET from config');
-    return;
-  }
-
   const { randomBytes } = await import('node:crypto');
-  const { setConfigValue } = await import('@agor/core/config');
-  const generatedSecret = randomBytes(32).toString('hex');
-  try {
-    await setConfigValue('daemon.masterSecret', generatedSecret);
-  } catch (error) {
-    throw new Error(
-      'AGOR_MASTER_SECRET is required for API key encryption and ' +
-        'config.yaml is not writable.\n' +
-        '\n' +
-        'Set the AGOR_MASTER_SECRET environment variable to a hex-encoded\n' +
-        '32-byte value (e.g. `openssl rand -hex 32`), or make\n' +
-        '~/.agor/config.yaml writable so the daemon can persist one.\n' +
-        '\n' +
-        `Underlying error: ${error instanceof Error ? error.message : String(error)}`
-    );
+  const { resolvePersistedSecret } = await import('./setup/persisted-secret.js');
+  const resolution = await resolvePersistedSecret({
+    name: 'AGOR_MASTER_SECRET (API key encryption)',
+    envVar: 'AGOR_MASTER_SECRET',
+    existing: config.daemon?.masterSecret,
+    configKey: 'daemon.masterSecret',
+    generate: () => randomBytes(32).toString('hex'),
+  });
+  // Side effect: downstream code (encrypted-creds resolver, etc.) reads this
+  // off process.env, not off a parameter. Keep that contract.
+  process.env.AGOR_MASTER_SECRET = resolution.value;
+  switch (resolution.source) {
+    case 'env':
+      console.log('🔐 API key encryption enabled (AGOR_MASTER_SECRET set)');
+      break;
+    case 'config':
+      console.log('🔐 Using saved AGOR_MASTER_SECRET from config');
+      break;
+    case 'generated':
+      console.log('🔐 Generated and saved AGOR_MASTER_SECRET for API key encryption');
+      console.log('   Secret stored in ~/.agor/config.yaml');
+      break;
   }
-  process.env.AGOR_MASTER_SECRET = generatedSecret;
-  console.log('🔐 Generated and saved AGOR_MASTER_SECRET for API key encryption');
-  console.log('   Secret stored in ~/.agor/config.yaml');
 }
 
 // ---------------------------------------------------------------------------

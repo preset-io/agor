@@ -163,6 +163,15 @@ async function handlePromptPayload(
     process.exit(1);
   }
 
+  // Seed DAEMON_URL so executor-local getDaemonUrl() works regardless of
+  // whether spawn-executor.ts already set it. In stdin-via-daemon mode the
+  // env var is already populated by spawn-executor.ts; in `agor-executor
+  // --stdin < payload.json` debug runs the payload's daemonUrl is the
+  // only source. The executor never reads config.yaml for this — see
+  // packages/executor/src/config.ts.
+  const resolvedDaemonUrl = payload.daemonUrl || 'http://localhost:3030';
+  process.env.DAEMON_URL = resolvedDaemonUrl;
+
   // Start executor in Feathers mode
   const executor = new AgorExecutor({
     sessionToken: payload.sessionToken,
@@ -171,7 +180,7 @@ async function handlePromptPayload(
     prompt: payload.params.prompt,
     tool: payload.params.tool,
     permissionMode: payload.params.permissionMode,
-    daemonUrl: payload.daemonUrl || 'http://localhost:3030',
+    daemonUrl: resolvedDaemonUrl,
     messageSource: payload.params.messageSource,
     resolvedConfig: payload.resolvedConfig,
   });
@@ -213,6 +222,11 @@ async function handleLegacyMode(values: {
     process.exit(1);
   }
 
+  // Seed DAEMON_URL so executor-local getDaemonUrl() works in the legacy
+  // CLI flow too (no parent process to set it). See config.ts.
+  const resolvedDaemonUrl = (values['daemon-url'] as string) || 'http://localhost:3030';
+  process.env.DAEMON_URL = resolvedDaemonUrl;
+
   // Start executor in Feathers mode
   const executor = new AgorExecutor({
     sessionToken: values['session-token'] as string,
@@ -221,7 +235,7 @@ async function handleLegacyMode(values: {
     prompt: values.prompt as string,
     tool: values.tool as 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot',
     permissionMode: (values['permission-mode'] as 'ask' | 'auto' | 'allow-all') || undefined,
-    daemonUrl: (values['daemon-url'] as string) || 'http://localhost:3030',
+    daemonUrl: resolvedDaemonUrl,
   });
 
   await executor.start();

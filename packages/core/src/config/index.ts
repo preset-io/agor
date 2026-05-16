@@ -17,6 +17,7 @@ export type { ProxyMethod, ResolvedProxy } from './proxies-resolver';
 export { resolveProxies } from './proxies-resolver';
 export * from './repo-list';
 export * from './repo-reference';
+export * from './resolved-config-slice';
 export * from './resource-schemas';
 export * from './resource-sync';
 export type {
