@@ -814,6 +814,36 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
       ],
       patch: [
+        // Archive sweep: drop notifications when a worktree is archived
+        // (§6.2). Runs regardless of RBAC mode.
+        async (context: HookContext) => {
+          const patchData = context.data as Partial<import('@agor/core/types').Worktree>;
+          const worktree = context.result as import('@agor/core/types').Worktree | undefined;
+          if (patchData?.archived === true && worktree?.worktree_id) {
+            setImmediate(async () => {
+              try {
+                const notificationsService = context.app.service(
+                  'notifications'
+                ) as unknown as {
+                  cleanupForWorktree?: (worktreeId: string) => Promise<number>;
+                };
+                if (notificationsService?.cleanupForWorktree) {
+                  const dropped = await notificationsService.cleanupForWorktree(
+                    worktree.worktree_id
+                  );
+                  if (dropped > 0) {
+                    console.log(
+                      `🔔 [notifications] dropped ${dropped} row(s) for archived worktree ${worktree.worktree_id.substring(0, 8)}`
+                    );
+                  }
+                }
+              } catch (err) {
+                console.warn('[notifications] worktree archive sweep failed:', err);
+              }
+            });
+          }
+          return context;
+        },
         ...(worktreeRbacEnabled
           ? [
               async (context: HookContext) => {
@@ -1977,10 +2007,33 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       patch: [
         async (context) => {
+          // Archive sweep: when a session flips to archived, drop any
+          // outstanding notifications pointing at it (§6.2). Fire-and-forget;
+          // failure here must not break the patch response.
+          const patchData = context.data as Partial<import('@agor/core/types').Session>;
+          const session = Array.isArray(context.result) ? context.result[0] : context.result;
+          if (patchData?.archived === true && session?.session_id) {
+            setImmediate(async () => {
+              try {
+                const notificationsService = context.app.service('notifications') as unknown as {
+                  cleanupForSession?: (sessionId: string) => Promise<number>;
+                };
+                if (notificationsService?.cleanupForSession) {
+                  const dropped = await notificationsService.cleanupForSession(session.session_id);
+                  if (dropped > 0) {
+                    console.log(
+                      `🔔 [notifications] dropped ${dropped} row(s) for archived session ${session.session_id.substring(0, 8)}`
+                    );
+                  }
+                }
+              } catch (err) {
+                console.warn('[notifications] session archive sweep failed:', err);
+              }
+            });
+          }
+
           // Automatically process queued tasks when session becomes IDLE
           // This ensures queued tasks are processed regardless of how the session became IDLE
-          const session = Array.isArray(context.result) ? context.result[0] : context.result;
-
           if (session && session.status === 'idle') {
             // Flush GitHub message buffer (fire-and-forget).
             // When a GitHub-connected session finishes its turn, post the last

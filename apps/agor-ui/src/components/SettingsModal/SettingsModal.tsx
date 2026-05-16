@@ -28,6 +28,7 @@ import {
   FolderOutlined,
   InfoCircleOutlined,
   MessageOutlined,
+  NotificationOutlined,
   RobotOutlined,
   TeamOutlined,
   ThunderboltOutlined,
@@ -40,6 +41,7 @@ import { WorktreeModal } from '../WorktreeModal';
 import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
 import { AboutTab } from './AboutTab';
 import { AgenticToolsSection } from './AgenticToolsSection';
+import { AnnouncementsTab } from './AnnouncementsTab';
 import { ArtifactsTable } from './ArtifactsTable';
 import { AssistantsTable } from './AssistantsTable';
 import { BoardsTable } from './BoardsTable';
@@ -313,6 +315,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             label: 'Users',
             icon: <TeamOutlined />,
           },
+          ...(isAdmin
+            ? [
+                {
+                  key: 'announcements',
+                  label: 'Announcements',
+                  icon: <NotificationOutlined />,
+                },
+              ]
+            : []),
         ],
       },
       {
@@ -448,6 +459,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             onDelete={onDeleteUser}
           />
         );
+      case 'announcements':
+        return <AnnouncementsTab client={client} />;
       case 'about':
         return (
           <AboutTab
