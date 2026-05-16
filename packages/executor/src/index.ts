@@ -15,6 +15,7 @@ import type {
   SessionID,
   TaskID,
 } from '@agor/core/types';
+import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
 
@@ -27,6 +28,8 @@ export interface ExecutorConfig {
   permissionMode?: PermissionMode;
   daemonUrl: string;
   messageSource?: MessageSource;
+  /** Daemon-resolved config slice. See payload-types.ResolvedConfigSliceSchema. */
+  resolvedConfig?: ResolvedConfigSlice;
 }
 
 export class AgorExecutor {
@@ -155,6 +158,7 @@ export class AgorExecutor {
       permissionMode: this.config.permissionMode,
       abortController: this.abortController,
       messageSource: this.config.messageSource,
+      resolvedConfig: this.config.resolvedConfig,
     });
 
     this.isRunning = false;

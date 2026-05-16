@@ -25,6 +25,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadConfigSync } from '@agor/core/config';
 import {
   attachEnvFileCleanup,
   buildSpawnArgs,
@@ -226,20 +227,54 @@ export function spawnExecutor(
 ): void {
   const { executorCommandTemplate, templateVariables, logPrefix = '[Executor]' } = options;
 
+  // Daemon resolves the small config slice the executor needs (permission
+  // timeout, opencode URL, host IP override) so the executor never has to
+  // read config.yaml itself. The slice is added under `resolvedConfig` if
+  // the caller didn't already provide one. See payload-types.ts.
+  const payloadWithConfig =
+    'resolvedConfig' in payload
+      ? payload
+      : { ...payload, resolvedConfig: buildResolvedConfigSlice() };
+
   // Decide execution mode: templated or local
   if (executorCommandTemplate) {
-    spawnExecutorWithTemplate(payload, {
+    spawnExecutorWithTemplate(payloadWithConfig, {
       ...options,
       executorCommandTemplate,
       templateVariables: {
-        command: payload.command as string,
+        command: payloadWithConfig.command as string,
         task_id: generateTaskId(),
         ...templateVariables,
       },
       logPrefix,
     });
   } else {
-    spawnExecutorLocal(payload, options);
+    spawnExecutorLocal(payloadWithConfig, options);
+  }
+}
+
+/**
+ * Build the daemon-resolved config slice that gets embedded in executor
+ * payloads. Reads via loadConfigSync() which is stat-cached, so calling
+ * this on every spawn is cheap.
+ *
+ * Exported for tests; not part of the daemon's public surface.
+ */
+export function buildResolvedConfigSlice(): Record<string, unknown> {
+  try {
+    const config = loadConfigSync();
+    return {
+      execution: { permission_timeout_ms: config.execution?.permission_timeout_ms },
+      opencode: { serverUrl: config.opencode?.serverUrl },
+      daemon: { host_ip_address: config.daemon?.host_ip_address },
+    };
+  } catch (error) {
+    // Don't fail a spawn over a config read error — handlers have defaults.
+    console.warn(
+      '[Executor] Failed to resolve config slice; handlers will fall back to defaults:',
+      error instanceof Error ? error.message : String(error)
+    );
+    return {};
   }
 }
 
@@ -262,8 +297,10 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     asUser,
   } = options;
 
-  // Add DAEMON_URL to env so executor doesn't try to read config.yaml
-  // When impersonated, executor can't access /home/agorpg/.agor/config.yaml
+  // Add DAEMON_URL to env so the executor can connect back via Feathers.
+  // The executor itself never reads config.yaml — all config values it
+  // needs are pre-resolved by the daemon and embedded in the payload as
+  // `resolvedConfig` (see buildResolvedConfigSlice).
   const daemonUrl = getDaemonUrl();
 
   // When impersonating, pass minimal env vars and let sudo set HOME correctly

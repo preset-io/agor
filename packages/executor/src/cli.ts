@@ -173,6 +173,7 @@ async function handlePromptPayload(
     permissionMode: payload.params.permissionMode,
     daemonUrl: payload.daemonUrl || 'http://localhost:3030',
     messageSource: payload.params.messageSource,
+    resolvedConfig: payload.resolvedConfig,
   });
 
   await executor.start();

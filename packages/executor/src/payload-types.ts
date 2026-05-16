@@ -97,6 +97,52 @@ export const PermissionModeSchema = z.enum([
 export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 
 // ═══════════════════════════════════════════════════════════
+// Resolved Config Slice
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Strict subset of AgorConfig the daemon resolves once at spawn time and
+ * embeds in the executor payload.
+ *
+ * Letting the executor read `~/.agor/config.yaml` itself is broken under
+ * impersonation — the file is mode 0600 owned by the daemon user, and the
+ * executor running as a different uid can't read it (spawn-executor.ts has
+ * already been hand-routing credentials around this for a while). It also
+ * doesn't survive any future deployment where executor and daemon live in
+ * different containers.
+ *
+ * Instead: daemon resolves the small set of fields the executor actually
+ * needs and ships them in the payload. Handlers must apply their own
+ * defaults when a field is absent (legacy CLI mode has no payload).
+ *
+ * Grow this carefully — every field is new daemon → executor coupling. If
+ * a handler needs a config value that isn't here, add it explicitly.
+ */
+export const ResolvedConfigSliceSchema = z.object({
+  /** From `config.execution.*` */
+  execution: z
+    .object({
+      permission_timeout_ms: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
+
+  /** From `config.opencode.*` */
+  opencode: z
+    .object({
+      serverUrl: z.string().optional(),
+    })
+    .optional(),
+
+  /** From `config.daemon.*` (selected fields only) */
+  daemon: z
+    .object({
+      host_ip_address: z.string().optional(),
+    })
+    .optional(),
+});
+export type ResolvedConfigSlice = z.infer<typeof ResolvedConfigSliceSchema>;
+
+// ═══════════════════════════════════════════════════════════
 // Base Payload Schema
 // ═══════════════════════════════════════════════════════════
 
@@ -118,6 +164,13 @@ export const BasePayloadSchema = z.object({
 
   /** Data home directory override */
   dataHome: z.string().optional(),
+
+  /**
+   * Daemon-resolved config slice. See {@link ResolvedConfigSliceSchema}.
+   * Optional so the legacy CLI-args mode still validates; handlers must
+   * apply defaults when missing.
+   */
+  resolvedConfig: ResolvedConfigSliceSchema.optional(),
 });
 
 // ═══════════════════════════════════════════════════════════

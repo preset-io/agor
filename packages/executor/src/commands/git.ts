@@ -353,13 +353,15 @@ export async function handleGitClone(
  * @param worktreeId - Worktree ID
  * @param repoId - Repo ID
  * @param unixGroup - Unix group name (to look up GID), undefined if RBAC disabled
+ * @param configuredHostIp - Host IP override from daemon-resolved config (config.daemon.host_ip_address)
  * @returns Rendered template fields
  */
 async function renderEnvironmentTemplates(
   client: AgorClient,
   worktreeId: string,
   repoId: string,
-  unixGroup: string | undefined
+  unixGroup: string | undefined,
+  configuredHostIp: string | undefined
 ): Promise<{
   start_command?: string;
   stop_command?: string;
@@ -372,7 +374,6 @@ async function renderEnvironmentTemplates(
   // Import dependencies dynamically
   const { renderWorktreeSnapshot } = await import('@agor/core/environment/render-snapshot');
   const { getGidFromGroupName } = await import('@agor/core/unix');
-  const { loadConfig } = await import('@agor/core/config');
   const { resolveHostIpAddress } = await import('@agor/core/utils/host-ip');
 
   // Fetch worktree and repo from database
@@ -389,8 +390,9 @@ async function renderEnvironmentTemplates(
   const unixGid = unixGroup ? getGidFromGroupName(unixGroup) : undefined;
 
   // Resolve host IP for {{host.ip_address}} (frozen into rendered commands).
-  const config = await loadConfig();
-  const hostIpAddress = resolveHostIpAddress(config.daemon?.host_ip_address);
+  // Override comes from daemon-resolved config slice; autodetected fallback
+  // happens inside resolveHostIpAddress when undefined.
+  const hostIpAddress = resolveHostIpAddress(configuredHostIp);
 
   // Honor an explicit variant override if the worktree already picked one;
   // otherwise fall through to `environment.default` inside renderWorktreeSnapshot.
@@ -580,7 +582,13 @@ export async function handleGitWorktreeAdd(
           ? `with GID for worktree ${worktreeId.substring(0, 8)}`
           : `for worktree ${worktreeId.substring(0, 8)} (no Unix group)`;
         console.log(`[git.worktree.add] Rendering environment templates ${logSuffix}`);
-        renderedTemplates = await renderEnvironmentTemplates(client, worktreeId, repoId, unixGroup);
+        renderedTemplates = await renderEnvironmentTemplates(
+          client,
+          worktreeId,
+          repoId,
+          unixGroup,
+          payload.resolvedConfig?.daemon?.host_ip_address
+        );
         console.log(`[git.worktree.add] Templates rendered successfully`);
       } catch (error) {
         console.error(

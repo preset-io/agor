@@ -7,6 +7,7 @@
 
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import { TOOL_API_KEY_NAMES } from '@agor/core/types';
+import type { ResolvedConfigSlice } from '../../payload-types.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 
 /**
@@ -25,6 +26,8 @@ export type ToolRunner = (params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;
+  /** Daemon-resolved config slice. Undefined in legacy CLI mode. */
+  resolvedConfig?: ResolvedConfigSlice;
 }) => Promise<void>;
 
 /**
@@ -100,6 +103,7 @@ export class ToolRegistry {
       permissionMode?: PermissionMode;
       abortController: AbortController;
       messageSource?: MessageSource;
+      resolvedConfig?: ResolvedConfigSlice;
     }
   ): Promise<void> {
     const config = ToolRegistry.get(tool);
