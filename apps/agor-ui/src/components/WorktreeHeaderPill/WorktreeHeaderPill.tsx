@@ -15,7 +15,7 @@ import {
   TeamOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import { Button, Spin, Tooltip, theme } from 'antd';
+import { App, Button, Spin, Tooltip, theme } from 'antd';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
 import { Tag } from '../Tag';
@@ -54,6 +54,7 @@ export function WorktreeHeaderPill({
   connectionDisabled = false,
 }: WorktreeHeaderPillProps) {
   const { token } = theme.useToken();
+  const { modal } = App.useApp();
   const effectiveEnv = getEffectiveEnv(repo);
   const hasConfig = effectiveEnv.hasConfig;
   const env = worktree.environment_instance;
@@ -317,7 +318,15 @@ export function WorktreeHeaderPill({
                   icon={<FireOutlined />}
                   onClick={(e) => {
                     e.stopPropagation();
-                    onNukeEnvironment(worktree.worktree_id);
+                    modal.confirm({
+                      title: 'Nuke environment?',
+                      content:
+                        'This will stop the environment and DELETE all its volumes. Any data not committed/pushed will be lost.',
+                      okText: 'Nuke',
+                      okType: 'danger',
+                      cancelText: 'Cancel',
+                      onOk: () => onNukeEnvironment(worktree.worktree_id),
+                    });
                   }}
                   disabled={connectionDisabled}
                   style={iconButtonStyle}
