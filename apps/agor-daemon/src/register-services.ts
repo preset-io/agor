@@ -68,6 +68,7 @@ import { registerGitHubAppSetupRoutes } from './services/github-app-setup.js';
 import { createLeaderboardService } from './services/leaderboard.js';
 import { createMCPServersService } from './services/mcp-servers.js';
 import { createMessagesService } from './services/messages.js';
+import { createNotificationsService } from './services/notifications.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
 import { createReposService } from './services/repos.js';
 import { createSessionEnvSelectionsService } from './services/session-env-selections.js';
@@ -290,8 +291,70 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   }
 
   if (svcEnabled('boards')) {
-    app.use('/board-comments', createBoardCommentsService(db));
+    app.use('/board-comments', createBoardCommentsService(db, app));
   }
+
+  // ============================================================================
+  // Notifications — durable per-user inbox
+  // ============================================================================
+
+  app.use('/notifications', createNotificationsService(db, app), {
+    methods: [
+      'find',
+      'get',
+      'create',
+      'patch',
+      'remove',
+      'broadcast',
+      'expireBroadcast',
+      'listBroadcasts',
+      'markAllRead',
+      'unreadCount',
+    ],
+  });
+  const notificationsService = app.service('notifications') as ReturnType<
+    typeof createNotificationsService
+  >;
+  // All notification routes require an authenticated user; broadcast routes
+  // additionally require admin role.
+  const { requireMinimumRole: requireRoleHook } = await import('./utils/authorization.js');
+  const { ROLES: ROLES_CONST } = await import('@agor/core/types');
+  const requireAdminHook = requireRoleHook(ROLES_CONST.ADMIN, 'manage announcements');
+  app.service('notifications').hooks({
+    before: {
+      find: [ctx.requireAuth],
+      get: [ctx.requireAuth],
+      create: [ctx.requireAuth],
+      patch: [ctx.requireAuth],
+      remove: [ctx.requireAuth],
+      // biome-ignore lint/suspicious/noExplicitAny: custom-method hook keys are not in feathers types
+      broadcast: [ctx.requireAuth, requireAdminHook] as any,
+      // biome-ignore lint/suspicious/noExplicitAny: custom-method hook keys are not in feathers types
+      expireBroadcast: [ctx.requireAuth, requireAdminHook] as any,
+      // biome-ignore lint/suspicious/noExplicitAny: custom-method hook keys are not in feathers types
+      listBroadcasts: [ctx.requireAuth, requireAdminHook] as any,
+      // biome-ignore lint/suspicious/noExplicitAny: custom-method hook keys are not in feathers types
+      markAllRead: [ctx.requireAuth] as any,
+      // biome-ignore lint/suspicious/noExplicitAny: custom-method hook keys are not in feathers types
+      unreadCount: [ctx.requireAuth] as any,
+    },
+  });
+
+  // Nightly retention sweep — drops read notifs older than 90 days.
+  // Cheap enough to run every 24h on any reasonable DB size.
+  const RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+  const SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+  const retentionTimer = setInterval(() => {
+    notificationsService.retentionSweep(RETENTION_MS).catch((err: unknown) => {
+      console.warn('[notifications] retention sweep failed:', err);
+    });
+  }, SWEEP_INTERVAL_MS);
+  // Don't let the timer keep the process alive on shutdown.
+  retentionTimer.unref?.();
+  // Fire-and-forget first sweep at boot so a long-paused instance catches up.
+  notificationsService.retentionSweep(RETENTION_MS).catch((err: unknown) => {
+    console.warn('[notifications] initial retention sweep failed:', err);
+  });
 
   // ============================================================================
   // Worktrees, repos

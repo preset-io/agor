@@ -378,6 +378,20 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           if (sessionsService.triggerQueueProcessing) {
             await sessionsService.triggerQueueProcessing(task.session_id);
           }
+
+          // Fire `session_returned` notifications for COMPLETED / FAILED. We
+          // skip STOPPED (user-initiated, no surprise to notify about) and
+          // archived sessions/worktrees per design doc §4.
+          if (
+            (data.status === TaskStatus.COMPLETED || data.status === TaskStatus.FAILED) &&
+            !session.archived
+          ) {
+            try {
+              await this.fireSessionReturnedNotifications(task, session, params);
+            } catch (notifErr) {
+              console.warn('[notifications] session_returned producer failed:', notifErr);
+            }
+          }
         } catch (error) {
           console.error('❌ [TasksService] Failed to process task completion:', error);
         }
@@ -385,6 +399,137 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     }
 
     return result;
+  }
+
+  /**
+   * Producer for the `session_returned` notification type.
+   *
+   * Recipient set (per design doc §6): the union of session.created_by and
+   * every distinct task.created_by within the session. We skip anonymous users
+   * and the system. Each recipient gets a collapse-upserted row.
+   */
+  private async fireSessionReturnedNotifications(
+    task: Task,
+    session: Session,
+    params?: TaskParams
+  ): Promise<void> {
+    if (!this.app) return;
+
+    // Worktree archive guard — design doc §6.2.
+    let worktreeArchived = false;
+    let worktreeName: string | undefined;
+    try {
+      if (session.worktree_id) {
+        const worktree = await this.app.service('worktrees').get(session.worktree_id, params);
+        worktreeArchived = !!worktree?.archived;
+        worktreeName = worktree?.name;
+      }
+    } catch {
+      // If we can't read the worktree, fall through and notify anyway.
+    }
+    if (worktreeArchived) return;
+
+    // Build the recipient set: session creator + every task creator.
+    const recipients = new Set<string>();
+    if (session.created_by && session.created_by !== 'anonymous') {
+      recipients.add(session.created_by);
+    }
+    try {
+      const tasksResult = await this.app.service('tasks').find({
+        ...params,
+        query: { session_id: session.session_id },
+      });
+      const allTasks = (
+        Array.isArray(tasksResult) ? tasksResult : (tasksResult.data ?? [])
+      ) as Task[];
+      for (const t of allTasks) {
+        if (t.created_by && t.created_by !== 'anonymous') {
+          recipients.add(t.created_by);
+        }
+      }
+    } catch {
+      // Already have the session creator above — proceed.
+    }
+    if (recipients.size === 0) return;
+
+    // Fetch last assistant message for the preview (matches parent-callback logic).
+    let preview: string | undefined;
+    try {
+      const messagesService = this.app.service('messages');
+      const messagesResult = await messagesService.find({
+        ...params,
+        query: { session_id: session.session_id, task_id: task.task_id },
+      });
+      const messageList = (
+        Array.isArray(messagesResult) ? messagesResult : (messagesResult.data ?? [])
+      ) as Array<{
+        role?: string;
+        index?: number;
+        content?: unknown;
+      }>;
+      const assistantMessages = messageList
+        .filter((m) => m.role === 'assistant')
+        .sort((a, b) => (b.index ?? 0) - (a.index ?? 0));
+      if (assistantMessages.length > 0) {
+        const last = assistantMessages[0];
+        if (typeof last.content === 'string') {
+          preview = last.content;
+        } else if (Array.isArray(last.content)) {
+          preview = (last.content as Array<{ type?: string; text?: string }>)
+            .filter((b) => b.type === 'text')
+            .map((b) => b.text ?? '')
+            .join('\n\n');
+        }
+        if (preview && preview.length > 160) {
+          preview = `${preview.slice(0, 157)}…`;
+        }
+      }
+    } catch {
+      // Preview is optional.
+    }
+
+    const title = session.title?.trim() || `Session ${session.session_id.substring(0, 8)}`;
+    const notifs = this.app.service('notifications') as unknown as {
+      deliverCollapsed: (notif: unknown) => Promise<unknown>;
+    };
+    if (!notifs?.deliverCollapsed) return;
+
+    for (const recipient of recipients) {
+      try {
+        await notifs.deliverCollapsed({
+          recipient_user_id: recipient,
+          type: 'session_returned',
+          title,
+          preview,
+          source_session_id: session.session_id,
+          source_worktree_id: session.worktree_id,
+          source_board_id: session.board_id ?? undefined,
+          source_task_id: task.task_id,
+          scope: 'user',
+          data: {
+            agentic_tool: session.agentic_tool,
+            message_count:
+              task.message_range?.end_index !== undefined &&
+              task.message_range?.start_index !== undefined
+                ? task.message_range.end_index - task.message_range.start_index + 1
+                : undefined,
+          },
+        });
+      } catch (err) {
+        console.warn(
+          `[notifications] failed to deliver session_returned for ${recipient.substring(0, 8)}:`,
+          err
+        );
+      }
+    }
+
+    // Use worktreeName so the helper doesn't flag the (intentionally unused
+    // for now) variable; logging it here is harmless and useful in debug.
+    if (worktreeName) {
+      console.log(
+        `🔔 [notifications] session_returned delivered for ${session.session_id.substring(0, 8)} (worktree: ${worktreeName}) to ${recipients.size} recipient(s)`
+      );
+    }
   }
 
   /**

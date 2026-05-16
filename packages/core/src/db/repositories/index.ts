@@ -13,6 +13,7 @@ export * from './cards';
 export * from './gateway-channels';
 export * from './mcp-servers';
 export * from './messages';
+export * from './notifications';
 export * from './repos';
 export * from './serialized-sessions';
 export * from './session-env-selections';
