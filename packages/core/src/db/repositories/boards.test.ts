@@ -205,7 +205,7 @@ describe('BoardRepository.findById', () => {
     const data = createBoardData();
     await repo.create(data);
 
-    const idPrefix = data.board_id!.replace(/-/g, '').slice(0, 8);
+    const idPrefix = toShortId(data.board_id!, 8);
     const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
@@ -231,7 +231,7 @@ describe('BoardRepository.findById', () => {
     const data = createBoardData();
     await repo.create(data);
 
-    const idPrefix = data.board_id!.replace(/-/g, '').slice(0, 8).toUpperCase();
+    const idPrefix = toShortId(data.board_id!, 8).toUpperCase();
     const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
@@ -431,7 +431,7 @@ describe('BoardRepository.update', () => {
     const data = createBoardData({ name: 'Original' });
     await repo.create(data);
 
-    const idPrefix = data.board_id!.replace(/-/g, '').slice(0, 8);
+    const idPrefix = toShortId(data.board_id!, 8);
     const updated = await repo.update(idPrefix, { description: 'New description' });
 
     expect(updated.description).toBe('New description');
@@ -560,7 +560,7 @@ describe('BoardRepository.delete', () => {
     const data = createBoardData();
     await repo.create(data);
 
-    const idPrefix = data.board_id!.replace(/-/g, '').slice(0, 8);
+    const idPrefix = toShortId(data.board_id!, 8);
     await repo.delete(idPrefix);
 
     const found = await repo.findById(data.board_id!);

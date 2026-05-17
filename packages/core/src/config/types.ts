@@ -40,9 +40,6 @@ export interface AgorDisplaySettings {
 
   /** Enable color output */
   colorOutput?: boolean;
-
-  /** Short ID length (default: 8) */
-  shortIdLength?: number;
 }
 
 /**

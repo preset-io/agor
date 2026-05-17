@@ -13,21 +13,7 @@
 
 import { toShortId } from '../lib/ids.js';
 import type { RepoID, UUID, WorktreeID } from '../types/index.js';
-
-/**
- * Unix group/user names are intentionally NOT the canonical `SHORT_ID_LENGTH`
- * (20 chars) used for display IDs. They:
- * - are persisted system-wide in `/etc/group` and `/etc/passwd`,
- * - are parsed by fixed-length regexes here and in `user-manager.ts`,
- * - are referenced by the `unix_group` column on every worktree/repo row,
- * - are created once per worktree/repo lifecycle (not a hot path),
- * - fail loudly on collision (`groupadd` errors if the name exists).
- *
- * Bumping the length would require migrating every existing installation
- * (old groups would not match the new regex), and provides no win for a
- * non-display, rare-creation, failure-loud identifier. So 8 chars stays.
- */
-const UNIX_NAME_SHORT_ID_LENGTH = 8;
+import { UNIX_NAME_SHORT_ID_LENGTH } from './short-id-naming.js';
 
 /**
  * Generate Unix group name for a worktree

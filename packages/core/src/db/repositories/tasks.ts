@@ -5,8 +5,8 @@
  */
 
 import type { SessionID, Task, TaskMetadata, UUID } from '@agor/core/types';
-import { prefixToLikePattern, TaskStatus } from '@agor/core/types';
-import { eq, like, sql } from 'drizzle-orm';
+import { TaskStatus } from '@agor/core/types';
+import { eq, inArray, like, sql } from 'drizzle-orm';
 import { generateId, shortId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
@@ -15,7 +15,9 @@ import {
   AmbiguousIdError,
   type BaseRepository,
   EntityNotFoundError,
+  RESOLVE_SHORT_ID_FETCH_LIMIT,
   RepositoryError,
+  resolveByShortIdPrefix,
 } from './base';
 import { deepMerge } from './merge-utils';
 
@@ -95,32 +97,17 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   }
 
   /**
-   * Resolve short ID to full ID
+   * Resolve short ID to full ID via the centralized helper.
    */
   private async resolveId(id: string): Promise<string> {
-    // If already a full UUID, return as-is
-    if (id.length === 36 && id.includes('-')) {
-      return id;
-    }
-
-    // Short ID - need to resolve
-    const pattern = prefixToLikePattern(id);
-
-    const results = await select(this.db).from(tasks).where(like(tasks.task_id, pattern)).all();
-
-    if (results.length === 0) {
-      throw new EntityNotFoundError('Task', id);
-    }
-
-    if (results.length > 1) {
-      throw new AmbiguousIdError(
-        'Task',
-        id,
-        results.map((r: { task_id: string }) => r.task_id)
-      );
-    }
-
-    return results[0].task_id as UUID;
+    return resolveByShortIdPrefix(id, 'Task', async (pattern) => {
+      const rows = await select(this.db)
+        .from(tasks)
+        .where(like(tasks.task_id, pattern))
+        .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
+        .all();
+      return rows.map((r: { task_id: string }) => r.task_id);
+    });
   }
 
   /**
@@ -167,15 +154,13 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
 
       // Retrieve all inserted tasks. SQLite SELECT order is undefined without
       // an ORDER BY — we used to rely on UUIDv7's monotonic counter to make
-      // `id ASC` mirror insertion order, but `generateId` now randomizes
-      // `rand_a` (so 24-char short IDs don't collide for same-ms IDs), which
-      // breaks sub-ms sort. Re-impose insertion order explicitly by mapping
-      // returned rows back to the input order.
+      // `id ASC` mirror insertion order, but `generateId` now passes random
+      // bytes to `uuid.v7()` (so 24-char short IDs don't collide for same-ms
+      // IDs), which breaks sub-ms sort. Re-impose insertion order explicitly
+      // by mapping returned rows back to the input order. Use drizzle's
+      // `inArray` so the query is parameterized rather than string-built.
       const taskIds = inserts.map((t) => t.task_id);
-      const rows = await select(this.db)
-        .from(tasks)
-        .where(sql`${tasks.task_id} IN ${sql.raw(`(${taskIds.map((id) => `'${id}'`).join(',')})`)}`)
-        .all();
+      const rows = await select(this.db).from(tasks).where(inArray(tasks.task_id, taskIds)).all();
 
       const rowsById = new Map(rows.map((r: TaskRow) => [r.task_id, r]));
       return taskIds.map((id) => this.rowToTask(rowsById.get(id) as TaskRow));

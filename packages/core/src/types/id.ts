@@ -38,15 +38,14 @@ export type UUID = string & { readonly __brand: 'UUID' };
  * parent fan-out spawning):
  * - Chars 0–11 are the Unix-ms timestamp (deterministic per ms).
  * - Char 12 is the version nibble "7" (deterministic).
- * - Chars 13–15 are `rand_a`. Our `generateId()` wrapper randomizes these
- *   per call (RFC 9562 method 3) rather than using the library's monotonic
- *   counter — gives ~12 bits of per-ms entropy here.
- * - Chars 16–31 are the variant nibble + `rand_b` — fully random per call.
+ * - Chars 13–31 are derived from per-call random bytes — `generateId()`
+ *   passes fresh `randomBytes(16)` to `uuid.v7()`, bypassing the library's
+ *   monotonic-counter `seq` state. Only the 2 variant bits at char 16 are
+ *   fixed; everything else is truly random per call.
  *
- * Canonical display length is **24 chars**: timestamp(12) + version(1) +
- * randomized rand_a(3) + variant+rand_b prefix(8) ≈ 30 random bits per ms,
- * 50% birthday collision at ~31,500 same-ms IDs. Past any realistic Agor
- * workload by ~600×. See `SHORT_ID_LENGTH`.
+ * Canonical display length is **24 chars**: 11 hex chars of per-call random
+ * entropy = ~42 random bits per ms ≈ 4.4T slots → 50% birthday collision
+ * at ~2.5M same-ms IDs. Past any realistic Agor workload. See `SHORT_ID_LENGTH`.
  *
  * @example
  * const display: ShortID = "01933e4a7b897c35a8f39d2e"; // 24 chars (canonical)
@@ -92,13 +91,14 @@ export type AnyShortId = UUID | ShortID | string;
  * - UUIDv7's first 48 bits are a millisecond timestamp (chars 0–11), and
  *   char 12 is the fixed version nibble "7" — both deterministic for IDs
  *   born in the same ms.
- * - Our `generateId()` overrides the `uuid` library's monotonic counter
- *   with true random bits in rand_a (chars 13–15) — see ids.ts. That
- *   contributes ~12 random bits per ms.
- * - At 24 chars we additionally pull in the variant nibble + the first
- *   ~8 hex chars of rand_b, totaling ~30 random bits per ms (~1B slots) —
- *   50% birthday collision at ~31,500 same-ms IDs, 1% collision at ~3,800.
- *   Past any realistic Agor workload by ~600×.
+ * - Our `generateId()` passes fresh `randomBytes(16)` to `uuid.v7()`,
+ *   bypassing the library's per-ms `seq` counter (RFC 9562 method 3).
+ *   That makes chars 13–31 per-call random (minus 2 fixed variant bits
+ *   at char 16) — 74 random bits per call total.
+ * - At 24 chars we get 11 random hex chars after the deterministic prefix,
+ *   ≈ 42 random bits per ms (≈ 4.4T slots) — 50% birthday collision at
+ *   ~2.5M same-ms IDs, 1% at ~290K. Past any realistic Agor workload by
+ *   orders of magnitude.
  *
  * Inputs from users can be shorter — the centralized resolver
  * (`resolveByShortIdPrefix`) handles "too short to be unique" by throwing
@@ -130,7 +130,7 @@ export function toShortId(id: AnyShortId, length: number = SHORT_ID_LENGTH): Sho
 /**
  * Render a UUID as the canonical short ID for display.
  *
- * Always returns `SHORT_ID_LENGTH` hex chars (20). Use this everywhere a
+ * Always returns `SHORT_ID_LENGTH` hex chars (24). Use this everywhere a
  * user sees an ID — URLs, notifications, pills, logs, CLI — so every site
  * agrees on one collision-safe shape. No length parameter, by design: if
  * every site picks its own length, we get back the "Child session

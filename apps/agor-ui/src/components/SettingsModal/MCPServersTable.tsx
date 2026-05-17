@@ -1,4 +1,4 @@
-import type { CreateMCPServerInput, MCPServer } from '@agor-live/client';
+import { type CreateMCPServerInput, type MCPServer, shortId } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined } from '@ant-design/icons';
 import {
   Badge,
@@ -440,7 +440,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         {viewingServer && (
           <Descriptions bordered column={1} size="small" style={{ marginTop: 16 }}>
             <Descriptions.Item label="ID">
-              {(viewingServer.mcp_server_id as string).substring(0, 8)}
+              {shortId(viewingServer.mcp_server_id as string)}
             </Descriptions.Item>
             <Descriptions.Item label="Name">{viewingServer.name}</Descriptions.Item>
             {viewingServer.display_name && (

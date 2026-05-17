@@ -39,10 +39,6 @@ export default class ConfigIndex extends Command {
           `  color output:  ${chalk.gray(config.display.colorOutput ? 'enabled' : 'disabled')}`
         );
       }
-      if (config.display?.shortIdLength) {
-        this.log(`  short ID len:  ${chalk.gray(String(config.display.shortIdLength))}`);
-      }
-
       // Credentials (only show keys that are set)
       if (config.credentials && Object.keys(config.credentials).length > 0) {
         this.log(chalk.bold('\nCredentials:'));
@@ -105,7 +101,7 @@ export default class ConfigIndex extends Command {
       this.log('    defaults.board, defaults.agent');
       this.log('');
       this.log(chalk.cyan('  Display:'));
-      this.log('    display.tableStyle, display.colorOutput, display.shortIdLength');
+      this.log('    display.tableStyle, display.colorOutput');
       this.log('');
       this.log(chalk.cyan('  Credentials:'));
       this.log('    credentials.ANTHROPIC_API_KEY');

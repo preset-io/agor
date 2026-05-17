@@ -315,7 +315,7 @@ export class GatewayService {
       const otherChannelMapping = await this.threadMapRepo.findByThread(data.thread_id);
       if (otherChannelMapping) {
         console.log(
-          `[gateway] IGNORED: Thread ${data.thread_id} owned by channel ${shortId(otherChannelMapping.channel_id)}, not ours (${channel.id.substring(0, 8)}). Silently dropping.`
+          `[gateway] IGNORED: Thread ${data.thread_id} owned by channel ${shortId(otherChannelMapping.channel_id)}, not ours (${shortId(channel.id)}). Silently dropping.`
         );
         return {
           success: false,
@@ -336,7 +336,7 @@ export class GatewayService {
       // Use debug level — this fires for every non-Agor thread reply in monitored
       // channels and would create excessive log noise at info level.
       console.debug(
-        `[gateway] IGNORED: Thread reply without mention in unmapped thread: channel=${channel.id.substring(0, 8)}, thread=${data.thread_id}`
+        `[gateway] IGNORED: Thread reply without mention in unmapped thread: channel=${shortId(channel.id)}, thread=${data.thread_id}`
       );
       return {
         success: false,

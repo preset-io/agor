@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { prefixToLikePattern, SHORT_ID_LENGTH, toShortId } from '../types/id';
 import {
   expandPrefix,
@@ -129,14 +129,25 @@ describe('shortId', () => {
   });
 
   it('does NOT collide for IDs generated in the same millisecond', () => {
-    // Burst-generate many IDs and assert every canonical short form is
-    // unique. The library's monotonic-counter UUIDv7 used to defeat this
-    // at 20 chars (only 4 random bits per ms); our `generateId()` wrapper
-    // restores true rand_a entropy so 24-char prefixes carry ~30 random
-    // bits per ms — comfortably unique for any realistic burst.
-    const ids = Array.from({ length: 2000 }, () => generateId());
-    const shorts = new Set(ids.map((id) => shortId(id)));
-    expect(shorts.size).toBe(ids.length);
+    // Freeze the clock so every ID lands in the exact same ms — this is the
+    // scenario the helper exists to handle (parent fan-out spawning, MCP
+    // tools firing in rapid succession). The library's monotonic-counter
+    // UUIDv7 default would collapse 2000 IDs into a handful of unique
+    // 24-char prefixes; our `generateId()` passes fresh random bytes per
+    // call (RFC 9562 method 3) so every prefix is unique.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    try {
+      const ids = Array.from({ length: 2000 }, () => generateId());
+      // Confirm the test fixture actually pins the same ms — first 12 hex
+      // chars of UUIDv7 are the timestamp.
+      const tsPrefix = ids[0].replace(/-/g, '').slice(0, 12);
+      expect(ids.every((id) => id.replace(/-/g, '').startsWith(tsPrefix))).toBe(true);
+      const shorts = new Set(ids.map((id) => shortId(id)));
+      expect(shorts.size).toBe(ids.length);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

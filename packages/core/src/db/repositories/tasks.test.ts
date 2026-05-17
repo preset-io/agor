@@ -7,7 +7,7 @@
 import type { Task, UUID } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
-import { generateId } from '../../lib/ids';
+import { generateId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
@@ -331,7 +331,7 @@ describe('TaskRepository.findById', () => {
     expect(byFull?.task_id).toBe(data.task_id);
 
     // Short ID
-    const idPrefix = data.task_id!.replace(/-/g, '').slice(0, 8);
+    const idPrefix = toShortId(data.task_id!, 8);
     const byShort = await taskRepo.findById(idPrefix);
     expect(byShort?.task_id).toBe(data.task_id);
 
@@ -626,7 +626,7 @@ describe('TaskRepository.update', () => {
     expect(updated.status).toBe(TaskStatus.RUNNING);
 
     // Update by short ID
-    const idPrefix = data.task_id!.replace(/-/g, '').slice(0, 8);
+    const idPrefix = toShortId(data.task_id!, 8);
     const updated2 = await taskRepo.update(idPrefix, { status: TaskStatus.COMPLETED });
     expect(updated2.status).toBe(TaskStatus.COMPLETED);
   });
@@ -726,7 +726,7 @@ describe('TaskRepository.delete', () => {
     expect(await taskRepo.findById(data1.task_id!)).toBeNull();
 
     // Delete by short ID
-    const idPrefix = data2.task_id!.replace(/-/g, '').slice(0, 8);
+    const idPrefix = toShortId(data2.task_id!, 8);
     await taskRepo.delete(idPrefix);
     expect(await taskRepo.findById(data2.task_id!)).toBeNull();
   });

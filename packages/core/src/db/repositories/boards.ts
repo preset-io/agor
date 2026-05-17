@@ -5,7 +5,7 @@
  */
 
 import type { Board, BoardExportBlob, BoardObject, UUID } from '@agor/core/types';
-import { prefixToLikePattern, WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
+import { WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
 import { and, eq, exists, inArray, isNotNull, like, ne, or, sql } from 'drizzle-orm';
 import * as yaml from 'js-yaml';
 import { getBaseUrl } from '../../config/config-manager';
@@ -19,7 +19,9 @@ import {
   AmbiguousIdError,
   type BaseRepository,
   EntityNotFoundError,
+  RESOLVE_SHORT_ID_FETCH_LIMIT,
   RepositoryError,
+  resolveByShortIdPrefix,
 } from './base';
 
 /**
@@ -96,32 +98,17 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   }
 
   /**
-   * Resolve short ID to full ID
+   * Resolve short ID to full ID via the centralized helper.
    */
   private async resolveId(id: string): Promise<string> {
-    // If already a full UUID, return as-is
-    if (id.length === 36 && id.includes('-')) {
-      return id;
-    }
-
-    // Short ID - need to resolve
-    const pattern = prefixToLikePattern(id);
-
-    const results = await select(this.db).from(boards).where(like(boards.board_id, pattern)).all();
-
-    if (results.length === 0) {
-      throw new EntityNotFoundError('Board', id);
-    }
-
-    if (results.length > 1) {
-      throw new AmbiguousIdError(
-        'Board',
-        id,
-        results.map((r: { board_id: string }) => r.board_id)
-      );
-    }
-
-    return results[0].board_id as UUID;
+    return resolveByShortIdPrefix(id, 'Board', async (pattern) => {
+      const rows = await select(this.db)
+        .from(boards)
+        .where(like(boards.board_id, pattern))
+        .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
+        .all();
+      return rows.map((r: { board_id: string }) => r.board_id);
+    });
   }
 
   /**

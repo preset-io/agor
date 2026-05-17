@@ -60,7 +60,7 @@ export function createUserApiKeysService(apiKeysRepo: UserApiKeysRepository) {
       if (!user) throw new NotAuthenticated('Authentication required');
 
       await apiKeysRepo.delete(id, user.user_id);
-      console.log(`[API Keys] Deleted: ${id.substring(0, 8)} for user ${shortId(user.user_id)}`);
+      console.log(`[API Keys] Deleted: ${shortId(id)} for user ${shortId(user.user_id)}`);
       return { id };
     },
   };

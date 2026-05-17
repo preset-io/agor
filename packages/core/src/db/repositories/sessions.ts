@@ -5,7 +5,7 @@
  */
 
 import type { Session, UUID } from '@agor/core/types';
-import { prefixToLikePattern, SessionStatus, WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
+import { SessionStatus, WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
 import { and, desc, eq, inArray, isNotNull, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId, shortId } from '../../lib/ids';
@@ -25,7 +25,9 @@ import {
   AmbiguousIdError,
   type BaseRepository,
   EntityNotFoundError,
+  RESOLVE_SHORT_ID_FETCH_LIMIT,
   RepositoryError,
+  resolveByShortIdPrefix,
 } from './base';
 import { deepMerge } from './merge-utils';
 
@@ -166,35 +168,17 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   }
 
   /**
-   * Resolve short ID to full ID
+   * Resolve short ID to full ID via the centralized helper.
    */
   private async resolveId(id: string): Promise<string> {
-    // If already a full UUID, return as-is
-    if (id.length === 36 && id.includes('-')) {
-      return id;
-    }
-
-    // Short ID - need to resolve
-    const pattern = prefixToLikePattern(id);
-
-    const results = await select(this.db)
-      .from(sessions)
-      .where(like(sessions.session_id, pattern))
-      .all();
-
-    if (results.length === 0) {
-      throw new EntityNotFoundError('Session', id);
-    }
-
-    if (results.length > 1) {
-      throw new AmbiguousIdError(
-        'Session',
-        id,
-        results.map((r: { session_id: string }) => r.session_id)
-      );
-    }
-
-    return results[0].session_id as UUID;
+    return resolveByShortIdPrefix(id, 'Session', async (pattern) => {
+      const rows = await select(this.db)
+        .from(sessions)
+        .where(like(sessions.session_id, pattern))
+        .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
+        .all();
+      return rows.map((r: { session_id: string }) => r.session_id);
+    });
   }
 
   /**

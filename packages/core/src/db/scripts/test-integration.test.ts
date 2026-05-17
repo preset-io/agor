@@ -165,7 +165,7 @@ describe('ID Generation', () => {
     const localShortId = shortId(id);
 
     expect(localShortId).toHaveLength(SHORT_ID_LENGTH);
-    // Canonical short form is a 20-char hex prefix (no hyphens).
+    // Canonical short form is a 24-char hex prefix (no hyphens).
     expect(localShortId).toBe(id.replace(/-/g, '').slice(0, SHORT_ID_LENGTH));
   });
 });

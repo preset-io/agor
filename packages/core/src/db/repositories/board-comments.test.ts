@@ -209,7 +209,7 @@ describe('BoardCommentsRepository.findById', () => {
     const data = createCommentData({ board_id: board.board_id });
     await repo.create(data);
 
-    const idPrefix = data.comment_id!.replace(/-/g, '').slice(0, 8);
+    const idPrefix = toShortId(data.comment_id!, 8);
     const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
@@ -238,7 +238,7 @@ describe('BoardCommentsRepository.findById', () => {
     const data = createCommentData({ board_id: board.board_id });
     await repo.create(data);
 
-    const idPrefix = data.comment_id!.replace(/-/g, '').slice(0, 8).toUpperCase();
+    const idPrefix = toShortId(data.comment_id!, 8).toUpperCase();
     const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
@@ -461,7 +461,7 @@ describe('BoardCommentsRepository.update', () => {
     const data = createCommentData({ board_id: board.board_id });
     await repo.create(data);
 
-    const idPrefix = data.comment_id!.replace(/-/g, '').slice(0, 8);
+    const idPrefix = toShortId(data.comment_id!, 8);
     const updated = await repo.update(idPrefix, { content: 'Updated' });
 
     expect(updated.content).toBe('Updated');
@@ -533,7 +533,7 @@ describe('BoardCommentsRepository.delete', () => {
     const data = createCommentData({ board_id: board.board_id });
     await repo.create(data);
 
-    const idPrefix = data.comment_id!.replace(/-/g, '').slice(0, 8);
+    const idPrefix = toShortId(data.comment_id!, 8);
     await repo.delete(idPrefix);
 
     const found = await repo.findById(data.comment_id!);

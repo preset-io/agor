@@ -489,7 +489,7 @@ export function createSocketIOConfig(
           // refuse to relay.
           rejectTerminal(
             event,
-            `payload userId (${String(payloadUserId).slice(0, 8)}…) does not match ` +
+            `payload userId (${shortId(String(payloadUserId))}…) does not match ` +
               `authed userId (${shortId(auth.userId)}…)`
           );
           return null;

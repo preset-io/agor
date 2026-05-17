@@ -282,7 +282,7 @@ describe('SessionRepository.findById', () => {
     const data = createSessionData({ worktree_id: worktree.worktree_id });
     await repo.create(data);
 
-    const idPrefix = data.session_id!.replace(/-/g, '').slice(0, 8);
+    const idPrefix = toShortId(data.session_id!, 8);
     const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
@@ -296,7 +296,7 @@ describe('SessionRepository.findById', () => {
     await repo.create(data);
 
     // Use first 8 chars - resolveId uses LIKE pattern that works better with shorter prefixes
-    const idPrefix = data.session_id!.replace(/-/g, '').slice(0, 8);
+    const idPrefix = toShortId(data.session_id!, 8);
     const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
@@ -324,7 +324,7 @@ describe('SessionRepository.findById', () => {
     const data = createSessionData({ worktree_id: worktree.worktree_id });
     await repo.create(data);
 
-    const idPrefix = data.session_id!.replace(/-/g, '').slice(0, 8).toUpperCase();
+    const idPrefix = toShortId(data.session_id!, 8).toUpperCase();
     const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
@@ -809,7 +809,7 @@ describe('SessionRepository.update', () => {
     });
     await repo.create(data);
 
-    const idPrefix = data.session_id!.replace(/-/g, '').slice(0, 8);
+    const idPrefix = toShortId(data.session_id!, 8);
     const updated = await repo.update(idPrefix, { status: SessionStatus.RUNNING });
 
     expect(updated.status).toBe(SessionStatus.RUNNING);
@@ -933,7 +933,7 @@ describe('SessionRepository.delete', () => {
     const data = createSessionData({ worktree_id: worktree.worktree_id });
     await repo.create(data);
 
-    const idPrefix = data.session_id!.replace(/-/g, '').slice(0, 8);
+    const idPrefix = toShortId(data.session_id!, 8);
     await repo.delete(idPrefix);
 
     const found = await repo.findById(data.session_id!);

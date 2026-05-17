@@ -278,7 +278,6 @@ export function getDefaultConfig(): AgorConfig {
     display: {
       tableStyle: 'unicode',
       colorOutput: true,
-      shortIdLength: 8,
     },
     daemon: {
       port: DAEMON.DEFAULT_PORT,

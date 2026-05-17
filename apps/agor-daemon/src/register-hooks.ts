@@ -1600,7 +1600,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       console.log(
         `📡 [Publish] ${context.path} ${context.method}`,
         context.id
-          ? `id: ${typeof context.id === 'string' ? context.id.substring(0, 8) : context.id}`
+          ? `id: ${typeof context.id === 'string' ? shortId(context.id) : context.id}`
           : '',
         `channels: ${app.channel('authenticated').length}`
       );

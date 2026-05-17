@@ -5,6 +5,7 @@
  * Optionally wraps in Popover for rich metadata display
  */
 
+import { shortId } from '@agor-live/client';
 import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon';
 import { Popover } from 'antd';
 import type React from 'react';
@@ -26,13 +27,6 @@ export interface EventStreamPillProps {
   /** Optional metadata card to show in popover on hover */
   metadataCard?: React.ReactNode;
 }
-
-/**
- * Extract short ID (first 8 chars without hyphens)
- */
-const toShortId = (id: string): string => {
-  return id.replace(/-/g, '').slice(0, 8);
-};
 
 export const EventStreamPill = ({
   id,
@@ -69,7 +63,7 @@ export const EventStreamPill = ({
       }}
       onClick={handleClick}
     >
-      {label ?? toShortId(id)}
+      {label ?? shortId(id)}
     </Tag>
   );
 

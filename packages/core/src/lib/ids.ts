@@ -58,26 +58,31 @@ export type IDPrefix = string;
 // ============================================================================
 
 /**
- * Generate a new UUIDv7 identifier with true random `rand_a`.
+ * Generate a new UUIDv7 identifier with full per-call entropy.
  *
- * Why the wrapper: the `uuid` npm package's v7 implementation uses RFC 9562
- * **method 1** — a per-millisecond-initialized monotonic counter in the
- * rand_a field — to guarantee strict sub-millisecond sort order. That gives
- * us only ~13 hex chars of per-call entropy (the rand_b suffix). A 20-char
- * canonical short ID would carry only 4 bits of true entropy per ms,
- * collapsing to ~5 unique values at 50% birthday collision — the same-ms
- * collision bug this whole effort exists to prevent.
+ * Why this isn't a bare `uuid.v7()` call:
  *
- * RFC 9562 **method 3** allows rand_a to be fully random per call, at the
- * cost of giving up strict sub-millisecond ordering. Nothing in Agor relies
- * on that (ms-resolution time-ordering on the timestamp prefix is
- * preserved; sub-ms sort is a tiebreaker that's already meaningless), so we
- * overwrite the library's counter bits with random hex.
+ * The `uuid@14` package's default `v7()` implements RFC 9562 **method 1** —
+ * a per-millisecond-initialized monotonic counter (`seq`) that's encoded
+ * into bytes 6–10. Without our intervention, *only bytes 11–15 (the last
+ * 10 hex chars) are truly random per call* within a single millisecond.
+ * A 24-char display prefix would carry ~10 bits of per-call entropy —
+ * 50% birthday collision at ~32 same-ms IDs — the bug this whole effort
+ * exists to prevent (see "Child session 019e372a has completed").
  *
- * Result: 24-char canonical short IDs carry ~30 random bits per ms
- * (~31,500 same-ms IDs before 50% birthday collision). The first 48 bits
- * remain the Unix-ms timestamp, so DB index locality and `ORDER BY id` are
- * unchanged at ms resolution. Existing IDs in the DB are unaffected.
+ * Passing `{ random: randomBytes(16) }` bypasses the library's `_state`
+ * machine entirely: bytes 6–15 are derived from the fresh random bytes we
+ * supply, giving us RFC 9562 **method 3** behavior (74 bits of per-call
+ * entropy). A 24-char prefix now carries ~42 random bits per ms (~2.5M
+ * same-ms IDs before 50% birthday collision) — past any realistic Agor
+ * workload by orders of magnitude.
+ *
+ * Trade-off: we give up the library's strict sub-millisecond `seq`
+ * ordering. Ms-resolution time-ordering on the timestamp prefix
+ * (bytes 0–5) is preserved, so DB index locality and "ORDER BY id ASC ≈
+ * insertion order at second resolution" still work. The one caller that
+ * relied on sub-ms ordering (`TaskRepository.createMany`) now imposes
+ * insertion order explicitly. Existing IDs in the DB are unaffected.
  *
  * @returns A UUIDv7-shaped, RFC 9562 method-3 identifier.
  *
@@ -86,16 +91,7 @@ export type IDPrefix = string;
  * // => "01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f"
  */
 export function generateId(): UUID {
-  const base = uuidv7();
-  // UUID hex positions (with hyphens): xxxxxxxx-xxxx-7XXX-yXXX-xxxxxxxxxxxx
-  //                                     0       8   13 14  18 19
-  // - chars 14: literal '7' (version) — must preserve
-  // - chars 15-17: rand_a (3 hex / 12 bits) — REPLACE with true random
-  // - char 18: literal '-' (must preserve)
-  // - char 19: variant nibble (uuid lib already sets top 2 bits per RFC)
-  //   — leaving it alone keeps the library's RFC-compliant variant
-  const rand = randomBytes(2).toString('hex'); // 4 hex chars, take 3
-  return `${base.slice(0, 15)}${rand.slice(0, 3)}${base.slice(18)}` as UUID;
+  return uuidv7({ random: randomBytes(16) }) as UUID;
 }
 
 // ============================================================================
@@ -357,7 +353,7 @@ function truncate(str: string, maxLength: number): string {
  * lower-level `toShortId(id, length)` primitive directly.
  *
  * For general display (logs, notifications, URLs, single IDs in any
- * unbounded set), use `shortId(id)` — it's `SHORT_ID_LENGTH` (20) chars,
+ * unbounded set), use `shortId(id)` — it's `SHORT_ID_LENGTH` (24) chars,
  * which is collision-safe for any realistic workload.
  *
  * @param ids - Array of UUIDs

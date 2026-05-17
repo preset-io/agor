@@ -42,7 +42,6 @@ function createConfigData(overrides?: Partial<AgorConfig>): AgorConfig {
     display: {
       tableStyle: 'ascii',
       colorOutput: false,
-      shortIdLength: 12,
     },
     daemon: {
       port: 4000,
@@ -91,7 +90,6 @@ describe('getDefaultConfig', () => {
     expect(defaults.defaults?.agent).toBe('claude-code');
     expect(defaults.display?.tableStyle).toBe('unicode');
     expect(defaults.display?.colorOutput).toBe(true);
-    expect(defaults.display?.shortIdLength).toBe(8);
     expect(defaults.daemon?.port).toBe(3030);
     expect(defaults.daemon?.host).toBe('localhost');
     expect(defaults.ui?.port).toBe(5173);
@@ -572,11 +570,13 @@ describe('getConfigValue', () => {
   });
 
   it('should handle number values', async () => {
-    const config = createConfigData();
+    const config = createConfigData({
+      ui: { port: 9090, host: 'localhost' },
+    });
     await saveConfig(config);
 
-    const shortIdLength = await getConfigValue('display.shortIdLength');
-    expect(shortIdLength).toBe(12);
+    const port = await getConfigValue('ui.port');
+    expect(port).toBe(9090);
   });
 });
 
@@ -637,10 +637,10 @@ describe('setConfigValue', () => {
 
   it('should handle number values', async () => {
     await saveConfig({});
-    await setConfigValue('display.shortIdLength', 16);
+    await setConfigValue('ui.port', 9090);
 
-    const value = await getConfigValue('display.shortIdLength');
-    expect(value).toBe(16);
+    const value = await getConfigValue('ui.port');
+    expect(value).toBe(9090);
   });
 
   it('should throw error for top-level keys', async () => {

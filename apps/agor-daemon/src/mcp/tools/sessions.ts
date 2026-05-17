@@ -1,4 +1,4 @@
-import { WorktreeRepository, type WorktreeWithZoneAndSessions } from '@agor/core/db';
+import { shortId, WorktreeRepository, type WorktreeWithZoneAndSessions } from '@agor/core/db';
 import {
   AVAILABLE_CLAUDE_MODEL_ALIASES,
   CODEX_MODEL_METADATA,
@@ -911,7 +911,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       }
 
       const callbackNote = callbackConfig.callback_session_id
-        ? ` Callback will be sent to session ${(callbackConfig.callback_session_id as string).substring(0, 8)} on completion.`
+        ? ` Callback will be sent to session ${shortId(callbackConfig.callback_session_id as string)} on completion.`
         : '';
 
       const mcpFailureNote =

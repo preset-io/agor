@@ -5,7 +5,6 @@
  */
 
 import type { Repo, RepoEnvironment, RepoEnvironmentConfigV1, UUID } from '@agor/core/types';
-import { prefixToLikePattern } from '@agor/core/types';
 import { eq, like, sql } from 'drizzle-orm';
 import { resolveVariant, wrapV1AsV2 } from '../../config/variant-resolver.js';
 import { generateId } from '../../lib/ids';
@@ -16,7 +15,9 @@ import {
   AmbiguousIdError,
   type BaseRepository,
   EntityNotFoundError,
+  RESOLVE_SHORT_ID_FETCH_LIMIT,
   RepositoryError,
+  resolveByShortIdPrefix,
 } from './base';
 import { deepMerge } from './merge-utils';
 
@@ -142,32 +143,17 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
   }
 
   /**
-   * Resolve short ID to full ID
+   * Resolve short ID to full ID via the centralized helper.
    */
   private async resolveId(id: string): Promise<string> {
-    // If already a full UUID, return as-is
-    if (id.length === 36 && id.includes('-')) {
-      return id;
-    }
-
-    // Short ID - need to resolve
-    const pattern = prefixToLikePattern(id);
-
-    const results = await select(this.db).from(repos).where(like(repos.repo_id, pattern)).all();
-
-    if (results.length === 0) {
-      throw new EntityNotFoundError('Repo', id);
-    }
-
-    if (results.length > 1) {
-      throw new AmbiguousIdError(
-        'Repo',
-        id,
-        results.map((r: { repo_id: string }) => r.repo_id)
-      );
-    }
-
-    return results[0].repo_id as UUID;
+    return resolveByShortIdPrefix(id, 'Repo', async (pattern) => {
+      const rows = await select(this.db)
+        .from(repos)
+        .where(like(repos.repo_id, pattern))
+        .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
+        .all();
+      return rows.map((r: { repo_id: string }) => r.repo_id);
+    });
   }
 
   /**

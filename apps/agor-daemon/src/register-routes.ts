@@ -651,7 +651,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async create(data: { prompt: string; task_id?: string }, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
-        console.log(`🔀 Forking session: ${id.substring(0, 8)}`);
+        console.log(`🔀 Forking session: ${shortId(id)}`);
         const forkedSession = await sessionsService.fork(id, data, params);
         console.log(`✅ Fork created: ${shortId(forkedSession.session_id)}`);
 
@@ -677,7 +677,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async create(data: Partial<import('@agor/core/types').SpawnConfig>, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
-        console.log(`🌱 Spawning session from: ${id.substring(0, 8)}`);
+        console.log(`🌱 Spawning session from: ${shortId(id)}`);
         const spawnedSession = await sessionsService.spawn(id, data, params);
         console.log(`✅ Spawn created: ${shortId(spawnedSession.session_id)}`);
 
@@ -858,9 +858,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         error instanceof NotFoundError ||
         (error instanceof Error && error.message.includes('No record found'))
       ) {
-        console.log(
-          `⚠️  ${entityType} ${id.substring(0, 8)} was deleted mid-execution - skipping update`
-        );
+        console.log(`⚠️  ${entityType} ${shortId(id)} was deleted mid-execution - skipping update`);
         return false;
       }
       throw error;
@@ -1269,7 +1267,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // Auto-unarchive on prompt
         if (session.archived) {
           console.log(
-            `📦 [Prompt] Auto-unarchiving session ${id.substring(0, 8)} (was archived: ${session.archived_reason || 'unknown reason'})`
+            `📦 [Prompt] Auto-unarchiving session ${shortId(id)} (was archived: ${session.archived_reason || 'unknown reason'})`
           );
           session = (await sessionsService.patch(
             id,
@@ -1323,7 +1321,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             });
 
             console.log(
-              `📬 [Prompt] Auto-queued task for session ${id.substring(0, 8)} at position ${queuedTask.queue_position} ` +
+              `📬 [Prompt] Auto-queued task for session ${shortId(id)} at position ${queuedTask.queue_position} ` +
                 `(session status: ${lockedSession.status}, existing queue items: ${queuedTasks.length})`
             );
 
@@ -1985,7 +1983,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         if (targetTasksArray.length === 0) {
           console.warn(
-            `⚠️  [Stop] No active tasks for session ${id.substring(0, 8)}, resetting to IDLE${stopReason ? ` (reason: ${stopReason})` : ''}`
+            `⚠️  [Stop] No active tasks for session ${shortId(id)}, resetting to IDLE${stopReason ? ` (reason: ${stopReason})` : ''}`
           );
           // ready_for_prompt: true so the post-patch hook drains any QUEUED tasks.
           // Stop is "skip current", not "wipe everything" — queued prompts represent
@@ -2013,13 +2011,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const latestTask = targetTasksArray[0];
 
         console.log(
-          `🛑 [Stop] Stopping task ${shortId(latestTask.task_id)} for session ${id.substring(0, 8)}${stopReason ? ` (reason: ${stopReason})` : ''}`
+          `🛑 [Stop] Stopping task ${shortId(latestTask.task_id)} for session ${shortId(id)}${stopReason ? ` (reason: ${stopReason})` : ''}`
         );
 
         const processKilled = killExecutorProcess(id);
         if (!processKilled) {
           console.warn(
-            `⚠️  [Stop] No tracked process for session ${id.substring(0, 8)} — executor may have already exited`
+            `⚠️  [Stop] No tracked process for session ${shortId(id)} — executor may have already exited`
           );
         }
 

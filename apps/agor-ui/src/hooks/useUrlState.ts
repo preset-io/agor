@@ -41,11 +41,62 @@ export interface UseUrlStateOptions {
 /**
  * Extract the canonical short ID for use in URLs.
  *
- * Same `SHORT_ID_LENGTH` (20-char) shape used everywhere else — URLs use the
+ * Same `SHORT_ID_LENGTH` (24-char) shape used everywhere else — URLs use the
  * same display length as notifications/pills so users can copy-paste between
  * surfaces and have the prefix round-trip via `findByShortIdPrefix`.
  */
 const urlShortId = (uuid: string) => shortId(uuid);
+
+/**
+ * Pure resolver: short-ID prefix → board ID, with ambiguity treated as
+ * not-found. Extracted from the hook closure so it can be unit-tested
+ * directly. See the doc on `resolveSessionFromShortIdPure` for why we
+ * refuse to guess on ambiguous matches.
+ */
+export function resolveBoardFromUrlPure(
+  boardParam: string,
+  boardById: Map<string, { board_id: string; slug?: string }>,
+  onAmbiguous?: (param: string, matchCount: number) => void
+): string | null {
+  for (const board of boardById.values()) {
+    if (board.slug === boardParam) {
+      return board.board_id;
+    }
+  }
+  const matches = findByShortIdPrefix(
+    boardParam,
+    Array.from(boardById.values(), (b) => ({ id: b.board_id }))
+  );
+  if (matches.length === 0) return null;
+  if (matches.length === 1) return matches[0].id;
+  onAmbiguous?.(boardParam, matches.length);
+  return null;
+}
+
+/**
+ * Pure resolver: short-ID prefix → session ID, with ambiguity treated as
+ * not-found. Previously this silently routed to the lexicographically-
+ * greatest match (newest by UUIDv7's time ordering); that was a deliberate
+ * "don't 500 the page" choice when 8-char URLs were collision-prone, but
+ * it could silently land a stale deep link on the *wrong* session. With
+ * `SHORT_ID_LENGTH` now 24 (~290K same-ms IDs before 1% collision),
+ * realistic new URLs are unambiguous, so we'd rather surface the failure
+ * than mis-route.
+ */
+export function resolveSessionFromShortIdPure(
+  sessionShortId: string,
+  sessionById: Map<string, { session_id: string }>,
+  onAmbiguous?: (shortId: string, matchCount: number) => void
+): string | null {
+  const matches = findByShortIdPrefix(
+    sessionShortId,
+    Array.from(sessionById.values(), (s) => ({ id: s.session_id }))
+  );
+  if (matches.length === 0) return null;
+  if (matches.length === 1) return matches[0].id;
+  onAmbiguous?.(sessionShortId, matches.length);
+  return null;
+}
 
 /**
  * Hook for bidirectional URL state synchronization
@@ -133,75 +184,31 @@ export function useUrlState(options: UseUrlStateOptions) {
     }
   }, [currentBoardId, currentSessionId, buildUrl, location.pathname, location.search, navigate]);
 
-  /**
-   * Resolve URL param to board ID.
-   *
-   * Tries slug first (`boardParam === board.slug`), then falls back to a
-   * short-ID prefix match via the shared core helper. Ambiguous prefixes
-   * (multiple boards match) are treated as not-found — see
-   * `resolveSessionFromShortId` for the reasoning. Realistic ambiguity is
-   * only possible for legacy ≤16-char URLs minted before `SHORT_ID_LENGTH`
-   * was bumped to 20.
-   */
-  const resolveBoardFromUrl = useCallback(
-    (boardParam: string): string | null => {
-      for (const board of boardById.values()) {
-        if (board.slug === boardParam) {
-          return board.board_id;
-        }
-      }
-
-      const matches = findByShortIdPrefix(
-        boardParam,
-        Array.from(boardById.values(), (b) => ({ id: b.board_id }))
+  // Dev-only warning on ambiguous URL prefixes — see `resolveSessionFromShortIdPure`
+  // for the rationale. Returning `null` (not-found) is the production behavior.
+  const warnAmbiguous = useCallback((kind: 'board' | 'session', param: string, n: number) => {
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[useUrlState] ${kind === 'board' ? 'Board' : 'Session'} short ID "${param}" matched ${n} ` +
+          `${kind === 'board' ? 'boards' : 'sessions'}; treating as not-found ` +
+          `(URL must use full UUID or unambiguous prefix).`
       );
-      if (matches.length === 0) return null;
-      if (matches.length === 1) return matches[0].id;
+    }
+  }, []);
 
-      // Ambiguous — refuse to guess. Symmetrical with the session resolver.
-      if (import.meta.env.DEV) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[useUrlState] Board short ID "${boardParam}" matched ${matches.length} boards; ` +
-            `treating as not-found (URL must use full UUID or unambiguous prefix).`
-        );
-      }
-      return null;
-    },
-    [boardById]
+  const resolveBoardFromUrl = useCallback(
+    (boardParam: string) =>
+      resolveBoardFromUrlPure(boardParam, boardById, (p, n) => warnAmbiguous('board', p, n)),
+    [boardById, warnAmbiguous]
   );
 
-  /**
-   * Resolve session ID from short ID via the shared core helper.
-   *
-   * On ambiguous prefix (>1 match), returns null — same contract as
-   * "not found." Previously this silently routed to the lexicographically-
-   * greatest match (newest by UUIDv7's time ordering); that was a deliberate
-   * "don't 500 the page" choice when 8-char URLs were collision-prone, but
-   * it could silently land a stale deep link on the *wrong* session. With
-   * `SHORT_ID_LENGTH` now 20 (~580 same-ms IDs before 1% collision),
-   * realistic new URLs are unambiguous, so we'd rather surface the failure
-   * than mis-route.
-   */
   const resolveSessionFromShortId = useCallback(
-    (sessionShortId: string): string | null => {
-      const matches = findByShortIdPrefix(
-        sessionShortId,
-        Array.from(sessionById.values(), (s) => ({ id: s.session_id }))
-      );
-      if (matches.length === 0) return null;
-      if (matches.length === 1) return matches[0].id;
-
-      if (import.meta.env.DEV) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[useUrlState] Session short ID "${sessionShortId}" matched ${matches.length} sessions; ` +
-            `treating as not-found (URL must use full UUID or unambiguous prefix).`
-        );
-      }
-      return null;
-    },
-    [sessionById]
+    (sessionShortId: string) =>
+      resolveSessionFromShortIdPure(sessionShortId, sessionById, (p, n) =>
+        warnAmbiguous('session', p, n)
+      ),
+    [sessionById, warnAmbiguous]
   );
 
   // Sync URL -> State on mount and URL changes

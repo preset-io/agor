@@ -9,8 +9,7 @@
  * register-services.ts and operate on the daemon's DB + filesystem directly.
  */
 
-import type { Database } from '@agor/core/db';
-import { SerializedSessionRepository } from '@agor/core/db';
+import { type Database, SerializedSessionRepository, shortId } from '@agor/core/db';
 import type { AgenticToolName } from '@agor/core/types';
 import {
   computeFileHash,
@@ -84,7 +83,7 @@ export async function pullIfNeeded(ctx: PullContext): Promise<void> {
     const age = Date.now() - latest.created_at;
     if (age > STALE_PROCESSING_THRESHOLD_MS) {
       console.log(
-        `[session-state] Cleaning stale 'processing' row ${latest.id.substring(0, 8)} (age: ${Math.round(age / 1000)}s)`
+        `[session-state] Cleaning stale 'processing' row ${shortId(latest.id)} (age: ${Math.round(age / 1000)}s)`
       );
       await repo.deleteById(latest.id);
       // Fall through: check if there's a 'done' row behind it
@@ -118,13 +117,13 @@ export async function pullIfNeeded(ctx: PullContext): Promise<void> {
   // Case 4: MD5 differs → restore from DB
   if (!latest.payload) {
     console.warn(
-      `[session-state] 'done' row ${latest.id.substring(0, 8)} has no payload, skipping restore`
+      `[session-state] 'done' row ${shortId(latest.id)} has no payload, skipping restore`
     );
     return;
   }
 
   console.log(
-    `[session-state] Restoring session file from DB (row ${latest.id.substring(0, 8)}, turn ${latest.turn_index})`
+    `[session-state] Restoring session file from DB (row ${shortId(latest.id)}, turn ${latest.turn_index})`
   );
   await restoreFile(filePath, latest.payload);
 }
