@@ -306,7 +306,16 @@ export function OnboardingWizard({
   const [apiKey, setApiKey] = useState('');
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName>('claude-code');
   const [testAuthLoading, setTestAuthLoading] = useState(false);
-  const [testAuthResult, setTestAuthResult] = useState<AuthCheckResult | null>(null);
+  // Ambient-auth probe result (CLI login, env var, system credential) — drives
+  // the "Already authenticated → Continue" auto-flip. Set ONLY by the
+  // useEffect that runs on landing/agent-change; never by the Test Connection
+  // button. Conflating these two paths previously caused a typed-key test to
+  // flip the panel and let the user advance without ever saving the key.
+  const [detectedAuth, setDetectedAuth] = useState<AuthCheckResult | null>(null);
+  // Inline feedback from the user clicking "Test Connection" on a typed key.
+  // Never flips the panel, never advances, never saves. Wiped on agent
+  // change and on key edit (stale).
+  const [manualTestResult, setManualTestResult] = useState<AuthCheckResult | null>(null);
   // Lets the user opt out of detected auth (CLI/OAuth/file-probe) and paste
   // a key manually — useful when the detected method isn't what they want
   // (e.g. ChatGPT OAuth detected but they prefer a work API key) or when
@@ -954,10 +963,10 @@ export function OnboardingWizard({
   const handleTestAuth = useCallback(async () => {
     if (!onCheckAuth) return;
     setTestAuthLoading(true);
-    setTestAuthResult(null);
+    setManualTestResult(null);
     const result = await onCheckAuth(selectedAgent, apiKey.trim() || undefined);
     setTestAuthLoading(false);
-    setTestAuthResult(result);
+    setManualTestResult(result);
   }, [onCheckAuth, selectedAgent, apiKey]);
 
   const handleLaunch = useCallback(async () => {
@@ -1036,7 +1045,8 @@ export function OnboardingWizard({
     setApiKey('');
     setSelectedAgent('claude-code');
     setTestAuthLoading(false);
-    setTestAuthResult(null);
+    setDetectedAuth(null);
+    setManualTestResult(null);
     setOverrideDetectedAuth(false);
     setCreatedRepoId(null);
     setCreatedBoardId(null);
@@ -1255,7 +1265,7 @@ export function OnboardingWizard({
         <>
           <Alert
             type="error"
-            title="Clone failed"
+            message="Clone failed"
             description={error}
             showIcon
             style={{ marginBottom: 16, textAlign: 'left' }}
@@ -1297,7 +1307,7 @@ export function OnboardingWizard({
         <>
           <Alert
             type="error"
-            title={error}
+            message={error}
             showIcon
             style={{ marginBottom: 16, textAlign: 'left' }}
           />
@@ -1359,7 +1369,7 @@ export function OnboardingWizard({
           </Form.Item>
         </Form>
 
-        {error && <Alert type="error" title={error} showIcon style={{ marginBottom: 16 }} />}
+        {error && <Alert type="error" message={error} showIcon style={{ marginBottom: 16 }} />}
 
         <Button
           type="primary"
@@ -1378,7 +1388,12 @@ export function OnboardingWizard({
     // "Already auth'd" covers both stored credentials (agentic_tools / env vars
     // / system credentials) AND ambient CLI auth detected by onCheckAuth —
     // e.g. the user already ran `claude auth login` outside the wizard.
-    const isAuthenticated = hasKey || !!testAuthResult?.authenticated;
+    // Auto-flip to "Already authenticated → Continue" ONLY for ambient auth
+    // (stored credential or CLI-detected). The "Test Connection" button writes
+    // to manualTestResult and intentionally never participates here, so a
+    // successful test on a typed key shows inline ✓ feedback without skipping
+    // the Save & Continue step.
+    const isAuthenticated = hasKey || !!detectedAuth?.authenticated;
 
     const renderAuthHint = () => {
       if (selectedAgent === 'claude-code') {
@@ -1439,7 +1454,8 @@ export function OnboardingWizard({
                 setSelectedAgent(value);
                 setApiKey('');
                 setError(null);
-                setTestAuthResult(null);
+                setDetectedAuth(null);
+                setManualTestResult(null);
                 setOverrideDetectedAuth(false);
               }}
               options={[
@@ -1454,7 +1470,7 @@ export function OnboardingWizard({
           </Form.Item>
         </Form>
 
-        {testAuthLoading && !testAuthResult ? (
+        {testAuthLoading && !detectedAuth ? (
           <div style={{ textAlign: 'center', padding: '24px 0' }}>
             <Spin />
             <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
@@ -1469,10 +1485,10 @@ export function OnboardingWizard({
               title={
                 hasKey
                   ? `${AGENT_LABELS[selectedAgent]} is configured`
-                  : `Already authenticated${testAuthResult?.method ? ` (${testAuthResult.method})` : ''}`
+                  : `Already authenticated${detectedAuth?.method ? ` (${detectedAuth.method})` : ''}`
               }
               subTitle={
-                testAuthResult?.hint || `You're all set to use ${AGENT_LABELS[selectedAgent]}.`
+                detectedAuth?.hint || `You're all set to use ${AGENT_LABELS[selectedAgent]}.`
               }
             />
             <Space direction="vertical" size="small">
@@ -1517,22 +1533,35 @@ export function OnboardingWizard({
                 <Input.Password
                   placeholder={apiKeyPlaceholder(selectedAgent)}
                   value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
+                  onChange={(e) => {
+                    setApiKey(e.target.value);
+                    // Editing the key invalidates any prior test result.
+                    setManualTestResult(null);
+                  }}
                 />
               </Form.Item>
             </Form>
 
-            {error && <Alert type="error" title={error} showIcon style={{ marginBottom: 16 }} />}
+            {error && <Alert type="error" message={error} showIcon style={{ marginBottom: 16 }} />}
 
-            {testAuthResult && !testAuthResult.authenticated && (
-              <Alert
-                type="warning"
-                showIcon
-                style={{ marginBottom: 16, textAlign: 'left' }}
-                title="Not authenticated"
-                description={testAuthResult.hint}
-              />
-            )}
+            {manualTestResult &&
+              (manualTestResult.authenticated ? (
+                <Alert
+                  type="success"
+                  showIcon
+                  style={{ marginBottom: 16, textAlign: 'left' }}
+                  message="Connection works"
+                  description={manualTestResult.hint || 'Click Save & Continue to store this key.'}
+                />
+              ) : (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginBottom: 16, textAlign: 'left' }}
+                  message="Not authenticated"
+                  description={manualTestResult.hint}
+                />
+              ))}
 
             <Space wrap>
               <Button
@@ -1571,7 +1600,7 @@ export function OnboardingWizard({
       {error && (
         <Alert
           type="error"
-          title={error}
+          message={error}
           showIcon
           style={{ marginBottom: 16, textAlign: 'left' }}
         />
@@ -1695,10 +1724,10 @@ export function OnboardingWizard({
     if (currentStep !== 'api-keys' || !onCheckAuth) return;
     if (autoTestedAgentRef.current === selectedAgent) return;
     autoTestedAgentRef.current = selectedAgent;
-    setTestAuthResult(null);
+    setDetectedAuth(null);
     setTestAuthLoading(true);
     onCheckAuth(selectedAgent)
-      .then((result) => setTestAuthResult(result))
+      .then((result) => setDetectedAuth(result))
       .catch(() => {})
       .finally(() => setTestAuthLoading(false));
   }, [currentStep, selectedAgent, onCheckAuth]);
