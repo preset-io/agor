@@ -377,9 +377,22 @@ export function OnboardingWizard({
   };
 
   // ─── Resume from prior onboarding state ──────────
+  //
+  // ONE-SHOT: this effect runs exactly once per wizard mount, before any
+  // user interaction. The wizard's own `saveOnboardingProgress` writes the
+  // user-selected path back to `user.preferences.onboarding.path`, which
+  // would otherwise cause this effect to re-fire AFTER the user picks a
+  // path — making a fresh-flow user look like a returning-resumption user
+  // and triggering bogus step jumps (e.g. the assistant-path branch picks
+  // up the SHARED framework repo and skips to "board", silently bypassing
+  // api-keys and clone). resumedRef.current is set unconditionally at the
+  // end so subsequent re-renders are no-ops. Wizard remount on user
+  // change (key={currentUser.user_id} in App.tsx) gives each user a fresh
+  // shot at the resume decision.
   const resumedRef = useRef(false);
   useEffect(() => {
     if (!open || resumedRef.current || !user) return;
+    resumedRef.current = true;
 
     const onboarding = user.preferences?.onboarding;
     const mainBoardId = user.preferences?.mainBoardId;
@@ -410,9 +423,12 @@ export function OnboardingWizard({
       mainBoardId && boardById.get(mainBoardId)?.created_by === user.user_id
         ? mainBoardId
         : undefined;
-    // Repos are shared resources (no created_by attribution). The repoId
-    // existing in the map is the only signal we have, which is fine — the
-    // damaging skips are board/worktree, not repo.
+    // Repos are SHARED resources (no created_by attribution). We require a
+    // saved repoId in the user's own preferences as proof that this user
+    // intentionally adopted this repo — we deliberately do NOT pick up
+    // matching repos from the map otherwise (e.g. via findReadyFrameworkRepo)
+    // as that would let a new user inherit any framework repo cloned by a
+    // prior user and skip the clone step.
     const validRepoId =
       onboarding.repoId && repoById.has(onboarding.repoId) ? onboarding.repoId : undefined;
 
@@ -428,8 +444,6 @@ export function OnboardingWizard({
       });
     }
 
-    // We have prior onboarding state — resume from where user left off
-    resumedRef.current = true;
     // Map legacy 'persisted-agent' to 'assistant'
     const resumedPath: WizardPath =
       onboarding.path === 'persisted-agent' ? 'assistant' : (onboarding.path as WizardPath);
@@ -441,9 +455,7 @@ export function OnboardingWizard({
     }
 
     // Restore repoId so the worktree step doesn't fail "Missing repo or board"
-    // on resume. The safety-net effect can re-derive it for the assistant path
-    // (framework slug) but has no signal for an own-repo resume because
-    // `repoUrl`/`localRepoPath` are local state and reset to ''.
+    // on resume.
     if (validRepoId) {
       setCreatedRepoId(validRepoId);
     }
@@ -462,19 +474,8 @@ export function OnboardingWizard({
     } else if (validRepoId) {
       // Repo is registered (already restored above) — go straight to board
       setCurrentStep('board');
-    } else if (resumedPath === 'assistant') {
-      // Assistant path may have a framework repo cloned outside this wizard
-      // (or under a prior onboarding without persisted repoId). Try to find it.
-      const found = findReadyFrameworkRepo(repoById);
-      if (found) {
-        setCreatedRepoId(found[0]);
-        setCurrentStep('board');
-      } else {
-        // Nothing created yet — restart from api-keys (first real step in new flow)
-        setCurrentStep('api-keys');
-      }
     } else {
-      // own-repo with nothing created — restart from api-keys
+      // Nothing the user actually created yet — restart from api-keys
       setCurrentStep('api-keys');
     }
   }, [
@@ -729,20 +730,23 @@ export function OnboardingWizard({
       // Persist chosen path immediately
       saveOnboardingProgress({ path: selectedPath });
 
-      // API keys is now the first step for both paths.
-      // Check if framework repo already exists (assistant) — if so, skip ahead.
-      if (selectedPath === 'assistant') {
-        const found = findReadyFrameworkRepo(repoById);
-        if (found) {
-          setCreatedRepoId(found[0]);
-          setCurrentStep('board');
-          return;
-        }
-      }
-
+      // Always advance to api-keys after path selection.
+      //
+      // Previously the assistant branch did `findReadyFrameworkRepo(repoById)`
+      // and skipped to "board" if any framework repo was found anywhere in
+      // the daemon. The framework repo is a SHARED resource (no per-user
+      // attribution), so as soon as one admin or earlier user had cloned it,
+      // every subsequent user picking the assistant path would silently
+      // bypass the api-keys + clone steps and land on board creation. That
+      // matches the reported bug: brand-new user picks "Assistant", wizard
+      // skips past LLM auth and clone, lands at board / worktree creation.
+      //
+      // The assistant clone step is now reached via the api-keys path like
+      // every other tool; handleStartClone deduplicates against the shared
+      // framework repo at the daemon level (so re-cloning is a no-op).
       setCurrentStep('api-keys');
     },
-    [repoById, saveOnboardingProgress, setCurrentStep]
+    [saveOnboardingProgress, setCurrentStep]
   );
 
   const handleStartClone = useCallback(async () => {
