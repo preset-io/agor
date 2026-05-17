@@ -18,12 +18,6 @@ export const NotificationType = {
 } as const;
 export type NotificationType = (typeof NotificationType)[keyof typeof NotificationType];
 
-export const NotificationScope = {
-  USER: 'user',
-  GLOBAL: 'global',
-} as const;
-export type NotificationScope = (typeof NotificationScope)[keyof typeof NotificationScope];
-
 /**
  * Notification identifier — UUIDv7, 36 chars.
  */
@@ -42,12 +36,6 @@ export interface NotificationData {
   /** Agentic tool icon hint for `session_returned` cards (`claude-code` etc.) */
   agentic_tool?: string;
 
-  /** Number of messages produced by the completing task (for the meta line). */
-  message_count?: number;
-
-  /** Optional mention excerpt (~120 chars around the @-token). */
-  mention_excerpt?: string;
-
   /**
    * Group id for admin broadcasts — every fanned-out row in a single broadcast
    * shares this id so we can bulk-expire / bulk-patch.
@@ -62,15 +50,12 @@ export interface Notification {
   /** The user that should see this row. */
   recipient_user_id: UserID;
 
-  /** Type discriminator — drives icon, color, link, and grouping. */
+  /** Type discriminator — drives icon and link target. */
   type: NotificationType;
 
   /** Materialized for the panel — no joins required to render. */
   title: string;
   preview?: string;
-
-  /** Optional override for the click-through. If null, derived from source_*. */
-  link_url?: string;
 
   /**
    * Source pointers — all optional, depend on type. SET NULL on cascade so
@@ -88,11 +73,8 @@ export interface Notification {
   /** Null = unread; set timestamp = read. Dismiss is hard-delete (no column). */
   read_at?: Date;
 
-  /** Optional auto-expiry (admin banners). */
+  /** Admin-set on "Expire now"; client filters expired banners out. */
   expires_at?: Date;
-
-  /** `user` (default) or `global` (admin broadcast). */
-  scope: NotificationScope;
 
   /** Type-specific extras (see NotificationData). */
   data: NotificationData;
@@ -122,7 +104,6 @@ export interface NotificationPatch {
 export interface NotificationBroadcastInput {
   title: string;
   preview?: string;
-  link_url?: string;
   banner?: boolean;
   expires_at?: Date | null;
   /** Optional override; otherwise the service generates one. */
@@ -135,7 +116,6 @@ export interface NotificationBroadcastInput {
 export interface NotificationQuery {
   recipient_user_id?: string;
   type?: NotificationType;
-  scope?: NotificationScope;
   /** `true` returns only unread rows; `false` returns only read rows. */
   unread?: boolean;
   $limit?: number;

@@ -505,14 +505,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           source_worktree_id: session.worktree_id,
           source_board_id: session.worktree_board_id ?? undefined,
           source_task_id: task.task_id,
-          scope: 'user',
           data: {
             agentic_tool: session.agentic_tool,
-            message_count:
-              task.message_range?.end_index !== undefined &&
-              task.message_range?.start_index !== undefined
-                ? task.message_range.end_index - task.message_range.start_index + 1
-                : undefined,
           },
         });
       } catch (err) {

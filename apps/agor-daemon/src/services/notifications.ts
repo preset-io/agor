@@ -32,7 +32,6 @@ import { userRoomName } from '../setup/socketio';
 export type NotificationsParams = QueryParams<{
   recipient_user_id?: string;
   type?: Notification['type'];
-  scope?: Notification['scope'];
   unread?: boolean;
 }> &
   AuthenticatedParams;
@@ -84,7 +83,6 @@ export class NotificationsService extends DrizzleService<
     const filters = {
       recipient_user_id: userId, // authenticated user only
       type: q.type as Notification['type'] | undefined,
-      scope: q.scope as Notification['scope'] | undefined,
       unread: q.unread,
     };
 
@@ -242,7 +240,6 @@ export class NotificationsService extends DrizzleService<
     const rows = await this.notifRepo.broadcast({
       title: data.title,
       preview: data.preview,
-      link_url: data.link_url,
       banner: data.banner ?? false,
       expires_at: data.expires_at ?? undefined,
       broadcast_group_id: groupId,

@@ -14,7 +14,6 @@ export default {
   'internal-mcp': 'Agor MCP Server',
   'rich-chat-ux': 'Rich Chat UX',
   'multiplayer-social': 'Multiplayer & Social',
-  notifications: 'Notifications',
   'environment-configuration': 'Environments',
   scheduler: 'Scheduler',
   cards: 'Cards (Beta)',

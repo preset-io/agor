@@ -16,7 +16,6 @@ import type {
   NotificationCreate,
   NotificationData,
   NotificationID,
-  NotificationScope,
   NotificationType,
   UUID,
 } from '@agor/core/types';
@@ -30,7 +29,6 @@ import { type BaseRepository, EntityNotFoundError, RepositoryError } from './bas
 export interface NotificationFilters {
   recipient_user_id?: string;
   type?: NotificationType;
-  scope?: NotificationScope;
   /** `true` = unread only; `false` = read only; omit for both. */
   unread?: boolean;
 }
@@ -59,7 +57,6 @@ export class NotificationsRepository
       type: row.type as NotificationType,
       title: row.title,
       preview: row.preview ?? undefined,
-      link_url: row.link_url ?? undefined,
       source_session_id: row.source_session_id ? (row.source_session_id as UUID) : undefined,
       source_worktree_id: row.source_worktree_id ? (row.source_worktree_id as UUID) : undefined,
       source_board_id: row.source_board_id ? (row.source_board_id as UUID) : undefined,
@@ -68,7 +65,6 @@ export class NotificationsRepository
       source_user_id: row.source_user_id ? (row.source_user_id as UUID) : undefined,
       read_at: row.read_at ? new Date(row.read_at) : undefined,
       expires_at: row.expires_at ? new Date(row.expires_at) : undefined,
-      scope: (row.scope as NotificationScope) ?? 'user',
       data,
     };
   }
@@ -82,7 +78,6 @@ export class NotificationsRepository
       type: notif.type,
       title: notif.title,
       preview: notif.preview ?? null,
-      link_url: notif.link_url ?? null,
       source_session_id: notif.source_session_id ?? null,
       source_worktree_id: notif.source_worktree_id ?? null,
       source_board_id: notif.source_board_id ?? null,
@@ -91,7 +86,6 @@ export class NotificationsRepository
       source_user_id: notif.source_user_id ?? null,
       read_at: notif.read_at ?? null,
       expires_at: notif.expires_at ?? null,
-      scope: notif.scope ?? 'user',
       data: (notif.data ?? {}) as NotificationData,
     };
   }
@@ -153,9 +147,6 @@ export class NotificationsRepository
     }
     if (filters?.type) {
       conditions.push(eq(notifications.type, filters.type));
-    }
-    if (filters?.scope) {
-      conditions.push(eq(notifications.scope, filters.scope));
     }
     if (filters?.unread === true) {
       conditions.push(isNull(notifications.read_at));
@@ -289,7 +280,6 @@ export class NotificationsRepository
           .set({
             title: notif.title,
             preview: notif.preview ?? null,
-            link_url: notif.link_url ?? null,
             source_task_id: notif.source_task_id ?? null,
             source_worktree_id: notif.source_worktree_id ?? target.source_worktree_id,
             source_board_id: notif.source_board_id ?? target.source_board_id,
@@ -437,7 +427,6 @@ export class NotificationsRepository
   async broadcast(payload: {
     title: string;
     preview?: string;
-    link_url?: string;
     banner: boolean;
     expires_at?: Date;
     broadcast_group_id: string;
@@ -459,7 +448,6 @@ export class NotificationsRepository
       type: 'global_admin',
       title: payload.title,
       preview: payload.preview ?? null,
-      link_url: payload.link_url ?? null,
       source_session_id: null,
       source_worktree_id: null,
       source_board_id: null,
@@ -468,7 +456,6 @@ export class NotificationsRepository
       source_user_id: payload.source_user_id,
       read_at: null,
       expires_at: payload.expires_at ?? null,
-      scope: 'global',
       data,
     }));
 

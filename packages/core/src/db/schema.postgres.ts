@@ -1492,7 +1492,6 @@ export const notifications = pgTable(
 
     title: text('title').notNull(),
     preview: text('preview'),
-    link_url: text('link_url'),
 
     source_session_id: varchar('source_session_id', { length: 36 }).references(
       () => sessions.session_id,
@@ -1516,10 +1515,6 @@ export const notifications = pgTable(
 
     read_at: t.timestamp('read_at'),
     expires_at: t.timestamp('expires_at'),
-
-    scope: text('scope', { enum: ['user', 'global'] })
-      .notNull()
-      .default('user'),
 
     data: t.json<NotificationData>('data').notNull().default(sql`'{}'`),
   },

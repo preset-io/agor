@@ -5,7 +5,6 @@ CREATE TABLE "notifications" (
 	"type" text NOT NULL,
 	"title" text NOT NULL,
 	"preview" text,
-	"link_url" text,
 	"source_session_id" varchar(36),
 	"source_worktree_id" varchar(36),
 	"source_board_id" varchar(36),
@@ -14,7 +13,6 @@ CREATE TABLE "notifications" (
 	"source_user_id" varchar(36),
 	"read_at" timestamp with time zone,
 	"expires_at" timestamp with time zone,
-	"scope" text DEFAULT 'user' NOT NULL,
 	"data" jsonb DEFAULT '{}'::jsonb NOT NULL
 );
 --> statement-breakpoint

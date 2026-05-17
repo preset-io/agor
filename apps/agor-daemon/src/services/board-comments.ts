@@ -207,10 +207,7 @@ export class BoardCommentsService extends DrizzleService<
           source_board_id: comment.board_id ?? undefined,
           source_comment_id: comment.comment_id,
           source_user_id: comment.created_by ?? undefined,
-          scope: 'user',
-          data: {
-            mention_excerpt: preview,
-          },
+          data: {},
         });
       } catch (err) {
         console.warn(
