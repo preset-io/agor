@@ -1315,8 +1315,15 @@ function AppContent() {
           onLogout={logout}
         />
 
-        {/* Onboarding Wizard - shown for new users */}
+        {/* Onboarding Wizard - shown for new users.
+            Key by user identity so the wizard's local React state (currentStep,
+            resumedRef, createdRepoId, etc.) is bound to the signed-in user.
+            On any user change (logout → login as someone else, or admin
+            impersonate), React tears down + remounts the wizard with fresh
+            state, eliminating any chance of one user's onboarding progress
+            leaking into another user's session. */}
         <OnboardingWizard
+          key={currentUser?.user_id ?? '__anon__'}
           open={onboardingWizardOpen}
           onComplete={handleOnboardingComplete}
           repoById={repoById}
