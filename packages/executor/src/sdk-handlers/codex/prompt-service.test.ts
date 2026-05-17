@@ -21,6 +21,18 @@ const appServerMocks = vi.hoisted(() => ({
   forkCodexThreadViaAppServer: vi.fn(),
 }));
 
+const mcpScopingMocks = vi.hoisted(() => ({
+  getMcpServersForSession: vi.fn(),
+}));
+
+const mcpAuthMocks = vi.hoisted(() => ({
+  resolveMCPAuthHeaders: vi.fn(),
+}));
+
+const configMocks = vi.hoisted(() => ({
+  getDaemonUrl: vi.fn(),
+}));
+
 import { CodexPromptService } from './prompt-service.js';
 
 // Track how many Codex instances were created (module-level state)
@@ -38,6 +50,9 @@ async function* streamMockEvents() {
 
 // Mock @agor/core/sdk to avoid spawning real Codex CLI processes
 vi.mock('./app-server-client.js', () => appServerMocks);
+vi.mock('../base/mcp-scoping.js', () => mcpScopingMocks);
+vi.mock('@agor/core/tools/mcp/jwt-auth', () => mcpAuthMocks);
+vi.mock('../../config.js', () => configMocks);
 
 vi.mock('@agor/core/sdk', () => {
   class MockCodexClient {
@@ -746,5 +761,140 @@ describe('CodexPromptService - tool payload mapping', () => {
         }
       })()
     ).rejects.toThrow('Codex stream error: stream exploded');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MCP server config builder
+//
+// Regression coverage for the fix in this PR: every Codex MCP server config
+// Agor emits must carry `default_tools_approval_mode: "approve"`. Without it,
+// Codex's elicitation layer prompts for every MCP tool call, and in headless
+// `exec --json` mode (what @openai/codex-sdk uses) those prompts resolve to
+// "user cancelled MCP tool call". See
+// codex-rs/codex-mcp/src/mcp/mod.rs::mcp_permission_prompt_is_auto_approved.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('CodexPromptService - buildMcpServersConfig', () => {
+  const mockMcpServerRepo = {
+    findById: vi.fn(),
+  } as any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([]);
+    mcpAuthMocks.resolveMCPAuthHeaders.mockResolvedValue(null);
+    configMocks.getDaemonUrl.mockResolvedValue('http://localhost:3030');
+  });
+
+  const makeService = () =>
+    new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockWorktreesRepo,
+      undefined,
+      'test-api-key',
+      mockMcpServerRepo
+    );
+
+  it('emits default_tools_approval_mode=approve on the built-in agor server', async () => {
+    const service = makeService();
+    const { servers, total } = await (service as any).buildMcpServersConfig(
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      'agor-bearer-token',
+      undefined
+    );
+
+    expect(total).toBe(1);
+    expect(servers.agor).toMatchObject({
+      url: 'http://localhost:3030/mcp',
+      default_tools_approval_mode: 'approve',
+    });
+  });
+
+  it('emits default_tools_approval_mode=approve on a stdio server', async () => {
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+      {
+        server: {
+          name: 'github',
+          transport: 'stdio',
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-github'],
+          env: { GITHUB_TOKEN: 'xxx' },
+        },
+      },
+    ]);
+
+    const service = makeService();
+    const { servers, total } = await (service as any).buildMcpServersConfig(
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      undefined,
+      undefined
+    );
+
+    expect(total).toBe(1);
+    expect(servers.github).toMatchObject({
+      command: 'npx',
+      default_tools_approval_mode: 'approve',
+    });
+  });
+
+  it('emits default_tools_approval_mode=approve on an http/sse server', async () => {
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+      {
+        server: {
+          name: 'remote',
+          transport: 'http',
+          url: 'https://example.com/mcp',
+        },
+      },
+    ]);
+
+    const service = makeService();
+    const { servers, total } = await (service as any).buildMcpServersConfig(
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      undefined,
+      undefined
+    );
+
+    expect(total).toBe(1);
+    expect(servers.remote).toMatchObject({
+      url: 'https://example.com/mcp',
+      default_tools_approval_mode: 'approve',
+    });
+  });
+
+  it('applies default_tools_approval_mode=approve to ALL servers in a mixed config', async () => {
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+      {
+        server: {
+          name: 'github',
+          transport: 'stdio',
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-github'],
+        },
+      },
+      {
+        server: {
+          name: 'linear',
+          transport: 'http',
+          url: 'https://mcp.linear.app/sse',
+        },
+      },
+    ]);
+
+    const service = makeService();
+    const { servers, total } = await (service as any).buildMcpServersConfig(
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      'agor-bearer-token',
+      undefined
+    );
+
+    expect(total).toBe(3);
+    for (const name of ['agor', 'github', 'linear']) {
+      expect(servers[name], `server "${name}" missing approval mode`).toMatchObject({
+        default_tools_approval_mode: 'approve',
+      });
+    }
   });
 });

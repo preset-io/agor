@@ -85,10 +85,13 @@ export type {
  * Get the default permission mode for a given agentic tool
  *
  * Per tool:
- * - Claude Code: 'acceptEdits' — Claude's ask-for-permission flow is good
- *   UX; auto-accept file edits but ask for Bash/MCP. Users can switch a
- *   running session to `bypassPermissions` mid-flight from the session UI
- *   if the prompts get noisy.
+ * - Claude Code: 'acceptEdits' — auto-accept file edits. Bash/shell tool
+ *   prompts still flow through Agor's permission UI; MCP tool calls for
+ *   the built-in `agor` server and any attached MCP servers are
+ *   auto-approved by the executor's canUseTool hook (see
+ *   sdk-handlers/claude/permissions/permission-hooks.ts), so MCP-heavy
+ *   sessions don't death-by-modal. Users can flip a running session to
+ *   `bypassPermissions` mid-flight from the session UI.
  * - Codex: 'allow-all' — maps to sandbox `workspace-write` + approval
  *   `never` + network-on. Codex's MCP auto-approve is wired through
  *   `default_tools_approval_mode = "approve"` on each server config

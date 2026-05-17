@@ -2,8 +2,8 @@
  * Tests for session.ts runtime behavior
  *
  * Per-tool defaults:
- * - Claude Code: acceptEdits (auto-accept edits; ask for Bash/MCP — users
- *   can switch a running session to bypassPermissions mid-flight)
+ * - Claude Code: acceptEdits (auto-accept edits; Bash still asks; MCP
+ *   tool calls are auto-approved in the executor via canUseTool)
  * - Codex: allow-all (sandbox workspace-write + approval never +
  *   network-on; MCP elicitation auto-approved via per-server
  *   default_tools_approval_mode in the executor)
@@ -20,7 +20,7 @@ describe('getDefaultPermissionMode', () => {
     expect(getDefaultPermissionMode('codex')).toBe('allow-all');
   });
 
-  it('returns "acceptEdits" for claude-code (auto-edit, ask for Bash/MCP)', () => {
+  it('returns "acceptEdits" for claude-code (auto-edit; Bash asks; MCP auto-approved in executor)', () => {
     expect(getDefaultPermissionMode('claude-code')).toBe('acceptEdits');
   });
 
@@ -44,7 +44,7 @@ describe('getDefaultPermissionMode', () => {
       expect(mode).toBe('allow-all');
     });
 
-    it('claude-code uses acceptEdits (auto-edit, prompt for Bash/MCP)', () => {
+    it('claude-code uses acceptEdits (auto-edit; Bash asks; MCP auto-approved in executor)', () => {
       const mode = getDefaultPermissionMode('claude-code');
       expect(mode).toBe('acceptEdits');
     });

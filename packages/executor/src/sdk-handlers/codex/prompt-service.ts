@@ -27,7 +27,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { shortId } from '@agor/core/db';
-import type { Thread, ThreadItem } from '@agor/core/sdk';
+import type { CodexOptions, Thread, ThreadItem } from '@agor/core/sdk';
 import { Codex } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
@@ -66,14 +66,27 @@ function toCodexReasoningEffort(
 }
 
 /**
- * Mirrors the (unexported) `CodexConfigObject` shape from `@openai/codex-sdk`.
- * The SDK flattens nested objects into `--config key.path=value` flags and
- * TOML-quotes string values automatically.
+ * Codex CLI config payload, sourced from the SDK's public `CodexOptions`
+ * surface so we follow the SDK automatically. The SDK flattens nested
+ * objects into `--config key.path=value` flags and TOML-quotes string
+ * values for us.
  */
-type CodexConfigValue = string | number | boolean | CodexConfigValue[] | CodexConfigObject;
-interface CodexConfigObject {
-  [key: string]: CodexConfigValue;
-}
+type CodexConfigObject = NonNullable<CodexOptions['config']>;
+type CodexConfigValue = CodexConfigObject[string];
+
+/**
+ * Per-MCP-server config snippet that auto-approves all tool calls without
+ * a user prompt. Codex's MCP elicitation gates tool calls behind a per-
+ * server prompt that defaults to `Prompt`; in headless `exec --json`
+ * (what `@openai/codex-sdk` uses), prompts resolve to "user cancelled
+ * MCP tool call". Setting `default_tools_approval_mode = "approve"`
+ * short-circuits that prompt and matches Agor's "trust the worktree
+ * sandbox, don't gate every MCP self-call" model. See
+ * `codex-rs/codex-mcp/src/mcp/mod.rs::mcp_permission_prompt_is_auto_approved`
+ * — without this, only `danger-full-access` (which grants full-disk-write)
+ * clears the prompt.
+ */
+const MCP_AUTO_APPROVE: CodexConfigObject = { default_tools_approval_mode: 'approve' };
 
 export interface CodexPromptResult {
   /** Complete assistant response from Codex */
@@ -514,16 +527,6 @@ export class CodexPromptService {
 
     const result: CodexConfigObject = {};
     const claimedNames = new Set<string>();
-
-    // Codex's MCP layer gates tool calls behind a per-server elicitation that
-    // defaults to a user prompt; in headless `exec --json` (what the SDK uses),
-    // prompts resolve to "user cancelled MCP tool call". Setting
-    // `default_tools_approval_mode = "approve"` short-circuits that prompt and
-    // auto-approves calls, matching Agor's "trust the worktree sandbox, don't
-    // gate every MCP self-call" model. See codex-mcp/src/mcp/mod.rs
-    // `mcp_permission_prompt_is_auto_approved` — without this, only
-    // `danger-full-access` (which grants full-disk-write) clears the prompt.
-    const MCP_AUTO_APPROVE: CodexConfigObject = { default_tools_approval_mode: 'approve' };
 
     // Built-in Agor MCP server (streamable HTTP). Token travels via
     // bearer_token_env_var — never in the URL.
