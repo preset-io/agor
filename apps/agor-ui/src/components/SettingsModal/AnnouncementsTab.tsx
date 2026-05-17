@@ -5,7 +5,6 @@ import {
   Checkbox,
   Form,
   Input,
-  InputNumber,
   Modal,
   message,
   Space,
@@ -240,8 +239,6 @@ interface ComposeForm {
   title: string;
   preview?: string;
   banner: boolean;
-  expireValue?: number;
-  expireUnit?: 'minutes' | 'hours' | 'days';
 }
 
 const ComposeAnnouncementModal: React.FC<ComposeAnnouncementModalProps> = ({
@@ -259,13 +256,11 @@ const ComposeAnnouncementModal: React.FC<ComposeAnnouncementModalProps> = ({
       const values = await form.validateFields();
       setSubmitting(true);
 
-      const expires_at = computeExpiresAt(values);
       // biome-ignore lint/suspicious/noExplicitAny: dynamic feathers service typing
       await (client.service('notifications') as any).broadcast({
         title: values.title,
         preview: values.preview,
         banner: values.banner ?? false,
-        expires_at: expires_at?.toISOString(),
       });
       message.success('Announcement sent');
       form.resetFields();
@@ -291,12 +286,7 @@ const ComposeAnnouncementModal: React.FC<ComposeAnnouncementModalProps> = ({
       okButtonProps={{ loading: submitting }}
       destroyOnClose
     >
-      <Form
-        form={form}
-        layout="vertical"
-        initialValues={{ banner: false, expireUnit: 'hours' }}
-        preserve={false}
-      >
+      <Form form={form} layout="vertical" initialValues={{ banner: false }} preserve={false}>
         <Form.Item
           name="title"
           label="Title"
@@ -323,36 +313,11 @@ const ComposeAnnouncementModal: React.FC<ComposeAnnouncementModalProps> = ({
           <Checkbox>Show as a sticky banner in the navbar</Checkbox>
         </Form.Item>
 
-        <Form.Item label="Auto-expire after">
-          <Space>
-            <Form.Item name="expireValue" noStyle>
-              <InputNumber min={1} placeholder="(never)" style={{ width: 100 }} />
-            </Form.Item>
-            <Form.Item name="expireUnit" noStyle>
-              <Input style={{ width: 100 }} placeholder="hours" disabled={false} />
-            </Form.Item>
-            <Text type="secondary">(blank = never expires)</Text>
-          </Space>
-        </Form.Item>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          Announcements stay visible until you click <strong>Expire now</strong> from the list
+          above.
+        </Text>
       </Form>
     </Modal>
   );
 };
-
-function computeExpiresAt(values: ComposeForm): Date | undefined {
-  if (!values.expireValue || values.expireValue <= 0) return undefined;
-  const ms = unitToMs(values.expireUnit ?? 'hours') * values.expireValue;
-  return new Date(Date.now() + ms);
-}
-
-function unitToMs(unit: 'minutes' | 'hours' | 'days' | string): number {
-  switch (unit) {
-    case 'minutes':
-      return 60_000;
-    case 'days':
-      return 86_400_000;
-    case 'hours':
-    default:
-      return 3_600_000;
-  }
-}

@@ -309,6 +309,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       'expireBroadcast',
       'listBroadcasts',
       'markAllRead',
+      'clearAll',
       'unreadCount',
     ],
   });
@@ -331,6 +332,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       expireBroadcast: [ctx.requireAuth, requireAdminHook],
       listBroadcasts: [ctx.requireAuth, requireAdminHook],
       markAllRead: [ctx.requireAuth],
+      clearAll: [ctx.requireAuth],
       unreadCount: [ctx.requireAuth],
     },
     // biome-ignore lint/suspicious/noExplicitAny: custom-method hook keys (broadcast/expireBroadcast/etc.) aren't in feathers' HookTypeMap

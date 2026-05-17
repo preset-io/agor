@@ -6,9 +6,12 @@
  * - Subscribes to `notification:created` / `notification:patched` /
  *   `notification:removed` on the user's per-user socket room.
  * - Subscribes to `notification:all_read` for the cross-tab mark-all-read sync.
- * - Subscribes to `notification:bulk_removed` for archive sweeps.
- * - Exposes `markRead`, `dismiss`, `markAllRead`, `dismissBroadcast`.
+ * - Subscribes to `notification:bulk_removed` for archive sweeps and Clear.
+ * - Exposes `markRead`, `dismiss`, `markAllRead`, `clearAll`, `dismissBroadcast`.
  * - Derives `unreadCount`, `activeBanner` for the AppHeader.
+ *
+ * The bell component calls `markAllRead()` when the popover opens (open = read,
+ * per §3.2) and `clearAll()` from the panel header's Clear button.
  *
  * Design ref: `docs/notification-system-design.md` §8.
  */
@@ -26,6 +29,7 @@ interface UseNotificationsResult {
   markRead: (notificationId: string) => Promise<void>;
   dismiss: (notificationId: string) => Promise<void>;
   markAllRead: () => Promise<void>;
+  clearAll: () => Promise<void>;
   dismissBroadcast: (broadcastGroupId: string) => Promise<void>;
   refetch: () => Promise<void>;
 }
@@ -241,6 +245,20 @@ export function useNotifications(
     }
   }, [client, userId]);
 
+  const clearAll = useCallback(async () => {
+    if (!client || !userId) return;
+    // Optimistic: drop everything from local state. Server emits
+    // `notification:bulk_removed` for cross-tab sync.
+    setById(new Map());
+    try {
+      await client.service('notifications').clearAll({});
+    } catch (err) {
+      console.warn('[useNotifications] clearAll failed:', err);
+      // Refetch to recover state if the server rejected.
+      refetch().catch(() => {});
+    }
+  }, [client, userId, refetch]);
+
   const dismissBroadcast = useCallback(
     async (broadcastGroupId: string) => {
       // Find local row in the broadcast and dismiss it (per-user delete);
@@ -262,6 +280,7 @@ export function useNotifications(
     markRead,
     dismiss,
     markAllRead,
+    clearAll,
     dismissBroadcast,
     refetch,
   };

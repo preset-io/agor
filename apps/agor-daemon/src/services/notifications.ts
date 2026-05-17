@@ -207,6 +207,22 @@ export class NotificationsService extends DrizzleService<
   }
 
   /**
+   * Custom method: Hard-delete every notification for the calling user.
+   * Powers the panel's "Clear" button (§3.2).
+   */
+  async clearAll(_data: unknown, params?: NotificationsParams): Promise<{ removed: number }> {
+    const userId = this.getRequestingUserId(params);
+    if (!userId) {
+      throw new Error('Authentication required');
+    }
+    const ids = await this.notifRepo.deleteAllForRecipient(userId);
+    if (this.app.io && ids.length > 0) {
+      this.app.io.to(userRoomName(userId)).emit('notification:bulk_removed', { ids });
+    }
+    return { removed: ids.length };
+  }
+
+  /**
    * Custom method: Unread count for the calling user. Used by the badge.
    */
   async unreadCount(_data: unknown, params?: NotificationsParams): Promise<{ count: number }> {

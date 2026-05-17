@@ -647,9 +647,9 @@ export const App: React.FC<AppProps> = ({
     notifications,
     unreadCount: notificationUnreadCount,
     activeBanner,
-    markRead: markNotificationRead,
     dismiss: dismissNotification,
     markAllRead: markAllNotificationsRead,
+    clearAll: clearAllNotifications,
   } = useNotifications(client, user?.user_id);
 
   // Include current user in the global facepile (always first)
@@ -795,9 +795,9 @@ export const App: React.FC<AppProps> = ({
               notifications={notifications}
               notificationUnreadCount={notificationUnreadCount}
               activeBanner={activeBanner}
-              onNotificationMarkRead={markNotificationRead}
               onNotificationDismiss={dismissNotification}
               onNotificationMarkAllRead={markAllNotificationsRead}
+              onNotificationClear={clearAllNotifications}
               onNotificationOpen={(n) => {
                 if (n.source_board_id && n.source_board_id !== currentBoardId) {
                   setCurrentBoardId(n.source_board_id);

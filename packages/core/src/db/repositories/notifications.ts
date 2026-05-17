@@ -345,6 +345,23 @@ export class NotificationsRepository
   }
 
   /**
+   * Hard-delete every notification for a recipient. Powers the panel's
+   * "Clear" button — see design doc §3.2. Returns the deleted ids so the
+   * service can emit a `notification:bulk_removed` event.
+   */
+  async deleteAllForRecipient(recipientUserId: string): Promise<string[]> {
+    const rows = (await select(this.db)
+      .from(notifications)
+      .where(eq(notifications.recipient_user_id, recipientUserId))
+      .all()) as NotificationRow[];
+    if (rows.length === 0) return [];
+    await deleteFrom(this.db, notifications)
+      .where(eq(notifications.recipient_user_id, recipientUserId))
+      .run();
+    return rows.map((r) => r.notification_id);
+  }
+
+  /**
    * Retention sweep — deletes read notifications older than `olderThan`.
    *
    * Caller controls the cutoff (the cron passes `now - 90d`). Returns the

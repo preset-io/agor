@@ -74,9 +74,9 @@ export interface AppHeaderProps {
   notifications?: Notification[];
   notificationUnreadCount?: number;
   activeBanner?: Notification | null;
-  onNotificationMarkRead?: (id: string) => void;
   onNotificationDismiss?: (id: string) => void;
   onNotificationMarkAllRead?: () => void;
+  onNotificationClear?: () => void;
   onNotificationOpen?: (notification: Notification) => void;
   onBannerDismiss?: (notification: Notification) => void;
 }
@@ -150,9 +150,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   notifications = [],
   notificationUnreadCount = 0,
   activeBanner = null,
-  onNotificationMarkRead,
   onNotificationDismiss,
   onNotificationMarkAllRead,
+  onNotificationClear,
   onNotificationOpen,
   onBannerDismiss,
 }) => {
@@ -348,9 +348,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         <NotificationBell
           notifications={notifications}
           unreadCount={notificationUnreadCount}
-          onMarkRead={(id) => onNotificationMarkRead?.(id)}
           onDismiss={(id) => onNotificationDismiss?.(id)}
           onMarkAllRead={() => onNotificationMarkAllRead?.()}
+          onClear={() => onNotificationClear?.()}
           onOpen={onNotificationOpen}
           disabled={mutationDisabled}
         />

@@ -1,29 +1,30 @@
 import type { Notification } from '@agor-live/client';
 import {
   BellOutlined,
-  CheckOutlined,
   CloseOutlined,
   CommentOutlined,
+  DeleteOutlined,
   RobotOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
 import { Badge, Button, Empty, Popover, Space, Tooltip, Typography, theme } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { formatAbsoluteTime, formatRelativeTime } from '../../utils/time';
-import { ToolIcon } from '../ToolIcon';
 
 const { Text } = Typography;
 
-const HOVER_MARK_READ_DELAY_MS = 1500;
 const PANEL_MAX_ITEMS = 20;
 
 export interface NotificationBellProps {
   notifications: Notification[];
   unreadCount: number;
-  onMarkRead: (notificationId: string) => void;
-  onDismiss: (notificationId: string) => void;
+  /** Called when the popover opens with unread items — stamps read_at on all. */
   onMarkAllRead: () => void;
-  /** Optional click-through handler — receives the notification so the host can route. */
+  /** "Clear" button — hard-deletes every row currently in the panel. */
+  onClear: () => void;
+  /** Per-row dismiss (×) — hard-delete that row. */
+  onDismiss: (notificationId: string) => void;
+  /** Per-row click — navigation only; rows are already read by panel-open. */
   onOpen?: (notification: Notification) => void;
   /** Disabled state (mutation blocked, e.g. anonymous). */
   disabled?: boolean;
@@ -33,22 +34,37 @@ export interface NotificationBellProps {
  * Bell with badge counter + popover panel.
  * Lives on the AppHeader right side, between Facepile and Live Event Stream.
  *
- * Mark-read semantics:
- * - Hovering an item for 1.5s OR clicking it marks read (Linear-style).
- * - Dismiss is hard-delete (server-side).
- * - "Mark all read" affordance in the popover header.
+ * Per design doc §3.2:
+ * - Opening the panel marks every unread row read (open ≈ seen ≈ read).
+ * - Per-row click navigates (no extra state — already read).
+ * - Per-row × hard-deletes that row.
+ * - Header "Clear" button hard-deletes everything in the panel (no confirm).
+ *
+ * No hover-to-mark-read timer (overthinking) and no per-type colored accent
+ * stripes (variant-creep) — the icon is the type signifier.
  */
 export const NotificationBell: React.FC<NotificationBellProps> = ({
   notifications,
   unreadCount,
-  onMarkRead,
-  onDismiss,
   onMarkAllRead,
+  onClear,
+  onDismiss,
   onOpen,
   disabled,
 }) => {
   const { token } = theme.useToken();
   const [open, setOpen] = useState(false);
+
+  // Open the panel → mark every unread row read. Reads `unreadCount` and
+  // `onMarkAllRead` via a ref so this effect only re-runs on the open
+  // transition, not whenever unreadCount ticks down.
+  const openHandlerRef = useRef<() => void>(() => {});
+  openHandlerRef.current = () => {
+    if (unreadCount > 0) onMarkAllRead();
+  };
+  useEffect(() => {
+    if (open) openHandlerRef.current();
+  }, [open]);
 
   const hasUserMention = notifications.some((n) => n.type === 'mention' && !n.read_at);
 
@@ -69,14 +85,15 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({
         <Button
           type="text"
           size="small"
-          icon={<CheckOutlined />}
-          disabled={unreadCount === 0}
+          danger
+          icon={<DeleteOutlined />}
+          disabled={visible.length === 0}
           onClick={(e) => {
             e.stopPropagation();
-            onMarkAllRead();
+            onClear();
           }}
         >
-          Mark all read
+          Clear
         </Button>
       </div>
 
@@ -103,10 +120,8 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({
               <NotificationCard
                 key={n.notification_id}
                 notification={n}
-                onMarkRead={() => onMarkRead(n.notification_id)}
                 onDismiss={() => onDismiss(n.notification_id)}
                 onClick={() => {
-                  onMarkRead(n.notification_id);
                   onOpen?.(n);
                   setOpen(false);
                 }}
@@ -149,51 +164,30 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({
 };
 
 // ============================================================================
-// NotificationCard — one row in the panel
+// NotificationCard — one row in the panel. Single layout for every type.
 // ============================================================================
 
 interface NotificationCardProps {
   notification: Notification;
-  onMarkRead: () => void;
   onDismiss: () => void;
   onClick: () => void;
 }
 
 const NotificationCard: React.FC<NotificationCardProps> = ({
   notification,
-  onMarkRead,
   onDismiss,
   onClick,
 }) => {
   const { token } = theme.useToken();
   const isUnread = !notification.read_at;
-
-  // Hover-1.5s → mark read.
-  const handleMouseEnter = () => {
-    if (!isUnread) return;
-    hoverTimerRef.current = setTimeout(onMarkRead, HOVER_MARK_READ_DELAY_MS);
-  };
-  const handleMouseLeave = () => {
-    if (hoverTimerRef.current) {
-      clearTimeout(hoverTimerRef.current);
-      hoverTimerRef.current = null;
-    }
-  };
-
-  // Keep timer alive across re-renders.
-  const hoverTimerRef = useHoverTimer();
-
-  const { icon, stripeColor, label } = getVariant(notification, token);
+  const { icon, label } = getTypeIconAndLabel(notification, token);
 
   return (
     <div
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
       style={{
         display: 'flex',
         alignItems: 'stretch',
         gap: 0,
-        borderLeft: `3px solid ${stripeColor}`,
         backgroundColor: isUnread ? token.colorPrimaryBg : 'transparent',
         borderBottom: `1px solid ${token.colorBorderSecondary}`,
         position: 'relative',
@@ -248,25 +242,6 @@ const NotificationCard: React.FC<NotificationCardProps> = ({
               {notification.preview}
             </Text>
           )}
-
-          {notification.data?.agentic_tool && (
-            <span
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 4,
-                marginTop: 2,
-                color: token.colorTextTertiary,
-                fontSize: token.fontSizeSM,
-              }}
-            >
-              <ToolIcon tool={notification.data.agentic_tool} size={14} />
-              <span>{notification.data.agentic_tool}</span>
-              {typeof notification.data.message_count === 'number' && (
-                <span>· {notification.data.message_count} messages</span>
-              )}
-            </span>
-          )}
         </span>
       </button>
 
@@ -289,44 +264,30 @@ const NotificationCard: React.FC<NotificationCardProps> = ({
 // Helpers
 // ============================================================================
 
-function getVariant(
+function getTypeIconAndLabel(
   n: Notification,
   token: ReturnType<typeof theme.useToken>['token']
-): { icon: React.ReactNode; stripeColor: string; label: string } {
+): { icon: React.ReactNode; label: string } {
   switch (n.type) {
     case 'mention':
       return {
         icon: <CommentOutlined style={{ color: token.colorPrimary, fontSize: 18 }} />,
-        stripeColor: token.colorPrimary,
         label: 'Mention',
       };
     case 'session_returned':
       return {
         icon: <RobotOutlined style={{ color: token.colorSuccess, fontSize: 18 }} />,
-        stripeColor: token.colorSuccess,
         label: 'Session returned',
       };
     case 'global_admin':
       return {
         icon: <WarningOutlined style={{ color: token.colorWarning, fontSize: 18 }} />,
-        stripeColor: token.colorWarning,
         label: 'Announcement',
       };
     default:
       return {
         icon: <BellOutlined style={{ color: token.colorInfo, fontSize: 18 }} />,
-        stripeColor: token.colorInfo,
         label: 'Notification',
       };
   }
-}
-
-function useHoverTimer(): React.MutableRefObject<ReturnType<typeof setTimeout> | null> {
-  const ref = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    return () => {
-      if (ref.current) clearTimeout(ref.current);
-    };
-  }, []);
-  return ref;
 }
