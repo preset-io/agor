@@ -1,10 +1,12 @@
 /**
  * Tests for session.ts runtime behavior
  *
- * Defaults are tuned for Agor's MCP-heavy model — the environment-level
- * sandbox is the defense, not per-call prompts:
- * - Claude Code: bypassPermissions (no per-call prompts)
- * - Codex: allow-all (maps to sandbox workspace-write + approval never)
+ * Per-tool defaults:
+ * - Claude Code: acceptEdits (auto-accept edits; ask for Bash/MCP — users
+ *   can switch a running session to bypassPermissions mid-flight)
+ * - Codex: allow-all (sandbox workspace-write + approval never +
+ *   network-on; MCP elicitation auto-approved via per-server
+ *   default_tools_approval_mode in the executor)
  * - Gemini: autoEdit (unchanged — pending separate audit)
  * - OpenCode: autoEdit (unchanged — pending separate audit)
  */
@@ -18,8 +20,8 @@ describe('getDefaultPermissionMode', () => {
     expect(getDefaultPermissionMode('codex')).toBe('allow-all');
   });
 
-  it('returns "bypassPermissions" for claude-code (Agor MCP-heavy default)', () => {
-    expect(getDefaultPermissionMode('claude-code')).toBe('bypassPermissions');
+  it('returns "acceptEdits" for claude-code (auto-edit, ask for Bash/MCP)', () => {
+    expect(getDefaultPermissionMode('claude-code')).toBe('acceptEdits');
   });
 
   it('returns "autoEdit" for gemini (native Gemini mode)', () => {
@@ -30,10 +32,10 @@ describe('getDefaultPermissionMode', () => {
     expect(getDefaultPermissionMode('opencode')).toBe('autoEdit');
   });
 
-  it('returns "bypassPermissions" for any unknown tool (default case)', () => {
+  it('returns "acceptEdits" for any unknown tool (default case)', () => {
     // Type assertion to test default behavior with invalid input
     const unknownTool = 'unknown-tool' as AgenticToolName;
-    expect(getDefaultPermissionMode(unknownTool)).toBe('bypassPermissions');
+    expect(getDefaultPermissionMode(unknownTool)).toBe('acceptEdits');
   });
 
   describe('permission mode characteristics', () => {
@@ -42,9 +44,9 @@ describe('getDefaultPermissionMode', () => {
       expect(mode).toBe('allow-all');
     });
 
-    it('claude-code uses bypass mode for MCP-heavy sessions', () => {
+    it('claude-code uses acceptEdits (auto-edit, prompt for Bash/MCP)', () => {
       const mode = getDefaultPermissionMode('claude-code');
-      expect(mode).toBe('bypassPermissions');
+      expect(mode).toBe('acceptEdits');
     });
 
     it('gemini uses native Gemini SDK mode', () => {
@@ -73,7 +75,7 @@ describe('getDefaultPermissionMode', () => {
         results[tool] = getDefaultPermissionMode(tool);
       }
 
-      expect(results['claude-code']).toBe('bypassPermissions');
+      expect(results['claude-code']).toBe('acceptEdits');
       expect(results.codex).toBe('allow-all');
       expect(results.gemini).toBe('autoEdit');
       expect(results.opencode).toBe('autoEdit');

@@ -1380,95 +1380,32 @@ export function OnboardingWizard({
     // e.g. the user already ran `claude auth login` outside the wizard.
     const isAuthenticated = hasKey || !!testAuthResult?.authenticated;
 
-    // Surfaces Agor's relaxed permission defaults so users see what they're
-    // agreeing to during onboarding instead of discovering it via behavior.
-    // Defense-in-depth comes from the worktree sandbox + (optional) Unix
-    // impersonation, not from per-call prompts in an MCP-heavy session.
-    const renderSecurityDefaultsNote = (tool: 'claude-code' | 'codex') => {
-      const sandboxLink = (
-        <Typography.Link
-          href="https://agor.live/guide/multiplayer-unix-isolation"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Agor's worktree sandbox
-        </Typography.Link>
-      );
-      const description =
-        tool === 'claude-code' ? (
-          <span>
-            New sessions run in <Text strong>bypassPermissions</Text> mode — Claude won't prompt for
-            each file edit or tool call. Safety comes from {sandboxLink}; you can tighten per
-            session in <Text strong>Session Settings</Text>.
-          </span>
-        ) : (
-          <span>
-            New sessions run as <Text strong>workspace-write</Text> + approval{' '}
-            <Text strong>never</Text> with network access on — Codex won't prompt for each action.
-            Safety comes from {sandboxLink}; you can tighten per session in{' '}
-            <Text strong>Session Settings</Text>.
-          </span>
-        );
-      return (
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 16, textAlign: 'left' }}
-          message="Permission defaults"
-          description={description}
-        />
-      );
-    };
-
     const renderAuthHint = () => {
       if (selectedAgent === 'claude-code') {
+        // No "Permission defaults" note: Claude defaults to `acceptEdits`,
+        // which IS the SDK's recommended mode (auto-accept edits, prompt for
+        // Bash/MCP). Users can flip to bypass per-session in Session Settings.
         return (
-          <>
-            <Alert
-              type="info"
-              showIcon
-              style={{ marginBottom: 16, textAlign: 'left' }}
-              description={
-                <span>
-                  You have three ways to authenticate Claude Code: paste an{' '}
-                  <Text code style={{ fontSize: 12 }}>
-                    ANTHROPIC_API_KEY
-                  </Text>{' '}
-                  below, run{' '}
-                  <Text code style={{ fontSize: 12 }}>
-                    claude auth login
-                  </Text>{' '}
-                  in the terminal Agor runs as, or set up a Pro/Max session token from{' '}
-                  <Text strong>User Settings → Claude Code</Text> (best for Claude subscribers).
-                </span>
-              }
-            />
-            {renderSecurityDefaultsNote('claude-code')}
-          </>
+          <Paragraph type="secondary" style={{ marginBottom: 16 }}>
+            Paste an <Text code>ANTHROPIC_API_KEY</Text>, run <Text code>claude auth login</Text>,
+            or set up a Pro/Max token in <Text strong>User Settings → Claude Code</Text>.
+          </Paragraph>
         );
       }
       if (selectedAgent === 'codex') {
+        // Single-line surfacing of the non-obvious Codex default: auto-approve
+        // is wired through Codex's per-server MCP approval mode + workspace-write
+        // sandbox. Worth a one-liner so it's not a surprise.
         return (
           <>
-            <Alert
-              type="info"
-              showIcon
-              style={{ marginBottom: 16, textAlign: 'left' }}
-              description={
-                <span>
-                  Paste an{' '}
-                  <Text code style={{ fontSize: 12 }}>
-                    OPENAI_API_KEY
-                  </Text>{' '}
-                  below, or authenticate via{' '}
-                  <Text code style={{ fontSize: 12 }}>
-                    codex
-                  </Text>{' '}
-                  in the terminal Agor runs as.
-                </span>
-              }
-            />
-            {renderSecurityDefaultsNote('codex')}
+            <Paragraph type="secondary" style={{ marginBottom: 8 }}>
+              Paste an <Text code>OPENAI_API_KEY</Text>, or run <Text code>codex login</Text> in
+              Agor's terminal.
+            </Paragraph>
+            <Paragraph type="secondary" style={{ marginBottom: 16, fontSize: 12 }}>
+              Defaults: auto-approves tool calls inside the worktree sandbox. Tighten in{' '}
+              <Text strong>Session Settings</Text>.
+            </Paragraph>
           </>
         );
       }
@@ -1616,15 +1553,6 @@ export function OnboardingWizard({
                 Continue without key
               </Button>
             </Space>
-            <div style={{ marginTop: 12 }}>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                Keys are saved to{' '}
-                <Text strong style={{ fontSize: 12 }}>
-                  User Settings → Agent Setup
-                </Text>{' '}
-                — you can update them any time.
-              </Text>
-            </div>
           </>
         )}
       </div>

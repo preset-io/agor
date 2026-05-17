@@ -515,6 +515,16 @@ export class CodexPromptService {
     const result: CodexConfigObject = {};
     const claimedNames = new Set<string>();
 
+    // Codex's MCP layer gates tool calls behind a per-server elicitation that
+    // defaults to a user prompt; in headless `exec --json` (what the SDK uses),
+    // prompts resolve to "user cancelled MCP tool call". Setting
+    // `default_tools_approval_mode = "approve"` short-circuits that prompt and
+    // auto-approves calls, matching Agor's "trust the worktree sandbox, don't
+    // gate every MCP self-call" model. See codex-mcp/src/mcp/mod.rs
+    // `mcp_permission_prompt_is_auto_approved` — without this, only
+    // `danger-full-access` (which grants full-disk-write) clears the prompt.
+    const MCP_AUTO_APPROVE: CodexConfigObject = { default_tools_approval_mode: 'approve' };
+
     // Built-in Agor MCP server (streamable HTTP). Token travels via
     // bearer_token_env_var — never in the URL.
     if (mcpToken) {
@@ -527,6 +537,7 @@ export class CodexPromptService {
         url: `${daemonUrl}/mcp`,
         bearer_token_env_var: agorBearerEnvVar,
         required: false,
+        ...MCP_AUTO_APPROVE,
       };
       console.log(
         `   📝 [Codex MCP] Configuring built-in Agor MCP server (HTTP) at ${daemonUrl}/mcp`
@@ -540,7 +551,7 @@ export class CodexPromptService {
         server.name.toLowerCase() === 'agor' ? 'conflicts with built-in Agor MCP server' : undefined
       );
 
-      const serverConfig: CodexConfigObject = {};
+      const serverConfig: CodexConfigObject = { ...MCP_AUTO_APPROVE };
       console.log(`   📝 [Codex MCP] Configuring STDIO server: ${server.name} -> ${serverName}`);
       if (server.command) {
         serverConfig.command = server.command;
@@ -565,7 +576,7 @@ export class CodexPromptService {
         server.name.toLowerCase() === 'agor' ? 'conflicts with built-in Agor MCP server' : undefined
       );
 
-      const serverConfig: CodexConfigObject = {};
+      const serverConfig: CodexConfigObject = { ...MCP_AUTO_APPROVE };
       console.log(`   📝 [Codex MCP] Configuring HTTP server: ${server.name} -> ${serverName}`);
       if (server.url) {
         serverConfig.url = server.url;
