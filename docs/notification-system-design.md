@@ -86,59 +86,57 @@ A new bell button on `AppHeader.tsx`, on the **right side**, between the Facepil
 A `<Popover>` (consistent with the existing `instanceDescription` popover at `AppHeader.tsx:222-235`), opened on bell click. **Not a drawer** — drawers are heavy and we already have one (the session list). Popovers are right for read-mostly lists.
 
 ```
-┌─ Notifications ─────────────────────────── [✓ Mark all read] ─┐
+┌─ Notifications ─────────────────────────────────── [Clear] ───┐
 │                                                                │
 │  ⚠️  Deploying around noon PST today  ──────────── 2h ago  [×] │  ← global admin
-│      Max · sticks until expiry                                 │
-│  ─────────────────────────────────────────────────────────────│
 │  💬  Alice mentioned you in a comment ──────────── 12m ago [×]│  ← mention
 │      "@you can you look at this?"                              │
-│      auth-rewrite (fix-jwt) · my-board                         │
-│  ─────────────────────────────────────────────────────────────│
-│  🌳  Session returned: "Refactor login flow"  ──── 34m ago [×]│  ← session-returned (worktree)
-│      auth-rewrite · 3 messages, 4 tools · ⬢ claude-code        │
-│  ─────────────────────────────────────────────────────────────│
-│  🤖  research-bot finished its run  ─────────────── 1h ago [×]│  ← session-returned (assistant)
+│  🤖  Session returned: "Refactor login flow"  ──── 34m ago [×]│  ← session_returned
+│      "I refactored the login flow into a state machine…"      │
+│  🤖  research-bot finished its run  ─────────────── 1h ago [×]│  ← session_returned
 │      "Found 12 candidate libraries…"                           │
-│  ─────────────────────────────────────────────────────────────│
 │                                                                │
-│                       View all (12)                            │  ← only if >10 unread+read shown
 └────────────────────────────────────────────────────────────────┘
 ```
 
 - **Sort:** strict `created_at DESC`. No grouping by type, no priority lanes — that's a category-error path that adds modes without adding clarity.
-- **Read state on open:** opening the panel does **not** auto-mark-read. Hovering an item for 1.5s, _or_ clicking it, marks it read. (Pattern stolen from Linear.) This avoids the "blink and you lose your place" problem where opening to peek wipes the badge.
-- **Dismiss:** the `[×]` is explicit and **hard-deletes the row**. There is no soft-delete state — dismissed = gone. Rationale in §5.3.
-- **Mark all read:** affordance in the header (resolves Max's open question — yes, ship it).
-- **Limit:** show the most recent 20 in the popover. "View all" link goes to `/notifications` if we want a full inbox view later (out of v1).
+- **Open = mark all read.** Opening the panel batches a single `markAllRead` call — every unread row gets stamped with `read_at = now`. The counter zeroes. Cross-tab sync via the existing `notification:all_read` event.
+- **Per-item click navigates** (no extra state change — already read).
+- **Dismiss:** the `[×]` is explicit and **hard-deletes the row**. No soft-delete state. Rationale in §5.3.
+- **Header button is "Clear"**, not "Mark all read". It hard-deletes everything currently in the panel (matches Slack/Discord; per-row dismiss is already irreversible). No confirm — friction without payoff.
+- **Read items stay in the panel** (slightly dimmed) until cleared or individually dismissed. The panel becomes a recent-activity log you can scroll back through.
+- **Limit:** show the most recent 50 in the popover (server-side `$limit`). "View all" full inbox view is v1.5.
+
+**Why this model (and not Linear-style hover-to-read):** In a notification panel — not an email inbox — the user flow is _open → scan → act-or-close_. Nobody comes back to "still-unread items I half-saw earlier." Open ≈ seen ≈ read. The hover-1.5s timer was overthinking it; an earlier draft proposed it and we cut it.
 
 ### 3.3 Notification card anatomy
 
-Three visual variants, distinguished by an icon glyph + a left accent stripe. Layouts use the same height (~56px) so the list is uniform.
+**One card layout for every type.** An earlier draft proposed three visual variants with colored accent stripes; cut that — the icon already differentiates, and three variants is overhead without payoff for a 20-row scannable list.
 
 ```
-USER MESSAGE (mention)         WORKTREE SESSION RETURNED        ASSISTANT RETURNED
-┌────────────────────────┐     ┌────────────────────────┐      ┌────────────────────────┐
-│ 💬 Alice mentioned you │     │ 🌳 Session returned    │      │ 🤖 research-bot done   │
-│    "look at this?"     │     │    auth-rewrite        │      │    "Found 12 libs…"    │
-│    fix-jwt · my-board  │     │    ⬢ claude-code · 3m  │      │    daily-audit · 1h    │
-└────────────────────────┘     └────────────────────────┘      └────────────────────────┘
-   ▲                              ▲                                ▲
-   blue accent stripe              green accent stripe              purple accent stripe
-   colorPrimary                    colorSuccess                     colorInfo (or assistant theme)
+┌──────────────────────────────────────────────────────────────────────┐
+│ {icon}  {title}                                          {age}   [×] │
+│         {preview}                                                    │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-**Differentiation strategy:**
+- **Icon (left, ~18px):**
+  - 💬 / `CommentOutlined` — mention
+  - 🤖 / `RobotOutlined` — session_returned
+  - ⚠️ / `WarningOutlined` — global_admin
+- **Title:** session display name (for `session_returned`), or "Alice mentioned you" (for `mention`), or admin title (for `global_admin`).
+- **Preview:** for `session_returned`, truncated last assistant message of the completing task (§4.1). For `mention`, the comment content. For `global_admin`, the broadcast preview body.
+- **Age:** relative time on the right (`formatRelativeTime`); absolute time in a tooltip.
+- **`[×]`:** dismiss = hard-delete (§5.3).
+- **Unread row state:** subtle background tint (`token.colorPrimaryBg`) and bold title until the panel opens; then read state dims it.
 
-- **Glyph in front:** 💬 (mention), 🌳 (worktree session — matches the existing `🌳 my-worktree` line in the session drawer per `WorktreeListDrawer.tsx`), 🤖 (assistant), ⚠️/ℹ️ (admin).
-- **Color stripe:** uses Ant Design tokens (`colorPrimary`, `colorSuccess`, `colorInfo`, `colorWarning`) so it picks up theme correctly.
-- **Tool icon (`<ToolIcon>`)** on session-returned variants — already exists, used in the session drawer. Tells you at a glance whether Claude, Codex, or Gemini returned.
+**No colored accent stripe, no per-variant layout.** The icon is the type signifier. Color is reserved for unread-vs-read state.
 
-**Open question — assistant vs worktree session:** today there's no `is_assistant` flag on a session in the schema (I checked `schema.sqlite.ts:43-182`). For v1, treat all session-returned notifs as the worktree variant. Add a follow-up to materialize an "assistant session" marker when persistent assistants land — at that point we can switch the icon/color. This is a **scope cut** disguised as a follow-up; flagged in §10.
+**Assistant vs worktree session** — there's still no `is_assistant` marker on `sessions` (I checked `schema.sqlite.ts`). v1 doesn't differentiate; when the marker lands, the same card can pick a different icon. No new card variant needed.
 
 ### 3.4 Sticky banner (global admin messages)
 
-Some admin messages should be more in-your-face than a panel item. For those, render a sticky banner **in the navbar's currently-empty center slot** (between `RecentBoardPills` and the right-side controls). Triggered by `notification.scope = 'global'` AND `notification.data.banner = true`.
+Some admin messages should be more in-your-face than a panel item. For those, render a sticky banner **in the navbar's currently-empty center slot** (between `RecentBoardPills` and the right-side controls). Triggered by `notification.type === 'global_admin'` AND `notification.data.banner === true`.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -150,7 +148,7 @@ Rules:
 
 - Only **one** banner shown at a time. If two are active, the most recent wins; older ones live in the panel only.
 - Banner is dismissible per-user — hard-deletes that user's row, killing both the banner and the panel item in one go.
-- Banner respects an optional `expires_at` on the notification — auto-removed when expired.
+- Banner respects an optional `expires_at` on the notification — admin can "Expire now" from the Announcements tab; rows past expiry are filtered client-side. **No auto-expire-after-N-hours UI knob in the compose form** — admins don't know in advance when the deploy will be done; they click "Expire now" when reality dictates.
 - **Cap on length:** ~80 chars in the navbar. Longer content lives in the panel.
 
 ### 3.5 Navbar message ticker — scope-cut for v1
@@ -166,7 +164,7 @@ Max's brief floats a "🌳 {worktree}: {truncated agent response}" ticker that f
 
 ### 3.6 Toast vs notification — the rule
 
-Codify in `apps/agor-ui/src/utils/message.tsx` doc-comment + a guide page. Proposed rule:
+Codify as a JSDoc on `useThemedMessage` in `apps/agor-ui/src/utils/message.tsx`. No separate guide page — the rule is internal contributor guidance, not user-facing documentation. Proposed rule:
 
 > **Use a toast (Ant Design `message`) when:**
 >
@@ -207,7 +205,9 @@ Hold the line on a small set. Each one needs a clear trigger, recipient set, and
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | --------------------------------------------------- | ----------------------------------------- |
 | **`mention`**          | A `board_comments` row is **created** (or patched to add a new mention) and `data.mentions[]` contains a user_id. Excludes self-mentions (`recipient ≠ author`).       | Each mentioned user                 | Board with comments panel open, scrolled to comment | Always (mentions are inherently directed) |
 | **`session_returned`** | `tasks.patch` sets `status` to `COMPLETED` or `FAILED` AND `session.archived = false` AND `worktree.archived = false`. **Fires per task completion, not per message.** | Subscribers of the session (see §6) | Session detail panel open in the right board        | Auto-subscribed via interaction (see §6)  |
-| **`global_admin`**     | Admin authors a global message (see §7)                                                                                                                                | All users (fanout)                  | Optionally a URL; otherwise just the panel          | Always (one slot, dismissible)            |
+| **`global_admin`**     | Admin authors a global message (see §7)                                                                                                                                | All users (fanout)                  | Panel only (no per-row click target)                | Always (one slot, dismissible)            |
+
+**v1 coverage gap — flagged.** The `mention` type fires only when `data.mentions[]` adds a new user_id. It does **not** track thread participation: if Alice tags Bob, then Alice replies in the thread without re-tagging Bob, Bob hears nothing. Same if Bob replies to a thread and gets no follow-up pings. This is `comment_reply` territory, slotted for **v1.5 alongside the polymorphic mute table** (see §6.3). For v1, threads are single-shot ping surfaces.
 
 ### 4.1 What carries through to the notification
 
@@ -233,7 +233,7 @@ The producer fetches the last assistant message using the same query already imp
 | `schedule_fired`                                 | If a scheduled prompt produces a session that returns, the _return_ notif covers it. The fire itself isn't actionable.                                               |
 | `child_session_completed` (parent callback)      | Already handled by the queued-system-message pipe in `parent-session-callbacks.md`. That's an agent↔agent channel, not a user-addressed inbox. Don't double-deliver. |
 | `oauth_disconnected`                             | Toast on the active session is enough. Future: notification if the disconnect happens while the user is on another board.                                            |
-| `comment_reply` (you commented, someone replied) | v2. Requires a thread-participation tracker.                                                                                                                         |
+| `comment_reply` (you commented, someone replied) | **v1.5** (promoted from v2 after recognizing the v1 thread coverage gap). Pairs with polymorphic mute table — shipping replies without mute is the spam path.        |
 
 ---
 
@@ -268,7 +268,6 @@ export const notifications = sqliteTable(
     // assistant message of the completed task (see §4.1).
     title: text('title').notNull(), // ~80 chars
     preview: text('preview'), // ~160 chars, optional
-    link_url: text('link_url'), // optional override; otherwise computed from source_*
 
     // Source pointers — all optional, depend on type. SET NULL on cascade so
     // a deleted session/worktree leaves the notif row with a "this session
@@ -296,17 +295,14 @@ export const notifications = sqliteTable(
     // State — only two: unread (read_at IS NULL) or read (read_at IS NOT NULL).
     // Dismiss = hard-delete the row, no soft-delete column. See §5.3.
     read_at: t.timestamp('read_at'), // null = unread
-    expires_at: t.timestamp('expires_at'), // optional auto-expiry (admin banners)
+    expires_at: t.timestamp('expires_at'), // admin-set on "Expire now"; client filters
 
-    // Scope — 'user' = recipient-only, 'global' = part of an admin broadcast
-    // (still stored per-row, marker for UI styling + grouping).
-    scope: text('scope', { enum: ['user', 'global'] })
-      .notNull()
-      .default('user'),
-
-    // Type-specific extras: { banner?: bool, agentic_tool?: string,
-    //   message_count?: number, mention_excerpt?: string,
-    //   broadcast_group_id?: string, ... }
+    // Type-specific extras. Producers stamp the fields they care about; the
+    // consumer reads defensively. Kept minimal: { banner?: bool,
+    // agentic_tool?: string, broadcast_group_id?: string }.
+    //
+    // NOT included (we considered and cut): `message_count`, `mention_excerpt`
+    // — never rendered in v1 cards, easier to add later than rip out now.
     data: t
       .json<NotificationData>('data')
       .notNull()
@@ -323,12 +319,18 @@ export const notifications = sqliteTable(
       table.recipient_user_id,
       table.read_at
     ),
-    // Collapse upsert lookup (see §5.2)
-    recipientSourceIdx: index('notifications_recipient_source_idx').on(
+    // Collapse upsert lookup (see §5.2). NOT unique — mentions on the same
+    // session must coexist; collapse for `session_returned` is enforced in the
+    // repository in a SELECT-then-INSERT-or-UPDATE transaction.
+    recipientSourceTypeIdx: index('notifications_recipient_source_type_idx').on(
       table.recipient_user_id,
       table.source_session_id,
       table.type
     ),
+    // Archive cleanup: DELETE WHERE source_session_id = ?
+    sourceSessionIdx: index('notifications_source_session_idx').on(table.source_session_id),
+    // Archive cleanup: DELETE WHERE source_worktree_id = ?
+    sourceWorktreeIdx: index('notifications_source_worktree_idx').on(table.source_worktree_id),
   })
 );
 ```
@@ -361,7 +363,15 @@ Counter = `COUNT(*) WHERE recipient = me AND read_at IS NULL`.
 
 ### 5.4 Indexes
 
-Three indexes cover all v1 access patterns (panel list, unread count, collapse upsert, mark-all-read). All are recipient-leading because every read scopes by user. Index sizes are bounded by _active_ notifications per user — and dismiss-as-hard-delete keeps the tail short. Retention sweep for aged read rows in v1.5 (§10 Q-D).
+Five indexes cover all v1 access patterns:
+
+- **`notifications_recipient_created_idx`** — panel list ("newest notifs for this user").
+- **`notifications_recipient_read_idx`** — unread count + mark-all-read sweep.
+- **`notifications_recipient_source_type_idx`** — collapse upsert lookup for `session_returned`.
+- **`notifications_source_session_idx`** — archive cleanup (DELETE WHERE source_session_id = ?).
+- **`notifications_source_worktree_idx`** — archive cleanup (DELETE WHERE source_worktree_id = ?).
+
+The first three are recipient-leading; the last two support the bulk-delete sweeps fired when a session or worktree is archived. Index sizes are bounded by _active_ notifications per user — and dismiss-as-hard-delete keeps the tail short. Retention sweep for aged read rows in v1.5 (§10 Q-D).
 
 ---
 
@@ -438,7 +448,7 @@ Naming the table `session_notification_mutes` was too narrow (caught by Max). Di
 | `mention` on a board-level comment      | `board_id`                                                                        |
 | `mention` on a session-attached comment | `session_id`, `worktree_id`, `board_id`                                           |
 | `mention` on a threaded reply           | `comment_thread` (= root `parent_comment_id`), + whatever the root is attached to |
-| `comment_reply` (v2)                    | `comment_thread`, + attached scope                                                |
+| `comment_reply` (v1.5)                  | `comment_thread`, + attached scope                                                |
 
 A user who has muted **any** scope an event falls under suppresses the notification.
 
@@ -452,6 +462,17 @@ A user who has muted **any** scope an event falls under suppresses the notificat
 | `board`          | **Skip.** Boards are too coarse — if you don't care about a board, you stop visiting it |                                                                                                                        |
 
 **Context can change.** Mute is reversible (just `DELETE` the row). When a thread pivots and you re-engage, unmute. The negative-only-state property means unmuting leaves no trace — which is what you want.
+
+#### 6.3.2 Thread participation — v1.5 alongside `comment_reply`
+
+Once `comment_reply` ships, the producer needs to know who's in a thread. Rule:
+
+> **You're a participant in a thread iff** you've been @-mentioned in any comment in the thread OR you've posted any comment in the thread (via `comment.parent_comment_id` chain to the root).
+> A new reply in a thread → notification to every distinct participant ≠ author of the new reply, minus anyone who muted the `comment_thread` scope.
+
+Implementation note: walking the `parent_comment_id` chain to find the root is N+1; **denormalize a `thread_root_id` column on `board_comments`** (set on insert, immutable thereafter) so participation lookups are a single indexed scan. That's a small comments-table migration that pairs with the v1.5 work.
+
+Self-replies are filtered the same way as self-mentions (Q-G).
 
 ---
 
@@ -537,11 +558,11 @@ On panel open, fetch the latest 50 unread + read-not-dismissed:
 
 ```
 GET /notifications?
-  recipient_user_id=me
-  &dismissed_at[$eq]=null
   &$sort[created_at]=-1
   &$limit=50
 ```
+
+(`recipient_user_id` is forced server-side from the auth context; not a client-supplied filter. No `dismissed_at` filter since there's no such column — dismissal is hard-delete.)
 
 Standard Feathers paginated find. Hooks enforce `recipient_user_id = authenticated user_id` — a user cannot fetch someone else's notifications.
 
@@ -570,9 +591,9 @@ The `<Badge>` component subscribes to a derived `unreadCount` selector over the 
 
 See §3.2 above.
 
-### 9.3 Notification card — three variants
+### 9.3 Notification card — single layout
 
-See §3.3 above. Compact form, ~56px tall, uniform across types.
+See §3.3 above. One card layout for every type; icon is the type signifier. ~56px tall.
 
 ### 9.4 Sticky admin banner (navbar center)
 
@@ -613,20 +634,20 @@ When no active banner, the center collapses; the existing layout doesn't shift (
 
 Numbered to match the brief's open questions where applicable.
 
-| #   | Question                       | Position                                                                                                                                            |
-| --- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Notification entity schema     | §5 — schema sketched, recipient-leading indexes                                                                                                     |
-| 2   | Persistent table vs in-memory  | **Persistent.** Durability across reload + cross-device sync requires it                                                                            |
-| 3   | Delivery channel               | **Socket primary, fetch on bell-open, refetch-on-reconnect fallback.** No polling steady-state                                                      |
-| 4   | Read vs dismissed              | **Two states, no soft-delete.** §5.3. `read_at` is the only state column; dismiss hard-deletes the row                                              |
-| 5   | Click-through dismiss          | **Don't auto-dismiss on click.** Click marks read, dismiss is explicit. Matches Max's lean                                                          |
-| 6   | Session vs task linking        | **`source_session_id` is the link target. `source_task_id` is metadata.** Tasks are the unit of work; sessions are the place you go back to         |
-| 7   | De-dup / collapse              | **Collapse `session_returned` per `(user, session, type)`. Don't collapse `mention` or `global_admin`.** §5.2                                       |
-| 8   | Mute / snooze per session      | **v1.5.** Polymorphic `notification_mutes(recipient_user_id, scope_type, scope_id, muted_at)` table covering sessions, threads, worktrees. See §6.3 |
-| 9   | Cross-device sync              | **Free** — same backing table, same socket room, two tabs see the same state                                                                        |
-| 10  | Permissions on global messages | **Admin role.** Authored from a new `SettingsModal` tab. §7                                                                                         |
-| 11  | Ticker / streamer rules        | **Cut from v1.** §3.5                                                                                                                               |
-| 12  | Notification taxonomy          | **§4.** Three types in v1: mention, session_returned, global_admin                                                                                  |
+| #   | Question                       | Position                                                                                                                                                        |
+| --- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Notification entity schema     | §5 — schema sketched, recipient-leading indexes                                                                                                                 |
+| 2   | Persistent table vs in-memory  | **Persistent.** Durability across reload + cross-device sync requires it                                                                                        |
+| 3   | Delivery channel               | **Socket primary, fetch on bell-open, refetch-on-reconnect fallback.** No polling steady-state                                                                  |
+| 4   | Read vs dismissed              | **Two states, no soft-delete.** §5.3. `read_at` is the only state column; dismiss hard-deletes the row                                                          |
+| 5   | Click-through dismiss          | **Don't auto-dismiss on click.** Click navigates only. Open-panel marks all read. Dismiss is explicit per-row. Header button = "Clear" (hard-deletes all). §3.2 |
+| 6   | Session vs task linking        | **`source_session_id` is the link target. `source_task_id` is metadata.** Tasks are the unit of work; sessions are the place you go back to                     |
+| 7   | De-dup / collapse              | **Collapse `session_returned` per `(user, session, type)`. Don't collapse `mention` or `global_admin`.** §5.2                                                   |
+| 8   | Mute / snooze per session      | **v1.5.** Polymorphic `notification_mutes(recipient_user_id, scope_type, scope_id, muted_at)` table covering sessions, threads, worktrees. See §6.3             |
+| 9   | Cross-device sync              | **Free** — same backing table, same socket room, two tabs see the same state                                                                                    |
+| 10  | Permissions on global messages | **Admin role.** Authored from a new `SettingsModal` tab. §7                                                                                                     |
+| 11  | Ticker / streamer rules        | **Cut from v1.** §3.5                                                                                                                                           |
+| 12  | Notification taxonomy          | **§4.** Three types in v1: mention, session_returned, global_admin                                                                                              |
 
 ### 10.1 Decisions made (after iteration with Max)
 
@@ -639,11 +660,18 @@ These were originally flagged as "deferred" but have been resolved:
 - **Q-E — Fire on FAILED: yes (DECIDED).** Failures are exactly the events a notification system exists for. Mirrors parent-callback design.
 - **Q-F — Toast suppression on relevant page: yes, client-side (DECIDED).** When a `notification:created` event arrives and `source_session_id`/`source_board_id` matches the user's current route, the toast is suppressed. Notification still created server-side. Documented in §3.6.
 - **Q-G — Self-mention: skip the notification (DECIDED).** Producer enforces `recipient_user_id ≠ source_user_id`. `@me TODO check this` doesn't ping you.
+- **Q-H — Panel open = mark all read; header button is "Clear" not "Mark all read" (DECIDED).** Open ≈ seen ≈ read in a notification panel (unlike an email inbox). The "Clear" button hard-deletes everything currently in the panel; no confirm. Hover-1.5s mark-read was overthinking it and is removed. §3.2.
+- **Q-I — Single card layout, no colored accent stripes (DECIDED).** Icon is the type signifier; stripes were variant-creep. §3.3.
+- **Q-J — Drop `scope`, `link_url` columns; drop `data.message_count` and `data.mention_excerpt` (DECIDED).** `scope` is redundant with `type`; `link_url` is always derivable from `source_*`; the two `data` fields were never rendered. §5.1.
+- **Q-K — Drop the toast-vs-notification guide page; keep only the JSDoc on `useThemedMessage` (DECIDED).** Rule is contributor guidance, not user docs. §3.6.
+- **Q-L — Drop the auto-expire-after-N-hours UI knob in the announcement compose form (DECIDED).** Admins don't know in advance; "Expire now" handles reality. The `expires_at` column stays for the "Expire now" action. §3.4.
+- **Q-M — Promote `comment_reply` to v1.5 with thread participation (DECIDED).** v1 has a real gap: thread replies after the first @-mention produce silence. Ships with the polymorphic mute table — replies without mute is the spam path. §4, §6.3.2.
 
 ### 10.2 Still open (not blocking v1)
 
 - **Mute UI exact placement (v1.5).** Session footer is decided; "mute thread" surface depends on where comment-overflow menus live, which the comments team will pick. Not a v1 question.
 - **Layer-3 full subscription primitive.** Whether "watch-without-interacting" ever becomes a real ask. Defer indefinitely; revisit only if requested.
+- **`thread_root_id` denormalization on `board_comments`.** Needed for cheap thread-participation lookups in v1.5. Small comments-table migration; coordinate with whoever owns the comments work.
 
 ---
 
@@ -651,22 +679,24 @@ These were originally flagged as "deferred" but have been resolved:
 
 ### v1 — the core inbox
 
-- Schema migration (`notifications` table, indexes).
-- `NotificationsService` (Feathers, `find`/`get`/`patch`/`remove` + custom `broadcast`).
+- Schema migration (`notifications` table, 5 indexes per §5.4). No `scope`, no `link_url`.
+- `NotificationsService` (Feathers, `find`/`get`/`patch`/`remove` + custom `broadcast` + `expireBroadcast` + `clearAll`).
 - Producers in `tasks.ts` (session_returned, fires per task completion) and `board-comments.ts` (mention; skip self-mentions).
 - **Archive-time cleanup hook** — on `session.archived = true` or `worktree.archived = true`, run `DELETE FROM notifications WHERE source_session_id = …` (and worktree variant).
 - **Retention sweep** — nightly cron, `DELETE FROM notifications WHERE read_at IS NOT NULL AND read_at < now() - 90 days`.
 - Bell + counter on `AppHeader` right side.
-- Panel with the three card variants, mark-read-on-click/hover, **dismiss = hard-delete**, mark-all-read.
+- Panel: **single card layout** (icon-by-type), open-marks-all-read, click-navigates, per-item `[×]` hard-deletes, header **"Clear"** button hard-deletes all.
 - **Context-aware toast suppression** — client compares `source_session_id` / `source_board_id` against current route before firing the toast.
-- Sticky admin banner in navbar center.
-- Settings → Announcements admin tab (compose, list, expire).
+- Sticky admin banner in navbar center (kept — Max likes it).
+- Settings → Announcements admin tab (compose, list, "Expire now"). **No auto-expire-after-N-hours knob in compose.**
 - Socket push wired through existing `user/{user_id}` rooms.
-- Toast-vs-notification rule documented in `apps/agor-docs/pages/guide/` and as a JSDoc on `useThemedMessage`.
+- Toast-vs-notification rule as **JSDoc on `useThemedMessage`** only — no separate guide page.
 
-### v1.5 — quality of life
+### v1.5 — quality of life + thread participation
 
 - **Polymorphic mute table** — new `notification_mutes(recipient_user_id, scope_type, scope_id, muted_at)` table (§6.3). Producer subtracts users who muted any scope the event falls under.
+- **`comment_reply` notification type** — fires on a comment created with `parent_comment_id` set; recipients = thread participants (mentioned-in OR posted-in) ≠ new comment author, minus muters. Pairs with mute table (shipping replies without mute is the spam path). §6.3.2.
+- **`thread_root_id` denormalization on `board_comments`** — small comments-table migration so thread-participation lookups are cheap.
 - **Mute affordances** — session footer, "Mute this session" / "Mute thread" actions on notification cards, worktree settings tab.
 - Archive-time hook extended to also delete mute rows for the archived entity.
 - **Snooze for N hours** — per-notification action.
@@ -694,11 +724,11 @@ For a single engineer familiar with the codebase. Timeboxes are _rough order of 
 | **Archive cleanup + retention sweep** (delete on archive, nightly cron for 90d aged read rows)                                | 0.25d  |
 | **Socket push + client subscription** (piggyback on existing rooms)                                                           | 0.5d   |
 | **Bell + counter** (AppHeader integration, `<Badge>`)                                                                         | 0.5d   |
-| **Panel UI** (popover, card variants, mark-read, dismiss, mark-all-read)                                                      | 1.5d   |
+| **Panel UI** (popover, single card layout, open-marks-read, dismiss, "Clear")                                                 | 1d     |
 | **Context-aware toast suppression** (route-match check before firing toast)                                                   | 0.25d  |
 | **Sticky admin banner** (navbar center slot, dismiss, expiry)                                                                 | 0.5d   |
 | **Admin authoring UI** (SettingsModal tab, compose modal, list view)                                                          | 1d     |
-| **Toast-vs-notification doc + guide page**                                                                                    | 0.25d  |
+| **Toast-vs-notification JSDoc** (no guide page)                                                                               | 0.1d   |
 | **Tests + Storybook** (panel + cards + counter)                                                                               | 1d     |
 | **Smoke test + screenshot pass**                                                                                              | 0.25d  |
 
@@ -758,7 +788,7 @@ For the implementer:
 | Bell + Panel component      | `apps/agor-ui/src/components/NotificationBell/` (new)                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Banner component            | `apps/agor-ui/src/components/AppHeader/AnnouncementBanner.tsx` (new)                                                                                                                                                                                                                                                                                                                                                                                                      |
 | Admin authoring             | `apps/agor-ui/src/components/SettingsModal/AnnouncementsTab.tsx` (new)                                                                                                                                                                                                                                                                                                                                                                                                    |
-| Toast-vs-notification rule  | JSDoc on `apps/agor-ui/src/utils/message.tsx` + new guide page `apps/agor-docs/pages/guide/notifications.mdx`                                                                                                                                                                                                                                                                                                                                                             |
+| Toast-vs-notification rule  | JSDoc on `apps/agor-ui/src/utils/message.tsx`. **No separate guide page** — the rule is contributor-facing guidance, not user docs.                                                                                                                                                                                                                                                                                                                                       |
 
 ---
 
