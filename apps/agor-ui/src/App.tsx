@@ -1357,7 +1357,6 @@ function AppContent() {
             onboardingConfig?.assistantPending ?? onboardingConfig?.persistedAgentPending
           }
           frameworkRepoUrl={onboardingConfig?.frameworkRepoUrl}
-          systemCredentials={onboardingConfig?.systemCredentials}
         />
 
         <DeviceRouter />

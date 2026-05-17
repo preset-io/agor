@@ -122,11 +122,6 @@ export interface OnboardingWizardProps {
   // Config from health endpoint
   assistantPending?: boolean;
   frameworkRepoUrl?: string;
-  systemCredentials?: {
-    ANTHROPIC_API_KEY?: boolean;
-    OPENAI_API_KEY?: boolean;
-    GEMINI_API_KEY?: boolean;
-  };
 }
 
 // ─── Helpers ────────────────────────────────────────────
@@ -270,7 +265,6 @@ export function OnboardingWizard({
   onCheckAuth,
   assistantPending,
   frameworkRepoUrl,
-  systemCredentials,
 }: OnboardingWizardProps) {
   const { token } = useToken();
 
@@ -306,20 +300,13 @@ export function OnboardingWizard({
   const [apiKey, setApiKey] = useState('');
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName>('claude-code');
   const [testAuthLoading, setTestAuthLoading] = useState(false);
-  // Ambient-auth probe result (CLI login, env var, system credential) — drives
-  // the "Already authenticated → Continue" auto-flip. Set ONLY by the
-  // useEffect that runs on landing/agent-change; never by the Test Connection
-  // button. Conflating these two paths previously caused a typed-key test to
-  // flip the panel and let the user advance without ever saving the key.
-  const [detectedAuth, setDetectedAuth] = useState<AuthCheckResult | null>(null);
   // Inline feedback from the user clicking "Test Connection" on a typed key.
   // Never flips the panel, never advances, never saves. Wiped on agent
   // change and on key edit (stale).
   const [manualTestResult, setManualTestResult] = useState<AuthCheckResult | null>(null);
-  // Lets the user opt out of detected auth (CLI/OAuth/file-probe) and paste
-  // a key manually — useful when the detected method isn't what they want
-  // (e.g. ChatGPT OAuth detected but they prefer a work API key) or when
-  // our probe is wrong. Resets on agent change and on wizard reset.
+  // Lets the user opt out of an already-stored per-user credential and paste
+  // a different key — useful when the stored key is wrong-account or stale.
+  // Resets on agent change and on wizard reset.
   const [overrideDetectedAuth, setOverrideDetectedAuth] = useState(false);
 
   // Created resource IDs
@@ -336,9 +323,6 @@ export function OnboardingWizard({
   // The failure watcher ignores these so a stale row from a prior attempt never
   // immediately cancels a new retry before the daemon has a chance to replace it.
   const knownFailedRepoIdsRef = useRef<Set<string>>(new Set());
-  // Tracks which agent we've already auto-tested on the current api-keys
-  // visit, so re-rendering the step doesn't re-fire the test endlessly.
-  const autoTestedAgentRef = useRef<string | null>(null);
 
   // ─── Derived ──────────────────────────────────────
   const steps = useMemo(() => getStepsForPath(path), [path]);
@@ -349,7 +333,17 @@ export function OnboardingWizard({
   // Claude Code accepts either an Anthropic API key or a Pro/Max subscription
   // OAuth token (from `claude setup-token`). Either is a valid credential.
   // Per-tool credentials live under `agentic_tools[tool][envVarName]` (boolean
-  // presence flags on the public DTO).
+  // presence flags on the public DTO). `env_vars` is also per-user (lives on
+  // the User record).
+  //
+  // Intentionally PER-USER only — we don't consider host-level fallbacks
+  // (config.yaml `credentials.*` or daemon process env vars) when deciding
+  // whether to skip the LLM-auth onboarding step. Sessions still fall back
+  // to host-level creds at run time, but treating them as "this user is
+  // already authenticated" auto-skipped onboarding for brand-new users (they
+  // silently inherited the admin's setup with no chance to configure their
+  // own). Users who want the host fallback can click "Continue without key"
+  // in the form.
   const claudeFields = user?.agentic_tools?.['claude-code'];
   const codexFields = user?.agentic_tools?.codex;
   const geminiFields = user?.agentic_tools?.gemini;
@@ -357,24 +351,12 @@ export function OnboardingWizard({
   const hasAnthropicKey = !!(
     claudeFields?.ANTHROPIC_API_KEY ||
     claudeFields?.CLAUDE_CODE_OAUTH_TOKEN ||
-    user?.env_vars?.ANTHROPIC_API_KEY ||
-    systemCredentials?.ANTHROPIC_API_KEY
+    user?.env_vars?.ANTHROPIC_API_KEY
   );
-  const hasOpenAIKey = !!(
-    codexFields?.OPENAI_API_KEY ||
-    user?.env_vars?.OPENAI_API_KEY ||
-    systemCredentials?.OPENAI_API_KEY
-  );
-  const hasGeminiKey = !!(
-    geminiFields?.GEMINI_API_KEY ||
-    user?.env_vars?.GEMINI_API_KEY ||
-    systemCredentials?.GEMINI_API_KEY
-  );
-
+  const hasOpenAIKey = !!(codexFields?.OPENAI_API_KEY || user?.env_vars?.OPENAI_API_KEY);
+  const hasGeminiKey = !!(geminiFields?.GEMINI_API_KEY || user?.env_vars?.GEMINI_API_KEY);
   const hasCopilotToken = !!(
-    copilotFields?.COPILOT_GITHUB_TOKEN ||
-    user?.env_vars?.COPILOT_GITHUB_TOKEN ||
-    (systemCredentials as Record<string, unknown>)?.COPILOT_GITHUB_TOKEN
+    copilotFields?.COPILOT_GITHUB_TOKEN || user?.env_vars?.COPILOT_GITHUB_TOKEN
   );
 
   const hasKeyForAgent = (agent: AgenticToolName): boolean => {
@@ -1045,7 +1027,6 @@ export function OnboardingWizard({
     setApiKey('');
     setSelectedAgent('claude-code');
     setTestAuthLoading(false);
-    setDetectedAuth(null);
     setManualTestResult(null);
     setOverrideDetectedAuth(false);
     setCreatedRepoId(null);
@@ -1054,7 +1035,6 @@ export function OnboardingWizard({
     setCloneElapsedSeconds(0);
     resumedRef.current = false;
     branchNameInitRef.current = false;
-    autoTestedAgentRef.current = null;
     knownFailedRepoIdsRef.current = new Set();
 
     if (user) {
@@ -1388,12 +1368,16 @@ export function OnboardingWizard({
     // "Already auth'd" covers both stored credentials (agentic_tools / env vars
     // / system credentials) AND ambient CLI auth detected by onCheckAuth —
     // e.g. the user already ran `claude auth login` outside the wizard.
-    // Auto-flip to "Already authenticated → Continue" ONLY for ambient auth
-    // (stored credential or CLI-detected). The "Test Connection" button writes
-    // to manualTestResult and intentionally never participates here, so a
-    // successful test on a typed key shows inline ✓ feedback without skipping
-    // the Save & Continue step.
-    const isAuthenticated = hasKey || !!detectedAuth?.authenticated;
+    // Auto-flip to "{tool} is configured → Continue" ONLY when the current
+    // user has THEIR OWN stored per-user credential. We intentionally do not
+    // gate on `detectedAuth?.authenticated` here: the ambient probe reads
+    // host-level state (daemon env vars, daemon's ~/.claude or ~/.codex), and
+    // letting it auto-skip the LLM-auth step caused brand-new users to never
+    // see the API-key input — they silently inherited the admin's setup. The
+    // "Test Connection" button writes to manualTestResult (inline ✓/✗) and
+    // is also intentionally absent here so a typed-key test never replaces
+    // the Save step.
+    const isAuthenticated = hasKey;
 
     const renderAuthHint = () => {
       if (selectedAgent === 'claude-code') {
@@ -1454,7 +1438,6 @@ export function OnboardingWizard({
                 setSelectedAgent(value);
                 setApiKey('');
                 setError(null);
-                setDetectedAuth(null);
                 setManualTestResult(null);
                 setOverrideDetectedAuth(false);
               }}
@@ -1470,34 +1453,21 @@ export function OnboardingWizard({
           </Form.Item>
         </Form>
 
-        {testAuthLoading && !detectedAuth ? (
-          <div style={{ textAlign: 'center', padding: '24px 0' }}>
-            <Spin />
-            <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
-              Checking authentication…
-            </Paragraph>
-          </div>
-        ) : isAuthenticated && !overrideDetectedAuth ? (
+        {isAuthenticated && !overrideDetectedAuth ? (
           <div style={{ textAlign: 'center', padding: '8px 0' }}>
             <Result
               style={{ padding: '16px 0' }}
               icon={<CheckCircleOutlined style={{ color: token.colorSuccess }} />}
-              title={
-                hasKey
-                  ? `${AGENT_LABELS[selectedAgent]} is configured`
-                  : `Already authenticated${detectedAuth?.method ? ` (${detectedAuth.method})` : ''}`
-              }
-              subTitle={
-                detectedAuth?.hint || `You're all set to use ${AGENT_LABELS[selectedAgent]}.`
-              }
+              title={`${AGENT_LABELS[selectedAgent]} is configured`}
+              subTitle={`You're all set to use ${AGENT_LABELS[selectedAgent]}.`}
             />
             <Space direction="vertical" size="small">
               <Button type="primary" onClick={handleAdvanceFromApiKeys}>
                 Continue
               </Button>
-              {/* Escape hatch: detected auth may be stale, wrong-account, or
-                  just not what the user wants (e.g. ChatGPT OAuth detected
-                  but they prefer a work API key). */}
+              {/* Escape hatch: stored key may be stale, wrong-account, or
+                  just not what the user wants (e.g. work account on file but
+                  they want to use a personal key for this onboarding). */}
               <Button type="link" onClick={() => setOverrideDetectedAuth(true)}>
                 Use a different API key instead
               </Button>
@@ -1707,30 +1677,6 @@ export function OnboardingWizard({
       handleCreateBoard();
     }
   }, [currentStep, loading, error, createdBoardId, handleCreateBoard]);
-
-  // Reset auto-test tracker when leaving the api-keys step so the next
-  // visit can re-test (e.g. after the user installs a CLI auth elsewhere).
-  useEffect(() => {
-    if (currentStep !== 'api-keys') {
-      autoTestedAgentRef.current = null;
-    }
-  }, [currentStep]);
-
-  // Auto-run a connection test when the user lands on api-keys (or switches
-  // agents on it). This catches the common case where they've already auth'd
-  // the agent CLI (e.g. `claude auth login`) — surfaces a Continue button
-  // instead of asking for a key they don't need.
-  useEffect(() => {
-    if (currentStep !== 'api-keys' || !onCheckAuth) return;
-    if (autoTestedAgentRef.current === selectedAgent) return;
-    autoTestedAgentRef.current = selectedAgent;
-    setDetectedAuth(null);
-    setTestAuthLoading(true);
-    onCheckAuth(selectedAgent)
-      .then((result) => setDetectedAuth(result))
-      .catch(() => {})
-      .finally(() => setTestAuthLoading(false));
-  }, [currentStep, selectedAgent, onCheckAuth]);
 
   // ─── Footer ───────────────────────────────────────
 
