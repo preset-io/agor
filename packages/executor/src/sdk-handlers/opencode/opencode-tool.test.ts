@@ -284,9 +284,10 @@ describe('OpenCodeTool', () => {
       await (tool as any).ensureMcpServers('session-1', client, 'test-token');
 
       // Should have called client.mcp.add with Agor MCP config
-      // MCP name format: agor_${sessionId.substring(0, 8)}
+      // MCP name format: agor_${shortId(sessionId)} — shortId strips hyphens,
+      // so 'session-1' becomes 'session1' (under the canonical-length cap).
       expect(mockMcpAddCalls.length).toBeGreaterThanOrEqual(1);
-      const agorCall = mockMcpAddCalls.find((c) => c.name === 'agor_session-');
+      const agorCall = mockMcpAddCalls.find((c) => c.name === 'agor_session1');
       expect(agorCall).toBeDefined();
       expect(agorCall!.config).toEqual({
         type: 'remote',
@@ -504,7 +505,8 @@ describe('OpenCodeTool', () => {
 
       await (tool as any).ensureMcpServers('session-encode', client, tokenWithSpecialChars);
 
-      const agorCall = mockMcpAddCalls.find((c) => c.name === 'agor_session-');
+      // shortId('session-encode') strips the hyphen → 'sessionencode'
+      const agorCall = mockMcpAddCalls.find((c) => c.name === 'agor_sessionencode');
       expect(agorCall).toBeDefined();
       const config = agorCall!.config as {
         url: string;
@@ -567,7 +569,7 @@ describe('OpenCodeTool', () => {
 
       await tool.executeTask?.('session-mcp', 'test prompt', 'task-2');
 
-      // Should have injected Agor MCP (name format: agor_${sessionId.substring(0, 8)})
+      // Should have injected Agor MCP (name format: agor_${shortId(sessionId)})
       const agorCall = mockMcpAddCalls.find((c) => c.name.startsWith('agor_'));
       expect(agorCall).toBeDefined();
     });

@@ -7,7 +7,7 @@
 
 import { execSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
-import { validateDirectory } from '@agor/core';
+import { shortId, validateDirectory } from '@agor/core';
 import { Claude } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
@@ -93,7 +93,7 @@ function logPromptStart(
   _cwd: string,
   agentSessionId?: string
 ) {
-  console.log(`🤖 Prompting Claude for session ${sessionId.substring(0, 8)}...`);
+  console.log(`🤖 Prompting Claude for session ${shortId(sessionId)}...`);
   if (agentSessionId) {
     console.log(`   Resuming session: ${agentSessionId}`);
   }
@@ -372,9 +372,7 @@ export async function setupQuery(
       userEnvCount = totalVarCount - systemVarCount;
 
       if (userEnvCount > 0) {
-        console.log(
-          `🔐 Using ${userEnvCount} environment vars for user ${contextUserId.substring(0, 8)}`
-        );
+        console.log(`🔐 Using ${userEnvCount} environment vars for user ${shortId(contextUserId)}`);
       }
     } catch (err) {
       console.error(`⚠️  Failed to resolve user environment:`, err);
@@ -399,13 +397,11 @@ export async function setupQuery(
       if (parentSession?.sdk_session_id) {
         queryOptions.resume = parentSession.sdk_session_id;
         queryOptions.forkSession = true; // SDK will create new session ID from parent's history
-        console.log(
-          `🍴 Forking from parent session: ${parentSession.sdk_session_id.substring(0, 8)}`
-        );
+        console.log(`🍴 Forking from parent session: ${shortId(parentSession.sdk_session_id)}`);
         console.log(`   SDK will return new session ID for this fork`);
       } else {
         console.warn(
-          `⚠️  Parent session ${forkedFromSessionId.substring(0, 8)} has no sdk_session_id - starting fresh`
+          `⚠️  Parent session ${shortId(forkedFromSessionId)} has no sdk_session_id - starting fresh`
         );
       }
     }
@@ -413,7 +409,7 @@ export async function setupQuery(
     else if (parentSessionId && !forkedFromSessionId && !session.sdk_session_id) {
       // This is a SPAWN - start FRESH, do NOT resume from parent
       console.log(
-        `🌱 Spawning fresh session (parent: ${parentSessionId.substring(0, 8)}) - NOT forking SDK session`
+        `🌱 Spawning fresh session (parent: ${shortId(parentSessionId)}) - NOT forking SDK session`
       );
       console.log(`   Child will start with clean context (spawns don't inherit parent history)`);
       // Don't set queryOptions.resume - let it start completely fresh
@@ -459,7 +455,7 @@ export async function setupQuery(
         );
         console.warn(`   🔧 SOLUTION: Clearing sdk_session_id to force fresh session start`);
         console.warn(
-          `   Previous SDK session: ${session.sdk_session_id.substring(0, 8)} (will be discarded)`
+          `   Previous SDK session: ${shortId(session.sdk_session_id)} (will be discarded)`
         );
 
         // Clear SDK session ID to force fresh start with new MCP config
@@ -481,7 +477,7 @@ export async function setupQuery(
 
         if (isLikelyStale) {
           console.warn(
-            `⚠️  Resume session ${session.sdk_session_id.substring(0, 8)} appears stale (${Math.round(hoursSinceUpdate)}h old) - starting fresh`
+            `⚠️  Resume session ${shortId(session.sdk_session_id)} appears stale (${Math.round(hoursSinceUpdate)}h old) - starting fresh`
           );
 
           // Clear stale session ID to prevent exit code 1
@@ -491,7 +487,7 @@ export async function setupQuery(
           // Don't set queryOptions.resume - start fresh
         } else {
           queryOptions.resume = session.sdk_session_id;
-          console.log(`   Resuming SDK session: ${session.sdk_session_id.substring(0, 8)}`);
+          console.log(`   Resuming SDK session: ${shortId(session.sdk_session_id)}`);
         }
       }
     }
@@ -520,7 +516,7 @@ export async function setupQuery(
       queryOptions.mcpServers = mcpConfig;
     } else {
       console.warn(
-        `⚠️  No MCP token found for session ${sessionId.substring(0, 8)} - MCP tools unavailable`
+        `⚠️  No MCP token found for session ${shortId(sessionId)} - MCP tools unavailable`
       );
     }
   }

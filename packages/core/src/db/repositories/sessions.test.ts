@@ -8,7 +8,7 @@
 import type { Session, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
-import { generateId } from '../../lib/ids';
+import { generateId, shortId, toShortId } from '../../lib/ids';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
 import { RepoRepository } from './repos';
@@ -282,8 +282,8 @@ describe('SessionRepository.findById', () => {
     const data = createSessionData({ worktree_id: worktree.worktree_id });
     await repo.create(data);
 
-    const shortId = data.session_id!.replace(/-/g, '').slice(0, 8);
-    const found = await repo.findById(shortId);
+    const idPrefix = data.session_id!.replace(/-/g, '').slice(0, 8);
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.session_id).toBe(data.session_id);
@@ -296,8 +296,8 @@ describe('SessionRepository.findById', () => {
     await repo.create(data);
 
     // Use first 8 chars - resolveId uses LIKE pattern that works better with shorter prefixes
-    const shortId = data.session_id!.replace(/-/g, '').slice(0, 8);
-    const found = await repo.findById(shortId);
+    const idPrefix = data.session_id!.replace(/-/g, '').slice(0, 8);
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.session_id).toBe(data.session_id);
@@ -309,8 +309,10 @@ describe('SessionRepository.findById', () => {
     const data = createSessionData({ worktree_id: worktree.worktree_id });
     await repo.create(data);
 
-    const shortId = data.session_id!.slice(0, 8);
-    const found = await repo.findById(shortId);
+    // Legacy 8-char input: tests the resolver accepts shorter-than-canonical
+    // prefixes.
+    const idPrefix = toShortId(data.session_id!, 8);
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.session_id).toBe(data.session_id);
@@ -322,8 +324,8 @@ describe('SessionRepository.findById', () => {
     const data = createSessionData({ worktree_id: worktree.worktree_id });
     await repo.create(data);
 
-    const shortId = data.session_id!.replace(/-/g, '').slice(0, 8).toUpperCase();
-    const found = await repo.findById(shortId);
+    const idPrefix = data.session_id!.replace(/-/g, '').slice(0, 8).toUpperCase();
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.session_id).toBe(data.session_id);
@@ -652,8 +654,8 @@ describe('SessionRepository.findChildren', () => {
       })
     );
 
-    const shortId = parent.session_id.replace(/-/g, '').slice(0, 8);
-    const children = await repo.findChildren(shortId);
+    const idPrefix = shortId(parent.session_id);
+    const children = await repo.findChildren(idPrefix);
 
     expect(children).toHaveLength(1);
   });
@@ -773,8 +775,8 @@ describe('SessionRepository.findAncestors', () => {
       })
     );
 
-    const shortId = child.session_id.replace(/-/g, '').slice(0, 8);
-    const ancestors = await repo.findAncestors(shortId);
+    const idPrefix = shortId(child.session_id);
+    const ancestors = await repo.findAncestors(idPrefix);
 
     expect(ancestors).toHaveLength(1);
     expect(ancestors[0].session_id).toBe(parent.session_id);
@@ -807,8 +809,8 @@ describe('SessionRepository.update', () => {
     });
     await repo.create(data);
 
-    const shortId = data.session_id!.replace(/-/g, '').slice(0, 8);
-    const updated = await repo.update(shortId, { status: SessionStatus.RUNNING });
+    const idPrefix = data.session_id!.replace(/-/g, '').slice(0, 8);
+    const updated = await repo.update(idPrefix, { status: SessionStatus.RUNNING });
 
     expect(updated.status).toBe(SessionStatus.RUNNING);
     expect(updated.session_id).toBe(data.session_id);
@@ -931,8 +933,8 @@ describe('SessionRepository.delete', () => {
     const data = createSessionData({ worktree_id: worktree.worktree_id });
     await repo.create(data);
 
-    const shortId = data.session_id!.replace(/-/g, '').slice(0, 8);
-    await repo.delete(shortId);
+    const idPrefix = data.session_id!.replace(/-/g, '').slice(0, 8);
+    await repo.delete(idPrefix);
 
     const found = await repo.findById(data.session_id!);
     expect(found).toBeNull();

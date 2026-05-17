@@ -19,6 +19,7 @@
  */
 
 import type { WorktreeRepository } from '@agor/core/db';
+import { shortId } from '@agor/core/db';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { HookContext, User, UUID, WorktreeID } from '@agor/core/types';
 import {
@@ -253,7 +254,7 @@ export function setupWorktreeOwnersService(
           // Fire-and-forget sync to executor
           // Syncing the worktree will pick up the new owner from the DB
           console.log(
-            `[Unix Integration] Syncing worktree ${worktreeId.substring(0, 8)} after owner added`
+            `[Unix Integration] Syncing worktree ${shortId(worktreeId)} after owner added`
           );
           const serviceToken = createServiceToken(config.jwtSecret);
           spawnExecutorFireAndForget(
@@ -286,7 +287,7 @@ export function setupWorktreeOwnersService(
           // Fire-and-forget sync to executor
           // Syncing the worktree will handle the removed owner
           console.log(
-            `[Unix Integration] Syncing worktree ${worktreeId.substring(0, 8)} after owner removed`
+            `[Unix Integration] Syncing worktree ${shortId(worktreeId)} after owner removed`
           );
           const serviceToken = createServiceToken(config.jwtSecret);
           spawnExecutorFireAndForget(

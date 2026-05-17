@@ -5,7 +5,7 @@
  * sessions deleted during async operations.
  */
 
-import { isForeignKeyConstraintError } from '@agor/core/db';
+import { isForeignKeyConstraintError, shortId } from '@agor/core/db';
 import type { Message } from '@agor/core/types';
 import type { MessagesService } from '../base/index.js';
 
@@ -26,7 +26,7 @@ export async function safeCreateMessage(
   } catch (error) {
     if (isForeignKeyConstraintError(error)) {
       console.warn(
-        `⚠️  Session ${message.session_id.substring(0, 8)} deleted during message creation, skipping`
+        `⚠️  Session ${shortId(message.session_id)} deleted during message creation, skipping`
       );
       return null;
     }

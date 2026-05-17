@@ -12,7 +12,7 @@
  * - ❌ Session fork (emulated via new sessions in Phase 2)
  */
 
-import { generateId } from '@agor/core/db';
+import { generateId, shortId } from '@agor/core/db';
 import type {
   MCPServerRepository,
   MessagesRepository,
@@ -343,7 +343,7 @@ export class CopilotTool implements ITool {
       if (existingSession?.sdk_session_id) {
         if (existingSession.sdk_session_id !== sdkSessionId) {
           console.warn(
-            `⚠️  Copilot returned new session_id ${sdkSessionId.substring(0, 8)} but session already has ${existingSession.sdk_session_id.substring(0, 8)} — keeping original`
+            `⚠️  Copilot returned new session_id ${shortId(sdkSessionId)} but session already has ${shortId(existingSession.sdk_session_id)} — keeping original`
           );
         }
         return;

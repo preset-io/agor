@@ -14,6 +14,7 @@
  */
 
 import type { Database } from '@agor/core/db';
+import { shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { DaemonServicesConfig, ServiceGroupName, SessionID, UserID } from '@agor/core/types';
 import { getServiceTier, SERVICE_GROUP_TO_MCP_DOMAINS, SERVICE_TIER_RANK } from '@agor/core/types';
@@ -492,7 +493,7 @@ export function setupMCPRoutes(
       }
 
       console.log(
-        `🔌 MCP request authenticated (user: ${context.userId.substring(0, 8)}, session: ${context.sessionId.substring(0, 8)})`
+        `🔌 MCP request authenticated (user: ${shortId(context.userId)}, session: ${shortId(context.sessionId)})`
       );
 
       // Fetch the authenticated user

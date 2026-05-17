@@ -7,7 +7,7 @@
 
 import type { BoardComment, CommentID, UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
-import { generateId } from '../../lib/ids';
+import { generateId, shortId, toShortId } from '../../lib/ids';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
 import { BoardCommentsRepository } from './board-comments';
@@ -209,8 +209,8 @@ describe('BoardCommentsRepository.findById', () => {
     const data = createCommentData({ board_id: board.board_id });
     await repo.create(data);
 
-    const shortId = data.comment_id!.replace(/-/g, '').slice(0, 8);
-    const found = await repo.findById(shortId);
+    const idPrefix = data.comment_id!.replace(/-/g, '').slice(0, 8);
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.comment_id).toBe(data.comment_id);
@@ -222,8 +222,11 @@ describe('BoardCommentsRepository.findById', () => {
     const data = createCommentData({ board_id: board.board_id });
     await repo.create(data);
 
-    const shortId = data.comment_id!.slice(0, 8);
-    const found = await repo.findById(shortId);
+    // Legacy 8-char input: tests the resolver accepts shorter-than-canonical
+    // prefixes. Uses the lower-level primitive intentionally — the resolver
+    // must handle any 8+ hex chars per `isValidShortID`.
+    const idPrefix = toShortId(data.comment_id!, 8);
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.comment_id).toBe(data.comment_id);
@@ -235,8 +238,8 @@ describe('BoardCommentsRepository.findById', () => {
     const data = createCommentData({ board_id: board.board_id });
     await repo.create(data);
 
-    const shortId = data.comment_id!.replace(/-/g, '').slice(0, 8).toUpperCase();
-    const found = await repo.findById(shortId);
+    const idPrefix = data.comment_id!.replace(/-/g, '').slice(0, 8).toUpperCase();
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.comment_id).toBe(data.comment_id);
@@ -458,8 +461,8 @@ describe('BoardCommentsRepository.update', () => {
     const data = createCommentData({ board_id: board.board_id });
     await repo.create(data);
 
-    const shortId = data.comment_id!.replace(/-/g, '').slice(0, 8);
-    const updated = await repo.update(shortId, { content: 'Updated' });
+    const idPrefix = data.comment_id!.replace(/-/g, '').slice(0, 8);
+    const updated = await repo.update(idPrefix, { content: 'Updated' });
 
     expect(updated.content).toBe('Updated');
   });
@@ -530,8 +533,8 @@ describe('BoardCommentsRepository.delete', () => {
     const data = createCommentData({ board_id: board.board_id });
     await repo.create(data);
 
-    const shortId = data.comment_id!.replace(/-/g, '').slice(0, 8);
-    await repo.delete(shortId);
+    const idPrefix = data.comment_id!.replace(/-/g, '').slice(0, 8);
+    await repo.delete(idPrefix);
 
     const found = await repo.findById(data.comment_id!);
     expect(found).toBeNull();
@@ -618,8 +621,8 @@ describe('BoardCommentsRepository.resolve/unresolve', () => {
     const data = createCommentData({ board_id: board.board_id, resolved: false });
     const created = await repo.create(data);
 
-    const shortId = created.comment_id.replace(/-/g, '').slice(0, 8);
-    const resolved = await repo.resolve(shortId);
+    const idPrefix = shortId(created.comment_id);
+    const resolved = await repo.resolve(idPrefix);
 
     expect(resolved.resolved).toBe(true);
   });

@@ -12,6 +12,7 @@ import {
   BoardRepository,
   type Database,
   type SessionRepository,
+  shortId,
   UserMCPOAuthTokenRepository,
   type UsersRepository,
   type WorktreeRepository,
@@ -800,7 +801,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                   creatorId as import('@agor/core/types').UUID
                 );
                 console.log(
-                  `[RBAC] Added creator ${creatorId.substring(0, 8)} as owner of worktree ${worktree.worktree_id.substring(0, 8)}`
+                  `[RBAC] Added creator ${shortId(creatorId)} as owner of worktree ${shortId(worktree.worktree_id)}`
                 );
 
                 // NOTE: unix.sync-worktree is NOT spawned here to avoid race conditions.
@@ -840,14 +841,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 const previousValue = params._previousOthersFsAccess;
                 if (previousValue === worktree.others_fs_access) {
                   console.log(
-                    `[Unix Integration] Worktree ${worktree.worktree_id.substring(0, 8)} others_fs_access unchanged (${previousValue}), skipping`
+                    `[Unix Integration] Worktree ${shortId(worktree.worktree_id)} others_fs_access unchanged (${previousValue}), skipping`
                   );
                   return context;
                 }
 
                 if (!worktree.path) {
                   console.log(
-                    `[Unix Integration] Worktree ${worktree.worktree_id.substring(0, 8)} has no path, skipping permission update`
+                    `[Unix Integration] Worktree ${shortId(worktree.worktree_id)} has no path, skipping permission update`
                   );
                   return context;
                 }
@@ -856,7 +857,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 // The executor will handle permission changes idempotently
                 if (jwtSecret) {
                   console.log(
-                    `[Unix Integration] Syncing permissions for worktree ${worktree.worktree_id.substring(0, 8)} (others_fs_access: ${previousValue} -> ${worktree.others_fs_access})`
+                    `[Unix Integration] Syncing permissions for worktree ${shortId(worktree.worktree_id)} (others_fs_access: ${previousValue} -> ${worktree.others_fs_access})`
                   );
                   const serviceToken = createServiceToken(jwtSecret);
                   spawnExecutorFireAndForget(
@@ -1830,7 +1831,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             userId as import('@agor/core/types').UserID
           );
 
-          console.log(`🔄 Regenerated MCP token for session ${session.session_id.substring(0, 8)}`);
+          console.log(`🔄 Regenerated MCP token for session ${shortId(session.session_id)}`);
 
           // Add token to result (not stored in DB, regenerated on-demand with
           // a fresh `jti` and `exp`)
@@ -1895,7 +1896,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             userId as import('@agor/core/types').UserID
           );
 
-          console.log(`🎫 MCP token issued for session ${session.session_id.substring(0, 8)}`);
+          console.log(`🎫 MCP token issued for session ${shortId(session.session_id)}`);
 
           // Note: We no longer auto-attach global MCP servers to sessions.
           // Instead, getMcpServersForSession() will automatically provide ALL
@@ -1944,7 +1945,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                   // Fire-and-forget: trigger unix.sync-worktree to add session user to groups
                   if (jwtSecret) {
                     console.log(
-                      `[Unix Integration] Non-owner session created in worktree ${session.worktree_id.substring(0, 8)} ` +
+                      `[Unix Integration] Non-owner session created in worktree ${shortId(session.worktree_id)} ` +
                         `by ${session.unix_username} (others_fs_access: ${worktree.others_fs_access}), syncing group membership`
                     );
                     const serviceToken = createServiceToken(jwtSecret);
@@ -1964,7 +1965,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 } catch (error) {
                   // Don't fail session creation if unix sync fails
                   console.error(
-                    `[Unix Integration] Failed to trigger group sync for session ${session.session_id.substring(0, 8)}:`,
+                    `[Unix Integration] Failed to trigger group sync for session ${shortId(session.session_id)}:`,
                     error
                   );
                 }
@@ -1991,7 +1992,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 await gatewayService.flushGitHubBuffer(session.session_id);
               } catch (error) {
                 console.warn(
-                  `[gateway] Failed to flush GitHub buffer for session ${session.session_id.substring(0, 8)}:`,
+                  `[gateway] Failed to flush GitHub buffer for session ${shortId(session.session_id)}:`,
                   error
                 );
               }
@@ -2002,13 +2003,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               setImmediate(async () => {
                 try {
                   console.log(
-                    `🔄 [SessionsService.after.patch] Session ${session.session_id.substring(0, 8)} became IDLE, checking for queued tasks...`
+                    `🔄 [SessionsService.after.patch] Session ${shortId(session.session_id)} became IDLE, checking for queued tasks...`
                   );
 
                   await sessionsService.triggerQueueProcessing(session.session_id, context.params);
                 } catch (error) {
                   console.error(
-                    `❌ [SessionsService.after.patch] Failed to process queue for session ${session.session_id.substring(0, 8)}:`,
+                    `❌ [SessionsService.after.patch] Failed to process queue for session ${shortId(session.session_id)}:`,
                     error
                   );
                   // Don't throw - queue processing failure shouldn't break session patches
@@ -2143,7 +2144,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             );
             context.result = result;
             console.log('🔄 [boards patch hook] Emitting patched event for upsertObject', {
-              board_id: result.board_id.substring(0, 8),
+              board_id: shortId(result.board_id),
               objectId,
               objectsCount: Object.keys(result.objects || {}).length,
               objects: result.objects,

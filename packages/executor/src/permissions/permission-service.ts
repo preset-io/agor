@@ -22,6 +22,7 @@
  * 7. Promise resolves → SDK resumes execution
  */
 
+import { shortId } from '@agor/core/db';
 import type { SessionID, TaskID } from '@agor/core/types';
 import { PermissionScope } from '@agor/core/types';
 
@@ -190,7 +191,7 @@ export class PermissionService {
 
     if (cancelledCount > 0) {
       console.log(
-        `🛡️  [executor] Cancelled ${cancelledCount} pending permission request(s) for session ${sessionId.substring(0, 8)}`
+        `🛡️  [executor] Cancelled ${cancelledCount} pending permission request(s) for session ${shortId(sessionId)}`
       );
     }
   }

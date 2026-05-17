@@ -2,7 +2,11 @@ import type { SessionID, TaskID, WorktreeID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock minimal dependencies
-vi.mock('@agor/core', () => ({ validateDirectory: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@agor/core', () => ({
+  validateDirectory: vi.fn().mockResolvedValue(undefined),
+  // shortId is used in log lines inside query-builder; passthrough mock.
+  shortId: vi.fn((id: string) => id),
+}));
 vi.mock('@agor/core/sdk', () => ({ Claude: { query: vi.fn() } }));
 vi.mock('@agor/core/templates/session-context', () => ({
   renderAgorSystemPrompt: vi.fn().mockResolvedValue('prompt'),

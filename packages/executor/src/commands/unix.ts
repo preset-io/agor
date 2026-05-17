@@ -19,6 +19,7 @@
 import { exec, execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
+import { shortId } from '@agor/core/db';
 import type { RepoID, WorktreeID } from '@agor/core/types';
 import {
   AGOR_USERS_GROUP,
@@ -178,7 +179,7 @@ export async function handleUnixSyncRepo(
     }
 
     const groupName = generateRepoGroupName(repoId as RepoID);
-    console.log(`[unix.sync-repo] Syncing repo ${repoId.substring(0, 8)} with group ${groupName}`);
+    console.log(`[unix.sync-repo] Syncing repo ${shortId(repoId)} with group ${groupName}`);
 
     // Ensure group exists
     const groupExists = await checkCommand(UnixGroupCommands.groupExists(groupName));
@@ -246,7 +247,7 @@ export async function handleUnixSyncRepo(
       } catch (_error) {
         // Worktree owners service might not exist if RBAC is disabled
         console.log(
-          `[unix.sync-repo] Could not fetch owners for worktree ${wt.worktree_id.substring(0, 8)}`
+          `[unix.sync-repo] Could not fetch owners for worktree ${shortId(wt.worktree_id)}`
         );
       }
     }
@@ -343,7 +344,7 @@ export async function handleUnixSyncWorktree(
 
     const groupName = generateWorktreeGroupName(worktreeId as WorktreeID);
     console.log(
-      `[unix.sync-worktree] Syncing worktree ${worktreeId.substring(0, 8)} with group ${groupName}`
+      `[unix.sync-worktree] Syncing worktree ${shortId(worktreeId)} with group ${groupName}`
     );
 
     // Ensure group exists
@@ -631,7 +632,7 @@ export async function handleUnixSyncUser(
     // Fetch user details
     const user = await client.service('users').get(userId);
     if (!user.unix_username) {
-      console.log(`[unix.sync-user] User ${userId.substring(0, 8)} has no unix_username, skipping`);
+      console.log(`[unix.sync-user] User ${shortId(userId)} has no unix_username, skipping`);
       return {
         success: true,
         data: { userId, skipped: true, reason: 'no_unix_username' },
@@ -662,7 +663,7 @@ export async function handleUnixSyncUser(
       return { success: true, data: { userId, deleted: true } };
     }
 
-    console.log(`[unix.sync-user] Syncing user ${userId.substring(0, 8)} (${unixUsername})`);
+    console.log(`[unix.sync-user] Syncing user ${shortId(userId)} (${unixUsername})`);
 
     // Ensure user exists
     const userExists = await checkCommand(`id ${unixUsername} > /dev/null 2>&1`);

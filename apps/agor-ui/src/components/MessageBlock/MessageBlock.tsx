@@ -16,6 +16,7 @@ import {
   type PermissionRequestContent,
   PermissionScope,
   PermissionStatus,
+  shortId,
   type User,
 } from '@agor-live/client';
 import { RobotOutlined, SyncOutlined, WarningOutlined } from '@ant-design/icons';
@@ -352,10 +353,10 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
           : '';
     const btwPrompt = message.metadata?.btw_prompt as string | undefined;
     const btwSessionId = message.metadata?.btw_session_id as string | undefined;
-    const btwShortId = btwSessionId ? btwSessionId.substring(0, 8) : undefined;
+    const btwShortId = btwSessionId ? shortId(btwSessionId) : undefined;
     const callerSessionId = message.metadata?.btw_caller_session_id as string | undefined;
     const callerTitle = message.metadata?.btw_caller_title as string | undefined;
-    const callerShortId = callerSessionId ? callerSessionId.substring(0, 8) : undefined;
+    const callerShortId = callerSessionId ? shortId(callerSessionId) : undefined;
     const isRemote = !!callerSessionId;
 
     // Build markdown content

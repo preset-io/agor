@@ -14,19 +14,20 @@ import type {
   User,
   UUID,
 } from '@agor/core/types';
-import { prefixToLikePattern, toAgenticToolsStatus } from '@agor/core/types';
+import { toAgenticToolsStatus } from '@agor/core/types';
 import { eq, like } from 'drizzle-orm';
 import { normalizeStoredEnvMap, type RawStoredEnvVar } from '../../config/env-vars';
-import { generateId } from '../../lib/ids';
+import { generateId, shortId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { decryptApiKey, encryptApiKey } from '../encryption';
 import { type UserInsert as SchemaUserInsert, type UserRow, users } from '../schema';
 import {
-  AmbiguousIdError,
   type BaseRepository,
   EntityNotFoundError,
+  RESOLVE_SHORT_ID_FETCH_LIMIT,
   RepositoryError,
+  resolveByShortIdPrefix,
 } from './base';
 
 /**
@@ -124,32 +125,17 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
   }
 
   /**
-   * Resolve short ID to full ID
+   * Resolve short ID to full ID via the centralized helper.
    */
   private async resolveId(id: string): Promise<string> {
-    // If already a full UUID, return as-is
-    if (id.length === 36 && id.includes('-')) {
-      return id;
-    }
-
-    // Short ID - need to resolve
-    const pattern = prefixToLikePattern(id);
-
-    const results = await select(this.db).from(users).where(like(users.user_id, pattern)).all();
-
-    if (results.length === 0) {
-      throw new EntityNotFoundError('User', id);
-    }
-
-    if (results.length > 1) {
-      throw new AmbiguousIdError(
-        'User',
-        id,
-        results.map((r: UserRow) => r.user_id)
-      );
-    }
-
-    return results[0].user_id;
+    return resolveByShortIdPrefix(id, 'User', async (pattern) => {
+      const rows = await select(this.db)
+        .from(users)
+        .where(like(users.user_id, pattern))
+        .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
+        .all();
+      return rows.map((r: UserRow) => r.user_id);
+    });
   }
 
   /**
@@ -360,7 +346,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
         out[field] = decryptApiKey(encrypted);
       } catch (error) {
         console.error(
-          `[users] Failed to decrypt ${tool}.${field} for user ${userId.substring(0, 8)}: ${
+          `[users] Failed to decrypt ${tool}.${field} for user ${shortId(userId)}: ${
             (error as Error).message
           }`
         );
@@ -392,7 +378,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
       return decryptApiKey(encrypted);
     } catch (error) {
       console.error(
-        `[users] Failed to decrypt ${tool}.${field} for user ${userId.substring(0, 8)}: ${
+        `[users] Failed to decrypt ${tool}.${field} for user ${shortId(userId)}: ${
           (error as Error).message
         }`
       );

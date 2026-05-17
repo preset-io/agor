@@ -20,6 +20,7 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseAgorYml } from '@agor/core/config';
+import { shortId } from '@agor/core/db';
 import {
   categorizeGitError,
   cleanWorktree,
@@ -208,7 +209,7 @@ export async function handleGitClone(
         // queryable. Patch it to `ready` and fill in the post-clone fields.
         repoId = payload.params.repoId;
         console.log(
-          `[git.clone] Patching pre-created repo ${repoId.substring(0, 8)} to ready: ` +
+          `[git.clone] Patching pre-created repo ${shortId(repoId)} to ready: ` +
             `slug=${slug} default_branch=${defaultBranch}` +
             (payload.params.default_branch ? ' (user-supplied)' : ' (auto-detected)')
         );
@@ -254,7 +255,7 @@ export async function handleGitClone(
       // sudo privileges regardless of executor impersonation mode.
       if (payload.params.initUnixGroup && repoId) {
         try {
-          console.log(`[git.clone] Initializing Unix group for repo ${repoId.substring(0, 8)}`);
+          console.log(`[git.clone] Initializing Unix group for repo ${shortId(repoId)}`);
           const result = await client
             .service('repos')
             .initializeUnixGroup({ repoId, userId: payload.params.userId });
@@ -307,7 +308,7 @@ export async function handleGitClone(
           },
         });
         console.log(
-          `[git.clone] Marked repo ${payload.params.repoId.substring(0, 8)} as failed (${category})`
+          `[git.clone] Marked repo ${shortId(payload.params.repoId)} as failed (${category})`
         );
       } catch (patchError) {
         // Best-effort: if the daemon-side patch fails, the daemon's `onExit`
@@ -531,7 +532,7 @@ export async function handleGitWorktreeAdd(
       try {
         const othersAccess = payload.params.othersAccess || 'read';
         console.log(
-          `[git.worktree.add] Initializing Unix group for worktree ${worktreeId.substring(0, 8)}`
+          `[git.worktree.add] Initializing Unix group for worktree ${shortId(worktreeId)}`
         );
         const result = await client
           .service('worktrees')
@@ -579,8 +580,8 @@ export async function handleGitWorktreeAdd(
     if (worktreeId) {
       try {
         const logSuffix = unixGroup
-          ? `with GID for worktree ${worktreeId.substring(0, 8)}`
-          : `for worktree ${worktreeId.substring(0, 8)} (no Unix group)`;
+          ? `with GID for worktree ${shortId(worktreeId)}`
+          : `for worktree ${shortId(worktreeId)} (no Unix group)`;
         console.log(`[git.worktree.add] Rendering environment templates ${logSuffix}`);
         renderedTemplates = await renderEnvironmentTemplates(
           client,
@@ -601,7 +602,7 @@ export async function handleGitWorktreeAdd(
 
     // Patch worktree status to 'ready' (DB record was created by daemon with 'creating')
     if (worktreeId) {
-      console.log(`[git.worktree.add] Marking worktree ${worktreeId.substring(0, 8)} as ready`);
+      console.log(`[git.worktree.add] Marking worktree ${shortId(worktreeId)} as ready`);
       await client.service('worktrees').patch(worktreeId, {
         filesystem_status: 'ready',
         ...(unixGroup ? { unix_group: unixGroup } : {}),

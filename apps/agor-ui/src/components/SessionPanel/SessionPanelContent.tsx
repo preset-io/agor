@@ -1,5 +1,5 @@
 import type { AgorClient, Session, SpawnConfig, Task, Worktree } from '@agor-live/client';
-import { getAssistantConfig, isAssistant } from '@agor-live/client';
+import { getAssistantConfig, isAssistant, shortId } from '@agor-live/client';
 import {
   CodeOutlined,
   CommentOutlined,
@@ -256,7 +256,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
               client={client}
               userId={currentUserId}
               worktreeId={session.worktree_id}
-              focusTabName={`cli-${session.session_id.slice(0, 8)}`}
+              focusTabName={`cli-${shortId(session.session_id)}`}
               // Server-side ensure-create — if the cli tab doesn't yet
               // exist (cold-start race where `onCliSessionCreated`'s
               // dispatch landed in an empty room), terminals.create

@@ -22,7 +22,7 @@ import {
   parseAgorYml,
   writeAgorYml,
 } from '@agor/core/config';
-import { type Database, RepoRepository, WorktreeRepository } from '@agor/core/db';
+import { type Database, RepoRepository, shortId, WorktreeRepository } from '@agor/core/db';
 import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
@@ -193,7 +193,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     if (existing) {
       if (existing.clone_status === 'failed') {
         console.log(
-          `[clone ${slug}] Found previous failed clone (${existing.repo_id.substring(0, 8)}); deleting to retry`
+          `[clone ${slug}] Found previous failed clone (${shortId(existing.repo_id)}); deleting to retry`
         );
         await this.remove(existing.repo_id, { ...params, query: {} });
       } else {
@@ -789,7 +789,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     {
       const worktreeRepo = new WorktreeRepository(this.db);
       await worktreeRepo.addOwner(worktree.worktree_id, userId);
-      console.log(`✓ Added user ${userId.substring(0, 8)} as owner of worktree ${worktree.name}`);
+      console.log(`✓ Added user ${shortId(userId)} as owner of worktree ${worktree.name}`);
     }
 
     if (data.boardId) {

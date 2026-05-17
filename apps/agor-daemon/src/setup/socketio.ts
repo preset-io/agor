@@ -14,6 +14,7 @@
  * agor.db, and the JWT secret). See `terminal:*` handlers below.
  */
 
+import { shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
   AuthenticatedUser,
@@ -337,9 +338,7 @@ export function createSocketIOConfig(
         // Attach user to socket (FeathersJS convention)
         (socket as FeathersSocket).feathers = { user };
 
-        console.log(
-          `🔐 WebSocket authenticated: ${socket.id} (user: ${user.user_id.substring(0, 8)})`
-        );
+        console.log(`🔐 WebSocket authenticated: ${socket.id} (user: ${shortId(user.user_id)})`);
         next();
       } catch (error) {
         console.error(`❌ WebSocket authentication failed for ${socket.id}:`, error);
@@ -352,7 +351,7 @@ export function createSocketIOConfig(
       activeConnections++;
       const user = (socket as FeathersSocket).feathers?.user;
       console.log(
-        `🔌 Socket.io connection established: ${socket.id} (user: ${user ? user.user_id.substring(0, 8) : 'unknown'}, total: ${activeConnections})`
+        `🔌 Socket.io connection established: ${socket.id} (user: ${user ? shortId(user.user_id) : 'unknown'}, total: ${activeConnections})`
       );
 
       // Welcome event: ship the daemon's build identity so UI tabs can spot
@@ -372,7 +371,7 @@ export function createSocketIOConfig(
       if (user?.user_id) {
         socket.join(userRoomName(user.user_id));
         console.log(
-          `🏠 Socket ${socket.id} joined user room at connection: user:${user.user_id.substring(0, 8)}`
+          `🏠 Socket ${socket.id} joined user room at connection: user:${shortId(user.user_id)}`
         );
       }
 
@@ -491,7 +490,7 @@ export function createSocketIOConfig(
           rejectTerminal(
             event,
             `payload userId (${String(payloadUserId).slice(0, 8)}…) does not match ` +
-              `authed userId (${auth.userId.slice(0, 8)}…)`
+              `authed userId (${shortId(auth.userId)}…)`
           );
           return null;
         }
@@ -520,7 +519,7 @@ export function createSocketIOConfig(
         if (!auth.isService && auth.userId !== target) {
           rejectTerminal(
             'join',
-            `user ${auth.userId?.slice(0, 8)}… tried to join ${target.slice(0, 8)}…'s channel`
+            `user ${auth.userId ? shortId(auth.userId) : 'unknown'}… tried to join ${shortId(target)}…'s channel`
           );
           return;
         }
@@ -542,7 +541,7 @@ export function createSocketIOConfig(
           if (!auth.isService && auth.userId !== target) {
             rejectTerminal(
               'leave',
-              `user ${auth.userId?.slice(0, 8)}… tried to leave ${target.slice(0, 8)}…'s channel`
+              `user ${auth.userId ? shortId(auth.userId) : 'unknown'}… tried to leave ${shortId(target)}…'s channel`
             );
             return;
           }
@@ -685,7 +684,7 @@ export function createSocketIOConfig(
         if ((socket as FeathersSocket).feathers === context.connection) {
           socket.join(userRoomName(userId));
           console.log(
-            `🏠 Socket ${socket.id} joined user room after login: user:${userId.substring(0, 8)}`
+            `🏠 Socket ${socket.id} joined user room after login: user:${shortId(userId)}`
           );
           break;
         }

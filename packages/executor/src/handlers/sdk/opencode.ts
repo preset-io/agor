@@ -9,7 +9,7 @@
  * - Different return type (TaskResult vs execution result)
  */
 
-import { generateId } from '@agor/core';
+import { generateId, shortId } from '@agor/core';
 import type { MessageID, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
@@ -34,14 +34,14 @@ export async function executeOpenCodeTask(params: {
 }): Promise<void> {
   const { client, sessionId, taskId, prompt } = params;
 
-  console.log(`[opencode] Executing task ${taskId.substring(0, 8)}...`);
+  console.log(`[opencode] Executing task ${shortId(taskId)}...`);
 
   try {
     // Get session to extract model config
     const session = await client.service('sessions').get(sessionId);
     console.log('[opencode] Session loaded:', {
-      sessionId: sessionId.substring(0, 8),
-      sdk_session_id: session.sdk_session_id?.substring(0, 8),
+      sessionId: shortId(sessionId),
+      sdk_session_id: session.sdk_session_id ? shortId(session.sdk_session_id) : undefined,
       model: session.model_config?.model,
       provider: session.model_config?.provider,
     });
@@ -87,14 +87,14 @@ export async function executeOpenCodeTask(params: {
     // Check if we already have an OpenCode session (stored in sdk_session_id)
     if (session.sdk_session_id) {
       console.log(
-        `[opencode] Resuming existing OpenCode session: ${session.sdk_session_id.substring(0, 8)}`
+        `[opencode] Resuming existing OpenCode session: ${shortId(session.sdk_session_id)}`
       );
       opencodeSessionId = session.sdk_session_id;
     } else {
       // Create new OpenCode session
       console.log('[opencode] Creating new OpenCode session...');
       const sessionHandle = await tool.createSession?.({
-        title: session.title || `Task ${taskId.substring(0, 8)}`,
+        title: session.title || `Task ${shortId(taskId)}`,
         projectName: 'agor',
         model: session.model_config?.model,
         provider: session.model_config?.provider,
@@ -106,7 +106,7 @@ export async function executeOpenCodeTask(params: {
       }
 
       opencodeSessionId = sessionHandle.sessionId;
-      console.log(`[opencode] Created OpenCode session: ${opencodeSessionId.substring(0, 8)}`);
+      console.log(`[opencode] Created OpenCode session: ${shortId(opencodeSessionId)}`);
 
       // Store OpenCode session ID in Agor session for future resumes
       await client.service('sessions').patch(sessionId, {

@@ -61,8 +61,11 @@ export type {
 };
 
 export * from '@agor/core/client';
-// Re-export full browser-safe type/runtime surface for UI consumers.
-export { toShortId as formatShortId } from '@agor/core/client';
+// `shortId` is the canonical display helper (always SHORT_ID_LENGTH chars).
+// Use it for any UUID rendered to a user — URLs, pills, logs, notifications.
+// `toShortId(id, length)` is the lower-level primitive for rare cases that
+// need a non-canonical length (e.g. `findMinimumPrefixLength`).
+export { shortId } from '@agor/core/client';
 export { isValidSlug, REPO_SLUG_PATTERN } from '@agor/core/config/browser';
 export * from './models';
 

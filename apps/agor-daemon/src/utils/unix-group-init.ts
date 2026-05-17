@@ -15,7 +15,7 @@ import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getDaemonUser } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
-import { UsersRepository } from '@agor/core/db';
+import { shortId, UsersRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { RepoID, WorktreeID } from '@agor/core/types';
 import {
@@ -61,9 +61,7 @@ export async function initializeRepoUnixGroup(
   const groupName = generateRepoGroupName(repoId as RepoID);
   const daemonUser = getDaemonUser();
 
-  console.log(
-    `[unix-group-init] Creating repo group ${groupName} for repo ${repoId.substring(0, 8)}`
-  );
+  console.log(`[unix-group-init] Creating repo group ${groupName} for repo ${shortId(repoId)}`);
 
   // Create group if it doesn't exist
   const exists = await checkCommand(UnixGroupCommands.groupExists(groupName));
@@ -126,9 +124,7 @@ export async function initializeRepoUnixGroup(
 
   // Update repo record with group name
   await app.service('repos').patch(repoId, { unix_group: groupName });
-  console.log(
-    `[unix-group-init] Updated repo ${repoId.substring(0, 8)} with unix_group=${groupName}`
-  );
+  console.log(`[unix-group-init] Updated repo ${shortId(repoId)} with unix_group=${groupName}`);
 
   return groupName;
 }
@@ -145,7 +141,7 @@ export async function initializeWorktreeUnixGroup(
   const daemonUser = getDaemonUser();
 
   console.log(
-    `[unix-group-init] Creating worktree group ${groupName} for worktree ${worktreeId.substring(0, 8)}`
+    `[unix-group-init] Creating worktree group ${groupName} for worktree ${shortId(worktreeId)}`
   );
 
   // Look up worktree from DB
@@ -239,7 +235,7 @@ export async function initializeWorktreeUnixGroup(
   // Update worktree record with group name
   await app.service('worktrees').patch(worktreeId, { unix_group: groupName });
   console.log(
-    `[unix-group-init] Updated worktree ${worktreeId.substring(0, 8)} with unix_group=${groupName}`
+    `[unix-group-init] Updated worktree ${shortId(worktreeId)} with unix_group=${groupName}`
   );
 
   return groupName;

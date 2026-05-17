@@ -15,6 +15,7 @@ import {
   SUPPRESSED_CLAUDE_STATUSES,
   SUPPRESSED_CLAUDE_SYSTEM_SUBTYPES,
 } from '@agor/core/client/claude-system-suppression';
+import { shortId } from '@agor/core/db';
 import type {
   SDKAssistantMessage,
   SDKCompactBoundaryMessage,
@@ -355,7 +356,7 @@ export class SDKMessageProcessor {
   private handleUser(msg: SDKUserMessage | SDKUserMessageReplay): ProcessedEvent[] {
     // Check if this is a replay message (already processed)
     if ('isReplay' in msg && msg.isReplay) {
-      console.debug(`🔄 User message replay (uuid: ${msg.uuid?.substring(0, 8)})`);
+      console.debug(`🔄 User message replay (uuid: ${msg.uuid ? shortId(msg.uuid) : 'unknown'})`);
       return []; // Skip replays - already in our database
     }
 
@@ -390,7 +391,9 @@ export class SDKMessageProcessor {
     } else if (hasText) {
       const textBlocks = content.filter((b) => b.type === 'text');
       const textPreview = textBlocks[0]?.text?.substring(0, 100) || '';
-      console.log(`👤 SDK user message (uuid: ${uuid?.substring(0, 8)}): "${textPreview}"`);
+      console.log(
+        `👤 SDK user message (uuid: ${uuid ? shortId(uuid) : 'unknown'}): "${textPreview}"`
+      );
 
       // Regular user text messages - also save for completeness
       return [
@@ -405,7 +408,7 @@ export class SDKMessageProcessor {
         },
       ];
     } else {
-      console.log(`👤 SDK user message (uuid: ${uuid?.substring(0, 8)})`);
+      console.log(`👤 SDK user message (uuid: ${uuid ? shortId(uuid) : 'unknown'})`);
       console.log(
         `   Content types:`,
         Array.isArray(content) ? content.map((b) => b.type) : 'no content'

@@ -1,5 +1,5 @@
 import { isWorktreeRbacEnabled } from '@agor/core/config';
-import { WorktreeRepository } from '@agor/core/db';
+import { shortId, WorktreeRepository } from '@agor/core/db';
 import type {
   BoardID,
   Repo,
@@ -605,7 +605,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         : undefined;
       const triggerTemplate = args.triggerTemplate === true;
 
-      console.log(`📍 MCP pinning worktree ${worktreeId.substring(0, 8)} to zone ${zoneId}`);
+      console.log(`📍 MCP pinning worktree ${shortId(worktreeId)} to zone ${zoneId}`);
 
       // Get worktree to find its board
       const worktree = await ctx.app.service('worktrees').get(worktreeId, ctx.baseServiceParams);
@@ -687,9 +687,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
 
       if (triggerTemplate && targetSessionId && hasZoneTrigger) {
         // Case 1: Explicit trigger to an existing session
-        console.log(
-          `🎯 Triggering zone prompt template for session ${targetSessionId.substring(0, 8)}`
-        );
+        console.log(`🎯 Triggering zone prompt template for session ${shortId(targetSessionId)}`);
 
         const { renderTemplate } = await import('@agor/core/templates/handlebars-helpers');
         const { buildZoneTriggerContext } = await import(
@@ -742,7 +740,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
               note: 'Session is busy. Zone trigger prompt has been queued.',
             };
             console.log(
-              `📬 Zone trigger queued for session ${targetSessionId.substring(0, 8)} at position ${task.queue_position}`
+              `📬 Zone trigger queued for session ${shortId(targetSessionId)} at position ${task.queue_position}`
             );
           } else {
             promptResult = {
@@ -750,7 +748,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
               sessionId: targetSessionId,
               note: 'Zone trigger prompt sent to target session',
             };
-            console.log(`✅ Zone trigger executed: task ${task.task_id.substring(0, 8)}`);
+            console.log(`✅ Zone trigger executed: task ${shortId(task.task_id)}`);
           }
         } else {
           promptResult = {
@@ -763,7 +761,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         // the daemon's POST /worktrees/:id/fire-zone-trigger uses, so MCP-
         // and UI-fired sessions stay in lockstep.
         console.log(
-          `🎯 Zone has always_new trigger, auto-creating session for worktree ${worktreeId.substring(0, 8)}`
+          `🎯 Zone has always_new trigger, auto-creating session for worktree ${shortId(worktreeId)}`
         );
 
         try {
@@ -779,15 +777,13 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
             userId: ctx.userId,
           });
           const agenticTool = newSession.agentic_tool;
-          console.log(
-            `✅ Auto-created session ${newSession.session_id.substring(0, 8)} (${agenticTool})`
-          );
+          console.log(`✅ Auto-created session ${shortId(newSession.session_id)} (${agenticTool})`);
           promptResult = {
             taskId: task.task_id,
             sessionId: newSession.session_id,
-            note: `always_new trigger: created session ${newSession.session_id.substring(0, 8)} (${agenticTool}) and sent prompt`,
+            note: `always_new trigger: created session ${shortId(newSession.session_id)} (${agenticTool}) and sent prompt`,
           };
-          console.log(`✅ Zone trigger executed: task ${task.task_id.substring(0, 8)}`);
+          console.log(`✅ Zone trigger executed: task ${shortId(task.task_id)}`);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           if (message.includes('rendered to an empty prompt')) {

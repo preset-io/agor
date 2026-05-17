@@ -1,4 +1,5 @@
 import type { Artifact, Board, Worktree } from '@agor-live/client';
+import { shortId } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined } from '@ant-design/icons';
 import {
   Badge,
@@ -140,7 +141,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
         const worktree = worktreeById.get(worktreeId);
         return (
           <Typography.Text type="secondary">
-            {worktree?.name || worktreeId.slice(0, 8)}
+            {worktree?.name || shortId(worktreeId)}
           </Typography.Text>
         );
       },
@@ -154,7 +155,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
         const board = boardById.get(boardId);
         return (
           <Typography.Text type="secondary">
-            {board ? `${board.icon || ''} ${board.name}`.trim() : boardId.slice(0, 8)}
+            {board ? `${board.icon || ''} ${board.name}`.trim() : shortId(boardId)}
           </Typography.Text>
         );
       },

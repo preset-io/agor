@@ -11,6 +11,7 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { shortId } from '../lib/ids';
 import type { Repo, Session, SessionID, User, UUID, Worktree, WorktreeID } from '../types';
 import { renderTemplate } from './handlebars-helpers';
 
@@ -88,7 +89,7 @@ export async function buildSessionContext(
         }
       } catch (err) {
         console.warn(
-          `[SessionContext] Failed to fetch owner for session ${sessionId.substring(0, 8)}:`,
+          `[SessionContext] Failed to fetch owner for session ${shortId(sessionId)}:`,
           err
         );
       }

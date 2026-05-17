@@ -21,6 +21,7 @@ import {
   insert,
   RepoRepository,
   sessions,
+  shortId,
   worktrees,
 } from '@agor/core/db';
 import type { SessionID, UserID } from '@agor/core/types';
@@ -58,7 +59,7 @@ async function seedSession(
   const repoRepo = new RepoRepository(db);
   const repo = await repoRepo.create({
     repo_id: generateId(),
-    slug: `slug-${opts.sessionId.slice(0, 8)}`,
+    slug: `slug-${shortId(opts.sessionId)}`,
     name: 'Test Repo',
     repo_type: 'remote' as const,
     remote_url: 'https://github.com/test/test.git',

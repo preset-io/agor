@@ -4,7 +4,7 @@
  * Displays the current status of a worktree's development environment.
  */
 
-import { formatShortId } from '@agor-live/client';
+import { shortId } from '@agor-live/client';
 import { Args } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../../base-command';
@@ -57,7 +57,7 @@ export default class WorktreeEnvStatus extends BaseCommand {
 
       this.log('');
       this.log(chalk.bold(`Environment Status: ${chalk.cyan(worktree.name)}`));
-      this.log(`  ID: ${chalk.dim(formatShortId(worktree.worktree_id))}`);
+      this.log(`  ID: ${chalk.dim(shortId(worktree.worktree_id))}`);
       this.log('');
 
       if (!worktree.environment_instance) {
@@ -120,18 +120,18 @@ export default class WorktreeEnvStatus extends BaseCommand {
       if (env.status === 'running') {
         this.log(
           chalk.dim(
-            `    Stop:    ${chalk.cyan(`agor worktree env stop ${formatShortId(worktree.worktree_id)}`)}`
+            `    Stop:    ${chalk.cyan(`agor worktree env stop ${shortId(worktree.worktree_id)}`)}`
           )
         );
         this.log(
           chalk.dim(
-            `    Restart: ${chalk.cyan(`agor worktree env restart ${formatShortId(worktree.worktree_id)}`)}`
+            `    Restart: ${chalk.cyan(`agor worktree env restart ${shortId(worktree.worktree_id)}`)}`
           )
         );
       } else {
         this.log(
           chalk.dim(
-            `    Start:   ${chalk.cyan(`agor worktree env start ${formatShortId(worktree.worktree_id)}`)}`
+            `    Start:   ${chalk.cyan(`agor worktree env start ${shortId(worktree.worktree_id)}`)}`
           )
         );
       }

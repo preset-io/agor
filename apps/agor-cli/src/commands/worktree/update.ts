@@ -5,7 +5,7 @@
  */
 
 import type { Worktree } from '@agor-live/client';
-import { formatShortId } from '@agor-live/client';
+import { shortId } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
@@ -64,7 +64,7 @@ export default class WorktreeUpdate extends BaseCommand {
 
       this.log('');
       this.log(`${chalk.green('✓')} Worktree updated: ${chalk.cyan(updated.name)}`);
-      this.log(`  ID: ${chalk.dim(formatShortId(updated.worktree_id))}`);
+      this.log(`  ID: ${chalk.dim(shortId(updated.worktree_id))}`);
       this.log('');
 
       // Show what was updated

@@ -2,6 +2,7 @@ import { decryptApiKey, eq } from '../db';
 import type { Database } from '../db/client';
 import { select } from '../db/database-wrapper';
 import { users } from '../db/schema';
+import { shortId } from '../lib/ids';
 import type { AgenticToolName, ApiKeyName, StoredAgenticTools, UserID } from '../types';
 import { getCredential, isConfigCredentialKey } from './config-manager';
 
@@ -55,7 +56,7 @@ export async function resolveApiKey(
   context: KeyResolutionContext = {}
 ): Promise<KeyResolutionResult> {
   console.log(
-    `🔍 [API Key Resolution] Resolving ${keyName} for user ${context.userId?.substring(0, 8) || 'none'}`
+    `🔍 [API Key Resolution] Resolving ${keyName} for user ${context.userId ? shortId(context.userId) : 'none'}`
   );
 
   // 1. Check per-user key (highest precedence). Storage lives at
@@ -92,7 +93,7 @@ export async function resolveApiKey(
           const decryptedKey = decryptApiKey(encryptedKey);
           if (decryptedKey && decryptedKey.length > 0) {
             console.log(
-              `   ✓ Found user-level API key for ${keyName} (user: ${context.userId.substring(0, 8)})`
+              `   ✓ Found user-level API key for ${keyName} (user: ${shortId(context.userId)})`
             );
             return { apiKey: decryptedKey, source: 'user', useNativeAuth: false };
           }

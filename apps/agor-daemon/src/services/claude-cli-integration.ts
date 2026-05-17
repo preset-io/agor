@@ -50,7 +50,13 @@ import {
   permissionModeForCli,
   slugForCwd,
 } from '@agor/core/claude-cli';
-import { type Database, generateId, SessionRepository, TaskRepository } from '@agor/core/db';
+import {
+  type Database,
+  generateId,
+  SessionRepository,
+  shortId,
+  TaskRepository,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import {
   type Session,
@@ -139,7 +145,7 @@ async function persistActiveTurnSnapshot(
   const repo = new SessionRepository(db);
   const row = await repo.findById(sessionId);
   if (!row) {
-    throw new Error(`persistActiveTurnSnapshot: session not found: ${sessionId.slice(0, 8)}`);
+    throw new Error(`persistActiveTurnSnapshot: session not found: ${shortId(sessionId)}`);
   }
   const patch = {
     cli_state: {
@@ -1016,7 +1022,7 @@ export function buildSpawnConfigForSession(
   return {
     sessionId: transcriptExists ? undefined : session.session_id,
     resumeSessionId: transcriptExists ? session.session_id : undefined,
-    displayName: `cli-${session.session_id.slice(0, 8)}`,
+    displayName: `cli-${shortId(session.session_id)}`,
     model: session.model_config?.model,
     effort: session.model_config?.effort as ClaudeCliSpawnConfig['effort'] | undefined,
     permissionMode: permissionModeForCli(session.permission_config?.mode),
@@ -1086,7 +1092,7 @@ export async function onCliSessionCreated(
   const jsonlPath = claudeSessionJsonlPath(homeDir, worktreeCwd, session.session_id);
   const spawnCfg = buildSpawnConfigForSession(session, worktreeCwd);
   const built = buildClaudeCliSpawn(spawnCfg);
-  const tabName = spawnCfg.displayName ?? `cli-${session.session_id.slice(0, 8)}`;
+  const tabName = spawnCfg.displayName ?? `cli-${shortId(session.session_id)}`;
 
   // 1) Persist cli_state for diagnostics + restart recovery.
   const persister = buildCliPersister(app);

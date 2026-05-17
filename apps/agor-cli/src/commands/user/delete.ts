@@ -2,6 +2,7 @@
  * `agor user delete` - Delete a user
  */
 
+import { shortId } from '@agor/core/db';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
@@ -57,7 +58,7 @@ export default class UserDelete extends BaseCommand {
           {
             type: 'confirm',
             name: 'confirm',
-            message: `Delete user ${chalk.cyan(user.email)} (${chalk.gray(user.user_id.substring(0, 8))})`,
+            message: `Delete user ${chalk.cyan(user.email)} (${chalk.gray(shortId(user.user_id))})`,
             default: false,
           },
         ]);
@@ -75,7 +76,7 @@ export default class UserDelete extends BaseCommand {
       this.log(`${chalk.green('✓')} User deleted successfully`);
       this.log('');
       this.log(`  Email: ${chalk.cyan(user.email)}`);
-      this.log(`  ID:    ${chalk.gray(user.user_id.substring(0, 8))}`);
+      this.log(`  ID:    ${chalk.gray(shortId(user.user_id))}`);
 
       await this.cleanupClient(client);
     } catch (error) {

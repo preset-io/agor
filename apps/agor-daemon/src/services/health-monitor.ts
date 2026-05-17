@@ -12,6 +12,7 @@
  */
 
 import { ENVIRONMENT } from '@agor/core/config';
+import { shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Worktree, WorktreeID } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
@@ -141,16 +142,14 @@ export class HealthMonitor {
         this.stopMonitoring(worktreeId);
         // Only log at debug level - this is normal cleanup, not an error
         if (process.env.DEBUG) {
-          console.log(
-            `   Health monitoring stopped for deleted worktree ${worktreeId.substring(0, 8)}`
-          );
+          console.log(`   Health monitoring stopped for deleted worktree ${shortId(worktreeId)}`);
         }
         return;
       }
 
       // Log actual errors (not "not found" errors from deleted worktrees)
       console.error(
-        `❌ Health check failed for worktree ${worktreeId.substring(0, 8)}:`,
+        `❌ Health check failed for worktree ${shortId(worktreeId)}:`,
         error instanceof Error ? error.message : error
       );
     }
@@ -210,7 +209,7 @@ export class HealthMonitor {
     // Clear all intervals
     for (const [worktreeId, interval] of this.intervals.entries()) {
       clearInterval(interval);
-      console.log(`   Stopped monitoring: ${worktreeId.substring(0, 8)}`);
+      console.log(`   Stopped monitoring: ${shortId(worktreeId)}`);
     }
 
     this.intervals.clear();

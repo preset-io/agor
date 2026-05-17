@@ -12,7 +12,7 @@ import {
   loadClaudeSession,
   transcriptsToMessages,
 } from '@agor/core/claude';
-import { generateId } from '@agor/core/db';
+import { generateId, shortId } from '@agor/core/db';
 import type {
   MessageID,
   Repo,
@@ -108,7 +108,7 @@ export default class SessionLoadClaude extends BaseCommand {
 
       // Create worktree for this imported session
       const worktreesService = client.service('worktrees');
-      const worktreeName = `imported-${sessionId.substring(0, 8)}`;
+      const worktreeName = `imported-${shortId(sessionId)}`;
       const worktree = (await worktreesService.create({
         worktree_id: generateId() as WorktreeID,
         repo_id: repo.repo_id,

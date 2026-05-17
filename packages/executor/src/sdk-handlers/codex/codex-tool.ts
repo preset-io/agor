@@ -8,7 +8,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { generateId } from '@agor/core/db';
+import { generateId, shortId } from '@agor/core/db';
 import type {
   MCPServerRepository,
   MessagesRepository,
@@ -573,8 +573,8 @@ export class CodexTool implements ITool {
       if (existingSession?.sdk_session_id) {
         if (existingSession.sdk_session_id !== threadId) {
           const msg =
-            `Codex thread lost: asked to resume ${existingSession.sdk_session_id.substring(0, 8)} ` +
-            `but Codex started a new thread ${threadId.substring(0, 8)}. ` +
+            `Codex thread lost: asked to resume ${shortId(existingSession.sdk_session_id)} ` +
+            `but Codex started a new thread ${shortId(threadId)}. ` +
             `The previous conversation history is no longer available (the thread file was likely deleted when the environment was rebuilt). ` +
             `Please start a new session to continue.`;
           console.error(`❌ ${msg}`);

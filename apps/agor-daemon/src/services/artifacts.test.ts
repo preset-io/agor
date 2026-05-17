@@ -9,7 +9,13 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { generateId } from '@agor/core';
-import { ArtifactRepository, BoardRepository, type Database, UsersRepository } from '@agor/core/db';
+import {
+  ArtifactRepository,
+  BoardRepository,
+  type Database,
+  shortId,
+  UsersRepository,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Artifact, BoardID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect } from 'vitest';
@@ -68,8 +74,8 @@ function defaultLandDestForArtifact(
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 40);
-  const shortId = artifact.artifact_id.replace(/-/g, '').slice(0, 8);
-  const folder = slug.length > 0 ? `${slug}-${shortId}` : artifact.artifact_id;
+  const idShort = shortId(artifact.artifact_id);
+  const folder = slug.length > 0 ? `${slug}-${idShort}` : artifact.artifact_id;
   return path.join(tmpRoot, '.agor', 'artifacts', folder);
 }
 

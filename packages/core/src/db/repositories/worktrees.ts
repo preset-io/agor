@@ -12,10 +12,11 @@ import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
 import { type WorktreeInsert, type WorktreeRow, worktreeOwners, worktrees } from '../schema';
 import {
-  AmbiguousIdError,
   type BaseRepository,
   EntityNotFoundError,
+  RESOLVE_SHORT_ID_FETCH_LIMIT,
   RepositoryError,
+  resolveByShortIdPrefix,
 } from './base';
 import { deepMerge } from './merge-utils';
 
@@ -189,33 +190,33 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
   }
 
   /**
-   * Find worktree by exact ID or short ID prefix
+   * Find worktree by exact ID or short ID prefix.
+   *
+   * Goes through the centralized `resolveByShortIdPrefix` so the LIKE pattern
+   * is built via `prefixToLikePattern` — which re-inserts hyphens at the
+   * canonical UUID positions. Without this normalization, a prefix that
+   * spans a hyphen boundary (anything ≥9 chars) silently matches nothing
+   * because stored IDs are hyphenated.
    */
   async findById(id: string): Promise<Worktree | null> {
-    // Exact match (full UUID)
-    if (id.length === 36 && id.includes('-')) {
-      const row = await select(this.db).from(worktrees).where(eq(worktrees.worktree_id, id)).one();
+    try {
+      const fullId = await resolveByShortIdPrefix(id, 'Worktree', async (pattern) => {
+        const rows = await select(this.db)
+          .from(worktrees)
+          .where(like(worktrees.worktree_id, pattern))
+          .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
+          .all();
+        return rows.map((r: { worktree_id: string }) => r.worktree_id);
+      });
+      const row = await select(this.db)
+        .from(worktrees)
+        .where(eq(worktrees.worktree_id, fullId))
+        .one();
       return row ? this.rowToWorktree(row) : null;
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) return null;
+      throw error;
     }
-
-    // Short ID match (prefix) - just use the id directly as a prefix since it's already short
-    const prefix = id.replace(/-/g, '').toLowerCase();
-    const matches = await select(this.db)
-      .from(worktrees)
-      .where(like(worktrees.worktree_id, `${prefix}%`))
-      .limit(2) // Fetch 2 to detect ambiguity
-      .all();
-
-    if (matches.length === 0) return null;
-    if (matches.length > 1) {
-      throw new AmbiguousIdError(
-        'Worktree',
-        prefix,
-        matches.map((m: { worktree_id: string }) => m.worktree_id)
-      );
-    }
-
-    return this.rowToWorktree(matches[0]);
   }
 
   /**

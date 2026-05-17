@@ -331,12 +331,12 @@ describe('TaskRepository.findById', () => {
     expect(byFull?.task_id).toBe(data.task_id);
 
     // Short ID
-    const shortId = data.task_id!.replace(/-/g, '').slice(0, 8);
-    const byShort = await taskRepo.findById(shortId);
+    const idPrefix = data.task_id!.replace(/-/g, '').slice(0, 8);
+    const byShort = await taskRepo.findById(idPrefix);
     expect(byShort?.task_id).toBe(data.task_id);
 
     // Case insensitive
-    const byUpper = await taskRepo.findById(shortId.toUpperCase());
+    const byUpper = await taskRepo.findById(idPrefix.toUpperCase());
     expect(byUpper?.task_id).toBe(data.task_id);
   });
 
@@ -626,8 +626,8 @@ describe('TaskRepository.update', () => {
     expect(updated.status).toBe(TaskStatus.RUNNING);
 
     // Update by short ID
-    const shortId = data.task_id!.replace(/-/g, '').slice(0, 8);
-    const updated2 = await taskRepo.update(shortId, { status: TaskStatus.COMPLETED });
+    const idPrefix = data.task_id!.replace(/-/g, '').slice(0, 8);
+    const updated2 = await taskRepo.update(idPrefix, { status: TaskStatus.COMPLETED });
     expect(updated2.status).toBe(TaskStatus.COMPLETED);
   });
 
@@ -726,8 +726,8 @@ describe('TaskRepository.delete', () => {
     expect(await taskRepo.findById(data1.task_id!)).toBeNull();
 
     // Delete by short ID
-    const shortId = data2.task_id!.replace(/-/g, '').slice(0, 8);
-    await taskRepo.delete(shortId);
+    const idPrefix = data2.task_id!.replace(/-/g, '').slice(0, 8);
+    await taskRepo.delete(idPrefix);
     expect(await taskRepo.findById(data2.task_id!)).toBeNull();
   });
 

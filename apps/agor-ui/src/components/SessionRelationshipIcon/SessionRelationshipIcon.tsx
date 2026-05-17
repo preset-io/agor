@@ -1,4 +1,5 @@
 import type { Session } from '@agor-live/client';
+import { shortId } from '@agor-live/client';
 import { ForkOutlined, SubnodeOutlined } from '@ant-design/icons';
 import { Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
@@ -27,7 +28,7 @@ export const SessionRelationshipIcon: React.FC<SessionRelationshipIconProps> = (
 
   if (forkedFromId && session.fork_origin === 'btw') {
     return (
-      <Tooltip title={`Forked (btw) from ${forkedFromId.substring(0, 8)}`}>
+      <Tooltip title={`Forked (btw) from ${shortId(forkedFromId)}`}>
         <Typography.Text
           style={{
             fontSize: Math.round(size * 0.85),
@@ -44,14 +45,14 @@ export const SessionRelationshipIcon: React.FC<SessionRelationshipIconProps> = (
   }
   if (parentId) {
     return (
-      <Tooltip title={`Spawned from ${parentId.substring(0, 8)}`}>
+      <Tooltip title={`Spawned from ${shortId(parentId)}`}>
         <SubnodeOutlined style={{ fontSize: size, color: token.colorInfo, flexShrink: 0 }} />
       </Tooltip>
     );
   }
   if (forkedFromId) {
     return (
-      <Tooltip title={`Forked from ${forkedFromId.substring(0, 8)}`}>
+      <Tooltip title={`Forked from ${shortId(forkedFromId)}`}>
         <ForkOutlined style={{ fontSize: size, color: token.colorWarning, flexShrink: 0 }} />
       </Tooltip>
     );

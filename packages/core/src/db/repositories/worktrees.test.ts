@@ -6,7 +6,7 @@
 
 import type { UUID, WorktreeID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
-import { generateId } from '../../lib/ids';
+import { generateId, shortId } from '../../lib/ids';
 import { boards } from '../schema';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
@@ -217,17 +217,17 @@ describe('WorktreeRepository.findById', () => {
     expect(byFull?.base_ref).toBe('main');
 
     // Test short ID without hyphens
-    const shortId = data.worktree_id.replace(/-/g, '').slice(0, 8);
-    const byShort = await wtRepo.findById(shortId);
+    const idPrefix = shortId(data.worktree_id);
+    const byShort = await wtRepo.findById(idPrefix);
     expect(byShort?.worktree_id).toBe(data.worktree_id);
 
     // Test short ID with hyphens
-    const shortIdHyphens = data.worktree_id.slice(0, 8);
+    const shortIdHyphens = shortId(data.worktree_id);
     const byShortHyphens = await wtRepo.findById(shortIdHyphens);
     expect(byShortHyphens?.worktree_id).toBe(data.worktree_id);
 
     // Test case insensitivity
-    const byUpper = await wtRepo.findById(shortId.toUpperCase());
+    const byUpper = await wtRepo.findById(idPrefix.toUpperCase());
     expect(byUpper?.worktree_id).toBe(data.worktree_id);
   });
 
@@ -466,8 +466,8 @@ describe('WorktreeRepository.update', () => {
     expect(updated1.name).toBe(data.name); // Unchanged
 
     // Update by short ID
-    const shortId = data.worktree_id.replace(/-/g, '').slice(0, 8);
-    const updated2 = await wtRepo.update(shortId, { base_ref: 'develop' });
+    const idPrefix = shortId(data.worktree_id);
+    const updated2 = await wtRepo.update(idPrefix, { base_ref: 'develop' });
     expect(updated2.base_ref).toBe('develop');
   });
 
@@ -608,8 +608,8 @@ describe('WorktreeRepository.delete', () => {
     expect(found1).toBeNull();
 
     // Delete by short ID
-    const shortId = data2.worktree_id.replace(/-/g, '').slice(0, 8);
-    await wtRepo.delete(shortId);
+    const idPrefix = shortId(data2.worktree_id);
+    await wtRepo.delete(idPrefix);
     const found2 = await wtRepo.findById(data2.worktree_id);
     expect(found2).toBeNull();
   });

@@ -6,7 +6,7 @@
  * Uses SDK's built-in permission persistence via updatedPermissions.
  */
 
-import { generateId } from '@agor/core';
+import { generateId, shortId } from '@agor/core';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 import {
   MessageRole,
@@ -145,7 +145,7 @@ export function createCanUseToolCallback(
       const existingLock = deps.permissionLocks.get(sessionId);
       if (existingLock) {
         console.log(
-          `⏳ [canUseTool] Waiting for pending permission check (session ${sessionId.substring(0, 8)})`
+          `⏳ [canUseTool] Waiting for pending permission check (session ${shortId(sessionId)})`
         );
         await existingLock;
         console.log(`✅ [canUseTool] Permission check complete, proceeding...`);
@@ -388,9 +388,7 @@ export function createCanUseToolCallback(
       if (releaseLock) {
         releaseLock();
         deps.permissionLocks.delete(sessionId);
-        console.log(
-          `🔓 [canUseTool] Released permission lock for session ${sessionId.substring(0, 8)}`
-        );
+        console.log(`🔓 [canUseTool] Released permission lock for session ${shortId(sessionId)}`);
       }
     }
   };

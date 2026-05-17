@@ -5,7 +5,7 @@
  * cleaning or removing files from the filesystem.
  */
 
-import { formatShortId } from '@agor-live/client';
+import { shortId } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
@@ -61,7 +61,7 @@ export default class WorktreeArchive extends BaseCommand {
       this.log(chalk.blue('📦 Archiving worktree:'));
       this.log(`  Name: ${chalk.cyan(worktree.name)}`);
       this.log(`  Path: ${chalk.dim(worktree.path)}`);
-      this.log(`  ID:   ${chalk.dim(formatShortId(worktree.worktree_id))}`);
+      this.log(`  ID:   ${chalk.dim(shortId(worktree.worktree_id))}`);
 
       // Query sessions service for count
       const sessionsService = client.service('sessions');

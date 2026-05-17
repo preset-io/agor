@@ -1,4 +1,5 @@
 import type { Session } from '@agor-live/client';
+import { shortId } from '@agor-live/client';
 import { LinkOutlined, PhoneOutlined } from '@ant-design/icons';
 import { Badge, Space, Typography, theme } from 'antd';
 import type React from 'react';
@@ -55,7 +56,7 @@ export const CallbackTargetDisplay: React.FC<CallbackTargetDisplayProps> = ({
 
   const targetTitle = target
     ? getSessionDisplayTitle(target, { includeAgentFallback: true, includeIdFallback: true })
-    : `${targetId.substring(0, 8)} (not loaded)`;
+    : `${shortId(targetId)} (not loaded)`;
 
   const handleOpen = (e: React.MouseEvent) => {
     e.preventDefault();

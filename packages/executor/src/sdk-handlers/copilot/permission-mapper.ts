@@ -16,7 +16,7 @@
  * Returns: 'approved' | 'denied-interactively-by-user' | 'denied-by-rules' | etc.
  */
 
-import { generateId } from '@agor/core';
+import { generateId, shortId } from '@agor/core';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole, PermissionStatus, SessionStatus, TaskStatus } from '@agor/core/types';
 import type {
@@ -221,7 +221,7 @@ export function createPermissionHandler(
       const existingLock = deps.permissionLocks.get(sessionId);
       if (existingLock) {
         console.log(
-          `⏳ [Copilot Permission] Waiting for pending permission check (session ${sessionId.substring(0, 8)})`
+          `⏳ [Copilot Permission] Waiting for pending permission check (session ${shortId(sessionId)})`
         );
         await existingLock;
       }
@@ -409,7 +409,7 @@ export function createPermissionHandler(
         releaseLock();
         deps.permissionLocks.delete(sessionId);
         console.log(
-          `🔓 [Copilot Permission] Released permission lock for session ${sessionId.substring(0, 8)}`
+          `🔓 [Copilot Permission] Released permission lock for session ${shortId(sessionId)}`
         );
       }
     }

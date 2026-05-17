@@ -7,7 +7,7 @@
  */
 
 import type { Board, BoardEntityObject, Session, Worktree } from '@agor-live/client';
-import { PAGINATION } from '@agor-live/client';
+import { PAGINATION, shortId } from '@agor-live/client';
 import { Args } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
@@ -112,7 +112,7 @@ export default class BoardAddSession extends BaseCommand {
 
       this.log(
         chalk.green(
-          `✓ Added worktree "${worktree.name}" (containing session ${session.session_id.substring(0, 8)}) to board "${board.name}"`
+          `✓ Added worktree "${worktree.name}" (containing session ${shortId(session.session_id)}) to board "${board.name}"`
         )
       );
     } catch (error) {

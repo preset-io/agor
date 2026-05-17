@@ -10,6 +10,7 @@
  */
 
 import type { BoardRepository, SessionRepository, WorktreeRepository } from '@agor/core/db';
+import { shortId } from '@agor/core/db';
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
   HookContext,
@@ -578,7 +579,7 @@ export function loadSessionWorktree(
             });
             sessionId = existingRecord?.session_id;
             console.log(
-              `[loadSessionWorktree] Loaded session_id from existing record: ${sessionId?.substring(0, 8) || 'NOT FOUND'}`
+              `[loadSessionWorktree] Loaded session_id from existing record: ${sessionId ? shortId(sessionId) : 'NOT FOUND'}`
             );
           } catch (error) {
             console.error(
@@ -1033,7 +1034,7 @@ export async function ensureCanPromptTargetSession(
   try {
     targetSession = await app.service('sessions').get(sessionId, { provider: undefined });
   } catch {
-    throw new Forbidden(`Invalid callback target: session ${sessionId.substring(0, 8)} not found`);
+    throw new Forbidden(`Invalid callback target: session ${shortId(sessionId)} not found`);
   }
 
   // Load its worktree
@@ -1073,7 +1074,7 @@ export async function ensureCanPromptTargetSession(
 
   throw new Forbidden(
     `Cannot set callback target: you need at least 'session' permission on worktree ` +
-      `${worktree.name || worktree.worktree_id.substring(0, 8)}. ` +
+      `${worktree.name || shortId(worktree.worktree_id)}. ` +
       `You have '${effectiveLevel}' permission.`
   );
 }

@@ -11,6 +11,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { SessionRepository, WorktreeRepository } from '@agor/core/db';
+import { shortId } from '@agor/core/db';
 import type { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 
@@ -83,7 +84,7 @@ export function createUploadStorage(
 
         if (DEBUG_UPLOAD) {
           console.log(
-            `📂 [Upload Storage] Processing upload for session ${sessionId?.substring(0, 8)}`
+            `📂 [Upload Storage] Processing upload for session ${sessionId ? shortId(sessionId) : 'unknown'}`
           );
           console.log(`   Destination type: ${destination}`);
         }
@@ -96,20 +97,18 @@ export function createUploadStorage(
         // Get session to find associated worktree
         const session = await sessionRepo.findById(sessionId);
         if (!session) {
-          console.error(`❌ [Upload Storage] Session not found: ${sessionId.substring(0, 8)}`);
+          console.error(`❌ [Upload Storage] Session not found: ${shortId(sessionId)}`);
           return cb(new Error(`Session not found: ${sessionId}`), '');
         }
 
         if (!session.worktree_id) {
-          console.error(`❌ [Upload Storage] Session ${sessionId.substring(0, 8)} has no worktree`);
+          console.error(`❌ [Upload Storage] Session ${shortId(sessionId)} has no worktree`);
           return cb(new Error(`Session ${sessionId} has no associated worktree`), '');
         }
 
         const worktree = await worktreeRepo.findById(session.worktree_id);
         if (!worktree) {
-          console.error(
-            `❌ [Upload Storage] Worktree not found: ${session.worktree_id.substring(0, 8)}`
-          );
+          console.error(`❌ [Upload Storage] Worktree not found: ${shortId(session.worktree_id)}`);
           return cb(new Error(`Worktree not found: ${session.worktree_id}`), '');
         }
 

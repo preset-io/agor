@@ -8,6 +8,7 @@
  * 4. Exits when task completes
  */
 
+import { shortId } from '@agor/core/db';
 import type {
   MessageSource,
   PermissionMode,
@@ -48,8 +49,8 @@ export class AgorExecutor {
     console.log('[executor] Starting Agor Executor (Feathers mode)');
     const uid = typeof process.getuid === 'function' ? process.getuid() : 'N/A';
     console.log(`[executor] User: ${process.env.USER || 'unknown'} (uid: ${uid})`);
-    console.log(`[executor] Session: ${this.config.sessionId.substring(0, 8)}`);
-    console.log(`[executor] Task: ${this.config.taskId.substring(0, 8)}`);
+    console.log(`[executor] Session: ${shortId(this.config.sessionId)}`);
+    console.log(`[executor] Task: ${shortId(this.config.taskId)}`);
     console.log(`[executor] Tool: ${this.config.tool}`);
     console.log(`[executor] Daemon: ${this.config.daemonUrl}`);
 

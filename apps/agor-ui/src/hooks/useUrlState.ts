@@ -14,7 +14,7 @@
  * - /b/550e8400/a1b2c3d4
  */
 
-import { findByShortIdPrefix, toShortId, URL_SHORT_ID_LENGTH } from '@agor-live/client';
+import { findByShortIdPrefix, shortId } from '@agor-live/client';
 import { useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
@@ -38,8 +38,14 @@ export interface UseUrlStateOptions {
   onSessionChange: (sessionId: string | null) => void;
 }
 
-/** Extract the URL-length short ID from a UUID (16 chars, no hyphens). */
-const urlShortId = (uuid: string) => toShortId(uuid, URL_SHORT_ID_LENGTH);
+/**
+ * Extract the canonical short ID for use in URLs.
+ *
+ * Same `SHORT_ID_LENGTH` (20-char) shape used everywhere else — URLs use the
+ * same display length as notifications/pills so users can copy-paste between
+ * surfaces and have the prefix round-trip via `findByShortIdPrefix`.
+ */
+const urlShortId = (uuid: string) => shortId(uuid);
 
 /**
  * Hook for bidirectional URL state synchronization
@@ -131,10 +137,11 @@ export function useUrlState(options: UseUrlStateOptions) {
    * Resolve URL param to board ID.
    *
    * Tries slug first (`boardParam === board.slug`), then falls back to a
-   * short-ID prefix match via the shared core helper. For short IDs, if
-   * multiple boards match (legacy 8-char timestamp-prefix collision), we
-   * pick the lexicographically-greatest board_id — UUIDv7 is time-ordered,
-   * so that's the most recently created board.
+   * short-ID prefix match via the shared core helper. Ambiguous prefixes
+   * (multiple boards match) are treated as not-found — see
+   * `resolveSessionFromShortId` for the reasoning. Realistic ambiguity is
+   * only possible for legacy ≤16-char URLs minted before `SHORT_ID_LENGTH`
+   * was bumped to 20.
    */
   const resolveBoardFromUrl = useCallback(
     (boardParam: string): string | null => {
@@ -149,7 +156,17 @@ export function useUrlState(options: UseUrlStateOptions) {
         Array.from(boardById.values(), (b) => ({ id: b.board_id }))
       );
       if (matches.length === 0) return null;
-      return matches.reduce((a, b) => (a.id > b.id ? a : b)).id;
+      if (matches.length === 1) return matches[0].id;
+
+      // Ambiguous — refuse to guess. Symmetrical with the session resolver.
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[useUrlState] Board short ID "${boardParam}" matched ${matches.length} boards; ` +
+            `treating as not-found (URL must use full UUID or unambiguous prefix).`
+        );
+      }
+      return null;
     },
     [boardById]
   );
@@ -157,10 +174,14 @@ export function useUrlState(options: UseUrlStateOptions) {
   /**
    * Resolve session ID from short ID via the shared core helper.
    *
-   * When multiple sessions match (legacy 8-char URLs collide on UUIDv7's
-   * timestamp prefix), we deterministically pick the newest session —
-   * UUIDv7 IDs are lexicographically time-ordered, so max-by-string is
-   * max-by-creation-time.
+   * On ambiguous prefix (>1 match), returns null — same contract as
+   * "not found." Previously this silently routed to the lexicographically-
+   * greatest match (newest by UUIDv7's time ordering); that was a deliberate
+   * "don't 500 the page" choice when 8-char URLs were collision-prone, but
+   * it could silently land a stale deep link on the *wrong* session. With
+   * `SHORT_ID_LENGTH` now 20 (~580 same-ms IDs before 1% collision),
+   * realistic new URLs are unambiguous, so we'd rather surface the failure
+   * than mis-route.
    */
   const resolveSessionFromShortId = useCallback(
     (sessionShortId: string): string | null => {
@@ -171,15 +192,14 @@ export function useUrlState(options: UseUrlStateOptions) {
       if (matches.length === 0) return null;
       if (matches.length === 1) return matches[0].id;
 
-      const newest = matches.reduce((a, b) => (a.id > b.id ? a : b)).id;
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
         console.warn(
-          `[useUrlState] Short ID "${sessionShortId}" matched ${matches.length} sessions; ` +
-            `routing to newest (${newest}).`
+          `[useUrlState] Session short ID "${sessionShortId}" matched ${matches.length} sessions; ` +
+            `treating as not-found (URL must use full UUID or unambiguous prefix).`
         );
       }
-      return newest;
+      return null;
     },
     [sessionById]
   );

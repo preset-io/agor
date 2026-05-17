@@ -10,7 +10,7 @@ import path from 'node:path';
 import type { AgorConfig } from '@agor/core/config';
 import { getAgorHome } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
-import { MessagesRepository, SessionRepository } from '@agor/core/db';
+import { MessagesRepository, SessionRepository, shortId } from '@agor/core/db';
 import type { Id, Paginated, Session, SessionID, Task } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
@@ -147,7 +147,7 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
         {}
       );
       console.log(
-        `   ✓ Marked session ${session.session_id.substring(0, 8)} as idle (was: ${session.status})`
+        `   ✓ Marked session ${shortId(session.session_id)} as idle (was: ${session.status})`
       );
     }
   }
@@ -178,7 +178,7 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
           {}
         );
         console.log(
-          `   ✓ Marked session ${sessionId.substring(0, 8)} as idle (had orphaned tasks, was: ${session.status})`
+          `   ✓ Marked session ${shortId(sessionId)} as idle (had orphaned tasks, was: ${session.status})`
         );
       }
     }
@@ -235,9 +235,7 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
         if (!attachTask) {
           // No task exists — message would be invisible (transcript is task-scoped).
           // This session has never had any work, so there is nothing for the user to resume.
-          console.log(
-            `   ⏭  Session ${sessionId.substring(0, 8)} has no tasks — skipping restart notice`
-          );
+          console.log(`   ⏭  Session ${shortId(sessionId)} has no tasks — skipping restart notice`);
           continue;
         }
 
@@ -253,7 +251,7 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
           const last = lastMessages[0];
           if (last?.type === 'daemon_restart' || last?.type === 'daemon_crash') {
             console.log(
-              `   ⏭  Session ${sessionId.substring(0, 8)} already has a restart notice — skipping`
+              `   ⏭  Session ${shortId(sessionId)} already has a restart notice — skipping`
             );
             continue;
           }
@@ -279,12 +277,10 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
           });
         }
 
-        console.log(
-          `   ✉  Injected ${restartType} notice into session ${sessionId.substring(0, 8)}`
-        );
+        console.log(`   ✉  Injected ${restartType} notice into session ${shortId(sessionId)}`);
       } catch (err) {
         console.warn(
-          `   ⚠️  Failed to inject restart notice into session ${sessionId.substring(0, 8)}:`,
+          `   ⚠️  Failed to inject restart notice into session ${shortId(sessionId)}:`,
           err
         );
       }

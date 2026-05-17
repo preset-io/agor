@@ -6,7 +6,7 @@
  */
 
 import { type ApiKeyName, resolveApiKey } from '@agor/core/config';
-import { generateId } from '@agor/core/db';
+import { generateId, shortId } from '@agor/core/db';
 import { getGitState } from '@agor/core/git';
 import type {
   AgenticToolName,
@@ -318,7 +318,7 @@ export async function executeToolTask(params: {
   const { client, sessionId, taskId, prompt, permissionMode, apiKeyEnvVar, toolName, createTool } =
     params;
 
-  console.log(`[${toolName}] Executing task ${taskId.substring(0, 8)}...`);
+  console.log(`[${toolName}] Executing task ${shortId(taskId)}...`);
 
   // Resolve API key with proper precedence (user → config → env → native auth).
   // Pass `toolName` so the daemon scopes the per-user lookup to this tool's
@@ -406,7 +406,7 @@ export async function executeToolTask(params: {
 
     if (result.hadError) {
       console.error(
-        `[${toolName}] SDK returned error result for session ${sessionId.substring(0, 8)}, marking task as failed${result.errorDetails?.length ? `: ${result.errorDetails.join('; ')}` : ''}`
+        `[${toolName}] SDK returned error result for session ${shortId(sessionId)}, marking task as failed${result.errorDetails?.length ? `: ${result.errorDetails.join('; ')}` : ''}`
       );
     }
 

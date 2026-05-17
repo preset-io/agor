@@ -21,6 +21,7 @@ import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 type ResumedSessionData = Gemini.ResumedSessionData;
 type Part = GenAI.Part;
 
+import { shortId } from '@agor/core/db';
 import { getDaemonUrl } from '../../config.js';
 import type {
   MCPServerRepository,
@@ -501,7 +502,7 @@ export class GeminiPromptService {
       }
 
       // Find session file matching pattern: session-*-{sessionId-first8}.json
-      const sessionIdShort = sessionId.slice(0, 8);
+      const sessionIdShort = shortId(sessionId);
       const files = await fs.readdir(chatsDir);
       const sessionFile = files.find((f) => f.includes(sessionIdShort) && f.endsWith('.json'));
 
@@ -676,7 +677,7 @@ export class GeminiPromptService {
         );
       } else {
         console.warn(
-          `⚠️  No MCP token found for session ${sessionId.substring(0, 8)} - MCP tools unavailable`
+          `⚠️  No MCP token found for session ${shortId(sessionId)} - MCP tools unavailable`
         );
       }
     } else {

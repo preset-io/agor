@@ -3,7 +3,7 @@
  */
 
 import type { BoardEntityObject } from '@agor-live/client';
-import { PAGINATION } from '@agor-live/client';
+import { PAGINATION, shortId } from '@agor-live/client';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';
 import Table from 'cli-table3';
@@ -66,7 +66,7 @@ export default class BoardList extends BaseCommand {
           (bo) => bo.board_id === board.board_id
         ).length;
         table.push([
-          board.board_id.substring(0, 8),
+          shortId(board.board_id),
           `${board.icon || '📋'} ${board.name}`,
           worktreeCount.toString(),
           board.description || '',

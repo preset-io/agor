@@ -29,6 +29,7 @@ import {
   ArtifactTrustGrantRepository,
   BoardRepository,
   type Database,
+  shortId,
   WorktreeRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
@@ -147,8 +148,8 @@ function defaultLandFolderName(artifact: { name: string; artifact_id: string }):
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 40);
-  const shortId = artifact.artifact_id.replace(/-/g, '').slice(0, 8);
-  return slug.length > 0 ? `${slug}-${shortId}` : artifact.artifact_id;
+  const idShort = shortId(artifact.artifact_id);
+  return slug.length > 0 ? `${slug}-${idShort}` : artifact.artifact_id;
 }
 
 /**

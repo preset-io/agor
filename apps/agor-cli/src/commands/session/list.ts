@@ -5,7 +5,7 @@
  */
 
 import type { PaginatedResult, Session } from '@agor-live/client';
-import { formatShortId, PAGINATION, SessionStatus } from '@agor-live/client';
+import { PAGINATION, SessionStatus, shortId } from '@agor-live/client';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';
 import Table from 'cli-table3';
@@ -164,7 +164,7 @@ export default class SessionList extends BaseCommand {
 
       // Add rows
       for (const session of sessions) {
-        const shortId = formatShortId(session.session_id);
+        const localShortId = shortId(session.session_id);
         const _firstTask =
           Array.isArray(session.tasks) && session.tasks.length > 0 ? session.tasks[0] : null;
         const description = this.truncate(session.description || '(no description)', 28);
@@ -174,12 +174,12 @@ export default class SessionList extends BaseCommand {
         const completedTasks = 0;
         // Note: Session now uses worktree_id, not nested repo object
         // For now, show worktree_id if available, otherwise '-'
-        const worktree = session.worktree_id ? session.worktree_id.substring(0, 8) : '-';
+        const worktree = session.worktree_id ? shortId(session.worktree_id) : '-';
         const gitRef = session.git_state?.ref || '-';
         const modified = this.formatRelativeTime(session.last_updated || session.created_at);
 
         table.push([
-          chalk.dim(shortId),
+          chalk.dim(localShortId),
           description,
           session.agentic_tool,
           this.formatStatus(session.status),

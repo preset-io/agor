@@ -6,7 +6,7 @@
 
 import type { UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
-import { generateId } from '../../lib/ids';
+import { generateId, shortId } from '../../lib/ids';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
 import { RepoRepository } from './repos';
@@ -253,8 +253,8 @@ describe('RepoRepository.findById', () => {
     const data = createRepoData();
     await repo.create(data);
 
-    const shortId = data.repo_id.replace(/-/g, '').slice(0, 8);
-    const found = await repo.findById(shortId);
+    const idPrefix = shortId(data.repo_id);
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.repo_id).toBe(data.repo_id);
@@ -267,8 +267,8 @@ describe('RepoRepository.findById', () => {
 
     // Use only first 8 chars since resolveId uses simple LIKE without expanding hyphens
     // For 12+ chars, the pattern won't match UUIDs with hyphens in database
-    const shortId = data.repo_id.replace(/-/g, '').slice(0, 8);
-    const found = await repo.findById(shortId);
+    const idPrefix = shortId(data.repo_id);
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.repo_id).toBe(data.repo_id);
@@ -280,8 +280,8 @@ describe('RepoRepository.findById', () => {
     await repo.create(data);
 
     // Use first 8 chars with hyphen still in place (resolveId strips hyphens)
-    const shortId = data.repo_id.slice(0, 8);
-    const found = await repo.findById(shortId);
+    const idPrefix = shortId(data.repo_id);
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.repo_id).toBe(data.repo_id);
@@ -292,8 +292,8 @@ describe('RepoRepository.findById', () => {
     const data = createRepoData();
     await repo.create(data);
 
-    const shortId = data.repo_id.replace(/-/g, '').slice(0, 8).toUpperCase();
-    const found = await repo.findById(shortId);
+    const idPrefix = shortId(data.repo_id).toUpperCase();
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.repo_id).toBe(data.repo_id);
@@ -490,8 +490,8 @@ describe('RepoRepository.update', () => {
     const data = createRepoData({ default_branch: 'main' });
     await repo.create(data);
 
-    const shortId = data.repo_id.replace(/-/g, '').slice(0, 8);
-    const updated = await repo.update(shortId, { default_branch: 'develop' });
+    const idPrefix = shortId(data.repo_id);
+    const updated = await repo.update(idPrefix, { default_branch: 'develop' });
 
     expect(updated.default_branch).toBe('develop');
     expect(updated.repo_id).toBe(data.repo_id);
@@ -768,8 +768,8 @@ describe('RepoRepository.delete', () => {
     const data = createRepoData();
     await repo.create(data);
 
-    const shortId = data.repo_id.replace(/-/g, '').slice(0, 8);
-    await repo.delete(shortId);
+    const idPrefix = shortId(data.repo_id);
+    await repo.delete(idPrefix);
 
     const found = await repo.findById(data.repo_id);
     expect(found).toBeNull();

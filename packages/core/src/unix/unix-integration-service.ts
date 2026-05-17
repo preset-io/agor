@@ -15,6 +15,7 @@
 
 import type { Database } from '../db/index.js';
 import { RepoRepository, UsersRepository, WorktreeRepository } from '../db/repositories/index.js';
+import { shortId } from '../lib/ids';
 import type { RepoID, UserID, UUID, WorktreeID } from '../types/index.js';
 import type { CommandExecutor } from './command-executor.js';
 import { NoOpExecutor } from './command-executor.js';
@@ -214,7 +215,7 @@ export class UnixIntegrationService {
     const groupName = generateWorktreeGroupName(worktreeId);
 
     console.log(
-      `[UnixIntegration] Creating group ${groupName} for worktree ${worktreeId.substring(0, 8)}`
+      `[UnixIntegration] Creating group ${groupName} for worktree ${shortId(worktreeId)}`
     );
 
     // Check if group already exists
@@ -278,12 +279,12 @@ export class UnixIntegrationService {
   async deleteWorktreeGroup(worktreeId: WorktreeID): Promise<void> {
     const worktree = await this.worktreeRepo.findById(worktreeId);
     if (!worktree?.unix_group) {
-      console.log(`[UnixIntegration] No Unix group for worktree ${worktreeId.substring(0, 8)}`);
+      console.log(`[UnixIntegration] No Unix group for worktree ${shortId(worktreeId)}`);
       return;
     }
 
     console.log(
-      `[UnixIntegration] Deleting group ${worktree.unix_group} for worktree ${worktreeId.substring(0, 8)}`
+      `[UnixIntegration] Deleting group ${worktree.unix_group} for worktree ${shortId(worktreeId)}`
     );
 
     // Check if group exists before deleting
@@ -303,7 +304,7 @@ export class UnixIntegrationService {
     const worktree = await this.worktreeRepo.findById(worktreeId);
     if (!worktree?.unix_group) {
       console.log(
-        `[UnixIntegration] No Unix group for worktree ${worktreeId.substring(0, 8)}, skipping user add`
+        `[UnixIntegration] No Unix group for worktree ${shortId(worktreeId)}, skipping user add`
       );
       return;
     }
@@ -311,7 +312,7 @@ export class UnixIntegrationService {
     const user = await this.usersRepo.findById(userId as UserID);
     if (!user?.unix_username) {
       console.log(
-        `[UnixIntegration] User ${userId.substring(0, 8)} has no Unix username, skipping group add`
+        `[UnixIntegration] User ${shortId(userId)} has no Unix username, skipping group add`
       );
       return;
     }
@@ -348,7 +349,7 @@ export class UnixIntegrationService {
     const worktree = await this.worktreeRepo.findById(worktreeId);
     if (!worktree?.unix_group) {
       console.log(
-        `[UnixIntegration] No Unix group for worktree ${worktreeId.substring(0, 8)}, skipping user remove`
+        `[UnixIntegration] No Unix group for worktree ${shortId(worktreeId)}, skipping user remove`
       );
       return;
     }
@@ -356,7 +357,7 @@ export class UnixIntegrationService {
     const user = await this.usersRepo.findById(userId as UserID);
     if (!user?.unix_username) {
       console.log(
-        `[UnixIntegration] User ${userId.substring(0, 8)} has no Unix username, skipping group remove`
+        `[UnixIntegration] User ${shortId(userId)} has no Unix username, skipping group remove`
       );
       return;
     }
@@ -391,7 +392,7 @@ export class UnixIntegrationService {
     const worktree = await this.worktreeRepo.findById(worktreeId);
     if (!worktree?.unix_group) {
       console.log(
-        `[UnixIntegration] No Unix group for worktree ${worktreeId.substring(0, 8)}, skipping permissions`
+        `[UnixIntegration] No Unix group for worktree ${shortId(worktreeId)}, skipping permissions`
       );
       return;
     }
@@ -453,9 +454,7 @@ export class UnixIntegrationService {
   async createRepoGroup(repoId: RepoID): Promise<string> {
     const groupName = generateRepoGroupName(repoId);
 
-    console.log(
-      `[UnixIntegration] Creating repo group ${groupName} for repo ${repoId.substring(0, 8)}`
-    );
+    console.log(`[UnixIntegration] Creating repo group ${groupName} for repo ${shortId(repoId)}`);
 
     // Check if group already exists
     const exists = await this.executor.check(UnixGroupCommands.groupExists(groupName));
@@ -517,12 +516,12 @@ export class UnixIntegrationService {
   async deleteRepoGroup(repoId: RepoID): Promise<void> {
     const repo = await this.repoRepo.findById(repoId);
     if (!repo?.unix_group) {
-      console.log(`[UnixIntegration] No Unix group for repo ${repoId.substring(0, 8)}`);
+      console.log(`[UnixIntegration] No Unix group for repo ${shortId(repoId)}`);
       return;
     }
 
     console.log(
-      `[UnixIntegration] Deleting repo group ${repo.unix_group} for repo ${repoId.substring(0, 8)}`
+      `[UnixIntegration] Deleting repo group ${repo.unix_group} for repo ${shortId(repoId)}`
     );
 
     // Check if group exists before deleting
@@ -546,7 +545,7 @@ export class UnixIntegrationService {
     const repo = await this.repoRepo.findById(repoId);
     if (!repo?.unix_group) {
       console.log(
-        `[UnixIntegration] No Unix group for repo ${repoId.substring(0, 8)}, skipping repo permissions`
+        `[UnixIntegration] No Unix group for repo ${shortId(repoId)}, skipping repo permissions`
       );
       return;
     }
@@ -598,7 +597,7 @@ export class UnixIntegrationService {
     const worktree = await this.worktreeRepo.findById(worktreeId);
     if (!worktree?.repo_id) {
       console.log(
-        `[UnixIntegration] Worktree ${worktreeId.substring(0, 8)} has no repo, skipping .git/worktrees fix`
+        `[UnixIntegration] Worktree ${shortId(worktreeId)} has no repo, skipping .git/worktrees fix`
       );
       return;
     }
@@ -648,16 +647,14 @@ export class UnixIntegrationService {
   async addUserToRepoGroup(repoId: RepoID, userId: UUID): Promise<void> {
     const repo = await this.repoRepo.findById(repoId);
     if (!repo?.unix_group) {
-      console.log(
-        `[UnixIntegration] No Unix group for repo ${repoId.substring(0, 8)}, skipping user add`
-      );
+      console.log(`[UnixIntegration] No Unix group for repo ${shortId(repoId)}, skipping user add`);
       return;
     }
 
     const user = await this.usersRepo.findById(userId as UserID);
     if (!user?.unix_username) {
       console.log(
-        `[UnixIntegration] User ${userId.substring(0, 8)} has no Unix username, skipping repo group add`
+        `[UnixIntegration] User ${shortId(userId)} has no Unix username, skipping repo group add`
       );
       return;
     }
@@ -692,7 +689,7 @@ export class UnixIntegrationService {
     const repo = await this.repoRepo.findById(repoId);
     if (!repo?.unix_group) {
       console.log(
-        `[UnixIntegration] No Unix group for repo ${repoId.substring(0, 8)}, skipping user remove`
+        `[UnixIntegration] No Unix group for repo ${shortId(repoId)}, skipping user remove`
       );
       return;
     }
@@ -700,7 +697,7 @@ export class UnixIntegrationService {
     const user = await this.usersRepo.findById(userId as UserID);
     if (!user?.unix_username) {
       console.log(
-        `[UnixIntegration] User ${userId.substring(0, 8)} has no Unix username, skipping repo group remove`
+        `[UnixIntegration] User ${shortId(userId)} has no Unix username, skipping repo group remove`
       );
       return;
     }
@@ -786,7 +783,7 @@ export class UnixIntegrationService {
    * @param repoId - Repo ID
    */
   async syncRepo(repoId: RepoID): Promise<void> {
-    console.log(`[UnixIntegration] Full sync for repo ${repoId.substring(0, 8)}`);
+    console.log(`[UnixIntegration] Full sync for repo ${shortId(repoId)}`);
 
     // Ensure repo group exists and .git permissions are set
     await this.createRepoGroup(repoId);
@@ -834,7 +831,7 @@ export class UnixIntegrationService {
       // Generate a default username
       unixUsername = generateUnixUsername(userId);
       console.log(
-        `[UnixIntegration] Generated Unix username: ${unixUsername} for user ${userId.substring(0, 8)}`
+        `[UnixIntegration] Generated Unix username: ${unixUsername} for user ${shortId(userId)}`
       );
     }
 
@@ -980,7 +977,7 @@ export class UnixIntegrationService {
   async deleteUnixUser(userId: UserID, deleteHome: boolean = false): Promise<void> {
     const user = await this.usersRepo.findById(userId);
     if (!user?.unix_username) {
-      console.log(`[UnixIntegration] User ${userId.substring(0, 8)} has no Unix username`);
+      console.log(`[UnixIntegration] User ${shortId(userId)} has no Unix username`);
       return;
     }
 
@@ -1048,7 +1045,7 @@ export class UnixIntegrationService {
     const user = await this.usersRepo.findById(userId as UserID);
     if (!user?.unix_username) {
       console.log(
-        `[UnixIntegration] User ${userId.substring(0, 8)} has no Unix username, skipping symlink`
+        `[UnixIntegration] User ${shortId(userId)} has no Unix username, skipping symlink`
       );
       return;
     }
@@ -1056,7 +1053,7 @@ export class UnixIntegrationService {
     const worktree = await this.worktreeRepo.findById(worktreeId);
     if (!worktree?.path || !worktree.name) {
       console.log(
-        `[UnixIntegration] Worktree ${worktreeId.substring(0, 8)} has no path/name, skipping symlink`
+        `[UnixIntegration] Worktree ${shortId(worktreeId)} has no path/name, skipping symlink`
       );
       return;
     }
@@ -1112,7 +1109,7 @@ export class UnixIntegrationService {
   async syncUserSymlinks(userId: UserID): Promise<void> {
     const user = await this.usersRepo.findById(userId);
     if (!user?.unix_username) {
-      console.log(`[UnixIntegration] User ${userId.substring(0, 8)} has no Unix username`);
+      console.log(`[UnixIntegration] User ${shortId(userId)} has no Unix username`);
       return;
     }
 
@@ -1153,7 +1150,7 @@ export class UnixIntegrationService {
     const ownerIds = await this.worktreeRepo.getOwners(worktreeId);
 
     console.log(
-      `[UnixIntegration] Syncing symlinks for worktree ${worktreeId.substring(0, 8)} (${ownerIds.length} owners)`
+      `[UnixIntegration] Syncing symlinks for worktree ${shortId(worktreeId)} (${ownerIds.length} owners)`
     );
 
     for (const ownerId of ownerIds) {
@@ -1173,7 +1170,7 @@ export class UnixIntegrationService {
    * @param worktreeId - Worktree ID
    */
   async syncWorktree(worktreeId: WorktreeID): Promise<void> {
-    console.log(`[UnixIntegration] Full sync for worktree ${worktreeId.substring(0, 8)}`);
+    console.log(`[UnixIntegration] Full sync for worktree ${shortId(worktreeId)}`);
 
     // Ensure group exists and permissions are set
     // Note: createWorktreeGroup() handles setting directory permissions internally
@@ -1194,7 +1191,7 @@ export class UnixIntegrationService {
    * @param userId - User ID
    */
   async syncUser(userId: UserID): Promise<void> {
-    console.log(`[UnixIntegration] Full sync for user ${userId.substring(0, 8)}`);
+    console.log(`[UnixIntegration] Full sync for user ${shortId(userId)}`);
 
     // Ensure Unix user exists
     await this.ensureUnixUser(userId);

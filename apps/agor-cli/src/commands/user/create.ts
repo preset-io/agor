@@ -3,6 +3,7 @@
  */
 
 import type { CreateUserInput, UserRole } from '@agor-live/client';
+import { shortId } from '@agor-live/client';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
@@ -122,7 +123,7 @@ export default class UserCreate extends BaseCommand {
       this.log(`  Name:          ${chalk.cyan(user.name || '(not set)')}`);
       this.log(`  Role:          ${chalk.cyan(user.role)}`);
       this.log(`  Unix Username: ${chalk.cyan(user.unix_username || '(not set)')}`);
-      this.log(`  ID:            ${chalk.gray(user.user_id.substring(0, 8))}`);
+      this.log(`  ID:            ${chalk.gray(shortId(user.user_id))}`);
       if (user.must_change_password) {
         this.log(`  ${chalk.yellow('⚠')} User must change password on first login`);
       }

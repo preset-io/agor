@@ -33,6 +33,7 @@ import type {
   ArtifactPayload,
   BoardObject,
 } from '@agor-live/client';
+import { shortId } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -579,7 +580,7 @@ export const ArtifactNode = ({
   // valid payload to do anything useful (export, interact, consent)
   // only render when `payload` exists; reload and delete are always
   // available so a stuck artifact can be retried or removed.
-  const fallbackName = `Artifact ${data.artifactId.slice(0, 8)}`;
+  const fallbackName = `Artifact ${shortId(data.artifactId)}`;
   const headerBadgeStatus: 'processing' | 'error' | 'success' = error
     ? 'error'
     : loading

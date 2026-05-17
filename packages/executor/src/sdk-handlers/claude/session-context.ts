@@ -7,6 +7,7 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { shortId } from '@agor/core/db';
 import type { SessionID } from '@agor/core/types';
 
 /**
@@ -16,7 +17,7 @@ import type { SessionID } from '@agor/core/types';
  * @param sdkSessionId - Claude SDK session ID (for conversation continuity, optional)
  */
 export function generateSessionContext(sessionId: SessionID, sdkSessionId?: string): string {
-  const shortId = sessionId.substring(0, 8);
+  const sessionShort = shortId(sessionId);
 
   let sdkSessionLine = '';
   if (sdkSessionId) {
@@ -32,7 +33,7 @@ export function generateSessionContext(sessionId: SessionID, sdkSessionId?: stri
 You are currently running within **Agor** (https://agor.live), a multiplayer canvas for orchestrating AI coding agents.
 
 **Session IDs:**
-- **Agor Session ID:** \`${sessionId}\` (short: \`${shortId}\`) - Agor's internal session tracking${sdkSessionLine}
+- **Agor Session ID:** \`${sessionId}\` (short: \`${sessionShort}\`) - Agor's internal session tracking${sdkSessionLine}
 
 When you see these IDs referenced in prompts or tool calls, they refer to THIS session you're currently in.
 
@@ -78,9 +79,7 @@ export async function appendSessionContextToCLAUDEmd(
     const newContent = existingContent + sessionContext;
 
     await fs.writeFile(claudeMdPath, newContent, 'utf-8');
-    console.log(
-      `✅ Appended session context to CLAUDE.md for session ${sessionId.substring(0, 8)}`
-    );
+    console.log(`✅ Appended session context to CLAUDE.md for session ${shortId(sessionId)}`);
   } catch (error) {
     console.error(`❌ Failed to append session context to CLAUDE.md:`, error);
     // Non-fatal - agent will still work, just won't know its session ID

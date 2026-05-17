@@ -7,7 +7,7 @@
 import type { SessionID, Task, TaskMetadata, UUID } from '@agor/core/types';
 import { prefixToLikePattern, TaskStatus } from '@agor/core/types';
 import { eq, like, sql } from 'drizzle-orm';
-import { generateId } from '../../lib/ids';
+import { generateId, shortId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
 import { type TaskInsert, type TaskRow, tasks } from '../schema';
@@ -165,14 +165,20 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       // Bulk insert all tasks
       await insert(this.db, tasks).values(inserts).run();
 
-      // Retrieve all inserted tasks
+      // Retrieve all inserted tasks. SQLite SELECT order is undefined without
+      // an ORDER BY — we used to rely on UUIDv7's monotonic counter to make
+      // `id ASC` mirror insertion order, but `generateId` now randomizes
+      // `rand_a` (so 24-char short IDs don't collide for same-ms IDs), which
+      // breaks sub-ms sort. Re-impose insertion order explicitly by mapping
+      // returned rows back to the input order.
       const taskIds = inserts.map((t) => t.task_id);
       const rows = await select(this.db)
         .from(tasks)
         .where(sql`${tasks.task_id} IN ${sql.raw(`(${taskIds.map((id) => `'${id}'`).join(',')})`)}`)
         .all();
 
-      return rows.map((row: TaskRow) => this.rowToTask(row));
+      const rowsById = new Map(rows.map((r: TaskRow) => [r.task_id, r]));
+      return taskIds.map((id) => this.rowToTask(rowsById.get(id) as TaskRow));
     } catch (error) {
       throw new RepositoryError(
         `Failed to bulk create tasks: ${error instanceof Error ? error.message : String(error)}`,
@@ -308,7 +314,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const fullId = await this.resolveId(id);
 
       console.debug(
-        `🔄 [TaskRepo] Updating task ${fullId.substring(0, 8)}${updates.status ? ` (status: ${updates.status})` : ''}`
+        `🔄 [TaskRepo] Updating task ${shortId(fullId)}${updates.status ? ` (status: ${updates.status})` : ''}`
       );
 
       // Use transaction to make read-merge-write atomic

@@ -19,7 +19,7 @@ import type {
   StreamingMessageState,
   User,
 } from '@agor-live/client';
-import { TaskStatus } from '@agor-live/client';
+import { shortId, TaskStatus } from '@agor-live/client';
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
 import { Alert, Button, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -423,7 +423,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
         : genealogy?.spawn_point_message_index;
       const icon = isForked ? <ForkOutlined /> : <BranchesOutlined />;
       const actionText = isForked ? 'Forked' : 'Spawned';
-      const shortId = sessionId?.substring(0, 8);
+      const idShort = sessionId ? shortId(sessionId) : undefined;
 
       return (
         <div
@@ -443,7 +443,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
             <Text style={{ fontSize: token.fontSizeLG }}>
               {actionText} from session{' '}
               <Text code strong style={{ fontSize: token.fontSizeLG }}>
-                {shortId}
+                {idShort}
               </Text>
               {messageIndex !== undefined && (
                 <>

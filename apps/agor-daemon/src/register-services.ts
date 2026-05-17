@@ -19,6 +19,7 @@ import {
   type SessionMCPServerRow,
   select,
   sessionMcpServers,
+  shortId,
   UserMCPOAuthTokenRepository,
   WorktreeRepository,
 } from '@agor/core/db';
@@ -616,7 +617,7 @@ function createExecuteHandler(
     const sessionUnixUser = session.unix_username;
 
     console.log('[Daemon] Determining executor Unix user:', {
-      sessionId: session.session_id.slice(0, 8),
+      sessionId: shortId(session.session_id),
       unixUserMode,
       sessionUnixUser,
       configExecutorUser,
@@ -801,21 +802,21 @@ function createExecuteHandler(
 
     if (executorProcess.pid) {
       trackExecutorProcess(sessionId, executorProcess.pid);
-      console.log(`[Executor ${sessionId.slice(0, 8)}] PID: ${executorProcess.pid}`);
+      console.log(`[Executor ${shortId(sessionId)}] PID: ${executorProcess.pid}`);
     }
 
     executorProcess.stdin?.write(JSON.stringify(executorPayload));
     executorProcess.stdin?.end();
 
     executorProcess.stdout?.on('data', (data) => {
-      console.log(`[Executor ${sessionId.slice(0, 8)}] ${data.toString().trim()}`);
+      console.log(`[Executor ${shortId(sessionId)}] ${data.toString().trim()}`);
     });
     executorProcess.stderr?.on('data', (data) => {
-      console.error(`[Executor ${sessionId.slice(0, 8)}] ${data.toString().trim()}`);
+      console.error(`[Executor ${shortId(sessionId)}] ${data.toString().trim()}`);
     });
 
     executorProcess.on('exit', async (code) => {
-      console.log(`[Executor ${sessionId.slice(0, 8)}] Exited with code ${code}`);
+      console.log(`[Executor ${shortId(sessionId)}] Exited with code ${code}`);
       untrackExecutorProcess(sessionId);
 
       // Safety net: check if task is still running
@@ -825,7 +826,7 @@ function createExecuteHandler(
 
         if (latestTaskId && latestTaskId !== taskId) {
           console.log(
-            `⏭️ [Executor] Task ${taskId.slice(0, 8)} is not the latest (latest: ${latestTaskId.slice(0, 8)}), skipping safety net`
+            `⏭️ [Executor] Task ${shortId(taskId)} is not the latest (latest: ${shortId(latestTaskId)}), skipping safety net`
           );
         } else if (
           currentSession.status === SessionStatus.RUNNING ||
@@ -846,11 +847,11 @@ function createExecuteHandler(
             if (isTaskStillActive) {
               await app.service('tasks').patch(taskId, { status: TaskStatus.FAILED }, params);
               console.log(
-                `✅ [Executor] Task ${taskId.slice(0, 8)} marked as FAILED after executor exit (code: ${code})`
+                `✅ [Executor] Task ${shortId(taskId)} marked as FAILED after executor exit (code: ${code})`
               );
             } else {
               console.log(
-                `⚠️  [Executor] Task ${taskId.slice(0, 8)} already ${currentTask.status}, but session still ${currentSession.status} — repairing session state`
+                `⚠️  [Executor] Task ${shortId(taskId)} already ${currentTask.status}, but session still ${currentSession.status} — repairing session state`
               );
               await app
                 .service('sessions')
@@ -858,19 +859,19 @@ function createExecuteHandler(
             }
           } catch (taskError) {
             console.error(
-              `⚠️  [Executor] Failed to mark task ${taskId.slice(0, 8)} as FAILED, falling back to session IDLE update:`,
+              `⚠️  [Executor] Failed to mark task ${shortId(taskId)} as FAILED, falling back to session IDLE update:`,
               taskError
             );
             await app
               .service('sessions')
               .patch(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true }, params);
             console.log(
-              `✅ [Executor] Session ${sessionId.slice(0, 8)} status updated to IDLE after executor exit (was: ${currentSession.status})`
+              `✅ [Executor] Session ${shortId(sessionId)} status updated to IDLE after executor exit (was: ${currentSession.status})`
             );
           }
         } else {
           console.log(
-            `ℹ️  [Executor] Session ${sessionId.slice(0, 8)} already in ${currentSession.status} state, skipping IDLE update`
+            `ℹ️  [Executor] Session ${shortId(sessionId)} already in ${currentSession.status} state, skipping IDLE update`
           );
         }
       } catch (error) {
@@ -2580,11 +2581,11 @@ async function bootstrapSuperadminUsers(
       await usersService.patch(userId as any, { role: ROLES.SUPERADMIN });
       promotedCount++;
       console.log(
-        `[RBAC] Bootstrap promoted user ${userId.substring(0, 8)} (${user.email}) to superadmin`
+        `[RBAC] Bootstrap promoted user ${shortId(userId)} (${user.email}) to superadmin`
       );
     } catch (error) {
       console.warn(
-        `[RBAC] Failed to bootstrap superadmin for user ${userId.substring(0, 8)}: ${error instanceof Error ? error.message : String(error)}`
+        `[RBAC] Failed to bootstrap superadmin for user ${shortId(userId)}: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }

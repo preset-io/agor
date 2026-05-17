@@ -10,7 +10,7 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { generateId } from '@agor/core/db';
+import { generateId, shortId } from '@agor/core/db';
 import type { PermissionMode as ClaudeSDKPermissionMode } from '@agor/core/sdk';
 import { mapPermissionMode } from '@agor/core/utils/permission-mode-mapper';
 import type {
@@ -109,9 +109,7 @@ async function withFeathersSessionGuard<T>(
   // Check session exists before executing operation
   const sessionExists = await sessionsRepo?.findById(sessionId);
   if (!sessionExists) {
-    console.warn(
-      `⚠️  Session ${sessionId.substring(0, 8)} no longer exists, skipping guarded operation`
-    );
+    console.warn(`⚠️  Session ${shortId(sessionId)} no longer exists, skipping guarded operation`);
     return null;
   }
 
@@ -890,18 +888,16 @@ export class ClaudeTool implements ITool {
         const existingSession = await this.sessionsRepo.findById(sessionId);
         if (existingSession?.sdk_session_id) {
           if (existingSession.sdk_session_id === agentSessionId) {
-            console.log(
-              `💾 Agent SDK session_id unchanged (already ${agentSessionId.substring(0, 8)})`
-            );
+            console.log(`💾 Agent SDK session_id unchanged (already ${shortId(agentSessionId)})`);
           } else {
             console.warn(
-              `⚠️  Agent SDK returned new session_id ${agentSessionId.substring(0, 8)} but session already has ${existingSession.sdk_session_id.substring(0, 8)} — keeping original (sdk_session_id is immutable)`
+              `⚠️  Agent SDK returned new session_id ${shortId(agentSessionId)} but session already has ${shortId(existingSession.sdk_session_id)} — keeping original (sdk_session_id is immutable)`
             );
           }
           return;
         }
 
-        console.log(`📝 Setting sdk_session_id for first time: ${agentSessionId.substring(0, 8)}`);
+        console.log(`📝 Setting sdk_session_id for first time: ${shortId(agentSessionId)}`);
         const updated = await this.sessionsRepo.update(sessionId, {
           sdk_session_id: agentSessionId,
         });

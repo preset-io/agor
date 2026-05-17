@@ -5,7 +5,7 @@
  */
 
 import type { Repo, Worktree } from '@agor-live/client';
-import { formatShortId, PAGINATION } from '@agor-live/client';
+import { PAGINATION, shortId } from '@agor-live/client';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';
 import Table from 'cli-table3';
@@ -175,8 +175,8 @@ export default class WorktreeList extends BaseCommand {
           ? `${worktree.name} ${chalk.dim('□')}`
           : worktree.name;
         table.push([
-          chalk.dim(formatShortId(worktree.worktree_id)),
-          repo ? repo.slug : chalk.dim(formatShortId(worktree.repo_id)),
+          chalk.dim(shortId(worktree.worktree_id)),
+          repo ? repo.slug : chalk.dim(shortId(worktree.repo_id)),
           nameDisplay,
           worktree.ref,
           sessionCount.toString(),

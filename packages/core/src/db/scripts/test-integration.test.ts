@@ -9,7 +9,7 @@
 
 import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import { formatShortId, generateId } from '../../lib/ids';
+import { generateId, SHORT_ID_LENGTH, shortId } from '../../lib/ids';
 import type { Session, SessionID, TaskID, UserID } from '../../types';
 import { SessionStatus, TaskStatus } from '../../types';
 import { createDatabase } from '../client';
@@ -162,10 +162,11 @@ describe('ID Generation', () => {
 
   it('should format short IDs correctly', () => {
     const id = generateId();
-    const shortId = formatShortId(id);
+    const localShortId = shortId(id);
 
-    expect(shortId).toHaveLength(8);
-    expect(shortId).toBe(id.slice(0, 8));
+    expect(localShortId).toHaveLength(SHORT_ID_LENGTH);
+    // Canonical short form is a 20-char hex prefix (no hyphens).
+    expect(localShortId).toBe(id.replace(/-/g, '').slice(0, SHORT_ID_LENGTH));
   });
 });
 
@@ -218,8 +219,8 @@ describe('Session Repository Integration', () => {
       tasks: [],
     });
 
-    const shortId = formatShortId(session.session_id);
-    const found = await repo.findById(shortId);
+    const localShortId = shortId(session.session_id);
+    const found = await repo.findById(localShortId);
 
     expect(found).toBeDefined();
     expect(found!.session_id).toBe(session.session_id);

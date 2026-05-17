@@ -8,7 +8,7 @@
  */
 
 import type { AgorClient, User, Worktree, WorktreePermissionLevel } from '@agor-live/client';
-import { hasMinimumRole, ROLES } from '@agor-live/client';
+import { hasMinimumRole, ROLES, shortId } from '@agor-live/client';
 import { UserOutlined, WarningOutlined } from '@ant-design/icons';
 import { Alert, Button, Form, Select, Space, Switch, Typography } from 'antd';
 import { useEffect, useState } from 'react';
@@ -235,7 +235,7 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
             options={allUsers
               .map((user) => {
                 const isCurrentUser = user.user_id === currentUserId;
-                const label = user.email || `User ${user.user_id.substring(0, 8)}`;
+                const label = user.email || `User ${shortId(user.user_id)}`;
                 const displayLabel = isCurrentUser ? `${label} (You)` : label;
 
                 return {

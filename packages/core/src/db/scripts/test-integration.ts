@@ -13,7 +13,7 @@
  *   npm run test:integration
  */
 
-import { formatShortId, generateId } from '../../lib/ids';
+import { generateId, shortId } from '../../lib/ids';
 import type { Session, TaskID, UserID, WorktreeID } from '../../types';
 import { SessionStatus, TaskStatus } from '../../types';
 import { createDatabase } from '../client';
@@ -70,7 +70,7 @@ async function testIdGeneration() {
 
   console.log('  ✅ Generated 5 UUIDv7s');
   console.log(`  ✅ Sample ID: ${ids[0]}`);
-  console.log(`  ✅ Short form: ${formatShortId(ids[0])}`);
+  console.log(`  ✅ Short form: ${shortId(ids[0])}`);
   console.log('  ✅ Time-ordered');
 }
 
@@ -97,17 +97,17 @@ async function testSessionRepository(db: ReturnType<typeof createDatabase>) {
     tasks: [],
   });
 
-  console.log(`  ✅ Created session: ${formatShortId(session.session_id)}`);
+  console.log(`  ✅ Created session: ${shortId(session.session_id)}`);
 
   // Test short ID resolution
-  const shortId = formatShortId(session.session_id);
-  const found = await repo.findById(shortId);
+  const localShortId = shortId(session.session_id);
+  const found = await repo.findById(localShortId);
 
   if (!found || found.session_id !== session.session_id) {
     throw new Error('Short ID resolution failed');
   }
 
-  console.log(`  ✅ Resolved short ID: ${shortId} → ${session.session_id}`);
+  console.log(`  ✅ Resolved short ID: ${localShortId} → ${session.session_id}`);
 
   // Test JSON data integrity
   if (found.agentic_tool !== 'claude-code') {
@@ -158,7 +158,7 @@ async function testTaskRepository(db: ReturnType<typeof createDatabase>, session
     tool_use_count: 5,
   });
 
-  console.log(`  ✅ Created task: ${formatShortId(task.task_id)}`);
+  console.log(`  ✅ Created task: ${shortId(task.task_id)}`);
 
   // Test findBySession
   const tasks = await repo.findBySession(session.session_id);
@@ -201,7 +201,7 @@ async function testBoardRepository(db: ReturnType<typeof createDatabase>, sessio
     icon: 'rocket',
   });
 
-  console.log(`  ✅ Created board: ${formatShortId(board.board_id)}`);
+  console.log(`  ✅ Created board: ${shortId(board.board_id)}`);
 
   // TODO: Update board tests for worktree-centric model
   // Old session-based board API is deprecated
@@ -241,7 +241,7 @@ async function testRepoRepository(db: ReturnType<typeof createDatabase>) {
     default_branch: 'main',
   });
 
-  console.log(`  ✅ Created repo: ${formatShortId(repoData.repo_id)}`);
+  console.log(`  ✅ Created repo: ${shortId(repoData.repo_id)}`);
 
   // Note: Worktrees are now managed separately in the worktrees table
   console.log('  ✅ Repo created successfully');
@@ -274,7 +274,7 @@ async function testGenealogy(db: ReturnType<typeof createDatabase>) {
     tasks: [],
   });
 
-  console.log(`  ✅ Created parent: ${formatShortId(parent.session_id)}`);
+  console.log(`  ✅ Created parent: ${shortId(parent.session_id)}`);
 
   // Create forked child
   const fork = await repo.create({
@@ -292,7 +292,7 @@ async function testGenealogy(db: ReturnType<typeof createDatabase>) {
     tasks: [],
   });
 
-  console.log(`  ✅ Created fork: ${formatShortId(fork.session_id)}`);
+  console.log(`  ✅ Created fork: ${shortId(fork.session_id)}`);
 
   // Create spawned child
   const spawn = await repo.create({
@@ -310,7 +310,7 @@ async function testGenealogy(db: ReturnType<typeof createDatabase>) {
     tasks: [],
   });
 
-  console.log(`  ✅ Created spawn: ${formatShortId(spawn.session_id)}`);
+  console.log(`  ✅ Created spawn: ${shortId(spawn.session_id)}`);
 
   // Test findChildren
   const children = await repo.findChildren(parent.session_id);
@@ -367,10 +367,10 @@ async function main() {
     console.log('✅ All tests passed!');
     console.log('');
     console.log('📊 Test Summary:');
-    console.log(`  - Session: ${formatShortId(session.session_id)}`);
-    console.log(`  - Task: ${formatShortId(task.task_id)}`);
-    console.log(`  - Board: ${formatShortId(board.board_id)}`);
-    console.log(`  - Repo: ${formatShortId(repo.repo_id)}`);
+    console.log(`  - Session: ${shortId(session.session_id)}`);
+    console.log(`  - Task: ${shortId(task.task_id)}`);
+    console.log(`  - Board: ${shortId(board.board_id)}`);
+    console.log(`  - Repo: ${shortId(repo.repo_id)}`);
     console.log('');
     console.log('✨ Sprint 1 Complete - Ready for Sprint 2!');
 

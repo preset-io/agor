@@ -53,6 +53,7 @@ import {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import './SessionCanvas.css';
+import { shortId } from '@agor-live/client';
 import { mapToArray } from '@/utils/mapHelpers';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
 import { useMutationGate } from '../../contexts/ConnectionContext';
@@ -375,7 +376,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const canvasBackground = hasUserStyling ? undefined : defaultBackground;
 
     // Sanitize and scope custom CSS for this board (enables @keyframes, animations, etc.)
-    const boardCssClass = board?.board_id ? `board-css-${board.board_id.slice(0, 8)}` : '';
+    const boardCssClass = board?.board_id ? `board-css-${shortId(board.board_id)}` : '';
     const scopedCustomCss = useMemo(() => {
       if (!hasUserStyling) return '';
       // Prepend background_color as a CSS rule so it's at the same specificity as custom_css

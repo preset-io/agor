@@ -10,6 +10,7 @@ import {
   DEFAULT_ADMIN_USER,
   getUserByEmail,
   runMigrations,
+  shortId,
 } from '@agor/core/db';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
@@ -50,7 +51,7 @@ export default class UserCreateAdmin extends Command {
         this.log(`  Email: ${chalk.cyan(DEFAULT_ADMIN_USER.email)}`);
         this.log(`  Name:  ${chalk.cyan(existingAdmin.name || '(not set)')}`);
         this.log(`  Role:  ${chalk.cyan(existingAdmin.role)}`);
-        this.log(`  ID:    ${chalk.gray(existingAdmin.user_id.substring(0, 8))}`);
+        this.log(`  ID:    ${chalk.gray(shortId(existingAdmin.user_id))}`);
         this.log('');
         this.log(
           chalk.gray(
@@ -70,7 +71,7 @@ export default class UserCreateAdmin extends Command {
       this.log(`  Password: ${chalk.cyan(DEFAULT_ADMIN_USER.password)}`);
       this.log(`  Name:     ${chalk.cyan(user.name)}`);
       this.log(`  Role:     ${chalk.cyan(user.role)}`);
-      this.log(`  ID:       ${chalk.gray(user.user_id.substring(0, 8))}`);
+      this.log(`  ID:       ${chalk.gray(shortId(user.user_id))}`);
       this.log('');
       this.log(chalk.yellow('⚠ SECURITY WARNING'));
       this.log(chalk.gray('  Change the password immediately using:'));

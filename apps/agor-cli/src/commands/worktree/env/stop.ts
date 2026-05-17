@@ -4,7 +4,7 @@
  * Stops the development environment for a worktree.
  */
 
-import { formatShortId } from '@agor-live/client';
+import { shortId } from '@agor-live/client';
 import { Args } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../../base-command';
@@ -38,7 +38,7 @@ export default class WorktreeEnvStop extends BaseCommand {
 
       this.log('');
       this.log(`Stopping environment for ${chalk.cyan(worktree.name)}...`);
-      this.log(`  ID:   ${chalk.dim(formatShortId(worktree.worktree_id))}`);
+      this.log(`  ID:   ${chalk.dim(shortId(worktree.worktree_id))}`);
       this.log('');
 
       // Call custom stopEnvironment method

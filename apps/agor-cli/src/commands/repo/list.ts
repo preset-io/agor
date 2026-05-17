@@ -5,7 +5,7 @@
  */
 
 import type { PaginatedResult, Repo } from '@agor-live/client';
-import { formatShortId, PAGINATION } from '@agor-live/client';
+import { PAGINATION, shortId } from '@agor-live/client';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';
 import Table from 'cli-table3';
@@ -82,10 +82,10 @@ export default class RepoList extends BaseCommand {
 
       // Add rows
       for (const repo of repos) {
-        const shortId = formatShortId(repo.repo_id);
+        const localShortId = shortId(repo.repo_id);
 
         table.push([
-          chalk.dim(shortId),
+          chalk.dim(localShortId),
           repo.slug,
           repo.repo_type,
           this.truncate(repo.remote_url || '(no remote)', 35),

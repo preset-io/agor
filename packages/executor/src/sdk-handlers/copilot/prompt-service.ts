@@ -11,6 +11,7 @@
  * - Events stream back through the session's event emitter
  */
 
+import { shortId } from '@agor/core/db';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import type { CopilotSession } from '@github/copilot-sdk';
 import { CopilotClient } from '@github/copilot-sdk';
@@ -242,7 +243,7 @@ export class CopilotPromptService {
       throw new Error(`Session ${sessionId} not found`);
     }
 
-    console.log(`🔍 [Copilot] Starting prompt execution for session ${sessionId.substring(0, 8)}`);
+    console.log(`🔍 [Copilot] Starting prompt execution for session ${shortId(sessionId)}`);
     console.log(`   Permission mode: ${permissionMode || 'not specified (will use default)'}`);
     console.log(
       `   Existing SDK session ID: ${session.sdk_session_id || 'none (will create new)'}`
@@ -444,7 +445,7 @@ export class CopilotPromptService {
           error instanceof Error &&
           (error.name === 'AbortError' || error.message.includes('abort'))
         ) {
-          console.log(`🛑 [Copilot] Query aborted for session ${sessionId.substring(0, 8)}`);
+          console.log(`🛑 [Copilot] Query aborted for session ${shortId(sessionId)}`);
           yield { type: 'stopped', sessionId: copilotSessionId };
           return;
         }
@@ -528,7 +529,7 @@ export class CopilotPromptService {
         (error.name === 'AbortError' || error.message.includes('abort'))
       ) {
         console.log(
-          `🛑 [Stop] Copilot query aborted for session ${sessionId.substring(0, 8)} - this is expected`
+          `🛑 [Stop] Copilot query aborted for session ${shortId(sessionId)} - this is expected`
         );
         yield { type: 'stopped', sessionId: '' };
         return;

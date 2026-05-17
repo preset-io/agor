@@ -41,6 +41,7 @@ export interface PermissionRequest {
   timestamp: string;
 }
 
+import { shortId } from '../lib/ids';
 // NOTE: PermissionScope is now defined as an enum in types/message.ts
 // Import it from there instead of using this type union
 import { PermissionScope } from '../types/message';
@@ -184,7 +185,7 @@ export class PermissionService {
 
     if (cancelledCount > 0) {
       console.log(
-        `🛡️  Cancelled ${cancelledCount} pending permission request(s) for session ${sessionId.substring(0, 8)}`
+        `🛡️  Cancelled ${cancelledCount} pending permission request(s) for session ${shortId(sessionId)}`
       );
     }
   }

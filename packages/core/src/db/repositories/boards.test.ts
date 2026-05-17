@@ -7,7 +7,7 @@
 
 import type { Board, BoardObject, UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
-import { generateId } from '../../lib/ids';
+import { generateId, shortId, toShortId } from '../../lib/ids';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
 import { BoardRepository } from './boards';
@@ -205,8 +205,8 @@ describe('BoardRepository.findById', () => {
     const data = createBoardData();
     await repo.create(data);
 
-    const shortId = data.board_id!.replace(/-/g, '').slice(0, 8);
-    const found = await repo.findById(shortId);
+    const idPrefix = data.board_id!.replace(/-/g, '').slice(0, 8);
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.board_id).toBe(data.board_id);
@@ -217,8 +217,10 @@ describe('BoardRepository.findById', () => {
     const data = createBoardData();
     await repo.create(data);
 
-    const shortId = data.board_id!.slice(0, 8);
-    const found = await repo.findById(shortId);
+    // Legacy 8-char input: tests the resolver accepts shorter-than-canonical
+    // prefixes.
+    const idPrefix = toShortId(data.board_id!, 8);
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.board_id).toBe(data.board_id);
@@ -229,8 +231,8 @@ describe('BoardRepository.findById', () => {
     const data = createBoardData();
     await repo.create(data);
 
-    const shortId = data.board_id!.replace(/-/g, '').slice(0, 8).toUpperCase();
-    const found = await repo.findById(shortId);
+    const idPrefix = data.board_id!.replace(/-/g, '').slice(0, 8).toUpperCase();
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.board_id).toBe(data.board_id);
@@ -429,8 +431,8 @@ describe('BoardRepository.update', () => {
     const data = createBoardData({ name: 'Original' });
     await repo.create(data);
 
-    const shortId = data.board_id!.replace(/-/g, '').slice(0, 8);
-    const updated = await repo.update(shortId, { description: 'New description' });
+    const idPrefix = data.board_id!.replace(/-/g, '').slice(0, 8);
+    const updated = await repo.update(idPrefix, { description: 'New description' });
 
     expect(updated.description).toBe('New description');
     expect(updated.board_id).toBe(data.board_id);
@@ -558,8 +560,8 @@ describe('BoardRepository.delete', () => {
     const data = createBoardData();
     await repo.create(data);
 
-    const shortId = data.board_id!.replace(/-/g, '').slice(0, 8);
-    await repo.delete(shortId);
+    const idPrefix = data.board_id!.replace(/-/g, '').slice(0, 8);
+    await repo.delete(idPrefix);
 
     const found = await repo.findById(data.board_id!);
     expect(found).toBeNull();
@@ -724,10 +726,10 @@ describe('BoardRepository.upsertBoardObject', () => {
     const repo = new BoardRepository(db);
     const board = await repo.create(createBoardData());
 
-    const shortId = board.board_id.replace(/-/g, '').slice(0, 8);
+    const idPrefix = shortId(board.board_id);
     const textObject: BoardObject = { type: 'text', x: 100, y: 200, content: 'Test' };
 
-    const updated = await repo.upsertBoardObject(shortId, 'text-1', textObject);
+    const updated = await repo.upsertBoardObject(idPrefix, 'text-1', textObject);
 
     expect(updated.objects).toEqual({ 'text-1': textObject });
   });
@@ -807,8 +809,8 @@ describe('BoardRepository.removeBoardObject', () => {
       })
     );
 
-    const shortId = board.board_id.replace(/-/g, '').slice(0, 8);
-    const updated = await repo.removeBoardObject(shortId, 'text-1');
+    const idPrefix = shortId(board.board_id);
+    const updated = await repo.removeBoardObject(idPrefix, 'text-1');
 
     expect(updated.objects).toEqual({});
   });

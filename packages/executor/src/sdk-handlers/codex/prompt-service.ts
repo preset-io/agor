@@ -26,6 +26,7 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { shortId } from '@agor/core/db';
 import type { Thread, ThreadItem } from '@agor/core/sdk';
 import { Codex } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
@@ -488,7 +489,7 @@ export class CodexPromptService {
     mcpToken: string | undefined,
     forUserId: UserID | undefined
   ): Promise<{ servers: CodexConfigObject; total: number }> {
-    console.log(`🔍 [Codex MCP] Fetching MCP servers for session ${sessionId.substring(0, 8)}...`);
+    console.log(`🔍 [Codex MCP] Fetching MCP servers for session ${shortId(sessionId)}...`);
     console.log(`   [Codex MCP] forUserId: ${forUserId || 'NOT SET'}`);
 
     const serversWithSource = await getMcpServersForSession(sessionId, {
@@ -518,7 +519,7 @@ export class CodexPromptService {
     // bearer_token_env_var — never in the URL.
     if (mcpToken) {
       const daemonUrl = await getDaemonUrl();
-      const agorBearerEnvVar = `AGOR_MCP_${sessionId.substring(0, 8)}_AGOR`;
+      const agorBearerEnvVar = `AGOR_MCP_${shortId(sessionId)}_AGOR`;
       process.env[agorBearerEnvVar] = mcpToken;
 
       claimedNames.add('agor');
@@ -583,7 +584,7 @@ export class CodexPromptService {
         if (authHeader) {
           const bearerToken = /^Bearer\s+(.+)$/i.exec(authHeader)?.[1];
           if (bearerToken) {
-            const envVarName = `AGOR_MCP_${sessionId.substring(0, 8)}_${serverName.toUpperCase()}`;
+            const envVarName = `AGOR_MCP_${shortId(sessionId)}_${serverName.toUpperCase()}`;
             process.env[envVarName] = bearerToken;
             serverConfig.bearer_token_env_var = envVarName;
             console.log(`      auth: ${server.auth?.type ?? 'bearer'} token via ${envVarName}`);
@@ -770,13 +771,13 @@ export class CodexPromptService {
     const parentSession = await this.sessionsRepo.findById(parentSessionId);
     if (!parentSession?.sdk_session_id) {
       console.warn(
-        `⚠️  [Codex] Fork requested from parent ${parentSessionId.substring(0, 8)}, but parent has no Codex thread id; starting fresh`
+        `⚠️  [Codex] Fork requested from parent ${shortId(parentSessionId)}, but parent has no Codex thread id; starting fresh`
       );
       return;
     }
 
     console.log(
-      `🍴 [Codex] Forking from parent thread ${parentSession.sdk_session_id.substring(0, 8)} via app-server thread/fork`
+      `🍴 [Codex] Forking from parent thread ${shortId(parentSession.sdk_session_id)} via app-server thread/fork`
     );
 
     const appServerEnv: NodeJS.ProcessEnv = { ...process.env };
@@ -794,7 +795,7 @@ export class CodexPromptService {
     session.sdk_session_id = forkedThreadId;
 
     console.log(
-      `✅ [Codex] Forked thread ${parentSession.sdk_session_id.substring(0, 8)} → ${forkedThreadId.substring(0, 8)}`
+      `✅ [Codex] Forked thread ${shortId(parentSession.sdk_session_id)} → ${shortId(forkedThreadId)}`
     );
   }
 
@@ -833,7 +834,7 @@ export class CodexPromptService {
     // This ensures hot-reload of credentials from Settings UI while avoiding process accumulation
     this.refreshClient(currentApiKey);
 
-    console.log(`🔍 [Codex] Starting prompt execution for session ${sessionId.substring(0, 8)}`);
+    console.log(`🔍 [Codex] Starting prompt execution for session ${shortId(sessionId)}`);
     console.log(`   Permission mode: ${permissionMode || 'not specified (will use default)'}`);
     console.log(`   Existing thread ID: ${session.sdk_session_id || 'none (will create new)'}`);
 
@@ -867,7 +868,7 @@ export class CodexPromptService {
     const mcpToken = session.mcp_token;
     if (!mcpToken) {
       console.warn(
-        `⚠️  No MCP token found for session ${sessionId.substring(0, 8)} - Agor MCP tools unavailable`
+        `⚠️  No MCP token found for session ${shortId(sessionId)} - Agor MCP tools unavailable`
       );
     }
 
@@ -961,7 +962,7 @@ export class CodexPromptService {
       );
       console.warn(`   🔧 SOLUTION: Clearing sdk_session_id to force fresh thread start`);
       console.warn(
-        `   Previous SDK thread: ${session.sdk_session_id.substring(0, 8)} (will be discarded)`
+        `   Previous SDK thread: ${shortId(session.sdk_session_id)} (will be discarded)`
       );
 
       // Clear SDK session ID to force fresh start with new MCP config
@@ -1032,7 +1033,7 @@ export class CodexPromptService {
 
       // Use streaming API with abort signal for proper cancellation support
       // The signal is passed to Codex SDK which will throw AbortError when aborted
-      console.log(`🎬 [Codex] Starting runStreamed() for session ${sessionId.substring(0, 8)}`);
+      console.log(`🎬 [Codex] Starting runStreamed() for session ${shortId(sessionId)}`);
       const turnOptions = abortController ? { signal: abortController.signal } : undefined;
       const { events } = await thread.runStreamed(prompt, turnOptions);
       console.log(`✅ [Codex] runStreamed() returned, starting event iteration`);
@@ -1257,14 +1258,14 @@ export class CodexPromptService {
                   ? 'No API key configured and ChatGPT subscription auth (~/.codex/auth.json) was rejected or missing. Run `codex login` from the worktree terminal, or add an API key in Settings > Codex > Authentication.'
                   : 'No API key configured. Add one in Settings > Codex > Authentication, or sign in via `codex login`.';
               console.error(
-                `❌ [Codex] Authentication failed for session ${sessionId.substring(0, 8)}: ${guidance}`
+                `❌ [Codex] Authentication failed for session ${shortId(sessionId)}: ${guidance}`
               );
               throw new Error(`Codex authentication failed: ${guidance}`);
             }
 
             // Log full error details for non-auth failures
             console.error(
-              `❌ [Codex] Turn failed for session ${sessionId.substring(0, 8)}:`,
+              `❌ [Codex] Turn failed for session ${shortId(sessionId)}:`,
               errorMessage
             );
             throw new Error(`Codex execution failed: ${errorMessage}`);
@@ -1294,7 +1295,7 @@ export class CodexPromptService {
         (error.name === 'AbortError' || error.message.includes('abort'))
       ) {
         console.log(
-          `🛑 [Stop] Codex query aborted for session ${sessionId.substring(0, 8)} - this is expected`
+          `🛑 [Stop] Codex query aborted for session ${shortId(sessionId)} - this is expected`
         );
         // Yield stopped event to signal execution was halted
         yield { type: 'stopped', threadId: thread.id || undefined };
@@ -1421,7 +1422,7 @@ export class CodexPromptService {
     this.instructionsFilePaths.delete(sessionId);
 
     // Clean up session-scoped MCP bearer token env vars
-    const envPrefix = `AGOR_MCP_${sessionId.substring(0, 8)}_`;
+    const envPrefix = `AGOR_MCP_${shortId(sessionId)}_`;
     for (const key of Object.keys(process.env)) {
       if (key.startsWith(envPrefix)) {
         delete process.env[key];

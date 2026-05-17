@@ -5,6 +5,7 @@
  * Automatically loads CLAUDE.md and uses preset system prompts matching Claude Code CLI.
  */
 
+import { shortId } from '@agor/core/db';
 import type { PermissionMode, SDKResultMessage } from '@agor/core/sdk';
 import type {
   MCPServerRepository,
@@ -243,7 +244,7 @@ If you continue to see authentication errors, please contact your Agor administr
               console.log(`💾 Stored Agent SDK session_id in database`);
             } else if (existingSdkSessionId && existingSdkSessionId !== event.agentSessionId) {
               console.warn(
-                `⚠️  SDK returned new session_id ${event.agentSessionId.substring(0, 8)} but session already has ${existingSdkSessionId.substring(0, 8)} — keeping original`
+                `⚠️  SDK returned new session_id ${shortId(event.agentSessionId)} but session already has ${shortId(existingSdkSessionId)} — keeping original`
               );
             }
             continue; // Don't yield this event upstream
@@ -297,9 +298,7 @@ If you continue to see authentication errors, please contact your Agor administr
         error instanceof Error &&
         (error.name === 'AbortError' || error.message.includes('abort'))
       ) {
-        console.log(
-          `🛑 [Stop] Query aborted for session ${sessionId.substring(0, 8)} - this is expected`
-        );
+        console.log(`🛑 [Stop] Query aborted for session ${shortId(sessionId)} - this is expected`);
         // Yield stopped event to signal execution was halted
         yield { type: 'stopped' } as ProcessedEvent;
         // Don't throw - this is a clean stop, not an error
@@ -319,7 +318,7 @@ If you continue to see authentication errors, please contact your Agor administr
         enhancedError.stack = error.stack;
       }
       console.error(`❌ SDK iteration failed:`, {
-        sessionId: sessionId.substring(0, 8),
+        sessionId: shortId(sessionId),
         messageCount: state.messageCount,
         error: error instanceof Error ? error.message : String(error),
         stderr: stderrOutput || '(no stderr output)',
@@ -438,7 +437,7 @@ If you continue to see authentication errors, please contact your Agor administr
         (error.name === 'AbortError' || error.message.includes('abort'))
       ) {
         console.log(
-          `🛑 [Stop] Query aborted via interrupt() for session ${sessionId.substring(0, 8)} (non-streaming) - this is expected`
+          `🛑 [Stop] Query aborted via interrupt() for session ${shortId(sessionId)} (non-streaming) - this is expected`
         );
         // Don't throw - this is a clean stop, not an error
         // Return empty result since we were stopped
@@ -473,7 +472,7 @@ If you continue to see authentication errors, please contact your Agor administr
    */
   async stopTask(sessionId: SessionID): Promise<{ success: boolean; reason?: string }> {
     console.log(
-      `🛑 [Deprecated] stopTask called for session ${sessionId.substring(0, 8)} - actual stop handled by AbortController`
+      `🛑 [Deprecated] stopTask called for session ${shortId(sessionId)} - actual stop handled by AbortController`
     );
     // Cancellation is now handled by AbortController passed to SDK
     // This method is kept for API compatibility

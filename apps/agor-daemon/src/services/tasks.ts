@@ -10,7 +10,7 @@ import {
   renderChildCompletionCallback,
 } from '@agor/core/callbacks/child-completion-template';
 import { PAGINATION } from '@agor/core/config';
-import { type Database, TaskRepository } from '@agor/core/db';
+import { type Database, shortId, TaskRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
   ContentBlock,
@@ -125,9 +125,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     // NOTE: create() always returns a single Task (not an array) in practice
     if (data.status === TaskStatus.RUNNING && !Array.isArray(result) && this.app) {
       console.log(`🔍 [TasksService.create] ENTERING session status update block`);
-      console.log(
-        `🔍 [TasksService.create] About to patch session ${result.session_id.substring(0, 8)}`
-      );
+      console.log(`🔍 [TasksService.create] About to patch session ${shortId(result.session_id)}`);
       try {
         const patchResult = await this.app.service('sessions').patch(
           result.session_id,
@@ -139,7 +137,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         );
 
         console.log(
-          `✅ [TasksService] Session ${result.session_id.substring(0, 8)} status updated to RUNNING (task ${result.task_id.substring(0, 8)} created)`,
+          `✅ [TasksService] Session ${shortId(result.session_id)} status updated to RUNNING (task ${shortId(result.task_id)} created)`,
           `Patch result status: ${patchResult.status}`
         );
       } catch (error) {
@@ -245,7 +243,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
               .catch((err: unknown) => {
                 const message = err instanceof Error ? err.message : String(err);
                 console.warn(
-                  `⚠️  [TasksService] ensureRepoOriginAlignedById failed for session ${task.session_id?.substring(0, 8)}: ${message}`
+                  `⚠️  [TasksService] ensureRepoOriginAlignedById failed for session ${task.session_id ? shortId(task.session_id) : 'unknown'}: ${message}`
                 );
               });
           }
@@ -254,7 +252,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
           if (latestTaskId && latestTaskId !== task.task_id) {
             console.log(
-              `⏭️ [TasksService] Skipping session IDLE update - task ${task.task_id.substring(0, 8)} is not the latest (latest: ${latestTaskId.substring(0, 8)})`
+              `⏭️ [TasksService] Skipping session IDLE update - task ${shortId(task.task_id)} is not the latest (latest: ${shortId(latestTaskId)})`
             );
             // Still process callbacks (task completed, callback target needs to know)
             const earlyCallbackTarget =
@@ -274,7 +272,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
           if (isUserInitiatedStop) {
             console.log(
-              `⏭️ [TasksService] Skipping session IDLE update for STOPPED task ${task.task_id.substring(0, 8)} — stop endpoint handles session state`
+              `⏭️ [TasksService] Skipping session IDLE update for STOPPED task ${shortId(task.task_id)} — stop endpoint handles session state`
             );
           } else {
             await this.app.service('sessions').patch(
@@ -287,7 +285,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             );
 
             console.log(
-              `✅ [TasksService] Session ${task.session_id.substring(0, 8)} status updated to IDLE (task ${task.task_id.substring(0, 8)} ${data.status})`
+              `✅ [TasksService] Session ${shortId(task.session_id)} status updated to IDLE (task ${shortId(task.task_id)} ${data.status})`
             );
           }
 
@@ -315,7 +313,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
               const sessionsService = this.app.service('sessions') as unknown as SessionsService;
               if (sessionsService.triggerQueueProcessing) {
                 console.log(
-                  `🔄 [TasksService] Triggering callback target queue processing for ${targetSessionId.substring(0, 8)} (callback queued)`
+                  `🔄 [TasksService] Triggering callback target queue processing for ${shortId(targetSessionId)} (callback queued)`
                 );
                 // Pass empty params to avoid leaking child's auth context to target
                 // The queue processor will reconstruct target auth from queued task metadata
@@ -345,7 +343,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
                   },
                 });
                 console.log(
-                  `🔕 [TasksService] Auto-disabled callback for session ${session.session_id.substring(0, 8)} (once mode)`
+                  `🔕 [TasksService] Auto-disabled callback for session ${shortId(session.session_id)} (once mode)`
                 );
               } catch (error) {
                 console.warn(`⚠️  [TasksService] Failed to auto-disable callback:`, error);
@@ -362,7 +360,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
                 archived_reason: 'btw_completed',
               });
               console.log(
-                `📦 [TasksService] Auto-archived btw fork session ${session.session_id.substring(0, 8)}`
+                `📦 [TasksService] Auto-archived btw fork session ${shortId(session.session_id)}`
               );
             } catch (error) {
               console.warn(`⚠️  [TasksService] Failed to auto-archive btw fork:`, error);
@@ -509,7 +507,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       });
 
       console.log(
-        `💬 [TasksService] Injected btw result message into parent session ${parentSessionId.substring(0, 8)} from btw fork ${btwSession.session_id.substring(0, 8)}`
+        `💬 [TasksService] Injected btw result message into parent session ${shortId(parentSessionId)} from btw fork ${shortId(btwSession.session_id)}`
       );
     } catch (error) {
       console.warn(`⚠️  [TasksService] Failed to inject btw result message:`, error);
@@ -544,7 +542,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
       if (!callbackEnabled) {
         console.log(
-          `⏭️  [TasksService] Callbacks disabled for child session ${childSession.session_id.substring(0, 8)}`
+          `⏭️  [TasksService] Callbacks disabled for child session ${shortId(childSession.session_id)}`
         );
         return;
       }
@@ -617,12 +615,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
       // Build callback context
       const context: ChildCompletionContext = {
-        childSessionId: childSession.session_id.substring(0, 8),
+        childSessionId: shortId(childSession.session_id),
         childSessionFullId: childSession.session_id,
-        childTaskId: task.task_id.substring(0, 8),
+        childTaskId: shortId(task.task_id),
         childTaskFullId: task.task_id,
-        parentSessionId: targetSessionId.substring(0, 8), // backward compat
-        callbackSessionId: targetSessionId.substring(0, 8),
+        parentSessionId: shortId(targetSessionId), // backward compat
+        callbackSessionId: shortId(targetSessionId),
         spawnPrompt,
         status: task.status, // COMPLETED, FAILED, etc.
         completedAt: task.completed_at || new Date().toISOString(),
@@ -642,7 +640,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // Validate target session has a creator for authentication
       if (!targetSession.created_by) {
         console.warn(
-          `⚠️  [TasksService] Cannot queue callback: target session ${targetSessionId.substring(0, 8)} has no creator (anonymous session)`
+          `⚠️  [TasksService] Cannot queue callback: target session ${shortId(targetSessionId)} has no creator (anonymous session)`
         );
         return;
       }
@@ -676,7 +674,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       this.emit?.('queued', callbackTask);
 
       console.log(
-        `🔔 Queued callback task ${callbackTask.task_id.substring(0, 8)} on session ${targetSessionId.substring(0, 8)} from child ${childSession.session_id.substring(0, 8)}`
+        `🔔 Queued callback task ${shortId(callbackTask.task_id)} on session ${shortId(targetSessionId)} from child ${shortId(childSession.session_id)}`
       );
 
       // NOTE: Queue processing is handled automatically via task completion hook.

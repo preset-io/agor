@@ -1,4 +1,5 @@
 import type { SessionStatus, TaskStatus } from '@agor-live/client';
+import { shortId } from '@agor-live/client';
 // TODO: Move normalization to DB or daemon API
 import {
   ApartmentOutlined,
@@ -604,7 +605,7 @@ const SessionIdPopoverContent: React.FC<{
         >
           <div style={{ flex: 1, fontFamily: token.fontFamilyCode, fontSize: '0.9em' }}>
             <div style={{ color: token.colorTextSecondary, fontSize: '0.85em', marginBottom: 2 }}>
-              {sessionId.substring(0, 8)}
+              {shortId(sessionId)}
             </div>
             <div style={{ wordBreak: 'break-all', fontSize: '0.75em', opacity: 0.7 }}>
               {sessionId}
@@ -640,7 +641,7 @@ const SessionIdPopoverContent: React.FC<{
           >
             <div style={{ flex: 1, fontFamily: token.fontFamilyCode, fontSize: '0.9em' }}>
               <div style={{ color: token.colorTextSecondary, fontSize: '0.85em', marginBottom: 2 }}>
-                {sdkSessionId.substring(0, 8)}
+                {shortId(sdkSessionId)}
               </div>
               <div style={{ wordBreak: 'break-all', fontSize: '0.75em', opacity: 0.7 }}>
                 {sdkSessionId}
@@ -672,7 +673,7 @@ export const SessionIdPill: React.FC<SessionIdPillProps> = ({
   const { token } = theme.useToken();
   // Prefer SDK session ID (more useful for CLI/logs) over Agor internal ID
   const displayId = sdkSessionId || sessionId;
-  const shortId = displayId.substring(0, 8);
+  const idShort = shortId(displayId);
 
   const pill = (
     <Tag
@@ -680,7 +681,7 @@ export const SessionIdPill: React.FC<SessionIdPillProps> = ({
       color={PILL_COLORS.session}
       style={{ cursor: showCopy ? 'pointer' : 'default', ...style }}
     >
-      <span style={{ fontFamily: token.fontFamilyCode }}>{shortId}</span>
+      <span style={{ fontFamily: token.fontFamilyCode }}>{idShort}</span>
     </Tag>
   );
 
@@ -784,7 +785,7 @@ export const ForkPill: React.FC<ForkPillProps> = ({
     <Tooltip
       title={
         <div>
-          <div>Forked from session {fromSessionId.substring(0, 8)}</div>
+          <div>Forked from session {shortId(fromSessionId)}</div>
           {messageIndex !== undefined && <div>Message index: {messageIndex}</div>}
           <div style={{ marginTop: 4, fontSize: '0.9em', opacity: 0.8 }}>
             Click to copy session ID
@@ -798,7 +799,7 @@ export const ForkPill: React.FC<ForkPillProps> = ({
         style={{ ...style, cursor: 'pointer' }}
         onClick={handleCopySessionId}
       >
-        FORKED from {fromSessionId.substring(0, 8)}
+        FORKED from {shortId(fromSessionId)}
         {messageIndex !== undefined && ` as of message ${messageIndex}`}
       </Tag>
     </Tooltip>
@@ -826,7 +827,7 @@ export const SpawnPill: React.FC<SpawnPillProps> = ({
     <Tooltip
       title={
         <div>
-          <div>Spawned from session {fromSessionId.substring(0, 8)}</div>
+          <div>Spawned from session {shortId(fromSessionId)}</div>
           {messageIndex !== undefined && <div>Message index: {messageIndex}</div>}
           <div style={{ marginTop: 4, fontSize: '0.9em', opacity: 0.8 }}>
             Click to copy session ID
@@ -840,7 +841,7 @@ export const SpawnPill: React.FC<SpawnPillProps> = ({
         style={{ ...style, cursor: 'pointer' }}
         onClick={handleCopySessionId}
       >
-        SPAWNED from {fromSessionId.substring(0, 8)}
+        SPAWNED from {shortId(fromSessionId)}
         {messageIndex !== undefined && ` as of message ${messageIndex}`}
       </Tag>
     </Tooltip>
@@ -853,6 +854,7 @@ interface ReportPillProps extends BasePillProps {
 
 export const ReportPill: React.FC<ReportPillProps> = ({ reportId, style }) => (
   <Tag icon={<FileTextOutlined />} color={PILL_COLORS.report} style={style}>
+    {/* shortid-guard:ignore reportId is a `<session>/<task>.md` file path, not a UUIDv7 */}
     {reportId ? `Report ${reportId.substring(0, 7)}` : 'Has Report'}
   </Tag>
 );

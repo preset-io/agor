@@ -14,7 +14,7 @@
  * - ⏳ Session import (future: when OpenCode provides export API)
  */
 
-import { generateId } from '@agor/core';
+import { generateId, shortId } from '@agor/core';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import type { Part as OpenCodePart } from '@opencode-ai/sdk';
@@ -198,8 +198,8 @@ export class OpenCodeTool implements ITool {
   ): Promise<void> {
     if (mcpToken) {
       // Use session-specific MCP name to avoid conflicts with stale entries
-      const shortId = sessionId.substring(0, 8);
-      const mcpName = `agor_${shortId}`;
+      const sessionShort = shortId(sessionId);
+      const mcpName = `agor_${sessionShort}`;
 
       try {
         const daemonUrl = await getDaemonUrl();

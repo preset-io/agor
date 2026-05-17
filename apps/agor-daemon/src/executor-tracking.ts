@@ -1,3 +1,5 @@
+import { shortId } from '@agor/core/db';
+
 /**
  * Executor PID Tracking
  *
@@ -45,7 +47,7 @@ export function killExecutorProcess(sessionId: string): boolean {
   }
 
   console.log(
-    `🛑 [Stop] Sending SIGTERM to executor PID ${proc.pid} (session ${sessionId.substring(0, 8)})`
+    `🛑 [Stop] Sending SIGTERM to executor PID ${proc.pid} (session ${shortId(sessionId)})`
   );
   try {
     process.kill(proc.pid, 'SIGTERM');

@@ -4,7 +4,7 @@
  * Displays comprehensive information about a specific worktree.
  */
 
-import { formatShortId } from '@agor-live/client';
+import { shortId } from '@agor-live/client';
 import { Args } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
@@ -62,7 +62,7 @@ export default class WorktreeShow extends BaseCommand {
 
       // Identity
       this.log(chalk.bold('Identity:'));
-      this.log(`  ID:           ${chalk.dim(formatShortId(worktree.worktree_id))}`);
+      this.log(`  ID:           ${chalk.dim(shortId(worktree.worktree_id))}`);
       this.log(`  Name:         ${chalk.cyan(worktree.name)}`);
       this.log(`  Unique ID:    ${chalk.dim(worktree.worktree_unique_id)}`);
       this.log('');
@@ -94,7 +94,7 @@ export default class WorktreeShow extends BaseCommand {
         this.log(`  Notes:        ${worktree.notes}`);
       }
       if (worktree.board_id) {
-        this.log(`  Board:        ${chalk.dim(formatShortId(worktree.board_id))}`);
+        this.log(`  Board:        ${chalk.dim(shortId(worktree.board_id))}`);
       }
       this.log('');
 
@@ -109,7 +109,7 @@ export default class WorktreeShow extends BaseCommand {
         if (allSessions.length > 0) {
           this.log(`  ${chalk.cyan(allSessions.length.toString())} session(s)`);
           for (const session of allSessions.slice(0, 5)) {
-            this.log(`    ${chalk.dim(formatShortId(session.session_id))}`);
+            this.log(`    ${chalk.dim(shortId(session.session_id))}`);
           }
           if (allSessions.length > 5) {
             this.log(`    ${chalk.dim(`... and ${allSessions.length - 5} more`)}`);

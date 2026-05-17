@@ -1,4 +1,5 @@
 import type { Session } from '@agor-live/client';
+import { shortId } from '@agor-live/client';
 import { PhoneOutlined } from '@ant-design/icons';
 import { Badge, Button, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
@@ -37,7 +38,7 @@ export const CallbackToggleButton: React.FC<CallbackToggleButtonProps> = ({ sess
   const target = sessionById.get(targetId);
   const targetTitle = target
     ? getSessionDisplayTitle(target, { includeAgentFallback: true, includeIdFallback: true })
-    : `${targetId.substring(0, 8)}`;
+    : `${shortId(targetId)}`;
 
   const statusBadge = (() => {
     if (!target) return null;

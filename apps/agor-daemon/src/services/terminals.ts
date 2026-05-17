@@ -30,8 +30,8 @@ import {
 } from '@agor/core/config';
 import {
   type Database,
-  formatShortId,
   SessionRepository,
+  shortId,
   UsersRepository,
   WorktreeRepository,
 } from '@agor/core/db';
@@ -115,7 +115,7 @@ function writeEnvFile(
 
   try {
     const tmpDir = os.tmpdir();
-    const envFile = path.join(tmpDir, `agor-env-${userId.substring(0, 8)}.sh`);
+    const envFile = path.join(tmpDir, `agor-env-${shortId(userId)}.sh`);
 
     // Build shell script to export env vars
     const exportLines = Object.entries(env)
@@ -417,7 +417,7 @@ export class TerminalsService {
       const tabName =
         session.cli_state?.zellij_tab_name ??
         spawnCfg.displayName ??
-        `cli-${session.session_id.slice(0, 8)}`;
+        `cli-${shortId(session.session_id)}`;
       return {
         tabName,
         cwd: worktree.path,
@@ -497,12 +497,12 @@ export class TerminalsService {
     // Detect any running `zellij attach agor-<sessionName>` and adopt
     // it into the Map so subsequent dispatch reuses the existing
     // executor instead of fork-bombing.
-    const expectedSessionName = `agor-${formatShortId(userId)}`;
+    const expectedSessionName = `agor-${shortId(userId)}`;
     if (!this.executorTerminals.get(userId)) {
       const adopted = await this.detectExistingExecutor(expectedSessionName);
       if (adopted) {
         console.log(
-          `[TerminalsService] adopting existing zellij executor for user ${userId.slice(0, 8)} (sessionName=${expectedSessionName})`
+          `[TerminalsService] adopting existing zellij executor for user ${shortId(userId)} (sessionName=${expectedSessionName})`
         );
         this.executorTerminals.set(userId, {
           sessionName: expectedSessionName,
@@ -664,7 +664,7 @@ export class TerminalsService {
     }
 
     // Build Zellij session name
-    const userSessionSuffix = formatShortId(userId);
+    const userSessionSuffix = shortId(userId);
     const sessionName = `agor-${userSessionSuffix}`;
 
     // Generate session token for executor
@@ -701,7 +701,7 @@ export class TerminalsService {
         },
       },
       {
-        logPrefix: `[TerminalsService.executor ${userId.slice(0, 8)}]`,
+        logPrefix: `[TerminalsService.executor ${shortId(userId)}]`,
         asUser: finalUnixUser || undefined,
         env: executorEnv,
         // Clean up map when executor exits (handles crashes too)
@@ -811,6 +811,6 @@ export class TerminalsService {
    */
   handleExecutorExit(userId: UserID): void {
     this.executorTerminals.delete(userId);
-    console.log(`[TerminalsService] Executor terminal exited for user ${userId.slice(0, 8)}`);
+    console.log(`[TerminalsService] Executor terminal exited for user ${shortId(userId)}`);
   }
 }

@@ -15,6 +15,8 @@
  * `/sessions/:id/prompt`, closing the cross-route race that a per-task
  * lock would miss.
  */
+
+import { shortId } from '@agor/core/db';
 import { Conflict, NotFound } from '@agor/core/feathers';
 import type { MessageSource, Params, PermissionMode, Task } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
@@ -63,7 +65,7 @@ export async function runExistingTask(
   }
   if (fresh.status !== TaskStatus.CREATED) {
     throw new Conflict(
-      `Task ${task.task_id.substring(0, 8)} cannot be run: status is '${fresh.status}' ` +
+      `Task ${shortId(task.task_id)} cannot be run: status is '${fresh.status}' ` +
         `(only 'created' tasks may be triggered; the task may have been started by ` +
         `another caller or drained from the queue).`
     );

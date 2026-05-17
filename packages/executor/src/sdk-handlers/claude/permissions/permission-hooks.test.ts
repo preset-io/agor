@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@agor/core', () => ({
   generateId: vi.fn(() => 'test-generated-id'),
+  // shortId is used in log lines inside permission-hooks; a passthrough
+  // mock keeps test output legible without depending on real ID shape.
+  shortId: vi.fn((id: string) => id),
 }));
 
 import { createCanUseToolCallback } from './permission-hooks.js';

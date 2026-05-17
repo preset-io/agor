@@ -12,9 +12,7 @@ import type {
   MCPServerID,
   UpdateMCPServerInput,
   UserID,
-  UUID,
 } from '@agor/core/types';
-import { prefixToLikePattern } from '@agor/core/types';
 import { and, eq, like } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -24,7 +22,9 @@ import {
   AmbiguousIdError,
   type BaseRepository,
   EntityNotFoundError,
+  RESOLVE_SHORT_ID_FETCH_LIMIT,
   RepositoryError,
+  resolveByShortIdPrefix,
 } from './base';
 
 /**
@@ -118,35 +118,17 @@ export class MCPServerRepository
   }
 
   /**
-   * Resolve short ID to full ID
+   * Resolve short ID to full ID via the centralized helper.
    */
   private async resolveId(id: string): Promise<string> {
-    // If already a full UUID, return as-is
-    if (id.length === 36 && id.includes('-')) {
-      return id;
-    }
-
-    // Short ID - need to resolve
-    const pattern = prefixToLikePattern(id);
-
-    const results = await select(this.db)
-      .from(mcpServers)
-      .where(like(mcpServers.mcp_server_id, pattern))
-      .all();
-
-    if (results.length === 0) {
-      throw new EntityNotFoundError('MCPServer', id);
-    }
-
-    if (results.length > 1) {
-      throw new AmbiguousIdError(
-        'MCPServer',
-        id,
-        results.map((r: { mcp_server_id: string }) => r.mcp_server_id)
-      );
-    }
-
-    return results[0].mcp_server_id as UUID;
+    return resolveByShortIdPrefix(id, 'MCPServer', async (pattern) => {
+      const rows = await select(this.db)
+        .from(mcpServers)
+        .where(like(mcpServers.mcp_server_id, pattern))
+        .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
+        .all();
+      return rows.map((r: { mcp_server_id: string }) => r.mcp_server_id);
+    });
   }
 
   /**

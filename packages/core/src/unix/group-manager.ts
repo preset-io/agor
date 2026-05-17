@@ -11,8 +11,23 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import { formatShortId } from '../lib/ids.js';
+import { toShortId } from '../lib/ids.js';
 import type { RepoID, UUID, WorktreeID } from '../types/index.js';
+
+/**
+ * Unix group/user names are intentionally NOT the canonical `SHORT_ID_LENGTH`
+ * (20 chars) used for display IDs. They:
+ * - are persisted system-wide in `/etc/group` and `/etc/passwd`,
+ * - are parsed by fixed-length regexes here and in `user-manager.ts`,
+ * - are referenced by the `unix_group` column on every worktree/repo row,
+ * - are created once per worktree/repo lifecycle (not a hot path),
+ * - fail loudly on collision (`groupadd` errors if the name exists).
+ *
+ * Bumping the length would require migrating every existing installation
+ * (old groups would not match the new regex), and provides no win for a
+ * non-display, rare-creation, failure-loud identifier. So 8 chars stays.
+ */
+const UNIX_NAME_SHORT_ID_LENGTH = 8;
 
 /**
  * Generate Unix group name for a worktree
@@ -24,8 +39,7 @@ import type { RepoID, UUID, WorktreeID } from '../types/index.js';
  * @returns Unix group name (e.g., 'agor_wt_03b62447')
  */
 export function generateWorktreeGroupName(worktreeId: WorktreeID): string {
-  const shortId = formatShortId(worktreeId as UUID);
-  return `agor_wt_${shortId}`;
+  return `agor_wt_${toShortId(worktreeId as UUID, UNIX_NAME_SHORT_ID_LENGTH)}`;
 }
 
 /**
@@ -68,8 +82,7 @@ export function isValidWorktreeGroupName(groupName: string): boolean {
  * @returns Unix group name (e.g., 'agor_rp_03b62447')
  */
 export function generateRepoGroupName(repoId: RepoID): string {
-  const shortId = formatShortId(repoId as UUID);
-  return `agor_rp_${shortId}`;
+  return `agor_rp_${toShortId(repoId as UUID, UNIX_NAME_SHORT_ID_LENGTH)}`;
 }
 
 /**

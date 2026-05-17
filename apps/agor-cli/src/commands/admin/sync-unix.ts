@@ -33,6 +33,7 @@ import {
   inArray,
   repos,
   select,
+  shortId,
   update,
   users,
   worktreeOwners,
@@ -321,7 +322,7 @@ export default class SyncUnix extends Command {
         }
         targetRepoId = (targetWts[0] as { repo_id: string }).repo_id as RepoID;
         this.log(
-          chalk.cyan(`   Parent repo: ${targetRepoId.substring(0, 8)} (also scoped to this repo)\n`)
+          chalk.cyan(`   Parent repo: ${shortId(targetRepoId)} (also scoped to this repo)\n`)
         );
       }
 
@@ -393,7 +394,7 @@ export default class SyncUnix extends Command {
           const pathUsable = repoPath ? existsSync(repoPath) : false;
 
           this.log(chalk.bold(`📁 ${rawRepo.slug}`));
-          this.log(chalk.gray(`   repo_id: ${rawRepo.repo_id.substring(0, 8)}`));
+          this.log(chalk.gray(`   repo_id: ${shortId(rawRepo.repo_id)}`));
           this.log(
             chalk.gray(`   unix_group: ${expectedGroup}${dbNeedsBackfill ? ' (to backfill)' : ''}`)
           );
@@ -585,7 +586,7 @@ export default class SyncUnix extends Command {
 
           this.log(chalk.bold(`📋 ${user.email}`));
           this.log(chalk.gray(`   unix_username: ${user.unix_username}`));
-          this.log(chalk.gray(`   user_id: ${user.user_id.substring(0, 8)}`));
+          this.log(chalk.gray(`   user_id: ${shortId(user.user_id)}`));
 
           // Check if Unix user exists
           result.unixUserExists = unixUserExists(user.unix_username);
@@ -721,7 +722,7 @@ export default class SyncUnix extends Command {
               if (verbose) {
                 this.log(
                   chalk.gray(
-                    `   Repo ${wt.repo_id.substring(0, 8)} → group ${repoGroup} ` +
+                    `   Repo ${shortId(wt.repo_id)} → group ${repoGroup} ` +
                       `(exists: ${repoGroupExistsOnSystem ? 'yes' : 'no'}, member: ${isInRepoGroup ? 'yes' : 'no'})`
                   )
                 );
@@ -847,7 +848,7 @@ export default class SyncUnix extends Command {
           }
 
           this.log(chalk.bold(`📁 ${rawWt.name}`));
-          this.log(chalk.gray(`   worktree_id: ${rawWt.worktree_id.substring(0, 8)}`));
+          this.log(chalk.gray(`   worktree_id: ${shortId(rawWt.worktree_id)}`));
           this.log(
             chalk.gray(`   unix_group: ${expectedGroup}${dbNeedsBackfill ? ' (to backfill)' : ''}`)
           );
@@ -1047,7 +1048,7 @@ export default class SyncUnix extends Command {
             const baseRef = rawWorktree.data?.base_ref || repoInfo.defaultBranch;
 
             this.log(chalk.bold(`🔧 ${rawWorktree.name}`));
-            this.log(chalk.gray(`   worktree_id: ${rawWorktree.worktree_id.substring(0, 8)}`));
+            this.log(chalk.gray(`   worktree_id: ${shortId(rawWorktree.worktree_id)}`));
             this.log(chalk.gray(`   status: failed → attempting restore`));
             this.log(chalk.gray(`   ref: ${rawWorktree.ref}, base: ${baseRef}`));
             this.log(chalk.gray(`   path: ${worktreePath}`));
@@ -1089,7 +1090,7 @@ export default class SyncUnix extends Command {
           }
 
           this.log(chalk.bold(`📁 ${rawWorktree.name}`));
-          this.log(chalk.gray(`   worktree_id: ${rawWorktree.worktree_id.substring(0, 8)}`));
+          this.log(chalk.gray(`   worktree_id: ${shortId(rawWorktree.worktree_id)}`));
           this.log(chalk.gray(`   unix_group: ${rawWorktree.unix_group}`));
           this.log(chalk.gray(`   path: ${worktreePath}`));
           if (rawWorktree.archived) {

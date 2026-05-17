@@ -8,7 +8,7 @@ import type { Session, UUID } from '@agor/core/types';
 import { prefixToLikePattern, SessionStatus, WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
 import { and, desc, eq, inArray, isNotNull, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
-import { generateId } from '../../lib/ids';
+import { generateId, shortId } from '../../lib/ids';
 import { getSessionUrl } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
@@ -489,7 +489,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       const statusInfo = updates.status
         ? ` (status: ${updates.status}, ready_for_prompt: ${updates.ready_for_prompt})`
         : '';
-      console.debug(`🔄 [SessionRepo] Updating session ${fullId.substring(0, 8)}${statusInfo}`);
+      console.debug(`🔄 [SessionRepo] Updating session ${shortId(fullId)}${statusInfo}`);
 
       // Use transaction to make read-merge-write atomic
       // This prevents race conditions where another update happens between read and write
