@@ -392,6 +392,42 @@ export function OnboardingWizard({
       return;
     }
 
+    // Resource-ownership validation. The resume-step decisions below jump the
+    // wizard past the api-keys / board / repo creation steps based on IDs
+    // stored in user.preferences. If those IDs ever point at resources NOT
+    // created by the current user — whether through a leak, a stale prefs
+    // copy, or an admin viewing a shared resource — the wizard would
+    // wrongly skip steps for a user who hasn't actually completed them.
+    // Only treat the resume IDs as valid when (a) the resource is loaded
+    // AND (b) the current user is its creator. Anything that fails this
+    // check is treated as if the preference were unset; the fallback chain
+    // then routes the user to the right step (typically api-keys).
+    const validWorktreeId =
+      onboarding.worktreeId && worktreeById.get(onboarding.worktreeId)?.created_by === user.user_id
+        ? onboarding.worktreeId
+        : undefined;
+    const validBoardId =
+      mainBoardId && boardById.get(mainBoardId)?.created_by === user.user_id
+        ? mainBoardId
+        : undefined;
+    // Repos are shared resources (no created_by attribution). The repoId
+    // existing in the map is the only signal we have, which is fine — the
+    // damaging skips are board/worktree, not repo.
+    const validRepoId =
+      onboarding.repoId && repoById.has(onboarding.repoId) ? onboarding.repoId : undefined;
+
+    if (
+      onboarding.worktreeId !== validWorktreeId ||
+      mainBoardId !== validBoardId ||
+      onboarding.repoId !== validRepoId
+    ) {
+      console.warn('[OnboardingWizard] Dropping resume references not owned by current user', {
+        user_id: user.user_id,
+        claimed: { worktreeId: onboarding.worktreeId, mainBoardId, repoId: onboarding.repoId },
+        valid: { worktreeId: validWorktreeId, boardId: validBoardId, repoId: validRepoId },
+      });
+    }
+
     // We have prior onboarding state — resume from where user left off
     resumedRef.current = true;
     // Map legacy 'persisted-agent' to 'assistant'
@@ -399,33 +435,31 @@ export function OnboardingWizard({
       onboarding.path === 'persisted-agent' ? 'assistant' : (onboarding.path as WizardPath);
     setPath(resumedPath);
 
-    // Restore created resource IDs
-    if (mainBoardId) {
-      setCreatedBoardId(mainBoardId);
-    } else if (onboarding.boardId) {
-      setCreatedBoardId(onboarding.boardId);
+    // Restore created resource IDs (only the validated ones)
+    if (validBoardId) {
+      setCreatedBoardId(validBoardId);
     }
 
     // Restore repoId so the worktree step doesn't fail "Missing repo or board"
     // on resume. The safety-net effect can re-derive it for the assistant path
     // (framework slug) but has no signal for an own-repo resume because
     // `repoUrl`/`localRepoPath` are local state and reset to ''.
-    if (onboarding.repoId && repoById.has(onboarding.repoId)) {
-      setCreatedRepoId(onboarding.repoId);
+    if (validRepoId) {
+      setCreatedRepoId(validRepoId);
     }
 
-    if (onboarding.worktreeId) {
-      setCreatedWorktreeId(onboarding.worktreeId);
+    if (validWorktreeId) {
+      setCreatedWorktreeId(validWorktreeId);
     }
 
     // Figure out which step to resume from
-    if (onboarding.worktreeId && worktreeById.has(onboarding.worktreeId)) {
-      // Worktree exists — go to launch (api-keys now comes before clone/add-repo)
+    if (validWorktreeId) {
+      // Worktree exists AND is owned by current user — go to launch
       setCurrentStep('launch');
-    } else if (mainBoardId && boardById.has(mainBoardId)) {
-      // Board exists — go to worktree creation
+    } else if (validBoardId) {
+      // Board exists AND is owned by current user — go to worktree creation
       setCurrentStep('worktree');
-    } else if (onboarding.repoId && repoById.has(onboarding.repoId)) {
+    } else if (validRepoId) {
       // Repo is registered (already restored above) — go straight to board
       setCurrentStep('board');
     } else if (resumedPath === 'assistant') {
@@ -809,9 +843,12 @@ export function OnboardingWizard({
   ]);
 
   const handleCreateBoard = useCallback(async () => {
-    // If we already have a board from a prior run, skip creation
+    // If we already have a board from a prior run, skip creation —
+    // but only if it's actually OWNED by the current user. A leaked
+    // mainBoardId pointing at someone else's board must not let us
+    // short-circuit the create step.
     const existingBoardId = user?.preferences?.mainBoardId;
-    if (existingBoardId && boardById.has(existingBoardId)) {
+    if (existingBoardId && user && boardById.get(existingBoardId)?.created_by === user.user_id) {
       setCreatedBoardId(existingBoardId);
       setLoading(false);
       setCurrentStep('worktree');
