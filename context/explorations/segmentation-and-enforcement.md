@@ -255,13 +255,27 @@ Three sub-problems, three independent answers:
 
 ---
 
+## 4.5. The executor command templating that already exists
+
+Worth surfacing because it materially changes how PRs E, H, and the Phase 3 work get framed: **the executor command templating is already built and shipped**, just dormant by default.
+
+- **Config field:** `execution.executor_command_template` (`packages/core/src/config/types.ts:340-387`). Optional string. When unset → local subprocess spawn. When set → daemon runs `sh -c <substituted_template>` and pipes the JSON payload to stdin.
+- **Template variables substituted at spawn time:** `{task_id}`, `{command}`, `{unix_user}`, `{unix_user_uid}`, `{unix_user_gid}`, `{session_id}`, `{worktree_id}`. Both kubectl and docker example templates are baked into the type docstring.
+- **Implementation:** `apps/agor-daemon/src/utils/spawn-executor.ts:387-455` (`spawnExecutorWithTemplate`). Uses `stdio: ['pipe', 'pipe', 'pipe']` in template mode (vs `['pipe', 'inherit', 'inherit']` local) so the daemon can capture stdout/stderr that kubectl pipes back.
+- **Backend extensibility:** any `sh`-invocable command works. SLURM, Nomad, AWS Batch, Lambda-style async backends all fit as long as they accept stdin and pipe stdout/stderr. The constraint is the I/O contract, not the orchestrator.
+- **What's NOT there yet:** the daemon doesn't *parse* executor stdout — it logs it. Today's 10 executor commands are fire-and-forget (write to DB via Feathers, exit). **PR H introduces the synchronous-RPC-over-stdout pattern** that subsequent `worktree.*.query` commands can reuse. The template path picks it up for free since it already captures stdout.
+
+This is the seam Phase 3 of [`daemon-fs-decoupling.md`](./daemon-fs-decoupling.md) was going to lean on; reassuring to confirm it's not vapor — it's the "abstraction is there, implementation is partial" line in §1.4 of that doc.
+
+---
+
 ## 5. Executor sandboxing — chroot-style, per-worktree
 
 Max's aspiration: each executor process sees exactly one worktree's filesystem, nothing else.
 
 ### 5.1 What we have today
 
-- **Impersonation** (`unix_user_mode: strict`): each executor runs as the session-creator's Unix user. `setfacl` ACLs gate worktree access by group membership. See [`address-issue-1140-impersonation-abstraction`](#) (in flight).
+- **Impersonation** (`unix_user_mode: strict`): each executor runs as the session-creator's Unix user. `setfacl` ACLs gate worktree access by group membership. See [`address-issue-1140-impersonation-abstraction`](#) (closed 2026-05-09 — the executor-as-impersonation-boundary work landed).
 - **Process-level isolation** docs in [`executor-isolation.md`](./executor-isolation.md).
 - **Docker option** (per [`containerized-execution.mdx`](../../apps/agor-docs/pages/guide/containerized-execution.mdx)): executor in a container with the worktree mounted.
 
@@ -368,6 +382,33 @@ The deliverable. Each PR is sized for one worktree, reviewable in one sitting (�
 
 ---
 
+### PR H — `refactor: move git ls-files autocomplete to executor (always)`
+
+- **Scope:** Replace the daemon-side `git ls-files` call in `apps/agor-daemon/src/services/files.ts:73-84` with an executor RPC. Adds a new executor command `worktree.files.list` (payload: `{ worktreeId, pattern?, limit? }`; result: `{ files: string[] }`). Daemon spawns executor, writes payload to stdin, **awaits a single JSON result line on stdout**, parses it, returns to caller. No caching — executor spawn cost (~200–500ms local, 5–15s k8s cold-start) is the wall. Autocomplete latency is acceptable at that level for a low-hit-rate feature; warm executor pools (Phase 3) eventually solve k8s.
+- **New pattern introduced — flag explicitly:** Today's 10 executor commands are fire-and-forget (write to DB via Feathers, exit). This is the **first synchronous-RPC-over-stdout** executor command. Establishes the contract: a `worktree.*.query` family that returns its result as the final stdout line in a stable JSON shape, daemon awaits exit code and parses. ~30 lines added to `spawn-executor.ts`, but worth its own design call-out in the PR description since future "daemon needs to peek at worktree FS" needs will reuse it (`worktree.files.read`, `worktree.git.status`, etc.).
+- **Side effect:** One of the 5 daemon-side `@agor/core/git` (simple-git) call sites goes away. Doesn't drop simple-git anywhere yet — but it's the start of `@agor/core/git` becoming executor-only.
+- **Files:** `apps/agor-daemon/src/services/files.ts`, `apps/agor-daemon/src/utils/spawn-executor.ts` (add a `spawnExecutorWithStdoutResult` variant — or generalize the template path to read a result line), `packages/executor/src/commands/worktree-files-list.ts` (new), `packages/executor/src/payload-types.ts` (new payload + result types)
+- **Effort:** ~1 eng-week (the new RPC pattern is the meaningful work; the actual `git ls-files` invocation is one simple-git call)
+- **Risk:** Medium — introduces a new executor I/O contract. Strong tests for both stdout parsing and the local + template spawn paths.
+- **Depends on:** Nothing (parallel to A–G). Recommended to ship before PR F (`@agor/types` extraction), otherwise the new payload types get migrated twice.
+- **Hard rules:** Stdout result line must be the **last** non-empty line, prefixed with a stable marker (e.g. `__AGOR_RESULT__:<json>`) so interspersed log lines don't confuse the parser. Must work identically under local subprocess spawn AND under `executor_command_template` (kubectl pipes stdout back the same way — see `spawn-executor.ts:387-455` for the existing template path). Don't cache. Don't introduce a Feathers callback path — keep it stdin → exec → stdout-result, no daemon-side polling.
+- **Success criteria:** Daemon `services/files.ts` makes zero `simple-git` calls. File autocomplete works in both local and (with a configured `executor_command_template`) k8s modes. The stdout result protocol is documented in a one-page note that subsequent `worktree.*.query` PRs can cite.
+- **Sets up:** Companion PRs for the remaining 4 daemon-side simple-git sites (`utils/realign-repo-origin.ts`, `services/users.ts`, `services/repos.ts`, `index.ts`), each using the same stdout-RPC pattern. After all 5: relocate pure helpers (`buildGitConfigParameters`, `isLikelyGitToken`, `ensureGitRemoteUrl`) out of `@agor/core/git` to a neutral subpath, and `@agor/core/git` becomes executor-only — lint-enforceable.
+
+### PR I — `infra: split-home Docker compose (runtime enforcement of daemon ⊥ worktree FS)`
+
+- **Scope:** A new `docker/docker-compose.split.yml` (and matching CI job) that runs daemon and executor as **two different Unix users** with **two different home directory mounts**, using the existing `paths.data_home` config (`packages/core/src/config/config-manager.ts:847-945` — already supports this) plus the existing `execution.executor_unix_user` knob. Daemon runs as `agor`, owns `~/.agor/` (config.yaml, agor.db, admin-credentials, sentinel). Executor runs as `agor_executor`, owns `/var/lib/agor-data/{repos,worktrees}/`. Filesystem permissions (0700 on the data home) prevent daemon from even `stat`'ing worktree paths. CI runs the existing test suite against this compose — **every today-daemon-touches-worktree-FS path surfaces as a real failing test**, not a lint warning.
+- **Why this matters:** Lint catches new violations as code is added. Runtime enforcement catches today's drift. They're complementary — lint prevents future regressions; this compose proves today's state. It also gives operators a documented "strict mode" deployment shape (`unix_user_mode: insulated` + split data home) that's already half-built in config.
+- **What you expect to see fail initially:** Per §1.1 of `daemon-fs-decoupling.md`, ~7 of the 13 daemon-FS-touching files touch worktree paths. Under split-home they'll EACCES: artifact landing, upload write, autocomplete (until PR H lands), worktree existsSync probes, realign-repo-origin, env-file write, env-process spawn. **Each failure is a forcing function for the corresponding Phase 1B PR.** Mark expected failures explicitly in the PR description — turning known-drift into known-test-failures is the win, not pretending it'll all pass.
+- **Files:** `docker/docker-compose.split.yml` (new), `docker/Dockerfile.split` or extension of existing, CI workflow YAML, a short `apps/agor-docs/pages/guide/split-home-deployment.mdx` for operators
+- **Effort:** ~1 eng-week (compose is small; meaningful work is triaging which test failures are "expected — see Phase 1B PR X" vs. "unexpected — needs investigation")
+- **Risk:** Medium — surfaces lots of red CI initially. Mitigated by clearly labelling expected failures with their Phase 1B owner PR.
+- **Depends on:** Nothing (parallel to A–H). High signal value if it lands EARLY; each subsequent Phase 1B PR can flip a known-failing test to passing.
+- **Hard rules:** Use the existing `paths.data_home` and `executor_unix_user` config — do NOT introduce new config knobs. The mode is already half-built. Do not modify the daemon's behavior to "tolerate EACCES gracefully" — let it fail. The failures are the deliverable.
+- **Success criteria:** Compose runs. Known-drift files fail with EACCES (cataloged in PR description, tied to their cleanup PR). Non-drift files pass. CI exposes a "split-home" job that subsequent PRs can watch turn green incrementally.
+
+---
+
 ### Recommended sequence
 
 Two parallel streams:
@@ -376,7 +417,7 @@ Two parallel streams:
 - PR A (lint warn) → PR B (relocate IDs) → PR C (lint error)
 
 **Stream 2 — Topology debt (heavier, ongoing):**
-- PR E (artifact via executor) → next Phase 1B PRs (upload via executor, realign-origin via executor, file-ls via executor) → eventually Phase 2 (`EnvironmentRuntime` interface)
+- PR E (artifact via executor) → PR H (git ls-files via executor — introduces the sync-RPC-over-stdout pattern) → next Phase 1B PRs (upload via executor, realign-origin via executor, etc., reusing PR H's pattern) → eventually Phase 2 (`EnvironmentRuntime` interface)
 
 **Stream 3 — HA framing (low-cost, high-information):**
 - PR D (spike plan) → run the spike → write up findings → decide
@@ -384,7 +425,10 @@ Two parallel streams:
 **Stream 4 — The mechanical fence (long-term):**
 - PR F (extract `@agor/types`) → PR G (drop `@agor/core` from executor)
 
-Stream 1 should ship first because (a) it's cheap, (b) it gates drift while Streams 2 and 4 are in flight, and (c) it surfaces real violations that Streams 2 and 4 will need to know about.
+**Stream 5 — Runtime enforcement (high-signal, parallel to all of the above):**
+- PR I (split-home Docker compose) — surfaces today's drift as failing CI; each Phase 1B PR flips failures green
+
+Stream 1 should ship first because (a) it's cheap, (b) it gates drift while Streams 2 and 4 are in flight, and (c) it surfaces real violations that Streams 2 and 4 will need to know about. **PR I should ship as early as possible alongside Stream 1** — it's the runtime counterpart to lint and provides the test signal for Stream 2's incremental wins.
 
 ---
 
@@ -395,7 +439,7 @@ These would shift the plan above if surprising:
 1. **How much of `@agor/core/sdk` is "types" vs. "code"?** The 12 executor imports from `@agor/core/sdk` need to be available somewhere when we extract `@agor/types`. If most are types, easy. If they include `claude-system-suppression` or other runtime code, the relocation has a bigger surface.
 2. **Is there a build-time barrel-elimination strategy?** Today `import { x } from '@agor/core'` works because of `export * from './db/index.js'` in `packages/core/src/index.ts`. If we tightened the barrel (or added a Biome rule against bare `@agor/core` imports from the executor), would anything break? Worth a 1-hour spike.
 3. **What's the actual Phase 2 (`EnvironmentRuntime`) timeline?** PR D-G are all "prepare ground for Phase 2/3." If Phase 2 is 6 months out, do A/B/C/F first and let the enforcement layer accumulate signal. If Phase 2 starts in 4 weeks, push harder on E and the rest of Phase 1B sweep.
-4. **Are `address-issue-1140-impersonation-abstraction` and this worktree on the same page on `unix.sync-worktree` ownership?** That worktree is the executor-as-impersonation-boundary; it overlaps. Coordinate before either ships.
+4. **Did issue #1140 close out the executor-as-impersonation-boundary work cleanly?** Closed 2026-05-09. Worth a quick read of the merged PR(s) to confirm there are no remaining daemon-side impersonation paths that PR I would surface as failures and that we'd then mis-attribute to drift instead of "intentional but not migrated yet."
 
 ---
 
