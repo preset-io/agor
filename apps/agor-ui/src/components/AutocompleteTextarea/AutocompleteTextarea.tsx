@@ -741,6 +741,32 @@ export const AutocompleteTextarea = React.forwardRef<
       [onFilesDrop]
     );
 
+    const handlePaste = useCallback(
+      (e: React.ClipboardEvent) => {
+        if (!onFilesDrop) return;
+
+        const imageFiles: File[] = [];
+        for (const item of Array.from(e.clipboardData.items)) {
+          if (item.kind === 'file' && item.type.startsWith('image/')) {
+            const file = item.getAsFile();
+            if (file) {
+              const ext = item.type.split('/')[1] || 'png';
+              const niceName = `pasted-screenshot-${new Date()
+                .toISOString()
+                .replace(/[:.]/g, '-')}.${ext}`;
+              imageFiles.push(new File([file], niceName, { type: file.type }));
+            }
+          }
+        }
+
+        if (imageFiles.length === 0) return;
+
+        e.preventDefault();
+        onFilesDrop(imageFiles);
+      },
+      [onFilesDrop]
+    );
+
     /**
      * Render popover content
      */
@@ -917,6 +943,7 @@ export const AutocompleteTextarea = React.forwardRef<
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
+          onPaste={handlePaste}
         >
           {/* Drag-over overlay */}
           {isDragOver && (
