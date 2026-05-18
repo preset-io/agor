@@ -269,6 +269,26 @@ This is the seam Phase 3 of [`daemon-fs-decoupling.md`](./daemon-fs-decoupling.m
 
 ---
 
+## 4.6. Optional config knobs surfaced by this analysis
+
+Two configuration shapes worth introducing as OSS knobs, both giving self-hosted operators control over architectural choices the current code hardcodes:
+
+**`worktree_mode: worktree | clone | hybrid`** (deferred — POC informs first)
+- `worktree`: today's behavior. `git worktree add` against a bare repo. Optimal for disk + clone-time.
+- `clone`: independent `git clone --branch <branch>` per worktree. Stronger per-worktree isolation, portable backups, no bare-repo coupling. Costs disk + clone-time.
+- `hybrid`: clone with `--reference <cache>` against a local bare-repo cache. Best of both.
+- **Why deferred:** the practical complications around mounting two related directories (bare repo + worktree) with absolute-path `gitdir` linkage may make this nightmarish or trivial depending on the POC findings. Add this knob after we know.
+
+**`environment_mode: commands | webhooks`** (capturable as a follow-up PR)
+- `commands`: today's behavior. Long-lived child processes (vite/nodemon) for live watch.
+- `webhooks`: env processes don't exist as long-lived daemons. Commits trigger configured webhooks that produce preview URLs.
+- Matches the modern Vercel/Netlify/Render preview-deploy UX. Significantly simplifies the codebase by removing all `spawnEnvironmentCommand` machinery in that mode. Adds a webhook-receiver service + per-stack default handlers (Node/Python/etc).
+- This is OSS-public — many self-hosters would prefer it over inotify-watch.
+
+See PR J in §6.
+
+---
+
 ## 5. Executor sandboxing — chroot-style, per-worktree
 
 Max's aspiration: each executor process sees exactly one worktree's filesystem, nothing else.
@@ -407,6 +427,17 @@ The deliverable. Each PR is sized for one worktree, reviewable in one sitting (�
 - **Hard rules:** Use the existing `paths.data_home` and `executor_unix_user` config — do NOT introduce new config knobs. The mode is already half-built. Do not modify the daemon's behavior to "tolerate EACCES gracefully" — let it fail. The failures are the deliverable.
 - **Success criteria:** Compose runs. Known-drift files fail with EACCES (cataloged in PR description, tied to their cleanup PR). Non-drift files pass. CI exposes a "split-home" job that subsequent PRs can watch turn green incrementally.
 
+### PR J — `feat: environment_mode config (commands | webhooks)`
+
+- **Scope:** Add a top-level `environment_mode` config field (default: `commands` — today's behavior). When set to `webhooks`, the daemon does NOT spawn `spawnEnvironmentCommand` children for envs. Instead, the daemon exposes a webhook receiver (signed payload) that customers configure their build pipelines to call after each commit. The webhook payload includes worktree id + sha + status + preview URL; daemon stores it and surfaces it in the UI as "preview URL: <link>".
+- **Why OSS-public:** many self-hosters prefer preview-deploys to live-watch. Aligns with modern dev workflows. Doesn't depend on hosted topology decisions — works the same on a laptop, on a self-hosted VM, on any k8s deployment.
+- **Files:** `packages/core/src/config/types.ts` (new field), `apps/agor-daemon/src/services/environments.ts` (gate on mode), new `apps/agor-daemon/src/services/preview-webhook.ts` (receiver), `apps/agor-ui/src/components/EnvironmentPanel/` (render preview URL instead of watch logs in webhook mode)
+- **Effort:** ~2 eng-weeks (the receiver + signing is small; UI rework is the bulk)
+- **Risk:** Low — additive feature, default unchanged
+- **Depends on:** Nothing (parallel to all others)
+- **Hard rules:** Default MUST remain `commands` — no silent UX regression for existing users. Webhook payloads MUST be signed (HMAC with a per-deployment secret) to prevent spoofing. Per-stack default handlers (e.g. "post a Vercel-style deploy URL") should be documented but not bundled into the daemon.
+- **Success criteria:** Self-hosted users can switch to `webhooks` mode and get preview-URL-per-commit instead of live-watch. Existing `commands` mode unchanged.
+
 ---
 
 ### Recommended sequence
@@ -427,6 +458,10 @@ Two parallel streams:
 
 **Stream 5 — Runtime enforcement (high-signal, parallel to all of the above):**
 - PR I (split-home Docker compose) — surfaces today's drift as failing CI; each Phase 1B PR flips failures green
+
+**Stream 6 — Optional new modes (orthogonal):**
+- PR J (`environment_mode: commands | webhooks`) — additive feature; ships when there's appetite
+- (deferred) `worktree_mode: worktree | clone | hybrid` — adds after POC findings inform whether mounting bare-repo + worktree pair cleanly is a nightmare or trivial
 
 Stream 1 should ship first because (a) it's cheap, (b) it gates drift while Streams 2 and 4 are in flight, and (c) it surfaces real violations that Streams 2 and 4 will need to know about. **PR I should ship as early as possible alongside Stream 1** — it's the runtime counterpart to lint and provides the test signal for Stream 2's incremental wins.
 
