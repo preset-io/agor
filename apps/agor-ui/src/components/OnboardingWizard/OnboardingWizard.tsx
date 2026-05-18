@@ -69,11 +69,11 @@ const { useToken } = theme;
 
 const CLONE_TIMEOUT_MS = 120_000;
 
-const ASSISTANT_BOOT_PROMPT = `You are starting your first session as an Agor assistant.
-
-Read the framework files in this worktree. Then introduce yourself — show that you understand your role as a persistent, memory-aware assistant, not a generic chatbot. Keep your intro brief and warm.
-
-Context: this is a fresh Agor installation, assistant path, first session.`;
+// Minimal kickoff: context only, no role-instructions. The framework files
+// (BOOT.md and what it links to) own the "who you are / what to do" — putting
+// that in the prompt too just makes the agent perform an intro for the prompt
+// rather than internalize the framework.
+const ASSISTANT_BOOT_PROMPT = `Fresh Agor worktree, first session. Start with BOOT.md.`;
 
 // ─── Types ──────────────────────────────────────────────
 
