@@ -69,11 +69,16 @@ const { useToken } = theme;
 
 const CLONE_TIMEOUT_MS = 120_000;
 
-// Minimal kickoff: context only, no role-instructions. The framework files
-// (BOOT.md and what it links to) own the "who you are / what to do" — putting
-// that in the prompt too just makes the agent perform an intro for the prompt
-// rather than internalize the framework.
-const ASSISTANT_BOOT_PROMPT = `Fresh Agor worktree, first session. Start with BOOT.md.`;
+// Minimal kickoff: context only, no role-instructions. The framework owns
+// "who you are / what to do" — putting that in the prompt makes the agent
+// perform an intro for the prompt rather than internalize the framework.
+//
+// BOOTSTRAP.md is the dedicated first-run ritual in the agor-assistant
+// framework: explicit about "ship something useful fast, don't ceremonialize"
+// and self-deletes after. BOOT.md (every-session ritual) just redirects to
+// BOOTSTRAP.md on first run anyway — pointing there saves one indirection
+// and surfaces the first-run-specific tone-setting.
+const ASSISTANT_BOOT_PROMPT = `Fresh Agor worktree, first session. Start with BOOTSTRAP.md.`;
 
 // ─── Types ──────────────────────────────────────────────
 
