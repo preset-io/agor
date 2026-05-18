@@ -1,8 +1,8 @@
 # Daemon Filesystem Decoupling
 
-**Status:** 🔬 Exploration / design. **Phase 1A (config hygiene, §1.5) is shipping in this PR** (H1–H4). Phase 1B and Phases 2–4 are still position-paper. **H5 (CLI config separation) is split to a follow-up worktree** to keep Phase 1A focused and reviewable.
+**Status:** 🔬 Exploration / design. **Phase 1A (config hygiene, §1.5) shipped in PR #1209** (H1–H4). Phase 1B and Phases 2–4 are still position-paper. **H5 (CLI config separation) is split to a follow-up worktree** to keep Phase 1A focused and reviewable.
 **Created:** 2026-05-16
-**Companion exploration docs:** [`executor-expansion.md`](./executor-expansion.md), [`executor-isolation.md`](./executor-isolation.md), and the user-facing [`containerized-execution`](../../apps/agor-docs/pages/guide/containerized-execution.mdx) guide.
+**Companion exploration docs:** [`segmentation-and-enforcement.md`](./segmentation-and-enforcement.md) (follow-up — enforcement layer + concrete next-step PRs), [`executor-expansion.md`](./executor-expansion.md), [`executor-isolation.md`](./executor-isolation.md), and the user-facing [`containerized-execution`](../../apps/agor-docs/pages/guide/containerized-execution.mdx) guide.
 
 ---
 
