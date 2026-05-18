@@ -394,8 +394,8 @@ importers:
         specifier: ^9.1.10
         version: 9.1.16(@vitest/runner@4.1.5)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(storybook@9.1.20(@testing-library/dom@10.4.1)(prettier@3.8.3)(vite@8.0.10(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3)))(vitest@4.1.5)
       '@storybook/react':
-        specifier: ^9.1.10
-        version: 9.1.16(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(storybook@9.1.20(@testing-library/dom@10.4.1)(prettier@3.8.3)(vite@8.0.10(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3)))(typescript@5.9.3)
+        specifier: ^10.4.0
+        version: 10.4.0(@types/react-dom@18.3.7(@types/react@18.3.26))(@types/react@18.3.26)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(storybook@9.1.20(@testing-library/dom@10.4.1)(prettier@3.8.3)(vite@8.0.10(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3)))(typescript@5.9.3)
       '@storybook/react-vite':
         specifier: ^10.4.0
         version: 10.4.0(@types/react-dom@18.3.7(@types/react@18.3.26))(@types/react@18.3.26)(esbuild@0.25.12)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(rollup@4.60.1)(storybook@9.1.20(@testing-library/dom@10.4.1)(prettier@3.8.3)(vite@8.0.10(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3)))(typescript@5.9.3)(vite@8.0.10(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -4181,18 +4181,6 @@ packages:
       typescript:
         optional: true
 
-  '@storybook/react@9.1.16':
-    resolution: {integrity: sha512-M/SkHJJdtiGpodBJq9+DYmSkEOD+VqlPxKI+FvbHESTNs//1IgqFIjEWetd8quhd9oj/gvo4ICBAPu+UmD6M9w==}
-    engines: {node: '>=20.0.0'}
-    peerDependencies:
-      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0-beta
-      react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0-beta
-      storybook: '>=9.1.19 <10'
-      typescript: '>= 4.9.x'
-    peerDependenciesMeta:
-      typescript:
-        optional: true
-
   '@swc/helpers@0.5.15':
     resolution: {integrity: sha512-JQ5TuMi45Owi4/BIMAJBoSQoOJu12oOk/gADqlcUL9JEdHB8vyjUSsxqeNXnmXHjYKMi2WcYtezGEEhqUI/E2g==}
 
@@ -5004,8 +4992,8 @@ packages:
     resolution: {integrity: sha512-lGe34o6EHj9y3Kts9R4ZYs/Gr+6N7MCaMlIFA3F1R2O5/m7K06AxfSeO5530PEERE6/WyEg3lsuyw4GHlPZHog==}
     engines: {node: ^4.5.0 || >= 5.9}
 
-  baseline-browser-mapping@2.10.29:
-    resolution: {integrity: sha512-Asa2krT+XTPZINCS+2QcyS8WTkObE77RwkydwF7h6DmnKqbvlalz93m/dnphUyCa6SWSP51VgtEUf2FN+gelFQ==}
+  baseline-browser-mapping@2.10.30:
+    resolution: {integrity: sha512-xjOFN16Ha1+Rz4nFYKqHU/LSB+gx/Vi3yQLX7r7sAW+Wa+8hhF2h4pvqTrTMc8+WcDBEunnUurr46Jvv0jk3Vg==}
     engines: {node: '>=6.0.0'}
     hasBin: true
 
@@ -5130,6 +5118,9 @@ packages:
 
   caniuse-lite@1.0.30001792:
     resolution: {integrity: sha512-hVLMUZFgR4JJ6ACt1uEESvQN1/dBVqPAKY0hgrV70eN3391K6juAfTjKZLKvOMsx8PxA7gsY1/tLMMTcfFLLpw==}
+
+  caniuse-lite@1.0.30001793:
+    resolution: {integrity: sha512-iwSsYWaCOoh26cV8NwNRViHlrfUvYsHDfRVcbtmw0Kg6PJIZZXwMkj1442FYLBGkeUf1juAsU3DTfxW579mrPA==}
 
   capital-case@1.0.4:
     resolution: {integrity: sha512-ds37W8CytHgwnhGGTi88pcPyR15qoNkOpYwmMMfnWqqWgESapLqvDx6huFjQ5vqWSn2Z06173XNA7LtMOeUh1A==}
@@ -5845,8 +5836,8 @@ packages:
     engines: {node: '>=0.10.0'}
     hasBin: true
 
-  electron-to-chromium@1.5.356:
-    resolution: {integrity: sha512-9NgFd7m5t5MCJ5rUSjJITUXAH9mEGlrlofnMf4YEr+pz6JlP7cWmTAH+JFmbPnaSW8koVTkuW7pacORWAnA5Yw==}
+  electron-to-chromium@1.5.357:
+    resolution: {integrity: sha512-NHlTIQDK8fmVwHwuIzmXYEJ1Ewq3D9wDNc0cWXxDGysP6Pb21giwGNkxiTifyKy/4SoPuN5l6GLP1W9Sv7zB2g==}
 
   emoji-picker-react@4.18.0:
     resolution: {integrity: sha512-vLTrLfApXAIciguGE57pXPWs9lPLBspbEpPMiUq03TIli2dHZBiB+aZ0R9/Wat0xmTfcd4AuEzQgSYxEZ8C88Q==}
@@ -13583,16 +13574,6 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@storybook/react@9.1.16(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(storybook@9.1.20(@testing-library/dom@10.4.1)(prettier@3.8.3)(vite@8.0.10(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3)))(typescript@5.9.3)':
-    dependencies:
-      '@storybook/global': 5.0.0
-      '@storybook/react-dom-shim': 9.1.16(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(storybook@9.1.20(@testing-library/dom@10.4.1)(prettier@3.8.3)(vite@8.0.10(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3)))
-      react: 18.3.1
-      react-dom: 18.3.1(react@18.3.1)
-      storybook: 9.1.20(@testing-library/dom@10.4.1)(prettier@3.8.3)(vite@8.0.10(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3))
-    optionalDependencies:
-      typescript: 5.9.3
-
   '@swc/helpers@0.5.15':
     dependencies:
       tslib: 2.8.1
@@ -14567,7 +14548,7 @@ snapshots:
 
   base64id@2.0.0: {}
 
-  baseline-browser-mapping@2.10.29: {}
+  baseline-browser-mapping@2.10.30: {}
 
   bcryptjs@2.4.3: {}
 
@@ -14644,9 +14625,9 @@ snapshots:
 
   browserslist@4.28.2:
     dependencies:
-      baseline-browser-mapping: 2.10.29
-      caniuse-lite: 1.0.30001792
-      electron-to-chromium: 1.5.356
+      baseline-browser-mapping: 2.10.30
+      caniuse-lite: 1.0.30001793
+      electron-to-chromium: 1.5.357
       node-releases: 2.0.44
       update-browserslist-db: 1.2.3(browserslist@4.28.2)
 
@@ -14724,6 +14705,8 @@ snapshots:
       tslib: 2.8.1
 
   caniuse-lite@1.0.30001792: {}
+
+  caniuse-lite@1.0.30001793: {}
 
   capital-case@1.0.4:
     dependencies:
@@ -15349,7 +15332,7 @@ snapshots:
     dependencies:
       jake: 10.9.4
 
-  electron-to-chromium@1.5.356: {}
+  electron-to-chromium@1.5.357: {}
 
   emoji-picker-react@4.18.0(react@18.3.1):
     dependencies:
