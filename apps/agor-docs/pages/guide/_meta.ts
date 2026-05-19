@@ -13,6 +13,7 @@ export default {
   assistants: 'Assistants',
   'internal-mcp': 'Agor MCP Server',
   'rich-chat-ux': 'Rich Chat UX',
+  'in-conversation-widgets': 'In-Conversation Widgets',
   'multiplayer-social': 'Multiplayer & Social',
   'environment-configuration': 'Environments',
   scheduler: 'Scheduler',
