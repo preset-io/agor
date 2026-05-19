@@ -10,14 +10,14 @@ Companion brief: `design-in-conversation-widget-primitive` worktree.
 
 Agor needs a way for agents to render small interactive UI inline in the conversation transcript — a form, a button, a picker — that captures user input **without that input ever entering the LLM's context**.
 
-**Motivating use case:** during onboarding (and beyond) the agent often needs an env var (`HUBSPOT_API_KEY`, `GITHUB_TOKEN`) before it can do its job. Today: "please go to User Settings → Env Vars and add X." User context-switches; flow breaks. **Wanted:** the agent calls `agor_widgets_request_env_vars({ names, reason })`, a form pops into the transcript, the user types and submits inline, the secret goes **directly from the React widget to the daemon** (not through the model), and the agent receives a sanitized confirmation event (`{ names, status }`, no values) and continues.
+**Motivating use case:** during onboarding (and beyond) the agent often needs an env var (`HUBSPOT_API_KEY`, `GITHUB_TOKEN`) before it can do its job. Today: "please go to User Settings → Env Vars and add X." User context-switches; flow breaks. **Wanted:** the agent calls `agor_widgets_request_env_vars({ names, reason })`, a form pops into the transcript, the user types and submits inline, the secret goes **directly from the React widget to the daemon** (not through the model), and a **sanitized system-authored prompt** is auto-queued into the agent's next turn (`[Agor] User submitted HUBSPOT_API_KEY (scope: global). Retry the operation that needed it.`) so it can continue.
 
 **This is the first instance of a broader primitive** — Agor Custom Widgets. v1 ships the framework + the env-var widget. The same primitive will host OAuth-connect, file picker, MCP-server selector, confirmation prompt, and similar agent-driven micro-interactions.
 
 **Three hard requirements drive the design:**
 
 1. **Secret never enters the LLM context.** Triple-checked across every code path. Value flows browser → daemon, never browser → agent → daemon.
-2. **Agent stays informed.** A sanitized confirmation event (`{ widget_id, widget_type, status, names, scope }`) reaches the agent so it can resume work.
+2. **Agent stays informed, asynchronously.** The MCP tool returns immediately (fire-and-forget). When the user submits, a sanitized system-authored task is **auto-queued** via the "Never lose a prompt" (#1068) infrastructure; the agent picks it up in its next turn — no executor pause, no HTTP timeout, works in Slack/gateway contexts unchanged.
 3. **Extensible.** v1 architecture supports 3+ future widget types without re-architecture (validated in §6).
 
 ---
@@ -26,10 +26,11 @@ Agor needs a way for agents to render small interactive UI inline in the convers
 
 | Pattern | PR | Verdict |
 |---|---|---|
-| `permission_request` messages + executor pause/resume (`canUseTool`) | merged | **Closest production reference.** Reuse the message-as-state, pause-the-tool-call, broadcast-via-Feathers shape. Differs only in *who initiates* (we initiate from an MCP tool, not a SDK hook). |
+| **"Never lose a prompt" — daemon-owned user-messages + task-centric queue** | #1068 | **Direct dependency.** Widget submissions inject a system-authored task into the existing prompt queue. The agent picks it up exactly as it would a user-typed message in an idle/busy session. This is what lets us be fully decoupled. |
+| `permission_request` messages + executor pause/resume (`canUseTool`) | merged | **Architecturally adjacent**, but we diverge on resolution. `permission_request` blocks the executor at `canUseTool`; widgets do **not** block — they fire, the tool returns, and the agent ends its turn. We share only the "message row as widget state" shape and the Feathers broadcast channel. |
 | `appendSystemMessage` helper + `MessageType` discriminant union | #1166 | **Reuse directly.** Add `'widget_request'` to `MessageType` and to the helper's `type` union (`apps/agor-daemon/src/utils/append-system-message.ts:36`). |
 | `ArtifactConsentModal` + `artifact_trust_grants` table + TOFU strict-subset matching | #1147 | **Mine for UX patterns, not architecture.** Artifact consent is a *modal* triggered from an artifact card; widgets render *inline in the transcript*. Reuse the scope-selector copy, the "submit just nominates scope" pattern, and the strict-subset principle. Do **not** reuse the table — widgets are per-session ephemera, not durable grants. |
-| `AskUserQuestion` SDK tool (`input_request` message type, `InputRequestService`, `InputRequestBlock`) | #658 → ripped in #1181 | **Dead.** The SDK tool is in `CLAUDE_CODE_DISALLOWED_TOOLS` (`packages/executor/src/sdk-handlers/claude/constants.ts:33`). The widget primitive is the long-term replacement; a `confirmation`/`question` widget closes the gap that disallowing left (see §6 and §7 PR 3). |
+| `AskUserQuestion` SDK tool (`input_request` message type, `InputRequestService`, `InputRequestBlock`) | #658 → ripped in #1181 | **Dead.** The SDK tool is in `CLAUDE_CODE_DISALLOWED_TOOLS` (`packages/executor/src/sdk-handlers/claude/constants.ts:33`). It was killed because pause/resume hangs in async contexts (Slack). The widget primitive's **decoupled** design is what makes it survivable; the confirmation widget (§7 PR 3) closes the gap that disallowing left. |
 | Env-var storage (`users.data.env_vars` JSON map, AES-256-GCM via `encryptApiKey`, scope enum, blocklist, `^[A-Z_][A-Z0-9_]*$` regex) | existing | **Reuse the existing users service.** The env-var widget submit handler is a thin shim that PATCHes `/users/:id` with a single-key `env_vars` patch. Validation, encryption, scope handling, blocklist enforcement all already live there. |
 | MCP tool registry (`apps/agor-daemon/src/mcp/tools/*.ts`, `registerTool(name, {description, inputSchema, annotations}, handler)`, `ctx.sessionId`, `textResult(...)`) | existing | **Slot a new `widgets.ts` file alongside other domains.** Standard pattern. |
 
@@ -107,63 +108,86 @@ Why per-widget tools (vs. one generic `agor_widgets_request(type, params)`):
 
 The handler logic is shared via a small helper (see §3.4) so adding a widget type ≈ defining its Zod schema, its React component, and its submit handler.
 
-### 3.3 Daemon flow (the pause/resume model)
+### 3.3 Daemon flow (decoupled fire-and-forget)
 
 ```
-┌──────────┐                ┌─────────────┐               ┌────────┐               ┌────────┐
-│  Agent   │                │ Daemon (MCP │               │   UI   │               │  User  │
-│ (Claude) │                │   server)   │               │ client │               │        │
-└────┬─────┘                └──────┬──────┘               └────┬───┘               └────┬───┘
-     │                             │                           │                        │
-     │ MCP: agor_widgets_request_  │                           │                        │
-     │  env_vars({names, reason})  │                           │                        │
-     │ ──────────────────────────► │                           │                        │
-     │                             │                           │                        │
-     │                             │ appendSystemMessage(      │                        │
-     │                             │   type='widget_request',  │                        │
-     │                             │   metadata.widget={...,   │                        │
-     │                             │     status:'pending'})    │                        │
-     │                             │                           │                        │
-     │                             │ Feathers 'messages         │                        │
-     │                             │  created' WS event ──────►│                        │
-     │                             │                           │ render WidgetBlock     │
-     │                             │                           │ ──────────────────────►│
-     │                             │                           │                        │
-     │                             │ await resolution          │ types HUBSPOT_API_KEY  │
-     │                             │ (long-poll, see §3.5)     │ ◄──────────────────────│
-     │                             │                           │                        │
-     │                             │ POST /widgets/:id/submit  │                        │
-     │                             │ {values, scope}           │                        │
-     │                             │ ◄─────────────────────────│                        │
-     │                             │                           │                        │
-     │                             │ users.patch              │                        │
-     │                             │  (encrypt, store)         │                        │
-     │                             │                           │                        │
-     │                             │ messages.patch           │                        │
-     │                             │  (widget.status =         │                        │
-     │                             │   'submitted',            │                        │
-     │                             │   result_meta = {names,   │                        │
-     │                             │   scope})                 │                        │
-     │                             │                           │                        │
-     │                             │ widget:resolved event ────┼───────────────────────►│
-     │                             │                           │ re-render badge       │
-     │                             │                           │                        │
-     │ MCP tool returns:           │                           │                        │
-     │  { widget_id,               │                           │                        │
-     │    status: 'submitted',     │                           │                        │
-     │    names: [...],            │                           │                        │
-     │    scope: 'global' }        │                           │                        │
-     │ ◄────────────────────────── │                           │                        │
-     │                             │                           │                        │
-     │ resumes — retries           │                           │                        │
-     │ original API call           │                           │                        │
+┌──────────┐         ┌─────────────┐         ┌────────┐         ┌────────┐
+│  Agent   │         │ Daemon (MCP │         │   UI   │         │  User  │
+│ (Claude) │         │   server)   │         │ client │         │        │
+└────┬─────┘         └──────┬──────┘         └────┬───┘         └────┬───┘
+     │ MCP call            │                      │                  │
+     │ agor_widgets_       │                      │                  │
+     │  request_env_vars   │                      │                  │
+     │ ──────────────────► │                      │                  │
+     │                     │ appendSystemMessage  │                  │
+     │                     │  type='widget_       │                  │
+     │                     │   request'           │                  │
+     │                     │  metadata.widget=    │                  │
+     │                     │   {…,status:         │                  │
+     │                     │   'pending'}         │                  │
+     │                     │                      │                  │
+     │                     │ 'messages created'   │                  │
+     │                     │  WS event ─────────► │ render           │
+     │                     │                      │  WidgetBlock ──► │
+     │                     │                      │                  │
+     │ tool returns        │                      │                  │
+     │ IMMEDIATELY:        │                      │                  │
+     │  { widget_id,       │                      │                  │
+     │    status:          │                      │                  │
+     │   'requested' }     │                      │                  │
+     │ ◄────────────────── │                      │                  │
+     │                     │                      │                  │
+     │ ends turn —         │                      │                  │
+     │ session goes IDLE   │                      │                  │
+     │                     │                      │                  │
+     │                     │   ⏱  (seconds, minutes, or hours later) │
+     │                     │                      │                  │
+     │                     │                      │ types value      │
+     │                     │                      │ ◄─────────────── │
+     │                     │ POST /widgets/:id/   │                  │
+     │                     │  submit              │                  │
+     │                     │  {values, scope}     │                  │
+     │                     │ ◄─────────────────── │                  │
+     │                     │                      │                  │
+     │                     │ users.patch          │                  │
+     │                     │  (encrypt, store)    │                  │
+     │                     │                      │                  │
+     │                     │ messages.patch       │                  │
+     │                     │  widget.status=      │                  │
+     │                     │   'submitted'        │                  │
+     │                     │                      │                  │
+     │                     │ tasks.create         │                  │
+     │                     │  (system-authored,   │                  │
+     │                     │   buildAutoResume    │                  │
+     │                     │   Prompt(            │                  │
+     │                     │    result_meta))     │                  │
+     │                     │                      │                  │
+     │                     │ 'widget:resolved' ─► │ re-render badge  │
+     │                     │                      │                  │
+     │ NEW TASK arrives    │                      │                  │
+     │ as user-role        │                      │                  │
+     │ message:            │                      │                  │
+     │ "[Agor] User        │                      │                  │
+     │  submitted          │                      │                  │
+     │  HUBSPOT_API_KEY    │                      │                  │
+     │  (scope: global).   │                      │                  │
+     │  Retry the          │                      │                  │
+     │  operation that     │                      │                  │
+     │  needed it."        │                      │                  │
+     │ ◄────────────────── │                      │                  │
+     │                     │                      │                  │
+     │ resumes —           │                      │                  │
+     │ retries original    │                      │                  │
+     │ API call            │                      │                  │
 ```
 
 Key properties:
 
-- **Executor doesn't exit.** It's blocked at the MCP tool call (HTTP request to the daemon, same shape as any other long-running tool). This is the same pause model that `permission_request` uses; the difference is the pause lives in the *daemon* (waiting on the human) rather than the *executor* (waiting on `canUseTool`).
-- **The MCP tool result carries names + status + scope, never values.**
-- **Transcript persistence is automatic** because the widget IS a message row.
+- **The MCP tool is fire-and-forget.** It inserts the widget message and returns within milliseconds. The agent reads the tool description and ends its turn voluntarily. No HTTP timeout, no executor pause, no daemon-side await.
+- **The widget message is the durable resolution surface.** It survives daemon restarts, executor exits, hours-long user gaps, page reloads. State lives entirely in `metadata.widget` on the row.
+- **Resolution arrives via the existing prompt queue.** When the user submits, the daemon writes the env var AND creates a system-authored task (`role: 'user'`, `created_by: 'system'`) using the same code path as a human-typed prompt (#1068's daemon-owned user-message infrastructure). Idle sessions kick off immediately; busy sessions queue it.
+- **The prompt is auto-built by the widget registry.** Each widget type contributes a `buildAutoResumePrompt(result_meta)` function (and a `buildDismissedPrompt(...)` for the dismissal path). The agent sees an ordinary user-role message; from its perspective there's no widget machinery to reason about.
+- **Async-context-friendly.** Slack/gateway sessions work unchanged — the user might respond hours later from their phone; the task just queues.
 
 ### 3.4 Widget registry
 
@@ -177,10 +201,14 @@ export interface WidgetRegistryEntry<TParams, TSubmit, TResultMeta> {
   paramsSchema: z.ZodType<TParams>;
   /** Zod schema validating POST /widgets/:id/submit body */
   submitSchema: z.ZodType<TSubmit>;
-  /** What goes back to the agent (and into result_meta on the message). NEVER includes secret values. */
+  /** What goes back into result_meta on the message + into the auto-resume prompt. NEVER includes secret values. */
   buildResultMeta: (submit: TSubmit) => TResultMeta;
   /** Side-effect: persist the submitted values to wherever they belong */
   applySubmit: (ctx: SubmitCtx, submit: TSubmit) => Promise<void>;
+  /** The user-role prompt auto-queued into the agent's next turn on submit. Plain text, no values. */
+  buildAutoResumePrompt: (result_meta: TResultMeta, params: TParams) => string;
+  /** The user-role prompt auto-queued on dismissal. Always explicit ("don't immediately re-ask") to avoid loops. */
+  buildDismissedPrompt: (params: TParams) => string;
 }
 
 // frontend mirror
@@ -189,26 +217,42 @@ export const widgetComponents: Record<WidgetType, React.FC<WidgetProps>> = {
 };
 ```
 
-A new widget type is three files: a Zod-typed registry entry on the daemon, a React component on the UI, a registration line on each side. No core changes needed.
+A new widget type is three files: a Zod-typed registry entry on the daemon (with the two prompt-builders), a React component on the UI, a registration line on each side. No core changes needed.
 
-### 3.5 Long-poll vs. event subscription
+**Example prompt builders for `env_vars`:**
 
-The MCP tool handler needs to block until the widget resolves (or times out). Two implementation options:
+```ts
+buildAutoResumePrompt: (rm) =>
+  `[Agor] User submitted ${rm.names_submitted.join(', ')} (scope: ${rm.scope}). ` +
+  `You can now retry the operation that needed ${rm.names_submitted.length === 1 ? 'it' : 'them'}.`,
 
-| Option | How | Trade-off |
-|---|---|---|
-| **Long-await on internal event bus** (recommended) | Handler subscribes to `widget:resolved:<widget_id>` on the FeathersJS app's event emitter; awaits with a 30-min timeout (configurable via `widgets.default_timeout_ms`). | Same in-process pattern `PermissionService.waitForDecision()` uses. Lives in daemon memory — survives WS disconnects from the UI but not daemon restart. |
-| **Poll the message row** | Handler polls every 2s for `widget.status !== 'pending'`. | Simpler but wastes cycles. Skip. |
+buildDismissedPrompt: (params) =>
+  `[Agor] User dismissed the request for ${params.names.join(', ')}. ` +
+  `Do not re-request immediately — ask whether to proceed without, or move on to other work.`,
+```
 
-**Daemon restart handling**: on startup, scan `messages WHERE metadata->widget.status='pending'` bound to running sessions; if executor is still alive (PID check / `awaiting_widget` task status), it's already disconnected from the in-process await — the executor sees an MCP error and retries, the user sees the widget either still pending or already submitted. **Simplest fix**: mark all pending widgets as `timed_out` on daemon restart, surface a follow-up system message ("The widget request for HUBSPOT_API_KEY was cancelled by a daemon restart — re-prompt the agent to ask again."). Same pattern PR #1166 uses for orphaned sessions.
+### 3.5 Task-queue integration (the resolution path)
 
-### 3.6 HTTP timeout for the MCP request
+When `POST /widgets/:widget_id/submit` succeeds, the submit handler does four things in one transaction:
 
-This is the **single biggest implementation risk** (see §8). MCP tool calls flow over HTTP; a 30-minute open request will hit infrastructure timeouts (reverse proxies, load balancers, browser-side fetch idle). Mitigations:
+1. **Persist values** — call `registry[widget_type].applySubmit(ctx, submit)`. For env-vars, this is `users.patch(userId, { env_vars: { [name]: { value, scope } } })`. Encryption + validation happen inside the existing users service.
+2. **Patch the widget message** — `messages.patch(widget_id, { metadata: { ..., widget: { status: 'submitted', result_meta, resolved_at } } })`. The transcript renderer flips to the "submitted" badge.
+3. **Queue the auto-resume task** (if `auto_resume !== false` was passed to the original tool call) — create a new task via the existing task-creation path with:
+   - `role: 'user'`
+   - `created_by_user_id: <submitter>` (audit) but `metadata.system_authored: true` and `metadata.widget_id` for traceability
+   - `content: registry[widget_type].buildAutoResumePrompt(result_meta, params)`
+   - The "Never lose a prompt" infrastructure handles queueing-vs-immediate-dispatch based on session busy state.
+4. **Emit `widget:resolved`** — broadcast on the per-session Feathers room so any other connected UI clients refresh.
 
-1. **Keep-alive heartbeats**: SSE-style chunked response that emits empty whitespace every 25s (the MCP transport already streams). Implementation lives in the MCP server framework, not per-tool.
-2. **Shorter default timeout** (configurable): start with 10 min — same as `permission_request` (`DEFAULT_PERMISSION_TIMEOUT_MS = 600_000`). Bump if friction proves real.
-3. **Polling fallback**: if a tool times out at the HTTP layer but the widget is still `pending`, the agent's natural retry semantics call it again with the same `widget_id` (idempotency key) — daemon resumes the await on the *same* widget row instead of creating a new one. Stretch goal; not blocking v1.
+Dismissal (`POST /widgets/:widget_id/dismiss`) follows the same path but skips step 1 and uses `buildDismissedPrompt` in step 3.
+
+**No daemon-side await. No long-running HTTP. No timeout on the widget itself.** The widget is durable in the messages table; it can sit `pending` for an hour or a day. The user, the session, or the worktree can move on freely.
+
+### 3.6 What happens if the agent doesn't end its turn?
+
+The MCP tool's `description` explicitly instructs: *"This is a fire-and-forget request. The widget is now visible to the user. End your turn after this tool call — you will receive a new user-role message when the user responds, and can resume work then."* If the agent ignores this and keeps reasoning, it just continues without the value (and will likely fail and retry on a later turn). The next-turn message arrives normally when the user submits — the queueing infrastructure doesn't care whether the session was idle or in the middle of something.
+
+We do **not** rely on tool description alone for correctness; ignoring the contract is annoying but not harmful, and the agent's standard "tool said it succeeded → I'll see results later" reasoning typically works without the explicit instruction.
 
 ---
 
@@ -217,13 +261,14 @@ This is the **single biggest implementation risk** (see §8). MCP tool calls flo
 | Piece | Path | Reuses |
 |---|---|---|
 | MCP tool | `apps/agor-daemon/src/mcp/tools/widgets.ts` (new) | `registerTool` pattern from `worktrees.ts` |
-| Daemon submit endpoint | `POST /widgets/:widget_id/submit` (new route) | FeathersJS service for `widget-submissions` |
+| MCP tool return | `{ widget_id, status: 'requested' }` — fires immediately, agent ends turn | `textResult()` |
+| Daemon submit endpoint | `POST /widgets/:widget_id/submit`, `POST /widgets/:widget_id/dismiss` (new routes) | FeathersJS service `widget-submissions` |
 | Persistence | Thin shim → `app.service('users').patch(userId, { env_vars: { [name]: { value, scope } } })` | existing users service, `encryptApiKey`, blocklist, regex |
-| Message update | `app.service('messages').patch(widget_id, { metadata.widget: {...} })` | existing messages service |
-| Event | `app.io.to(sessionRoomName(sessionId)).emit('widget:resolved', {...})` | existing per-session room |
+| Message update | `app.service('messages').patch(widget_id, { metadata.widget: { status, result_meta, resolved_at } })` | existing messages service |
+| **Auto-resume task** | `app.service('tasks').create({ session_id, role: 'user', content: buildAutoResumePrompt(rm), metadata: { system_authored: true, widget_id } })` — picks up via the existing prompt queue | "Never lose a prompt" #1068 |
+| Event broadcast | `widget:resolved` Feathers event on the session room | existing per-session room |
 | UI dispatch | `MessageBlock.tsx`: `if (message.type === 'widget_request') return <WidgetBlock message={message} />` | `PermissionRequestBlock` precedent at MessageBlock.tsx:256-294 |
 | Widget component | `apps/agor-ui/src/components/Widgets/EnvVarRequestWidget.tsx` | form shape from `EnvVarEditor.tsx` |
-| Confirmation event for agent | MCP tool return: `{ widget_id, status, names, scope }` | `textResult()` |
 
 ### UI sketch
 
@@ -274,13 +319,14 @@ After dismissal:
 | Agent → MCP tool call (`agor_widgets_request_env_vars`) | **No** | Input schema accepts `names` (strings) + `reason`. No `values` field exists. Zod rejects extras. |
 | Daemon → `appendSystemMessage` → message row | **No** | `metadata.widget.params` is the agent-provided payload (names, reason, instructions); `content` is human-readable preview. Both are filled from the agent's tool args — agent had no values. |
 | Feathers `messages created` WebSocket event | **No** | Payload is the message row above. |
+| MCP tool return value → agent (synchronous) | **No** | Returns `{ widget_id, status: 'requested' }`. Fires immediately, before the user has even seen the widget. Cannot contain values by definition. |
 | UI → `POST /widgets/:id/submit` | **Yes** | Direct browser-to-daemon HTTP request. Auth via the user's session cookie / JWT. **This is the only place values exist on the wire**, and it never traverses the agent. |
 | Daemon submit handler → `users.patch` | **Yes (encrypted in transit at app layer)** | Standard env-var write path. `encryptApiKey()` is called inside the users service before DB write. |
-| Daemon → message status update (`messages.patch`) | **No** | Updates `metadata.widget.status` and `result_meta = { names, scope }`. Explicit allow-list — we patch by field, never spread the submit body. |
+| Daemon → message status update (`messages.patch`) | **No** | Updates `metadata.widget.status` and `result_meta` (e.g. `{ names_submitted, scope }`). Explicit allow-list — we patch by field, never spread the submit body. |
+| **Daemon → auto-resume task creation** (the prompt the agent next sees) | **No** | `tasks.create` content is `buildAutoResumePrompt(result_meta)`. The registry's prompt-builders take `result_meta` only — they have no access to the submit body. Add unit test: prompt-builder must accept `result_meta` only, not the raw submit payload (type system + runtime assertion). |
 | `widget:resolved` Feathers event | **No** | Payload is `{ widget_id, status, result_meta }`. |
-| MCP tool return value → agent | **No** | Returns `{ widget_id, status, names, scope }`. No `values` field. |
-| Transcript reload | **No** | Re-reads the message row; values were never stored on it. |
-| Logs | **No (must enforce)** | Submit handler MUST NOT log the request body. Add an explicit lint or test: `expect(logs).not.toContain(submittedValue)`. |
+| Transcript reload | **No** | Re-reads the message row; values were never stored on it. The auto-resume task is a normal task row containing only `result_meta`-derived text. |
+| Logs | **No (must enforce)** | Submit handler MUST NOT log the request body. Add an explicit test: `expect(logs).not.toContain(submittedValue)`. |
 
 The only access path to values after submission is the standard env-var read path (decrypt at runtime when launching an executor). That path is unchanged from today.
 
@@ -335,7 +381,7 @@ inputSchema: z.object({
 })
 // submit body: { option_id: string }
 // result_meta: { option_id, option_label }  // label is fine — it's agent-provided
-// MCP return: { widget_id, status, option_id, option_label }
+// auto-resume prompt: "[Agor] User chose: ${option_label}."
 ```
 
 **Fit check:**
@@ -352,18 +398,18 @@ inputSchema: z.object({
   scopes: z.array(z.string()).min(1),
   reason: z.string().max(500),
 })
-// submit body: empty — submission happens via OAuth callback, not user form
+// submit body: empty — resolution happens via OAuth callback, not user form
 // applySubmit: writes to existing OAuth tokens table
 // result_meta: { provider, granted_scopes: string[], account_label: string }
-// MCP return: { widget_id, status, provider, granted_scopes, account_label }
+// auto-resume prompt: "[Agor] User connected ${provider} (${account_label}). You can now retry."
 ```
 
 **Fit check:**
-- Widget renders a "Connect GitHub" button. Click → popup → OAuth callback hits a *separate* daemon endpoint (`/oauth/:provider/callback`) which then flips the widget status.
+- Widget renders a "Connect GitHub" button. Click → popup → OAuth callback hits a *separate* daemon endpoint (`/oauth/:provider/callback`) which then resolves the widget the same way `POST /widgets/:id/submit` would (write result_meta, queue auto-resume task, emit `widget:resolved`).
 - Token never goes anywhere near the agent. ✓
-- The submit endpoint is virtual here — resolution happens via the OAuth callback. Registry's `applySubmit` becomes "wait for OAuth, then write to tokens table."
+- **The decoupled flow makes this trivial.** OAuth flows are inherently async (popup → user-action → callback); the widget primitive doesn't care which daemon endpoint resolves the widget, only that *something* does. The pause/resume model would have had to invent a special async lane for this; we don't.
 
-**One real seam discovered:** not every widget resolves via `POST /widgets/:id/submit`. OAuth resolves via callback. We accommodate this by making `widget:resolved` the canonical resolution event, and treating `POST .../submit` as one of *several* possible resolution mechanisms. Worth calling out in the registry shape — `applySubmit` becomes optional, and the registry can declare alternative resolution paths.
+**Registry generalization:** `applySubmit` is one of several resolution paths. The OAuth widget type's registry entry exposes a `resolveFromOAuthCallback` function instead, called from `/oauth/:provider/callback`. The post-resolution machinery (patch message, queue auto-resume, emit event) is identical and lives in a shared helper.
 
 ### 6.3 `agor_widgets_request_mcp_server` — select / attach an MCP server
 
@@ -376,7 +422,7 @@ inputSchema: z.object({
 // submit body: { mcp_server_id: string } | { kind: 'add_new', config: {...} }
 // applySubmit: noop if existing, else creates an mcp_servers row scoped to the session
 // result_meta: { mcp_server_id, name, kind }
-// MCP return: { widget_id, status, mcp_server_id, name, kind }
+// auto-resume prompt: "[Agor] User selected MCP server '${name}'. You can now use it."
 ```
 
 **Fit check:**
@@ -393,31 +439,36 @@ inputSchema: z.object({
 ### PR 1: `feat(widgets): in-conversation widget primitive`
 
 Scope:
-- Add `'widget_request'` to `MessageType` (sqlite + postgres schemas + types).
+- Add `'widget_request'` to `MessageType` (sqlite + postgres schemas + types, migrations).
 - Extend `appendSystemMessage` helper's `type` union to include `widget_request`.
-- Add `metadata.widget` shape to `Message['metadata']` type (typed via a discriminated union over `widget_type`).
-- New FeathersJS service `widget-submissions` registering `POST /widgets/:widget_id/submit` — handler dispatches by `widget_type` to a daemon-side registry (initially empty).
-- Daemon event bus: `widget:resolved` per-widget-id channel, plus per-session-room broadcast.
-- New MCP tool domain marker (`domain: 'widgets'` for `agor_search_tools`).
-- UI: `WidgetBlock` dispatcher component in MessageBlock that switches on `metadata.widget.widget_type`, plus a placeholder "Unknown widget type" fallback.
-- Daemon-restart handling: on startup, mark all `pending` widgets as `timed_out` and append a follow-up system message (mirror PR #1166).
-- Config: `widgets.default_timeout_ms` (default 600_000) in `~/.agor/config.yaml`.
+- Add `metadata.widget` shape to `Message['metadata']` type (typed via a discriminated union over `widget_type`, with `schema_version: number` baked in).
+- Daemon-side registry shape at `apps/agor-daemon/src/widgets/registry.ts` (empty in PR 1; widget types register themselves in their own PRs). The registry entry type includes `paramsSchema`, `submitSchema`, `applySubmit`, `buildResultMeta`, `buildAutoResumePrompt`, `buildDismissedPrompt`.
+- New FeathersJS service `widget-submissions` registering `POST /widgets/:widget_id/submit` and `POST /widgets/:widget_id/dismiss`. Auth: caller must match session creator OR have `prompt`-tier worktree RBAC. Idempotency: status must be `pending`.
+- Submit handler dispatches by `widget_type` to the registry (no-op for empty registry), then: patches the message row, creates an auto-resume task via the existing task-creation path (`tasks.create` with `role: 'user'`, `metadata.system_authored: true`, `metadata.widget_id`), emits `widget:resolved`.
+- `widget:resolved` Feathers event on the per-session room.
+- New MCP tool domain marker (`domain: 'widgets'` for `agor_search_tools` filtering).
+- UI: `WidgetBlock` dispatcher component in `apps/agor-ui/src/components/MessageBlock/` that switches on `metadata.widget.widget_type`, plus a placeholder "Unknown widget type" fallback for forward-compat with newer widgets in older clients.
 
-No widget types ship in PR 1. The framework is callable but produces no actual widgets yet. Tests cover the registry, the submit endpoint's auth/idempotency, and the WebSocket broadcast.
+**Explicitly NOT in PR 1** (deliberately punted vs. the original design):
+- ~~Daemon-restart marking pending widgets as `timed_out`~~ — widgets are durable in the messages table; daemon restart is transparent. Nothing to do.
+- ~~`widgets.default_timeout_ms` config option~~ — the decoupled model has no timeout. A widget sits `pending` until submitted or dismissed (or the session is archived, at which point the widget tombstones along with the rest).
+- ~~Long-poll / event-bus await on the MCP tool side~~ — the tool returns immediately; nothing to await.
 
-**Estimated effort:** ~3-4 eng-days.
+No widget types ship in PR 1. The framework is callable but produces no actual widgets yet. Tests cover the registry shape, the submit endpoint's auth + idempotency, the auto-resume task creation, and the WebSocket broadcast.
+
+**Estimated effort:** ~2-3 eng-days (shrunk from ~3-4 — the dropped pieces were the hardest parts).
 
 ### PR 2: `feat(widgets): env_vars widget`
 
 Scope:
-- Register `env_vars` widget type in the daemon registry: Zod schemas, `applySubmit` = thin shim around `users.patch`.
-- Register `agor_widgets_request_env_vars` MCP tool in `apps/agor-daemon/src/mcp/tools/widgets.ts`.
+- Register `env_vars` widget type in the daemon registry: Zod schemas, `applySubmit` = thin shim around `users.patch`, `buildAutoResumePrompt` and `buildDismissedPrompt` per §3.4.
+- Register `agor_widgets_request_env_vars` MCP tool in `apps/agor-daemon/src/mcp/tools/widgets.ts`. Tool params include `auto_resume: boolean` (default `true`).
 - React component `EnvVarRequestWidget.tsx` (reuses form shape from `EnvVarEditor.tsx`).
 - Wire `widgetComponents['env_vars']` mapping on the UI.
 - Submit handler reuses existing env-var validation (`validateEnvVar`, `isEnvVarAllowed`, regex) and encryption (`encryptApiKey`) — zero net-new logic.
-- Confirmation event shape per §5.1.
+- **`already_present` short-circuit** (per D4 below, recommended yes): submit handler checks at request time whether the user already has all `names` in scope. If yes, immediately patches `metadata.widget.status = 'already_present'`, skips the form render, and queues the auto-resume task with a "values were already configured" prompt.
 - Docs: `apps/agor-docs/pages/guide/in-conversation-widgets.mdx` (user-facing) with the env-var section as the canonical example.
-- Storybook story for the widget in all three states (pending, submitted, dismissed).
+- Storybook story for the widget in pending, submitted, dismissed, and already-present states.
 
 **Estimated effort:** ~2-3 eng-days.
 
@@ -441,17 +492,17 @@ PR 1 → PR 2 → (optional) PR 3. PR 2 cannot land before PR 1 (depends on the 
 
 | # | Risk / question | Mitigation |
 |---|---|---|
-| R1 | **HTTP timeout for the blocked MCP request.** A 10-min await over fetch will trip on infra timeouts. | Keep-alive whitespace heartbeats every 25s; configurable timeout; idempotent re-call by `widget_id` if the agent retries. |
-| R2 | **Daemon restart while a widget is pending** breaks the in-process await. | On startup, mark pending widgets as `timed_out`, append a follow-up system message (mirrors PR #1166). |
-| R3 | **Widget message persists forever in the transcript.** The *names* of submitted env vars are visible to anyone who can read the transcript. | Same surface as User Settings → Env Vars. One-line disclaimer on the widget. If sensitive, the user can dismiss and add via Settings. |
-| R4 | **Widget-version drift** when v2 changes a widget's submit schema. | `metadata.widget.schema_version: number` baked in from v1. UI's `WidgetBlock` renders old versions in a degraded read-only mode. |
-| R5 | **Dismissal UX.** Does the agent treat dismissal as "user said no, stop" or "user said not-now, try again later"? | Confirmation event includes `status: 'dismissed'`. Agent prompt guidance: "On dismissal, ask the user once whether they want to proceed without; do not re-request immediately." |
-| R6 | **Multi-user authz for submission.** Who can submit on behalf of whom? | §5.2 — submitter must match session creator or have `prompt`-tier worktree RBAC. Cross-user submit attributed in `result_meta.submitted_by`. |
-| R7 | **Logging leakage.** Submit handler must not log values. | Lint rule + explicit test in PR 2 (`expect(logs).not.toContain(value)`). |
-| R8 | **Agent uses chat (not the widget) to extract values** by phishing the user. | Widget copy: "Never paste values into chat — only into the form above." Out of scope for code mitigations. |
+| R1 | **Widget message persists forever in the transcript.** The *names* of submitted env vars are visible to anyone who can read the transcript. | Same surface as User Settings → Env Vars. One-line disclaimer on the widget. If sensitive, the user can dismiss and add via Settings. |
+| R2 | **Widget-version drift** when v2 changes a widget's submit schema. | `metadata.widget.schema_version: number` baked in from v1. UI's `WidgetBlock` renders old versions in a degraded read-only mode for forward-compat. |
+| R3 | **Dismissal UX.** Does the agent treat dismissal as "user said no, stop" or "user said not-now, try again later"? | Auto-queued dismissal prompt is explicit: *"Do not re-request immediately — ask whether to proceed without, or move on to other work."* See `buildDismissedPrompt` example in §3.4. |
+| R4 | **Multi-user authz for submission.** Who can submit on behalf of whom? | §5.2 — submitter must match session creator or have `prompt`-tier worktree RBAC. Cross-user submit attributed in `result_meta.submitted_by`. |
+| R5 | **Logging leakage.** Submit handler must not log values. | Explicit test in PR 2 (`expect(logs).not.toContain(value)`). Submit handler accepts the body and immediately hands it to the registry's `applySubmit`; no intermediate variable that gets stringified. |
+| R6 | **Agent uses chat (not the widget) to extract values** by phishing the user. | Widget copy: "Never paste values into chat — only into the form above." Out of scope for code mitigations. |
+| R7 | **Stale widget message** — user submits 4 hours later in a session that's already moved on. Auto-queued task arrives mid-context-switch. | Acceptable. Same surface as "queued prompt arrives in a session you forgot about" — already a thing the user lives with. Mitigated by the prompt being self-explanatory (`[Agor] User submitted X. Retry the operation that needed it.`). Worth a small "Discard pending widgets on session archive" hook — when a session is archived, all its `pending` widgets transition to `dismissed` (no auto-resume task, since the session is gone). |
+| R8 | **Agent ignores the "end your turn" contract** and keeps reasoning after firing the tool. | Harmless — the auto-queued task arrives whenever the user submits. The agent's intermediate reasoning just turns out to have been speculative. Tool description nudges, doesn't enforce. |
+| R9 | **Auto-resume task fires on a session whose user is offline.** No one notices the queued prompt. | Standard task-queue semantics (#1068) — the prompt is durable, will fire when the executor next picks up. If the session is permanently abandoned, the task tombstones with the rest of the session. |
 | Q1 | **One generic `agor_widgets_request` tool vs. one tool per type?** | Recommended: one per type (§3.2). Typed contracts, better progressive discovery, better agent UX. |
-| Q2 | **Should widgets support a "value already exists" short-circuit?** E.g. agent asks for `HUBSPOT_API_KEY`, user already has it set globally → widget auto-resolves with status `already_present`. | **Recommended yes** for env-vars specifically (saves a user click). Daemon checks env-vars presence at request time and immediately resolves the widget if all requested names already exist in the user's scope. The agent gets `status: 'already_present', names_present: [...]` and can proceed without UI flicker. |
-| Q3 | **OAuth widget timeout** — OAuth flows can take minutes. Does the 10-min default suffice? | Per-widget-type override on `widget.timeout_ms` baked into the registry entry. OAuth defaults to 15 min. |
+| Q2 | **`already_present` short-circuit?** E.g. agent asks for `HUBSPOT_API_KEY`, user already has it set globally → widget auto-resolves with status `already_present`. | **Recommended yes** for env-vars specifically (saves a user click). Daemon checks presence at request time and short-circuits to `status: 'already_present'` + an auto-resume task ("`HUBSPOT_API_KEY` was already configured. You can proceed.") without rendering a form. See PR 2 scope. |
 
 ---
 
@@ -470,13 +521,18 @@ PR 1 → PR 2 → (optional) PR 3. PR 2 cannot land before PR 1 (depends on the 
 
 ## 10. Open call (for Max)
 
-Decisions I'd like an explicit thumbs-up/down on before PR 1 lands:
+Decisions Max has signed off on (commit history of this doc):
 
-- **D1:** Message-row-as-state vs. separate `pending_widgets` table. Recommendation: message-row (§3.1). Add a table only when we need cross-session queries.
-- **D2:** One MCP tool per widget type vs. one generic tool. Recommendation: per type (§3.2).
-- **D3:** Default timeout: 10 min (matches `permission_request`)? Or longer for env-vars (user may walk away to fetch a key)?
-- **D4:** Q2 — auto-resolve `already_present` for env-vars at request time?
-- **D5:** Should PR 3 (confirmation widget) ship in the same release as PR 2, or be deferred? It validates the abstraction earliest if it ships together.
+- **D1:** Message-row-as-state vs. separate `pending_widgets` table. **Resolved: row.** Add a table only when we need cross-session queries.
+- **D2:** One MCP tool per widget type vs. one generic tool. **Resolved: per type.**
+- **D3:** ~~Default timeout~~. **Resolved: no timeout.** Decoupled flow makes timeouts unnecessary. A widget sits `pending` until submitted, dismissed, or its session is archived.
+- **D4:** `already_present` short-circuit for env-vars. **Resolved: yes** — saves a user click; ships in PR 2.
+- **D5:** **Resolved: decoupled fire-and-forget flow** (no executor pause, no daemon-side await). MCP tool returns immediately; user submission auto-queues a system-authored task via "Never lose a prompt" (#1068).
+- **D6:** Default `auto_resume: true` on submit. Per-call opt-out via tool param. Dismissal also auto-queues with explicit "don't immediately re-ask" framing. **Resolved: yes.**
+
+Still open for Max:
+
+- **D7:** Should PR 3 (confirmation widget) ship in the same release as PR 2, or be deferred? Shipping together validates the abstraction earliest and closes the AskUserQuestion gap sooner.
 
 ---
 
@@ -490,6 +546,6 @@ _References (file:line)_
 - `packages/core/src/types/message.ts:33-41` — `MessageType` union to extend
 - `packages/core/src/db/encryption.ts` — `encryptApiKey` (do not reimplement)
 - `packages/core/src/config/env-validation.ts:30-90` — env-var validation (regex + blocklist)
-- `packages/executor/src/permissions/permission-service.ts:94-149` — pause/resume reference for the daemon-side await
+- `packages/executor/src/permissions/permission-service.ts:94-149` — pause/resume reference *(NOT followed)* — kept as a cite for the alternative we rejected
 - `packages/executor/src/sdk-handlers/claude/constants.ts:33` — AskUserQuestion disallowed
 - `apps/agor-ui/src/components/ArtifactConsentModal/ArtifactConsentModal.tsx` — scope-selector UX to mine
