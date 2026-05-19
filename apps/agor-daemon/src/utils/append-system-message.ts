@@ -33,7 +33,7 @@ export interface AppendSystemMessageOptions {
   /** Falls back to the first 200 chars of string content when omitted */
   contentPreview?: string;
   /** Defaults to 'system' */
-  type?: Extract<MessageType, 'system' | 'daemon_restart' | 'daemon_crash'>;
+  type?: Extract<MessageType, 'system' | 'daemon_restart' | 'daemon_crash' | 'widget_request'>;
   /** Defaults to MessageRole.SYSTEM */
   role?: Message['role'];
   metadata?: Message['metadata'];

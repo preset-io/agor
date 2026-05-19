@@ -51,6 +51,8 @@ const DOMAIN_DESCRIPTIONS: Record<string, string> = {
   analytics: 'Usage and cost tracking leaderboard',
   'mcp-servers': 'External MCP server configuration and OAuth management',
   proxies: 'Configured HTTP proxies for third-party APIs (Shortcut, Linear, Jira, etc.)',
+  widgets:
+    'In-conversation interactive widgets — agents render small forms/buttons inline in the transcript to capture user input that never enters the LLM context',
 };
 
 /** Tools always visible in `tools/list` even when search mode is enabled. */

@@ -103,6 +103,7 @@ import {
   PERMISSION_RANK,
   resolveWorktreePermission,
 } from './utils/worktree-authorization.js';
+import { resolveWidget } from './widgets/submissions.js';
 
 /**
  * Extended Params with route ID parameter.
@@ -1224,6 +1225,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           permissionMode?: import('@agor/core/types').PermissionMode;
           stream?: boolean;
           messageSource?: MessageSource;
+          /**
+           * Optional extra task metadata merged onto the queued/created task.
+           * Used by internal callers (e.g. widget submissions) to stamp
+           * traceability fields like `system_authored` / `widget_id`.
+           * External callers receive no validation on this field — it's
+           * trusted because the route is RBAC-gated.
+           */
+          metadata?: Partial<import('@agor/core/types').TaskMetadata>;
         },
         params: RouteParams
       ) {
@@ -1317,6 +1326,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               metadata: {
                 ...(params.user?.user_id ? { queued_by_user_id: params.user.user_id } : {}),
                 ...(messageSource ? { source: messageSource } : {}),
+                ...(data.metadata ?? {}),
               },
             });
 
@@ -1356,12 +1366,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // writes the user-message row, and spawns the executor. Both this
           // path and processNextQueuedTask go through that helper so behavior
           // stays in lockstep.
+          const idleTaskMetadata: import('@agor/core/types').TaskMetadata = {
+            ...(messageSource ? { source: messageSource } : {}),
+            ...(data.metadata ?? {}),
+          };
           const task = await taskRepo.createPending({
             session_id: id as SessionID,
             full_prompt: data.prompt,
             created_by: createdBy,
             status: TaskStatus.CREATED,
-            metadata: messageSource ? { source: messageSource } : undefined,
+            metadata: Object.keys(idleTaskMetadata).length > 0 ? idleTaskMetadata : undefined,
           });
           // Bypassing the service means no native 'created' emit; do it here
           // so reactive clients see the new task before the executor spawns.
@@ -2287,6 +2301,69 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     {
       create: { role: ROLES.MEMBER, action: 'respond to permission requests' },
+    },
+    requireAuth
+  );
+
+  // ============================================================================
+  // Widget submission / dismissal endpoints
+  //
+  // See `docs/internal/in-conversation-widgets-design-2026-05-19.md`. The
+  // resolver handles auth, idempotency, registry dispatch, message patching,
+  // auto-resume task queueing, and the `widget:resolved` broadcast.
+  // ============================================================================
+
+  const widgetResolverDeps = {
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers Application shape
+    app: app as any,
+    isWorktreeOwner: async (worktreeId: string, userId: UUID) =>
+      worktreeRepository.isOwner(worktreeId as import('@agor/core/types').WorktreeID, userId),
+  };
+
+  registerAuthenticatedRoute(
+    app,
+    '/widgets/:id/submit',
+    {
+      async create(data: Record<string, unknown>, params: RouteParams) {
+        const widgetId = params.route?.id;
+        if (!widgetId) throw new Error('Widget ID required');
+        if (!params.user?.user_id) {
+          throw new NotAuthenticated('Authentication required to submit a widget');
+        }
+        return resolveWidget(
+          widgetId,
+          { kind: 'submit', body: data ?? {} },
+          { user_id: params.user.user_id as UUID, role: params.user.role as string | undefined },
+          widgetResolverDeps
+        );
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'submit widgets' },
+    },
+    requireAuth
+  );
+
+  registerAuthenticatedRoute(
+    app,
+    '/widgets/:id/dismiss',
+    {
+      async create(_data: unknown, params: RouteParams) {
+        const widgetId = params.route?.id;
+        if (!widgetId) throw new Error('Widget ID required');
+        if (!params.user?.user_id) {
+          throw new NotAuthenticated('Authentication required to dismiss a widget');
+        }
+        return resolveWidget(
+          widgetId,
+          { kind: 'dismiss' },
+          { user_id: params.user.user_id as UUID, role: params.user.role as string | undefined },
+          widgetResolverDeps
+        );
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'dismiss widgets' },
     },
     requireAuth
   );
