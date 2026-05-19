@@ -379,6 +379,7 @@ export const messages = sqliteTable(
         'input_request',
         'daemon_restart',
         'daemon_crash',
+        'widget_request',
       ],
     }).notNull(),
     role: text('role', {

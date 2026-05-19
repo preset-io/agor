@@ -1,5 +1,5 @@
 // src/types/task.ts
-import type { SessionID, TaskID } from './id';
+import type { MessageID, SessionID, TaskID } from './id';
 import type { MessageSource } from './message';
 import type { ReportPath, ReportTemplate } from './report';
 
@@ -42,6 +42,17 @@ export interface TaskMetadata {
   queued_by_user_id?: string;
   child_session_id?: SessionID;
   child_task_id?: TaskID;
+  /**
+   * Marks a task whose prompt was authored by the daemon (not typed by a
+   * human). Used by widget auto-resume so the UI can label the queued
+   * prompt appropriately.
+   */
+  system_authored?: boolean;
+  /**
+   * For tasks queued by widget resolution, the widget message that fired
+   * this prompt. Links the task back to the originating widget for audit.
+   */
+  widget_id?: MessageID;
 }
 
 /**

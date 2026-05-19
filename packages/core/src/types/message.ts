@@ -6,6 +6,7 @@
  */
 
 import type { MessageID, SessionID, TaskID } from './id';
+import type { WidgetMessageMetadata } from './widget';
 
 /**
  * Message role - who is speaking
@@ -38,7 +39,8 @@ export type MessageType =
   | 'permission_request'
   | 'input_request'
   | 'daemon_restart'
-  | 'daemon_crash';
+  | 'daemon_crash'
+  | 'widget_request';
 
 /**
  * Content block (for multi-modal messages)
@@ -254,6 +256,27 @@ export interface Message {
      * - undefined: Legacy message or source not tracked
      */
     source?: MessageSource;
+
+    /**
+     * Widget request state. Only populated on `type === 'widget_request'`
+     * messages. Discriminated by `widget_type`; see `types/widget.ts`.
+     */
+    widget?: WidgetMessageMetadata;
+
+    /**
+     * Marks the user-role message / task as having been authored by the
+     * daemon on behalf of the user, rather than typed by a human.
+     * Used by widget auto-resume prompts (see `widget_id`) and other
+     * system-injected prompts so the UI can label them appropriately.
+     */
+    system_authored?: boolean;
+
+    /**
+     * For system-authored tasks queued in response to widget resolution,
+     * the widget message that triggered them. Lets the UI link the queued
+     * prompt back to the originating widget for audit / debugging.
+     */
+    widget_id?: MessageID;
 
     /** Additional agent-specific fields */
     [key: string]: unknown;

@@ -26,4 +26,5 @@ export * from './template';
 export * from './ui';
 export * from './user';
 export * from './utils';
+export * from './widget';
 export * from './worktree';
