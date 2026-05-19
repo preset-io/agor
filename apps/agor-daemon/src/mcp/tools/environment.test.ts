@@ -21,9 +21,13 @@ vi.mock('../resolve-ids.js', () => ({
   resolveMcpServerId: async (_ctx: unknown, id: string) => id,
 }));
 
-vi.mock('@agor/core/config', () => ({
-  isWorktreeRbacEnabled: () => false,
-}));
+vi.mock('@agor/core/config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agor/core/config')>();
+  return {
+    ...actual,
+    isWorktreeRbacEnabled: () => false,
+  };
+});
 
 vi.mock('@agor/core/db', () => ({
   WorktreeRepository: class FakeWorktreeRepository {

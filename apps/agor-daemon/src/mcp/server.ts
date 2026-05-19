@@ -41,6 +41,7 @@ import { registerSearchTools } from './tools/search.js';
 import { registerSessionTools } from './tools/sessions.js';
 import { registerTaskTools } from './tools/tasks.js';
 import { registerUserTools } from './tools/users.js';
+import { registerWidgetTools } from './tools/widgets.js';
 import { registerWorktreeTools } from './tools/worktrees.js';
 
 /**
@@ -107,6 +108,7 @@ Domains:
 - users: User accounts, profiles, preferences, and administration
 - analytics: Usage and cost tracking leaderboard
 - mcp-servers: External MCP server configuration and OAuth management
+- widgets: In-conversation interactive widgets (forms/buttons rendered inline; values never enter your context)
 
 Common workflows:
 
@@ -214,6 +216,11 @@ function buildRegistry(servicesConfig?: DaemonServicesConfig): ToolRegistry {
     registerSessionTools(tempServer, dummyCtx);
     registerTaskTools(tempServer, dummyCtx);
     registerMessageTools(tempServer, dummyCtx);
+  }
+
+  if (isDomainEnabled('widgets', servicesConfig)) {
+    registry.setCurrentDomain('widgets');
+    registerWidgetTools(tempServer, dummyCtx);
   }
 
   if (isDomainEnabled('repos', servicesConfig)) {
@@ -384,6 +391,7 @@ function createMcpServer(
     registerTaskTools(s, c);
     registerMessageTools(s, c);
   });
+  domainRegister('widgets', registerWidgetTools);
   domainRegister('repos', registerRepoTools);
   domainRegister('worktrees', (s, c) => {
     registerWorktreeTools(s, c);

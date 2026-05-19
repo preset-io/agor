@@ -120,7 +120,7 @@ export const DEFAULT_SERVICE_TIER: ServiceTier = 'on';
  * Used for conditional MCP tool registration.
  */
 export const SERVICE_GROUP_TO_MCP_DOMAINS: Partial<Record<ServiceGroupName, string[]>> = {
-  core: ['sessions'],
+  core: ['sessions', 'widgets'],
   worktrees: ['worktrees', 'environment'],
   repos: ['repos'],
   users: ['users'],

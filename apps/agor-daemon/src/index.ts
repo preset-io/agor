@@ -64,6 +64,7 @@ import { configureSwagger } from './setup/swagger.js';
 import { loadDaemonVersion } from './setup/version.js';
 import { startup } from './startup.js';
 import { configureDaemonUrl } from './utils/spawn-executor.js';
+import { registerAllWidgets } from './widgets/index.js';
 
 // Load daemon version at startup
 const DAEMON_VERSION = await loadDaemonVersion(import.meta.url);
@@ -126,6 +127,14 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Initialize Handlebars helpers for template rendering
   registerHandlebarsHelpers();
   console.log('✅ Handlebars helpers registered');
+
+  // Populate the widget registry. Each concrete widget type (`env_vars`,
+  // future `confirmation`, `oauth`, ...) lives in its own subdir under
+  // `./widgets/` and side-effect-registers via this central call. The
+  // registry is consulted by `POST /widgets/:id/{submit,dismiss}` and by
+  // the `agor_widgets_request_*` MCP tools.
+  registerAllWidgets();
+  console.log('✅ Widget registry populated');
 
   // Configure Git to fail fast instead of prompting for credentials
   process.env.GIT_TERMINAL_PROMPT = '0';
