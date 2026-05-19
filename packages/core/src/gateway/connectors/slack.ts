@@ -579,7 +579,7 @@ export class SlackConnector implements GatewayConnector {
 
     try {
       const result = await this.web.conversations.info({ channel: channelId });
-      const name = (result.channel as { name?: string })?.name ?? null;
+      const name = result.channel?.name ?? null;
 
       this.channelNameCache.set(channelId, {
         name,
@@ -643,14 +643,7 @@ export class SlackConnector implements GatewayConnector {
     try {
       const result = await this.web.conversations.info({ channel: channelId });
       if (result.ok && result.channel) {
-        const ch = result.channel as {
-          is_channel?: boolean;
-          is_group?: boolean;
-          is_mpim?: boolean;
-          is_im?: boolean;
-          is_private?: boolean;
-          name?: string;
-        };
+        const ch = result.channel;
         let resolvedType: string;
         if (ch.is_im) {
           resolvedType = 'im';
