@@ -353,4 +353,99 @@ describe('markdownToSlackPayload', () => {
     expect(payload.text).toBe('');
     expect(payload.blocks).toBeUndefined();
   });
+
+  it('does not emit a native table for pipe tables inside fenced code blocks', () => {
+    const md = '```\n| Col1 | Col2 |\n|------|------|\n| A    | B    |\n```';
+    const payload = markdownToSlackPayload(md);
+    // No table block — content stays inside a fenced code block, which
+    // slackify-markdown preserves verbatim in the text fallback path.
+    expect(payload.blocks).toBeUndefined();
+    expect(payload.text).toContain('```');
+    expect(payload.text).toContain('| Col1 | Col2 |');
+  });
+
+  it('renders only the first of three tables natively (one-table-per-message)', () => {
+    const md = [
+      '| A | B |\n|---|---|\n| 1 | 2 |',
+      '| C | D |\n|---|---|\n| 3 | 4 |',
+      '| E | F |\n|---|---|\n| 5 | 6 |',
+    ].join('\n\nText\n\n');
+    const payload = markdownToSlackPayload(md);
+    const tables = payload.blocks!.filter((b) => (b as { type: string }).type === 'table');
+    expect(tables).toHaveLength(1);
+    const monospaceSections = payload
+      .blocks!.filter((b) => (b as { type: string }).type === 'section')
+      .filter((s) => ((s as { text: { text: string } }).text.text ?? '').includes('```'));
+    expect(monospaceSections).toHaveLength(2);
+  });
+
+  it('drops blocks entirely (text-only) when an oversize table would not fit even monospace', () => {
+    // 200 rows × 4 cols of fat cells → exceeds both the native cap and the
+    // monospace section text cap; we should fall back to text-only.
+    const header = '| a | b | c | d |';
+    const sep = '|---|---|---|---|';
+    const fat = 'x'.repeat(200);
+    const rows = Array.from({ length: 200 }, () => `| ${fat} | ${fat} | ${fat} | ${fat} |`).join(
+      '\n'
+    );
+    const md = `${header}\n${sep}\n${rows}`;
+    const payload = markdownToSlackPayload(md);
+    expect(payload.blocks).toBeUndefined();
+    // Content is not silently truncated — the legacy mrkdwn fallback still
+    // contains the table inside its code fence.
+    expect(payload.text).toContain('```');
+    expect(payload.text.length).toBeGreaterThan(SECTION_MAX_CHARS_TEST);
+  });
+
+  it('normalizes CRLF line endings', () => {
+    const md = '| A | B |\r\n|---|---|\r\n| 1 | 2 |';
+    const payload = markdownToSlackPayload(md);
+    const table = payload.blocks!.find((b) => (b as { type: string }).type === 'table') as {
+      rows: { text: string }[][];
+    };
+    expect(table.rows[0]).toEqual([
+      { type: 'raw_text', text: 'A' },
+      { type: 'raw_text', text: 'B' },
+    ]);
+    expect(table.rows[1]).toEqual([
+      { type: 'raw_text', text: '1' },
+      { type: 'raw_text', text: '2' },
+    ]);
+  });
+
+  it('treats escaped pipes (\\|) as literal pipe characters inside cells', () => {
+    const md = '| key | value |\n|---|---|\n| or | a \\| b |';
+    const payload = markdownToSlackPayload(md);
+    const table = payload.blocks!.find((b) => (b as { type: string }).type === 'table') as {
+      rows: { text: string }[][];
+    };
+    expect(table.rows[1][0].text).toBe('or');
+    expect(table.rows[1][1].text).toBe('a | b');
+  });
+
+  it('emits column_settings reflecting GFM alignment markers', () => {
+    const md = '| L | C | R |\n|:---|:---:|---:|\n| 1 | 2 | 3 |';
+    const payload = markdownToSlackPayload(md);
+    const table = payload.blocks!.find((b) => (b as { type: string }).type === 'table') as {
+      column_settings?: { align: string }[];
+    };
+    expect(table.column_settings).toEqual([
+      { align: 'left' },
+      { align: 'center' },
+      { align: 'right' },
+    ]);
+  });
+
+  it('omits column_settings when every column is default-aligned', () => {
+    const md = '| A | B |\n|---|---|\n| 1 | 2 |';
+    const payload = markdownToSlackPayload(md);
+    const table = payload.blocks!.find((b) => (b as { type: string }).type === 'table') as {
+      column_settings?: unknown;
+    };
+    expect(table.column_settings).toBeUndefined();
+  });
 });
+
+// Mirrors SECTION_MAX_CHARS in slack.ts; kept in the test as a lower-bound
+// sanity check (we expect the legacy mrkdwn fallback to carry more than this).
+const SECTION_MAX_CHARS_TEST = 3000;

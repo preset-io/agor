@@ -513,6 +513,9 @@ importers:
       '@slack/socket-mode':
         specifier: ^2.0.5
         version: 2.0.5
+      '@slack/types':
+        specifier: ^2.20.0
+        version: 2.20.0
       '@slack/web-api':
         specifier: ^7.14.1
         version: 7.14.1

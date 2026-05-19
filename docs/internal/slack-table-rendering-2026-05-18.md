@@ -8,7 +8,7 @@
 
 **The landscape changed.** Slack shipped a native Block Kit `table` block on **Aug 14, 2025**, and rich_text gained markdown-table support on **Mar 6, 2026**. We can offload rendering to Slack entirely.
 
-**Recommendation:** Replace `wrapTablesInCodeBlocks()` with a small adapter that emits Block Kit `table` blocks via `chat.postMessage(blocks: [...])`. For tables that exceed Block Kit's caps (>20 cols or >100 rows), upload as `.csv` via `files.uploadV2`. Drop the monospace path entirely.
+**Recommendation:** Add an adapter that emits Block Kit `table` blocks via `chat.postMessage(blocks: [...])` when a markdown table fits Slack's caps, with **per-table dynamic fallback** to the existing monospace section when it doesn't (>20 cols, >100 rows, oversize cell, or 2nd+ table — Slack allows one `table` block per message). When even the monospace fallback wouldn't fit (3000-char section cap), or when the message would exceed Slack's 50-block cap, drop `blocks` entirely and let the `text` field carry the message (40k-char budget; never truncated). CSV upload via `files.uploadV2` is deferred to a follow-up PR for tables too large for any block-based rendering.
 
 This is **not** "owning a table library" — Slack owns the rendering. We emit ~50–100 LOC of JSON. The adapter is a markdown-table → JSON converter, the inverse shape of the existing detector.
 

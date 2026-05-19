@@ -32,6 +32,15 @@ export interface OutboundPayload {
 }
 
 /**
+ * Normalize the value returned by a connector's `formatMessage` (which may
+ * be a plain mrkdwn/markdown string or a structured {@link OutboundPayload})
+ * into a canonical `OutboundPayload` shape, so callers don't have to branch.
+ */
+export function normalizeOutbound(formatted: string | OutboundPayload): OutboundPayload {
+  return typeof formatted === 'string' ? { text: formatted } : formatted;
+}
+
+/**
  * Gateway connector — abstracts platform-specific messaging APIs
  *
  * Each connector handles one channel type (Slack, Discord, etc.) and provides

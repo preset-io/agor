@@ -6,6 +6,7 @@
  */
 
 export type { GatewayConnector, InboundMessage, OutboundPayload } from './connector';
+export { normalizeOutbound } from './connector';
 export { getConnector, hasConnector, registerConnector } from './connector-registry';
 export { GitHubConnector, parseThreadId as parseGitHubThreadId } from './connectors/github';
 export { SlackConnector } from './connectors/slack';

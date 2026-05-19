@@ -21,6 +21,7 @@ import {
   formatGatewayContext,
   getConnector,
   hasConnector,
+  normalizeOutbound,
   parseGitHubThreadId,
 } from '@agor/core/gateway';
 import { resolveSessionDefaults } from '@agor/core/sessions';
@@ -850,11 +851,9 @@ export class GatewayService {
     try {
       const connector = getConnector(channel.channel_type as ChannelType, channel.config);
 
-      const formatted = connector.formatMessage
-        ? connector.formatMessage(data.message)
-        : data.message;
-      const text = typeof formatted === 'string' ? formatted : formatted.text;
-      const blocks = typeof formatted === 'string' ? undefined : formatted.blocks;
+      const { text, blocks } = normalizeOutbound(
+        connector.formatMessage ? connector.formatMessage(data.message) : data.message
+      );
 
       await connector.sendMessage({
         threadId: mapping.thread_id,
@@ -910,11 +909,9 @@ export class GatewayService {
     try {
       const connector = getConnector(channel.channel_type as ChannelType, channel.config);
 
-      const formatted = connector.formatMessage
-        ? connector.formatMessage(bufferedMessage)
-        : bufferedMessage;
-      const text = typeof formatted === 'string' ? formatted : formatted.text;
-      const blocks = typeof formatted === 'string' ? undefined : formatted.blocks;
+      const { text, blocks } = normalizeOutbound(
+        connector.formatMessage ? connector.formatMessage(bufferedMessage) : bufferedMessage
+      );
 
       // Edit the "Processing..." comment with the final response
       const outboundMetadata: Record<string, unknown> = {};

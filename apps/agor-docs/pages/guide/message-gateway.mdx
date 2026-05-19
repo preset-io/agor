@@ -249,6 +249,8 @@ interface GatewayConnector {
 
 Implement this interface, register it in the connector registry, and the gateway service handles the rest — authentication, thread mapping, session lifecycle, and outbound routing all work automatically.
 
+The `blocks` field is opaque platform-specific data — currently only the Slack connector uses it (to emit Block Kit `table` blocks for markdown tables). Other connectors can ignore it and rely on `text`.
+
 ## Best Practices
 
 - **Use trust or auto mode for unattended agents.** If you want the agent to operate without human approval on each tool call, set the permission mode accordingly.
