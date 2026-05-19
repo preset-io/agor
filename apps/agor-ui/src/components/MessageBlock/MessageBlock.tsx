@@ -44,6 +44,7 @@ import {
 } from '../ToolBlock';
 import { ToolIcon } from '../ToolIcon';
 import { ToolUseRenderer } from '../ToolUseRenderer';
+import { WidgetBlock } from './WidgetBlock';
 
 interface ToolUseBlock {
   type: 'tool_use';
@@ -298,6 +299,18 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   // surrounding agent text already carries the question/answer context.
   if (message.type === 'input_request') {
     return null;
+  }
+
+  // In-conversation interactive widgets. WidgetBlock looks up the registered
+  // component by `metadata.widget.widget_type` and falls back to an
+  // "Unknown widget type" placeholder for forward-compat with newer
+  // daemons. See `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
+  if (message.type === 'widget_request') {
+    return (
+      <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>
+        <WidgetBlock message={message} />
+      </div>
+    );
   }
 
   // Check if this is a Task tool prompt or result (agent-generated, but has user role)
