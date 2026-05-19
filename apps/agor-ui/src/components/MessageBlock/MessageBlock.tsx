@@ -44,6 +44,9 @@ import {
 } from '../ToolBlock';
 import { ToolIcon } from '../ToolIcon';
 import { ToolUseRenderer } from '../ToolUseRenderer';
+// Side-effect import: registers every built-in widget component with the
+// `WidgetBlock` dispatcher (e.g. `env_vars`).
+import '../Widgets';
 import { WidgetBlock } from './WidgetBlock';
 
 interface ToolUseBlock {
