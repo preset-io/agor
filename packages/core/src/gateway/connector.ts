@@ -19,6 +19,19 @@ export interface InboundMessage {
 }
 
 /**
+ * Outbound payload for a single message.
+ *
+ * `text` is always populated and acts as the plain/fallback rendering
+ * (used by client notifications and platforms that ignore structured blocks).
+ * `blocks` is platform-specific (e.g. Slack Block Kit) and is opaque here;
+ * the receiving connector knows how to interpret it.
+ */
+export interface OutboundPayload {
+  text: string;
+  blocks?: unknown[];
+}
+
+/**
  * Gateway connector — abstracts platform-specific messaging APIs
  *
  * Each connector handles one channel type (Slack, Discord, etc.) and provides
@@ -28,12 +41,17 @@ export interface GatewayConnector {
   readonly channelType: ChannelType;
 
   /**
-   * Send a message to a platform thread
+   * Send a message to a platform thread.
+   *
+   * `blocks` is optional and platform-specific. Connectors that don't support
+   * structured blocks should ignore it and use `text`.
+   *
    * @returns Platform-specific message ID
    */
   sendMessage(req: {
     threadId: string;
     text: string;
+    blocks?: unknown[];
     metadata?: Record<string, unknown>;
   }): Promise<string>;
 
@@ -48,7 +66,11 @@ export interface GatewayConnector {
   stopListening?(): Promise<void>;
 
   /**
-   * Convert markdown to platform-native formatting
+   * Convert markdown to platform-native formatting.
+   *
+   * May return a plain string (mrkdwn/markdown text) or a richer
+   * {@link OutboundPayload} including structured `blocks` that the connector's
+   * own `sendMessage` will interpret. Callers should accept either shape.
    */
-  formatMessage?(markdown: string): string;
+  formatMessage?(markdown: string): string | OutboundPayload;
 }

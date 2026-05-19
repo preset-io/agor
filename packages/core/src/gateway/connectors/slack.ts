@@ -22,11 +22,22 @@
  */
 
 import { SocketModeClient } from '@slack/socket-mode';
+import type { KnownBlock, RawTextElement, SectionBlock, TableBlock } from '@slack/types';
 import { WebClient } from '@slack/web-api';
 import { slackifyMarkdown } from 'slackify-markdown';
 
 import type { ChannelType } from '../../types/gateway';
-import type { GatewayConnector, InboundMessage } from '../connector';
+import type { GatewayConnector, InboundMessage, OutboundPayload } from '../connector';
+
+// Block Kit table block limits (Slack docs, native block introduced Aug 2025).
+const TABLE_MAX_ROWS = 100;
+const TABLE_MAX_COLS = 20;
+// Slack documents no explicit per-cell limit; the section-block text limit is
+// 3000 chars and is the relevant ceiling for the monospace fallback too.
+const TABLE_MAX_CELL_CHARS = 3000;
+const SECTION_MAX_CHARS = 3000;
+// Slack rejects messages with more than one table block.
+const MAX_TABLES_PER_MESSAGE = 1;
 
 interface SlackConfig {
   bot_token: string;
@@ -149,10 +160,215 @@ export function wrapTablesInCodeBlocks(md: string): string {
  * headings (→ bold), images (→ links), code blocks (strips lang),
  * lists, blockquotes, tables (→ code blocks), and Slack character escaping.
  *
+ * This is the plain-text/notification fallback; for the block-aware payload
+ * (which renders tables as native Block Kit `table` blocks when possible),
+ * see {@link markdownToSlackPayload}.
+ *
  * @see https://github.com/jsarafajr/slackify-markdown
  */
 export function markdownToMrkdwn(markdown: string): string {
   return slackifyMarkdown(wrapTablesInCodeBlocks(markdown)).trim();
+}
+
+interface Segment {
+  kind: 'text' | 'table';
+  lines: string[];
+}
+
+/**
+ * Split markdown into alternating text and GFM-table segments.
+ *
+ * Reuses the same line-by-line state machine as {@link wrapTablesInCodeBlocks}
+ * — tables are only recognized outside fenced code blocks and require a GFM
+ * separator row (`|---|`). Pipe lines without a separator are treated as text.
+ */
+function segmentMarkdown(md: string): Segment[] {
+  const lines = md.split('\n');
+  const segments: Segment[] = [];
+  let textBuf: string[] = [];
+  let tableBuf: string[] = [];
+  let inCodeBlock = false;
+
+  const flushText = (): void => {
+    if (textBuf.length > 0) {
+      segments.push({ kind: 'text', lines: textBuf });
+      textBuf = [];
+    }
+  };
+  const flushTable = (): void => {
+    if (tableBuf.length === 0) return;
+    const block = tableBuf.join('\n');
+    if (/^\|[\s:]*-[\s:-]*\|/m.test(block)) {
+      flushText();
+      segments.push({ kind: 'table', lines: tableBuf });
+    } else {
+      // No separator row → not a real GFM table; treat as text.
+      textBuf.push(...tableBuf);
+    }
+    tableBuf = [];
+  };
+
+  for (const line of lines) {
+    if (/^(`{3,}|~{3,})/.test(line)) {
+      flushTable();
+      inCodeBlock = !inCodeBlock;
+      textBuf.push(line);
+      continue;
+    }
+    if (inCodeBlock) {
+      textBuf.push(line);
+      continue;
+    }
+    if (/^\s*\|/.test(line)) {
+      tableBuf.push(line);
+    } else {
+      flushTable();
+      textBuf.push(line);
+    }
+  }
+  flushTable();
+  flushText();
+
+  return segments;
+}
+
+/**
+ * Parse the lines of a GFM table into a 2D array of trimmed cell strings.
+ *
+ * Drops the separator row. Trims the outer pipes if present. Each row is
+ * returned at the length of the source row — callers normalize widths.
+ */
+function parseTableRows(tableLines: string[]): string[][] {
+  const dataLines = tableLines.filter((line) => !/^\s*\|[\s:]*-[\s:-]*\|/.test(line));
+  return dataLines.map((line) => {
+    const trimmed = line.trim();
+    const noLead = trimmed.startsWith('|') ? trimmed.slice(1) : trimmed;
+    const body = noLead.endsWith('|') ? noLead.slice(0, -1) : noLead;
+    return body.split('|').map((c) => c.trim());
+  });
+}
+
+/**
+ * Convert parsed GFM rows into a Block Kit `table` block, or null when the
+ * table can't be rendered natively (oversized, malformed, empty).
+ *
+ * Returning null is the signal to the caller to use the monospace fallback.
+ */
+function tableToBlockKit(tableLines: string[]): TableBlock | null {
+  const rows = parseTableRows(tableLines);
+  if (rows.length === 0) return null;
+
+  // Width is fixed by the header row; the separator we dropped earlier had
+  // already confirmed the table shape.
+  const cols = rows[0].length;
+  if (cols === 0 || cols > TABLE_MAX_COLS) return null;
+  if (rows.length > TABLE_MAX_ROWS) return null;
+
+  for (const row of rows) {
+    for (const cell of row) {
+      if (cell.length > TABLE_MAX_CELL_CHARS) return null;
+    }
+  }
+
+  const normalized: RawTextElement[][] = rows.map((row) => {
+    const cells: RawTextElement[] = [];
+    for (let i = 0; i < cols; i++) {
+      const raw = row[i] ?? '';
+      // Slack's RawTextElement requires text of length ≥ 1; substitute a
+      // single space for empty cells so the block validates.
+      cells.push({ type: 'raw_text', text: raw === '' ? ' ' : raw });
+    }
+    return cells;
+  });
+
+  return {
+    type: 'table',
+    rows: normalized,
+  };
+}
+
+/**
+ * Slackify a text segment and split it into one or more section blocks,
+ * each respecting the 3000-char section text limit.
+ */
+function buildTextBlocks(lines: string[]): SectionBlock[] {
+  const mrkdwn = slackifyMarkdown(lines.join('\n')).trim();
+  if (mrkdwn.length === 0) return [];
+
+  const blocks: SectionBlock[] = [];
+  let remaining = mrkdwn;
+  while (remaining.length > 0) {
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: remaining.slice(0, SECTION_MAX_CHARS) },
+    });
+    remaining = remaining.slice(SECTION_MAX_CHARS);
+  }
+  return blocks;
+}
+
+/**
+ * Wrap the original GFM table lines in a triple-backtick code block, sized
+ * to fit a single section text field. This is the monospace fallback used
+ * when {@link tableToBlockKit} declines to render the table natively.
+ */
+function monospaceFallbackBlock(tableLines: string[]): SectionBlock {
+  const wrapped = '```\n' + tableLines.join('\n') + '\n```';
+  return {
+    type: 'section',
+    text: { type: 'mrkdwn', text: wrapped.slice(0, SECTION_MAX_CHARS) },
+  };
+}
+
+/**
+ * Build a Slack outbound payload from GitHub-flavored markdown.
+ *
+ * If the message contains GFM tables, emits a `blocks` array that uses
+ * Block Kit's native `table` block (Aug 2025) for the first qualifying
+ * table and falls back to a monospace code block for any table that
+ * exceeds Slack's caps (>{@link TABLE_MAX_ROWS} rows, >{@link TABLE_MAX_COLS}
+ * cols, oversized cell) or for additional tables beyond Slack's
+ * one-table-per-message limit.
+ *
+ * If there are no tables, returns `{ text }` only — the same mrkdwn string
+ * the legacy path produced, so non-table messages are unchanged on the wire.
+ */
+export function markdownToSlackPayload(markdown: string): OutboundPayload {
+  const text = markdownToMrkdwn(markdown);
+
+  const segments = segmentMarkdown(markdown);
+  if (!segments.some((s) => s.kind === 'table')) {
+    return { text };
+  }
+
+  const blocks: KnownBlock[] = [];
+  let tablesEmitted = 0;
+  for (const seg of segments) {
+    if (seg.kind === 'text') {
+      blocks.push(...buildTextBlocks(seg.lines));
+      continue;
+    }
+
+    let native: TableBlock | null = null;
+    if (tablesEmitted < MAX_TABLES_PER_MESSAGE) {
+      native = tableToBlockKit(seg.lines);
+    }
+    if (native) {
+      blocks.push(native);
+      tablesEmitted++;
+    } else {
+      blocks.push(monospaceFallbackBlock(seg.lines));
+    }
+  }
+
+  // If slackify reduced every text segment to empty AND every table fell back,
+  // we still emit blocks — Slack handles an all-table message fine. But if
+  // somehow `blocks` is empty, drop back to text-only.
+  if (blocks.length === 0) {
+    return { text };
+  }
+
+  return { text, blocks };
 }
 
 export class SlackConnector implements GatewayConnector {
@@ -424,19 +640,27 @@ export class SlackConnector implements GatewayConnector {
   }
 
   /**
-   * Send a message to a Slack thread
+   * Send a message to a Slack thread.
+   *
+   * If `blocks` is provided (produced by {@link formatMessage}), it is sent as
+   * the rich payload and `text` becomes the notification/fallback string.
+   * Otherwise the legacy text-only path is used.
    */
   async sendMessage(req: {
     threadId: string;
     text: string;
+    blocks?: unknown[];
     metadata?: Record<string, unknown>;
   }): Promise<string> {
     const { channel, thread_ts } = parseThreadId(req.threadId);
+
+    const blocks = req.blocks && req.blocks.length > 0 ? (req.blocks as KnownBlock[]) : undefined;
 
     const result = await this.web.chat.postMessage({
       channel,
       thread_ts,
       text: req.text,
+      ...(blocks ? { blocks } : {}),
       unfurl_links: false,
       unfurl_media: false,
     });
@@ -760,9 +984,14 @@ export class SlackConnector implements GatewayConnector {
   }
 
   /**
-   * Convert markdown to Slack mrkdwn
+   * Convert markdown to a Slack outbound payload.
+   *
+   * Returns `{ text, blocks? }`. `text` is the mrkdwn fallback used for
+   * notifications and clients that don't render Block Kit; `blocks` is set
+   * when the message contains a GFM table that we can emit as a native
+   * Block Kit `table` block (or a monospace section fallback alongside one).
    */
-  formatMessage(markdown: string): string {
-    return markdownToMrkdwn(markdown);
+  formatMessage(markdown: string): OutboundPayload {
+    return markdownToSlackPayload(markdown);
   }
 }

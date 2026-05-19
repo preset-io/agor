@@ -337,6 +337,7 @@
     "@openai/codex-sdk": "^0.128.0",
     "@opencode-ai/sdk": "^1.2.20",
     "@slack/socket-mode": "^2.0.5",
+    "@slack/types": "^2.20.0",
     "@slack/web-api": "^7.14.1",
     "bcryptjs": "^2.4.3",
     "cron-parser": "^5.5.0",

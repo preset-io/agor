@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { markdownToMrkdwn, wrapTablesInCodeBlocks } from './slack';
+import { markdownToMrkdwn, markdownToSlackPayload, wrapTablesInCodeBlocks } from './slack';
 
 /**
  * slackify-markdown uses zero-width spaces (\u200B) around inline formatting
@@ -225,5 +225,132 @@ describe('wrapTablesInCodeBlocks', () => {
   it('does not wrap tables inside 4+ backtick fences', () => {
     const input = '````\n| Col1 | Col2 |\n|------|------|\n| A    | B    |\n````';
     expect(wrapTablesInCodeBlocks(input)).toBe(input);
+  });
+});
+
+describe('markdownToSlackPayload', () => {
+  it('returns text-only payload when there is no table', () => {
+    const payload = markdownToSlackPayload('Hello **world**');
+    expect(payload.blocks).toBeUndefined();
+    expect(payload.text).toContain('Hello');
+    expect(payload.text).toContain('*world*');
+  });
+
+  it('preserves the mrkdwn fallback identical to markdownToMrkdwn for non-table content', () => {
+    const md = '## Heading\n\n- item 1\n- item 2\n\n```js\nconst x = 1;\n```';
+    expect(markdownToSlackPayload(md).text).toBe(markdownToMrkdwn(md));
+  });
+
+  it('emits a native Block Kit table block for a simple GFM table', () => {
+    const md = '| Col1 | Col2 |\n|------|------|\n| A    | B    |';
+    const payload = markdownToSlackPayload(md);
+    expect(payload.blocks).toBeDefined();
+    const blocks = payload.blocks!;
+    const table = blocks.find((b) => (b as { type: string }).type === 'table') as {
+      type: 'table';
+      rows: { type: string; text: string }[][];
+    };
+    expect(table).toBeDefined();
+    expect(table.rows).toHaveLength(2);
+    expect(table.rows[0]).toEqual([
+      { type: 'raw_text', text: 'Col1' },
+      { type: 'raw_text', text: 'Col2' },
+    ]);
+    expect(table.rows[1]).toEqual([
+      { type: 'raw_text', text: 'A' },
+      { type: 'raw_text', text: 'B' },
+    ]);
+  });
+
+  it('keeps an mrkdwn `text` field alongside structured blocks (notification fallback)', () => {
+    const md = 'Intro\n\n| A | B |\n|---|---|\n| 1 | 2 |';
+    const payload = markdownToSlackPayload(md);
+    expect(payload.text).toContain('Intro');
+    expect(payload.text).toContain('```'); // legacy monospace fallback in text
+    expect(payload.blocks).toBeDefined();
+  });
+
+  it('substitutes a single space for empty cells (Slack requires text length ≥ 1)', () => {
+    const md = '| A | B |\n|---|---|\n|   | x |';
+    const payload = markdownToSlackPayload(md);
+    const table = payload.blocks!.find((b) => (b as { type: string }).type === 'table') as {
+      rows: { text: string }[][];
+    };
+    expect(table.rows[1][0].text).toBe(' ');
+    expect(table.rows[1][1].text).toBe('x');
+  });
+
+  it('normalizes row widths to the header width', () => {
+    // Row 1 has 3 cells, row 2 has 2 (malformed); header has 3.
+    const md = '| A | B | C |\n|---|---|---|\n| 1 | 2 | 3 |\n| 4 | 5 |';
+    const payload = markdownToSlackPayload(md);
+    const table = payload.blocks!.find((b) => (b as { type: string }).type === 'table') as {
+      rows: { text: string }[][];
+    };
+    expect(table.rows[0]).toHaveLength(3);
+    expect(table.rows[1]).toHaveLength(3);
+    expect(table.rows[2]).toHaveLength(3);
+    expect(table.rows[2][2].text).toBe(' '); // padded
+  });
+
+  it('falls back to a monospace section block when the table exceeds 20 columns', () => {
+    const cols = Array.from({ length: 21 }, (_, i) => `c${i}`).join(' | ');
+    const sep = Array.from({ length: 21 }, () => '---').join(' | ');
+    const data = Array.from({ length: 21 }, (_, i) => `v${i}`).join(' | ');
+    const md = `| ${cols} |\n| ${sep} |\n| ${data} |`;
+    const payload = markdownToSlackPayload(md);
+    expect(payload.blocks).toBeDefined();
+    // No native table block — fell back to a section with a code block
+    expect(payload.blocks!.some((b) => (b as { type: string }).type === 'table')).toBe(false);
+    const section = payload.blocks!.find((b) => (b as { type: string }).type === 'section') as {
+      text: { text: string };
+    };
+    expect(section.text.text).toContain('```');
+    expect(section.text.text).toContain('c0');
+  });
+
+  it('falls back to a monospace section block when the table exceeds 100 rows', () => {
+    const header = '| a | b |';
+    const sep = '|---|---|';
+    const rows = Array.from({ length: 101 }, (_, i) => `| ${i} | x |`).join('\n');
+    const md = `${header}\n${sep}\n${rows}`;
+    const payload = markdownToSlackPayload(md);
+    expect(payload.blocks!.some((b) => (b as { type: string }).type === 'table')).toBe(false);
+    const section = payload.blocks!.find((b) => (b as { type: string }).type === 'section') as {
+      text: { text: string };
+    };
+    expect(section.text.text).toContain('```');
+  });
+
+  it('renders only the first table natively when a message contains multiple tables', () => {
+    const md = '| A | B |\n|---|---|\n| 1 | 2 |\n\nText\n\n| C | D |\n|---|---|\n| 3 | 4 |';
+    const payload = markdownToSlackPayload(md);
+    const tables = payload.blocks!.filter((b) => (b as { type: string }).type === 'table');
+    expect(tables).toHaveLength(1);
+    // The second table is rendered as a monospace section
+    const sections = payload.blocks!.filter((b) => (b as { type: string }).type === 'section');
+    const monospaceSections = sections.filter((s) =>
+      ((s as { text: { text: string } }).text.text ?? '').includes('```')
+    );
+    expect(monospaceSections.length).toBeGreaterThan(0);
+  });
+
+  it('preserves intro/outro prose as section blocks around a table', () => {
+    const md = 'Before\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nAfter';
+    const payload = markdownToSlackPayload(md);
+    const blockTypes = payload.blocks!.map((b) => (b as { type: string }).type);
+    expect(blockTypes).toContain('section');
+    expect(blockTypes).toContain('table');
+    // The first block should be the "Before" text and the last should be "After"
+    const firstSection = payload.blocks!.find((b) => (b as { type: string }).type === 'section') as
+      | { text: { text: string } }
+      | undefined;
+    expect(firstSection?.text.text).toContain('Before');
+  });
+
+  it('handles empty input', () => {
+    const payload = markdownToSlackPayload('');
+    expect(payload.text).toBe('');
+    expect(payload.blocks).toBeUndefined();
   });
 });

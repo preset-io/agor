@@ -850,11 +850,16 @@ export class GatewayService {
     try {
       const connector = getConnector(channel.channel_type as ChannelType, channel.config);
 
-      const text = connector.formatMessage ? connector.formatMessage(data.message) : data.message;
+      const formatted = connector.formatMessage
+        ? connector.formatMessage(data.message)
+        : data.message;
+      const text = typeof formatted === 'string' ? formatted : formatted.text;
+      const blocks = typeof formatted === 'string' ? undefined : formatted.blocks;
 
       await connector.sendMessage({
         threadId: mapping.thread_id,
         text,
+        blocks,
         metadata: data.metadata,
       });
 
@@ -905,9 +910,11 @@ export class GatewayService {
     try {
       const connector = getConnector(channel.channel_type as ChannelType, channel.config);
 
-      const text = connector.formatMessage
+      const formatted = connector.formatMessage
         ? connector.formatMessage(bufferedMessage)
         : bufferedMessage;
+      const text = typeof formatted === 'string' ? formatted : formatted.text;
+      const blocks = typeof formatted === 'string' ? undefined : formatted.blocks;
 
       // Edit the "Processing..." comment with the final response
       const outboundMetadata: Record<string, unknown> = {};
@@ -923,6 +930,7 @@ export class GatewayService {
       await connector.sendMessage({
         threadId: mapping.thread_id,
         text,
+        blocks,
         metadata: outboundMetadata,
       });
 

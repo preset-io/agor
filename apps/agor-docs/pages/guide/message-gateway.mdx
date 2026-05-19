@@ -229,12 +229,21 @@ The gateway is built as a set of loosely coupled components:
 The connector interface is intentionally minimal:
 
 ```typescript
+interface OutboundPayload {
+  text: string;
+  blocks?: unknown[]; // platform-specific (e.g. Slack Block Kit)
+}
+
 interface GatewayConnector {
   readonly channelType: ChannelType;
-  sendMessage(req: { threadId: string; text: string }): Promise<string>;
+  sendMessage(req: {
+    threadId: string;
+    text: string;
+    blocks?: unknown[];
+  }): Promise<string>;
   startListening?(callback: (msg: InboundMessage) => void): Promise<void>;
   stopListening?(): Promise<void>;
-  formatMessage?(markdown: string): string;
+  formatMessage?(markdown: string): string | OutboundPayload;
 }
 ```
 
