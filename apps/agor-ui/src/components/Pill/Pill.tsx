@@ -642,6 +642,12 @@ export const SessionIdsList: React.FC<SessionIdsListProps> = ({
  */
 export const SessionInfoButton: React.FC<SessionIdsListProps> = (props) => (
   <Popover
+    title={
+      <span>
+        <IdcardOutlined style={{ marginRight: 8 }} />
+        Session IDs
+      </span>
+    }
     content={
       <div style={{ width: 400, maxWidth: '90vw' }}>
         <SessionIdsList {...props} />
@@ -685,6 +691,12 @@ export const SessionIdPill: React.FC<SessionIdPillProps> = ({
 
   return (
     <Popover
+      title={
+        <span>
+          <IdcardOutlined style={{ marginRight: 8 }} />
+          Session IDs
+        </span>
+      }
       content={
         <div style={{ width: 400, maxWidth: '90vw' }}>
           <SessionIdsList
@@ -694,7 +706,6 @@ export const SessionIdPill: React.FC<SessionIdPillProps> = ({
           />
         </div>
       }
-      title={null}
       trigger="hover"
       placement="top"
       mouseEnterDelay={0.3}
