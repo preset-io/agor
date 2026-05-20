@@ -18,7 +18,7 @@
  * See `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
  */
 
-import type { EnvVarScope, Message, WidgetMessageMetadata } from '@agor-live/client';
+import type { AgorClient, EnvVarScope, Message, WidgetMessageMetadata } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   LockOutlined,
@@ -27,7 +27,6 @@ import {
 } from '@ant-design/icons';
 import { Button, Card, Input, Select, Space, Typography, theme } from 'antd';
 import { useMemo, useState } from 'react';
-import { getDaemonUrl } from '@/config/daemon';
 import { useThemedMessage } from '@/utils/message';
 import { registerWidgetComponent, type WidgetComponentProps } from '../MessageBlock/WidgetBlock';
 
@@ -42,14 +41,6 @@ interface EnvVarsParams {
 interface EnvVarsResultMeta {
   names_submitted: string[];
   scope: EnvVarScope;
-}
-
-function getAuthHeaders(): HeadersInit {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('feathers-jwt') : null;
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
 }
 
 function readParams(widget: WidgetMessageMetadata): EnvVarsParams {
@@ -101,9 +92,15 @@ interface PendingFormProps {
   widgetId: string;
   message: Message;
   params: EnvVarsParams;
+  client: AgorClient | null;
 }
 
-const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message: _message, params }) => {
+const PendingForm: React.FC<PendingFormProps> = ({
+  widgetId,
+  message: _message,
+  params,
+  client,
+}) => {
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
 
@@ -125,18 +122,13 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message: _message, 
     [params.names, values]
   );
 
+  // Use the Feathers client so the built-in 401 refresh/retry hook fires
+  // on token expiry rather than a raw 401 surfacing as a save failure.
   const post = async (path: 'submit' | 'dismiss', body: unknown) => {
-    const url = `${getDaemonUrl()}/widgets/${encodeURIComponent(widgetId)}/${path}`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(body ?? {}),
-    });
-    if (!res.ok) {
-      const detail = await res.text().catch(() => '');
-      throw new Error(detail || `${res.statusText} (${res.status})`);
+    if (!client) {
+      throw new Error('No client available — refresh and try again');
     }
-    return res.json().catch(() => ({}));
+    return client.service(`widgets/${encodeURIComponent(widgetId)}/${path}`).create(body ?? {});
   };
 
   const handleSubmit = async () => {
@@ -314,7 +306,11 @@ const AlreadyPresentSummary: React.FC<{ widget: WidgetMessageMetadata }> = ({ wi
   );
 };
 
-export const EnvVarRequestWidget: React.FC<WidgetComponentProps> = ({ message, widget }) => {
+export const EnvVarRequestWidget: React.FC<WidgetComponentProps> = ({
+  message,
+  widget,
+  client,
+}) => {
   const params = readParams(widget);
   const widgetId = widget.widget_id as unknown as string;
 
@@ -326,7 +322,7 @@ export const EnvVarRequestWidget: React.FC<WidgetComponentProps> = ({ message, w
     case 'already_present':
       return <AlreadyPresentSummary widget={widget} />;
     default:
-      return <PendingForm widgetId={widgetId} message={message} params={params} />;
+      return <PendingForm widgetId={widgetId} message={message} params={params} client={client} />;
   }
 };
 

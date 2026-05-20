@@ -10,6 +10,7 @@
  */
 
 import {
+  type AgorClient,
   type ContentBlock as CoreContentBlock,
   type DiffEnrichment,
   type Message,
@@ -88,6 +89,8 @@ interface MessageBlockProps {
   isFirstPendingPermission?: boolean; // For sequencing permission requests
   isLatestMessage?: boolean; // Whether this is the most recent message (don't collapse by default)
   assistantEmoji?: string; // Emoji override for assistant avatar (replaces tool icon)
+  /** Authenticated Feathers client, forwarded to WidgetBlock for inline-form submission. */
+  client?: AgorClient | null;
   onPermissionDecision?: (
     sessionId: string,
     requestId: string,
@@ -253,6 +256,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   isLatestMessage = false,
   onPermissionDecision,
   assistantEmoji,
+  client = null,
 }) => {
   const { token } = theme.useToken();
 
@@ -311,7 +315,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   if (message.type === 'widget_request') {
     return (
       <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>
-        <WidgetBlock message={message} />
+        <WidgetBlock message={message} client={client} />
       </div>
     );
   }

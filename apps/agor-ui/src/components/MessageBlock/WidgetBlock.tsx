@@ -10,7 +10,7 @@
  * See `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
  */
 
-import type { Message, WidgetMessageMetadata, WidgetType } from '@agor-live/client';
+import type { AgorClient, Message, WidgetMessageMetadata, WidgetType } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   ExclamationCircleOutlined,
@@ -24,6 +24,13 @@ const { Text } = Typography;
 export interface WidgetComponentProps {
   message: Message;
   widget: WidgetMessageMetadata;
+  /**
+   * Authenticated Feathers client. Widget components MUST submit via
+   * `client.service(...).create(...)` rather than raw fetch so the
+   * built-in 401 refresh/retry hook applies and tokens stay in sync.
+   * `null` if no session is active.
+   */
+  client: AgorClient | null;
 }
 
 /**
@@ -42,6 +49,7 @@ export function registerWidgetComponent(
 
 interface WidgetBlockProps {
   message: Message;
+  client: AgorClient | null;
 }
 
 /**
@@ -49,7 +57,7 @@ interface WidgetBlockProps {
  * component for `widget.widget_type`; falls back to a forward-compat
  * placeholder.
  */
-export const WidgetBlock: React.FC<WidgetBlockProps> = ({ message }) => {
+export const WidgetBlock: React.FC<WidgetBlockProps> = ({ message, client }) => {
   const { token } = theme.useToken();
   const widget = message.metadata?.widget;
 
@@ -85,7 +93,7 @@ export const WidgetBlock: React.FC<WidgetBlockProps> = ({ message }) => {
     );
   }
 
-  return <Component message={message} widget={widget} />;
+  return <Component message={message} widget={widget} client={client} />;
 };
 
 function renderStatusBadge(status: WidgetMessageMetadata['status']): React.ReactNode {

@@ -99,7 +99,11 @@ async function applyEnvVarsSubmit(ctx: WidgetSubmitCtx, submit: EnvVarsSubmit): 
         env_vars?: Record<string, string>;
         env_var_scopes?: Record<string, 'global' | 'session'>;
       },
-      params?: { user: { user_id: UserID; role: string | undefined }; authenticated: true }
+      params?: {
+        user: { user_id: UserID; role: string | undefined };
+        authenticated: true;
+        trustedInternalWrite?: boolean;
+      }
     ): Promise<unknown>;
   };
 
@@ -108,23 +112,22 @@ async function applyEnvVarsSubmit(ctx: WidgetSubmitCtx, submit: EnvVarsSubmit): 
     env_var_scopes[name] = submit.scope;
   }
 
-  // Single patch: values are written first (encrypted in the service), then
-  // scopes applied in the same transaction.
+  // The widget submit endpoint already authorized the caller via
+  // `canResolveWidget` (session-creator OR prompt-tier worktree RBAC), so
+  // we set `trustedInternalWrite` on the users.patch hook to bypass its
+  // self-only check (`register-hooks.ts:1490`). Field-level admin gates
+  // for unix_username/role/must_change_password run first and are NOT
+  // bypassed — env_vars / env_var_scopes are not gated.
   //
-  // Auth: the users.patch hook (`register-hooks.ts:1435-1487`) demands either
-  // (a) caller is admin, or (b) caller patches their own profile. Without
-  // params it sees `params.user = undefined` and throws 403. We pass the
-  // SUBMITTER's identity through — covers the common cases:
-  //   • submitter == session creator (default)  → self-patch path
-  //   • submitter is admin (any role >= admin)  → admin bypass path
-  // The cross-user collaborator case (non-admin submitter ≠ session creator)
-  // is a known limitation; see design doc §5.2.
+  // submitter identity is still threaded through for audit; the widget
+  // submit handler records it separately as `metadata.widget.submitted_by`.
   await usersService.patch(
     ctx.sessionCreatorUserId,
     { env_vars: submit.values, env_var_scopes },
     {
       user: { user_id: ctx.submitterUserId, role: ctx.submitterRole },
       authenticated: true,
+      trustedInternalWrite: true,
     }
   );
 }

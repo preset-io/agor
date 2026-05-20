@@ -74,22 +74,32 @@ export interface WidgetResolutionResult {
 /**
  * Check whether the caller is allowed to resolve a widget for the given
  * session+worktree. Mirrors the rule in §5.2 / R4: session creator always
- * passes; non-creators need prompt-tier worktree RBAC.
+ * passes; worktree owners pass via the owner-bypass path; non-creators need
+ * prompt-tier worktree RBAC.
  */
 export function canResolveWidget(
   caller: AuthenticatedCaller,
   session: Pick<Session, 'created_by'>,
-  worktree: Worktree
+  worktree: Worktree,
+  isOwner: boolean
 ): boolean {
   if (session.created_by === caller.user_id) return true;
-  const effective = resolveWorktreePermission(
-    worktree,
-    caller.user_id,
-    /* isOwner */ false,
-    caller.role
-  );
+  const effective = resolveWorktreePermission(worktree, caller.user_id, isOwner, caller.role);
   return PERMISSION_RANK[effective] >= PERMISSION_RANK.prompt;
 }
+
+/**
+ * Per-widget in-process serialization. Two concurrent submits (e.g. two
+ * browser tabs both posting in the small window between the status check
+ * and the message.patch) would each pass the `status === 'pending'` gate
+ * and both run side effects: doubled auto-resume tasks, surprise writes.
+ *
+ * The lock guards the critical section (status check → applySubmit →
+ * message.patch → tasks.create). Sufficient for single-daemon deployments,
+ * which is the only deployment shape today. A multi-daemon setup would need
+ * a DB-level optimistic check; we accept that trade today.
+ */
+const inFlightResolutions = new Map<string, Promise<WidgetResolutionResult>>();
 
 /**
  * Resolve a widget (submit or dismiss). Pure-ish: side effects all go
@@ -107,6 +117,30 @@ export async function resolveWidget(
     throw new NotAuthenticated('Authentication required to resolve a widget');
   }
 
+  // Serialize concurrent resolutions for the same widget (see comment on
+  // `inFlightResolutions`). The second caller will await the first's
+  // outcome and then hit the `status !== 'pending'` rejection.
+  const existing = inFlightResolutions.get(widgetId);
+  if (existing) {
+    await existing.catch(() => {}); // swallow — we re-check status below
+  }
+  const promise = (async () => doResolveWidget(widgetId, action, caller, deps))();
+  inFlightResolutions.set(widgetId, promise);
+  try {
+    return await promise;
+  } finally {
+    if (inFlightResolutions.get(widgetId) === promise) {
+      inFlightResolutions.delete(widgetId);
+    }
+  }
+}
+
+async function doResolveWidget(
+  widgetId: string,
+  action: WidgetResolutionAction,
+  caller: AuthenticatedCaller,
+  deps: WidgetResolverDeps
+): Promise<WidgetResolutionResult> {
   // 1. Load the widget message.
   let message: Message;
   try {
@@ -127,10 +161,11 @@ export async function resolveWidget(
   // 2. Load the session + worktree for authz.
   const session = (await deps.app.service('sessions').get(message.session_id)) as Session;
   const worktree = (await deps.app.service('worktrees').get(session.worktree_id)) as Worktree;
+  const isOwner = await deps.isWorktreeOwner(worktree.worktree_id, caller.user_id);
 
-  if (!canResolveWidget(caller, session, worktree)) {
+  if (!canResolveWidget(caller, session, worktree, isOwner)) {
     throw new Forbidden(
-      `You need to be the session creator or have 'prompt' permission on the worktree to resolve this widget.`
+      `You need to be the session creator, a worktree owner, or have 'prompt' permission on the worktree to resolve this widget.`
     );
   }
 

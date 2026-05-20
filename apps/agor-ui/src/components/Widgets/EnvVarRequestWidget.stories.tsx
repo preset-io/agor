@@ -1,7 +1,19 @@
-import type { Message, WidgetMessageMetadata } from '@agor-live/client';
+import type { AgorClient, Message, WidgetMessageMetadata } from '@agor-live/client';
 import type { Meta, StoryObj } from '@storybook/react';
 import { ConfigProvider, theme } from 'antd';
 import { EnvVarRequestWidget } from './EnvVarRequestWidget';
+
+// Stub client for stories — `service(path).create(body)` resolves to a
+// no-op so the form's Save/Dismiss buttons don't throw in the playground.
+const stubClient = {
+  service() {
+    return {
+      async create() {
+        return { widget_id: 'wid-storybook-1', status: 'submitted' };
+      },
+    };
+  },
+} as unknown as AgorClient;
 
 function makeMessage(widget: WidgetMessageMetadata): Message {
   return {
@@ -41,6 +53,7 @@ const meta = {
   title: 'Widgets/EnvVarRequestWidget',
   component: EnvVarRequestWidget,
   parameters: { layout: 'centered' },
+  args: { client: stubClient },
   decorators: [
     (Story) => (
       <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>

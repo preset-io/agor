@@ -11,17 +11,46 @@
  *     read-only summary instead of the form.
  */
 
-import type { Message, WidgetMessageMetadata } from '@agor-live/client';
+import type { AgorClient, Message, WidgetMessageMetadata } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import type { ReactElement } from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { EnvVarRequestWidget } from './EnvVarRequestWidget';
 
 /** Wrap with Ant Design's App so `useThemedMessage` finds a message instance. */
 function renderWithApp(ui: ReactElement) {
   return render(<AntApp>{ui}</AntApp>);
+}
+
+interface StubServiceCall {
+  path: string;
+  body: unknown;
+}
+
+/**
+ * Minimal AgorClient stub — only the `service(path).create(body)` surface
+ * the widget uses. Returns a `calls` array for assertions and a `shouldFail`
+ * knob for negative tests.
+ */
+function makeStubClient(opts: { shouldFail?: boolean } = {}): {
+  client: AgorClient;
+  calls: StubServiceCall[];
+} {
+  const calls: StubServiceCall[] = [];
+  const client = {
+    service(path: string) {
+      return {
+        async create(body: unknown) {
+          calls.push({ path, body });
+          if (opts.shouldFail) throw new Error('Invalid env var');
+          return { widget_id: 'wid-1', status: 'submitted' };
+        },
+      };
+    },
+  } as unknown as AgorClient;
+  return { client, calls };
 }
 
 function makeMessage(widget: WidgetMessageMetadata): Message {
@@ -58,24 +87,6 @@ function makeWidget(
   } as WidgetMessageMetadata;
 }
 
-const originalFetch = global.fetch;
-let fetchMock: ReturnType<typeof vi.fn>;
-
-beforeEach(() => {
-  fetchMock = vi.fn(async () => ({
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    json: async () => ({ widget_id: 'wid-1', status: 'submitted' }),
-    text: async () => 'ok',
-  })) as unknown as ReturnType<typeof vi.fn>;
-  global.fetch = fetchMock as unknown as typeof fetch;
-});
-
-afterEach(() => {
-  global.fetch = originalFetch;
-});
-
 describe('EnvVarRequestWidget — pending state', () => {
   it('renders one password input per requested name', () => {
     const widget = makeWidget({
@@ -84,14 +95,20 @@ describe('EnvVarRequestWidget — pending state', () => {
         reason: 'two integrations',
       },
     });
-    renderWithApp(<EnvVarRequestWidget message={makeMessage(widget)} widget={widget} />);
+    const { client } = makeStubClient();
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
     expect(screen.getByLabelText(/Value for HUBSPOT_API_KEY/i)).toBeTruthy();
     expect(screen.getByLabelText(/Value for STRIPE_SECRET_KEY/i)).toBeTruthy();
   });
 
   it('disables Save until every field has a value', () => {
     const widget = makeWidget();
-    renderWithApp(<EnvVarRequestWidget message={makeMessage(widget)} widget={widget} />);
+    const { client } = makeStubClient();
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
     const saveBtn = screen.getByRole('button', { name: 'Save' });
     expect((saveBtn as HTMLButtonElement).disabled).toBe(true);
 
@@ -100,9 +117,12 @@ describe('EnvVarRequestWidget — pending state', () => {
     expect((saveBtn as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('submits via POST /widgets/:id/submit with the typed values + chosen scope', async () => {
+  it('submits via widgets/:id/submit with the typed values + chosen scope', async () => {
     const widget = makeWidget();
-    renderWithApp(<EnvVarRequestWidget message={makeMessage(widget)} widget={widget} />);
+    const { client, calls } = makeStubClient();
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
 
     const input = screen.getByLabelText(/Value for HUBSPOT_API_KEY/i);
     fireEvent.change(input, { target: { value: 'secret-key' } });
@@ -110,43 +130,37 @@ describe('EnvVarRequestWidget — pending state', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(calls.length).toBe(1);
     });
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toMatch(/\/widgets\/wid-1\/submit$/);
-    expect(init.method).toBe('POST');
-    const body = JSON.parse(init.body as string);
-    expect(body).toEqual({
+    expect(calls[0].path).toBe('widgets/wid-1/submit');
+    expect(calls[0].body).toEqual({
       values: { HUBSPOT_API_KEY: 'secret-key' },
       scope: 'global', // UI always starts at Global; no scope change in this test
     });
   });
 
-  it('dismisses via POST /widgets/:id/dismiss with an empty body', async () => {
+  it('dismisses via widgets/:id/dismiss with an empty body', async () => {
     const widget = makeWidget();
-    renderWithApp(<EnvVarRequestWidget message={makeMessage(widget)} widget={widget} />);
+    const { client, calls } = makeStubClient();
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(calls.length).toBe(1);
     });
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toMatch(/\/widgets\/wid-1\/dismiss$/);
-    expect(init.method).toBe('POST');
-    expect(JSON.parse(init.body as string)).toEqual({});
+    expect(calls[0].path).toBe('widgets/wid-1/dismiss');
+    expect(calls[0].body).toEqual({});
   });
 
   it('re-enables Save after a failed submit so the user can retry', async () => {
-    fetchMock.mockImplementation(async () => ({
-      ok: false,
-      status: 400,
-      statusText: 'Bad Request',
-      json: async () => ({ message: 'Invalid env var' }),
-      text: async () => 'Invalid env var',
-    }));
     const widget = makeWidget();
-    renderWithApp(<EnvVarRequestWidget message={makeMessage(widget)} widget={widget} />);
+    const { client, calls } = makeStubClient({ shouldFail: true });
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
     fireEvent.change(screen.getByLabelText(/Value for HUBSPOT_API_KEY/i), {
       target: { value: 'shh' },
     });
@@ -159,7 +173,7 @@ describe('EnvVarRequestWidget — pending state', () => {
     await waitFor(() => {
       expect(saveBtn.disabled).toBe(false);
     });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(calls.length).toBe(1);
   });
 });
 
@@ -170,7 +184,10 @@ describe('EnvVarRequestWidget — terminal states', () => {
       resolved_at: '2026-05-19T12:34:56.000Z',
       result_meta: { names_submitted: ['HUBSPOT_API_KEY'], scope: 'global' },
     });
-    renderWithApp(<EnvVarRequestWidget message={makeMessage(widget)} widget={widget} />);
+    const { client } = makeStubClient();
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
     expect(screen.getByText(/HUBSPOT_API_KEY/i)).toBeTruthy();
     expect(screen.getByText(/saved/i)).toBeTruthy();
     expect(screen.getByText(/global/i)).toBeTruthy();
@@ -179,14 +196,20 @@ describe('EnvVarRequestWidget — terminal states', () => {
 
   it('renders the dismissed summary', () => {
     const widget = makeWidget({ status: 'dismissed' });
-    renderWithApp(<EnvVarRequestWidget message={makeMessage(widget)} widget={widget} />);
+    const { client } = makeStubClient();
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
     expect(screen.getByText(/dismissed/i)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
   });
 
   it('renders the already_present summary', () => {
     const widget = makeWidget({ status: 'already_present' });
-    renderWithApp(<EnvVarRequestWidget message={makeMessage(widget)} widget={widget} />);
+    const { client } = makeStubClient();
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
     expect(screen.getByText(/already configured/i)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
   });

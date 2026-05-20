@@ -505,6 +505,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
             onUnloadTaskMessages={handleUnloadTaskMessages}
             assistantEmoji={assistantEmoji}
             isLatestTask={taskIndex === tasks.length - 1}
+            client={client}
           />
         ))}
       </div>

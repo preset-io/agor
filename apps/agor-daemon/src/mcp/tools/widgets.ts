@@ -19,18 +19,17 @@ import type {
   EnvVarMetadata,
   EnvVarScope,
   MessageID,
-  Paginated,
   Session,
   SessionID,
-  Task,
   TaskID,
   User,
   UserID,
   WidgetMessageMetadata,
 } from '@agor/core/types';
-import { MessageRole, TaskStatus } from '@agor/core/types';
+import { MessageRole } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { appendSystemMessage } from '../../utils/append-system-message.js';
+import { findHostTaskForSession } from '../../utils/session-tasks.js';
 import { type EnvVarsParams, envVarsParamsSchema } from '../../widgets/env-vars/index.js';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
@@ -45,52 +44,6 @@ function widgetContentPreview(params: EnvVarsParams): string {
   return params.names.length === 1
     ? `Please provide ${list}: ${params.reason}`
     : `Please provide ${list}: ${params.reason}`;
-}
-
-/**
- * Find the active task for the session, so the widget message can be bound
- * to it. The transcript renderer loads messages per-task (`messages where
- * task_id = X`), so a widget message without a `task_id` is invisible —
- * see `packages/client/src/reactive-session.ts:252`. Prefer the currently
- * active task (the one that invoked this MCP call); fall back to the most
- * recent task as a defensive measure.
- *
- * Implementation note: `TasksService.find()` short-circuits on `session_id`
- * BEFORE applying status / sort (see `services/tasks.ts:65-110`), so a
- * combined query like `{ session_id, status: RUNNING, $sort }` silently
- * returns ALL session tasks in created_at ASC. We work around that by
- * fetching the session's tasks once and doing the active-status filter +
- * recency sort in-process. Same workaround the stop-route uses
- * (`register-routes.ts:1990-2024`).
- */
-const ACTIVE_TASK_STATUSES = new Set<string>([
-  TaskStatus.RUNNING,
-  TaskStatus.AWAITING_PERMISSION,
-  TaskStatus.STOPPING,
-]);
-
-function recencyKey(t: Task): number {
-  return new Date(t.started_at || t.created_at).getTime();
-}
-
-async function findHostTaskId(ctx: McpContext, sessionId: SessionID): Promise<TaskID | undefined> {
-  const result = (await ctx.app.service('tasks').find({
-    query: { session_id: sessionId, $limit: 1000 },
-    ...ctx.baseServiceParams,
-  })) as Paginated<Task> | Task[];
-  const all = Array.isArray(result) ? result : result.data;
-  if (all.length === 0) return undefined;
-
-  // Active (RUNNING / AWAITING_PERMISSION / STOPPING) most-recent first.
-  const active = all
-    .filter((t) => ACTIVE_TASK_STATUSES.has(t.status))
-    .sort((a, b) => recencyKey(b) - recencyKey(a));
-  if (active[0]) return active[0].task_id as TaskID;
-
-  // Fallback: the session's most-recent task overall (defensive — the MCP
-  // tool is invoked by a running agent, so an active task should exist).
-  const recent = [...all].sort((a, b) => recencyKey(b) - recencyKey(a));
-  return recent[0]?.task_id as TaskID | undefined;
 }
 
 /**
@@ -162,7 +115,15 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       // Bind the widget message to the host task so the transcript renderer
       // picks it up — `loadTaskMessages(taskId)` queries by `task_id`, and a
       // message without one is orphaned (invisible in the conversation pane).
-      const hostTaskId = await findHostTaskId(ctx, ctx.sessionId as SessionID);
+      // The transcript renderer loads messages per-task; an unbound widget
+      // message is invisible. See `utils/session-tasks.ts` for the lookup
+      // semantics (active-first, recency-DESC fallback).
+      const hostTask = await findHostTaskForSession(
+        ctx.app,
+        ctx.sessionId as SessionID,
+        ctx.baseServiceParams
+      );
+      const hostTaskId = hostTask?.task_id as TaskID | undefined;
 
       const created = await appendSystemMessage({
         app: ctx.app,
@@ -187,23 +148,18 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       // Extend the host task's message_range.end_index so the widget is
       // counted within the task's window (mirrors the daemon-restart
       // injection path at `startup.ts:274`).
-      if (hostTaskId) {
+      if (hostTask?.message_range) {
         try {
-          const task = (await ctx.app
-            .service('tasks')
-            .get(hostTaskId, ctx.baseServiceParams)) as Task;
-          if (task.message_range) {
-            await ctx.app.service('tasks').patch(
-              hostTaskId,
-              {
-                message_range: {
-                  start_index: task.message_range.start_index,
-                  end_index: created.index,
-                },
+          await ctx.app.service('tasks').patch(
+            hostTask.task_id,
+            {
+              message_range: {
+                start_index: hostTask.message_range.start_index,
+                end_index: created.index,
               },
-              ctx.baseServiceParams
-            );
-          }
+            },
+            ctx.baseServiceParams
+          );
         } catch (err) {
           // Non-fatal — widget will still render via task_id lookup.
           console.warn(

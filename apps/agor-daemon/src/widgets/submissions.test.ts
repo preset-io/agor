@@ -203,31 +203,37 @@ describe('canResolveWidget', () => {
   it('allows the session creator', () => {
     const session = { created_by: 'alice' as UserID };
     const worktree = { others_can: 'view' } as unknown as Worktree;
-    expect(canResolveWidget({ user_id: 'alice' as UserID }, session, worktree)).toBe(true);
+    expect(canResolveWidget({ user_id: 'alice' as UserID }, session, worktree, false)).toBe(true);
   });
 
   it('rejects a non-creator with view-only RBAC', () => {
     const session = { created_by: 'alice' as UserID };
     const worktree = { others_can: 'view' } as unknown as Worktree;
-    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, worktree)).toBe(false);
+    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, worktree, false)).toBe(false);
   });
 
   it('rejects a non-creator with session-tier RBAC (session tier is for own sessions only)', () => {
     const session = { created_by: 'alice' as UserID };
     const worktree = { others_can: 'session' } as unknown as Worktree;
-    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, worktree)).toBe(false);
+    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, worktree, false)).toBe(false);
   });
 
   it('allows a non-creator with prompt-tier RBAC', () => {
     const session = { created_by: 'alice' as UserID };
     const worktree = { others_can: 'prompt' } as unknown as Worktree;
-    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, worktree)).toBe(true);
+    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, worktree, false)).toBe(true);
   });
 
   it('allows a non-creator with all-tier RBAC', () => {
     const session = { created_by: 'alice' as UserID };
     const worktree = { others_can: 'all' } as unknown as Worktree;
-    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, worktree)).toBe(true);
+    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, worktree, false)).toBe(true);
+  });
+
+  it('allows an explicit worktree owner even when others_can is view-only', () => {
+    const session = { created_by: 'alice' as UserID };
+    const worktree = { others_can: 'view' } as unknown as Worktree;
+    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, worktree, true)).toBe(true);
   });
 });
 
@@ -437,6 +443,36 @@ describe('resolveWidget', () => {
         { app: app as never, isWorktreeOwner: async () => false }
       )
     ).rejects.toThrow(/Invalid submit/);
+  });
+
+  it('serializes concurrent resolutions on the same widget — only one applySubmit fires', async () => {
+    const { applySubmit } = registerTestWidget();
+    const fixtures = makeFixtures();
+    const { app } = makeApp(fixtures);
+
+    // Two callers hit submit in the same tick. The lock should let one
+    // through to terminal state; the second sees `status !== 'pending'` and
+    // rejects. applySubmit must only run ONCE.
+    const [first, second] = await Promise.allSettled([
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'submit', body: { value: 'one', scope: 'global' } },
+        { user_id: 'creator-user-id' as UserID },
+        { app: app as never, isWorktreeOwner: async () => false }
+      ),
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'submit', body: { value: 'two', scope: 'global' } },
+        { user_id: 'creator-user-id' as UserID },
+        { app: app as never, isWorktreeOwner: async () => false }
+      ),
+    ]);
+
+    expect(applySubmit).toHaveBeenCalledTimes(1);
+    const fulfilledCount = [first, second].filter((r) => r.status === 'fulfilled').length;
+    const rejectedCount = [first, second].filter((r) => r.status === 'rejected').length;
+    expect(fulfilledCount).toBe(1);
+    expect(rejectedCount).toBe(1);
   });
 });
 

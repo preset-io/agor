@@ -40,8 +40,7 @@ function makeCtx(
   };
   return {
     ctx: {
-      // biome-ignore lint/suspicious/noExplicitAny: Pass-through stub
-      app: app as any,
+      app: app as never,
       sessionId: 'sess-1' as never,
       submitterUserId: 'user-creator' as UserID,
       submitterRole: 'member' as string | undefined,
@@ -177,15 +176,18 @@ describe('env_vars widget — applySubmit', () => {
       env_vars: { HUBSPOT_API_KEY: 'shh' },
       env_var_scopes: { HUBSPOT_API_KEY: 'global' },
     });
-    // Regression: must pass auth params so the users.patch self-only hook
-    // (`register-hooks.ts:1481`) doesn't 403. Submitter context goes through.
+    // Regression: must pass auth params so the users.patch hook (`register-
+    // hooks.ts:1490`) accepts a write to a user other than the caller via
+    // the `trustedInternalWrite` escape hatch (the widget endpoint already
+    // authorized this via `canResolveWidget`).
     expect(params).toEqual({
       user: { user_id: 'user-creator', role: 'member' },
       authenticated: true,
+      trustedInternalWrite: true,
     });
   });
 
-  it('passes admin params through when submitter is admin (admin bypass path)', async () => {
+  it('passes submitter identity through for audit when an admin submits', async () => {
     const { ctx: baseCtx, patchSpy } = makeCtx();
     const adminCtx = {
       ...baseCtx,
@@ -197,12 +199,11 @@ describe('env_vars widget — applySubmit', () => {
       scope: 'global',
     });
     const [, , params] = patchSpy.mock.calls[0];
-    // Admin submitter → users.patch hook bypasses the self-check via
-    // role-based admin path. Target is still sessionCreatorUserId, but the
-    // auth params carry the ADMIN submitter's identity.
+    // Auth params carry the SUBMITTER identity so the patch is attributable.
     expect(params).toEqual({
       user: { user_id: 'user-admin', role: 'admin' },
       authenticated: true,
+      trustedInternalWrite: true,
     });
   });
 
@@ -242,8 +243,12 @@ describe('env_vars widget — applySubmit', () => {
     ).rejects.toThrow(/value too long/i);
   });
 
-  it('does NOT log the submitted value (R5)', async () => {
-    // R5 in the design doc: submit handler must not log values.
+  it('widget shim does not log the submitted value (R5 — daemon-widget surface only)', async () => {
+    // R5 in the design doc: submit handler must not log values. NOTE: this
+    // test covers ONLY the widget-side shim (env-vars/index.ts applySubmit
+    // + buildResultMeta). It stubs users.patch, so the users service's own
+    // log paths aren't exercised here — those are tested separately at the
+    // users-service level (it already only logs names, not values).
     const secret = 'super-leaky-secret-value-XYZ';
     const calls: unknown[][] = [];
     const spies = [

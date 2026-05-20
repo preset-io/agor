@@ -1482,6 +1482,21 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             return context;
           }
 
+          // Trusted internal-server-side write escape hatch. Set by code paths
+          // that have ALREADY authorized the caller against a different,
+          // narrower contract than the users.patch self-only hook — e.g. the
+          // widget submit endpoint, which authorizes via `canResolveWidget`
+          // (session-creator OR prompt-tier worktree RBAC) and then writes
+          // the resulting env-var values onto the session creator's profile.
+          //
+          // Field-level admin gates above (unix_username / role /
+          // must_change_password) are NOT bypassed — those run first.
+          //
+          // Grep for: trustedInternalWrite — to audit every site that sets it.
+          if ((params as { trustedInternalWrite?: boolean }).trustedInternalWrite === true) {
+            return context;
+          }
+
           // Otherwise forbidden
           throw new Forbidden('You can only update your own profile');
         },

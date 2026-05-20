@@ -90,6 +90,7 @@ import {
   requireMinimumRole,
 } from './utils/authorization.js';
 import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
+import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import {
@@ -1980,20 +1981,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           };
         }
 
-        const targetTasksArray: Task[] = [];
-
-        for (const status of [
-          TaskStatus.RUNNING,
-          TaskStatus.AWAITING_PERMISSION,
-          TaskStatus.STOPPING,
-        ]) {
-          const result = await tasksService.find({
-            query: { session_id: id, status, $limit: 10 },
-          });
-          const findResult = result as Task[] | Paginated<Task>;
-          const tasks = isPaginated(findResult) ? findResult.data : findResult;
-          targetTasksArray.push(...tasks);
-        }
+        // `TasksService.find()` short-circuits on session_id and silently
+        // ignores the status filter; use the shared helper that filters in
+        // process. Already recency-DESC sorted.
+        const targetTasksArray = await findActiveTasksForSession(app as never, id as SessionID);
 
         if (targetTasksArray.length === 0) {
           console.warn(
@@ -2017,11 +2008,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           };
         }
 
-        targetTasksArray.sort((a, b) => {
-          const timeA = new Date(a.started_at || a.created_at).getTime();
-          const timeB = new Date(b.started_at || b.created_at).getTime();
-          return timeB - timeA;
-        });
         const latestTask = targetTasksArray[0];
 
         console.log(
