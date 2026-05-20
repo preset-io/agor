@@ -161,6 +161,37 @@ export interface SpawnExecutorOptions {
    * Used to clean up resources when executor terminates.
    */
   onExit?: (code: number | null) => void;
+
+  /**
+   * Callback fired immediately after the child process is spawned, before
+   * stdin is written. Receives the ChildProcess so callers can track its
+   * pid (e.g. for /sessions/:id/stop), wire additional event listeners, or
+   * attach custom cleanup. Called for both local and templated spawn paths.
+   */
+  onSpawn?: (child: import('node:child_process').ChildProcess) => void;
+
+  /**
+   * Pre-curated environment for the executor process. When set, the local-
+   * subprocess path uses this verbatim instead of building its own
+   * essentialEnv (which curates down to a hardcoded set of API-key vars).
+   *
+   * Use this when the caller has already assembled an env that includes
+   * downstream-specific values (gateway env vars, scoped credentials,
+   * DAEMON_URL, …) that the built-in curation would drop. Ignored by the
+   * templated spawn path (the template controls its own env).
+   */
+  preparedEnv?: Record<string, string>;
+
+  /**
+   * Pre-written impersonation env file (mode 0600, owned by `asUser`).
+   * When set, the local-subprocess path uses this path verbatim instead of
+   * calling prepareImpersonationEnv() itself. Useful when the caller has
+   * already prepared an env file with a different env mix than spawn-
+   * executor's defaults would produce.
+   *
+   * Only applies when `asUser` is set. Ignored by the templated path.
+   */
+  preparedEnvFilePath?: string;
 }
 
 /**
@@ -322,6 +353,9 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     env = process.env as Record<string, string>,
     logPrefix = '[Executor]',
     asUser: rawAsUser,
+    onSpawn,
+    preparedEnv,
+    preparedEnvFilePath,
   } = options;
   const asUser = rawAsUser || undefined;
 
@@ -331,37 +365,48 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   // `resolvedConfig` (see buildResolvedConfigSlice).
   const daemonUrl = getDaemonUrl();
 
-  // When impersonating, pass minimal env vars and let sudo set HOME correctly
-  const essentialEnv: Record<string, string> = asUser
-    ? Object.fromEntries(
-        Object.entries({
-          DAEMON_URL: daemonUrl,
-          PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
-          NODE_ENV: env.NODE_ENV,
-          // HOME: not set - sudo will set it to the target user's home directory
-          ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
-          ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
-          ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
-          CLAUDE_CODE_OAUTH_TOKEN: env.CLAUDE_CODE_OAUTH_TOKEN,
-          OPENAI_API_KEY: env.OPENAI_API_KEY,
-          OPENAI_BASE_URL: env.OPENAI_BASE_URL,
-          GEMINI_API_KEY: env.GEMINI_API_KEY,
-          GOOGLE_API_KEY: env.GOOGLE_API_KEY,
-          // Forward git hardening pairs across the sudo boundary (sudoers
-          // env_keep is the belt; this is the suspenders for this path).
-          GIT_CONFIG_PARAMETERS: env.GIT_CONFIG_PARAMETERS,
-        }).filter(([_, v]) => v !== undefined)
-      )
-    : { ...env, DAEMON_URL: daemonUrl };
-
-  const envWithDaemonUrl = essentialEnv;
+  // When impersonating, pass minimal env vars and let sudo set HOME correctly.
+  // If the caller supplied a pre-curated env (preparedEnv), use it verbatim
+  // (still ensuring DAEMON_URL is present) instead of the hardcoded curation.
+  const envWithDaemonUrl: Record<string, string> = preparedEnv
+    ? { DAEMON_URL: daemonUrl, ...preparedEnv }
+    : asUser
+      ? Object.fromEntries(
+          Object.entries({
+            DAEMON_URL: daemonUrl,
+            PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
+            NODE_ENV: env.NODE_ENV,
+            // HOME: not set - sudo will set it to the target user's home directory
+            ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
+            ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
+            ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
+            CLAUDE_CODE_OAUTH_TOKEN: env.CLAUDE_CODE_OAUTH_TOKEN,
+            OPENAI_API_KEY: env.OPENAI_API_KEY,
+            OPENAI_BASE_URL: env.OPENAI_BASE_URL,
+            GEMINI_API_KEY: env.GEMINI_API_KEY,
+            GOOGLE_API_KEY: env.GOOGLE_API_KEY,
+            // Forward git hardening pairs across the sudo boundary (sudoers
+            // env_keep is the belt; this is the suspenders for this path).
+            GIT_CONFIG_PARAMETERS: env.GIT_CONFIG_PARAMETERS,
+          }).filter(([_, v]) => v !== undefined)
+        )
+      : { ...env, DAEMON_URL: daemonUrl };
 
   // Route secret-looking env vars through an on-disk env file owned by the
   // target user (mode 0600). This keeps API keys/tokens out of argv and out
   // of /proc/<pid>/cmdline. Non-secret vars (PATH, DAEMON_URL, NODE_ENV)
   // are still inlined for simplicity.
+  // If the caller already wrote an env file (preparedEnvFilePath), skip the
+  // prepareImpersonationEnv() call and use the pre-written file directly.
   const prepared = asUser
-    ? prepareImpersonationEnv({ asUser, env: envWithDaemonUrl })
+    ? preparedEnvFilePath
+      ? {
+          inlineEnv: Object.fromEntries(
+            Object.entries(envWithDaemonUrl).filter(([k]) => !isSecretEnvKey(k))
+          ),
+          envFilePath: preparedEnvFilePath,
+        }
+      : prepareImpersonationEnv({ asUser, env: envWithDaemonUrl })
     : { inlineEnv: undefined, envFilePath: undefined };
 
   // Build spawn command - handles impersonation via sudo -u when asUser is set
@@ -420,6 +465,10 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   // uses `sudo -u <asUser> rm -f` so it works under sticky /tmp.
   attachEnvFileCleanup(executorProcess, { envFilePath: prepared.envFilePath, asUser });
 
+  // Notify caller that the process is live (before stdin is written so the
+  // caller can attach additional listeners without racing against data).
+  onSpawn?.(executorProcess);
+
   // Log if process fails to spawn
   executorProcess.on('error', (error) => {
     console.error(`${logPrefix} Spawn error:`, error.message);
@@ -477,6 +526,9 @@ function spawnExecutorWithTemplate(
   const executorProcess = spawn('sh', ['-c', command], {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
+
+  // Notify caller that the process is live (before stdin is written).
+  options.onSpawn?.(executorProcess);
 
   // Log stdout in real-time
   executorProcess.stdout?.on('data', (data) => {

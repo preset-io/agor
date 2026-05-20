@@ -90,6 +90,7 @@ import {
   getSessionFilePath,
 } from './utils/session-state.js';
 import { pullIfNeeded, pushAsync } from './utils/session-state-hooks.js';
+import { spawnExecutor } from './utils/spawn-executor.js';
 
 /**
  * Interface for dependencies needed by service registration.
@@ -533,10 +534,6 @@ function createExecuteHandler(
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type varies by context
     params: any
   ) => {
-    const { spawn } = await import('node:child_process');
-    const path = await import('node:path');
-    const { fileURLToPath } = await import('node:url');
-
     const session = await sessionsService.get(sessionId, params);
     if (!session) {
       throw new Error(`Session ${sessionId} not found`);
@@ -584,32 +581,12 @@ function createExecuteHandler(
       }
     }
 
-    // Find executor binary
-    const dirname =
-      typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
-    const { existsSync } = await import('node:fs');
-    const possiblePaths = [
-      path.join(dirname, '../executor/cli.js'),
-      path.join(dirname, '../../../packages/executor/bin/agor-executor'),
-      path.join(dirname, '../../../packages/executor/dist/cli.js'),
-    ];
-    const executorPath = possiblePaths.find((p) => existsSync(p));
-    if (!executorPath) {
-      throw new Error(
-        `Executor binary not found. Tried:\n${possiblePaths.map((p) => `  - ${p}`).join('\n')}`
-      );
-    }
-    console.log(`[Daemon] Using executor at: ${executorPath}`);
-
     // Determine Unix user for executor
     const {
       resolveUnixUserForImpersonation,
       validateResolvedUnixUser,
       UnixUserNotFoundError,
-      buildSpawnArgs,
       getHomedirFromUsername,
-      prepareImpersonationEnv,
-      attachEnvFileCleanup,
     } = await import('@agor/core/unix');
 
     const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
@@ -740,28 +717,6 @@ function createExecuteHandler(
       },
     };
 
-    // Route secret-looking env vars through an on-disk env file owned by the
-    // target user (mode 0600) so API keys/tokens never appear in argv.
-    const prepared = executorUnixUser
-      ? prepareImpersonationEnv({ asUser: executorUnixUser, env: executorEnv })
-      : { inlineEnv: undefined, envFilePath: undefined };
-
-    const { cmd, args } = buildSpawnArgs('node', [executorPath, '--stdin'], {
-      asUser: executorUnixUser || undefined,
-      env: executorUnixUser ? prepared.inlineEnv : undefined,
-      envFilePath: prepared.envFilePath,
-    });
-
-    if (executorUnixUser) {
-      console.log(
-        `[Daemon] Spawning executor as user=${executorUnixUser}${
-          prepared.envFilePath ? ' (secrets in env-file)' : ''
-        }`
-      );
-    } else {
-      console.log(`[Daemon] Spawning executor as current user (no impersonation)`);
-    }
-
     // Stateless FS mode: resolve executor home dir for session file path
     const executorHomeDir = executorUnixUser ? getHomedirFromUsername(executorUnixUser) : undefined;
 
@@ -785,153 +740,142 @@ function createExecuteHandler(
       }
     }
 
-    const executorProcess = spawn(cmd, args, {
+    const logPrefix = `[Executor ${shortId(sessionId)}]`;
+
+    spawnExecutor(executorPayload, {
       cwd,
-      env: executorUnixUser ? undefined : executorEnv,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    // Safety-net cleanup for the env file. The inner bash script `rm -f`s
-    // the file before exec in the normal path, so this only fires if sudo
-    // or bash failed to launch at all, or `set -eu` aborted the source
-    // step. Uses sudo when asUser is set so it works under sticky /tmp.
-    attachEnvFileCleanup(executorProcess, {
-      envFilePath: prepared.envFilePath,
       asUser: executorUnixUser || undefined,
-    });
+      preparedEnv: executorEnv,
+      logPrefix,
+      templateVariables: {
+        session_id: sessionId,
+        task_id: taskId,
+        unix_user: executorUnixUser || undefined,
+      },
+      onSpawn: (child) => {
+        if (child.pid) {
+          trackExecutorProcess(sessionId, child.pid);
+          console.log(`${logPrefix} PID: ${child.pid}`);
+        }
+      },
+      onExit: async (code) => {
+        console.log(`${logPrefix} Exited with code ${code}`);
+        untrackExecutorProcess(sessionId);
 
-    if (executorProcess.pid) {
-      trackExecutorProcess(sessionId, executorProcess.pid);
-      console.log(`[Executor ${shortId(sessionId)}] PID: ${executorProcess.pid}`);
-    }
+        // Safety net: check if task is still running
+        try {
+          const currentSession = await app.service('sessions').get(sessionId, params);
+          const latestTaskId = currentSession.tasks?.[currentSession.tasks.length - 1];
 
-    executorProcess.stdin?.write(JSON.stringify(executorPayload));
-    executorProcess.stdin?.end();
+          if (latestTaskId && latestTaskId !== taskId) {
+            console.log(
+              `⏭️ [Executor] Task ${shortId(taskId)} is not the latest (latest: ${shortId(latestTaskId)}), skipping safety net`
+            );
+          } else if (
+            currentSession.status === SessionStatus.RUNNING ||
+            currentSession.status === SessionStatus.AWAITING_PERMISSION ||
+            currentSession.status === SessionStatus.AWAITING_INPUT ||
+            currentSession.status === SessionStatus.STOPPING ||
+            currentSession.status === SessionStatus.TIMED_OUT
+          ) {
+            try {
+              const currentTask = await app.service('tasks').get(taskId, params);
+              const isTaskStillActive =
+                currentTask.status === TaskStatus.RUNNING ||
+                currentTask.status === 'awaiting_permission' ||
+                currentTask.status === 'awaiting_input' ||
+                currentTask.status === 'stopping' ||
+                currentTask.status === 'timed_out';
 
-    executorProcess.stdout?.on('data', (data) => {
-      console.log(`[Executor ${shortId(sessionId)}] ${data.toString().trim()}`);
-    });
-    executorProcess.stderr?.on('data', (data) => {
-      console.error(`[Executor ${shortId(sessionId)}] ${data.toString().trim()}`);
-    });
-
-    executorProcess.on('exit', async (code) => {
-      console.log(`[Executor ${shortId(sessionId)}] Exited with code ${code}`);
-      untrackExecutorProcess(sessionId);
-
-      // Safety net: check if task is still running
-      try {
-        const currentSession = await app.service('sessions').get(sessionId, params);
-        const latestTaskId = currentSession.tasks?.[currentSession.tasks.length - 1];
-
-        if (latestTaskId && latestTaskId !== taskId) {
-          console.log(
-            `⏭️ [Executor] Task ${shortId(taskId)} is not the latest (latest: ${shortId(latestTaskId)}), skipping safety net`
-          );
-        } else if (
-          currentSession.status === SessionStatus.RUNNING ||
-          currentSession.status === SessionStatus.AWAITING_PERMISSION ||
-          currentSession.status === SessionStatus.AWAITING_INPUT ||
-          currentSession.status === SessionStatus.STOPPING ||
-          currentSession.status === SessionStatus.TIMED_OUT
-        ) {
-          try {
-            const currentTask = await app.service('tasks').get(taskId, params);
-            const isTaskStillActive =
-              currentTask.status === TaskStatus.RUNNING ||
-              currentTask.status === 'awaiting_permission' ||
-              currentTask.status === 'awaiting_input' ||
-              currentTask.status === 'stopping' ||
-              currentTask.status === 'timed_out';
-
-            if (isTaskStillActive) {
-              await app.service('tasks').patch(taskId, { status: TaskStatus.FAILED }, params);
-              console.log(
-                `✅ [Executor] Task ${shortId(taskId)} marked as FAILED after executor exit (code: ${code})`
-              );
-            } else {
-              console.log(
-                `⚠️  [Executor] Task ${shortId(taskId)} already ${currentTask.status}, but session still ${currentSession.status} — repairing session state`
+              if (isTaskStillActive) {
+                await app.service('tasks').patch(taskId, { status: TaskStatus.FAILED }, params);
+                console.log(
+                  `✅ [Executor] Task ${shortId(taskId)} marked as FAILED after executor exit (code: ${code})`
+                );
+              } else {
+                console.log(
+                  `⚠️  [Executor] Task ${shortId(taskId)} already ${currentTask.status}, but session still ${currentSession.status} — repairing session state`
+                );
+                await app
+                  .service('sessions')
+                  .patch(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true }, params);
+              }
+            } catch (taskError) {
+              console.error(
+                `⚠️  [Executor] Failed to mark task ${shortId(taskId)} as FAILED, falling back to session IDLE update:`,
+                taskError
               );
               await app
                 .service('sessions')
                 .patch(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true }, params);
-            }
-          } catch (taskError) {
-            console.error(
-              `⚠️  [Executor] Failed to mark task ${shortId(taskId)} as FAILED, falling back to session IDLE update:`,
-              taskError
-            );
-            await app
-              .service('sessions')
-              .patch(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true }, params);
-            console.log(
-              `✅ [Executor] Session ${shortId(sessionId)} status updated to IDLE after executor exit (was: ${currentSession.status})`
-            );
-          }
-        } else {
-          console.log(
-            `ℹ️  [Executor] Session ${shortId(sessionId)} already in ${currentSession.status} state, skipping IDLE update`
-          );
-        }
-      } catch (error) {
-        console.error(`❌ [Executor] Failed to handle executor exit:`, error);
-      }
-
-      // Stateless FS mode: serialize session file to DB after executor exits
-      if (config.execution?.stateless_fs_mode) {
-        try {
-          // Re-fetch session to get sdk_session_id (may have been set during execution)
-          const freshSession = await app.service('sessions').get(sessionId, params);
-          if (freshSession.sdk_session_id) {
-            pushAsync({
-              db,
-              sessionId,
-              worktreeId: freshSession.worktree_id,
-              taskId,
-              sdkSessionId: freshSession.sdk_session_id,
-              worktreePath: cwd,
-              tool: freshSession.agentic_tool,
-              executorHomeDir,
-            });
-
-            // Also compute and write session_md5 to the task record
-            try {
-              let filePath: string;
-              if (freshSession.agentic_tool === 'codex') {
-                const codexHome = getCodexHome(executorHomeDir);
-                const found = await findCodexSessionFile(codexHome, freshSession.sdk_session_id);
-                filePath = found || '';
-              } else {
-                filePath = getSessionFilePath(
-                  freshSession.agentic_tool,
-                  cwd,
-                  freshSession.sdk_session_id,
-                  executorHomeDir
-                );
-              }
-              if (filePath) {
-                const md5 = await computeFileHash(filePath);
-                if (md5) {
-                  await app.service('tasks').patch(taskId, { session_md5: md5 }, params);
-                }
-              }
-            } catch (md5Err) {
-              console.error(
-                '[stateless-fs] Failed to write session_md5 to task:',
-                md5Err instanceof Error ? md5Err.message : md5Err
+              console.log(
+                `✅ [Executor] Session ${shortId(sessionId)} status updated to IDLE after executor exit (was: ${currentSession.status})`
               );
             }
+          } else {
+            console.log(
+              `ℹ️  [Executor] Session ${shortId(sessionId)} already in ${currentSession.status} state, skipping IDLE update`
+            );
           }
-        } catch (pushErr) {
-          console.error(
-            '[stateless-fs] pushAsync setup failed:',
-            pushErr instanceof Error ? pushErr.message : pushErr
-          );
+        } catch (error) {
+          console.error(`❌ [Executor] Failed to handle executor exit:`, error);
         }
-      }
 
-      appWithExecutor.sessionTokenService?.revokeToken(sessionToken);
+        // Stateless FS mode: serialize session file to DB after executor exits
+        if (config.execution?.stateless_fs_mode) {
+          try {
+            // Re-fetch session to get sdk_session_id (may have been set during execution)
+            const freshSession = await app.service('sessions').get(sessionId, params);
+            if (freshSession.sdk_session_id) {
+              pushAsync({
+                db,
+                sessionId,
+                worktreeId: freshSession.worktree_id,
+                taskId,
+                sdkSessionId: freshSession.sdk_session_id,
+                worktreePath: cwd,
+                tool: freshSession.agentic_tool,
+                executorHomeDir,
+              });
+
+              // Also compute and write session_md5 to the task record
+              try {
+                let filePath: string;
+                if (freshSession.agentic_tool === 'codex') {
+                  const codexHome = getCodexHome(executorHomeDir);
+                  const found = await findCodexSessionFile(codexHome, freshSession.sdk_session_id);
+                  filePath = found || '';
+                } else {
+                  filePath = getSessionFilePath(
+                    freshSession.agentic_tool,
+                    cwd,
+                    freshSession.sdk_session_id,
+                    executorHomeDir
+                  );
+                }
+                if (filePath) {
+                  const md5 = await computeFileHash(filePath);
+                  if (md5) {
+                    await app.service('tasks').patch(taskId, { session_md5: md5 }, params);
+                  }
+                }
+              } catch (md5Err) {
+                console.error(
+                  '[stateless-fs] Failed to write session_md5 to task:',
+                  md5Err instanceof Error ? md5Err.message : md5Err
+                );
+              }
+            }
+          } catch (pushErr) {
+            console.error(
+              '[stateless-fs] pushAsync setup failed:',
+              pushErr instanceof Error ? pushErr.message : pushErr
+            );
+          }
+        }
+
+        appWithExecutor.sessionTokenService?.revokeToken(sessionToken);
+      },
     });
 
     return {
