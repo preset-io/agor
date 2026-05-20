@@ -78,8 +78,7 @@ describe('env_vars widget — paramsSchema', () => {
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      // default_scope and auto_resume defaults applied
-      expect(result.data.default_scope).toBe('global');
+      // auto_resume default applied (scope is a user-only UI choice)
       expect(result.data.auto_resume).toBe(true);
     }
   });
@@ -288,7 +287,6 @@ describe('env_vars widget — prompt builders', () => {
     const params = {
       names: ['HUBSPOT_API_KEY'],
       reason: 'why',
-      default_scope: 'global' as const,
       auto_resume: true,
     };
     const rm = { names_submitted: ['HUBSPOT_API_KEY'], scope: 'global' as const };
@@ -305,7 +303,6 @@ describe('env_vars widget — prompt builders', () => {
     const params = {
       names: ['A', 'B'],
       reason: 'why',
-      default_scope: 'session' as const,
       auto_resume: true,
     };
     const prompt = envVarsWidget.buildAutoResumePrompt(rm, params);
@@ -316,7 +313,6 @@ describe('env_vars widget — prompt builders', () => {
     const params = {
       names: ['HUBSPOT_API_KEY'],
       reason: 'why',
-      default_scope: 'global' as const,
       auto_resume: true,
     };
     const prompt = envVarsWidget.buildDismissedPrompt(params);

@@ -35,10 +35,6 @@ export const envVarsParamsSchema = z.object({
     .describe(
       'One sentence explaining why you need the value(s). Keep it tight — this renders in a small muted line under the input. NOT a place to restate what the widget does.'
     ),
-  default_scope: z
-    .enum(['global', 'session'])
-    .default('global')
-    .describe('Suggested scope for the values. User can override in the form.'),
   auto_resume: z
     .boolean()
     .default(true)

@@ -52,7 +52,6 @@ function makeWidget(
     params: {
       names: ['HUBSPOT_API_KEY'],
       reason: 'Needed to call the Hubspot API.',
-      default_scope: 'global',
       ...(paramOverrides ?? {}),
     },
     ...rest,
@@ -83,7 +82,6 @@ describe('EnvVarRequestWidget — pending state', () => {
       params: {
         names: ['HUBSPOT_API_KEY', 'STRIPE_SECRET_KEY'],
         reason: 'two integrations',
-        default_scope: 'global',
       },
     });
     renderWithApp(<EnvVarRequestWidget message={makeMessage(widget)} widget={widget} />);
@@ -120,7 +118,7 @@ describe('EnvVarRequestWidget — pending state', () => {
     const body = JSON.parse(init.body as string);
     expect(body).toEqual({
       values: { HUBSPOT_API_KEY: 'secret-key' },
-      scope: 'global', // default_scope was 'global'; no scope change in this test
+      scope: 'global', // UI always starts at Global; no scope change in this test
     });
   });
 

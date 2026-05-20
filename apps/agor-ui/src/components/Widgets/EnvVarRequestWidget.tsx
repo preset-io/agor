@@ -19,7 +19,12 @@
  */
 
 import type { EnvVarScope, Message, WidgetMessageMetadata } from '@agor-live/client';
-import { CheckCircleOutlined, LockOutlined, MinusCircleOutlined } from '@ant-design/icons';
+import {
+  CheckCircleOutlined,
+  LockOutlined,
+  MinusCircleOutlined,
+  SafetyCertificateOutlined,
+} from '@ant-design/icons';
 import { Button, Card, Input, Select, Space, Typography, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import { getDaemonUrl } from '@/config/daemon';
@@ -31,7 +36,6 @@ const { Text } = Typography;
 interface EnvVarsParams {
   names: string[];
   reason: string;
-  default_scope: EnvVarScope;
   auto_resume?: boolean;
 }
 
@@ -69,15 +73,22 @@ const VarRow: React.FC<VarRowProps> = ({ name, value, onChange, disabled }) => {
     <div>
       <Text
         strong
-        style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 4 }}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          marginBottom: 4,
+          fontFamily: token.fontFamilyCode,
+          fontSize: token.fontSizeSM,
+        }}
       >
         <LockOutlined style={{ color: token.colorTextSecondary }} />
-        <code style={{ fontSize: token.fontSize }}>{name}</code>
+        {name}
       </Text>
       <Input.Password
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="Enter value"
+        placeholder={`Enter value for ${name}`}
         disabled={disabled}
         aria-label={`Value for ${name}`}
         autoComplete="off"
@@ -101,7 +112,11 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message: _message, 
     for (const name of params.names) initial[name] = '';
     return initial;
   });
-  const [scope, setScope] = useState<EnvVarScope>(params.default_scope ?? 'global');
+  // Scope is a user-only choice — agent doesn't get to suggest it. Default
+  // to global because the most common case is "credential I'll need across
+  // sessions" (API keys, tokens). User can downscope to Session if they
+  // want a one-off.
+  const [scope, setScope] = useState<EnvVarScope>('global');
   const [submitting, setSubmitting] = useState(false);
   const [dismissing, setDismissing] = useState(false);
 
@@ -157,6 +172,11 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message: _message, 
     }
   };
 
+  const title =
+    params.names.length === 1
+      ? 'Securely provide environment variable'
+      : `Securely provide ${params.names.length} environment variables`;
+
   return (
     <Card
       size="small"
@@ -164,6 +184,11 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message: _message, 
       styles={{ body: { padding: token.paddingSM } }}
     >
       <Space orientation="vertical" size="small" style={{ width: '100%' }}>
+        <Space size="small" style={{ width: '100%' }}>
+          <SafetyCertificateOutlined style={{ color: token.colorPrimary }} />
+          <Text strong>{title}</Text>
+        </Space>
+
         {params.reason && (
           <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
             {params.reason}
@@ -181,17 +206,22 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message: _message, 
         ))}
 
         <Space style={{ width: '100%', justifyContent: 'space-between' }} size="small">
-          <Select
-            size="small"
-            value={scope}
-            onChange={(v) => setScope(v)}
-            disabled={submitting || dismissing}
-            style={{ width: 120 }}
-            options={[
-              { value: 'session', label: 'Session' },
-              { value: 'global', label: 'Global' },
-            ]}
-          />
+          <Space size="small">
+            <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+              Scope:
+            </Text>
+            <Select
+              size="small"
+              value={scope}
+              onChange={(v) => setScope(v)}
+              disabled={submitting || dismissing}
+              style={{ width: 110 }}
+              options={[
+                { value: 'global', label: 'Global' },
+                { value: 'session', label: 'Session' },
+              ]}
+            />
+          </Space>
           <Space size="small">
             <Button size="small" onClick={handleDismiss} loading={dismissing} disabled={submitting}>
               Dismiss
@@ -240,7 +270,7 @@ const SubmittedSummary: React.FC<{ widget: WidgetMessageMetadata }> = ({ widget 
   const { token } = theme.useToken();
   const rm = readResultMeta(widget);
   const names = rm?.names_submitted ?? readParams(widget).names;
-  const scope = rm?.scope ?? readParams(widget).default_scope ?? 'global';
+  const scope = rm?.scope ?? 'global';
   return (
     <TerminalLine
       icon={<CheckCircleOutlined style={{ color: token.colorSuccess }} />}

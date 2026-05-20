@@ -5,9 +5,9 @@
  *   - Normal path: creates a `widget_request` message with status 'pending',
  *     returns `{ widget_id, status: 'requested' }`.
  *   - `already_present` short-circuit: when the user already has all names
- *     set in the chosen default_scope, marks the widget `already_present`
- *     and queues an auto-resume task with a "values already configured"
- *     prompt — without rendering a form.
+ *     set in GLOBAL scope, marks the widget `already_present` and queues
+ *     an auto-resume task with a "values already configured" prompt —
+ *     without rendering a form.
  *   - Negative short-circuit: missing one name → falls back to the normal
  *     pending path.
  *   - `auto_resume: false` + `already_present`: status flips but no task
@@ -199,7 +199,6 @@ describe('agor_widgets_request_env_vars', () => {
     const res = await handler({
       names: ['HUBSPOT_API_KEY'],
       reason: 'call hubspot',
-      default_scope: 'global',
       auto_resume: true,
     });
 
@@ -248,7 +247,6 @@ describe('agor_widgets_request_env_vars', () => {
     await handler({
       names: ['HUBSPOT_API_KEY'],
       reason: 'call hubspot',
-      default_scope: 'global',
       auto_resume: true,
     });
 
@@ -295,7 +293,6 @@ describe('agor_widgets_request_env_vars', () => {
     await handler({
       names: ['HUBSPOT_API_KEY'],
       reason: 'call hubspot',
-      default_scope: 'global',
       auto_resume: true,
     });
 
@@ -338,7 +335,6 @@ describe('agor_widgets_request_env_vars', () => {
     await handler({
       names: ['HUBSPOT_API_KEY'],
       reason: 'call hubspot',
-      default_scope: 'global',
       auto_resume: true,
     });
 
@@ -361,7 +357,6 @@ describe('agor_widgets_request_env_vars', () => {
     const res = await handler({
       names: ['HUBSPOT_API_KEY'],
       reason: 'call hubspot',
-      default_scope: 'global',
       auto_resume: true,
     });
 
@@ -399,7 +394,6 @@ describe('agor_widgets_request_env_vars', () => {
     const res = await handler({
       names: ['HUBSPOT_API_KEY', 'STRIPE_SECRET_KEY'],
       reason: 'two integrations',
-      default_scope: 'global',
       auto_resume: true,
     });
 
@@ -408,10 +402,10 @@ describe('agor_widgets_request_env_vars', () => {
     expect(calls.find((c) => c.service === '/sessions/:id/prompt')).toBeUndefined();
   });
 
-  it('does NOT short-circuit when the name is set but in a different scope than default_scope', async () => {
+  it('does NOT short-circuit when the name is set only in session scope (short-circuit is global-only)', async () => {
     const { app, calls } = makeApp({
       sessionCreator: 'user-creator',
-      // Stored under session scope; agent asks for global.
+      // Stored under session scope; short-circuit only fires for global.
       creatorEnvVars: { HUBSPOT_API_KEY: { set: true, scope: 'session' } },
     });
     const captured = registerAndCapture({
@@ -424,7 +418,6 @@ describe('agor_widgets_request_env_vars', () => {
     const res = await handler({
       names: ['HUBSPOT_API_KEY'],
       reason: 'why',
-      default_scope: 'global',
       auto_resume: true,
     });
 
@@ -448,7 +441,6 @@ describe('agor_widgets_request_env_vars', () => {
     const res = await handler({
       names: ['HUBSPOT_API_KEY'],
       reason: 'why',
-      default_scope: 'global',
       auto_resume: false,
     });
 

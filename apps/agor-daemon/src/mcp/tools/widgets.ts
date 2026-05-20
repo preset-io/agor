@@ -139,12 +139,13 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         .get(sessionCreatorId, ctx.baseServiceParams)) as User;
 
       // `already_present` short-circuit: if every requested name is already
-      // set in the chosen default scope, skip the form entirely and auto-
-      // resume the agent with a "use what you have" prompt.
+      // set globally for this user, skip the form entirely and auto-resume
+      // the agent. Global-only check is intentional — session-scoped values
+      // depend on session_env_selections which we don't read here.
       const presentEverywhere = allNamesPresentInScope(
         creator.env_vars,
         params.names,
-        params.default_scope as EnvVarScope
+        'global' as EnvVarScope
       );
 
       const requestedAt = new Date().toISOString();

@@ -31,7 +31,6 @@ function makeWidget(
     params: {
       names: ['HUBSPOT_API_KEY'],
       reason: 'Needed to call the Hubspot API.',
-      default_scope: 'global',
       ...(paramOverrides ?? {}),
     },
     ...rest,
@@ -70,7 +69,6 @@ export const PendingMultiple: Story = {
       params: {
         names: ['HUBSPOT_API_KEY', 'STRIPE_SECRET_KEY', 'OPENAI_API_KEY'],
         reason: 'Needed to fan out to three downstream APIs in this task.',
-        default_scope: 'global',
       },
     });
     return { message: makeMessage(widget), widget };
@@ -83,7 +81,6 @@ export const PendingNoReason: Story = {
       params: {
         names: ['HUBSPOT_API_KEY'],
         reason: '',
-        default_scope: 'global',
       },
     });
     return { message: makeMessage(widget), widget };
