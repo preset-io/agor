@@ -13,6 +13,7 @@ import {
   FileTextOutlined,
   ForkOutlined,
   GithubOutlined,
+  IdcardOutlined,
   LinkOutlined,
   MessageOutlined,
   PercentageOutlined,
@@ -21,7 +22,7 @@ import {
   ThunderboltOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
-import { Collapse, Popover, Tooltip, theme } from 'antd';
+import { Button, Collapse, Popover, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { getContextWindowPercentage } from '../../utils/contextWindow';
@@ -566,15 +567,21 @@ interface SessionIdPillProps extends BasePillProps {
   showCopy?: boolean;
 }
 
-/**
- * Session ID Popover Content Component
- * Displays both Agor session ID and agentic tool session ID with copy buttons
- */
-const SessionIdPopoverContent: React.FC<{
+interface SessionIdsListProps {
   sessionId: string;
   sdkSessionId?: string;
   agenticTool?: string;
-}> = ({ sessionId, sdkSessionId, agenticTool }) => {
+}
+
+/**
+ * Renders Agor + SDK session IDs (short + full) with copy buttons.
+ * Used in the SessionInfoButton popover and the Session Settings modal.
+ */
+export const SessionIdsList: React.FC<SessionIdsListProps> = ({
+  sessionId,
+  sdkSessionId,
+  agenticTool,
+}) => {
   const { token } = theme.useToken();
 
   const handleCopyAgor = () => {
@@ -587,22 +594,22 @@ const SessionIdPopoverContent: React.FC<{
     }
   };
 
+  const idRowStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: 8,
+    background: token.colorBgContainer,
+    borderRadius: token.borderRadius,
+    border: `1px solid ${token.colorBorder}`,
+  };
+
   return (
-    <div style={{ width: 400, maxWidth: '90vw' }}>
+    <div>
       {/* Agor Session ID */}
       <div style={{ marginBottom: sdkSessionId ? 16 : 0 }}>
         <div style={{ fontWeight: 600, fontSize: '0.95em', marginBottom: 8 }}>Agor Session ID</div>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: 8,
-            background: token.colorBgContainer,
-            borderRadius: token.borderRadius,
-            border: `1px solid ${token.colorBorder}`,
-          }}
-        >
+        <div style={idRowStyle}>
           <div style={{ flex: 1, fontFamily: token.fontFamilyCode, fontSize: '0.9em' }}>
             <div style={{ color: token.colorTextSecondary, fontSize: '0.85em', marginBottom: 2 }}>
               {shortId(sessionId)}
@@ -628,17 +635,7 @@ const SessionIdPopoverContent: React.FC<{
           <div style={{ fontWeight: 600, fontSize: '0.95em', marginBottom: 8 }}>
             {agenticTool || 'SDK'} Session ID
           </div>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: 8,
-              background: token.colorBgContainer,
-              borderRadius: token.borderRadius,
-              border: `1px solid ${token.colorBorder}`,
-            }}
-          >
+          <div style={idRowStyle}>
             <div style={{ flex: 1, fontFamily: token.fontFamilyCode, fontSize: '0.9em' }}>
               <div style={{ color: token.colorTextSecondary, fontSize: '0.85em', marginBottom: 2 }}>
                 {shortId(sdkSessionId)}
@@ -661,6 +658,27 @@ const SessionIdPopoverContent: React.FC<{
     </div>
   );
 };
+
+/**
+ * Compact icon-button trigger for session ID + info popover.
+ * Replaces the wider SessionIdPill in dense footer contexts. Same content,
+ * click-to-open (instead of hover) to avoid stray fires during footer mousing.
+ */
+export const SessionInfoButton: React.FC<SessionIdsListProps> = (props) => (
+  <Popover
+    content={
+      <div style={{ width: 400, maxWidth: '90vw' }}>
+        <SessionIdsList {...props} />
+      </div>
+    }
+    trigger="click"
+    placement="topLeft"
+  >
+    <Tooltip title="Session info & IDs">
+      <Button type="text" size="small" icon={<IdcardOutlined />} aria-label="Session info" />
+    </Tooltip>
+  </Popover>
+);
 
 export const SessionIdPill: React.FC<SessionIdPillProps> = ({
   sessionId,
@@ -692,11 +710,13 @@ export const SessionIdPill: React.FC<SessionIdPillProps> = ({
   return (
     <Popover
       content={
-        <SessionIdPopoverContent
-          sessionId={sessionId}
-          sdkSessionId={sdkSessionId}
-          agenticTool={agenticTool}
-        />
+        <div style={{ width: 400, maxWidth: '90vw' }}>
+          <SessionIdsList
+            sessionId={sessionId}
+            sdkSessionId={sdkSessionId}
+            agenticTool={agenticTool}
+          />
+        </div>
       }
       title={null}
       trigger="hover"

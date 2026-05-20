@@ -35,6 +35,7 @@ import { CallbackConfigForm } from '../CallbackConfigForm';
 import { CallbackTargetDisplay } from '../CallbackToggleButton';
 import { CodexSettingsForm } from '../CodexSettingsForm';
 import { ErrorBoundary } from '../ErrorBoundary';
+import { SessionIdsList } from '../Pill';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 import { SessionMetadataForm } from '../SessionMetadataForm';
 
@@ -349,6 +350,13 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
       <Form form={form} layout="vertical" initialValues={initialValues}>
         {/* PRIMARY ZONE — essential settings, always visible */}
         <SessionMetadataForm showHelpText={false} titleRequired={false} titleLabel="Title" />
+        <Form.Item label="Session IDs">
+          <SessionIdsList
+            sessionId={session.session_id}
+            sdkSessionId={session.sdk_session_id}
+            agenticTool={session.agentic_tool}
+          />
+        </Form.Item>
         <AgenticToolConfigForm
           agenticTool={session.agentic_tool}
           mcpServerById={mcpServerById}

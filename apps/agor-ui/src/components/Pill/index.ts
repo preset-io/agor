@@ -18,6 +18,8 @@ export {
   ReportPill,
   ScheduledRunPill,
   SessionIdPill,
+  SessionIdsList,
+  SessionInfoButton,
   SpawnPill,
   StatusPill,
   TokenCountPill,
