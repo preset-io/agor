@@ -52,28 +52,45 @@ function widgetContentPreview(params: EnvVarsParams): string {
  * to it. The transcript renderer loads messages per-task (`messages where
  * task_id = X`), so a widget message without a `task_id` is invisible —
  * see `packages/client/src/reactive-session.ts:252`. Prefer the currently
- * RUNNING task (the one that invoked this MCP call); fall back to the most
+ * active task (the one that invoked this MCP call); fall back to the most
  * recent task as a defensive measure.
+ *
+ * Implementation note: `TasksService.find()` short-circuits on `session_id`
+ * BEFORE applying status / sort (see `services/tasks.ts:65-110`), so a
+ * combined query like `{ session_id, status: RUNNING, $sort }` silently
+ * returns ALL session tasks in created_at ASC. We work around that by
+ * fetching the session's tasks once and doing the active-status filter +
+ * recency sort in-process. Same workaround the stop-route uses
+ * (`register-routes.ts:1990-2024`).
  */
-async function findHostTaskId(ctx: McpContext, sessionId: SessionID): Promise<TaskID | undefined> {
-  const running = (await ctx.app.service('tasks').find({
-    query: {
-      session_id: sessionId,
-      status: TaskStatus.RUNNING,
-      $limit: 1,
-      $sort: { created_at: -1 },
-    },
-    ...ctx.baseServiceParams,
-  })) as Paginated<Task> | Task[];
-  const runningList = Array.isArray(running) ? running : running.data;
-  if (runningList[0]) return runningList[0].task_id as TaskID;
+const ACTIVE_TASK_STATUSES = new Set<string>([
+  TaskStatus.RUNNING,
+  TaskStatus.AWAITING_PERMISSION,
+  TaskStatus.STOPPING,
+]);
 
-  const recent = (await ctx.app.service('tasks').find({
-    query: { session_id: sessionId, $limit: 1, $sort: { created_at: -1 } },
+function recencyKey(t: Task): number {
+  return new Date(t.started_at || t.created_at).getTime();
+}
+
+async function findHostTaskId(ctx: McpContext, sessionId: SessionID): Promise<TaskID | undefined> {
+  const result = (await ctx.app.service('tasks').find({
+    query: { session_id: sessionId, $limit: 1000 },
     ...ctx.baseServiceParams,
   })) as Paginated<Task> | Task[];
-  const recentList = Array.isArray(recent) ? recent : recent.data;
-  return recentList[0]?.task_id as TaskID | undefined;
+  const all = Array.isArray(result) ? result : result.data;
+  if (all.length === 0) return undefined;
+
+  // Active (RUNNING / AWAITING_PERMISSION / STOPPING) most-recent first.
+  const active = all
+    .filter((t) => ACTIVE_TASK_STATUSES.has(t.status))
+    .sort((a, b) => recencyKey(b) - recencyKey(a));
+  if (active[0]) return active[0].task_id as TaskID;
+
+  // Fallback: the session's most-recent task overall (defensive — the MCP
+  // tool is invoked by a running agent, so an active task should exist).
+  const recent = [...all].sort((a, b) => recencyKey(b) - recencyKey(a));
+  return recent[0]?.task_id as TaskID | undefined;
 }
 
 /**

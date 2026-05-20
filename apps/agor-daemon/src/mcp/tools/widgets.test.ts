@@ -64,15 +64,24 @@ interface ServiceCall {
   args: unknown[];
 }
 
+interface FakeTask {
+  task_id: string;
+  status: string;
+  created_at?: string;
+  started_at?: string;
+  message_range?: { start_index: number; end_index: number };
+}
+
 function makeApp(opts: {
   sessionCreator: string;
   creatorEnvVars?: Record<string, { set: true; scope: 'global' | 'session' }>;
-  /** When omitted, the tasks service returns a single RUNNING task (default). */
-  hostTask?: {
-    task_id: string;
-    status?: string;
-    message_range?: { start_index: number; end_index: number };
-  } | null;
+  /**
+   * The session's tasks. Mirrors how the real `TasksService.find({ session_id })`
+   * returns ALL session tasks (ASC by created_at) regardless of status / sort,
+   * because of the short-circuit at `services/tasks.ts:65-110`.
+   * When omitted, a single RUNNING task is returned.
+   */
+  sessionTasks?: FakeTask[] | null;
 }): {
   app: unknown;
   calls: ServiceCall[];
@@ -80,12 +89,16 @@ function makeApp(opts: {
 } {
   const calls: ServiceCall[] = [];
   let lastMessagePatch: Record<string, unknown> | undefined;
-  const defaultTask = {
-    task_id: 'task-host-1',
-    status: 'running',
-    message_range: { start_index: 0, end_index: 4 },
-  };
-  const hostTask = opts.hostTask === undefined ? defaultTask : opts.hostTask;
+  const defaultTasks: FakeTask[] = [
+    {
+      task_id: 'task-host-1',
+      status: 'running',
+      created_at: '2026-05-19T00:00:00.000Z',
+      message_range: { start_index: 0, end_index: 4 },
+    },
+  ];
+  const sessionTasks = opts.sessionTasks === undefined ? defaultTasks : (opts.sessionTasks ?? []);
+  const tasksById = new Map(sessionTasks.map((t) => [t.task_id, t]));
   const services: Record<string, Record<string, (...args: unknown[]) => unknown>> = {
     sessions: {
       get: async (...args: unknown[]) => {
@@ -105,16 +118,25 @@ function makeApp(opts: {
     tasks: {
       find: async (...args: unknown[]) => {
         calls.push({ service: 'tasks', method: 'find', args });
-        return { data: hostTask ? [hostTask] : [], total: hostTask ? 1 : 0, limit: 1, skip: 0 };
+        return {
+          data: sessionTasks,
+          total: sessionTasks.length,
+          limit: 1000,
+          skip: 0,
+        };
       },
       get: async (...args: unknown[]) => {
         calls.push({ service: 'tasks', method: 'get', args });
-        if (!hostTask) throw new Error('task not found');
-        return hostTask;
+        const id = args[0] as string;
+        const t = tasksById.get(id);
+        if (!t) throw new Error(`task not found: ${id}`);
+        return t;
       },
       patch: async (...args: unknown[]) => {
         calls.push({ service: 'tasks', method: 'patch', args });
-        return { ...hostTask, ...(args[1] as Record<string, unknown>) };
+        const id = args[0] as string;
+        const t = tasksById.get(id);
+        return { ...t, ...(args[1] as Record<string, unknown>) };
       },
     },
     messages: {
@@ -214,7 +236,7 @@ describe('agor_widgets_request_env_vars', () => {
   it('gracefully omits taskId when no task exists yet (e.g. brand-new session)', async () => {
     const { app, calls } = makeApp({
       sessionCreator: 'user-creator',
-      hostTask: null,
+      sessionTasks: [],
     });
     const captured = registerAndCapture({
       app,
@@ -234,6 +256,94 @@ describe('agor_widgets_request_env_vars', () => {
     expect(appendArgs.taskId).toBeUndefined();
     // No task to patch
     expect(calls.find((c) => c.service === 'tasks' && c.method === 'patch')).toBeUndefined();
+  });
+
+  it('binds to the RUNNING task, not the oldest, when several completed tasks exist', async () => {
+    // Repro for the bug from initial live test: TasksService.find short-circuits
+    // on session_id and returns ALL session tasks in created_at ASC, ignoring
+    // the status filter. The fix must filter to active statuses in-process.
+    const { app, calls } = makeApp({
+      sessionCreator: 'user-creator',
+      sessionTasks: [
+        {
+          task_id: 'task-bootstrap',
+          status: 'completed',
+          created_at: '2026-05-19T22:21:29.000Z',
+          message_range: { start_index: 0, end_index: 11 },
+        },
+        {
+          task_id: 'task-first-prompt',
+          status: 'completed',
+          created_at: '2026-05-20T01:58:10.000Z',
+          message_range: { start_index: 12, end_index: 16 },
+        },
+        {
+          task_id: 'task-current',
+          status: 'running',
+          created_at: '2026-05-20T02:12:35.000Z',
+          message_range: { start_index: 17, end_index: 18 },
+        },
+      ],
+    });
+    const captured = registerAndCapture({
+      app,
+      userId: 'user-creator',
+      sessionId: 'sess-1',
+    });
+
+    const handler = captured.agor_widgets_request_env_vars.cb;
+    await handler({
+      names: ['HUBSPOT_API_KEY'],
+      reason: 'call hubspot',
+      default_scope: 'global',
+      auto_resume: true,
+    });
+
+    const appendArgs = appendStub.mock.calls[0][0];
+    expect(appendArgs.taskId).toBe('task-current'); // NOT 'task-bootstrap'
+
+    // And the patch extends the CURRENT task's range, not the bootstrap's.
+    const taskPatch = calls.find((c) => c.service === 'tasks' && c.method === 'patch');
+    expect(taskPatch?.args[0]).toBe('task-current');
+  });
+
+  it('falls back to most-recent task when no task is RUNNING', async () => {
+    // Defensive: the MCP tool is invoked by a running agent, so this shouldn't
+    // normally happen — but if all tasks are somehow non-active, pick the
+    // most recent so the widget still renders SOMEWHERE rather than nowhere.
+    const { app } = makeApp({
+      sessionCreator: 'user-creator',
+      sessionTasks: [
+        {
+          task_id: 'task-old',
+          status: 'completed',
+          created_at: '2026-05-19T22:21:29.000Z',
+          message_range: { start_index: 0, end_index: 11 },
+        },
+        {
+          task_id: 'task-newer',
+          status: 'completed',
+          created_at: '2026-05-20T02:12:35.000Z',
+          message_range: { start_index: 12, end_index: 18 },
+        },
+      ],
+    });
+    const captured = registerAndCapture({
+      app,
+      userId: 'user-creator',
+      sessionId: 'sess-1',
+    });
+
+    const handler = captured.agor_widgets_request_env_vars.cb;
+    await handler({
+      names: ['HUBSPOT_API_KEY'],
+      reason: 'call hubspot',
+      default_scope: 'global',
+      auto_resume: true,
+    });
+
+    const appendArgs = appendStub.mock.calls[0][0];
+    expect(appendArgs.taskId).toBe('task-newer');
   });
 
   it('already_present short-circuit: status flips, auto-resume task queued, no form-render', async () => {
