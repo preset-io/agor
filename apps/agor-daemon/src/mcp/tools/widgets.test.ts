@@ -67,6 +67,12 @@ interface ServiceCall {
 function makeApp(opts: {
   sessionCreator: string;
   creatorEnvVars?: Record<string, { set: true; scope: 'global' | 'session' }>;
+  /** When omitted, the tasks service returns a single RUNNING task (default). */
+  hostTask?: {
+    task_id: string;
+    status?: string;
+    message_range?: { start_index: number; end_index: number };
+  } | null;
 }): {
   app: unknown;
   calls: ServiceCall[];
@@ -74,6 +80,12 @@ function makeApp(opts: {
 } {
   const calls: ServiceCall[] = [];
   let lastMessagePatch: Record<string, unknown> | undefined;
+  const defaultTask = {
+    task_id: 'task-host-1',
+    status: 'running',
+    message_range: { start_index: 0, end_index: 4 },
+  };
+  const hostTask = opts.hostTask === undefined ? defaultTask : opts.hostTask;
   const services: Record<string, Record<string, (...args: unknown[]) => unknown>> = {
     sessions: {
       get: async (...args: unknown[]) => {
@@ -88,6 +100,21 @@ function makeApp(opts: {
           user_id: opts.sessionCreator,
           env_vars: opts.creatorEnvVars ?? {},
         };
+      },
+    },
+    tasks: {
+      find: async (...args: unknown[]) => {
+        calls.push({ service: 'tasks', method: 'find', args });
+        return { data: hostTask ? [hostTask] : [], total: hostTask ? 1 : 0, limit: 1, skip: 0 };
+      },
+      get: async (...args: unknown[]) => {
+        calls.push({ service: 'tasks', method: 'get', args });
+        if (!hostTask) throw new Error('task not found');
+        return hostTask;
+      },
+      patch: async (...args: unknown[]) => {
+        calls.push({ service: 'tasks', method: 'patch', args });
+        return { ...hostTask, ...(args[1] as Record<string, unknown>) };
       },
     },
     messages: {
@@ -168,6 +195,45 @@ describe('agor_widgets_request_env_vars', () => {
     // No auto-resume task on the normal path — it fires only after the user
     // submits/dismisses, via the resolve handler.
     expect(calls.find((c) => c.service === '/sessions/:id/prompt')).toBeUndefined();
+
+    // Regression: the widget message MUST be bound to the host task — the
+    // transcript renderer loads messages by `task_id`, so an orphaned widget
+    // is invisible in the conversation pane.
+    expect(appendArgs.taskId).toBe('task-host-1');
+
+    // And the host task's message_range.end_index should be extended to cover
+    // the newly-inserted widget message.
+    const taskPatch = calls.find((c) => c.service === 'tasks' && c.method === 'patch');
+    expect(taskPatch).toBeDefined();
+    const patchBody = taskPatch?.args[1] as {
+      message_range: { end_index: number };
+    };
+    expect(patchBody.message_range.end_index).toBe(0); // index of the appended widget
+  });
+
+  it('gracefully omits taskId when no task exists yet (e.g. brand-new session)', async () => {
+    const { app, calls } = makeApp({
+      sessionCreator: 'user-creator',
+      hostTask: null,
+    });
+    const captured = registerAndCapture({
+      app,
+      userId: 'user-creator',
+      sessionId: 'sess-1',
+    });
+
+    const handler = captured.agor_widgets_request_env_vars.cb;
+    await handler({
+      names: ['HUBSPOT_API_KEY'],
+      reason: 'call hubspot',
+      default_scope: 'global',
+      auto_resume: true,
+    });
+
+    const appendArgs = appendStub.mock.calls[0][0];
+    expect(appendArgs.taskId).toBeUndefined();
+    // No task to patch
+    expect(calls.find((c) => c.service === 'tasks' && c.method === 'patch')).toBeUndefined();
   });
 
   it('already_present short-circuit: status flips, auto-resume task queued, no form-render', async () => {

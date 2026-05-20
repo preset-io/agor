@@ -19,13 +19,16 @@ import type {
   EnvVarMetadata,
   EnvVarScope,
   MessageID,
+  Paginated,
   Session,
   SessionID,
+  Task,
+  TaskID,
   User,
   UserID,
   WidgetMessageMetadata,
 } from '@agor/core/types';
-import { MessageRole } from '@agor/core/types';
+import { MessageRole, TaskStatus } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { appendSystemMessage } from '../../utils/append-system-message.js';
 import { type EnvVarsParams, envVarsParamsSchema } from '../../widgets/env-vars/index.js';
@@ -42,6 +45,35 @@ function widgetContentPreview(params: EnvVarsParams): string {
   return params.names.length === 1
     ? `Please provide ${list}: ${params.reason}`
     : `Please provide ${list}: ${params.reason}`;
+}
+
+/**
+ * Find the active task for the session, so the widget message can be bound
+ * to it. The transcript renderer loads messages per-task (`messages where
+ * task_id = X`), so a widget message without a `task_id` is invisible —
+ * see `packages/client/src/reactive-session.ts:252`. Prefer the currently
+ * RUNNING task (the one that invoked this MCP call); fall back to the most
+ * recent task as a defensive measure.
+ */
+async function findHostTaskId(ctx: McpContext, sessionId: SessionID): Promise<TaskID | undefined> {
+  const running = (await ctx.app.service('tasks').find({
+    query: {
+      session_id: sessionId,
+      status: TaskStatus.RUNNING,
+      $limit: 1,
+      $sort: { created_at: -1 },
+    },
+    ...ctx.baseServiceParams,
+  })) as Paginated<Task> | Task[];
+  const runningList = Array.isArray(running) ? running : running.data;
+  if (runningList[0]) return runningList[0].task_id as TaskID;
+
+  const recent = (await ctx.app.service('tasks').find({
+    query: { session_id: sessionId, $limit: 1, $sort: { created_at: -1 } },
+    ...ctx.baseServiceParams,
+  })) as Paginated<Task> | Task[];
+  const recentList = Array.isArray(recent) ? recent : recent.data;
+  return recentList[0]?.task_id as TaskID | undefined;
 }
 
 /**
@@ -110,10 +142,16 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         auto_resume: params.auto_resume,
       };
 
+      // Bind the widget message to the host task so the transcript renderer
+      // picks it up — `loadTaskMessages(taskId)` queries by `task_id`, and a
+      // message without one is orphaned (invisible in the conversation pane).
+      const hostTaskId = await findHostTaskId(ctx, ctx.sessionId as SessionID);
+
       const created = await appendSystemMessage({
         app: ctx.app,
         db: ctx.db,
         sessionId: ctx.sessionId,
+        taskId: hostTaskId,
         content: widgetContentPreview(params),
         contentPreview: `Widget: env_vars (${params.names.join(', ')})`,
         type: 'widget_request',
@@ -128,6 +166,35 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       });
 
       const widgetId = created.message_id as MessageID;
+
+      // Extend the host task's message_range.end_index so the widget is
+      // counted within the task's window (mirrors the daemon-restart
+      // injection path at `startup.ts:274`).
+      if (hostTaskId) {
+        try {
+          const task = (await ctx.app
+            .service('tasks')
+            .get(hostTaskId, ctx.baseServiceParams)) as Task;
+          if (task.message_range) {
+            await ctx.app.service('tasks').patch(
+              hostTaskId,
+              {
+                message_range: {
+                  start_index: task.message_range.start_index,
+                  end_index: created.index,
+                },
+              },
+              ctx.baseServiceParams
+            );
+          }
+        } catch (err) {
+          // Non-fatal — widget will still render via task_id lookup.
+          console.warn(
+            `[widgets] failed to extend task.message_range for widget ${widgetId}:`,
+            err
+          );
+        }
+      }
 
       // Stamp the actual widget_id onto the row (single source of truth =
       // `metadata.widget.widget_id === message.message_id`).
