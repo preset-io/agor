@@ -451,6 +451,17 @@ export async function createUserProcessEnvironment(
     }
   }
 
+  // Mirror GIT_AUTHOR_* → GIT_COMMITTER_* when committer is not explicitly set.
+  // Users commonly configure only GIT_AUTHOR_NAME/EMAIL; without committer vars,
+  // git falls back to the executor process's system git config — a different person
+  // — causing the author/committer split visible on GitHub PRs.
+  if (env.GIT_AUTHOR_NAME && !env.GIT_COMMITTER_NAME) {
+    env.GIT_COMMITTER_NAME = env.GIT_AUTHOR_NAME;
+  }
+  if (env.GIT_AUTHOR_EMAIL && !env.GIT_COMMITTER_EMAIL) {
+    env.GIT_COMMITTER_EMAIL = env.GIT_AUTHOR_EMAIL;
+  }
+
   // Set AGOR_USER_ENV_KEYS to communicate user-defined var keys to child processes
   // This is used by MCP template resolver to restrict context to user-scoped vars only
   if (userEnvKeys.length > 0) {

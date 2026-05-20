@@ -23,7 +23,7 @@ import { WorktreeRepository } from '../db/repositories/worktrees';
 import { users } from '../db/schema';
 import { dbTest } from '../db/test-helpers';
 import { generateId } from '../lib/ids';
-import { resolveUserEnvironment } from './env-resolver';
+import { createUserProcessEnvironment, resolveUserEnvironment } from './env-resolver';
 import type { StoredEnvVar } from './env-vars';
 
 // Force real AES encryption so URL-shaped tool config (e.g. ANTHROPIC_BASE_URL)
@@ -330,5 +330,85 @@ describe('resolveUserEnvironment — per-tool credential scoping', () => {
     // Without `tool`, the global env var still wins (no tool merge happens).
     const envNoTool = await resolveUserEnvironment(userId, db);
     expect(envNoTool.ANTHROPIC_API_KEY).toBe('global-fallback');
+  });
+});
+
+// ============================================================================
+// Git identity mirroring
+//
+// When a user sets GIT_AUTHOR_NAME/EMAIL but not GIT_COMMITTER_NAME/EMAIL,
+// createUserProcessEnvironment should mirror author → committer so that git
+// commits don't split author (user) from committer (system git config owner).
+// ============================================================================
+
+describe('createUserProcessEnvironment — git identity mirroring', () => {
+  // Ensure GIT_COMMITTER_* are absent from the test process environment so
+  // buildAllowlistedEnv() doesn't pre-populate them and mask the mirroring.
+  const savedCommitterName = process.env.GIT_COMMITTER_NAME;
+  const savedCommitterEmail = process.env.GIT_COMMITTER_EMAIL;
+  const savedAuthorName = process.env.GIT_AUTHOR_NAME;
+  const savedAuthorEmail = process.env.GIT_AUTHOR_EMAIL;
+
+  beforeAll(() => {
+    delete process.env.GIT_COMMITTER_NAME;
+    delete process.env.GIT_COMMITTER_EMAIL;
+    delete process.env.GIT_AUTHOR_NAME;
+    delete process.env.GIT_AUTHOR_EMAIL;
+  });
+
+  afterAll(() => {
+    if (savedCommitterName !== undefined) process.env.GIT_COMMITTER_NAME = savedCommitterName;
+    if (savedCommitterEmail !== undefined) process.env.GIT_COMMITTER_EMAIL = savedCommitterEmail;
+    if (savedAuthorName !== undefined) process.env.GIT_AUTHOR_NAME = savedAuthorName;
+    if (savedAuthorEmail !== undefined) process.env.GIT_AUTHOR_EMAIL = savedAuthorEmail;
+  });
+
+  dbTest('mirrors author → committer when only author vars are set', async ({ db }) => {
+    const userId = await createUserWithEnv(db, {
+      GIT_AUTHOR_NAME: encEntry('Alice Dev', 'global'),
+      GIT_AUTHOR_EMAIL: encEntry('alice@example.com', 'global'),
+    });
+
+    const env = await createUserProcessEnvironment(userId, db);
+    expect(env.GIT_AUTHOR_NAME).toBe('Alice Dev');
+    expect(env.GIT_AUTHOR_EMAIL).toBe('alice@example.com');
+    expect(env.GIT_COMMITTER_NAME).toBe('Alice Dev');
+    expect(env.GIT_COMMITTER_EMAIL).toBe('alice@example.com');
+  });
+
+  dbTest('does not override explicitly set committer vars', async ({ db }) => {
+    const userId = await createUserWithEnv(db, {
+      GIT_AUTHOR_NAME: encEntry('Alice Dev', 'global'),
+      GIT_AUTHOR_EMAIL: encEntry('alice@example.com', 'global'),
+      GIT_COMMITTER_NAME: encEntry('Alice Bot', 'global'),
+      GIT_COMMITTER_EMAIL: encEntry('alice-bot@example.com', 'global'),
+    });
+
+    const env = await createUserProcessEnvironment(userId, db);
+    expect(env.GIT_COMMITTER_NAME).toBe('Alice Bot');
+    expect(env.GIT_COMMITTER_EMAIL).toBe('alice-bot@example.com');
+  });
+
+  dbTest('mirrors independently — name without email and vice versa', async ({ db }) => {
+    const userId = await createUserWithEnv(db, {
+      GIT_AUTHOR_NAME: encEntry('Alice Dev', 'global'),
+      GIT_AUTHOR_EMAIL: encEntry('alice@example.com', 'global'),
+      GIT_COMMITTER_EMAIL: encEntry('alice-committer@example.com', 'global'),
+      // GIT_COMMITTER_NAME intentionally absent
+    });
+
+    const env = await createUserProcessEnvironment(userId, db);
+    expect(env.GIT_COMMITTER_NAME).toBe('Alice Dev'); // mirrored
+    expect(env.GIT_COMMITTER_EMAIL).toBe('alice-committer@example.com'); // unchanged
+  });
+
+  dbTest('no-op when neither author nor committer vars are set', async ({ db }) => {
+    const userId = await createUserWithEnv(db, {
+      GITHUB_TOKEN: encEntry('gh-secret', 'global'),
+    });
+
+    const env = await createUserProcessEnvironment(userId, db);
+    expect(env.GIT_AUTHOR_NAME).toBeUndefined();
+    expect(env.GIT_COMMITTER_NAME).toBeUndefined();
   });
 });
