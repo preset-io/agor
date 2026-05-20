@@ -573,91 +573,67 @@ interface SessionIdsListProps {
   agenticTool?: string;
 }
 
+interface IdRowProps {
+  label: string;
+  id: string;
+}
+
+const IdRow: React.FC<IdRowProps> = ({ label, id }) => {
+  const { token } = theme.useToken();
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '2px 0',
+      }}
+    >
+      <span
+        style={{
+          width: 56,
+          flexShrink: 0,
+          color: token.colorTextSecondary,
+          fontSize: '0.85em',
+        }}
+      >
+        {label}
+      </span>
+      <code
+        style={{
+          flex: 1,
+          fontFamily: token.fontFamilyCode,
+          fontSize: '0.85em',
+          wordBreak: 'break-all',
+        }}
+      >
+        {id}
+      </code>
+      <Button
+        type="text"
+        size="small"
+        icon={<CopyOutlined />}
+        onClick={() => copyToClipboard(id)}
+        aria-label={`Copy ${label} session ID`}
+      />
+    </div>
+  );
+};
+
 /**
- * Renders Agor + SDK session IDs (short + full) with copy buttons.
+ * Renders Agor + SDK session IDs as compact one-line rows with copy buttons.
  * Used in the SessionInfoButton popover and the Session Settings modal.
  */
 export const SessionIdsList: React.FC<SessionIdsListProps> = ({
   sessionId,
   sdkSessionId,
   agenticTool,
-}) => {
-  const { token } = theme.useToken();
-
-  const handleCopyAgor = () => {
-    copyToClipboard(sessionId);
-  };
-
-  const handleCopySdk = () => {
-    if (sdkSessionId) {
-      copyToClipboard(sdkSessionId);
-    }
-  };
-
-  const idRowStyle: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    padding: 8,
-    background: token.colorBgContainer,
-    borderRadius: token.borderRadius,
-    border: `1px solid ${token.colorBorder}`,
-  };
-
-  return (
-    <div>
-      {/* Agor Session ID */}
-      <div style={{ marginBottom: sdkSessionId ? 16 : 0 }}>
-        <div style={{ fontWeight: 600, fontSize: '0.95em', marginBottom: 8 }}>Agor Session ID</div>
-        <div style={idRowStyle}>
-          <div style={{ flex: 1, fontFamily: token.fontFamilyCode, fontSize: '0.9em' }}>
-            <div style={{ color: token.colorTextSecondary, fontSize: '0.85em', marginBottom: 2 }}>
-              {shortId(sessionId)}
-            </div>
-            <div style={{ wordBreak: 'break-all', fontSize: '0.75em', opacity: 0.7 }}>
-              {sessionId}
-            </div>
-          </div>
-          <Tag
-            icon={<CopyOutlined />}
-            color={PILL_COLORS.session}
-            style={{ cursor: 'pointer', margin: 0 }}
-            onClick={handleCopyAgor}
-          >
-            Copy
-          </Tag>
-        </div>
-      </div>
-
-      {/* SDK Session ID (if available) */}
-      {sdkSessionId && (
-        <div>
-          <div style={{ fontWeight: 600, fontSize: '0.95em', marginBottom: 8 }}>
-            {agenticTool || 'SDK'} Session ID
-          </div>
-          <div style={idRowStyle}>
-            <div style={{ flex: 1, fontFamily: token.fontFamilyCode, fontSize: '0.9em' }}>
-              <div style={{ color: token.colorTextSecondary, fontSize: '0.85em', marginBottom: 2 }}>
-                {shortId(sdkSessionId)}
-              </div>
-              <div style={{ wordBreak: 'break-all', fontSize: '0.75em', opacity: 0.7 }}>
-                {sdkSessionId}
-              </div>
-            </div>
-            <Tag
-              icon={<CopyOutlined />}
-              color={PILL_COLORS.session}
-              style={{ cursor: 'pointer', margin: 0 }}
-              onClick={handleCopySdk}
-            >
-              Copy
-            </Tag>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
+}) => (
+  <div>
+    <IdRow label="Agor" id={sessionId} />
+    {sdkSessionId && <IdRow label={agenticTool || 'SDK'} id={sdkSessionId} />}
+  </div>
+);
 
 /**
  * Compact icon-button trigger for session ID + info popover.
