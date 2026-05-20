@@ -11,6 +11,7 @@
  */
 
 import { ENV_VAR_CONSTRAINTS, isEnvVarAllowed, validateEnvVar } from '@agor/core/config';
+import { BadRequest } from '@agor/core/feathers';
 import type { UserID } from '@agor/core/types';
 import { z } from 'zod';
 import { registerWidget, type WidgetRegistryEntry, type WidgetSubmitCtx } from '../registry.js';
@@ -27,6 +28,9 @@ export const envVarsParamsSchema = z.object({
     .array(z.string().regex(ENV_VAR_NAME_REGEX))
     .min(1)
     .max(10)
+    .refine((names) => new Set(names).size === names.length, {
+      message: 'Env var names must be unique',
+    })
     .describe('UPPER_SNAKE env var names (same validation as User Settings).'),
   reason: z
     .string()
@@ -93,7 +97,7 @@ async function applyEnvVarsSubmit(
     submittedNames.length !== params.names.length ||
     submittedNames.some((name) => !requestedNames.has(name))
   ) {
-    throw new Error(
+    throw new BadRequest(
       'Submitted env var names must exactly match the widget request: expected ' +
         params.names.join(', ')
     );

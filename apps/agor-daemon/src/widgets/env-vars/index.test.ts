@@ -103,6 +103,12 @@ describe('env_vars widget — paramsSchema', () => {
   it('rejects empty reason', () => {
     expect(envVarsParamsSchema.safeParse({ names: ['X'], reason: '' }).success).toBe(false);
   });
+
+  it('rejects duplicate names', () => {
+    expect(
+      envVarsParamsSchema.safeParse({ names: ['A_KEY', 'A_KEY'], reason: 'why' }).success
+    ).toBe(false);
+  });
 });
 
 describe('env_vars widget — submitSchema', () => {
