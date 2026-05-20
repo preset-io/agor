@@ -77,12 +77,33 @@ export interface EnvVarsResultMeta {
  * blocklist, regex, and value-length checks all live inside that service —
  * we deliberately do NOT reimplement them here.
  */
-async function applyEnvVarsSubmit(ctx: WidgetSubmitCtx, submit: EnvVarsSubmit): Promise<void> {
+async function applyEnvVarsSubmit(
+  ctx: WidgetSubmitCtx,
+  submit: EnvVarsSubmit,
+  params: EnvVarsParams
+): Promise<void> {
+  // Enforce that the browser submitted exactly the names the agent requested
+  // (no more, no fewer). Without this, a tampered client could use the
+  // `trustedEnvVarWrite` escape hatch to write arbitrary env vars onto the
+  // session creator's profile — widening the attack surface far beyond what
+  // the agent (and the user reviewing the widget) intended.
+  const requestedNames = new Set(params.names);
+  const submittedNames = Object.keys(submit.values);
+  if (
+    submittedNames.length !== params.names.length ||
+    submittedNames.some((name) => !requestedNames.has(name))
+  ) {
+    throw new Error(
+      'Submitted env var names must exactly match the widget request: expected ' +
+        params.names.join(', ')
+    );
+  }
+
   // Belt-and-braces: re-validate names against the same regex+blocklist
   // the users service uses, surfacing a single combined error if anything
   // fails. The users service would reject the same way, but doing it here
   // up-front gives us a clearer error per name without partial writes.
-  for (const name of Object.keys(submit.values)) {
+  for (const name of submittedNames) {
     if (!isEnvVarAllowed(name)) {
       throw new Error(`Cannot set environment variable "${name}": blocked by allow-list`);
     }
@@ -102,32 +123,35 @@ async function applyEnvVarsSubmit(ctx: WidgetSubmitCtx, submit: EnvVarsSubmit): 
       params?: {
         user: { user_id: UserID; role: string | undefined };
         authenticated: true;
-        trustedInternalWrite?: boolean;
+        trustedEnvVarWrite?: boolean;
       }
     ): Promise<unknown>;
   };
 
   const env_var_scopes: Record<string, 'global' | 'session'> = {};
-  for (const name of Object.keys(submit.values)) {
+  for (const name of submittedNames) {
     env_var_scopes[name] = submit.scope;
   }
 
   // The widget submit endpoint already authorized the caller via
   // `canResolveWidget` (session-creator OR prompt-tier worktree RBAC), so
-  // we set `trustedInternalWrite` on the users.patch hook to bypass its
-  // self-only check (`register-hooks.ts:1490`). Field-level admin gates
-  // for unix_username/role/must_change_password run first and are NOT
-  // bypassed — env_vars / env_var_scopes are not gated.
+  // we set `trustedEnvVarWrite` on the users.patch hook to bypass its
+  // self-only check (`register-hooks.ts`). Field-level admin gates for
+  // unix_username/role/must_change_password run first and are NOT bypassed.
+  // The hook also enforces that only env_vars/env_var_scopes fields are
+  // written — this escape hatch cannot be used to patch other user fields.
   //
   // submitter identity is still threaded through for audit; the widget
   // submit handler records it separately as `metadata.widget.submitted_by`.
+  //
+  // Grep for: trustedEnvVarWrite — to audit every site that sets it.
   await usersService.patch(
     ctx.sessionCreatorUserId,
     { env_vars: submit.values, env_var_scopes },
     {
       user: { user_id: ctx.submitterUserId, role: ctx.submitterRole },
       authenticated: true,
-      trustedInternalWrite: true,
+      trustedEnvVarWrite: true,
     }
   );
 }

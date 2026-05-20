@@ -39,8 +39,14 @@ export async function findTasksForSession(
   params?: Params
 ): Promise<Task[]> {
   const result = (await app.service('tasks').find({
-    query: { session_id: sessionId, $limit: 1000 },
     ...(params ?? {}),
+    // Merge defensively: spread params first, then force session_id so a
+    // caller-supplied params.query can never silently overwrite the filter.
+    query: {
+      ...(params?.query as Record<string, unknown> | undefined),
+      session_id: sessionId,
+      $limit: (params?.query as Record<string, unknown> | undefined)?.$limit ?? 1000,
+    },
   })) as Paginated<Task> | Task[];
   const tasks = Array.isArray(result) ? result : result.data;
   return [...tasks].sort((a, b) => recencyKey(b) - recencyKey(a));

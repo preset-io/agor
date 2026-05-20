@@ -1482,18 +1482,27 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             return context;
           }
 
-          // Trusted internal-server-side write escape hatch. Set by code paths
-          // that have ALREADY authorized the caller against a different,
-          // narrower contract than the users.patch self-only hook — e.g. the
-          // widget submit endpoint, which authorizes via `canResolveWidget`
-          // (session-creator OR prompt-tier worktree RBAC) and then writes
-          // the resulting env-var values onto the session creator's profile.
+          // Env-var-specific trusted write escape hatch. Set ONLY by the widget
+          // submit path, which has already authorized the caller via
+          // `canResolveWidget` (session-creator OR prompt-tier worktree RBAC)
+          // before calling users.patch on the session creator's behalf.
           //
-          // Field-level admin gates above (unix_username / role /
-          // must_change_password) are NOT bypassed — those run first.
+          // Deliberately narrow: only allows `env_vars` + `env_var_scopes`
+          // fields — any attempt to slip in other fields (e.g. role, unix_username)
+          // throws immediately. Field-level admin gates above run first and are
+          // NOT bypassed regardless.
           //
-          // Grep for: trustedInternalWrite — to audit every site that sets it.
-          if ((params as { trustedInternalWrite?: boolean }).trustedInternalWrite === true) {
+          // Grep for: trustedEnvVarWrite — to audit every site that sets it.
+          if (
+            !context.params.provider &&
+            (params as { trustedEnvVarWrite?: boolean }).trustedEnvVarWrite === true
+          ) {
+            const keys = Object.keys(context.data ?? {});
+            if (!keys.every((k) => k === 'env_vars' || k === 'env_var_scopes')) {
+              throw new Forbidden(
+                'trustedEnvVarWrite only permits env_vars and env_var_scopes updates'
+              );
+            }
             return context;
           }
 

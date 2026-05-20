@@ -70,8 +70,12 @@ export interface WidgetRegistryEntry<TParams, TSubmit, TResultMeta> {
    * Apply the submission's side-effect (encrypt + write env var,
    * attach MCP server, finalize OAuth, etc.). The submit endpoint runs
    * this BEFORE patching the widget message status to 'submitted'.
+   *
+   * `params` is the original agent-provided params stored on the widget row —
+   * available so the handler can cross-check the submit body against what was
+   * originally requested (e.g. env_vars validates names match exactly).
    */
-  applySubmit: (ctx: WidgetSubmitCtx, submit: TSubmit) => Promise<void>;
+  applySubmit: (ctx: WidgetSubmitCtx, submit: TSubmit, params: TParams) => Promise<void>;
   /**
    * Build the user-role prompt auto-queued into the session's task queue
    * on submit. Takes only `result_meta` + `params` — never the raw submit

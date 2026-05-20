@@ -169,7 +169,9 @@ function makeFixtures(
   return { message, session, worktree };
 }
 
-function registerTestWidget(applySubmit = vi.fn(async () => {})) {
+function registerTestWidget(
+  applySubmit = vi.fn(async (_ctx: unknown, _submit: unknown, _params: unknown) => {})
+) {
   const entry: WidgetRegistryEntry<
     { names: string[]; reason: string },
     { value: string; scope: 'global' | 'session' },

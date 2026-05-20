@@ -3,8 +3,8 @@
  *
  * Renders inline in the transcript when an agent calls
  * `agor_widgets_request_env_vars`. Captures secret value(s) via password
- * inputs and POSTs them DIRECTLY to the daemon
- * (`POST /widgets/:widget_id/submit`) — values never flow through the
+ * inputs and submits them DIRECTLY to the daemon via the Feathers client
+ * (`widgets/:widget_id/submit`) — values never flow through the
  * agent's MCP transport.
  *
  * Design intent: KISS. Single card, no title bar, no warning Alert, no

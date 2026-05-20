@@ -165,10 +165,11 @@ describe('env_vars widget — buildResultMeta', () => {
 describe('env_vars widget — applySubmit', () => {
   it('calls users.patch with { env_vars, env_var_scopes } for the session creator', async () => {
     const { ctx, patchSpy } = makeCtx();
-    await envVarsWidget.applySubmit(ctx, {
-      values: { HUBSPOT_API_KEY: 'shh' },
-      scope: 'global',
-    });
+    await envVarsWidget.applySubmit(
+      ctx,
+      { values: { HUBSPOT_API_KEY: 'shh' }, scope: 'global' },
+      { names: ['HUBSPOT_API_KEY'], reason: 'call hubspot', auto_resume: true }
+    );
     expect(patchSpy).toHaveBeenCalledTimes(1);
     const [id, data, params] = patchSpy.mock.calls[0];
     expect(id).toBe('user-creator');
@@ -176,14 +177,13 @@ describe('env_vars widget — applySubmit', () => {
       env_vars: { HUBSPOT_API_KEY: 'shh' },
       env_var_scopes: { HUBSPOT_API_KEY: 'global' },
     });
-    // Regression: must pass auth params so the users.patch hook (`register-
-    // hooks.ts:1490`) accepts a write to a user other than the caller via
-    // the `trustedInternalWrite` escape hatch (the widget endpoint already
-    // authorized this via `canResolveWidget`).
+    // Regression: must pass auth params so the users.patch hook accepts a
+    // write to a user other than the caller via the `trustedEnvVarWrite`
+    // escape hatch (the widget endpoint already authorized via canResolveWidget).
     expect(params).toEqual({
       user: { user_id: 'user-creator', role: 'member' },
       authenticated: true,
-      trustedInternalWrite: true,
+      trustedEnvVarWrite: true,
     });
   });
 
@@ -194,39 +194,68 @@ describe('env_vars widget — applySubmit', () => {
       submitterUserId: 'user-admin' as UserID,
       submitterRole: 'admin',
     };
-    await envVarsWidget.applySubmit(adminCtx, {
-      values: { HUBSPOT_API_KEY: 'shh' },
-      scope: 'global',
-    });
+    await envVarsWidget.applySubmit(
+      adminCtx,
+      { values: { HUBSPOT_API_KEY: 'shh' }, scope: 'global' },
+      { names: ['HUBSPOT_API_KEY'], reason: 'call hubspot', auto_resume: true }
+    );
     const [, , params] = patchSpy.mock.calls[0];
     // Auth params carry the SUBMITTER identity so the patch is attributable.
     expect(params).toEqual({
       user: { user_id: 'user-admin', role: 'admin' },
       authenticated: true,
-      trustedInternalWrite: true,
+      trustedEnvVarWrite: true,
     });
   });
 
   it('writes ALL submitted names in one patch call', async () => {
     const { ctx, patchSpy } = makeCtx();
-    await envVarsWidget.applySubmit(ctx, {
-      values: { A_KEY: 'a', B_KEY: 'b' },
-      scope: 'session',
-    });
+    await envVarsWidget.applySubmit(
+      ctx,
+      { values: { A_KEY: 'a', B_KEY: 'b' }, scope: 'session' },
+      { names: ['A_KEY', 'B_KEY'], reason: 'why', auto_resume: true }
+    );
     expect(patchSpy).toHaveBeenCalledTimes(1);
     const [, data] = patchSpy.mock.calls[0] as [string, Record<string, unknown>];
     expect(data.env_vars).toEqual({ A_KEY: 'a', B_KEY: 'b' });
     expect(data.env_var_scopes).toEqual({ A_KEY: 'session', B_KEY: 'session' });
   });
 
+  it('rejects submitted names that do not exactly match params.names', async () => {
+    const { ctx, patchSpy } = makeCtx();
+    // Tampered client tries to write EXTRA_VAR that wasn't in the widget request.
+    await expect(
+      envVarsWidget.applySubmit(
+        ctx,
+        { values: { HUBSPOT_API_KEY: 'v', EXTRA_VAR: 'evil' }, scope: 'global' },
+        { names: ['HUBSPOT_API_KEY'], reason: 'why', auto_resume: true }
+      )
+    ).rejects.toThrow(/exactly match/i);
+    expect(patchSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects submitted names that are a subset of params.names', async () => {
+    const { ctx, patchSpy } = makeCtx();
+    // Client only submits one of the two requested vars — not an exact match.
+    await expect(
+      envVarsWidget.applySubmit(
+        ctx,
+        { values: { A_KEY: 'v' }, scope: 'global' },
+        { names: ['A_KEY', 'B_KEY'], reason: 'why', auto_resume: true }
+      )
+    ).rejects.toThrow(/exactly match/i);
+    expect(patchSpy).not.toHaveBeenCalled();
+  });
+
   it('rejects blocklisted names before patching', async () => {
     const { ctx, patchSpy } = makeCtx();
     // PATH is on the blocklist (system identity).
     await expect(
-      envVarsWidget.applySubmit(ctx, {
-        values: { PATH: '/tmp/evil' },
-        scope: 'global',
-      })
+      envVarsWidget.applySubmit(
+        ctx,
+        { values: { PATH: '/tmp/evil' }, scope: 'global' },
+        { names: ['PATH'], reason: 'why', auto_resume: true }
+      )
     ).rejects.toThrow(/blocked|cannot be set/i);
     expect(patchSpy).not.toHaveBeenCalled();
   });
@@ -236,10 +265,11 @@ describe('env_vars widget — applySubmit', () => {
       throw new Error('Invalid environment variable: value too long');
     });
     await expect(
-      envVarsWidget.applySubmit(ctx, {
-        values: { HUBSPOT_API_KEY: 'v' },
-        scope: 'global',
-      })
+      envVarsWidget.applySubmit(
+        ctx,
+        { values: { HUBSPOT_API_KEY: 'v' }, scope: 'global' },
+        { names: ['HUBSPOT_API_KEY'], reason: 'why', auto_resume: true }
+      )
     ).rejects.toThrow(/value too long/i);
   });
 
@@ -270,10 +300,11 @@ describe('env_vars widget — applySubmit', () => {
     ];
     try {
       const { ctx } = makeCtx();
-      await envVarsWidget.applySubmit(ctx, {
-        values: { HUBSPOT_API_KEY: secret },
-        scope: 'global',
-      });
+      await envVarsWidget.applySubmit(
+        ctx,
+        { values: { HUBSPOT_API_KEY: secret }, scope: 'global' },
+        { names: ['HUBSPOT_API_KEY'], reason: 'why', auto_resume: true }
+      );
       // Flatten every logged arg into a string and assert the secret is
       // nowhere in it. Covers stringified objects, error wrappers, etc.
       const allText = calls

@@ -208,7 +208,7 @@ async function doResolveWidget(
       submitterRole: caller.role,
       sessionCreatorUserId: session.created_by as UserID,
     };
-    await entry.applySubmit(submitCtx, submit);
+    await entry.applySubmit(submitCtx, submit, widget.params);
     resultMeta = entry.buildResultMeta(submit);
     autoResumePrompt = entry.buildAutoResumePrompt(resultMeta, widget.params);
   } else {
