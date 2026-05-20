@@ -865,7 +865,15 @@ export class CodexPromptService {
     // of truth for what "system default" means across daemon + executor.
     const codexConfig = session.permission_config?.codex;
     const defaults = getDefaultCodexPermissionConfig();
-    const sandboxMode = codexConfig?.sandboxMode ?? defaults.sandboxMode;
+    // AGOR_CODEX_SANDBOX_MODE lets k8s operators bypass workspace-write, which
+    // requires Linux user namespaces (bwrap) not available in pods. Set to
+    // 'danger-full-access' when the pod's own security context provides isolation.
+    const sandboxModeEnvOverride = process.env.AGOR_CODEX_SANDBOX_MODE as
+      | 'read-only'
+      | 'workspace-write'
+      | 'danger-full-access'
+      | undefined;
+    const sandboxMode = sandboxModeEnvOverride ?? codexConfig?.sandboxMode ?? defaults.sandboxMode;
     const approvalPolicy = codexConfig?.approvalPolicy ?? defaults.approvalPolicy;
     const networkAccess = codexConfig?.networkAccess ?? defaults.networkAccess;
 
