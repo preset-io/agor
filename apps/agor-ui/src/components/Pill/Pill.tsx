@@ -492,12 +492,12 @@ export const ModelPill: React.FC<ModelPillProps> = ({ model, style }) => {
 
 /**
  * Small amber dot indicating uncommitted ("dirty") working tree changes.
- * Mirrors the VSCode unsaved-file affordance. Purely decorative — the parent
- * pill carries the tooltip that explains both the SHA and the dot, so the
- * dot is `aria-hidden` to avoid duplicating that label for screen readers.
+ * Mirrors the VSCode unsaved-file affordance. Rendered inline at the end of
+ * a git-SHA pill (purely decorative — the parent pill carries the tooltip
+ * that explains both the SHA and the dot, so the dot is `aria-hidden`).
  */
 const DirtyDot: React.FC = () => (
-  <span aria-hidden="true" style={{ display: 'inline-flex', flexShrink: 0 }}>
+  <span aria-hidden="true" style={{ display: 'inline-flex', flexShrink: 0, marginLeft: 6 }}>
     <Badge status="warning" />
   </span>
 );
@@ -529,15 +529,15 @@ export const GitShaPill: React.FC<GitShaPillProps> = ({
 
   return (
     <Tooltip title={tooltip}>
-      <span
-        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}
+      <Tag
+        icon={<GithubOutlined />}
+        color={PILL_COLORS.git}
+        style={{ ...style, cursor: 'pointer' }}
         onClick={handleClick}
       >
+        <span style={{ fontFamily: token.fontFamilyCode }}>{displaySha}</span>
         {showDirty && <DirtyDot />}
-        <Tag icon={<GithubOutlined />} color={PILL_COLORS.git} style={style}>
-          <span style={{ fontFamily: token.fontFamilyCode }}>{displaySha}</span>
-        </Tag>
-      </span>
+      </Tag>
     </Tooltip>
   );
 };
@@ -575,16 +575,16 @@ export const GitStatePill: React.FC<GitStatePillProps> = ({
 
   return (
     <Tooltip title={tooltip}>
-      <span
-        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}
+      <Tag
+        icon={<ForkOutlined />}
+        color={PILL_COLORS.git}
+        style={{ ...style, cursor: 'pointer' }}
         onClick={handleClick}
       >
+        {shouldShowBranch && <span>{branch} : </span>}
+        <span style={{ fontFamily: token.fontFamilyCode }}>{displaySha}</span>
         {showDirty && <DirtyDot />}
-        <Tag icon={<ForkOutlined />} color={PILL_COLORS.git} style={style}>
-          {shouldShowBranch && <span>{branch} : </span>}
-          <span style={{ fontFamily: token.fontFamilyCode }}>{displaySha}</span>
-        </Tag>
-      </span>
+      </Tag>
     </Tooltip>
   );
 };
