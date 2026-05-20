@@ -143,6 +143,7 @@ export const GitSha: Story = {
         <GitStatePill sha="abc123def456" branch="main" />
         <GitStatePill sha="abc123def456-dirty" branch="feature/foo" />
         <GitStatePill sha="abc123def456" branch="main" worktreeName="main" />
+        <GitStatePill sha="abc123def456-dirty" branch="main" worktreeName="main" />
       </Space>
     </Space>
   ),

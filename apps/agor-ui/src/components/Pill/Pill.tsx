@@ -22,10 +22,11 @@ import {
   ThunderboltOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
-import { Collapse, Popover, Tooltip, theme } from 'antd';
+import { Badge, Collapse, Popover, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { getContextWindowPercentage } from '../../utils/contextWindow';
+import { parseGitStateSha } from '../../utils/gitState';
 import { type SessionForIds, SessionIdsList } from '../SessionIds';
 import { Tag } from '../Tag';
 
@@ -491,26 +492,15 @@ export const ModelPill: React.FC<ModelPillProps> = ({ model, style }) => {
 
 /**
  * Small amber dot indicating uncommitted ("dirty") working tree changes.
- * Mirrors the VSCode unsaved-file affordance. Purely visual — the parent
- * pill carries a single tooltip that explains both the SHA and the dot.
+ * Mirrors the VSCode unsaved-file affordance. Purely decorative — the parent
+ * pill carries the tooltip that explains both the SHA and the dot, so the
+ * dot is `aria-hidden` to avoid duplicating that label for screen readers.
  */
-const DirtyDot: React.FC = () => {
-  const { token } = theme.useToken();
-  return (
-    <span
-      role="img"
-      aria-label="Uncommitted changes"
-      style={{
-        display: 'inline-block',
-        width: 8,
-        height: 8,
-        borderRadius: '50%',
-        backgroundColor: token.colorWarning,
-        flexShrink: 0,
-      }}
-    />
-  );
-};
+const DirtyDot: React.FC = () => (
+  <span aria-hidden="true" style={{ display: 'inline-flex', flexShrink: 0 }}>
+    <Badge status="warning" />
+  </span>
+);
 
 interface GitShaPillProps extends BasePillProps {
   sha: string;
@@ -525,16 +515,24 @@ export const GitShaPill: React.FC<GitShaPillProps> = ({
   style,
 }) => {
   const { token } = theme.useToken();
-  const cleanSha = sha.replace('-dirty', '');
+  const { cleanSha } = parseGitStateSha(sha);
   const displaySha = cleanSha.substring(0, 7);
   const showDirty = isDirty && showDirtyIndicator;
   const tooltip = showDirty
-    ? 'Git commit SHA (working tree has uncommitted changes)'
-    : 'Git commit SHA';
+    ? 'Git commit SHA (working tree has uncommitted changes) · click to copy'
+    : 'Git commit SHA · click to copy';
+
+  const handleClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    await copyToClipboard(cleanSha);
+  };
 
   return (
     <Tooltip title={tooltip}>
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      <span
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}
+        onClick={handleClick}
+      >
         {showDirty && <DirtyDot />}
         <Tag icon={<GithubOutlined />} color={PILL_COLORS.git} style={style}>
           <span style={{ fontFamily: token.fontFamilyCode }}>{displaySha}</span>
@@ -559,8 +557,7 @@ export const GitStatePill: React.FC<GitStatePillProps> = ({
   style,
 }) => {
   const { token } = theme.useToken();
-  const isDirty = sha.endsWith('-dirty');
-  const cleanSha = sha.replace('-dirty', '');
+  const { cleanSha, isDirty } = parseGitStateSha(sha);
   const displaySha = cleanSha.substring(0, 7);
   const showDirty = isDirty && showDirtyIndicator;
 

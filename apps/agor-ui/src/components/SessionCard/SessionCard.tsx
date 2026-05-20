@@ -12,6 +12,7 @@ import {
 } from '@ant-design/icons';
 import { App, Button, Card, Collapse, Space, Typography } from 'antd';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { parseGitStateSha } from '../../utils/gitState';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { CreatedByTag } from '../metadata';
 import { Tag } from '../Tag';
@@ -75,9 +76,7 @@ const SessionCard = ({
   const isForked = !!session.genealogy.forked_from_session_id;
   const isSpawned = !!session.genealogy.parent_session_id;
 
-  // Check if git state is dirty
-  const isDirty = session.git_state.current_sha.endsWith('-dirty');
-  const cleanSha = session.git_state.current_sha.replace('-dirty', '');
+  const { cleanSha, isDirty } = parseGitStateSha(session.git_state.current_sha);
 
   // Task list collapse header (just the "Tasks" label)
   const taskListHeader = (
