@@ -12,7 +12,7 @@
 import type { Session, SessionID, UserID, UUID, WorktreeID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
-import { beforeAll, describe, expect } from 'vitest';
+import { afterAll, beforeAll, describe, expect } from 'vitest';
 import { select, update } from '../db/database-wrapper';
 import { encryptApiKey } from '../db/encryption';
 import { RepoRepository } from '../db/repositories/repos';
