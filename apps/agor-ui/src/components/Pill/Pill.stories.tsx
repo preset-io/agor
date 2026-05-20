@@ -7,6 +7,7 @@ import {
   DirtyStatePill,
   ForkPill,
   GitShaPill,
+  GitStatePill,
   MessageCountPill,
   ReportPill,
   SessionIdPill,
@@ -50,6 +51,8 @@ export const AllPills: Story = {
           <GitShaPill sha="abc123def456" />
           <GitShaPill sha="abc123def456-dirty" isDirty={true} />
           <GitShaPill sha="abc123def456-dirty" isDirty={true} showDirtyIndicator={false} />
+          <GitStatePill sha="abc123def456" branch="main" />
+          <GitStatePill sha="abc123def456-dirty" branch="feature/foo" />
           <DirtyStatePill />
         </Space>
       </div>
@@ -130,10 +133,17 @@ export const ToolCount: Story = {
 
 export const GitSha: Story = {
   render: () => (
-    <Space>
-      <GitShaPill sha="abc123def456" />
-      <GitShaPill sha="abc123def456-dirty" isDirty={true} />
-      <GitShaPill sha="abc123def456-dirty" isDirty={true} showDirtyIndicator={false} />
+    <Space orientation="vertical">
+      <Space>
+        <GitShaPill sha="abc123def456" />
+        <GitShaPill sha="abc123def456-dirty" isDirty={true} />
+        <GitShaPill sha="abc123def456-dirty" isDirty={true} showDirtyIndicator={false} />
+      </Space>
+      <Space>
+        <GitStatePill sha="abc123def456" branch="main" />
+        <GitStatePill sha="abc123def456-dirty" branch="feature/foo" />
+        <GitStatePill sha="abc123def456" branch="main" worktreeName="main" />
+      </Space>
     </Space>
   ),
 };
