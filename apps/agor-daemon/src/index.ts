@@ -63,7 +63,7 @@ import { configureChannels, createSocketIOConfig } from './setup/socketio.js';
 import { configureSwagger } from './setup/swagger.js';
 import { loadDaemonVersion } from './setup/version.js';
 import { startup } from './startup.js';
-import { configureDaemonUrl } from './utils/spawn-executor.js';
+import { configureDaemonUrl, configureExecutor } from './utils/spawn-executor.js';
 import { registerAllWidgets } from './widgets/index.js';
 
 // Load daemon version at startup
@@ -235,6 +235,13 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
 
   const daemonUrl = config.daemon?.public_url || `http://localhost:${DAEMON_PORT}`;
   configureDaemonUrl(daemonUrl);
+
+  // Wire the configured executor command template + impersonation user so the
+  // ~10 spawnExecutorFireAndForget() call sites pick them up without needing
+  // their own config-threading code. Local-subprocess remains the default
+  // when execution.executor_command_template is unset (no behavior change
+  // for existing deployments).
+  configureExecutor(config.execution);
   console.log(`[Executor] Daemon URL configured: ${daemonUrl}`);
 
   initializeAnthropicApiKey(config, process.env.ANTHROPIC_API_KEY);

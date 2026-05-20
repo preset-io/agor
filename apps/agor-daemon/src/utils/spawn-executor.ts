@@ -54,6 +54,42 @@ export function configureDaemonUrl(url: string): void {
 }
 
 /**
+ * Module-level executor configuration (template + impersonation user).
+ * Set once at daemon startup via configureExecutor().
+ *
+ * Used as the default by spawnExecutor() so call sites don't need to thread
+ * `executor_command_template` / `executor_unix_user` through every layer.
+ * Pre-existing call sites that pass `executorCommandTemplate` or `asUser`
+ * explicitly still win — this only kicks in when the option is omitted.
+ *
+ * Without this, the `execution.executor_command_template` config field was
+ * silently a no-op: `createConfiguredSpawner()` existed but had zero callers,
+ * so every spawn defaulted to the local-subprocess path regardless of config.
+ */
+let configuredExecutorConfig: ExecutorConfig | null = null;
+
+/**
+ * Configure the default executor settings (template + impersonation user).
+ * Call this once at daemon startup, before any spawnExecutor() calls.
+ *
+ * @param config - The `execution` block from loadConfig(). Undefined / null
+ *                 leaves defaults intact (local-subprocess, no impersonation).
+ */
+export function configureExecutor(config?: ExecutorConfig | null): void {
+  configuredExecutorConfig = config ?? null;
+  if (configuredExecutorConfig?.executor_command_template) {
+    const preview =
+      configuredExecutorConfig.executor_command_template.split('\n')[0]?.slice(0, 80) ?? '';
+    console.log(
+      `[Executor] Command template configured (first line): ${preview}${preview.length === 80 ? '…' : ''}`
+    );
+  }
+  if (configuredExecutorConfig?.executor_unix_user) {
+    console.log(`[Executor] Default impersonation user: ${configuredExecutorConfig.executor_unix_user}`);
+  }
+}
+
+/**
  * Template variables for executor command template substitution.
  * These are substituted into the executor_command_template at spawn time.
  */
@@ -225,7 +261,17 @@ export function spawnExecutor(
   payload: Record<string, unknown>,
   options: SpawnExecutorOptions = {}
 ): void {
-  const { executorCommandTemplate, templateVariables, logPrefix = '[Executor]' } = options;
+  const { templateVariables, logPrefix = '[Executor]' } = options;
+
+  // Resolve the command template + impersonation user from explicit options
+  // first, falling back to the module-level configuration set at startup via
+  // configureExecutor(). This lets the existing ~10 call sites keep their
+  // current shape (no `executorCommandTemplate` arg threaded through) while
+  // still honoring the `execution.executor_command_template` config field
+  // for remote / k8s deployments.
+  const executorCommandTemplate =
+    options.executorCommandTemplate ?? configuredExecutorConfig?.executor_command_template;
+  const asUser = options.asUser ?? configuredExecutorConfig?.executor_unix_user;
 
   // Daemon resolves the small config slice the executor needs (permission
   // timeout, opencode URL, host IP override) so the executor never has to
@@ -236,6 +282,7 @@ export function spawnExecutor(
   if (executorCommandTemplate) {
     spawnExecutorWithTemplate(payloadWithConfig, {
       ...options,
+      asUser,
       executorCommandTemplate,
       templateVariables: {
         command: payloadWithConfig.command as string,
@@ -245,7 +292,7 @@ export function spawnExecutor(
       logPrefix,
     });
   } else {
-    spawnExecutorLocal(payloadWithConfig, options);
+    spawnExecutorLocal(payloadWithConfig, { ...options, asUser });
   }
 }
 
