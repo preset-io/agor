@@ -116,11 +116,10 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
     'agor_widgets_request_env_vars',
     {
       description:
-        'Ask the user to provide one or more environment variables via an in-conversation form. ' +
-        'This is a FIRE-AND-FORGET request: the widget is rendered inline in the transcript and the user fills it out asynchronously. ' +
-        'End your turn after this tool call — you will receive a new user-role message ("[Agor] User submitted ...") when the user responds, and can resume work then. ' +
-        'CRITICAL: the values never enter your context — the user types them directly into the UI, the form posts straight to the daemon, and you only ever see variable NAMES. ' +
-        'Use this when you need a secret/credential to proceed (e.g. an API key). Do NOT ask the user to paste the value into chat — that defeats the security guarantee.',
+        'Ask the user to provide one or more environment variables via a compact in-conversation form. ' +
+        'FIRE-AND-FORGET: the widget renders inline; end your turn after calling. You will receive a user-role message ("[Agor] User submitted ...") when the user responds. ' +
+        'Values never enter your context — only the variable NAMES do. Do NOT ask the user to paste values into chat. ' +
+        'Keep `reason` to ONE short sentence (≤200 chars) — it shows as a small muted line; do not restate what the widget does or describe the security contract (the UI handles that).',
       annotations: { destructiveHint: false, openWorldHint: false },
       inputSchema: envVarsParamsSchema,
     },

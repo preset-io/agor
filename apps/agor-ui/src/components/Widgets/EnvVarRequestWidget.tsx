@@ -2,31 +2,28 @@
  * EnvVarRequestWidget — env_vars in-conversation widget UI.
  *
  * Renders inline in the transcript when an agent calls
- * `agor_widgets_request_env_vars`. Captures one or more secret values via
- * password inputs and POSTs them DIRECTLY to the daemon
- * (`POST /widgets/:widget_id/submit`) — values never flow through the agent's
- * MCP transport.
+ * `agor_widgets_request_env_vars`. Captures secret value(s) via password
+ * inputs and POSTs them DIRECTLY to the daemon
+ * (`POST /widgets/:widget_id/submit`) — values never flow through the
+ * agent's MCP transport.
  *
- * Terminal states (read-only summaries):
- *   - submitted        ✅ names + scope + submitter timestamp
- *   - dismissed        ⊘ names + "request dismissed"
- *   - already_present  ✓ names + "already configured"
+ * Design intent: KISS. Single card, no title bar, no warning Alert, no
+ * instructions Alert. Lock icon + var name is the only mandatory chrome.
+ *
+ * Terminal states (one-line read-only summaries):
+ *   - submitted        ✅ NAME saved (scope)
+ *   - dismissed        ⊘ NAME dismissed
+ *   - already_present  ✓ NAME already configured
  *
  * See `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
  */
 
 import type { EnvVarScope, Message, WidgetMessageMetadata } from '@agor-live/client';
-import {
-  CheckCircleOutlined,
-  LockOutlined,
-  MinusCircleOutlined,
-  SafetyCertificateOutlined,
-} from '@ant-design/icons';
-import { Alert, Button, Card, Input, Radio, Space, Tag, Typography, theme } from 'antd';
+import { CheckCircleOutlined, LockOutlined, MinusCircleOutlined } from '@ant-design/icons';
+import { Button, Card, Input, Select, Space, Typography, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import { getDaemonUrl } from '@/config/daemon';
 import { useThemedMessage } from '@/utils/message';
-import { MarkdownRenderer } from '../MarkdownRenderer';
 import { registerWidgetComponent, type WidgetComponentProps } from '../MessageBlock/WidgetBlock';
 
 const { Text } = Typography;
@@ -34,7 +31,6 @@ const { Text } = Typography;
 interface EnvVarsParams {
   names: string[];
   reason: string;
-  instructions?: string;
   default_scope: EnvVarScope;
   auto_resume?: boolean;
 }
@@ -52,11 +48,6 @@ function getAuthHeaders(): HeadersInit {
   };
 }
 
-/**
- * Coerce the widget's `params` (typed as `unknown` on the generic metadata) to
- * the env_vars-specific shape. The daemon validates with Zod before writing
- * the message row, so by the time this renders the shape is guaranteed.
- */
 function readParams(widget: WidgetMessageMetadata): EnvVarsParams {
   return widget.params as EnvVarsParams;
 }
@@ -64,6 +55,36 @@ function readParams(widget: WidgetMessageMetadata): EnvVarsParams {
 function readResultMeta(widget: WidgetMessageMetadata): EnvVarsResultMeta | undefined {
   return widget.result_meta as EnvVarsResultMeta | undefined;
 }
+
+interface VarRowProps {
+  name: string;
+  value: string;
+  onChange: (next: string) => void;
+  disabled: boolean;
+}
+
+const VarRow: React.FC<VarRowProps> = ({ name, value, onChange, disabled }) => {
+  const { token } = theme.useToken();
+  return (
+    <div>
+      <Text
+        strong
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 4 }}
+      >
+        <LockOutlined style={{ color: token.colorTextSecondary }} />
+        <code style={{ fontSize: token.fontSize }}>{name}</code>
+      </Text>
+      <Input.Password
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Enter value"
+        disabled={disabled}
+        aria-label={`Value for ${name}`}
+        autoComplete="off"
+      />
+    </div>
+  );
+};
 
 interface PendingFormProps {
   widgetId: string;
@@ -83,7 +104,6 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message: _message, 
   const [scope, setScope] = useState<EnvVarScope>(params.default_scope ?? 'global');
   const [submitting, setSubmitting] = useState(false);
   const [dismissing, setDismissing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const allFilled = useMemo(
     () => params.names.every((name) => values[name]?.trim().length > 0),
@@ -106,11 +126,7 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message: _message, 
 
   const handleSubmit = async () => {
     if (!allFilled || submitting) return;
-    setError(null);
     setSubmitting(true);
-    // Build the submit payload from local state. Note: `values` never crosses
-    // into the message metadata or the daemon-broadcast event — only into the
-    // direct HTTP POST below.
     const submitBody = {
       values: Object.fromEntries(params.names.map((name) => [name, values[name]?.trim() ?? ''])),
       scope,
@@ -118,15 +134,12 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message: _message, 
     try {
       await post('submit', submitBody);
       showSuccess(
-        `Saved ${params.names.length === 1 ? params.names[0] : `${params.names.length} variables`} (${scope})`
+        params.names.length === 1
+          ? `Saved ${params.names[0]} (${scope})`
+          : `Saved ${params.names.length} variables (${scope})`
       );
-      // Don't manually flip local state — the daemon broadcasts a
-      // `widget:resolved` event that re-renders the row from the patched
-      // message metadata.
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(msg);
-      showError(`Failed to save: ${msg}`);
+      showError(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSubmitting(false);
     }
@@ -134,14 +147,11 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message: _message, 
 
   const handleDismiss = async () => {
     if (dismissing) return;
-    setError(null);
     setDismissing(true);
     try {
       await post('dismiss', {});
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(msg);
-      showError(`Failed to dismiss: ${msg}`);
+      showError(`Dismiss failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setDismissing(false);
     }
@@ -150,87 +160,77 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message: _message, 
   return (
     <Card
       size="small"
-      title={
-        <Space>
-          <SafetyCertificateOutlined style={{ color: token.colorPrimary }} />
-          <Text strong>
-            {params.names.length === 1
-              ? `Agent needs ${params.names[0]}`
-              : `Agent needs ${params.names.length} environment variables`}
-          </Text>
-        </Space>
-      }
       style={{ margin: `${token.sizeUnit * 1.5}px 0`, background: token.colorBgContainer }}
+      styles={{ body: { padding: token.paddingSM } }}
     >
-      <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-        <MarkdownRenderer content={params.reason} compact />
-
-        {params.instructions && (
-          <Alert
-            type="info"
-            showIcon={false}
-            description={<MarkdownRenderer content={params.instructions} compact />}
-          />
+      <Space orientation="vertical" size="small" style={{ width: '100%' }}>
+        {params.reason && (
+          <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+            {params.reason}
+          </Text>
         )}
 
-        <Space orientation="vertical" size="small" style={{ width: '100%' }}>
-          {params.names.map((name) => (
-            <div key={name}>
-              <Tag icon={<LockOutlined />} color="gold" style={{ marginBottom: 4 }}>
-                <code>{name}</code>
-              </Tag>
-              <Input.Password
-                value={values[name] ?? ''}
-                onChange={(e) => setValues((prev) => ({ ...prev, [name]: e.target.value }))}
-                placeholder={`Enter value for ${name}`}
-                disabled={submitting || dismissing}
-                aria-label={`Value for ${name}`}
-                autoComplete="off"
-              />
-            </div>
-          ))}
-        </Space>
-
-        <Space orientation="vertical" size={4}>
-          <Text strong style={{ fontSize: token.fontSizeSM }}>
-            Scope
-          </Text>
-          <Radio.Group
-            value={scope}
-            onChange={(e) => setScope(e.target.value as EnvVarScope)}
+        {params.names.map((name) => (
+          <VarRow
+            key={name}
+            name={name}
+            value={values[name] ?? ''}
+            onChange={(next) => setValues((prev) => ({ ...prev, [name]: next }))}
             disabled={submitting || dismissing}
-          >
-            <Radio value="session">Session (only this session)</Radio>
-            <Radio value="global">Global (every session you own)</Radio>
-          </Radio.Group>
+          />
+        ))}
+
+        <Space style={{ width: '100%', justifyContent: 'space-between' }} size="small">
+          <Select
+            size="small"
+            value={scope}
+            onChange={(v) => setScope(v)}
+            disabled={submitting || dismissing}
+            style={{ width: 120 }}
+            options={[
+              { value: 'session', label: 'Session' },
+              { value: 'global', label: 'Global' },
+            ]}
+          />
+          <Space size="small">
+            <Button size="small" onClick={handleDismiss} loading={dismissing} disabled={submitting}>
+              Dismiss
+            </Button>
+            <Button
+              size="small"
+              type="primary"
+              onClick={handleSubmit}
+              loading={submitting}
+              disabled={!allFilled || dismissing}
+            >
+              Save
+            </Button>
+          </Space>
         </Space>
+      </Space>
+    </Card>
+  );
+};
 
-        <Alert
-          type="warning"
-          showIcon
-          title={
-            <Text style={{ fontSize: token.fontSizeSM }}>
-              Type values here, never paste them into chat. Values are encrypted at rest and never
-              sent to the agent — only the variable names are.
-            </Text>
-          }
-        />
-
-        {error && <Alert type="error" showIcon title={error} />}
-
-        <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
-          <Button onClick={handleDismiss} loading={dismissing} disabled={submitting}>
-            Dismiss
-          </Button>
-          <Button
-            type="primary"
-            onClick={handleSubmit}
-            loading={submitting}
-            disabled={!allFilled || dismissing}
-          >
-            Save &amp; continue
-          </Button>
-        </Space>
+const TerminalLine: React.FC<{
+  icon: React.ReactNode;
+  borderColor: string;
+  text: React.ReactNode;
+}> = ({ icon, borderColor, text }) => {
+  const { token } = theme.useToken();
+  return (
+    <Card
+      size="small"
+      style={{
+        margin: `${token.sizeUnit * 1.5}px 0`,
+        background: token.colorBgContainer,
+        borderLeft: `3px solid ${borderColor}`,
+      }}
+      styles={{ body: { padding: `${token.paddingXS}px ${token.paddingSM}px` } }}
+    >
+      <Space size="small">
+        {icon}
+        {text}
       </Space>
     </Card>
   );
@@ -242,28 +242,16 @@ const SubmittedSummary: React.FC<{ widget: WidgetMessageMetadata }> = ({ widget 
   const names = rm?.names_submitted ?? readParams(widget).names;
   const scope = rm?.scope ?? readParams(widget).default_scope ?? 'global';
   return (
-    <Card
-      size="small"
-      style={{
-        margin: `${token.sizeUnit * 1.5}px 0`,
-        background: token.colorBgContainer,
-        borderLeft: `3px solid ${token.colorSuccess}`,
-      }}
-    >
-      <Space>
-        <CheckCircleOutlined style={{ color: token.colorSuccess }} />
-        <Space orientation="vertical" size={0}>
-          <Text strong>
-            {names.length === 1 ? `${names[0]} saved` : `${names.length} variables saved`} ({scope})
-          </Text>
-          {widget.resolved_at && (
-            <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-              Submitted at {new Date(widget.resolved_at).toLocaleString()}
-            </Text>
-          )}
-        </Space>
-      </Space>
-    </Card>
+    <TerminalLine
+      icon={<CheckCircleOutlined style={{ color: token.colorSuccess }} />}
+      borderColor={token.colorSuccess}
+      text={
+        <Text>
+          {names.length === 1 ? names[0] : `${names.length} variables`} saved
+          <Text type="secondary"> ({scope})</Text>
+        </Text>
+      }
+    />
   );
 };
 
@@ -271,19 +259,11 @@ const DismissedSummary: React.FC<{ widget: WidgetMessageMetadata }> = ({ widget 
   const { token } = theme.useToken();
   const names = readParams(widget).names;
   return (
-    <Card
-      size="small"
-      style={{
-        margin: `${token.sizeUnit * 1.5}px 0`,
-        background: token.colorBgContainer,
-        borderLeft: `3px solid ${token.colorBorder}`,
-      }}
-    >
-      <Space>
-        <MinusCircleOutlined style={{ color: token.colorTextSecondary }} />
-        <Text type="secondary">Request for {names.join(', ')} dismissed</Text>
-      </Space>
-    </Card>
+    <TerminalLine
+      icon={<MinusCircleOutlined style={{ color: token.colorTextSecondary }} />}
+      borderColor={token.colorBorder}
+      text={<Text type="secondary">{names.join(', ')} dismissed</Text>}
+    />
   );
 };
 
@@ -291,28 +271,16 @@ const AlreadyPresentSummary: React.FC<{ widget: WidgetMessageMetadata }> = ({ wi
   const { token } = theme.useToken();
   const names = readParams(widget).names;
   return (
-    <Card
-      size="small"
-      style={{
-        margin: `${token.sizeUnit * 1.5}px 0`,
-        background: token.colorBgContainer,
-        borderLeft: `3px solid ${token.colorInfo}`,
-      }}
-    >
-      <Space>
-        <CheckCircleOutlined style={{ color: token.colorInfo }} />
-        <Space orientation="vertical" size={0}>
-          <Text strong>
-            {names.length === 1
-              ? `${names[0]} was already configured`
-              : `${names.join(', ')} were already configured`}
-          </Text>
-          <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-            No action needed — the agent has resumed.
-          </Text>
-        </Space>
-      </Space>
-    </Card>
+    <TerminalLine
+      icon={<CheckCircleOutlined style={{ color: token.colorInfo }} />}
+      borderColor={token.colorInfo}
+      text={
+        <Text>
+          {names.length === 1 ? names[0] : names.join(', ')}{' '}
+          <Text type="secondary">already configured</Text>
+        </Text>
+      }
+    />
   );
 };
 
@@ -332,9 +300,7 @@ export const EnvVarRequestWidget: React.FC<WidgetComponentProps> = ({ message, w
   }
 };
 
-// Register on module load so `WidgetBlock` can dispatch to it. The
-// registration is a side-effect of importing this file (via the
-// `Widgets/index.ts` barrel imported from `MessageBlock.tsx`).
+// Side-effect: register with the WidgetBlock dispatcher on module load.
 registerWidgetComponent('env_vars', EnvVarRequestWidget);
 
 export const _EnvVarRequestWidgetForTests = {

@@ -77,15 +77,13 @@ export const PendingMultiple: Story = {
   })(),
 };
 
-export const PendingWithInstructions: Story = {
+export const PendingNoReason: Story = {
   args: (() => {
     const widget = makeWidget({
       params: {
         names: ['HUBSPOT_API_KEY'],
-        reason: 'Needed to call the Hubspot Private Apps API.',
-        instructions:
-          'Get a key at [https://app.hubspot.com/private-apps](https://app.hubspot.com/private-apps).\n\nMake sure the **CRM > contacts > read** scope is enabled.',
-        default_scope: 'session',
+        reason: '',
+        default_scope: 'global',
       },
     });
     return { message: makeMessage(widget), widget };

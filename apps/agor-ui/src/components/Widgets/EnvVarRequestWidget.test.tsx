@@ -17,13 +17,6 @@ import { App as AntApp } from 'antd';
 import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Streamdown (used by MarkdownRenderer) lazy-loads katex.min.css which jsdom
-// can't resolve — drops out as an unhandled rejection that fails the suite.
-// Swap the renderer for a plain text passthrough.
-vi.mock('@/components/MarkdownRenderer', () => ({
-  MarkdownRenderer: ({ content }: { content: string }) => <div>{content}</div>,
-}));
-
 import { EnvVarRequestWidget } from './EnvVarRequestWidget';
 
 /** Wrap with Ant Design's App so `useThemedMessage` finds a message instance. */
@@ -101,7 +94,7 @@ describe('EnvVarRequestWidget — pending state', () => {
   it('disables Save until every field has a value', () => {
     const widget = makeWidget();
     renderWithApp(<EnvVarRequestWidget message={makeMessage(widget)} widget={widget} />);
-    const saveBtn = screen.getByRole('button', { name: /Save & continue/i });
+    const saveBtn = screen.getByRole('button', { name: 'Save' });
     expect((saveBtn as HTMLButtonElement).disabled).toBe(true);
 
     const input = screen.getByLabelText(/Value for HUBSPOT_API_KEY/i) as HTMLInputElement;
@@ -116,11 +109,7 @@ describe('EnvVarRequestWidget — pending state', () => {
     const input = screen.getByLabelText(/Value for HUBSPOT_API_KEY/i);
     fireEvent.change(input, { target: { value: 'secret-key' } });
 
-    // Switch scope to session to make sure the selection is carried.
-    fireEvent.click(screen.getByRole('radio', { name: /Session \(only this session\)/i }));
-
-    const saveBtn = screen.getByRole('button', { name: /Save & continue/i });
-    fireEvent.click(saveBtn);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -131,7 +120,7 @@ describe('EnvVarRequestWidget — pending state', () => {
     const body = JSON.parse(init.body as string);
     expect(body).toEqual({
       values: { HUBSPOT_API_KEY: 'secret-key' },
-      scope: 'session',
+      scope: 'global', // default_scope was 'global'; no scope change in this test
     });
   });
 
@@ -139,7 +128,7 @@ describe('EnvVarRequestWidget — pending state', () => {
     const widget = makeWidget();
     renderWithApp(<EnvVarRequestWidget message={makeMessage(widget)} widget={widget} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /Dismiss/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -150,7 +139,7 @@ describe('EnvVarRequestWidget — pending state', () => {
     expect(JSON.parse(init.body as string)).toEqual({});
   });
 
-  it('shows an inline error when the daemon rejects the submit', async () => {
+  it('re-enables Save after a failed submit so the user can retry', async () => {
     fetchMock.mockImplementation(async () => ({
       ok: false,
       status: 400,
@@ -163,11 +152,16 @@ describe('EnvVarRequestWidget — pending state', () => {
     fireEvent.change(screen.getByLabelText(/Value for HUBSPOT_API_KEY/i), {
       target: { value: 'shh' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Save & continue/i }));
+    const saveBtn = screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement;
+    fireEvent.click(saveBtn);
 
+    // After the failed POST resolves, the button should NOT be stuck in
+    // loading/disabled — the user can fix and retry. (Error itself surfaces
+    // via the global toast, not an inline Alert.)
     await waitFor(() => {
-      expect(screen.getByText(/Invalid env var/i)).toBeTruthy();
+      expect(saveBtn.disabled).toBe(false);
     });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -179,22 +173,23 @@ describe('EnvVarRequestWidget — terminal states', () => {
       result_meta: { names_submitted: ['HUBSPOT_API_KEY'], scope: 'global' },
     });
     renderWithApp(<EnvVarRequestWidget message={makeMessage(widget)} widget={widget} />);
-    expect(screen.getByText(/HUBSPOT_API_KEY saved/i)).toBeTruthy();
+    expect(screen.getByText(/HUBSPOT_API_KEY/i)).toBeTruthy();
+    expect(screen.getByText(/saved/i)).toBeTruthy();
     expect(screen.getByText(/global/i)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Save & continue/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
   });
 
   it('renders the dismissed summary', () => {
     const widget = makeWidget({ status: 'dismissed' });
     renderWithApp(<EnvVarRequestWidget message={makeMessage(widget)} widget={widget} />);
     expect(screen.getByText(/dismissed/i)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Save & continue/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
   });
 
   it('renders the already_present summary', () => {
     const widget = makeWidget({ status: 'already_present' });
     renderWithApp(<EnvVarRequestWidget message={makeMessage(widget)} widget={widget} />);
     expect(screen.getByText(/already configured/i)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Save & continue/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
   });
 });

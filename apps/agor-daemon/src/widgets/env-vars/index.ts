@@ -31,13 +31,10 @@ export const envVarsParamsSchema = z.object({
   reason: z
     .string()
     .min(1)
-    .max(500)
-    .describe('Short explanation shown to the user — why these are needed.'),
-  instructions: z
-    .string()
-    .max(2000)
-    .optional()
-    .describe('Optional markdown with extra context (e.g. where to obtain the key).'),
+    .max(200)
+    .describe(
+      'One sentence explaining why you need the value(s). Keep it tight — this renders in a small muted line under the input. NOT a place to restate what the widget does.'
+    ),
   default_scope: z
     .enum(['global', 'session'])
     .default('global')
