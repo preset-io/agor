@@ -170,6 +170,7 @@ export async function resolveWidget(
       app: deps.app as any,
       sessionId: message.session_id as SessionID,
       submitterUserId: caller.user_id,
+      submitterRole: caller.role,
       sessionCreatorUserId: session.created_by as UserID,
     };
     await entry.applySubmit(submitCtx, submit);

@@ -26,9 +26,11 @@ import {
   registerEnvVarsWidget,
 } from './index';
 
-function makeCtx(patch?: (id: string, data: unknown) => unknown | Promise<unknown>) {
-  const patchSpy = vi.fn(async (id: string, data: unknown) => {
-    return patch ? patch(id, data) : { user_id: id };
+function makeCtx(
+  patch?: (id: string, data: unknown, params: unknown) => unknown | Promise<unknown>
+) {
+  const patchSpy = vi.fn(async (id: string, data: unknown, params: unknown) => {
+    return patch ? patch(id, data, params) : { user_id: id };
   });
   const app = {
     service(name: string) {
@@ -42,6 +44,7 @@ function makeCtx(patch?: (id: string, data: unknown) => unknown | Promise<unknow
       app: app as any,
       sessionId: 'sess-1' as never,
       submitterUserId: 'user-creator' as UserID,
+      submitterRole: 'member' as string | undefined,
       sessionCreatorUserId: 'user-creator' as UserID,
     },
     patchSpy,
@@ -169,11 +172,38 @@ describe('env_vars widget — applySubmit', () => {
       scope: 'global',
     });
     expect(patchSpy).toHaveBeenCalledTimes(1);
-    const [id, data] = patchSpy.mock.calls[0];
+    const [id, data, params] = patchSpy.mock.calls[0];
     expect(id).toBe('user-creator');
     expect(data).toEqual({
       env_vars: { HUBSPOT_API_KEY: 'shh' },
       env_var_scopes: { HUBSPOT_API_KEY: 'global' },
+    });
+    // Regression: must pass auth params so the users.patch self-only hook
+    // (`register-hooks.ts:1481`) doesn't 403. Submitter context goes through.
+    expect(params).toEqual({
+      user: { user_id: 'user-creator', role: 'member' },
+      authenticated: true,
+    });
+  });
+
+  it('passes admin params through when submitter is admin (admin bypass path)', async () => {
+    const { ctx: baseCtx, patchSpy } = makeCtx();
+    const adminCtx = {
+      ...baseCtx,
+      submitterUserId: 'user-admin' as UserID,
+      submitterRole: 'admin',
+    };
+    await envVarsWidget.applySubmit(adminCtx, {
+      values: { HUBSPOT_API_KEY: 'shh' },
+      scope: 'global',
+    });
+    const [, , params] = patchSpy.mock.calls[0];
+    // Admin submitter → users.patch hook bypasses the self-check via
+    // role-based admin path. Target is still sessionCreatorUserId, but the
+    // auth params carry the ADMIN submitter's identity.
+    expect(params).toEqual({
+      user: { user_id: 'user-admin', role: 'admin' },
+      authenticated: true,
     });
   });
 

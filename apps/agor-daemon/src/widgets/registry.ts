@@ -35,6 +35,12 @@ export interface WidgetSubmitCtx {
   sessionId: SessionID;
   /** The user who submitted the widget (may differ from session creator). */
   submitterUserId: UserID;
+  /** The submitter's role, used to construct Feathers auth params for any
+   * internal service calls applySubmit makes. Service-layer hooks (e.g. the
+   * users.patch self-only check at `register-hooks.ts:1481`) read
+   * `params.user.role` to decide admin bypass — so applySubmit MUST pass these
+   * along when patching protected services, or it gets 403'd. */
+  submitterRole: string | undefined;
   /** Session creator — credentials get written to this identity. */
   sessionCreatorUserId: UserID;
 }

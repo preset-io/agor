@@ -105,7 +105,8 @@ async function applyEnvVarsSubmit(ctx: WidgetSubmitCtx, submit: EnvVarsSubmit): 
       data: {
         env_vars?: Record<string, string>;
         env_var_scopes?: Record<string, 'global' | 'session'>;
-      }
+      },
+      params?: { user: { user_id: UserID; role: string | undefined }; authenticated: true }
     ): Promise<unknown>;
   };
 
@@ -116,10 +117,23 @@ async function applyEnvVarsSubmit(ctx: WidgetSubmitCtx, submit: EnvVarsSubmit): 
 
   // Single patch: values are written first (encrypted in the service), then
   // scopes applied in the same transaction.
-  await usersService.patch(ctx.sessionCreatorUserId, {
-    env_vars: submit.values,
-    env_var_scopes,
-  });
+  //
+  // Auth: the users.patch hook (`register-hooks.ts:1435-1487`) demands either
+  // (a) caller is admin, or (b) caller patches their own profile. Without
+  // params it sees `params.user = undefined` and throws 403. We pass the
+  // SUBMITTER's identity through — covers the common cases:
+  //   • submitter == session creator (default)  → self-patch path
+  //   • submitter is admin (any role >= admin)  → admin bypass path
+  // The cross-user collaborator case (non-admin submitter ≠ session creator)
+  // is a known limitation; see design doc §5.2.
+  await usersService.patch(
+    ctx.sessionCreatorUserId,
+    { env_vars: submit.values, env_var_scopes },
+    {
+      user: { user_id: ctx.submitterUserId, role: ctx.submitterRole },
+      authenticated: true,
+    }
+  );
 }
 
 export const envVarsWidget: WidgetRegistryEntry<EnvVarsParams, EnvVarsSubmit, EnvVarsResultMeta> = {
