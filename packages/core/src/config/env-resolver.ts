@@ -451,15 +451,34 @@ export async function createUserProcessEnvironment(
     }
   }
 
-  // Mirror GIT_AUTHOR_* → GIT_COMMITTER_* when committer is not explicitly set.
-  // Users commonly configure only GIT_AUTHOR_NAME/EMAIL; without committer vars,
-  // git falls back to the executor process's system git config — a different person
-  // — causing the author/committer split visible on GitHub PRs.
+  // If you set one half of GIT_AUTHOR_*/GIT_COMMITTER_* via env, mirror to the other.
+  // Env vars are the multi-tenant identity boundary; falling through to shared
+  // user.* config (or executor-host gitconfig) risks misattribution — see
+  // the 2026-04-20 / 2026-05-20 base-repo user.* leak audits.
+  // Note: if you have author/committer in non-env config AND set only one env var,
+  // this will override the config-derived counterpart with the env value. That's
+  // intentional — setting any identity env signals you mean the env pair to win.
   if (env.GIT_AUTHOR_NAME && !env.GIT_COMMITTER_NAME) {
     env.GIT_COMMITTER_NAME = env.GIT_AUTHOR_NAME;
+    console.debug(
+      `[env-resolver] Mirrored GIT_AUTHOR_NAME → GIT_COMMITTER_NAME${userId ? ` for user ${userId}` : ''}`
+    );
+  } else if (env.GIT_COMMITTER_NAME && !env.GIT_AUTHOR_NAME) {
+    env.GIT_AUTHOR_NAME = env.GIT_COMMITTER_NAME;
+    console.debug(
+      `[env-resolver] Mirrored GIT_COMMITTER_NAME → GIT_AUTHOR_NAME${userId ? ` for user ${userId}` : ''}`
+    );
   }
   if (env.GIT_AUTHOR_EMAIL && !env.GIT_COMMITTER_EMAIL) {
     env.GIT_COMMITTER_EMAIL = env.GIT_AUTHOR_EMAIL;
+    console.debug(
+      `[env-resolver] Mirrored GIT_AUTHOR_EMAIL → GIT_COMMITTER_EMAIL${userId ? ` for user ${userId}` : ''}`
+    );
+  } else if (env.GIT_COMMITTER_EMAIL && !env.GIT_AUTHOR_EMAIL) {
+    env.GIT_AUTHOR_EMAIL = env.GIT_COMMITTER_EMAIL;
+    console.debug(
+      `[env-resolver] Mirrored GIT_COMMITTER_EMAIL → GIT_AUTHOR_EMAIL${userId ? ` for user ${userId}` : ''}`
+    );
   }
 
   // Set AGOR_USER_ENV_KEYS to communicate user-defined var keys to child processes

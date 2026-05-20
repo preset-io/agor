@@ -411,4 +411,31 @@ describe('createUserProcessEnvironment — git identity mirroring', () => {
     expect(env.GIT_AUTHOR_NAME).toBeUndefined();
     expect(env.GIT_COMMITTER_NAME).toBeUndefined();
   });
+
+  dbTest('mirrors committer → author when only committer vars are set', async ({ db }) => {
+    const userId = await createUserWithEnv(db, {
+      GIT_COMMITTER_NAME: encEntry('Bob Ops', 'global'),
+      GIT_COMMITTER_EMAIL: encEntry('bob@example.com', 'global'),
+    });
+
+    const env = await createUserProcessEnvironment(userId, db);
+    expect(env.GIT_COMMITTER_NAME).toBe('Bob Ops');
+    expect(env.GIT_COMMITTER_EMAIL).toBe('bob@example.com');
+    expect(env.GIT_AUTHOR_NAME).toBe('Bob Ops');
+    expect(env.GIT_AUTHOR_EMAIL).toBe('bob@example.com');
+  });
+
+  dbTest('cross-mirrors author name and committer email independently', async ({ db }) => {
+    const userId = await createUserWithEnv(db, {
+      GIT_AUTHOR_NAME: encEntry('Carol Dev', 'global'),
+      GIT_COMMITTER_EMAIL: encEntry('carol@example.com', 'global'),
+      // GIT_AUTHOR_EMAIL and GIT_COMMITTER_NAME intentionally absent
+    });
+
+    const env = await createUserProcessEnvironment(userId, db);
+    expect(env.GIT_AUTHOR_NAME).toBe('Carol Dev');
+    expect(env.GIT_COMMITTER_NAME).toBe('Carol Dev'); // mirrored from author
+    expect(env.GIT_COMMITTER_EMAIL).toBe('carol@example.com');
+    expect(env.GIT_AUTHOR_EMAIL).toBe('carol@example.com'); // mirrored from committer
+  });
 });
