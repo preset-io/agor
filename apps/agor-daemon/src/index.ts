@@ -242,7 +242,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // when execution.executor_command_template is unset (no behavior change
   // for existing deployments).
   configureExecutor(config.execution);
-  console.log(`[Executor] Daemon URL configured: ${daemonUrl}`);
 
   initializeAnthropicApiKey(config, process.env.ANTHROPIC_API_KEY);
   initializeAnthropicAuthToken(config, process.env.ANTHROPIC_AUTH_TOKEN);

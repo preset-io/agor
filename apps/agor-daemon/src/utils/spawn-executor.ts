@@ -25,6 +25,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { AgorExecutionSettings } from '@agor/core/config';
 import {
   attachEnvFileCleanup,
   buildSpawnArgs,
@@ -54,7 +55,7 @@ export function configureDaemonUrl(url: string): void {
 }
 
 /**
- * Module-level executor configuration (template + impersonation user).
+ * Module-level executor spawn defaults (template + impersonation user).
  * Set once at daemon startup via configureExecutor().
  *
  * Used as the default by spawnExecutor() so call sites don't need to thread
@@ -66,26 +67,30 @@ export function configureDaemonUrl(url: string): void {
  * silently a no-op: `createConfiguredSpawner()` existed but had zero callers,
  * so every spawn defaulted to the local-subprocess path regardless of config.
  */
-let configuredExecutorConfig: ExecutorConfig | null = null;
+let configuredExecutorDefaults: ExecutorSpawnDefaults = {};
 
 /**
  * Configure the default executor settings (template + impersonation user).
  * Call this once at daemon startup, before any spawnExecutor() calls.
  *
  * @param config - The `execution` block from loadConfig(). Undefined / null
- *                 leaves defaults intact (local-subprocess, no impersonation).
+ *                 clears defaults (local-subprocess, no impersonation).
  */
 export function configureExecutor(config?: ExecutorConfig | null): void {
-  configuredExecutorConfig = config ?? null;
-  if (configuredExecutorConfig?.executor_command_template) {
+  configuredExecutorDefaults = {
+    executorCommandTemplate: config?.executor_command_template || undefined,
+    asUser: config?.executor_unix_user || undefined,
+  };
+
+  if (configuredExecutorDefaults.executorCommandTemplate) {
     const preview =
-      configuredExecutorConfig.executor_command_template.split('\n')[0]?.slice(0, 80) ?? '';
+      configuredExecutorDefaults.executorCommandTemplate.split('\n')[0]?.slice(0, 80) ?? '';
     console.log(
       `[Executor] Command template configured (first line): ${preview}${preview.length === 80 ? '…' : ''}`
     );
   }
-  if (configuredExecutorConfig?.executor_unix_user) {
-    console.log(`[Executor] Default impersonation user: ${configuredExecutorConfig.executor_unix_user}`);
+  if (configuredExecutorDefaults.asUser) {
+    console.log(`[Executor] Default impersonation user: ${configuredExecutorDefaults.asUser}`);
   }
 }
 
@@ -136,14 +141,14 @@ export interface SpawnExecutorOptions {
    * routed through a 0600 env-file owned by `asUser` so their values stay
    * out of argv / /proc/<pid>/cmdline.
    */
-  asUser?: string;
+  asUser?: string | null;
 
   /**
    * Executor command template for remote/containerized execution.
    * When provided, uses template substitution instead of local subprocess.
    * Takes precedence over local spawning.
    */
-  executorCommandTemplate?: string;
+  executorCommandTemplate?: string | null;
 
   /**
    * Template variables for substitution in executor_command_template.
@@ -270,8 +275,11 @@ export function spawnExecutor(
   // still honoring the `execution.executor_command_template` config field
   // for remote / k8s deployments.
   const executorCommandTemplate =
-    options.executorCommandTemplate ?? configuredExecutorConfig?.executor_command_template;
-  const asUser = options.asUser ?? configuredExecutorConfig?.executor_unix_user;
+    options.executorCommandTemplate !== undefined
+      ? options.executorCommandTemplate || undefined
+      : configuredExecutorDefaults.executorCommandTemplate;
+  const asUser =
+    options.asUser !== undefined ? options.asUser || undefined : configuredExecutorDefaults.asUser;
 
   // Daemon resolves the small config slice the executor needs (permission
   // timeout, opencode URL, host IP override) so the executor never has to
@@ -287,6 +295,7 @@ export function spawnExecutor(
       templateVariables: {
         command: payloadWithConfig.command as string,
         task_id: generateTaskId(),
+        unix_user: asUser,
         ...templateVariables,
       },
       logPrefix,
@@ -312,8 +321,9 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     cwd = executorDir,
     env = process.env as Record<string, string>,
     logPrefix = '[Executor]',
-    asUser,
+    asUser: rawAsUser,
   } = options;
+  const asUser = rawAsUser || undefined;
 
   // Add DAEMON_URL to env so the executor can connect back via Feathers.
   // The executor itself never reads config.yaml — all config values it
@@ -494,6 +504,7 @@ function spawnExecutorWithTemplate(
         `${logPrefix} Executor exited with code ${code} (task: ${templateVariables.task_id})`
       );
     }
+    options.onExit?.(code);
   });
 
   // Write JSON payload to stdin and close it
@@ -581,11 +592,16 @@ export function generateSessionToken(app: {
  * Configuration for executor spawning.
  * Loaded from ~/.agor/config.yaml execution section.
  */
-export interface ExecutorConfig {
+export type ExecutorConfig = Pick<
+  AgorExecutionSettings,
+  'executor_command_template' | 'executor_unix_user'
+>;
+
+interface ExecutorSpawnDefaults {
   /** Executor command template for containerized execution */
-  executor_command_template?: string;
+  executorCommandTemplate?: string;
   /** Unix user to run executors as */
-  executor_unix_user?: string;
+  asUser?: string;
 }
 
 /**
@@ -611,8 +627,14 @@ export function createConfiguredSpawner(executionConfig?: ExecutorConfig) {
   ): void {
     spawnExecutor(payload, {
       ...options,
-      executorCommandTemplate: executionConfig?.executor_command_template,
-      asUser: options.asUser ?? executionConfig?.executor_unix_user,
+      // `null` intentionally suppresses module-level defaults so this
+      // factory remains an explicit dependency-injection variant rather than
+      // accidentally inheriting whatever configureExecutor() last installed.
+      executorCommandTemplate: executionConfig?.executor_command_template ?? null,
+      asUser:
+        options.asUser !== undefined
+          ? options.asUser
+          : (executionConfig?.executor_unix_user ?? null),
     });
   };
 }
