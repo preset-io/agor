@@ -31,7 +31,7 @@ import type { CodexOptions, Thread, ThreadItem } from '@agor/core/sdk';
 import { Codex } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
-import type { EffortLevel } from '@agor/core/types';
+import type { CodexSandboxMode, EffortLevel } from '@agor/core/types';
 import { getDefaultCodexPermissionConfig } from '@agor/core/utils/permission-mode-mapper';
 import { getDaemonUrl } from '../../config.js';
 import type {
@@ -865,13 +865,9 @@ export class CodexPromptService {
     // of truth for what "system default" means across daemon + executor.
     const codexConfig = session.permission_config?.codex;
     const defaults = getDefaultCodexPermissionConfig();
-    // AGOR_CODEX_SANDBOX_MODE lets k8s operators bypass workspace-write, which
-    // requires Linux user namespaces (bwrap) not available in pods. Set to
-    // 'danger-full-access' when the pod's own security context provides isolation.
+    // workspace-write uses bwrap not available in pods; override with danger-full-access for k8s.
     const sandboxModeEnvOverride = process.env.AGOR_CODEX_SANDBOX_MODE as
-      | 'read-only'
-      | 'workspace-write'
-      | 'danger-full-access'
+      | CodexSandboxMode
       | undefined;
     const sandboxMode = sandboxModeEnvOverride ?? codexConfig?.sandboxMode ?? defaults.sandboxMode;
     const approvalPolicy = codexConfig?.approvalPolicy ?? defaults.approvalPolicy;
