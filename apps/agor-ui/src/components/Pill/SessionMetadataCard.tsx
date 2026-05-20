@@ -6,12 +6,12 @@
  */
 
 import type { Repo, Session, User, Worktree } from '@agor-live/client';
-import { CopyOutlined, FolderOutlined } from '@ant-design/icons';
-import { Button, Space, Typography, theme } from 'antd';
+import { FolderOutlined } from '@ant-design/icons';
+import { Space, Typography, theme } from 'antd';
 import type React from 'react';
-import { copyToClipboard } from '../../utils/clipboard';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { CreatedByTag } from '../metadata';
+import { SessionIdsList } from '../SessionIds';
 import { Tag } from '../Tag';
 import { ToolIcon } from '../ToolIcon';
 import { ForkPill, PILL_COLORS, RepoPill, SpawnPill, StatusPill } from './Pill';
@@ -36,16 +36,6 @@ export const SessionMetadataCard: React.FC<SessionMetadataCardProps> = ({
   compact = true,
 }) => {
   const { token } = theme.useToken();
-
-  const handleCopyAgor = () => {
-    copyToClipboard(session.session_id);
-  };
-
-  const handleCopySdk = () => {
-    if (session.sdk_session_id) {
-      copyToClipboard(session.sdk_session_id);
-    }
-  };
 
   return (
     <div style={{ width: 400, maxWidth: '90vw' }}>
@@ -79,82 +69,19 @@ export const SessionMetadataCard: React.FC<SessionMetadataCardProps> = ({
         </div>
       </div>
 
-      {/* Session IDs — Agor + SDK rendered side-by-side so the relationship
-          between them is visually obvious. For Claude Code CLI sessions
-          the two are the same UUID by design (we pass --session-id <agor>
-          to the binary), so the SDK slot mirrors the Agor slot; for SDK
-          adapters they typically differ. SDK slot still hidden entirely
-          when no sdk_session_id has been captured yet (fresh SDK sessions
-          before the first response). */}
+      {/* Session IDs — shared with SessionIdsButton popover and Settings modal.
+          For Claude Code CLI sessions the two are the same UUID by design
+          (we pass --session-id <agor> to the binary); for SDK adapters they
+          typically differ. SDK row is hidden when no sdk_session_id has
+          been captured yet (fresh SDK sessions before the first response). */}
       <div
         style={{
           marginBottom: 12,
           paddingTop: 12,
           borderTop: `1px solid ${token.colorBorderSecondary}`,
-          display: 'flex',
-          gap: 12,
-          flexWrap: 'wrap',
         }}
       >
-        <div style={{ flex: 1, minWidth: 220 }}>
-          <div style={{ fontWeight: 600, fontSize: '0.85em', marginBottom: 8 }}>
-            Agor Session ID
-          </div>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '6px 12px',
-              background: token.colorBgLayout,
-              borderRadius: token.borderRadiusSM,
-              fontFamily: token.fontFamilyCode,
-              fontSize: '0.85em',
-            }}
-          >
-            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {session.session_id}
-            </span>
-            <Button
-              type="text"
-              size="small"
-              icon={<CopyOutlined />}
-              onClick={handleCopyAgor}
-              style={{ padding: '0 4px' }}
-            />
-          </div>
-        </div>
-
-        {session.sdk_session_id && (
-          <div style={{ flex: 1, minWidth: 220 }}>
-            <div style={{ fontWeight: 600, fontSize: '0.85em', marginBottom: 8 }}>
-              {session.agentic_tool || 'SDK'} Session ID
-            </div>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '6px 12px',
-                background: token.colorBgLayout,
-                borderRadius: token.borderRadiusSM,
-                fontFamily: token.fontFamilyCode,
-                fontSize: '0.85em',
-              }}
-            >
-              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {session.sdk_session_id}
-              </span>
-              <Button
-                type="text"
-                size="small"
-                icon={<CopyOutlined />}
-                onClick={handleCopySdk}
-                style={{ padding: '0 4px' }}
-              />
-            </div>
-          </div>
-        )}
+        <SessionIdsList session={session} />
       </div>
 
       {/* Genealogy (if applicable) */}

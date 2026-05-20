@@ -22,10 +22,11 @@ import {
   ThunderboltOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
-import { Button, Collapse, Popover, Tooltip, theme } from 'antd';
+import { Collapse, Popover, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { getContextWindowPercentage } from '../../utils/contextWindow';
+import { type SessionForIds, SessionIdsList } from '../SessionIds';
 import { Tag } from '../Tag';
 
 /**
@@ -567,101 +568,6 @@ interface SessionIdPillProps extends BasePillProps {
   showCopy?: boolean;
 }
 
-interface SessionIdsListProps {
-  sessionId: string;
-  sdkSessionId?: string;
-  agenticTool?: string;
-}
-
-interface IdRowProps {
-  label: string;
-  id: string;
-}
-
-const IdRow: React.FC<IdRowProps> = ({ label, id }) => {
-  const { token } = theme.useToken();
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        padding: '2px 0',
-      }}
-    >
-      <span
-        style={{
-          width: 56,
-          flexShrink: 0,
-          color: token.colorTextSecondary,
-          fontSize: '0.85em',
-        }}
-      >
-        {label}
-      </span>
-      <code
-        style={{
-          flex: 1,
-          fontFamily: token.fontFamilyCode,
-          fontSize: '0.85em',
-          wordBreak: 'break-all',
-        }}
-      >
-        {id}
-      </code>
-      <Button
-        type="text"
-        size="small"
-        icon={<CopyOutlined />}
-        onClick={() => copyToClipboard(id)}
-        aria-label={`Copy ${label} session ID`}
-      />
-    </div>
-  );
-};
-
-/**
- * Renders Agor + SDK session IDs as compact one-line rows with copy buttons.
- * Used in the SessionInfoButton popover and the Session Settings modal.
- */
-export const SessionIdsList: React.FC<SessionIdsListProps> = ({
-  sessionId,
-  sdkSessionId,
-  agenticTool,
-}) => (
-  <div>
-    <IdRow label="Agor" id={sessionId} />
-    {sdkSessionId && <IdRow label={agenticTool || 'SDK'} id={sdkSessionId} />}
-  </div>
-);
-
-/**
- * Compact icon-button trigger for session ID + info popover.
- * Replaces the wider SessionIdPill in dense footer contexts. Same content,
- * click-to-open (instead of hover) to avoid stray fires during footer mousing.
- */
-export const SessionInfoButton: React.FC<SessionIdsListProps> = (props) => (
-  <Popover
-    title={
-      <span>
-        <IdcardOutlined style={{ marginRight: 8 }} />
-        Session IDs
-      </span>
-    }
-    content={
-      <div style={{ width: 400, maxWidth: '90vw' }}>
-        <SessionIdsList {...props} />
-      </div>
-    }
-    trigger="click"
-    placement="topLeft"
-  >
-    <Tooltip title="Session info & IDs">
-      <Button type="text" size="small" icon={<IdcardOutlined />} aria-label="Session info" />
-    </Tooltip>
-  </Popover>
-);
-
 export const SessionIdPill: React.FC<SessionIdPillProps> = ({
   sessionId,
   sdkSessionId,
@@ -700,9 +606,13 @@ export const SessionIdPill: React.FC<SessionIdPillProps> = ({
       content={
         <div style={{ width: 400, maxWidth: '90vw' }}>
           <SessionIdsList
-            sessionId={sessionId}
-            sdkSessionId={sdkSessionId}
-            agenticTool={agenticTool}
+            session={
+              {
+                session_id: sessionId,
+                sdk_session_id: sdkSessionId,
+                agentic_tool: agenticTool,
+              } as SessionForIds
+            }
           />
         </div>
       }
