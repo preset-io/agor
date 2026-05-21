@@ -14,7 +14,9 @@ Why C-now: every git-state-spillover incident we've shipped a defense for in the
 
 Why D within two cycles: dual code paths are a maintenance tax we should treat as a debt, not an architecture. Model B (clone-mode as a permanent peer of worktree-mode) is explicitly rejected for this reason. The point of shipping C is to *de-risk the migration*, not to canonize two modes.
 
-Why disk cost is solved: with `git clone --reference <local-base-cache> --dissociate` (or `--filter=blob:none` where the remote supports partial clone), the per-branch disk overhead drops from "full repo" to "working tree + a few MB of refs." On our largest base repo today (`apache/superset` at 1.16 GB pack), 200 branches under naïve cloning would cost ~232 GB more than today's worktree model; under `--reference --dissociate` it costs **a few hundred MB total**, dominated by the per-branch working tree, **not** by `.git`. The "clones are too expensive" intuition is a pre-2017 one; modern git options make it a non-issue.
+Why disk cost is solved: the working tree (clean tracked files) is the irreducible cost — identical in worktree-mode and clone-mode. The "clones are massive" intuition collapses once you stop measuring `.git/objects` overhead in the wrong column. Apache Superset's clean tracked-source is **75 MB**; the 1.16 GB pack is what holds a decade of history. With `git clone --reference <local-base-cache>` (no `--dissociate`), per-branch `.git` is a few MB — branches share the daemon-owned base cache as an immutable object store while keeping their own `.git/config`, refs, and credentials surfaces. `--filter=blob:none` is the alternative for true per-branch independence with lazy blob fetch from origin (modest network tax on `git blame` / old-ref access; works on GitHub.com).
+
+**Critical correction from an earlier draft of this doc:** `--dissociate` is **not** the recommended default. It instructs git to copy all objects reachable from the cloned refs out of the reference, which for any feature branch off `main` in a deep repo means copying essentially the full pack history. For Superset that's ~1.16 GB per branch — same as a naïve clone. The cheap independence is at the **config layer** (which is where every leak vector lives), not the **object layer** (which we're happy to share with the daemon-owned base cache).
 
 Why now, not later: PR #1209 (`analyze-daemon-fs-decoupling`) and the in-flight `design-ui-daemon-executor-segmentation` both converge on "**isolated FS state per execution unit.**" Migrating to clones is the same primitive. Doing it now lets all three lines of work share one mental model; doing it later means re-doing the impersonation/Unix-group/FS-decoupling work twice.
 
@@ -53,24 +55,15 @@ Numbers from the local Agor instance (max@preset.io's machine), 2026-05-20.
 
 ### 2.1 Disk space — the headline number
 
-`.git` overhead per representative repo (`du -sm <repo>/.git` for base clones at `~/.agor/repos/<slug>/`):
+The single biggest framing error in disk-cost discussions is treating "the size of `~/.agor/repos/<slug>/`" as if it's all `.git`. It's not. Most of what's there is either build artifacts (`node_modules`, generated docs, compiled output) or git's full pack history. Only `git ls-files | xargs du` gives you the **clean tracked source** — which is always materialized regardless of clone strategy.
 
-| Repo | `.git` size | Why it matters |
-|---|---|---|
-| `apache/superset` | **~1.5 GB** (1.16 GB pack-size from `count-objects -vH`) | The worst-case live customer-scale repo we have. |
-| `agor-openclaw` | 865 MB | |
-| `apache/airflow` | 604 MB | Large OSS, deep history. |
-| `preset-io/agor` | 323 MB | This repo. |
-| `preset-io/manager` | 108 MB | Typical product repo. |
-| Median across 20 live repos | ~150 MB | Most repos are smaller than the headline. |
+Measured live (`du --exclude=.git` for working tree, `count-objects -vH` for pack):
 
-Working-tree size per branch (sampled from 3 active `preset-io/agor` worktrees):
-
-| Branch | Working-tree size |
-|---|---|
-| `design-worktree-to-branch-and-clone-model` | 110 MB |
-| `address-issue-1140-impersonation-abstraction` | 108 MB |
-| `analyze-daemon-fs-decoupling` | 109 MB |
+| Repo | Clean tracked source (irreducible) | `.git` pack history | `.git` total | Build/ignored bloat |
+|---|---|---|---|---|
+| `apache/superset` | **75 MB** | 1.16 GB | 1.7 GB | 2.6 GB (in working tree, on top of tracked) |
+| `preset-io/agor` | ~hundreds of MB | 184 MB | 324 MB | up to 9 GB with `node_modules` |
+| `preset-io/manager` | (not measured separately) | small | 108 MB | — |
 
 Branch counts (live, per-repo):
 
@@ -82,29 +75,37 @@ Branch counts (live, per-repo):
 | `preset-io/agor-assistant-private` | 78 |
 | `preset-io/manager` | 59 |
 
-#### Disk cost: today vs. naïve clones vs. `--reference --dissociate`
+#### Per-branch disk cost: every strategy, on Superset (349 branches)
 
-For `apache/superset` at 1.16 GB pack + 349 active branches:
+The working tree is identical in every column — 75 MB of tracked files at the branch's tip, plus whatever the developer installs/builds on top (`node_modules`, etc.) which is also strategy-independent. The interesting column is `.git` overhead.
 
-| Strategy | Cost | Per-branch overhead |
-|---|---|---|
-| **Today (git worktree)** | 1 × 1.16 GB pack + 349 × working-tree | `.git` overhead = **~0 per branch** (gitdir pointer is kB). Working tree dominates. |
-| **Naïve `git clone`** | 349 × (1.16 GB pack + working-tree) | **+1.16 GB per branch** = **+405 GB total** vs today |
-| **`git clone --reference <local-base> --dissociate`** | 1 × 1.16 GB base cache + 349 × (working-tree + ~few-MB independent refs + objects-needed-for-branch) | **~few MB per branch** of independent objects ([git docs](https://git-scm.com/docs/git-clone#Documentation/git-clone.txt---dissociate)). Working tree still dominates. |
-| **`git clone --filter=blob:none`** (partial) | 349 × (small commit/tree-only refs + working-tree + blobs-as-needed) | **~tens of MB per branch.** Lazy blob fetch on demand. Requires server-side support (GitHub.com: yes; some self-hosted: no). |
-| **`git clone --depth N`** (shallow) | 349 × (small refs + working-tree) | **Smallest.** But `git log` past N commits doesn't work, can't push some operations cleanly. Not for general use. |
+| Strategy | Working tree | `.git` overhead per branch | × 349 branches | Operational caveat |
+|---|---|---|---|---|
+| **Today (git worktree)** | 75 MB tracked | ~0 (gitdir pointer file) | 1.16 GB shared base + 26 GB working trees | Shared `.git/config` — the entire reason we're migrating |
+| **`--reference` (no dissociate)** ✓ default | 75 MB tracked | **~few MB** (alternates pointer + own refs) | 1.16 GB base cache + ~28 GB working trees + ~few GB refs | Base cache must not be aggressively pruned (`git gc --no-prune` OK; `git gc --prune=now` can corrupt branches) |
+| **`--filter=blob:none --single-branch`** ✓ alt | 75 MB tracked | **~tens of MB** (commit graph + trees, no extra blobs) | ~35 GB total | Blob access (e.g. `git blame`, `git checkout <old-ref>`) triggers network fetch from origin. Requires partial-clone-capable remote (GitHub.com: yes). |
+| **`--depth 1 --single-branch`** | 75 MB tracked | ~50–80 MB (tip's blobs compressed in pack) | ~44–54 GB total | `git log` past 1 commit broken; can't rebase against old history; can't push some operations cleanly |
+| **`--reference --dissociate`** ✗ rejected | 75 MB tracked | **~1.16 GB** (copies all reachable objects out of reference) | **~430 GB** total | Independent but as expensive as a naïve clone |
+| **Naïve `git clone`** ✗ rejected | 75 MB tracked | ~1.16 GB | ~430 GB total | No reason to choose this over `--reference` |
 
-**Bottom line:** with `--reference --dissociate` (or partial clone on supported remotes), per-branch overhead is **dominated by the working tree, not by `.git`.** The naïve-clone "10–100× disk" warning from `credential-leak-defenses-2026-05-11.md` §3.2 (Option 2 evaluation) **only applies to naïve clones**; it's not the design we'd ship.
+**Bottom line:** the cheap, functional options are `--reference` (small `.git`, depends on local base cache) or `--filter=blob:none` (small `.git`, depends on origin remote for lazy blob fetch). **`--dissociate` is the trap** — it copies full reachable history per branch and turns a cheap operation into an expensive one. Naïve clone is no worse than dissociate but no better either.
 
-**Recommended default:** `--reference <local-base-cache> --dissociate`. Rationale:
-1. Independent — base cache can be GC'd or moved without breaking child clones.
-2. Cheap — copies only the objects the branch ref actually needs.
-3. Available on any git ≥ 2.3 (no server-side support required, unlike partial clone).
-4. Composes with `--filter=blob:none` later if we want even cheaper.
+**Recommended defaults:**
+
+- **Self-hosted (most installs):** `--reference <local-base-cache>` (NO `--dissociate`). Base cache lives at the existing `~/.agor/repos/<slug>/` location. Daemon owns it as immutable infrastructure: `fetch --all` periodically; never `gc --prune=now`. Object-store coupling to a daemon-owned cache is fine — every leak vector we're closing is at the `.git/config` layer, not the object layer.
+- **Hosted / cloud:** `--filter=blob:none --single-branch --branch <branch>`. True per-branch object independence; blobs lazy from origin. Trade slight network tax (rare in steady state) for not needing a per-pod local base cache.
 
 Escape hatches per config:
-- `branch_storage.clone_mode: "reference-dissociate" | "reference" | "full" | "partial-blobless" | "shallow"` (operator can choose per env).
-- `branch_storage.shallow_depth: <N>` for `shallow` mode.
+
+```yaml
+execution:
+  branch_storage:
+    mode: clone                    # clone | worktree (worktree deprecated as of N+1)
+    clone_strategy: reference      # reference | partial-blobless | shallow | full | reference-dissociate
+    shallow_depth: 0               # shallow only; 0 = full
+    base_cache_refresh_seconds: 300
+    base_cache_gc_prune: false     # gates `gc --prune=now` on base; default false (safe with reference)
+```
 
 ### 2.2 Clone speed
 
@@ -139,20 +140,15 @@ This is a **simplification, not a complication.** The "one of N branches needs b
 
 506 `preset-io/agor` worktrees + ~349 `apache/superset` + ~160 `superset-shell` + … ≈ **1,347 live worktrees in the local installation**, and similar order of magnitude on production.
 
-For each:
-1. `git clone --reference <base-cache> --dissociate <remote> <new-clone-path>` (or copy strategy from existing worktree, see §6).
-2. `git checkout <branch-ref>` to match current state.
-3. If the worktree has uncommitted changes: `git stash apply` / copy diff over after clone. (See §6 risk handling.)
-4. Update DB record `worktrees.path` if path changes; otherwise atomically swap dir contents.
-5. Detach old `git worktree` (`git worktree remove <name>` on the old base).
+The migration is **in-place**: we never move the worktree's files. We only swap its `.git` gitdir-pointer file for a fresh `.git/` directory built by `git clone --no-checkout --reference`. Full procedure in §6.
 
-**Per-branch migration:** ~2–10 minutes (mostly working-tree copy / `--reference` setup), scriptable in parallel.
+**Per-branch migration:** ~5–30 seconds. Local-disk-only, no working-tree materialization needed.
 
 **Risk windows:**
-- **In-flight sessions** during migration. Need a per-branch lock (block session start; let active sessions finish; migrate; unlock). Alternative: do migration as a planned maintenance window (daemon down, batch-migrate, daemon up). Recommended: planned maintenance for the bulk run, online migration as a backstop for branches that come in late.
-- **Uncommitted working-tree state.** Most worktrees have some dirty state (`fs.statSync` and `git status` differ from committed). Migration must preserve it, not lose it. Strategy: rsync working tree from old worktree to new clone, then `git checkout` the right ref, then validate file diffs match. We have `git status`-equivalent capture in `packages/core/src/git/index.ts:1268-1309` (`getGitState`) for the lock/release fences.
+- **In-flight sessions** during migration. Per-branch lock (block new session start; respect existing session locks; let active sessions finish or refuse if `--force-stop`). Bulk run prefers planned maintenance for tidiness; online migration is the fallback for stragglers.
+- **Uncommitted working-tree state.** Preserved automatically — the worktree's files never move; only `.git` swaps. `git status` post-swap is identical to pre-swap. Validated as a step in the procedure.
 
-**Engineering effort:** ~3–5 eng-days to write the migration tool + 1 maintenance window of ~30 min for the bulk pass. Not weeks.
+**Engineering effort:** ~3–5 eng-days to write the migration tool + 30–60 min for the bulk pass.
 
 ### 2.5 UI / API / MCP rename
 
@@ -231,56 +227,134 @@ The exception: **if a hard production blocker emerges** during the clone-mode ro
 
 ## 5. Clone optimization choices
 
-Recommended default: **`git clone --reference <local-base-cache> --dissociate <remote> <branch-path>` followed by `git checkout <ref>`.**
+Recommended self-hosted default: **`git clone --reference <local-base-cache> <remote> <branch-path>` followed by `git checkout <branch>`.** No `--dissociate`.
 
-The local-base-cache is exactly today's base clone at `~/.agor/repos/<slug>/` — repurposed from "host of all worktrees" to "objects-only reference cache." It's not user-visible state anymore; the daemon keeps it fresh via periodic `git fetch --all`, and individual branches never write to it.
+The base cache is exactly today's base clone at `~/.agor/repos/<slug>/` — repurposed from "host of all worktrees" to "objects-only reference cache." After migration the daemon owns it as **append-only infrastructure**: periodic `git fetch --all` to keep it fresh, never `git gc --prune=now`, never `git repack -d` in a way that drops unreachables. Individual branches never write to it.
 
-Knobs (in `~/.agor/config.yaml`):
+The state-isolation we care about (configs, remotes, credentials, ssh command, hooks) lives in each branch's own `.git/`. The object store is happy to be shared with the daemon's base cache — no leak vector lives there.
 
-```yaml
-execution:
-  branch_storage:
-    mode: clone               # clone | worktree (worktree deprecated as of N+1, removed N+3)
-    clone_strategy: reference-dissociate   # see table below
-    shallow_depth: 0           # for clone_strategy=shallow only; 0 = full
-    base_cache_refresh_seconds: 300  # how often to `fetch --all` into base cache
-```
+Hosted / cloud default: **`git clone --filter=blob:none --single-branch --branch <branch> <remote> <branch-path>`.** Truly independent. Blobs lazy-fetched from origin on access.
 
-| `clone_strategy` | What it does | Per-branch `.git` overhead | When to use |
-|---|---|---|---|
-| `reference-dissociate` (default) | Clone with `--reference <base-cache> --dissociate`. Independent objects after creation. | Few MB | **Default.** Independent + cheap. |
-| `reference` | Clone with `--reference <base-cache>` (no dissociate). Cheapest, but base cache becomes load-bearing — pruning it breaks every branch referencing it. | < 1 MB | Power-user mode where disk is precious and operator commits to never running `git gc` on the base cache. |
-| `full` | Plain `git clone`, no reference. Each branch is fully self-contained. | Full pack size | Operators who want zero coupling between base cache and branches — at the cost of `.git`-per-branch disk. |
-| `partial-blobless` | `git clone --filter=blob:none`. Lazy blob fetch. | Tens of MB | Modern git ≥ 2.20, server-side partial-clone support (GitHub.com: yes). Optional. |
-| `shallow` | `git clone --depth <N>`. Limited history. | Smallest | Ephemeral PR-style branches that don't need history. Not safe as default — `git log` past N is broken. |
+| `clone_strategy` | What it does | Per-branch `.git` | Coupling | Default for |
+|---|---|---|---|---|
+| `reference` ✓ | `--reference <base-cache>`. Alternates point at base; nothing copied. | Few MB | Base cache must outlive branch + not aggressively pruned | **Self-hosted** |
+| `partial-blobless` ✓ | `--filter=blob:none --single-branch`. Lazy blob fetch from origin. | Tens of MB | Origin remote must support partial clone (GitHub.com yes) | **Hosted** |
+| `shallow` | `--depth <N>`. Truncated history. | Smallest | Self-contained but `git log` past N broken | Ephemeral / CI-style |
+| `full` | Plain clone. Full pack copied. | ~repo pack size | Self-contained | Operators who want zero coupling |
+| `reference-dissociate` | `--reference --dissociate`. Copies reachable objects out of reference. | ~repo pack size | Self-contained | **Not recommended** — same disk cost as full clone |
 
-**Risk of `reference-dissociate`:** if the base cache is missing or corrupted at clone time, the clone fails. Daemon must ensure the base cache exists before issuing clones — straightforward to add as a precondition in `services/repos.ts`'s `createWorktree`.
+**Risk: base-cache pruning under `reference`.** If an operator runs `git gc --prune=now` on the base cache and removes an unreachable object that some branch's `.git/objects/info/alternates` still depends on, that branch loses access to those objects. The daemon's base-cache management routine must:
 
-**Risk of `reference` (no dissociate):** as above, plus the base cache becomes part of every branch's object graph. `git gc` / repacking the base cache while a branch is being committed-to → object corruption in the branch. **Hence we default to `--dissociate`** to break the link.
+1. Never call `git gc --prune=now` on the base cache.
+2. If GC is needed, use `git gc --no-prune` (compresses without dropping unreachables).
+3. Surface a config knob `branch_storage.base_cache_gc_prune` (default `false`) so operators have to explicitly opt in to pruning.
+
+**Recoverable failure mode:** if the base cache is somehow corrupted or pruned, `git repack -ad --local` in each affected branch materializes the needed objects locally (essentially a deferred `--dissociate` per-branch). Possible but painful; the discipline above prevents it from ever being needed.
+
+**Risk: hosted partial-clone fallback.** If the origin remote disappears (network partition, repo deletion), `partial-blobless` branches lose access to non-materialized blobs. Mitigation: most working-set blobs are already materialized (they're the tracked files on disk); only archeology operations (`git blame` on old commits, `git checkout <old-ref>`) need network. Acceptable.
 
 ---
 
-## 6. Migration of existing worktrees
+## 6. Migration of existing worktrees — the de-worktreefication procedure
 
-One-time tool: `agor branches migrate --to clone [--dry-run]`.
+There is **no native `git worktree --dissociate` command.** Git ships no first-class way to convert a worktree into a standalone clone. The two sharing mechanisms — worktree's `commondir` and clone's `--reference`'s `alternates` — are different files, and `--dissociate` only knows how to break alternates.
 
-For each worktree record in DB:
+But the conversion is mechanically straightforward and can be done **in-place without moving the working tree at all**, because `git clone --no-checkout` builds just the `.git/` infrastructure and never touches the working tree. We swap one worktree's `.git` file (the `gitdir:` pointer) for a fresh `.git/` directory and we're done.
 
-1. **Lock** the worktree (block new session starts; let active sessions finish or refuse if `--force-stop`).
-2. **Snapshot** working-tree state: `git status --porcelain=v2 --untracked-files=all` from the old worktree. Capture diff vs HEAD.
-3. **New clone**: `git clone --reference <base-cache> --dissociate <remote> <new-path-temporary>`.
-4. **Checkout** the branch ref: `git checkout <ref>` in the new clone.
-5. **Apply diff**: rsync uncommitted working-tree changes from old worktree to new clone (preserve dirty state). Validate `git status` post-rsync matches snapshot.
-6. **Atomic swap**: rename old worktree dir aside, move new clone into place, update DB `worktrees.path` and `worktrees.storage_mode` columns.
-7. **Detach old**: `git worktree remove <old-name>` on the base repo's worktrees list (cleanup `.git/worktrees/<name>/`).
-8. **Unlock**.
+### Procedure (per branch)
 
-Failure handling:
-- Per-branch failure rolls back to old worktree (atomic swap is reversible until step 7).
-- Bulk failure: maintenance window pause; resume on retry.
-- The DB gets a new column `worktrees.storage_mode ENUM('worktree','clone')` so partial-migration state is queryable.
+Pre-conditions (validated by the migration tool):
 
-**Estimated effort:** 3–5 eng-days for the tool + tests + one-time runbook + the storage_mode column migration. The migration itself is ~30–60 min for ~1,500 worktrees if parallelized 4–8 wide.
+- The worktree's `.git` file exists and contains `gitdir: <path-to-base>/.git/worktrees/<name>`.
+- The base repo is reachable at the path the `gitdir:` line points to.
+- The worktree has no in-flight session (lock held).
+
+Steps:
+
+```bash
+# 1. Snapshot state for validation
+cd "$worktree"
+BRANCH=$(git symbolic-ref --short HEAD)            # or git rev-parse for detached
+HEAD_SHA=$(git rev-parse HEAD)
+REMOTE_URL=$(git remote get-url origin)
+STATUS_BEFORE=$(git status --porcelain=v2 --untracked-files=all)
+
+# 2. Build a fresh .git/ infrastructure in a temp dir, NO checkout.
+#    --no-checkout means the temp dir's working tree stays empty — we only care about .git/.
+git clone --no-checkout --reference "$BASE_CACHE" \
+          --single-branch --branch "$BRANCH" \
+          "$REMOTE_URL" "/tmp/agor-migrate-$WT_ID/"
+
+# 3. Confirm the new clone's HEAD matches what the worktree was at.
+NEW_HEAD=$(git -C "/tmp/agor-migrate-$WT_ID" rev-parse HEAD)
+[ "$NEW_HEAD" = "$HEAD_SHA" ] || abort "HEAD drifted during migration"
+
+# 4. Atomic swap: replace the gitdir pointer with the real .git/.
+mv "$worktree/.git" "$worktree/.git.gitdir-pointer.bak"
+mv "/tmp/agor-migrate-$WT_ID/.git" "$worktree/.git"
+
+# 5. Validate the worktree's git state is unchanged.
+STATUS_AFTER=$(cd "$worktree" && git status --porcelain=v2 --untracked-files=all)
+diff <(echo "$STATUS_BEFORE") <(echo "$STATUS_AFTER") || rollback
+
+# 6. Detach from base. Cleans up base/.git/worktrees/<name>/.
+git -C "$BASE" worktree remove --force "$WT_NAME" || \
+  rm -rf "$BASE/.git/worktrees/$WT_NAME" && git -C "$BASE" worktree prune
+
+# 7. Update DB record + commit.
+psql -c "UPDATE worktrees SET storage_mode='clone' WHERE worktree_id='$WT_ID'"
+
+# 8. Clean up backup.
+rm "$worktree/.git.gitdir-pointer.bak"
+```
+
+Rollback if step 5 or step 6 fails:
+
+```bash
+rm -rf "$worktree/.git"  # the new .git
+mv "$worktree/.git.gitdir-pointer.bak" "$worktree/.git"   # restore old gitdir pointer
+# Base repo still has the worktree entry; nothing to undo there.
+```
+
+### Why this is clean
+
+1. **The working tree never moves.** Inotify-watching processes, the developer's open editor, in-progress builds in `dist/` — none of them see file-mtime churn.
+2. **Uncommitted state is preserved automatically.** We don't rsync, we don't apply diffs. Git's view of "what's dirty" is computed from index + worktree contents — the worktree contents don't change, so the dirty state is identical post-swap.
+3. **`.git/objects/` for the new clone is empty** (because `--reference` writes only alternates, no copy). Disk-cost-neutral.
+4. **Atomic at the right boundary.** The only window of inconsistency is between step 4 (`mv` the pointer aside) and the end of step 4 (`mv` new `.git` into place). Both are atomic per-directory `rename(2)` calls on the same filesystem; a crash between them leaves the gitdir-pointer backup, and recovery is "rename it back."
+5. **`git worktree prune` cleans up base.** Even if the explicit `git worktree remove` fails (e.g. base has a stale lock), `prune` notices the gitdir file is gone and removes the orphan entry.
+
+### Per-branch cost
+
+- Roughly 5–30 seconds per branch (single-branch clone with reference is fast; no working-tree materialization).
+- I/O bound on `mv` (same filesystem; cheap).
+- Network: zero if the base cache already has all the objects (which it should after a `fetch --all` immediately prior).
+
+### Bulk migration
+
+`agor branches migrate --to clone [--dry-run] [--parallelism N]`:
+
+1. Pre-flight: `git fetch --all` on every base cache so they're fresh; verify base caches exist for every distinct repo in the worktree set.
+2. Snapshot DB: `SELECT * FROM worktrees WHERE storage_mode='worktree'` → migration set.
+3. Per-worktree lock (block new session creation; respect existing session locks).
+4. Run the procedure above with `--parallelism N`. Recommended `N=4` (limited by base-cache concurrent-read safety, which is solid in modern git).
+5. Resume-safe: on rerun, only worktrees with `storage_mode='worktree'` get touched.
+6. Idempotent: if a worktree's `.git` is already a directory (not a file), skip it as "already migrated."
+
+For Max's local instance (~1,347 worktrees across ~20 repos): estimated 30–60 minutes for the bulk pass at `N=4`.
+
+### Schema add
+
+```sql
+ALTER TABLE worktrees ADD COLUMN storage_mode TEXT NOT NULL DEFAULT 'worktree'
+  CHECK (storage_mode IN ('worktree', 'clone'));
+```
+
+Existing rows default to `'worktree'`. New rows post-PR-4 default to `'clone'`. Migration tool flips per-row to `'clone'` as each branch is converted.
+
+### Engineering estimate
+
+**3–5 eng-days** for the migration tool + tests + the storage_mode column migration + a runbook. The conversion procedure itself is ~80 lines of shell or Node; the resilience (locking, parallelism, resume, dry-run, rollback) is the bulk of the work.
 
 ---
 
