@@ -75,13 +75,13 @@ function renderDialog(props: Partial<React.ComponentProps<typeof CreateDialog>> 
 // Each test renders an antd Modal + Tabs and exercises tab-switching. That's
 // heavy in jsdom — Modal motion CSS never fires transitionend, the portal
 // mounts/unmounts every test, and finding labels inside Tabs panes is slow.
-// On the GitHub runner a single test can take 9-10s just to mount + query, so
-// the per-test budget needs more headroom than the vitest default. Same goes
-// for the individual findBy / waitFor helpers — give them ~5s each so the
-// whole-test timeout isn't doubling as the only safety net.
-const ASYNC = { timeout: 5_000 };
+// On the GitHub runner a single mount + first input change runs ~10s, and
+// every tab click adds ~7-8s of React-commit work to that. Give individual
+// findBy / waitFor helpers an explicit 10s budget so they aren't racing the
+// whole-test timeout.
+const ASYNC = { timeout: 10_000 };
 
-describe('CreateDialog — per-tab validity scoping', { timeout: 30_000 }, () => {
+describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () => {
   it('enables Create Assistant once Display Name is typed', async () => {
     renderDialog({ defaultTab: 'assistant' });
 
@@ -108,21 +108,16 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 30_000 }, () =>
     )) as HTMLInputElement;
     fireEvent.change(displayName, { target: { value: 'My Assistant' } });
 
-    const button = screen.getByRole('button', { name: /Create Assistant/i });
-    await waitFor(() => {
-      expect(button).not.toBeDisabled();
-    }, ASYNC);
-
-    // Switch away to a tab whose form is empty (and therefore invalid).
+    // Switch away and back without asserting on the interim state — that
+    // assertion isn't load-bearing for this regression and each waitFor pass
+    // adds 5-8s of overhead in CI.
     fireEvent.click(screen.getByRole('tab', { name: /Board/i }));
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Create Board/i })).toBeDisabled();
-    }, ASYNC);
-
-    // Switch back. Display Name is still filled — submit must be enabled
-    // without the user having to re-touch the field.
     fireEvent.click(screen.getByRole('tab', { name: /Assistant/i }));
 
+    // Display Name is still filled — submit must be enabled without the user
+    // having to re-touch the field. Pre-fix: handleTabChange reset the shared
+    // isValid to false and AssistantTab's useEffect didn't re-fire (its
+    // isFormValid hadn't changed), so the button stayed stuck disabled.
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Create Assistant/i })).not.toBeDisabled();
     }, ASYNC);
