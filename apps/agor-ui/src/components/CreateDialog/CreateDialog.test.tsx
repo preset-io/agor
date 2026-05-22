@@ -72,60 +72,80 @@ function renderDialog(props: Partial<React.ComponentProps<typeof CreateDialog>> 
   );
 }
 
-describe('CreateDialog — per-tab validity scoping', { timeout: 10_000 }, () => {
+// Each test renders an antd Modal + Tabs and exercises tab-switching. That's
+// heavy in jsdom — Modal motion CSS never fires transitionend, the portal
+// mounts/unmounts every test, and finding labels inside Tabs panes is slow.
+// On the GitHub runner a single test can take 9-10s just to mount + query, so
+// the per-test budget needs more headroom than the vitest default. Same goes
+// for the individual findBy / waitFor helpers — give them ~5s each so the
+// whole-test timeout isn't doubling as the only safety net.
+const ASYNC = { timeout: 5_000 };
+
+describe('CreateDialog — per-tab validity scoping', { timeout: 30_000 }, () => {
   it('enables Create Assistant once Display Name is typed', async () => {
     renderDialog({ defaultTab: 'assistant' });
 
-    const displayName = (await screen.findByLabelText(/Display Name/i)) as HTMLInputElement;
+    const displayName = (await screen.findByLabelText(
+      /Display Name/i,
+      undefined,
+      ASYNC
+    )) as HTMLInputElement;
     fireEvent.change(displayName, { target: { value: 'My Assistant' } });
 
     const button = screen.getByRole('button', { name: /Create Assistant/i });
     await waitFor(() => {
       expect(button).not.toBeDisabled();
-    });
+    }, ASYNC);
   });
 
   it('preserves Assistant validity when user switches tabs and switches back', async () => {
     renderDialog({ defaultTab: 'assistant' });
 
-    const displayName = (await screen.findByLabelText(/Display Name/i)) as HTMLInputElement;
+    const displayName = (await screen.findByLabelText(
+      /Display Name/i,
+      undefined,
+      ASYNC
+    )) as HTMLInputElement;
     fireEvent.change(displayName, { target: { value: 'My Assistant' } });
 
     const button = screen.getByRole('button', { name: /Create Assistant/i });
     await waitFor(() => {
       expect(button).not.toBeDisabled();
-    });
+    }, ASYNC);
 
     // Switch away to a tab whose form is empty (and therefore invalid).
     fireEvent.click(screen.getByRole('tab', { name: /Board/i }));
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Create Board/i })).toBeDisabled();
-    });
+    }, ASYNC);
 
     // Switch back. Display Name is still filled — submit must be enabled
     // without the user having to re-touch the field.
     fireEvent.click(screen.getByRole('tab', { name: /Assistant/i }));
 
-    const reShownButton = screen.getByRole('button', { name: /Create Assistant/i });
     await waitFor(() => {
-      expect(reShownButton).not.toBeDisabled();
-    });
+      expect(screen.getByRole('button', { name: /Create Assistant/i })).not.toBeDisabled();
+    }, ASYNC);
   });
 
   it('reports each tab its own validity (no spillover when switching to an empty tab)', async () => {
     renderDialog({ defaultTab: 'assistant' });
 
-    const displayName = (await screen.findByLabelText(/Display Name/i)) as HTMLInputElement;
+    const displayName = (await screen.findByLabelText(
+      /Display Name/i,
+      undefined,
+      ASYNC
+    )) as HTMLInputElement;
     fireEvent.change(displayName, { target: { value: 'My Assistant' } });
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Create Assistant/i })).not.toBeDisabled();
-    });
+    }, ASYNC);
 
     // Switch to Board (its form is empty). The footer's submit must reflect
     // Board's validity, not leak Assistant's "true" into Create Board.
     fireEvent.click(screen.getByRole('tab', { name: /Board/i }));
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Create Board/i })).toBeDisabled();
-    });
+    }, ASYNC);
   });
 });
