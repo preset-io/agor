@@ -17,6 +17,13 @@ import { WorktreeTab } from './tabs/WorktreeTab';
 
 type ActiveTab = 'worktree' | 'assistant' | 'board' | 'repository';
 
+const INITIAL_VALIDITY: Record<ActiveTab, boolean> = {
+  worktree: false,
+  assistant: false,
+  board: false,
+  repository: false,
+};
+
 const PURPOSE_TEXT: Record<ActiveTab, React.ReactNode> = {
   worktree: (
     <>
@@ -74,7 +81,11 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   onCreateAssistant,
 }) => {
   const [activeTab, setActiveTab] = useState<ActiveTab>(defaultTab);
-  const [isValid, setIsValid] = useState(false);
+  // Validity is tracked per tab so a sibling tab's empty-form state (or a
+  // deferred validity push from its init effect) can't clobber the active
+  // tab's submit button.
+  const [validByTab, setValidByTab] = useState<Record<ActiveTab, boolean>>(INITIAL_VALIDITY);
+  const isValid = validByTab[activeTab];
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Form submit refs — each tab exposes a submit function
@@ -86,18 +97,31 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   // Reset state when dialog closes (covers both cancel and successful submit)
   useEffect(() => {
     if (!open) {
-      setIsValid(false);
+      setValidByTab(INITIAL_VALIDITY);
       setActiveTab(defaultTab);
     }
   }, [open, defaultTab]);
 
-  const handleValidityChange = useCallback((valid: boolean) => {
-    setIsValid(valid);
+  const setTabValid = useCallback((tab: ActiveTab, valid: boolean) => {
+    setValidByTab((prev) => (prev[tab] === valid ? prev : { ...prev, [tab]: valid }));
   }, []);
+
+  const handleWorktreeValid = useCallback(
+    (v: boolean) => setTabValid('worktree', v),
+    [setTabValid]
+  );
+  const handleAssistantValid = useCallback(
+    (v: boolean) => setTabValid('assistant', v),
+    [setTabValid]
+  );
+  const handleBoardValid = useCallback((v: boolean) => setTabValid('board', v), [setTabValid]);
+  const handleRepositoryValid = useCallback(
+    (v: boolean) => setTabValid('repository', v),
+    [setTabValid]
+  );
 
   const handleTabChange = (key: string) => {
     setActiveTab(key as ActiveTab);
-    setIsValid(false);
   };
 
   const handleSubmit = async () => {
@@ -174,7 +198,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
             repoById={repoById}
             currentBoardId={currentBoardId}
             defaultPosition={defaultPosition}
-            onValidityChange={handleValidityChange}
+            onValidityChange={handleWorktreeValid}
             formRef={worktreeFormRef}
           />
         </div>
@@ -199,7 +223,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
           <AssistantTab
             repoById={repoById}
             boardById={boardById}
-            onValidityChange={handleValidityChange}
+            onValidityChange={handleAssistantValid}
             formRef={assistantFormRef}
             onCreateRepo={onCreateRepo}
           />
@@ -222,7 +246,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
             description={PURPOSE_TEXT.board}
             style={{ marginBottom: 16 }}
           />
-          <BoardTab onValidityChange={handleValidityChange} formRef={boardFormRef} />
+          <BoardTab onValidityChange={handleBoardValid} formRef={boardFormRef} />
         </div>
       ),
     },
@@ -242,7 +266,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
             description={PURPOSE_TEXT.repository}
             style={{ marginBottom: 16 }}
           />
-          <RepoTab onValidityChange={handleValidityChange} formRef={repoFormRef} />
+          <RepoTab onValidityChange={handleRepositoryValid} formRef={repoFormRef} />
         </div>
       ),
     },
