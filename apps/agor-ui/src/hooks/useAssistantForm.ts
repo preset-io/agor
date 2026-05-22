@@ -16,19 +16,23 @@ export function useAssistantForm(frameworkRepo: Repo | undefined) {
   const [customRepoSelected, setCustomRepoSelected] = useState(false);
   const lastAutoName = useRef('');
 
-  // Auto-select framework repo when available
-  useEffect(() => {
-    if (frameworkRepo && !form.getFieldValue('repoId')) {
-      form.setFieldValue('repoId', frameworkRepo.repo_id);
-    }
-  }, [frameworkRepo, form]);
-
   const validateForm = useCallback(() => {
     const values = form.getFieldsValue();
     const hasDisplayName = !!values.displayName?.trim();
     const hasRepo = Boolean(values.repoId || frameworkRepo?.repo_id);
     setIsFormValid(hasDisplayName && hasRepo);
   }, [form, frameworkRepo]);
+
+  // Auto-select framework repo when available. setFieldValue is silent
+  // (does not fire onFieldsChange), so re-run validation here — otherwise
+  // a name typed while the framework repo was still cloning leaves the
+  // submit button stuck disabled after the repo arrives.
+  useEffect(() => {
+    if (frameworkRepo && !form.getFieldValue('repoId')) {
+      form.setFieldValue('repoId', frameworkRepo.repo_id);
+    }
+    validateForm();
+  }, [frameworkRepo, form, validateForm]);
 
   const handleDisplayNameChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
