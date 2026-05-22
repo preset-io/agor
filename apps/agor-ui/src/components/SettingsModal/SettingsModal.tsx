@@ -381,6 +381,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             repoById={repoById}
             boardById={boardById}
             sessionsByWorktree={sessionsByWorktree}
+            userById={userById}
             client={client}
             onArchiveOrDelete={onArchiveOrDeleteWorktree}
             onRowClick={handleWorktreeRowClick}

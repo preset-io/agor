@@ -4,17 +4,24 @@ import type {
   CreateRepoRequest,
   Repo,
   Session,
+  User,
   Worktree,
 } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
+import { DeleteOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import {
-  DeleteOutlined,
-  EditOutlined,
-  FolderOutlined,
-  PlusOutlined,
-  RobotOutlined,
-} from '@ant-design/icons';
-import { Button, Empty, Form, Input, Modal, Space, Table, Tooltip, Typography, theme } from 'antd';
+  Button,
+  Empty,
+  Form,
+  Input,
+  Modal,
+  Popover,
+  Space,
+  Table,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
 import { useMemo, useState } from 'react';
 import { useAssistantForm } from '@/hooks/useAssistantForm';
 import { useEnsureFrameworkRepo } from '@/hooks/useEnsureFrameworkRepo';
@@ -22,6 +29,8 @@ import { createAssistantWorktree } from '@/utils/assistantCreation';
 import { mapToArray } from '@/utils/mapHelpers';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import { AssistantFormFields, CREATE_NEW_BOARD } from '../forms/AssistantFormFields';
+import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
+import { UserAvatar } from '../metadata/UserAvatar';
 import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
 import { renderEnvCell } from './WorktreeEnvColumn';
 
@@ -30,6 +39,7 @@ interface AssistantsTableProps {
   repoById: Map<string, Repo>;
   boardById: Map<string, Board>;
   sessionsByWorktree: Map<string, Session[]>;
+  userById: Map<string, User>;
   client: AgorClient | null;
   onArchiveOrDelete?: (
     worktreeId: string,
@@ -61,6 +71,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
   repoById,
   boardById,
   sessionsByWorktree,
+  userById,
   client,
   onArchiveOrDelete,
   onRowClick,
@@ -167,6 +178,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
     {
       title: 'Assistant',
       key: 'assistant',
+      width: 220,
       render: (_: unknown, record: Worktree) => {
         const config = getAssistantConfig(record);
         return (
@@ -176,15 +188,72 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
             ) : (
               <RobotOutlined style={{ color: token.colorInfo }} />
             )}
-            <div>
-              <Typography.Text strong>{config?.displayName ?? record.name}</Typography.Text>
-              <br />
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {record.name}
-              </Typography.Text>
-            </div>
+            <Typography.Text strong>{config?.displayName ?? record.name}</Typography.Text>
           </Space>
         );
+      },
+    },
+    {
+      title: 'Description',
+      key: 'description',
+      render: (_: unknown, record: Worktree) => {
+        const notes = (record.notes ?? '').trim();
+        if (!notes) {
+          return (
+            <Typography.Text type="secondary" italic style={{ fontSize: 12 }}>
+              No description
+            </Typography.Text>
+          );
+        }
+        const firstLine = notes.split('\n').find((l) => l.trim().length > 0) ?? notes;
+        return (
+          <Popover
+            content={
+              <div style={{ maxWidth: 480, maxHeight: 400, overflowY: 'auto' }}>
+                <MarkdownRenderer content={notes} compact showControls={false} />
+              </div>
+            }
+            trigger="hover"
+            placement="topLeft"
+            mouseEnterDelay={0.2}
+            // Prevent row-click navigation when interacting with the popover.
+            overlayStyle={{ pointerEvents: 'auto' }}
+          >
+            <div
+              style={{
+                display: '-webkit-box',
+                WebkitLineClamp: 1,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+                cursor: 'help',
+                maxWidth: 480,
+              }}
+            >
+              <MarkdownRenderer
+                content={firstLine}
+                inline
+                style={{ fontSize: 12, color: token.colorTextSecondary }}
+                showControls={false}
+              />
+            </div>
+          </Popover>
+        );
+      },
+    },
+    {
+      title: 'Creator',
+      key: 'creator',
+      width: 160,
+      render: (_: unknown, record: Worktree) => {
+        const user = userById.get(record.created_by);
+        if (!user) {
+          return (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              —
+            </Typography.Text>
+          );
+        }
+        return <UserAvatar user={user} showName size="small" />;
       },
     },
     {
@@ -196,52 +265,6 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
         const repo = repos.find((r: Repo) => r.repo_id === record.repo_id);
         return renderEnvCell(record, repo, token, { onStartEnvironment, onStopEnvironment });
       },
-    },
-    {
-      title: 'Repo',
-      key: 'repo',
-      render: (_: unknown, record: Worktree) => {
-        const repo = repoById.get(record.repo_id);
-        return (
-          <Space>
-            <FolderOutlined />
-            <Typography.Text>{repo?.name || 'Unknown'}</Typography.Text>
-          </Space>
-        );
-      },
-    },
-    {
-      title: 'Branch',
-      dataIndex: 'ref',
-      key: 'ref',
-      render: (ref: string) => <Typography.Text code>{ref}</Typography.Text>,
-    },
-    {
-      title: 'Sessions',
-      key: 'sessions',
-      width: 100,
-      render: (_: unknown, record: Worktree) => {
-        const count = (sessionsByWorktree.get(record.worktree_id) || []).length;
-        return (
-          <Typography.Text type="secondary">
-            {count} {count === 1 ? 'session' : 'sessions'}
-          </Typography.Text>
-        );
-      },
-    },
-    {
-      title: 'Path',
-      key: 'path',
-      width: 60,
-      align: 'center' as const,
-      render: (_: unknown, record: Worktree) => (
-        <Typography.Text
-          copyable={{
-            text: record.path,
-            tooltips: [`Copy path: ${record.path}`, 'Copied!'],
-          }}
-        />
-      ),
     },
     {
       title: 'Actions',
