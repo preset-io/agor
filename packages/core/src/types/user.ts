@@ -24,6 +24,35 @@ export const ROLES = {
 } as const satisfies Record<string, UserRole>;
 
 /**
+ * Display metadata for each role. Ordered from most → least privileged so UI
+ * dropdowns can render directly from this list without re-sorting.
+ *
+ * This is the single source of truth for role labels and descriptions —
+ * dropdowns, CLI prompts, and any other surface listing roles should map
+ * over this array instead of hard-coding role strings.
+ */
+export interface RoleOption {
+  value: UserRole;
+  label: string;
+  description: string;
+}
+
+export const ROLE_OPTIONS: readonly RoleOption[] = [
+  {
+    value: ROLES.SUPERADMIN,
+    label: 'Superadmin',
+    description: 'Full system access + worktree RBAC bypass',
+  },
+  {
+    value: ROLES.ADMIN,
+    label: 'Admin',
+    description: 'Manage resources (users, MCP servers, config)',
+  },
+  { value: ROLES.MEMBER, label: 'Member', description: 'Standard user' },
+  { value: ROLES.VIEWER, label: 'Viewer', description: 'Read-only access' },
+] as const;
+
+/**
  * Role rank used for minimum-role comparisons.
  * Higher rank = more privileges. 'owner' is a deprecated alias for superadmin.
  */
