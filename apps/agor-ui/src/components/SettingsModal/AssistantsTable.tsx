@@ -206,36 +206,41 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
           );
         }
         const firstLine = notes.split('\n').find((l) => l.trim().length > 0) ?? notes;
+        // Cell shows plain first-line ellipsis; popover renders full markdown.
+        // MarkdownRenderer's `inline` is currently a no-op (Streamdown still
+        // emits block nodes), so plain text is the honest preview here.
         return (
           <Popover
             content={
-              <div style={{ maxWidth: 480, maxHeight: 400, overflowY: 'auto' }}>
-                <MarkdownRenderer content={notes} compact showControls={false} />
+              <div
+                className="markdown-compact"
+                style={{
+                  maxWidth: 480,
+                  maxHeight: 400,
+                  overflowY: 'auto',
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                }}
+              >
+                <MarkdownRenderer content={notes} showControls={false} />
               </div>
             }
             trigger="hover"
             placement="topLeft"
-            mouseEnterDelay={0.2}
-            // Prevent row-click navigation when interacting with the popover.
-            overlayStyle={{ pointerEvents: 'auto' }}
+            mouseEnterDelay={0.3}
           >
-            <div
+            <Typography.Text
+              type="secondary"
+              ellipsis
               style={{
-                display: '-webkit-box',
-                WebkitLineClamp: 1,
-                WebkitBoxOrient: 'vertical',
-                overflow: 'hidden',
-                cursor: 'help',
+                display: 'block',
                 maxWidth: 480,
+                fontSize: 12,
+                cursor: 'help',
               }}
             >
-              <MarkdownRenderer
-                content={firstLine}
-                inline
-                style={{ fontSize: 12, color: token.colorTextSecondary }}
-                showControls={false}
-              />
-            </div>
+              {firstLine}
+            </Typography.Text>
           </Popover>
         );
       },
@@ -246,10 +251,10 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
       width: 160,
       render: (_: unknown, record: Worktree) => {
         const user = userById.get(record.created_by);
-        if (!user) {
+        if (!user || record.created_by === 'anonymous') {
           return (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              —
+              {record.created_by === 'anonymous' ? 'Anonymous' : 'Unknown User'}
             </Typography.Text>
           );
         }
