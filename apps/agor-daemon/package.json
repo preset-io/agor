@@ -29,16 +29,16 @@
     "@octokit/rest": "^22.0.1",
     "compression": "^1.8.1",
     "cors": "^2.8.6",
-    "dotenv": "^17.3.1",
+    "dotenv": "^17.4.2",
     "express": "^5.2.0",
-    "express-rate-limit": "^7.4.1",
-    "express-static-gzip": "^3.0.0",
+    "express-rate-limit": "^8.5.2",
+    "express-static-gzip": "^3.0.1",
     "feathers-swagger": "^3.0.0",
     "handlebars": "^4.7.8",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
     "socket.io": "^4.8.3",
-    "swagger-ui-dist": "^5.32.1"
+    "swagger-ui-dist": "^5.32.6"
   },
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.132",
