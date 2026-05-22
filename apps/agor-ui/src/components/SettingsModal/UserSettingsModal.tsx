@@ -7,7 +7,7 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { hasMinimumRole, ROLES } from '@agor-live/client';
+import { hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
 import {
   ApiOutlined,
   CloseOutlined,
@@ -596,12 +596,14 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                   : undefined
               }
             >
-              <Select disabled={!hasMinimumRole(currentUser?.role, ROLES.ADMIN)}>
-                {/* <Select.Option value="owner">Owner</Select.Option> */}
-                <Select.Option value="admin">Admin</Select.Option>
-                <Select.Option value="member">Member</Select.Option>
-                <Select.Option value="viewer">Viewer</Select.Option>
-              </Select>
+              <Select
+                disabled={!hasMinimumRole(currentUser?.role, ROLES.ADMIN)}
+                options={ROLE_OPTIONS.map((opt) => ({
+                  value: opt.value,
+                  label: opt.label,
+                  title: opt.description,
+                }))}
+              />
             </Form.Item>
 
             {/* Only show for admins editing other users */}
