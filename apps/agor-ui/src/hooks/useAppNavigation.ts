@@ -25,7 +25,7 @@ import type { Session, Worktree } from '@agor-live/client';
 import { useCallback, useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useRecenterMap } from '../contexts/CanvasNavigationContext';
-import { buildBoardPath, buildSessionPath } from './useUrlState';
+import { buildBoardPath, buildSessionPath, buildWorktreePath } from './useUrlState';
 
 interface UseAppNavigationOptions {
   /** Boards aren't exposed via AppDataContext yet — App.tsx passes its
@@ -117,11 +117,13 @@ export function useAppNavigation({
     (worktreeId: string, opts?: NavigationOpts) => {
       const worktree = worktreeByIdRef.current.get(worktreeId);
       if (!worktree?.board_id) return;
-      const target = buildBoardPath(worktree.board_id, boardByIdRef.current);
-      // The board-only URL doesn't encode the worktree focus, so we always
-      // call recenterMap explicitly. It handles same-board (sync) and
-      // cross-board (queue + switch). The redundant board switch (also
-      // triggered by URL→state once we navigate) is idempotent.
+      // Push the shareable worktree URL — useUrlState's URL→state effect
+      // will resolve it and call recenterMap. We still call recenterMap
+      // directly here as a same-tick fallback: if the URL doesn't change
+      // (already on this worktree's board path), the effect won't re-fire,
+      // so the imperative call is what actually moves the camera. The
+      // redundant call for the cross-board case is idempotent.
+      const target = buildWorktreePath(worktree.board_id, worktreeId, boardByIdRef.current);
       recenterMap(worktreeId, { boardId: worktree.board_id });
       if (canonical(target) !== canonical(locationPathnameRef.current)) {
         navigate(target, { replace: opts?.replace ?? false });

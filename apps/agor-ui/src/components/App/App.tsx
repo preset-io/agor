@@ -386,6 +386,7 @@ export const App: React.FC<AppProps> = ({
     currentSessionId: effectiveSelectedSessionId,
     boardById,
     sessionById,
+    worktreeById,
     onBoardChange: (boardId) => {
       setCurrentBoardIdInternal(boardId);
     },
