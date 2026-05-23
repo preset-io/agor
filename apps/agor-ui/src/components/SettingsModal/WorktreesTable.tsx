@@ -86,10 +86,10 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
 
   const handleRecenter = useCallback(
     (worktree: Worktree) => {
-      // Close the modal first so the canvas isn't obscured by it after the
-      // pan/zoom. goToWorktree pushes the board URL (so back button
-      // returns to settings) and recenterMap handles the cross-board case
-      // via the queue+switch mechanism.
+      // Close the modal first so the canvas isn't obscured by it after
+      // the pan/zoom. goToWorktree pushes the flat `/w/<short>/` URL;
+      // useUrlState's URL→state effect resolves the worktree, switches
+      // boards if needed, and fires the recenter via recenterMap.
       onClose?.();
       navigation.goToWorktree(worktree.worktree_id);
     },
