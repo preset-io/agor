@@ -803,7 +803,7 @@ export const App: React.FC<AppProps> = ({
               hasUserMentions={hasUserMentions}
               boards={mapToArray(boardById)}
               currentBoardId={currentBoardId}
-              onBoardChange={setCurrentBoardId}
+              onBoardChange={navigation.goToBoard}
               worktreeById={worktreeById}
               boardById={boardById}
               onUserClick={(
@@ -811,9 +811,10 @@ export const App: React.FC<AppProps> = ({
                 boardId?: BoardID,
                 cursor?: { x: number; y: number }
               ) => {
-                // Navigate to the user's board
+                // Navigate to the user's board (pushes history, so back
+                // button returns to the previous board)
                 if (boardId) {
-                  setCurrentBoardId(boardId);
+                  navigation.goToBoard(boardId);
                   // TODO: If cursor position is provided, we could pan to that position
                   // This would require exposing a method on SessionCanvasRef
                 }
@@ -1146,7 +1147,7 @@ export const App: React.FC<AppProps> = ({
               onClose={() => setListDrawerOpen(false)}
               boards={mapToArray(boardById)}
               currentBoardId={currentBoardId}
-              onBoardChange={setCurrentBoardId}
+              onBoardChange={navigation.goToBoard}
               sessionsByWorktree={sessionsByWorktree}
               worktreeById={worktreeById}
               repoById={repoById}
