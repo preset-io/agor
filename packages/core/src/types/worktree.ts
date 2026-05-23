@@ -77,12 +77,15 @@ export interface Worktree {
   /**
    * External/user-facing URL for viewing this worktree in the UI.
    *
-   * Computed property added by the repository layer. Optional — undefined
-   * on inputs / fixtures constructed by hand; on read paths from the
-   * repo it's always present as `string | null` (null when no board).
-   * Format: {baseUrl}/ui/b/{boardId}/w/{worktreeShortId}/
-   * Visiting the URL switches to the worktree's board and recenters
-   * the canvas on its card. See `apps/agor-ui/src/hooks/useUrlState.ts`.
+   * Computed property added by the repository layer. Optional —
+   * undefined on inputs / fixtures constructed by hand; on read paths
+   * from the repo it's always present as `string | null` (null when
+   * the worktree isn't placed on a board, since the share link has
+   * nothing to switch to).
+   * Format: `{baseUrl}/ui/w/{worktreeShortId}/`
+   * Visiting the URL resolves the worktree, switches to its board,
+   * and recenters the canvas on its card. See
+   * `apps/agor-ui/src/hooks/useUrlState.ts`.
    */
   url?: string | null;
 

@@ -89,7 +89,11 @@ export function useAppNavigation({
   const recenterMap = useRecenterMap();
 
   // Mirror live data + location into refs so the navigation functions
-  // have stable identities across socket churn.
+  // have stable identities across socket churn. Inline `useRef(value);
+  // ref.current = value` rather than going through a helper so biome's
+  // `useExhaustiveDependencies` heuristic (which only recognizes refs
+  // created from `useRef(...)` directly) doesn't falsely flag the
+  // useCallback deps below.
   const sessionByIdRef = useRef(sessionById);
   sessionByIdRef.current = sessionById;
   const worktreeByIdRef = useRef(worktreeById);
@@ -140,12 +144,13 @@ export function useAppNavigation({
     (worktreeId: string, opts?: NavigationOpts) => {
       const worktree = worktreeByIdRef.current.get(worktreeId);
       if (!worktree?.board_id) return;
-      // Push the shareable URL — useUrlState's URL→state effect resolves
-      // and fires recenterMap. We also call recenterMap directly as a
-      // same-tick fallback for the no-URL-change case (effect won't
-      // re-fire). The redundant cross-board call is idempotent.
-      recenterMap(worktreeId, { boardId: worktree.board_id });
-      pushPath(worktreePath(worktreeId as WorktreeID), opts);
+      // Push first; let useUrlState's URL→state effect fire the
+      // recenter. Only fall back to a direct recenter when the URL
+      // didn't actually change (no history transition, so the effect
+      // won't re-run) — avoids the prior double-recenter animation.
+      if (!pushPath(worktreePath(worktreeId as WorktreeID), opts)) {
+        recenterMap(worktreeId, { boardId: worktree.board_id });
+      }
     },
     [pushPath, recenterMap]
   );
@@ -157,8 +162,9 @@ export function useAppNavigation({
       // Parallel to goToWorktree. The canvas's recenter impl handles
       // the artifact-id-vs-board-object-id mismatch via a
       // data.artifactId fallback scan, so callers stay logical-id-only.
-      recenterMap(artifactId, { boardId: artifact.board_id });
-      pushPath(artifactPath(artifactId as ArtifactID), opts);
+      if (!pushPath(artifactPath(artifactId as ArtifactID), opts)) {
+        recenterMap(artifactId, { boardId: artifact.board_id });
+      }
     },
     [pushPath, recenterMap]
   );

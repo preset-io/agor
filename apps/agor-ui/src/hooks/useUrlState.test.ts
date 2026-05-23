@@ -1,5 +1,5 @@
 /**
- * Tests for useUrlState's pure URL-resolution helpers.
+ * Tests for the pure URL-resolution helpers consumed by `useUrlState`.
  *
  * The interesting contract here is the *failure mode*: when a URL prefix
  * matches multiple boards or sessions, we refuse to guess and return null
@@ -10,7 +10,7 @@
  * future refactors don't quietly bring back the silent mis-route.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { resolveBoardFromUrlPure, resolveSessionFromShortIdPure } from './useUrlState';
+import { resolveBoardFromUrlPure, resolveSessionFromShortIdPure } from '../utils/urlResolution';
 
 const boardA = { board_id: '019e3825-0000-7000-8000-000000000001', slug: 'alpha' };
 const boardB = { board_id: '019e3825-0000-7000-8000-000000000002', slug: 'beta' };

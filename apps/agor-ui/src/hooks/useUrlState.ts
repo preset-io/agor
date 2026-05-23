@@ -24,15 +24,16 @@
  */
 
 import type { BoardID, SessionID } from '@agor-live/client';
-import {
-  boardPath,
-  ENTITY_PATH_SEGMENTS,
-  findByShortIdPrefix,
-  sessionPath,
-} from '@agor-live/client';
+import { boardPath, ENTITY_PATH_SEGMENTS, sessionPath } from '@agor-live/client';
 import { useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useRecenterMap } from '../contexts/CanvasNavigationContext';
+import {
+  resolveArtifactFromShortIdPure,
+  resolveBoardFromUrlPure,
+  resolveSessionFromShortIdPure,
+  resolveWorktreeFromShortIdPure,
+} from '../utils/urlResolution';
 
 export interface UseUrlStateOptions {
   /** Current board ID (full UUID) */
@@ -77,83 +78,6 @@ export function buildBoardPath(
 }
 
 /**
- * Pure resolver: short-ID prefix → entity ID. Ambiguity is treated as
- * not-found (we'd rather 404 a deep link than mis-route it to the wrong
- * entity). With `SHORT_ID_LENGTH` now 24 (~290K same-ms IDs before 1%
- * collision), realistic URLs are unambiguous and silent mis-routing
- * would be the worse failure mode.
- */
-export function resolveByShortIdPure<T>(
-  prefix: string,
-  entries: Iterable<T>,
-  getId: (entry: T) => string,
-  onAmbiguous?: (prefix: string, matchCount: number) => void
-): string | null {
-  const matches = findByShortIdPrefix(
-    prefix,
-    Array.from(entries, (e) => ({ id: getId(e) }))
-  );
-  if (matches.length === 0) return null;
-  if (matches.length === 1) return matches[0].id;
-  onAmbiguous?.(prefix, matches.length);
-  return null;
-}
-
-/** Resolve a board param (slug or short-ID prefix) → board ID. Slug
- *  match wins (exact); short-ID match falls back to `resolveByShortIdPure`. */
-export function resolveBoardFromUrlPure(
-  boardParam: string,
-  boardById: Map<string, { board_id: string; slug?: string }>,
-  onAmbiguous?: (param: string, matchCount: number) => void
-): string | null {
-  for (const board of boardById.values()) {
-    if (board.slug === boardParam) {
-      return board.board_id;
-    }
-  }
-  return resolveByShortIdPure(boardParam, boardById.values(), (b) => b.board_id, onAmbiguous);
-}
-
-export function resolveSessionFromShortIdPure(
-  sessionShortId: string,
-  sessionById: Map<string, { session_id: string }>,
-  onAmbiguous?: (shortId: string, matchCount: number) => void
-): string | null {
-  return resolveByShortIdPure(
-    sessionShortId,
-    sessionById.values(),
-    (s) => s.session_id,
-    onAmbiguous
-  );
-}
-
-export function resolveWorktreeFromShortIdPure(
-  worktreeShortId: string,
-  worktreeById: Map<string, { worktree_id: string }>,
-  onAmbiguous?: (shortId: string, matchCount: number) => void
-): string | null {
-  return resolveByShortIdPure(
-    worktreeShortId,
-    worktreeById.values(),
-    (w) => w.worktree_id,
-    onAmbiguous
-  );
-}
-
-export function resolveArtifactFromShortIdPure(
-  artifactShortId: string,
-  artifactById: Map<string, { artifact_id: string }>,
-  onAmbiguous?: (shortId: string, matchCount: number) => void
-): string | null {
-  return resolveByShortIdPure(
-    artifactShortId,
-    artifactById.values(),
-    (a) => a.artifact_id,
-    onAmbiguous
-  );
-}
-
-/**
  * Hook for bidirectional URL state synchronization.
  */
 export function useUrlState(options: UseUrlStateOptions) {
@@ -193,11 +117,26 @@ export function useUrlState(options: UseUrlStateOptions) {
     worktree: false,
     artifact: false,
   });
+  // Pending deferred-recenter timer. Cleared before scheduling a new
+  // one so rapid URL changes don't fire a stale recenter after a newer
+  // navigation has already settled.
+  const deferredRecenterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     currentBoardIdRef.current = currentBoardId;
     currentSessionIdRef.current = currentSessionId;
   }, [currentBoardId, currentSessionId]);
+
+  // Clear any pending deferred-recenter timer on unmount so it can't
+  // fire after the consumer is gone.
+  useEffect(() => {
+    return () => {
+      if (deferredRecenterTimerRef.current) {
+        clearTimeout(deferredRecenterTimerRef.current);
+        deferredRecenterTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // Parse URL params (only one of session/worktree/artifact is non-null
   // for any given URL — they're mutually exclusive paths)
@@ -409,11 +348,16 @@ export function useUrlState(options: UseUrlStateOptions) {
     // the viewport. Without this, setCenter would use stale dimensions
     // and the target would land off-center. ~50ms covers React's
     // commit + ResizeObserver firing; invisible against the 400ms
-    // recenter animation.
+    // recenter animation. Stored in a ref so a follow-up URL change
+    // can cancel a stale pending recenter before it fires.
     if (urlParamsChanged && recenterTargetId && resolvedBoardId) {
+      if (deferredRecenterTimerRef.current) {
+        clearTimeout(deferredRecenterTimerRef.current);
+      }
       const target = recenterTargetId;
       const boardId = resolvedBoardId;
-      setTimeout(() => {
+      deferredRecenterTimerRef.current = setTimeout(() => {
+        deferredRecenterTimerRef.current = null;
         recenterMap(target, { boardId });
       }, 50);
     }
@@ -459,6 +403,4 @@ export function useUrlState(options: UseUrlStateOptions) {
     updateUrlFromState,
     isSettingsRoute,
   ]);
-
-  return { urlBoardParam, urlSessionShortId, buildUrl };
 }

@@ -2,6 +2,7 @@ import type {
   Artifact,
   AuthCheckResult,
   Board,
+  BoardID,
   CreateLocalRepoRequest,
   CreateMCPServerInput,
   CreateRepoRequest,
@@ -17,7 +18,13 @@ import type {
   UUID,
   Worktree,
 } from '@agor-live/client';
-import { getRepoReferenceOptions, UI_MOUNT_PATH } from '@agor-live/client';
+import {
+  boardPath,
+  ENTITY_PATH_SEGMENTS,
+  getRepoReferenceOptions,
+  sessionPath,
+  UI_MOUNT_PATH,
+} from '@agor-live/client';
 import { Alert, App as AntApp, ConfigProvider, Spin, theme } from 'antd';
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
@@ -291,11 +298,13 @@ function AppContent() {
       }
     }
 
-    // Navigate to the user's board + session, or to the boards list if they skipped
-    if (result.boardId && result.sessionId) {
-      navigate(`/b/${result.boardId}/${result.sessionId}/`);
+    // Navigate to the user's board + session, or to the boards list if they
+    // skipped. Use the centralized path builders — the old
+    // `/b/<board>/<session>/` shape was removed when we flattened entity URLs.
+    if (result.sessionId) {
+      navigate(sessionPath(result.sessionId as SessionID));
     } else if (result.boardId) {
-      navigate(`/b/${result.boardId}/`);
+      navigate(boardPath(result.boardId as BoardID, boardById.get(result.boardId)?.slug));
     } else {
       navigate('/');
     }
@@ -1304,10 +1313,11 @@ function AppContent() {
     setOpenNewWorktree(false);
   };
 
-  // All desktop /b/* URLs render the same AgorApp — the multiple routes
-  // exist so react-router's useParams (read inside useUrlState) populates
-  // the right named params for each URL shape (session vs worktree).
-  // Extract the element once instead of duplicating the (long) prop list.
+  // All desktop entity URLs (/b/, /s/, /w/, /a/) render the same
+  // AgorApp — the multiple routes exist so react-router's useParams
+  // (read inside useUrlState) populates the right named params for
+  // each URL shape (board / session / worktree / artifact). Extract
+  // the element once instead of duplicating the (long) prop list.
   const desktopAppElement = (
     <AgorApp
       client={client}
@@ -1479,11 +1489,23 @@ function AppContent() {
               worktree, artifact) get top-level paths keyed by short ID
               so they're stable across board moves. The app resolves the
               entity at click time, looks up its current board, and
-              switches if needed. See `packages/core/src/utils/url.ts`. */}
-          <Route path="/b/:boardParam/" element={desktopAppElement} />
-          <Route path="/s/:sessionShortId/" element={desktopAppElement} />
-          <Route path="/w/:worktreeShortId/" element={desktopAppElement} />
-          <Route path="/a/:artifactShortId/" element={desktopAppElement} />
+              switches if needed. Path segments come from the shared
+              `ENTITY_PATH_SEGMENTS` constant so this list and the
+              URL/path builders can't drift. See
+              `packages/core/src/utils/url.ts`. */}
+          <Route path={`/${ENTITY_PATH_SEGMENTS.board}/:boardParam/`} element={desktopAppElement} />
+          <Route
+            path={`/${ENTITY_PATH_SEGMENTS.session}/:sessionShortId/`}
+            element={desktopAppElement}
+          />
+          <Route
+            path={`/${ENTITY_PATH_SEGMENTS.worktree}/:worktreeShortId/`}
+            element={desktopAppElement}
+          />
+          <Route
+            path={`/${ENTITY_PATH_SEGMENTS.artifact}/:artifactShortId/`}
+            element={desktopAppElement}
+          />
 
           {/* Fallback for unknown / root paths */}
           <Route path="/*" element={desktopAppElement} />

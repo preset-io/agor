@@ -70,14 +70,13 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
    *
    * `baseUrl` (from `getBaseUrl()`) is required to compute the
    * `url` field. When omitted (e.g., tight internal paths that don't
-   * await config), `url` is left null. With the flat entity-URL
-   * scheme (`/w/<short>/`), no board lookup is needed — the URL is
-   * derived from the worktree ID alone and resolves to the worktree's
-   * current board at click time.
+   * await config), `url` is `null`. We also return `null` when the
+   * worktree isn't placed on a board — the `/w/<short>/` URL would
+   * resolve the worktree but have nowhere to switch the canvas to.
    */
   private rowToWorktree(row: WorktreeRow, baseUrl?: string): Worktree {
     const worktreeId = row.worktree_id as WorktreeID;
-    const url = baseUrl ? getWorktreeUrl(worktreeId, baseUrl) : null;
+    const url = baseUrl && row.board_id ? getWorktreeUrl(worktreeId, baseUrl) : null;
     return {
       worktree_id: worktreeId,
       repo_id: row.repo_id as UUID,

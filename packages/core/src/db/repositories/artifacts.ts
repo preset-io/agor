@@ -16,7 +16,6 @@ import type {
   UUID,
   WorktreeID,
 } from '@agor/core/types';
-import { prefixToLikePattern } from '@agor/core/types';
 import { and, eq, like, or } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
@@ -28,7 +27,9 @@ import {
   AmbiguousIdError,
   type BaseRepository,
   EntityNotFoundError,
+  RESOLVE_SHORT_ID_FETCH_LIMIT,
   RepositoryError,
+  resolveByShortIdPrefix,
 } from './base';
 
 export class ArtifactRepository implements BaseRepository<Artifact, Partial<Artifact>> {
@@ -38,13 +39,13 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
    * Convert database row to Artifact type.
    *
    * `baseUrl` is needed to compute the share-link `url` field. Omitted →
-   * `url` is `null`. With the flat entity-URL scheme (`/a/<short>/`),
-   * no board lookup is needed — the URL is derived from the artifact
-   * ID alone and resolves to its board at click time.
+   * `url` is `null`. Also `null` when the artifact isn't placed on a
+   * board (the `/a/<short>/` URL would resolve the artifact but have
+   * nowhere to switch the canvas to).
    */
   private rowToArtifact(row: ArtifactRow, baseUrl?: string): Artifact {
     const artifactId = row.artifact_id as ArtifactID;
-    const url = baseUrl ? getArtifactUrl(artifactId, baseUrl) : null;
+    const url = baseUrl && row.board_id ? getArtifactUrl(artifactId, baseUrl) : null;
     return {
       artifact_id: artifactId as UUID,
       worktree_id: (row.worktree_id as WorktreeID) ?? null,
@@ -74,23 +75,14 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
   }
 
   async resolveId(id: string): Promise<string> {
-    if (id.length === 36 && id.includes('-')) return id;
-
-    const pattern = prefixToLikePattern(id);
-    const results = await select(this.db)
-      .from(artifacts)
-      .where(like(artifacts.artifact_id, pattern))
-      .all();
-
-    if (results.length === 0) throw new EntityNotFoundError('Artifact', id);
-    if (results.length > 1) {
-      throw new AmbiguousIdError(
-        'Artifact',
-        id,
-        results.map((r: { artifact_id: string }) => r.artifact_id)
-      );
-    }
-    return results[0].artifact_id;
+    return resolveByShortIdPrefix(id, 'Artifact', async (pattern) => {
+      const rows = await select(this.db)
+        .from(artifacts)
+        .where(like(artifacts.artifact_id, pattern))
+        .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
+        .all();
+      return rows.map((r: { artifact_id: string }) => r.artifact_id);
+    });
   }
 
   async create(data: Partial<Artifact>): Promise<Artifact> {

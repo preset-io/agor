@@ -94,9 +94,12 @@ export function artifactPath(artifactId: ArtifactID): string {
 // REST / socket / MCP.
 // ---------------------------------------------------------------------------
 
-/** Compose a full external URL from a relative entity path. */
+/** Compose a full external URL from a relative entity path.
+ *  Strips a trailing slash off `baseUrl` defensively so misconfigured
+ *  `daemon.public_url` values (e.g. `https://agor.example.com/`) don't
+ *  produce double-slashed URLs like `https://agor.example.com//ui/...`. */
 function fullUrl(path: string, baseUrl: string): string {
-  return `${baseUrl}${UI_MOUNT_PATH}${path}`;
+  return `${baseUrl.replace(/\/$/, '')}${UI_MOUNT_PATH}${path}`;
 }
 
 /** Generate a board URL. */

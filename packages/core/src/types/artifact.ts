@@ -218,8 +218,11 @@ export interface Artifact {
    *
    * Computed property added by the repository layer. Optional —
    * undefined on inputs / fixtures constructed by hand; on read paths
-   * from the repo it's always present as `string | null`.
-   * Format: {baseUrl}/ui/b/{boardId}/a/{artifactShortId}/
+   * from the repo it's `string` when the artifact is placed on a
+   * board, `null` otherwise (the share link has nothing to switch to).
+   * Format: `{baseUrl}/ui/a/{artifactShortId}/`
+   * Visiting the URL switches to the artifact's board and recenters
+   * the canvas on its card.
    */
   url?: string | null;
 }

@@ -267,10 +267,12 @@ export interface Board {
   custom_context?: Record<string, unknown>;
 
   /**
-   * External/user-facing URL for viewing this board in the UI
+   * External/user-facing URL for viewing this board in the UI.
    *
-   * Computed property added by API hooks.
-   * Format: {baseUrl}/b/{boardId}/
+   * Computed property added by the repository layer.
+   * Format: `{baseUrl}/ui/b/{slug-or-shortId}/`
+   * Prefers the board's slug when set; falls back to the canonical
+   * short ID.
    */
   url: string;
 

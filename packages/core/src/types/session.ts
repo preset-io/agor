@@ -167,11 +167,15 @@ export interface Session {
   worktree_board_id?: BoardID | null;
 
   /**
-   * External/user-facing URL for viewing this session in the UI
+   * External/user-facing URL for viewing this session in the UI.
    *
-   * Computed property added by API hooks based on worktree_board_id.
-   * Format: {baseUrl}/b/{boardId}/{sessionId}/
-   * Null if the worktree is not on a board.
+   * Computed property added by the repository layer.
+   * Format: `{baseUrl}/ui/s/{sessionShortId}/`
+   * Visiting the URL resolves the session, switches to its worktree's
+   * board, and opens the conversation panel. Always present when the
+   * repo computes it (baseUrl available); board lookup happens at
+   * click time, so we don't need to know about the board to mint the
+   * URL.
    */
   url: string | null;
 

@@ -545,12 +545,14 @@ export const App: React.FC<AppProps> = ({
     );
   };
 
-  // Refs for the data this handler reads. Using refs (vs useCallback deps)
-  // means `handleSessionClick` keeps a stable identity across renders even
-  // as `sessionById` / `worktreeById` change on every socket event. Without
-  // this, the handler reference flips on every patch and gets passed into
-  // SessionCanvas → initialNodes deps → recomputed → every WorktreeCard
-  // memo fails. Pattern: ref holds latest values; closure never changes.
+  // Refs for the data `handleSessionClick` reads. Using refs (vs
+  // useCallback deps) keeps the handler's identity stable across
+  // socket-driven map churn — important because it flows through
+  // SessionCanvas → initialNodes deps and a flipping identity would
+  // cascade re-renders into every WorktreeCard. Inline `useRef(...)`
+  // rather than going through a helper so biome's
+  // `useExhaustiveDependencies` heuristic recognizes the refs as
+  // stable and doesn't false-positive on `.current.get` reads.
   const sessionByIdRef = useRef(sessionById);
   sessionByIdRef.current = sessionById;
   const worktreeByIdRef = useRef(worktreeById);
