@@ -12,6 +12,9 @@
  *      `UI_LABEL_ATTRS` (Modal.confirm({ title: '...' }), notification
  *      args, etc.). Catches `Modal.confirm`, `message.success`-style
  *      callsites by structure, not by callee name.
+ *   4. String / template literals passed as the first arg of well-known
+ *      notification helpers in `NOTIFY_FUNCS` (showSuccess, showError,
+ *      message.success, notification.warning, ...).
  *
  * NEVER touched:
  *   - Identifiers (variables, functions, types, props, imports)
@@ -73,6 +76,24 @@ const UI_LABEL_ATTRS = new Set([
   'tabLabel',
   'emptyText',
 ]);
+
+// Notification / toast helpers — when these are CALLED, the first string-like
+// arg is treated as a user-visible message. Match by simple-identifier and by
+// dotted property-access (message.success, notification.warning, …).
+const NOTIFY_FUNCS = new Set([
+  'showSuccess',
+  'showError',
+  'showWarning',
+  'showInfo',
+  'showLoading',
+  'success',
+  'error',
+  'warning',
+  'warn',
+  'info',
+  'loading',
+]);
+const NOTIFY_RECEIVERS = new Set(['message', 'notification', 'Modal', 'toast']);
 
 // Substrings that mark a string literal as machine-facing — skip even inside a UI_LABEL_ATTR.
 // (CSS class names, URL paths, DB columns, IDs, etc.)
@@ -138,6 +159,28 @@ function getPropertyAssignmentName(parent) {
   return null;
 }
 
+// Return true if this CallExpression's callee is a known notification helper.
+function isNotifyCall(call) {
+  if (!call || call.kind !== ts.SyntaxKind.CallExpression) return false;
+  const callee = call.expression;
+  // showSuccess(...)
+  if (callee.kind === ts.SyntaxKind.Identifier) {
+    return NOTIFY_FUNCS.has(callee.escapedText.toString());
+  }
+  // message.success(...), notification.warning(...), Modal.confirm(...)
+  if (callee.kind === ts.SyntaxKind.PropertyAccessExpression) {
+    const obj = callee.expression;
+    const name = callee.name;
+    if (obj?.kind === ts.SyntaxKind.Identifier && name?.kind === ts.SyntaxKind.Identifier) {
+      return (
+        NOTIFY_RECEIVERS.has(obj.escapedText.toString()) &&
+        NOTIFY_FUNCS.has(name.escapedText.toString())
+      );
+    }
+  }
+  return false;
+}
+
 // Decide whether a string-literal-like node sits inside a user-visible slot.
 function isInUiSlot(node) {
   const parent = node.parent;
@@ -159,6 +202,10 @@ function isInUiSlot(node) {
   if (parent.kind === ts.SyntaxKind.PropertyAssignment) {
     const propName = getPropertyAssignmentName(parent);
     return propName != null && UI_LABEL_ATTRS.has(propName);
+  }
+  // showSuccess('...'), message.success(`...`)  — first arg of a notify call.
+  if (parent.kind === ts.SyntaxKind.CallExpression && isNotifyCall(parent)) {
+    return parent.arguments[0] === node;
   }
   return false;
 }
