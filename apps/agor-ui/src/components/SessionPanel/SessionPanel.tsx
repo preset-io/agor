@@ -19,6 +19,7 @@ import {
   TaskStatus,
 } from '@agor-live/client';
 import {
+  AimOutlined,
   BranchesOutlined,
   CloseOutlined,
   CodeOutlined,
@@ -34,6 +35,7 @@ import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAppMcpData, useAppUserData } from '../../contexts/AppDataContext';
+import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { getContextWindowGradient } from '../../utils/contextWindow';
@@ -229,6 +231,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const { modal } = App.useApp();
   const { showSuccess, showInfo, showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
+  const recenterMap = useRecenterMap();
 
   // Subscribe only to the entity families this panel needs. SessionPanel
   // intentionally does NOT subscribe to live (sessions / worktrees / boards)
@@ -985,6 +988,20 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </div>
           </Space>
           <Space size={4}>
+            {worktree && (
+              <Tooltip title="Center map on worktree">
+                <Button
+                  type="text"
+                  icon={<AimOutlined />}
+                  onClick={() => {
+                    const ok = recenterMap(worktree.worktree_id);
+                    if (!ok) {
+                      showInfo('Worktree is not on the current board');
+                    }
+                  }}
+                />
+              </Tooltip>
+            )}
             {onOpenTerminal && worktree && (
               <Tooltip title="Open terminal in worktree directory">
                 <Button
