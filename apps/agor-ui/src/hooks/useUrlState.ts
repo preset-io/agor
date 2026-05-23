@@ -519,11 +519,22 @@ export function useUrlState(options: UseUrlStateOptions) {
     // canvas's recenter impl falls back to a data.artifactId scan when
     // looking up the artifact node (id mismatch — artifact nodes use
     // board_object.object_id as their RF id).
+    //
+    // Deferred via setTimeout so concurrent layout changes (the most
+    // common one: session panel closing because the URL drops the
+    // session segment, expanding the canvas) flush before we measure
+    // the viewport. Without this, setCenter uses stale dimensions and
+    // the target lands off-center once the panel collapses. ~50ms is
+    // long enough for React's commit + ResizeObserver to fire,
+    // invisible against the 400ms recenter animation.
     if (urlParamsChanged && resolvedBoardId) {
-      if (resolvedWorktreeId) {
-        recenterMap(resolvedWorktreeId, { boardId: resolvedBoardId });
-      } else if (resolvedArtifactId) {
-        recenterMap(resolvedArtifactId, { boardId: resolvedBoardId });
+      const recenterTargetId = resolvedWorktreeId ?? resolvedArtifactId;
+      if (recenterTargetId) {
+        const targetId = recenterTargetId;
+        const boardId = resolvedBoardId;
+        setTimeout(() => {
+          recenterMap(targetId, { boardId });
+        }, 50);
       }
     }
   }, [
