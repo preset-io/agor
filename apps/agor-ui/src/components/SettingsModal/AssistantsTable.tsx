@@ -8,7 +8,13 @@ import type {
   Worktree,
 } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
-import { DeleteOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
+import {
+  AimOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  PlusOutlined,
+  RobotOutlined,
+} from '@ant-design/icons';
 import {
   Button,
   Empty,
@@ -22,11 +28,12 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useAssistantForm } from '@/hooks/useAssistantForm';
 import { useEnsureFrameworkRepo } from '@/hooks/useEnsureFrameworkRepo';
 import { createAssistantWorktree } from '@/utils/assistantCreation';
 import { mapToArray } from '@/utils/mapHelpers';
+import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import { AssistantFormFields, CREATE_NEW_BOARD } from '../forms/AssistantFormFields';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
@@ -61,6 +68,9 @@ interface AssistantsTableProps {
   ) => Promise<Worktree | null>;
   onUpdateWorktree?: (worktreeId: string, updates: WorktreeUpdate) => void;
   onCreateRepo?: (data: CreateRepoRequest) => void | Promise<void>;
+  /** Close the parent Settings modal so the canvas isn't obscured by
+   *  it after recenter. Wired by SettingsModal. */
+  onClose?: () => void;
 }
 
 export const AssistantsTable: React.FC<AssistantsTableProps> = ({
@@ -75,9 +85,28 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
   onCreateWorktree,
   onUpdateWorktree,
   onCreateRepo,
+  onClose,
 }) => {
   const repos = mapToArray(repoById);
   const boards = mapToArray(boardById);
+
+  // Assistants ARE worktrees (just worktrees flagged via
+  // `custom_context.assistant`), so navigation reuses the `/w/<short>/`
+  // URL via `goToWorktree` — no separate `/assistant/<short>/` route.
+  // Reuses the `worktreeById` prop directly so we don't read the same
+  // data twice (props + context).
+  const navigation = useAppNavigation({ boardById, worktreeById });
+
+  const handleRecenter = useCallback(
+    (assistant: Worktree) => {
+      // Close the modal first so the canvas isn't obscured. goToWorktree
+      // pushes `/w/<short>/`; the URL→state effect handles cross-board
+      // switching + recenter.
+      onClose?.();
+      navigation.goToWorktree(assistant.worktree_id);
+    },
+    [onClose, navigation]
+  );
   const { token } = theme.useToken();
 
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -268,9 +297,22 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 100,
+      width: 130,
       render: (_: unknown, record: Worktree) => (
         <Space size="small">
+          {record.board_id && (
+            <Tooltip title="Center map on assistant">
+              <Button
+                type="text"
+                size="small"
+                icon={<AimOutlined />}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleRecenter(record);
+                }}
+              />
+            </Tooltip>
+          )}
           <Tooltip title="Edit assistant">
             <Button
               type="text"

@@ -46,10 +46,15 @@ interface UseAppNavigationOptions {
    *  from `useAppLiveData`) because this hook is called from App's own
    *  body, which renders the AppLiveDataProvider — so the provider
    *  isn't yet mounted when the hook runs. Matches `useUrlState`'s
-   *  arg-passing pattern. */
-  sessionById: Map<string, Session>;
-  worktreeById: Map<string, Worktree>;
-  artifactById: Map<string, Artifact>;
+   *  arg-passing pattern.
+   *
+   *  Each map is optional: callers only pass what their methods need
+   *  (e.g. a Settings table that only uses `goToWorktree` can omit
+   *  `sessionById` and `artifactById`). The unused maps fall back to
+   *  empty Maps; the corresponding goToX no-ops on lookup miss. */
+  sessionById?: Map<string, Session>;
+  worktreeById?: Map<string, Worktree>;
+  artifactById?: Map<string, Artifact>;
 }
 
 export interface NavigationOpts {
@@ -78,6 +83,8 @@ function canonical(path: string): string {
   return `${path.replace(/\/$/, '')}/`;
 }
 
+const EMPTY_MAP = new Map<string, never>();
+
 export function useAppNavigation({
   boardById,
   sessionById,
@@ -94,12 +101,15 @@ export function useAppNavigation({
   // `useExhaustiveDependencies` heuristic (which only recognizes refs
   // created from `useRef(...)` directly) doesn't falsely flag the
   // useCallback deps below.
-  const sessionByIdRef = useRef(sessionById);
-  sessionByIdRef.current = sessionById;
-  const worktreeByIdRef = useRef(worktreeById);
-  worktreeByIdRef.current = worktreeById;
-  const artifactByIdRef = useRef(artifactById);
-  artifactByIdRef.current = artifactById;
+  //
+  // Missing optional maps fall back to a shared empty map — the goToX
+  // method just no-ops on lookup miss, same as if the id wasn't found.
+  const sessionByIdRef = useRef(sessionById ?? (EMPTY_MAP as Map<string, Session>));
+  sessionByIdRef.current = sessionById ?? (EMPTY_MAP as Map<string, Session>);
+  const worktreeByIdRef = useRef(worktreeById ?? (EMPTY_MAP as Map<string, Worktree>));
+  worktreeByIdRef.current = worktreeById ?? (EMPTY_MAP as Map<string, Worktree>);
+  const artifactByIdRef = useRef(artifactById ?? (EMPTY_MAP as Map<string, Artifact>));
+  artifactByIdRef.current = artifactById ?? (EMPTY_MAP as Map<string, Artifact>);
   const boardByIdRef = useRef(boardById);
   boardByIdRef.current = boardById;
   const locationPathnameRef = useRef(location.pathname);

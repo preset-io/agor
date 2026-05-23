@@ -18,7 +18,6 @@ import {
 } from 'antd';
 import { useCallback, useState } from 'react';
 import { mapToArray, mapToSortedArray } from '@/utils/mapHelpers';
-import { useAppLiveData } from '../../contexts/AppDataContext';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 
 interface ArtifactsTableProps {
@@ -51,13 +50,9 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
   const [editingArtifact, setEditingArtifact] = useState<Artifact | null>(null);
   const [form] = Form.useForm();
 
-  const { sessionById, worktreeById: liveWorktreeById } = useAppLiveData();
-  const navigation = useAppNavigation({
-    boardById,
-    sessionById,
-    worktreeById: liveWorktreeById,
-    artifactById,
-  });
+  // Reuses the `artifactById` prop so we don't read the same data via
+  // both props and context. Only goToArtifact is used from this table.
+  const navigation = useAppNavigation({ boardById, artifactById });
 
   const handleRecenter = useCallback(
     (artifact: Artifact) => {

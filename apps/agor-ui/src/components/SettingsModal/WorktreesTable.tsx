@@ -1,4 +1,4 @@
-import type { AgorClient, Artifact, Board, Repo, Session, Worktree } from '@agor-live/client';
+import type { AgorClient, Board, Repo, Session, Worktree } from '@agor-live/client';
 import { isAssistant } from '@agor-live/client';
 import {
   AimOutlined,
@@ -24,7 +24,6 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
-import { useAppLiveData } from '../../contexts/AppDataContext';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import { ArchiveToggleButton } from '../ArchiveToggleButton';
@@ -36,10 +35,6 @@ interface WorktreesTableProps {
   worktreeById: Map<string, Worktree>;
   repoById: Map<string, Repo>;
   boardById: Map<string, Board>;
-  /** Artifacts map — passed through to useAppNavigation so goToArtifact
-   *  also works from here (and so the hook's required-arg shape is
-   *  satisfied; we don't expose an artifact action in this table). */
-  artifactById?: Map<string, Artifact>;
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   onArchiveOrDelete?: (
     worktreeId: string,
@@ -73,7 +68,6 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   worktreeById,
   repoById,
   boardById,
-  artifactById,
   sessionsByWorktree,
   onArchiveOrDelete,
   onUnarchive,
@@ -86,13 +80,9 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   const repos = mapToArray(repoById);
   const boards = mapToArray(boardById);
   const { token } = theme.useToken();
-  const { sessionById, worktreeById: liveWorktreeById } = useAppLiveData();
-  const navigation = useAppNavigation({
-    boardById,
-    sessionById,
-    worktreeById: liveWorktreeById,
-    artifactById: artifactById ?? new Map(),
-  });
+  // Reuses the `worktreeById` prop so we don't read the same data via
+  // both props and context. Only goToWorktree is used from this table.
+  const navigation = useAppNavigation({ boardById, worktreeById });
 
   const handleRecenter = useCallback(
     (worktree: Worktree) => {

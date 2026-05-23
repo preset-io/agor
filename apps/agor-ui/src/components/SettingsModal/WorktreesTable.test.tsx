@@ -12,36 +12,17 @@
  * `createModalOpen=true` session.
  */
 
-import type { Board, Repo, Session, Worktree } from '@agor-live/client';
+import type { Board, Repo, Worktree } from '@agor-live/client';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
-import { AppLiveDataProvider } from '../../contexts/AppDataContext';
 import { WorktreesTable } from './WorktreesTable';
 
-/** WorktreesTable now uses useAppNavigation → useNavigate + useAppLiveData,
- *  so it needs a Router and an AppLiveDataProvider in tests. */
-function renderWithProviders(
-  ui: React.ReactElement,
-  liveData: {
-    sessionById?: Map<string, Session>;
-    worktreeById?: Map<string, Worktree>;
-    sessionsByWorktree?: Map<string, Session[]>;
-  } = {}
-) {
-  return render(
-    <MemoryRouter>
-      <AppLiveDataProvider
-        value={{
-          sessionById: liveData.sessionById ?? new Map(),
-          worktreeById: liveData.worktreeById ?? new Map(),
-          sessionsByWorktree: liveData.sessionsByWorktree ?? new Map(),
-        }}
-      >
-        {ui}
-      </AppLiveDataProvider>
-    </MemoryRouter>
-  );
+/** WorktreesTable uses useAppNavigation → useNavigate under the hood,
+ *  so the test wraps in a Router. It no longer needs the AppLiveDataProvider
+ *  (table reads navigation maps from its props, not from context). */
+function renderWithProviders(ui: React.ReactElement) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>);
 }
 
 function makeRepo(overrides: Partial<Repo> = {}): Repo {
@@ -72,8 +53,7 @@ describe('WorktreesTable — source-branch preservation', { timeout: 10_000 }, (
         repoById={repoById}
         boardById={boardById}
         sessionsByWorktree={sessionsByWorktree as Map<string, never[]>}
-      />,
-      { worktreeById, sessionsByWorktree: sessionsByWorktree as Map<string, Session[]> }
+      />
     );
 
     // Open the create modal
@@ -91,21 +71,13 @@ describe('WorktreesTable — source-branch preservation', { timeout: 10_000 }, (
     // Map references for repoById and boardById. Same data, different refs.
     rerender(
       <MemoryRouter>
-        <AppLiveDataProvider
-          value={{
-            sessionById: new Map(),
-            worktreeById,
-            sessionsByWorktree: sessionsByWorktree as Map<string, Session[]>,
-          }}
-        >
-          <WorktreesTable
-            client={null}
-            worktreeById={worktreeById}
-            repoById={new Map([[repo.repo_id, repo]])}
-            boardById={new Map<string, Board>()}
-            sessionsByWorktree={sessionsByWorktree as Map<string, never[]>}
-          />
-        </AppLiveDataProvider>
+        <WorktreesTable
+          client={null}
+          worktreeById={worktreeById}
+          repoById={new Map([[repo.repo_id, repo]])}
+          boardById={new Map<string, Board>()}
+          sessionsByWorktree={sessionsByWorktree as Map<string, never[]>}
+        />
       </MemoryRouter>
     );
 
