@@ -399,7 +399,7 @@ export const App: React.FC<AppProps> = ({
   // button restores prior board+session+camera. The hook reads live data
   // via refs internally so its function identities stay stable across
   // socket churn — important because they flow into memoized children.
-  const navigation = useAppNavigation({ boardById });
+  const navigation = useAppNavigation({ boardById, sessionById, worktreeById });
 
   // Wrapper to update board ID (updates both state and URL via hook)
   // Also closes conversation panel when switching to a different board

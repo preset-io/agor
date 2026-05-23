@@ -24,6 +24,7 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
+import { useAppLiveData } from '../../contexts/AppDataContext';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import { ArchiveToggleButton } from '../ArchiveToggleButton';
@@ -80,7 +81,12 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   const repos = mapToArray(repoById);
   const boards = mapToArray(boardById);
   const { token } = theme.useToken();
-  const navigation = useAppNavigation({ boardById });
+  const { sessionById, worktreeById: liveWorktreeById } = useAppLiveData();
+  const navigation = useAppNavigation({
+    boardById,
+    sessionById,
+    worktreeById: liveWorktreeById,
+  });
 
   const handleRecenter = useCallback(
     (worktree: Worktree) => {

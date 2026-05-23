@@ -21,10 +21,9 @@
  * identity would defeat the memoization, cascading re-renders on every
  * stream patch.
  */
-import type { Worktree } from '@agor-live/client';
+import type { Session, Worktree } from '@agor-live/client';
 import { useCallback, useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useAppLiveData } from '../contexts/AppDataContext';
 import { useRecenterMap } from '../contexts/CanvasNavigationContext';
 import { buildBoardPath, buildSessionPath } from './useUrlState';
 
@@ -32,6 +31,13 @@ interface UseAppNavigationOptions {
   /** Boards aren't exposed via AppDataContext yet — App.tsx passes its
    *  local `boardById` so URL building can prefer slugs. */
   boardById: Map<string, { board_id: string; slug?: string }>;
+  /** Sessions and worktrees are passed in (rather than read from
+   *  `useAppLiveData`) because this hook is called from App's own body,
+   *  which renders the AppLiveDataProvider — so the provider isn't yet
+   *  mounted when the hook runs. Matches `useUrlState`'s arg-passing
+   *  pattern. */
+  sessionById: Map<string, Session>;
+  worktreeById: Map<string, Worktree>;
 }
 
 export interface NavigationOpts {
@@ -60,11 +66,14 @@ function canonical(path: string): string {
   return `${path.replace(/\/$/, '')}/`;
 }
 
-export function useAppNavigation({ boardById }: UseAppNavigationOptions): AppNavigation {
+export function useAppNavigation({
+  boardById,
+  sessionById,
+  worktreeById,
+}: UseAppNavigationOptions): AppNavigation {
   const navigate = useNavigate();
   const location = useLocation();
   const recenterMap = useRecenterMap();
-  const { sessionById, worktreeById } = useAppLiveData();
 
   // Mirror the latest live data + location into refs so the navigation
   // functions can have stable identities across socket churn.
