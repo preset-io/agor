@@ -20,7 +20,7 @@ interface UseGlobalSearchInput {
   sessionById: Map<string, Session>;
   worktreeById: Map<string, Worktree>;
   artifactById: Map<string, Artifact>;
-  boards: Board[];
+  boardById: Map<string, Board>;
   mcpServerById: Map<string, MCPServer>;
 }
 
@@ -40,7 +40,7 @@ export function useGlobalSearch({
   sessionById,
   worktreeById,
   artifactById,
-  boards,
+  boardById,
   mcpServerById,
 }: UseGlobalSearchInput): {
   results: ResultsByType;
@@ -141,7 +141,7 @@ export function useGlobalSearch({
 
     // Boards (filter archived)
     if (includeType('board')) {
-      const bs = boards
+      const bs = Array.from(boardById.values())
         .filter((b) => !b.archived)
         .filter((b) => !ownedByMe || b.created_by === currentUserId)
         .filter((b) => matchTokens(tokens, [b.name]))
@@ -171,7 +171,7 @@ export function useGlobalSearch({
     sessionById,
     worktreeById,
     artifactById,
-    boards,
+    boardById,
     mcpServerById,
   ]);
 

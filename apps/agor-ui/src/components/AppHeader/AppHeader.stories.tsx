@@ -24,6 +24,7 @@ type Story = StoryObj<typeof meta>;
 const EMPTY_DATA_MAPS = {
   sessionById: new Map(),
   worktreeById: new Map(),
+  boardById: new Map(),
   artifactById: new Map(),
   mcpServerById: new Map(),
 };

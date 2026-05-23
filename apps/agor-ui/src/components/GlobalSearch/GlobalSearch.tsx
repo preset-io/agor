@@ -1,8 +1,9 @@
-import type { Artifact, Board, BoardID, MCPServer, Session, Worktree } from '@agor-live/client';
+import type { Artifact, Board, MCPServer, Session, Worktree } from '@agor-live/client';
 import { SearchOutlined } from '@ant-design/icons';
 import { Input, type InputRef, theme } from 'antd';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { GLOBAL_SEARCH_LISTBOX_ID, GlobalSearchDropdown, rowDomId } from './GlobalSearchDropdown';
 import { SearchChipRow } from './SearchChipRow';
 import { type ChipFilter, MIN_QUERY_LENGTH, SECTION_ORDER, type SearchResultItem } from './types';
@@ -17,20 +18,13 @@ interface GlobalSearchProps {
   sessionById: Map<string, Session>;
   worktreeById: Map<string, Worktree>;
   artifactById: Map<string, Artifact>;
-  boards: Board[];
+  boardById: Map<string, Board>;
   mcpServerById: Map<string, MCPServer>;
 
-  /** Navigation callbacks (kept thin; reuse existing AppHeader primitives). */
-  onBoardChange?: (boardId: BoardID) => void;
   /**
-   * Sibling-PR primitive — when present, search clicks land directly on the
-   * worktree's canvas card. When absent, we fall back to onBoardChange.
-   */
-  onWorktreeFocus?: (worktreeId: string) => void;
-  /**
-   * V1 stub for entities that don't live on a board (MCP server) — opens
-   * the Settings modal as a coarse landing. Replaced in V2 with deep links
-   * to the right tab + row scroll-into-view.
+   * Open the Settings modal — used as a coarse landing for entity types
+   * that don't live on the canvas (MCP servers today). Stays as a callback
+   * because Settings is modal state, not URL-driven.
    */
   onSettingsClick?: () => void;
 }
@@ -47,10 +41,8 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   sessionById,
   worktreeById,
   artifactById,
-  boards,
+  boardById,
   mcpServerById,
-  onBoardChange,
-  onWorktreeFocus,
   onSettingsClick,
 }) => {
   const { token } = theme.useToken();
@@ -63,6 +55,13 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   const [ownedByMe, setOwnedByMe] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
+  const navigation = useAppNavigation({
+    boardById,
+    sessionById,
+    worktreeById,
+    artifactById,
+  });
+
   const { results, hasAnyResults, debouncedQuery, flush } = useGlobalSearch({
     query,
     ownedByMe,
@@ -71,7 +70,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
     sessionById,
     worktreeById,
     artifactById,
-    boards,
+    boardById,
     mcpServerById,
   });
 
@@ -138,52 +137,29 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   const navigateToResult = useCallback(
     (result: SearchResultItem) => {
       switch (result.type) {
-        case 'board': {
-          onBoardChange?.(result.item.board_id);
+        case 'board':
+          navigation.goToBoard(result.item.board_id);
           break;
-        }
         case 'worktree':
-        case 'assistant': {
-          if (onWorktreeFocus) {
-            onWorktreeFocus(result.item.worktree_id);
-          } else if (result.item.board_id) {
-            onBoardChange?.(result.item.board_id);
-          }
+        case 'assistant':
+          navigation.goToWorktree(result.item.worktree_id);
           break;
-        }
-        case 'session': {
-          const worktree = result.parentWorktree;
-          if (worktree) {
-            if (onWorktreeFocus) {
-              onWorktreeFocus(worktree.worktree_id);
-            } else if (worktree.board_id) {
-              onBoardChange?.(worktree.board_id);
-            }
-          }
+        case 'session':
+          navigation.goToSession(result.item.session_id);
           break;
-        }
-        case 'artifact': {
-          const worktree = result.parentWorktree;
-          if (worktree && onWorktreeFocus) {
-            onWorktreeFocus(worktree.worktree_id);
-          } else if (worktree?.board_id) {
-            onBoardChange?.(worktree.board_id);
-          } else {
-            // Artifact.board_id is required on the schema — always a safe fallback.
-            onBoardChange?.(result.item.board_id);
-          }
+        case 'artifact':
+          navigation.goToArtifact(result.item.artifact_id);
           break;
-        }
-        case 'mcp': {
-          // V1 stub — open Settings; V2 will deep-link to the MCP tab + row.
+        case 'mcp':
+          // MCP servers don't live on the canvas — fall back to opening
+          // Settings. V2 will deep-link to the MCP tab + scroll-into-view.
           onSettingsClick?.();
           break;
-        }
       }
       setOpen(false);
       setQuery('');
     },
-    [onBoardChange, onWorktreeFocus, onSettingsClick]
+    [navigation, onSettingsClick]
   );
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {

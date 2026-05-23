@@ -66,7 +66,7 @@ export interface AppHeaderProps {
   currentBoardId?: string;
   onBoardChange?: (boardId: string) => void;
   worktreeById: Map<string, Worktree>;
-  boardById?: Map<string, Board>; // For looking up board names
+  boardById: Map<string, Board>; // For looking up board names; required because GlobalSearch hands it to useAppNavigation for slug-aware path building
   onUserClick?: (
     userId: string,
     boardId?: BoardID,
@@ -78,13 +78,12 @@ export interface AppHeaderProps {
   instanceLabel?: string;
   /** Instance description (markdown) shown in popover around the instance label */
   instanceDescription?: string;
-  /** Live entity maps for the global-search dropdown. Passed through from App.tsx. */
+  /** Live entity maps for the global-search dropdown. Passed through from App.tsx.
+   * GlobalSearch calls useAppNavigation directly, so it needs boardById (for
+   * slug-aware path building) on top of the entity maps. */
   sessionById: Map<string, Session>;
   artifactById: Map<string, Artifact>;
   mcpServerById: Map<string, MCPServer>;
-  /** Optional sibling-PR primitive: pan/zoom the canvas to a specific worktree.
-   * When absent, GlobalSearch falls back to onBoardChange. */
-  onWorktreeFocus?: (worktreeId: string) => void;
 }
 
 const RecentBoardPills: React.FC<{
@@ -156,7 +155,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   sessionById,
   artifactById,
   mcpServerById,
-  onWorktreeFocus,
 }) => {
   const { token } = theme.useToken();
   // Single source of truth for "is the daemon usable right now?". Captures
@@ -325,10 +323,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           sessionById={sessionById}
           worktreeById={worktreeById}
           artifactById={artifactById}
-          boards={boards}
+          boardById={boardById}
           mcpServerById={mcpServerById}
-          onBoardChange={onBoardChange}
-          onWorktreeFocus={onWorktreeFocus}
           onSettingsClick={onSettingsClick}
         />
         <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
