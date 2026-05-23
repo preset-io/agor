@@ -865,12 +865,24 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // surface a fallback when the node lives elsewhere. Uses the node's
     // absolute position so zone-pinned children (with `parentId` set)
     // recenter correctly.
+    //
+    // ID-shape note: worktree nodes use `worktree_id` as their React Flow
+    // `id`, but artifact nodes use `board_object.object_id` (with the
+    // logical `artifact_id` on `data.artifactId`). Rather than thread a
+    // boardObjectById lookup through every caller, we accept the logical
+    // id and fall back to a `data.artifactId` scan when `getNode` misses.
     const recenterOnNode = useCallback((nodeId: string): boolean => {
       const instance = reactFlowInstanceRef.current;
       if (!instance) return false;
-      const node = instance.getNode(nodeId);
-      if (!node) return false;
       const allNodes = instance.getNodes();
+      let node = instance.getNode(nodeId);
+      if (!node) {
+        // Logical-id fallback: artifact callers pass artifact_id; find
+        // the node whose data references it. Extendable to other
+        // logical-id mismatches in the future.
+        node = allNodes.find((n) => n.data?.artifactId === nodeId);
+      }
+      if (!node) return false;
       const absPos = getNodeAbsolutePosition(node, allNodes);
       const width = node.width ?? 500;
       const height = node.height ?? 200;

@@ -1,4 +1,4 @@
-import type { AgorClient, Board, Repo, Session, Worktree } from '@agor-live/client';
+import type { AgorClient, Artifact, Board, Repo, Session, Worktree } from '@agor-live/client';
 import { isAssistant } from '@agor-live/client';
 import {
   AimOutlined,
@@ -36,6 +36,10 @@ interface WorktreesTableProps {
   worktreeById: Map<string, Worktree>;
   repoById: Map<string, Repo>;
   boardById: Map<string, Board>;
+  /** Artifacts map — passed through to useAppNavigation so goToArtifact
+   *  also works from here (and so the hook's required-arg shape is
+   *  satisfied; we don't expose an artifact action in this table). */
+  artifactById?: Map<string, Artifact>;
   sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
   onArchiveOrDelete?: (
     worktreeId: string,
@@ -69,6 +73,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   worktreeById,
   repoById,
   boardById,
+  artifactById,
   sessionsByWorktree,
   onArchiveOrDelete,
   onUnarchive,
@@ -86,6 +91,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
     boardById,
     sessionById,
     worktreeById: liveWorktreeById,
+    artifactById: artifactById ?? new Map(),
   });
 
   const handleRecenter = useCallback(

@@ -365,6 +365,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             worktreeById={worktreeById}
             repoById={repoById}
             boardById={boardById}
+            artifactById={artifactById}
             sessionsByWorktree={sessionsByWorktree}
             onArchiveOrDelete={onArchiveOrDeleteWorktree}
             onUnarchive={onUnarchiveWorktree}
@@ -409,6 +410,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             boardById={boardById}
             onUpdate={onUpdateArtifact}
             onDelete={onDeleteArtifact}
+            onClose={onClose}
           />
         );
       case 'mcp':

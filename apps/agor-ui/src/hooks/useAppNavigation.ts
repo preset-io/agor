@@ -21,23 +21,29 @@
  * identity would defeat the memoization, cascading re-renders on every
  * stream patch.
  */
-import type { Session, Worktree } from '@agor-live/client';
+import type { Artifact, Session, Worktree } from '@agor-live/client';
 import { useCallback, useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useRecenterMap } from '../contexts/CanvasNavigationContext';
-import { buildBoardPath, buildSessionPath, buildWorktreePath } from './useUrlState';
+import {
+  buildArtifactPath,
+  buildBoardPath,
+  buildSessionPath,
+  buildWorktreePath,
+} from './useUrlState';
 
 interface UseAppNavigationOptions {
   /** Boards aren't exposed via AppDataContext yet — App.tsx passes its
    *  local `boardById` so URL building can prefer slugs. */
   boardById: Map<string, { board_id: string; slug?: string }>;
-  /** Sessions and worktrees are passed in (rather than read from
-   *  `useAppLiveData`) because this hook is called from App's own body,
-   *  which renders the AppLiveDataProvider — so the provider isn't yet
-   *  mounted when the hook runs. Matches `useUrlState`'s arg-passing
+  /** Sessions, worktrees, and artifacts are passed in (rather than read
+   *  from `useAppLiveData`) because this hook is called from App's own
+   *  body, which renders the AppLiveDataProvider — so the provider isn't
+   *  yet mounted when the hook runs. Matches `useUrlState`'s arg-passing
    *  pattern. */
   sessionById: Map<string, Session>;
   worktreeById: Map<string, Worktree>;
+  artifactById: Map<string, Artifact>;
 }
 
 export interface NavigationOpts {
@@ -54,6 +60,9 @@ export interface AppNavigation {
   /** Navigate to a worktree's board and recenter on its card. Closes any
    *  open session panel (the URL drops the session segment). */
   goToWorktree: (worktreeId: string, opts?: NavigationOpts) => void;
+  /** Navigate to an artifact's board and recenter on its card. Mirrors
+   *  goToWorktree — same shareable-URL behavior under `/b/<board>/a/...`. */
+  goToArtifact: (artifactId: string, opts?: NavigationOpts) => void;
   /** Navigate to a board (no session). */
   goToBoard: (boardId: string, opts?: NavigationOpts) => void;
   /** Close the open session panel by pushing the board-only URL. */
@@ -70,6 +79,7 @@ export function useAppNavigation({
   boardById,
   sessionById,
   worktreeById,
+  artifactById,
 }: UseAppNavigationOptions): AppNavigation {
   const navigate = useNavigate();
   const location = useLocation();
@@ -81,6 +91,8 @@ export function useAppNavigation({
   sessionByIdRef.current = sessionById;
   const worktreeByIdRef = useRef(worktreeById);
   worktreeByIdRef.current = worktreeById;
+  const artifactByIdRef = useRef(artifactById);
+  artifactByIdRef.current = artifactById;
   const boardByIdRef = useRef(boardById);
   boardByIdRef.current = boardById;
   const locationPathnameRef = useRef(location.pathname);
@@ -137,6 +149,20 @@ export function useAppNavigation({
     [pushPath, recenterMap]
   );
 
+  const goToArtifact = useCallback(
+    (artifactId: string, opts?: NavigationOpts) => {
+      const artifact = artifactByIdRef.current.get(artifactId);
+      if (!artifact?.board_id) return;
+      // Parallel to goToWorktree. The canvas's recenter impl handles the
+      // artifact-id-vs-board-object-id mismatch via a data.artifactId
+      // fallback scan, so callers can stay logical-id-only.
+      const target = buildArtifactPath(artifact.board_id, artifactId, boardByIdRef.current);
+      recenterMap(artifactId, { boardId: artifact.board_id });
+      pushPath(target, opts);
+    },
+    [pushPath, recenterMap]
+  );
+
   const closeSession = useCallback(
     (opts?: NavigationOpts) => {
       // Drop the session segment by re-pushing only the board path. If
@@ -149,7 +175,7 @@ export function useAppNavigation({
   );
 
   return useMemo(
-    () => ({ goToSession, goToWorktree, goToBoard, closeSession }),
-    [goToSession, goToWorktree, goToBoard, closeSession]
+    () => ({ goToSession, goToWorktree, goToArtifact, goToBoard, closeSession }),
+    [goToSession, goToWorktree, goToArtifact, goToBoard, closeSession]
   );
 }

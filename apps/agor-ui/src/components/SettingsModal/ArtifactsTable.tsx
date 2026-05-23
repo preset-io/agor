@@ -1,6 +1,6 @@
 import type { Artifact, Board, Worktree } from '@agor-live/client';
 import { shortId } from '@agor-live/client';
-import { DeleteOutlined, EditOutlined } from '@ant-design/icons';
+import { AimOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons';
 import {
   Badge,
   Button,
@@ -16,8 +16,10 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { mapToArray, mapToSortedArray } from '@/utils/mapHelpers';
+import { useAppLiveData } from '../../contexts/AppDataContext';
+import { useAppNavigation } from '../../hooks/useAppNavigation';
 
 interface ArtifactsTableProps {
   artifactById: Map<string, Artifact>;
@@ -25,6 +27,9 @@ interface ArtifactsTableProps {
   boardById: Map<string, Board>;
   onUpdate?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDelete?: (artifactId: string) => void;
+  /** Close the parent Settings modal so the canvas isn't obscured by it
+   *  after recenter. Wired by SettingsModal. */
+  onClose?: () => void;
 }
 
 const templateColors: Record<string, string> = {
@@ -40,10 +45,30 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
   boardById,
   onUpdate,
   onDelete,
+  onClose,
 }) => {
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingArtifact, setEditingArtifact] = useState<Artifact | null>(null);
   const [form] = Form.useForm();
+
+  const { sessionById, worktreeById: liveWorktreeById } = useAppLiveData();
+  const navigation = useAppNavigation({
+    boardById,
+    sessionById,
+    worktreeById: liveWorktreeById,
+    artifactById,
+  });
+
+  const handleRecenter = useCallback(
+    (artifact: Artifact) => {
+      // Close the modal first so the canvas isn't obscured by it after the
+      // pan/zoom. goToArtifact pushes the shareable URL and recenterMap
+      // handles the cross-board case via the queue+switch mechanism.
+      onClose?.();
+      navigation.goToArtifact(artifact.artifact_id);
+    },
+    [onClose, navigation]
+  );
 
   const handleEdit = (artifact: Artifact) => {
     setEditingArtifact(artifact);
@@ -170,9 +195,22 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 90,
+      width: 120,
       render: (_: unknown, artifact: Artifact) => (
         <Space size="small">
+          {artifact.board_id && (
+            <Tooltip title="Center map on artifact">
+              <Button
+                type="text"
+                size="small"
+                icon={<AimOutlined />}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleRecenter(artifact);
+                }}
+              />
+            </Tooltip>
+          )}
           <Tooltip title="Edit artifact">
             <Button
               type="text"

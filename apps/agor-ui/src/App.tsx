@@ -1481,6 +1481,9 @@ function AppContent() {
               that recenters on a specific worktree on visit) */}
           <Route path="/b/:boardParam/w/:worktreeShortId/" element={desktopAppElement} />
 
+          {/* Desktop routes - board with artifact focus (parallel to /w/) */}
+          <Route path="/b/:boardParam/a/:artifactShortId/" element={desktopAppElement} />
+
           {/* Desktop routes - board only (Django-style trailing slash) */}
           <Route path="/b/:boardParam/" element={desktopAppElement} />
 
