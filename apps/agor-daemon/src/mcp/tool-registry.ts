@@ -44,10 +44,10 @@ const DOMAIN_DESCRIPTIONS: Record<string, string> = {
   sessions: 'Agent conversations with genealogy (fork/spawn), task tracking, and message history',
   repos: 'Repository registration and management',
   worktrees:
-    'Git worktrees with isolated branches, board placement, and zone pinning. ' +
+    'Branches — isolated workspaces (backed by git worktrees) with their own git refs, board placement, and zone pinning. ' +
     'Every `agor_worktrees_*` tool also has an `agor_branches_*` alias — both names work; the worktrees-prefixed names are deprecated.',
-  environment: 'Start/stop/health/logs/nuke for worktree dev environments',
-  boards: 'Spatial canvases with zones for organizing worktrees and cards',
+  environment: 'Start/stop/health/logs/nuke for branch dev environments',
+  boards: 'Spatial canvases with zones for organizing branches and cards',
   cards: 'Kanban-style cards and card type definitions on boards',
   users: 'User accounts, profiles, preferences, and administration',
   analytics: 'Usage and cost tracking leaderboard',

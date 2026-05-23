@@ -25,6 +25,7 @@ import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { Request, Response } from 'express';
 import { toJSONSchema } from 'zod/v4-mini';
 import type { AuthenticatedParams, AuthenticatedUser } from '../declarations.js';
+import { wrapRegisterTool } from './register-tool-proxy.js';
 import { validateSessionToken } from './tokens.js';
 import { ToolRegistry } from './tool-registry.js';
 import { registerAnalyticsTools } from './tools/analytics.js';
@@ -91,7 +92,7 @@ export function textResult(data: unknown) {
 }
 
 /** Server instructions shown to agents when tool search is enabled. */
-const SERVER_INSTRUCTIONS = `Agor is a multiplayer canvas for orchestrating AI coding agents. It manages git worktrees, tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration.
+const SERVER_INSTRUCTIONS = `Agor is a multiplayer canvas for orchestrating AI coding agents. It manages branches (isolated workspaces backed by git worktrees), tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration.
 
 This server uses progressive tool discovery. Only 2 tools are listed directly — use them to discover and call all available tools:
 
@@ -101,9 +102,9 @@ This server uses progressive tool discovery. Only 2 tools are listed directly �
 Domains:
 - sessions: Agent conversations with genealogy (fork/spawn), task tracking, and message history
 - repos: Repository registration and management
-- worktrees: Git worktrees with isolated branches, board placement, zone pinning, and assistant discovery
-- environment: Start/stop/health/logs for worktree dev environments
-- boards: Spatial canvases with zones for organizing worktrees and cards
+- worktrees: Branches with isolated git refs, board placement, zone pinning, and assistant discovery. Every \`agor_worktrees_*\` tool also has an \`agor_branches_*\` alias; the worktrees-prefixed names are deprecated.
+- environment: Start/stop/health/logs for branch dev environments
+- boards: Spatial canvases with zones for organizing branches and cards
 - cards: Kanban-style cards and card type definitions on boards
 - users: User accounts, profiles, preferences, and administration
 - analytics: Usage and cost tracking leaderboard
@@ -112,14 +113,14 @@ Domains:
 
 Common workflows:
 
-Create a worktree and start a session:
+Create a branch and start a session:
 1. agor_repos_list → get repoId
 2. agor_boards_list → get boardId
-3. agor_worktrees_create(repoId, boardId, worktreeName) → get worktreeId
+3. agor_branches_create(repoId, boardId, worktreeName) → get worktreeId
 4. agor_sessions_create(worktreeId, agenticTool, initialPrompt)
 
 Delegate a subtask to a child agent:
-1. agor_sessions_spawn(prompt) — inherits current worktree, tracks parent-child genealogy
+1. agor_sessions_spawn(prompt) — inherits current branch, tracks parent-child genealogy
 
 Continue or fork an existing session:
 1. agor_sessions_prompt(sessionId, prompt, mode:"continue"|"fork"|"subsession")
@@ -337,24 +338,17 @@ function isDomainEnabled(domain: string, servicesConfig?: DaemonServicesConfig):
 
 /**
  * Create a proxy McpServer that silently skips tools without
- * readOnlyHint: true. Uses Object.create so the original server is unmodified.
+ * `readOnlyHint: true`. Backs the read-only service tier where mutating
+ * tools should not even appear in `tools/list`.
  */
 function readOnlyProxy(server: McpServer): McpServer {
-  const proxy = Object.create(server) as McpServer;
-  const original = server.registerTool.bind(server);
-  // Cast required: registerTool is an overloaded generic — TS can't represent the replacement.
-  (proxy as unknown as Record<string, unknown>).registerTool = (
-    name: string,
-    config: Record<string, unknown>,
-    cb: unknown
-  ) => {
+  return wrapRegisterTool(server, (register, name, config, handler) => {
     const annotations = config.annotations as { readOnlyHint?: boolean } | undefined;
     if (annotations?.readOnlyHint === true) {
-      return (original as (...args: unknown[]) => unknown)(name, config, cb);
+      return register(name, config, handler);
     }
-    // Skip mutating tools silently
-  };
-  return proxy;
+    // Mutating tools: silently skipped in read-only mode.
+  });
 }
 
 function createMcpServer(

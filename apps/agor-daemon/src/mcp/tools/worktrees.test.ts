@@ -47,9 +47,10 @@ function makeFakeApp(services: Record<string, ServiceStub>) {
   };
 }
 
-type ToolHandler = (args: Record<string, unknown>) => Promise<{
-  content: Array<{ type: string; text: string }>;
-}>;
+type ToolResult = { content: Array<{ type: string; text: string }> };
+// Mirrors the SDK shape — handlers receive (args, extra), where `extra` carries
+// MCP request metadata (request id, progress token, etc.).
+type ToolHandler = (args: Record<string, unknown>, extra?: unknown) => Promise<ToolResult>;
 type ToolRegistration = { name: string; config: Record<string, unknown>; handler: ToolHandler };
 
 function makeCtx(services: Record<string, ServiceStub>) {
@@ -170,7 +171,7 @@ describe('agor_branches_* aliases', () => {
     expect(JSON.parse(brResult.content[0].text)).toEqual(fakeWorktrees);
   });
 
-  it('logs a deprecation line when agor_worktrees_list is invoked, but not for agor_branches_list', async () => {
+  it('warns on the deprecation channel when agor_worktrees_list is invoked, but not for agor_branches_list', async () => {
     const ctx = makeCtx({
       worktrees: {
         find: async () => [],
@@ -178,26 +179,91 @@ describe('agor_branches_* aliases', () => {
     });
 
     const regs = await captureAllWorktreeRegistrations(ctx);
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    // Matches the existing deprecation-warn convention (`console.warn` with
+    // an `⚠️` prefix) used elsewhere in the daemon — see
+    // `logQueryParamDeprecation` in apps/agor-daemon/src/mcp/server.ts.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     try {
       await regs.get('agor_worktrees_list')!.handler({});
-      const deprecationLogs = logSpy.mock.calls
+      const deprecationWarns = warnSpy.mock.calls
         .map((args) => args.join(' '))
         .filter((line) => line.includes('[mcp][deprecation]'));
-      expect(deprecationLogs).toHaveLength(1);
-      expect(deprecationLogs[0]).toContain('agor_worktrees_list');
-      expect(deprecationLogs[0]).toContain('agor_branches_list');
+      expect(deprecationWarns).toHaveLength(1);
+      expect(deprecationWarns[0]).toContain('agor_worktrees_list');
+      expect(deprecationWarns[0]).toContain('agor_branches_list');
 
-      logSpy.mockClear();
+      warnSpy.mockClear();
 
       await regs.get('agor_branches_list')!.handler({});
-      const noDeprecationLogs = logSpy.mock.calls
+      const noDeprecationWarns = warnSpy.mock.calls
         .map((args) => args.join(' '))
         .filter((line) => line.includes('[mcp][deprecation]'));
-      expect(noDeprecationLogs).toHaveLength(0);
+      expect(noDeprecationWarns).toHaveLength(0);
     } finally {
-      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('forwards MCP request metadata (the `extra` arg) through the deprecated wrapper', async () => {
+    // The SDK calls handlers with `(args, extra)`, where `extra` carries
+    // per-request metadata (request id, progress token, …). The deprecated
+    // wrapper must not drop `extra` — otherwise legacy callers silently
+    // lose anything the underlying handler reads from it.
+    //
+    // Exercise `withBranchAliases` directly on a synthetic registration so
+    // we own the underlying handler and can observe what it receives.
+    const { withBranchAliases } = await import('./worktrees.js');
+
+    type Captured = { args: unknown; extra: unknown };
+    const underlyingCalls: Captured[] = [];
+    const underlyingHandler = async (args: unknown, extra: unknown) => {
+      underlyingCalls.push({ args, extra });
+      return { content: [{ type: 'text' as const, text: 'ok' }] };
+    };
+
+    const registrations: Array<{
+      name: string;
+      config: Record<string, unknown>;
+      handler: ToolHandler;
+    }> = [];
+    const fakeServer = {
+      registerTool: (name: string, config: Record<string, unknown>, handler: ToolHandler) => {
+        registrations.push({ name, config, handler });
+      },
+    } as unknown as McpServer;
+
+    const proxy = withBranchAliases(fakeServer);
+    (
+      proxy as unknown as {
+        registerTool: (n: string, c: Record<string, unknown>, h: typeof underlyingHandler) => void;
+      }
+    ).registerTool('agor_worktrees_get', { description: 'probe' }, underlyingHandler);
+
+    const legacy = registrations.find((r) => r.name === 'agor_worktrees_get');
+    const alias = registrations.find((r) => r.name === 'agor_branches_get');
+    expect(legacy).toBeDefined();
+    expect(alias).toBeDefined();
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const probeArgs = { worktreeId: 'wt-1' };
+      const probeExtra = { requestId: 'req-42', progressToken: 'tok-1' };
+
+      // Legacy: wrapper logs + forwards both args to underlying.
+      await legacy!.handler(probeArgs, probeExtra);
+      expect(underlyingCalls).toHaveLength(1);
+      expect(underlyingCalls[0].args).toBe(probeArgs);
+      expect(underlyingCalls[0].extra).toBe(probeExtra);
+
+      // Alias: bypass wrapper — should also forward both args (it's the
+      // same underlying function, registered directly).
+      await alias!.handler(probeArgs, probeExtra);
+      expect(underlyingCalls).toHaveLength(2);
+      expect(underlyingCalls[1].args).toBe(probeArgs);
+      expect(underlyingCalls[1].extra).toBe(probeExtra);
+    } finally {
+      warnSpy.mockRestore();
     }
   });
 });
