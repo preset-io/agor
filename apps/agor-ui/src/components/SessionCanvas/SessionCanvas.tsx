@@ -56,6 +56,7 @@ import './SessionCanvas.css';
 import { shortId } from '@agor-live/client';
 import { mapToArray } from '@/utils/mapHelpers';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
+import { useRegisterRecenter } from '../../contexts/CanvasNavigationContext';
 import { useMutationGate } from '../../contexts/ConnectionContext';
 import { useCursorTracking } from '../../hooks/useCursorTracking';
 import { usePresence } from '../../hooks/usePresence';
@@ -854,6 +855,29 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       }),
       []
     );
+
+    // Pan/zoom the canvas onto a worktree's card. Returns true if the
+    // worktree was found on the current board; callers (e.g. the
+    // conversation-header recenter button) can surface a fallback when
+    // the worktree lives elsewhere. Uses the node's absolute position so
+    // zone-pinned worktrees (with `parentId` set) recenter correctly.
+    const recenterOnWorktree = useCallback((worktreeId: string): boolean => {
+      const instance = reactFlowInstanceRef.current;
+      if (!instance) return false;
+      const node = instance.getNode(worktreeId);
+      if (!node) return false;
+      const allNodes = instance.getNodes();
+      const absPos = getNodeAbsolutePosition(node, allNodes);
+      const width = node.width ?? 500;
+      const height = node.height ?? 200;
+      instance.setCenter(absPos.x + width / 2, absPos.y + height / 2, {
+        zoom: instance.getZoom(),
+        duration: 400,
+      });
+      return true;
+    }, []);
+
+    useRegisterRecenter(recenterOnWorktree);
 
     // Cursor tracking hook
     useCursorTracking({
