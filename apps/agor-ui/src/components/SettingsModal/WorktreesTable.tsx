@@ -24,8 +24,7 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
-import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
-import { useThemedMessage } from '../../utils/message';
+import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
 import { ArchiveToggleButton } from '../ArchiveToggleButton';
 import { WorktreeFormFields } from '../WorktreeFormFields';
@@ -81,23 +80,18 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
   const repos = mapToArray(repoById);
   const boards = mapToArray(boardById);
   const { token } = theme.useToken();
-  const recenterMap = useRecenterMap();
-  const { showInfo } = useThemedMessage();
+  const navigation = useAppNavigation({ boardById });
 
   const handleRecenter = useCallback(
     (worktree: Worktree) => {
       // Close the modal first so the canvas isn't obscured by it after the
-      // pan/zoom. If the worktree lives on a different board, recenterMap
-      // switches boards and queues the recenter for the new canvas.
+      // pan/zoom. goToWorktree pushes the board URL (so back button
+      // returns to settings) and recenterMap handles the cross-board case
+      // via the queue+switch mechanism.
       onClose?.();
-      const ok = recenterMap(worktree.worktree_id, {
-        boardId: worktree.board_id ?? undefined,
-      });
-      if (!ok) {
-        showInfo('Worktree is not on a board');
-      }
+      navigation.goToWorktree(worktree.worktree_id);
     },
-    [onClose, recenterMap, showInfo]
+    [onClose, navigation]
   );
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [form] = Form.useForm();

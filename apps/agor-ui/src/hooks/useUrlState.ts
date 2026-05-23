@@ -17,6 +17,7 @@
 import { findByShortIdPrefix, shortId } from '@agor-live/client';
 import { useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useRecenterMap } from '../contexts/CanvasNavigationContext';
 
 export interface UrlState {
   boardParam: string | null;
@@ -30,8 +31,10 @@ export interface UseUrlStateOptions {
   currentSessionId: string | null;
   /** Map of board ID to board object (for slug lookup) */
   boardById: Map<string, { board_id: string; slug?: string }>;
-  /** Map of session ID to session object (for short ID resolution) */
-  sessionById: Map<string, { session_id: string }>;
+  /** Map of session ID to session object (for short ID resolution and
+   *  recenter target lookup). `worktree_id` is read on URL→state sync to
+   *  recenter the canvas on the session's worktree. */
+  sessionById: Map<string, { session_id: string; worktree_id?: string }>;
   /** Callback when URL indicates a different board */
   onBoardChange: (boardIdOrSlug: string) => void;
   /** Callback when URL indicates a different session */
@@ -46,6 +49,33 @@ export interface UseUrlStateOptions {
  * surfaces and have the prefix round-trip via `findByShortIdPrefix`.
  */
 const urlShortId = (uuid: string) => shortId(uuid);
+
+/**
+ * Build a board-only path (`/b/<slug|shortId>/`). Prefers slug if available
+ * so URLs are human-readable; falls back to short ID. Includes the trailing
+ * slash to match the canonical Django-style form used throughout the app.
+ *
+ * Exported so the central navigation hook (`useAppNavigation`) and any
+ * other deliberate-nav site can build URLs identically to the state→URL
+ * self-heal here.
+ */
+export function buildBoardPath(
+  boardId: string,
+  boardById: Map<string, { board_id: string; slug?: string }>
+): string {
+  const board = boardById.get(boardId);
+  const param = board?.slug || urlShortId(boardId);
+  return `/b/${param}/`;
+}
+
+/** Build a session path under a board (`/b/<board>/<sessionShortId>/`). */
+export function buildSessionPath(
+  boardId: string,
+  sessionId: string,
+  boardById: Map<string, { board_id: string; slug?: string }>
+): string {
+  return `${buildBoardPath(boardId, boardById)}${urlShortId(sessionId)}/`;
+}
 
 /**
  * Pure resolver: short-ID prefix → board ID, with ambiguity treated as
@@ -114,6 +144,7 @@ export function useUrlState(options: UseUrlStateOptions) {
   const navigate = useNavigate();
   const location = useLocation();
   const params = useParams<{ boardParam?: string; sessionParam?: string }>();
+  const recenterMap = useRecenterMap();
 
   // Track if we're currently syncing to prevent loops
   const syncingRef = useRef(false);
@@ -150,16 +181,9 @@ export function useUrlState(options: UseUrlStateOptions) {
   const buildUrl = useCallback(
     (boardId: string | null, sessionId: string | null): string => {
       if (!boardId) return '/';
-
-      // Prefer slug over short ID for beautiful URLs
-      const board = boardById.get(boardId);
-      const boardParam = board?.slug || urlShortId(boardId);
-
-      let url = `/b/${boardParam}`;
-      if (sessionId) {
-        url += `/${urlShortId(sessionId)}`;
-      }
-      return `${url}/`; // Django-style trailing slash
+      return sessionId
+        ? buildSessionPath(boardId, sessionId, boardById)
+        : buildBoardPath(boardId, boardById);
     },
     [boardById]
   );
@@ -286,6 +310,20 @@ export function useUrlState(options: UseUrlStateOptions) {
         onSessionChange(resolvedSessionId);
       }
 
+      // URL is now the single source of truth for camera target: when a
+      // session URL resolves, recenter the canvas on its worktree. Covers
+      // deep links, back/forward, and any deliberate goToSession() push.
+      // recenterMap handles both same-board (sync) and cross-board (stash
+      // + idempotent switch — board state is already updating from
+      // onBoardChange above, so the redundant switcher call is a no-op).
+      if (resolvedSessionId) {
+        const resolvedSession = sessionById.get(resolvedSessionId);
+        const worktreeId = resolvedSession?.worktree_id;
+        if (worktreeId && resolvedBoardId) {
+          recenterMap(worktreeId, { boardId: resolvedBoardId });
+        }
+      }
+
       // Reset sync flag after a tick to allow state updates
       setTimeout(() => {
         syncingRef.current = false;
@@ -295,13 +333,14 @@ export function useUrlState(options: UseUrlStateOptions) {
     urlBoardParam,
     urlSessionParam,
     boardById.size,
-    sessionById.size,
+    sessionById,
     resolveBoardFromUrl,
     resolveSessionFromShortId,
     onBoardChange,
     onSessionChange,
     updateUrlFromState,
     isSettingsRoute,
+    recenterMap,
   ]);
 
   // Sync State -> URL when state changes

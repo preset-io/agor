@@ -30,6 +30,7 @@ import { LoginPage } from './components/LoginPage';
 import { MobileApp } from './components/mobile/MobileApp';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import type { WorktreeUpdate } from './components/WorktreeModal/tabs/GeneralTab';
+import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ServicesConfigContext } from './contexts/ServicesConfigContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
@@ -1655,7 +1656,13 @@ function AppWrapper() {
     <ConfigProvider theme={getCurrentThemeConfig()}>
       <AntApp>
         <ErrorBoundary variant="global">
-          <AppContent />
+          {/* CanvasNavigationProvider lives outside the agor `App` body so
+              hooks called in that body (useUrlState, useAppNavigation) can
+              read the canvas-nav context. The inner App component used to
+              wrap its own JSX in this provider; that's been removed. */}
+          <CanvasNavigationProvider>
+            <AppContent />
+          </CanvasNavigationProvider>
         </ErrorBoundary>
       </AntApp>
     </ConfigProvider>
