@@ -25,7 +25,7 @@ export const SearchChipRow: React.FC<SearchChipRowProps> = ({
   const { token } = theme.useToken();
 
   return (
-    <div style={{ padding: '8px 12px', borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
+    <div style={{ padding: '6px 12px', borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
       <Segmented
         size="small"
         value={activeChip}
@@ -34,7 +34,7 @@ export const SearchChipRow: React.FC<SearchChipRowProps> = ({
           label: TYPE_CHIP_LABELS[chip],
           value: chip,
         }))}
-        style={{ marginBottom: 8, fontSize: 12 }}
+        style={{ marginBottom: 4, fontSize: 12 }}
         aria-label="Filter by entity type"
       />
       <div

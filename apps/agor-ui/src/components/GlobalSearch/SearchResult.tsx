@@ -47,7 +47,7 @@ export const SearchResult: React.FC<SearchResultProps> = ({
         alignItems: 'flex-start',
         gap: 12,
         width: '100%',
-        padding: '8px 12px',
+        padding: '4px 12px',
         border: 'none',
         background: selected ? token.colorBgTextHover : 'transparent',
         cursor: 'pointer',

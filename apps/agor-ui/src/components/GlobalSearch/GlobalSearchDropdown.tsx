@@ -34,7 +34,7 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
       style={{
         maxHeight: 480,
         overflowY: 'auto',
-        padding: '4px 0',
+        padding: '2px 0',
       }}
     >
       {showRecents ? (
@@ -102,10 +102,10 @@ interface SectionShellProps {
 }
 
 const SectionShell: React.FC<SectionShellProps> = ({ title, token, children }) => (
-  <div style={{ padding: '4px 0' }}>
+  <div style={{ padding: '2px 0' }}>
     <div
       style={{
-        padding: '4px 16px 2px',
+        padding: '2px 16px 1px',
         fontSize: 11,
         textTransform: 'uppercase',
         letterSpacing: 0.5,
