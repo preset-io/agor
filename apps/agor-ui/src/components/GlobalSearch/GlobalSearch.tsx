@@ -82,12 +82,12 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
     artifactById,
   });
 
-  // Below MIN_QUERY_LENGTH (including empty) we show Recents — the hook
-  // returns empty results in that case, and the dropdown branches on this
-  // same predicate, so the keyboard cursor and the visible rows stay in sync.
-  const effectiveQuery =
-    debouncedQuery.trim().length < MIN_QUERY_LENGTH ? '' : debouncedQuery.trim();
-  const showRecents = effectiveQuery.length === 0;
+  // Recents/results predicate is derived from the **raw** query so deleting
+  // a long query back to <MIN_QUERY_LENGTH feels immediate — without this,
+  // there's a 220ms window where the dropdown shows stale prior results.
+  // Actual search results stay debounced (effectiveQuery uses debouncedQuery).
+  const showRecents = query.trim().length < MIN_QUERY_LENGTH;
+  const effectiveQuery = showRecents ? '' : debouncedQuery.trim();
 
   // Flatten current dropdown rows for keyboard nav. Order matches dropdown
   // section order; recents mode is a single flat list.
@@ -100,6 +100,15 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   useEffect(() => {
     setSelectedIndex((idx) => Math.min(Math.max(idx, 0), Math.max(visibleRows.length - 1, 0)));
   }, [visibleRows.length]);
+
+  // Scroll the keyboard cursor into view when it moves past the visible area.
+  // `block: 'nearest'` keeps the page steady when the row is already visible.
+  useEffect(() => {
+    if (!open) return;
+    const target = visibleRows[selectedIndex];
+    if (!target) return;
+    document.getElementById(rowDomId(target))?.scrollIntoView({ block: 'nearest' });
+  }, [selectedIndex, visibleRows, open]);
 
   // Global Cmd+K / Ctrl+K opens + focuses the input.
   useEffect(() => {
@@ -200,11 +209,12 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
     }
     if (e.key === 'Enter') {
       e.preventDefault();
-      // Honor the design doc's "immediate dispatch on Enter": if the user
-      // pressed Enter before the 220ms debounce settled, force-flush the
-      // debounced query so the dropdown recomputes on the next render. The
-      // current Enter doesn't navigate (visibleRows are still stale) — the
-      // next Enter does. Cheap, no synchronous filter duplication.
+      // If the user pressed Enter before the 220ms debounce settled, flush
+      // the debounced query so the dropdown shows fresh rows on the next
+      // render. The current Enter doesn't navigate — the next one does.
+      // This is intentionally a 2-press UX in the (rare) stale case; doing
+      // a true single-press would require synchronous filter computation
+      // outside React's render cycle. Acceptable since debounce is 220ms.
       if (query.trim() !== debouncedQuery.trim()) {
         flush();
         return;

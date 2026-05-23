@@ -1,12 +1,7 @@
 import { Typography, theme } from 'antd';
 import type React from 'react';
 import { SearchResult } from './SearchResult';
-import {
-  type ResultsByType,
-  SECTION_ORDER,
-  type SearchResultItem,
-  TYPE_CHIP_LABELS,
-} from './types';
+import { type ResultsByType, SECTION_LABELS, SECTION_ORDER, type SearchResultItem } from './types';
 
 const { Text } = Typography;
 
@@ -76,7 +71,7 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
           return (
             <SectionShell
               key={type}
-              title={`${TYPE_CHIP_LABELS[type]} · ${items.length}`}
+              title={`${SECTION_LABELS[type]} · ${items.length}`}
               token={token}
             >
               {items.map((result, i) => {
