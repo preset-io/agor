@@ -89,7 +89,8 @@ export function registerSearchTools(server: McpServer, registry: ToolRegistry): 
           .string()
           .optional()
           .describe(
-            'Filter by domain (e.g. "sessions", "worktrees" — also exposed via the `agor_branches_*` aliases — "boards", "cards", "environment")'
+            'Filter by domain (e.g. "sessions", "worktrees", "boards", "cards", "environment"). ' +
+              'Note: the "worktrees" domain exposes branch-facing `agor_branches_*` tool aliases alongside the legacy `agor_worktrees_*` names.'
           ),
         detail: z
           .enum(['list', 'full'])

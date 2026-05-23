@@ -274,7 +274,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     : !repo.environment
       ? 'Configure repo environment variants first'
       : variantChanged && !isAdmin
-        ? 'Only admins can change the worktree variant'
+        ? 'Only admins can change the branch variant'
         : variantChanged && envIsActive
           ? `Stop the environment before switching variants (currently ${envStatus})`
           : undefined;

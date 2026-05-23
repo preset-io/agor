@@ -58,7 +58,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
 
       // Worktree ID is now passed directly (resolved in NewSessionModal or from worktree creation)
       if (!config.worktree_id) {
-        throw new Error('Worktree ID is required');
+        throw new Error('Branch ID is required');
       }
 
       // Create session with worktree_id

@@ -15,7 +15,7 @@ export const BranchSelect: React.FC<BranchSelectProps> = ({
   worktreeById,
   value,
   onChange,
-  placeholder = 'Select a worktree',
+  placeholder = 'Select a branch',
   disabled = false,
   includeArchivedLabel = true,
 }) => {

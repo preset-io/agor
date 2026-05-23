@@ -43,6 +43,12 @@ const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/i;
  * both names work for 1–2 minor versions; legacy emits per-call warnings;
  * legacy is removed in a future release. The wrapper lives at the file
  * boundary so the 8 individual tool definitions below stay declarative.
+ *
+ * @internal Exported only so the focused alias-wrapper tests in
+ *   `worktrees.test.ts` can exercise the (args, extra) forwarding contract
+ *   without monkey-patching `registerWorktreeTools`. Not part of the
+ *   public module API; outside callers should go through
+ *   `registerWorktreeTools` like every other domain.
  */
 export function withBranchAliases(server: McpServer): McpServer {
   return wrapRegisterTool(server, (register, name, config, handler) => {

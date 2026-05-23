@@ -75,7 +75,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
       setAllowConcurrentRuns(scheduleConfig?.allow_concurrent_runs === true);
       setPromptTemplate(
         scheduleConfig?.prompt_template ||
-          'Review the current state of the worktree and provide a status update.'
+          'Review the current state of the branch and provide a status update.'
       );
 
       // Initialize form values

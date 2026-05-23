@@ -257,6 +257,7 @@ function isTransparentExpression(node) {
     case ts.SyntaxKind.NonNullExpression: // `foo!`
     case ts.SyntaxKind.AsExpression: // `foo as Bar`
     case ts.SyntaxKind.TypeAssertionExpression: // `<Bar>foo`
+    case ts.SyntaxKind.SatisfiesExpression: // `foo satisfies Bar`
       return true;
     case ts.SyntaxKind.BinaryExpression: {
       const op = node.operatorToken.kind;

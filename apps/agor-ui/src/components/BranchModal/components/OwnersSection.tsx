@@ -184,11 +184,11 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
   const hasUnsavedChanges = ownersChanged || permissionsChanged;
 
   const permissionLevelDescriptions: Record<WorktreePermissionLevel, string> = {
-    none: 'No access (worktree is completely private to owners)',
-    view: 'Can view worktrees, sessions, tasks, and messages',
+    none: 'No access (branch is completely private to owners)',
+    view: 'Can view branches, sessions, tasks, and messages',
     session: 'Can create new sessions (running as own identity) and prompt own sessions',
     prompt: 'Can prompt ANY session, including those created by other users',
-    all: 'Full access (create/update/delete sessions and worktrees)',
+    all: 'Full access (create/update/delete sessions and branches)',
   };
 
   const fsAccessDescriptions = {
