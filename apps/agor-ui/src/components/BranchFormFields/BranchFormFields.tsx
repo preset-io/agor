@@ -7,9 +7,18 @@
  */
 
 import type { Board, Repo } from '@agor-live/client';
-import { Checkbox, Form, Input, Radio, Select, Space, Typography } from 'antd';
+import { Checkbox, Form, Input, InputNumber, Radio, Select, Space, Typography } from 'antd';
 import { useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
+
+/**
+ * Default depth pre-filled into the "Depth" input when the user selects
+ * Branch storage. A small positive number is the right default: shallow
+ * clones drop a lot of disk overhead with negligible UX cost for typical
+ * feature branches. The user can clear the field for a full clone or set
+ * a different positive integer.
+ */
+const DEFAULT_CLONE_DEPTH = 100;
 
 export interface BranchFormFieldsProps {
   repoById: Map<string, Repo>;
@@ -188,19 +197,67 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
         tooltip={
           'How the branch is materialised on disk. ' +
           '"Worktree" uses git\'s native shared-base model (legacy default). ' +
-          '"Full clone" / "Shallow clone" give the branch its own .git/, ' +
-          'isolating credentials and config from sibling branches. ' +
+          '"Branch" gives this worktree its own .git/ directory via a real ' +
+          'git clone — credentials and config are isolated from sibling branches. ' +
           'See docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.'
         }
       >
-        <Select
-          options={[
-            { value: 'worktree', label: 'Worktree (default)' },
-            { value: 'clone', label: 'Full clone' },
-            { value: 'clone:100', label: 'Shallow clone (depth 100)' },
-          ]}
-          onChange={() => onFormChange?.()}
-        />
+        <Radio.Group onChange={() => onFormChange?.()}>
+          <Radio value="worktree">Worktree (default)</Radio>
+          <Radio value="clone">Branch</Radio>
+        </Radio.Group>
+      </Form.Item>
+
+      {/*
+        Depth input: only visible when "Branch" is selected. Pre-fills with
+        DEFAULT_CLONE_DEPTH on render so the common shallow case is one click
+        away; clearing the field means "full clone" (no --depth flag). Uses
+        `shouldUpdate` so the parent form only re-renders this branch when
+        the storage_mode field actually changes.
+      */}
+      <Form.Item
+        shouldUpdate={(prev, curr) =>
+          prev[`${fieldPrefix}storage_mode`] !== curr[`${fieldPrefix}storage_mode`]
+        }
+        noStyle
+      >
+        {({ getFieldValue }) =>
+          getFieldValue(`${fieldPrefix}storage_mode`) === 'clone' ? (
+            <Form.Item
+              name={`${fieldPrefix}clone_depth`}
+              label="Depth"
+              initialValue={DEFAULT_CLONE_DEPTH}
+              tooltip={
+                'Number of commits to keep (`git clone --depth N`). ' +
+                'Defaults to 100 — usually plenty for a feature branch. ' +
+                'Leave empty for a full clone with complete history.'
+              }
+              rules={[
+                {
+                  validator: (_rule, value) => {
+                    // Empty / null → full clone (handled at submit time).
+                    if (value === undefined || value === null || value === '') {
+                      return Promise.resolve();
+                    }
+                    if (Number.isInteger(value) && value > 0) {
+                      return Promise.resolve();
+                    }
+                    return Promise.reject(
+                      new Error('Depth must be a positive integer, or empty for a full clone')
+                    );
+                  },
+                },
+              ]}
+            >
+              <InputNumber
+                min={1}
+                placeholder="100"
+                style={{ width: 160 }}
+                onChange={() => onFormChange?.()}
+              />
+            </Form.Item>
+          ) : null
+        }
       </Form.Item>
 
       {showUrlFields && (

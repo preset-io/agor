@@ -2,7 +2,7 @@ import type { Repo } from '@agor-live/client';
 import { Button, Form, Modal } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
-import { BranchFormFields, parseStorageFormValue } from '../BranchFormFields';
+import { BranchFormFields } from '../BranchFormFields';
 import type { BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
 
 /** @deprecated Use BranchTabConfig directly. Kept as alias for backward compat. */
@@ -97,7 +97,14 @@ export const NewBranchModal: React.FC<NewBranchModalProps> = ({
     const values = await form.validateFields();
 
     const refType = values.refType || 'branch';
-    const storage = parseStorageFormValue(values.storage_mode);
+    const storageMode: 'worktree' | 'clone' = values.storage_mode ?? 'worktree';
+    // Depth only applies to clone-mode and only when the input has a
+    // positive value. The form's validator already rejects bad numbers;
+    // empty / cleared input → undefined → full clone at the daemon layer.
+    const cloneDepth =
+      storageMode === 'clone' && typeof values.clone_depth === 'number' && values.clone_depth > 0
+        ? values.clone_depth
+        : undefined;
     const config: NewWorktreeConfig = {
       repoId: values.repoId,
       name: values.name,
@@ -110,8 +117,8 @@ export const NewBranchModal: React.FC<NewBranchModalProps> = ({
       pull_request_url: values.pull_request_url,
       board_id: currentBoardId, // Include board_id if provided
       position: defaultPosition, // Include position if provided
-      storage_mode: storage.storage_mode,
-      ...(storage.clone_depth !== undefined ? { clone_depth: storage.clone_depth } : {}),
+      storage_mode: storageMode,
+      ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
     };
 
     // Remember last used repo

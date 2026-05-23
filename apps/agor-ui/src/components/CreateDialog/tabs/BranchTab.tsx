@@ -2,7 +2,7 @@ import type { Repo } from '@agor-live/client';
 import { Form } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
-import { BranchFormFields, parseStorageFormValue } from '../../BranchFormFields';
+import { BranchFormFields } from '../../BranchFormFields';
 
 export interface BranchTabConfig {
   repoId: string;
@@ -98,7 +98,11 @@ export const BranchTab: React.FC<BranchTabProps> = ({
     try {
       const values = await form.validateFields();
       const refType = values.refType || 'branch';
-      const storage = parseStorageFormValue(values.storage_mode);
+      const storageMode: 'worktree' | 'clone' = values.storage_mode ?? 'worktree';
+      const cloneDepth =
+        storageMode === 'clone' && typeof values.clone_depth === 'number' && values.clone_depth > 0
+          ? values.clone_depth
+          : undefined;
       const config: BranchTabConfig = {
         repoId: values.repoId,
         name: values.name,
@@ -111,8 +115,8 @@ export const BranchTab: React.FC<BranchTabProps> = ({
         pull_request_url: values.pull_request_url,
         board_id: currentBoardId,
         position: defaultPosition,
-        storage_mode: storage.storage_mode,
-        ...(storage.clone_depth !== undefined ? { clone_depth: storage.clone_depth } : {}),
+        storage_mode: storageMode,
+        ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
       };
 
       if (values.repoId) {
