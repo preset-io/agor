@@ -994,9 +994,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                   type="text"
                   icon={<AimOutlined />}
                   onClick={() => {
-                    const ok = recenterMap(worktree.worktree_id);
+                    const ok = recenterMap(worktree.worktree_id, {
+                      boardId: worktree.board_id ?? undefined,
+                    });
                     if (!ok) {
-                      showInfo('Worktree is not on the current board');
+                      showInfo('Worktree is not on a board');
                     }
                   }}
                 />

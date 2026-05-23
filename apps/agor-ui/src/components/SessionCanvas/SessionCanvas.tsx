@@ -56,7 +56,10 @@ import './SessionCanvas.css';
 import { shortId } from '@agor-live/client';
 import { mapToArray } from '@/utils/mapHelpers';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
-import { useRegisterRecenter } from '../../contexts/CanvasNavigationContext';
+import {
+  useConsumePendingRecenter,
+  useRegisterRecenter,
+} from '../../contexts/CanvasNavigationContext';
 import { useMutationGate } from '../../contexts/ConnectionContext';
 import { useCursorTracking } from '../../hooks/useCursorTracking';
 import { usePresence } from '../../hooks/usePresence';
@@ -856,15 +859,16 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       []
     );
 
-    // Pan/zoom the canvas onto a worktree's card. Returns true if the
-    // worktree was found on the current board; callers (e.g. the
-    // conversation-header recenter button) can surface a fallback when
-    // the worktree lives elsewhere. Uses the node's absolute position so
-    // zone-pinned worktrees (with `parentId` set) recenter correctly.
-    const recenterOnWorktree = useCallback((worktreeId: string): boolean => {
+    // Pan/zoom the canvas onto any React Flow node by id (worktree card,
+    // artifact, comment, etc.). Returns true if the node was found on the
+    // current board; callers (conversation header, settings tables) can
+    // surface a fallback when the node lives elsewhere. Uses the node's
+    // absolute position so zone-pinned children (with `parentId` set)
+    // recenter correctly.
+    const recenterOnNode = useCallback((nodeId: string): boolean => {
       const instance = reactFlowInstanceRef.current;
       if (!instance) return false;
-      const node = instance.getNode(worktreeId);
+      const node = instance.getNode(nodeId);
       if (!node) return false;
       const allNodes = instance.getNodes();
       const absPos = getNodeAbsolutePosition(node, allNodes);
@@ -877,7 +881,9 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       return true;
     }, []);
 
-    useRegisterRecenter(recenterOnWorktree);
+    useRegisterRecenter(recenterOnNode);
+
+    const consumePendingRecenter = useConsumePendingRecenter();
 
     // Cursor tracking hook
     useCursorTracking({
@@ -1338,6 +1344,15 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
       // Use a small delay to ensure DOM has updated
       const timer = setTimeout(() => {
+        // Cross-board recenter: if someone asked to recenter on a node that
+        // lives on this (newly-loaded) board, honor it instead of fitView.
+        // Falls back to fitView when the pending target isn't on this board
+        // either (stale/unknown id).
+        const pendingId = consumePendingRecenter();
+        if (pendingId && recenterOnNode(pendingId)) {
+          lastFitBoardIdRef.current = board?.board_id ?? null;
+          return;
+        }
         reactFlowInstanceRef.current?.fitView({
           padding: 0.2, // 20% padding around nodes
           minZoom: 0.1, // Allow zooming out far enough to see widely-spaced nodes
@@ -1349,7 +1364,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       }, 100);
 
       return () => clearTimeout(timer);
-    }, [isReactFlowReady, nodes.length, board?.board_id]); // isReactFlowReady + board_id triggers check, nodes.length gates execution
+    }, [isReactFlowReady, nodes.length, board?.board_id, consumePendingRecenter, recenterOnNode]);
 
     // Intercept onNodesChange to detect resize events
     const onNodesChange = useCallback(

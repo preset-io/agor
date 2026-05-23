@@ -33,7 +33,10 @@ import {
 import { mapToArray } from '@/utils/mapHelpers';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { AppEntityDataProvider, AppLiveDataProvider } from '../../contexts/AppDataContext';
-import { CanvasNavigationProvider } from '../../contexts/CanvasNavigationContext';
+import {
+  CanvasNavigationProvider,
+  useRegisterBoardSwitcher,
+} from '../../contexts/CanvasNavigationContext';
 import { useBoardTitle } from '../../hooks/useBoardTitle';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useFaviconStatus } from '../../hooks/useFaviconStatus';
@@ -66,6 +69,15 @@ import { WorktreeModal, type WorktreeModalTab } from '../WorktreeModal';
 import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
 
 const { Content } = Layout;
+
+/** Lives inside CanvasNavigationProvider so cross-board recenter calls can
+ *  ask App to switch boards. Renders nothing. */
+const BoardSwitcherBridge: React.FC<{ setCurrentBoardId: (id: string) => void }> = ({
+  setCurrentBoardId,
+}) => {
+  useRegisterBoardSwitcher(setCurrentBoardId);
+  return null;
+};
 
 export interface AppProps {
   client: AgorClient | null;
@@ -749,6 +761,7 @@ export const App: React.FC<AppProps> = ({
       <AppLiveDataProvider value={appLiveDataValue}>
         <AppActionsProvider value={appActionsValue}>
           <CanvasNavigationProvider>
+            <BoardSwitcherBridge setCurrentBoardId={setCurrentBoardId} />
             <Layout style={{ height: '100vh' }}>
               <AppHeader
                 user={user}
