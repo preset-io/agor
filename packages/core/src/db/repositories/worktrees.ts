@@ -4,10 +4,19 @@
  * Type-safe CRUD operations for worktrees with short ID support.
  */
 
-import type { AgenticToolName, SessionStatus, UUID, Worktree, WorktreeID } from '@agor/core/types';
+import type {
+  AgenticToolName,
+  BoardID,
+  SessionStatus,
+  UUID,
+  Worktree,
+  WorktreeID,
+} from '@agor/core/types';
 import { WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
 import { and, desc, eq, getTableColumns, inArray, isNotNull, like, or, sql } from 'drizzle-orm';
+import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
+import { getWorktreeUrl } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
 import { type WorktreeInsert, type WorktreeRow, worktreeOwners, worktrees } from '../schema';
@@ -57,11 +66,22 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
   constructor(private db: Database) {}
 
   /**
-   * Convert database row to Worktree type
+   * Convert database row to Worktree type.
+   *
+   * `baseUrl` (from `getBaseUrl()`) is required to compute the
+   * `url` field. When omitted (e.g., tight internal paths that don't
+   * await config), `url` is left null and external links won't work.
+   * Board slug isn't joined here — the URL builder falls back to a
+   * short-ID `<board>` segment, which still resolves correctly via
+   * `useUrlState`'s short-ID resolver. Joining boards for human-readable
+   * URLs is a future optimization.
    */
-  private rowToWorktree(row: WorktreeRow): Worktree {
+  private rowToWorktree(row: WorktreeRow, baseUrl?: string): Worktree {
+    const worktreeId = row.worktree_id as WorktreeID;
+    const boardId = (row.board_id as BoardID | null) ?? null;
+    const url = baseUrl ? getWorktreeUrl(worktreeId, boardId, null, baseUrl) : null;
     return {
-      worktree_id: row.worktree_id as WorktreeID,
+      worktree_id: worktreeId,
       repo_id: row.repo_id as UUID,
       created_at: new Date(row.created_at).toISOString(),
       updated_at: row.updated_at
@@ -79,7 +99,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       app_url: row.app_url ?? undefined,
       logs_command: row.logs_command ?? undefined,
       environment_variant: row.environment_variant ?? undefined,
-      board_id: (row.board_id as UUID | null) ?? undefined, // Top-level column
+      board_id: boardId ?? undefined, // Top-level column
       schedule_enabled: Boolean(row.schedule_enabled), // Convert SQLite integer (0/1) to boolean
       schedule_cron: row.schedule_cron ?? undefined,
       schedule_last_triggered_at: row.schedule_last_triggered_at ?? undefined,
@@ -94,6 +114,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       others_fs_access: row.others_fs_access ?? undefined,
       unix_group: row.unix_group ?? undefined,
       ...row.data,
+      url,
     };
   }
 
@@ -168,7 +189,8 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
     const insertData = this.worktreeToInsert(worktree);
     try {
       const row = await insert(this.db, worktrees).values(insertData).returning().one();
-      return this.rowToWorktree(row);
+      const baseUrl = await getBaseUrl();
+      return this.rowToWorktree(row, baseUrl);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       // Surface helpful messages for common constraint violations
@@ -212,7 +234,9 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
         .from(worktrees)
         .where(eq(worktrees.worktree_id, fullId))
         .one();
-      return row ? this.rowToWorktree(row) : null;
+      if (!row) return null;
+      const baseUrl = await getBaseUrl();
+      return this.rowToWorktree(row, baseUrl);
     } catch (error) {
       if (error instanceof EntityNotFoundError) return null;
       throw error;
@@ -249,7 +273,8 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
     const rows =
       conditions.length > 0 ? await query.where(and(...conditions)).all() : await query.all();
 
-    return rows.map((row: WorktreeRow) => this.rowToWorktree(row));
+    const baseUrl = await getBaseUrl();
+    return rows.map((row: WorktreeRow) => this.rowToWorktree(row, baseUrl));
   }
 
   /**
@@ -264,6 +289,8 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
     if (!existing) {
       throw new EntityNotFoundError('Worktree', id);
     }
+
+    const baseUrl = await getBaseUrl();
 
     // Use transaction to make read-merge-write atomic
     return await this.db.transaction(async (tx) => {
@@ -285,7 +312,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
         throw new EntityNotFoundError('Worktree', id);
       }
 
-      const current = this.rowToWorktree(currentRow);
+      const current = this.rowToWorktree(currentRow, baseUrl);
 
       // STEP 3: Deep merge updates into current worktree (in memory)
       // Preserves nested objects like schedule, environment_instance, custom_context
@@ -306,7 +333,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
         .returning()
         .one();
 
-      return this.rowToWorktree(row);
+      return this.rowToWorktree(row, baseUrl);
     });
   }
 
@@ -333,7 +360,9 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       .where(and(eq(worktrees.repo_id, repoId), eq(worktrees.name, name)))
       .one();
 
-    return row ? this.rowToWorktree(row) : null;
+    if (!row) return null;
+    const baseUrl = await getBaseUrl();
+    return this.rowToWorktree(row, baseUrl);
   }
 
   /**
@@ -347,7 +376,9 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       )
       .one();
 
-    return row ? this.rowToWorktree(row) : null;
+    if (!row) return null;
+    const baseUrl = await getBaseUrl();
+    return this.rowToWorktree(row, baseUrl);
   }
 
   /**
@@ -552,7 +583,8 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       .where(and(...conditions))
       .all();
 
-    return rows.map((row: WorktreeRow) => this.rowToWorktree(row));
+    const baseUrl = await getBaseUrl();
+    return rows.map((row: WorktreeRow) => this.rowToWorktree(row, baseUrl));
   }
 
   /**

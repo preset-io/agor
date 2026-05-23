@@ -74,6 +74,18 @@ export interface Worktree {
   /** User who created this worktree */
   created_by: UUID;
 
+  /**
+   * External/user-facing URL for viewing this worktree in the UI.
+   *
+   * Computed property added by the repository layer. Optional — undefined
+   * on inputs / fixtures constructed by hand; on read paths from the
+   * repo it's always present as `string | null` (null when no board).
+   * Format: {baseUrl}/ui/b/{boardId}/w/{worktreeShortId}/
+   * Visiting the URL switches to the worktree's board and recenters
+   * the canvas on its card. See `apps/agor-ui/src/hooks/useUrlState.ts`.
+   */
+  url?: string | null;
+
   // ===== Materialized (for indexes/queries) =====
 
   /**

@@ -10,6 +10,7 @@
 import type {
   Artifact,
   ArtifactBuildStatus,
+  ArtifactID,
   BoardID,
   SandpackTemplate,
   UUID,
@@ -17,7 +18,9 @@ import type {
 } from '@agor/core/types';
 import { prefixToLikePattern } from '@agor/core/types';
 import { and, eq, like, or } from 'drizzle-orm';
+import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
+import { getArtifactUrl } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type ArtifactInsert, type ArtifactRow, artifacts } from '../schema';
@@ -31,11 +34,24 @@ import {
 export class ArtifactRepository implements BaseRepository<Artifact, Partial<Artifact>> {
   constructor(private db: Database) {}
 
-  private rowToArtifact(row: ArtifactRow): Artifact {
+  /**
+   * Convert database row to Artifact type.
+   *
+   * `baseUrl` is needed to compute the share-link `url` field. Omitted →
+   * `url` is `null` (entity returned through tight internal paths that
+   * don't await config). Board slug isn't joined here — the URL builder
+   * falls back to a short-ID `<board>` segment that resolves via
+   * `useUrlState`'s short-ID resolver. Joining boards for human-readable
+   * URLs is a future optimization.
+   */
+  private rowToArtifact(row: ArtifactRow, baseUrl?: string): Artifact {
+    const artifactId = row.artifact_id as ArtifactID;
+    const boardId = row.board_id as BoardID;
+    const url = baseUrl ? getArtifactUrl(artifactId, boardId, null, baseUrl) : null;
     return {
-      artifact_id: row.artifact_id as UUID,
+      artifact_id: artifactId as UUID,
       worktree_id: (row.worktree_id as WorktreeID) ?? null,
-      board_id: row.board_id as BoardID,
+      board_id: boardId,
       name: row.name,
       description: row.description ?? undefined,
       path: row.path ?? null,
@@ -56,6 +72,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       updated_at: new Date(row.updated_at).toISOString(),
       archived: Boolean(row.archived),
       archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
+      url,
     };
   }
 
@@ -118,7 +135,8 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         .one();
 
       if (!row) throw new RepositoryError('Failed to retrieve created artifact');
-      return this.rowToArtifact(row);
+      const baseUrl = await getBaseUrl();
+      return this.rowToArtifact(row, baseUrl);
     } catch (error) {
       if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(
@@ -135,7 +153,9 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         .from(artifacts)
         .where(eq(artifacts.artifact_id, fullId))
         .one();
-      return row ? this.rowToArtifact(row) : null;
+      if (!row) return null;
+      const baseUrl = await getBaseUrl();
+      return this.rowToArtifact(row, baseUrl);
     } catch (error) {
       if (error instanceof EntityNotFoundError) return null;
       if (error instanceof AmbiguousIdError) throw error;
@@ -149,7 +169,8 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
   async findAll(): Promise<Artifact[]> {
     try {
       const rows = await select(this.db).from(artifacts).all();
-      return rows.map((row: ArtifactRow) => this.rowToArtifact(row));
+      const baseUrl = await getBaseUrl();
+      return rows.map((row: ArtifactRow) => this.rowToArtifact(row, baseUrl));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find all artifacts: ${error instanceof Error ? error.message : String(error)}`,
@@ -172,7 +193,8 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       }
 
       const rows = await query.all();
-      return rows.map((row: ArtifactRow) => this.rowToArtifact(row));
+      const baseUrl = await getBaseUrl();
+      return rows.map((row: ArtifactRow) => this.rowToArtifact(row, baseUrl));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find visible artifacts: ${error instanceof Error ? error.message : String(error)}`,
@@ -187,7 +209,8 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         .from(artifacts)
         .where(eq(artifacts.worktree_id, worktreeId))
         .all();
-      return rows.map((row: ArtifactRow) => this.rowToArtifact(row));
+      const baseUrl = await getBaseUrl();
+      return rows.map((row: ArtifactRow) => this.rowToArtifact(row, baseUrl));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find artifacts by worktree: ${error instanceof Error ? error.message : String(error)}`,
@@ -220,7 +243,8 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       }
 
       const rows = await query.all();
-      return rows.map((row: ArtifactRow) => this.rowToArtifact(row));
+      const baseUrl = await getBaseUrl();
+      return rows.map((row: ArtifactRow) => this.rowToArtifact(row, baseUrl));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find artifacts by board: ${error instanceof Error ? error.message : String(error)}`,
@@ -285,7 +309,8 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         .one();
 
       if (!row) throw new EntityNotFoundError('Artifact', id);
-      return this.rowToArtifact(row);
+      const baseUrl = await getBaseUrl();
+      return this.rowToArtifact(row, baseUrl);
     } catch (error) {
       if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(

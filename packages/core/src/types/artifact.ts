@@ -212,6 +212,16 @@ export interface Artifact {
    * timestamp when archived. Always cleared on unarchive (NULL in DB).
    */
   archived_at?: string | null;
+
+  /**
+   * External/user-facing URL for viewing this artifact in the UI.
+   *
+   * Computed property added by the repository layer. Optional —
+   * undefined on inputs / fixtures constructed by hand; on read paths
+   * from the repo it's always present as `string | null`.
+   * Format: {baseUrl}/ui/b/{boardId}/a/{artifactShortId}/
+   */
+  url?: string | null;
 }
 
 /**

@@ -1,31 +1,42 @@
 /**
  * URL normalization utilities
  *
- * Provides shared helpers for validating and normalizing user-provided URLs.
+ * Provides shared helpers for validating and normalizing user-provided URLs,
+ * plus builders for the entity deep-link URL scheme served by the UI app.
  */
 
 import { shortId } from '../lib/ids';
-import type { BoardID, SessionID } from '../types/id';
+import type { ArtifactID, BoardID, SessionID, WorktreeID } from '../types/id';
 
 /**
- * Generate a session URL for external/user-facing links
+ * UI mount path. The bundled UI is served at `${baseUrl}/ui/*` (see
+ * `apps/agor-daemon/src/index.ts:449-466`) and the React app uses
+ * `BrowserRouter basename='/ui'`, so external links MUST include this
+ * prefix to land in the SPA. Trailing slash on built URLs is Django-style
+ * — matches the routes declared in `apps/agor-ui/src/App.tsx`.
+ */
+const UI_MOUNT_PATH = '/ui';
+
+/** Resolve the `<board>` segment for a URL, preferring slug for
+ *  human-readability, falling back to short ID. */
+function boardParam(boardId: BoardID, boardSlug: string | null | undefined): string {
+  return boardSlug || shortId(boardId);
+}
+
+/** Build the `${baseUrl}/ui/b/<board>/` prefix used by every entity URL. */
+function boardPrefix(
+  boardId: BoardID,
+  boardSlug: string | null | undefined,
+  baseUrl: string
+): string {
+  return `${baseUrl}${UI_MOUNT_PATH}/b/${boardParam(boardId, boardSlug)}/`;
+}
+
+/**
+ * Generate a session URL (`{baseUrl}/ui/b/<board>/<sessionShort>/`).
  *
- * Prefers board slug over short ID for cleaner URLs. Falls back to short ID if slug unavailable.
- *
- * @param sessionId - Session ID (full UUID)
- * @param boardId - Board ID (required for URL generation)
- * @param boardSlug - Board slug (optional, preferred for cleaner URLs)
- * @param baseUrl - Base URL from config (e.g., "https://agor.example.com")
- * @returns Session URL or null if boardId is missing
- *
- * @example
- * ```ts
- * getSessionUrl('abc12345-...', 'board456-...', 'my-board', 'https://agor.example.com')
- * // => 'https://agor.example.com/b/my-board/abc12345'
- *
- * getSessionUrl('abc12345-...', 'board456-...', undefined, 'https://agor.example.com')
- * // => 'https://agor.example.com/b/board456/abc12345' (falls back to short ID)
- * ```
+ * @returns `null` if `boardId` is missing — sessions on un-placed
+ * worktrees aren't navigable.
  */
 export function getSessionUrl(
   sessionId: SessionID,
@@ -34,36 +45,50 @@ export function getSessionUrl(
   baseUrl: string
 ): string | null {
   if (!boardId) return null;
-  const boardParam = boardSlug || shortId(boardId);
-  return `${baseUrl}/b/${boardParam}/${shortId(sessionId)}`;
+  return `${boardPrefix(boardId, boardSlug, baseUrl)}${shortId(sessionId)}/`;
 }
 
-/**
- * Generate a board URL for external/user-facing links
- *
- * Prefers board slug over short ID for cleaner URLs. Falls back to short ID if slug unavailable.
- *
- * @param boardId - Board ID (full UUID)
- * @param boardSlug - Board slug (optional, preferred for cleaner URLs)
- * @param baseUrl - Base URL from config (e.g., "https://agor.example.com")
- * @returns Board URL
- *
- * @example
- * ```ts
- * getBoardUrl('board456-...', 'my-board', 'https://agor.example.com')
- * // => 'https://agor.example.com/b/my-board'
- *
- * getBoardUrl('board456-...', undefined, 'https://agor.example.com')
- * // => 'https://agor.example.com/b/board456' (falls back to short ID)
- * ```
- */
+/** Generate a board URL (`{baseUrl}/ui/b/<board>/`). */
 export function getBoardUrl(
   boardId: BoardID,
   boardSlug: string | null | undefined,
   baseUrl: string
 ): string {
-  const boardParam = boardSlug || shortId(boardId);
-  return `${baseUrl}/b/${boardParam}`;
+  return boardPrefix(boardId, boardSlug, baseUrl);
+}
+
+/**
+ * Generate a worktree-focus URL (`{baseUrl}/ui/b/<board>/w/<worktreeShort>/`).
+ * Shareable deep link — visiting the URL switches to the worktree's
+ * board (if needed) and recenters the canvas on the worktree card. See
+ * `apps/agor-ui/src/hooks/useUrlState.ts` for the consumer.
+ *
+ * @returns `null` if the worktree isn't placed on a board.
+ */
+export function getWorktreeUrl(
+  worktreeId: WorktreeID,
+  boardId: BoardID | null | undefined,
+  boardSlug: string | null | undefined,
+  baseUrl: string
+): string | null {
+  if (!boardId) return null;
+  return `${boardPrefix(boardId, boardSlug, baseUrl)}w/${shortId(worktreeId)}/`;
+}
+
+/**
+ * Generate an artifact-focus URL (`{baseUrl}/ui/b/<board>/a/<artifactShort>/`).
+ * Mirrors `getWorktreeUrl` for artifacts.
+ *
+ * @returns `null` if the artifact isn't placed on a board.
+ */
+export function getArtifactUrl(
+  artifactId: ArtifactID,
+  boardId: BoardID | null | undefined,
+  boardSlug: string | null | undefined,
+  baseUrl: string
+): string | null {
+  if (!boardId) return null;
+  return `${boardPrefix(boardId, boardSlug, baseUrl)}a/${shortId(artifactId)}/`;
 }
 
 /**
