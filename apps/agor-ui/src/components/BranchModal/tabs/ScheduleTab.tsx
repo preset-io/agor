@@ -332,8 +332,8 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
               </Space>
               <Text type="secondary" style={{ fontSize: '12px' }}>
                 {allowConcurrentRuns
-                  ? 'New runs will always start, even if another session is still active in this worktree.'
-                  : 'If a session is already active in this worktree, scheduled runs are skipped and manual "Run now" triggers return an error. This is the default.'}
+                  ? 'New runs will always start, even if another session is still active in this branch.'
+                  : 'If a session is already active in this branch, scheduled runs are skipped and manual "Run now" triggers return an error. This is the default.'}
               </Text>
             </Space>
           </Card>

@@ -1373,7 +1373,7 @@ export function OnboardingWizard({
         <Paragraph type="secondary">
           A branch is an isolated copy of your repo with its own branch.
           {path === 'assistant'
-            ? " We'll set up a worktree for your assistant."
+            ? " We'll set up a branch for your assistant."
             : ' Name it whatever you like.'}
         </Paragraph>
 
@@ -1610,7 +1610,7 @@ export function OnboardingWizard({
       <Paragraph type="secondary">
         {path === 'assistant'
           ? "Your assistant is set up. Let's create your first session!"
-          : "Your worktree is ready. Let's launch a session!"}
+          : "Your branch is ready. Let's launch a session!"}
       </Paragraph>
 
       {error && (

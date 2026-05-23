@@ -288,8 +288,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         .create({ variant: selectedVariant })) as Worktree;
       showSuccess(
         variantChanged
-          ? `Rendered variant "${selectedVariant}" to worktree`
-          : 'Re-rendered worktree environment'
+          ? `Rendered variant "${selectedVariant}" to branch`
+          : 'Re-rendered branch environment'
       );
       // Let parent update, but also refresh local editor immediately so users
       // see the new snapshot without waiting for a WS push.
@@ -736,7 +736,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
               <Tooltip
                 title={
                   isAdmin
-                    ? 'Replace variants with contents of .agor.yml in this worktree'
+                    ? 'Replace variants with contents of .agor.yml in this branch'
                     : 'Only admins can import .agor.yml'
                 }
               >
@@ -775,7 +775,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                     !isAdmin
                       ? 'Only admins can edit repo environment'
                       : repoEditBlocked
-                        ? 'Finish editing the worktree snapshot first'
+                        ? 'Finish editing the branch snapshot first'
                         : undefined
                   }
                 >
@@ -895,7 +895,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                     ? 'Only admins can edit the rendered snapshot directly'
                     : snapshotEditBlocked
                       ? 'Finish editing the repo environment first'
-                      : 'Edit the rendered commands for this worktree only'
+                      : 'Edit the rendered commands for this branch only'
                 }
               >
                 <Button

@@ -237,7 +237,7 @@ export const EventStream: Story = {
             label="auth-fix"
             icon={FolderOutlined}
             color="geekblue"
-            copyLabel="Worktree ID"
+            copyLabel="Branch ID"
           />
         </Space>
       </div>

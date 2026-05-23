@@ -296,7 +296,7 @@ const EventItemComponent = ({
           label={worktree.name}
           icon={FolderOutlined}
           color="geekblue"
-          copyLabel="Worktree ID"
+          copyLabel="Branch ID"
           metadataCard={
             <BranchCard
               worktree={worktree}

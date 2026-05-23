@@ -182,7 +182,7 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
           loading={loading}
           onFileClick={handleFileClick}
           onDownload={downloadFile}
-          emptyMessage="No files found in worktree"
+          emptyMessage="No files found in branch"
         />
 
         {isMarkdown ? (

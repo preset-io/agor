@@ -165,8 +165,8 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
           onChange={(e) => handleCheckboxChange(e.target.checked)}
         >
           {refType === 'tag'
-            ? 'Use worktree name as branch name (new branch from tag)'
-            : 'Use worktree name as branch name'}
+            ? 'Use branch name as branch name (new branch from tag)'
+            : 'Use branch name as branch name'}
         </Checkbox>
       </Form.Item>
 
@@ -218,7 +218,7 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
         <br />• Fetch latest from origin
         <br />• Create new branch{' '}
         <Typography.Text code>
-          {useSameBranchName ? '<worktree-name>' : '<branch-name>'}
+          {useSameBranchName ? '<branch-name>' : '<branch-name>'}
         </Typography.Text>{' '}
         based on {refType === 'tag' ? 'tag' : 'branch'}{' '}
         <Typography.Text code>

@@ -823,7 +823,7 @@ export const WorktreePill: React.FC<WorktreePillProps> = ({ managed = true, styl
 
   return (
     <Tag color={PILL_COLORS.worktree} style={style}>
-      <span style={{ fontFamily: token.fontFamilyCode }}>{managed ? 'Managed' : 'Worktree'}</span>
+      <span style={{ fontFamily: token.fontFamilyCode }}>{managed ? 'Managed' : 'Branch'}</span>
     </Tag>
   );
 };

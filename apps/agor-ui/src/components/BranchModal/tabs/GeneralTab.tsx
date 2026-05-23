@@ -308,7 +308,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
               label="MCP Servers"
               labelCol={{ span: 6 }}
               wrapperCol={{ span: 18 }}
-              extra="Default MCP servers for new sessions in this worktree"
+              extra="Default MCP servers for new sessions in this branch"
             >
               <MCPServerSelect
                 mcpServers={mcpServers}

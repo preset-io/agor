@@ -346,7 +346,7 @@ const ChannelFormFields: React.FC<{
         rules={[{ required: true, message: 'Please select a target branch' }]}
         tooltip={
           mode === 'create'
-            ? 'New sessions from this channel will be created in this worktree'
+            ? 'New sessions from this channel will be created in this branch'
             : undefined
         }
       >

@@ -509,7 +509,7 @@ const WorktreeCardComponent = ({
               e.stopPropagation();
               onCreateSession(worktree.worktree_id);
             }}
-            title={isCreating ? 'Worktree is being created...' : undefined}
+            title={isCreating ? 'Branch is being created...' : undefined}
           >
             New Session
           </Button>
