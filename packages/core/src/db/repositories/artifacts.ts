@@ -38,20 +38,17 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
    * Convert database row to Artifact type.
    *
    * `baseUrl` is needed to compute the share-link `url` field. Omitted →
-   * `url` is `null` (entity returned through tight internal paths that
-   * don't await config). Board slug isn't joined here — the URL builder
-   * falls back to a short-ID `<board>` segment that resolves via
-   * `useUrlState`'s short-ID resolver. Joining boards for human-readable
-   * URLs is a future optimization.
+   * `url` is `null`. With the flat entity-URL scheme (`/a/<short>/`),
+   * no board lookup is needed — the URL is derived from the artifact
+   * ID alone and resolves to its board at click time.
    */
   private rowToArtifact(row: ArtifactRow, baseUrl?: string): Artifact {
     const artifactId = row.artifact_id as ArtifactID;
-    const boardId = row.board_id as BoardID;
-    const url = baseUrl ? getArtifactUrl(artifactId, boardId, null, baseUrl) : null;
+    const url = baseUrl ? getArtifactUrl(artifactId, baseUrl) : null;
     return {
       artifact_id: artifactId as UUID,
       worktree_id: (row.worktree_id as WorktreeID) ?? null,
-      board_id: boardId,
+      board_id: row.board_id as BoardID,
       name: row.name,
       description: row.description ?? undefined,
       path: row.path ?? null,

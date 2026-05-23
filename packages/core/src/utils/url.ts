@@ -1,95 +1,136 @@
 /**
- * URL normalization utilities
+ * URL & path utilities
  *
- * Provides shared helpers for validating and normalizing user-provided URLs,
- * plus builders for the entity deep-link URL scheme served by the UI app.
+ * Single source of truth for:
+ *   1. The path shape rendered by the UI router and consumed by share
+ *      links — top-level entity paths (`/b/<board>/`, `/s/<sessionShort>/`,
+ *      `/w/<worktreeShort>/`, `/a/<artifactShort>/`).
+ *   2. The UI mount point (`/ui`) at which the daemon serves the SPA.
+ *   3. Composition of full external URLs (`baseUrl + UI_MOUNT_PATH +
+ *      path`) handed back through REST / MCP responses.
+ *
+ * Design note — flat entity URLs: sub-entities (sessions, worktrees,
+ * artifacts) used to be nested under their board (`/b/<board>/w/<wt>/`).
+ * Boards can move, so embedding the board in the URL of an object
+ * that's only implicitly on it makes shared links rot when the object
+ * moves. The new scheme uses the short ID as a stable entity identifier
+ * — the app resolves the entity, looks up its current board, switches
+ * if needed. Boards keep their `/b/<board>/` URL because they're a
+ * destination in their own right.
+ *
+ * Server callers want full URLs (`getXUrl`); the UI router uses the
+ * `xPath` builders directly (react-router adds `UI_MOUNT_PATH` via the
+ * BrowserRouter `basename`, so the relative path is what we push).
+ *
+ * Also exports `normalizeOptionalHttpUrl` / `isAllowedHealthCheckUrl`
+ * for unrelated user-input validation (kept here for historical reasons).
  */
 
 import { shortId } from '../lib/ids';
 import type { ArtifactID, BoardID, SessionID, WorktreeID } from '../types/id';
 
-/**
- * UI mount path. The bundled UI is served at `${baseUrl}/ui/*` (see
- * `apps/agor-daemon/src/index.ts:449-466`) and the React app uses
- * `BrowserRouter basename='/ui'`, so external links MUST include this
- * prefix to land in the SPA. Trailing slash on built URLs is Django-style
- * — matches the routes declared in `apps/agor-ui/src/App.tsx`.
- */
-const UI_MOUNT_PATH = '/ui';
-
-/** Resolve the `<board>` segment for a URL, preferring slug for
- *  human-readability, falling back to short ID. */
-function boardParam(boardId: BoardID, boardSlug: string | null | undefined): string {
-  return boardSlug || shortId(boardId);
-}
-
-/** Build the `${baseUrl}/ui/b/<board>/` prefix used by every entity URL. */
-function boardPrefix(
-  boardId: BoardID,
-  boardSlug: string | null | undefined,
-  baseUrl: string
-): string {
-  return `${baseUrl}${UI_MOUNT_PATH}/b/${boardParam(boardId, boardSlug)}/`;
-}
+// ---------------------------------------------------------------------------
+// Constants — shared by daemon static-serving, UI router basename, and the
+// server-side URL builders below. Keep these in one place; the daemon and
+// UI both import them rather than hardcoding.
+// ---------------------------------------------------------------------------
 
 /**
- * Generate a session URL (`{baseUrl}/ui/b/<board>/<sessionShort>/`).
- *
- * @returns `null` if `boardId` is missing — sessions on un-placed
- * worktrees aren't navigable.
+ * Path prefix under which the bundled UI is served (see
+ * `apps/agor-daemon/src/index.ts` static-serving block). React Router
+ * uses this as `BrowserRouter basename`, so client-side path builders
+ * intentionally do NOT include it — the router prepends it on navigate.
+ * Server-side `getXUrl` helpers DO include it because they're building
+ * fully-qualified browser URLs.
  */
-export function getSessionUrl(
-  sessionId: SessionID,
-  boardId: BoardID | null | undefined,
-  boardSlug: string | null | undefined,
-  baseUrl: string
-): string | null {
-  if (!boardId) return null;
-  return `${boardPrefix(boardId, boardSlug, baseUrl)}${shortId(sessionId)}/`;
+export const UI_MOUNT_PATH = '/ui';
+
+/**
+ * Top-level URL segments per entity type. Each addressable entity gets
+ * one path-leading discriminator: `/b/...` for boards, `/s/...` for
+ * sessions, etc. Keep this in lockstep with the route table in
+ * `apps/agor-ui/src/App.tsx`.
+ */
+export const ENTITY_PATH_SEGMENTS = {
+  board: 'b',
+  session: 's',
+  worktree: 'w',
+  artifact: 'a',
+} as const;
+
+// ---------------------------------------------------------------------------
+// Path builders — produce the `/<entity>/<id>/` shape with no `/ui`
+// prefix and no base URL. Used by both the UI router (which adds `/ui`
+// via basename) and the server-side URL builders (which add baseUrl +
+// UI_MOUNT_PATH).
+// ---------------------------------------------------------------------------
+
+/** `/b/<board>/` — board view. Prefers the human-readable slug, falls
+ *  back to the canonical short ID. */
+export function boardPath(boardId: BoardID, boardSlug?: string | null): string {
+  return `/${ENTITY_PATH_SEGMENTS.board}/${boardSlug || shortId(boardId)}/`;
 }
 
-/** Generate a board URL (`{baseUrl}/ui/b/<board>/`). */
+/** `/s/<sessionShort>/` — session deep link. App resolves the session,
+ *  switches to its worktree's board, and opens the conversation panel. */
+export function sessionPath(sessionId: SessionID): string {
+  return `/${ENTITY_PATH_SEGMENTS.session}/${shortId(sessionId)}/`;
+}
+
+/** `/w/<worktreeShort>/` — worktree deep link. App resolves the
+ *  worktree, switches to its board, and recenters the canvas on its card. */
+export function worktreePath(worktreeId: WorktreeID): string {
+  return `/${ENTITY_PATH_SEGMENTS.worktree}/${shortId(worktreeId)}/`;
+}
+
+/** `/a/<artifactShort>/` — artifact deep link. Same shape as worktree. */
+export function artifactPath(artifactId: ArtifactID): string {
+  return `/${ENTITY_PATH_SEGMENTS.artifact}/${shortId(artifactId)}/`;
+}
+
+// ---------------------------------------------------------------------------
+// Full URL builders — `baseUrl + UI_MOUNT_PATH + path()`. Used by
+// repositories to populate the `url` field on entities returned through
+// REST / socket / MCP.
+// ---------------------------------------------------------------------------
+
+/** Compose a full external URL from a relative entity path. */
+function fullUrl(path: string, baseUrl: string): string {
+  return `${baseUrl}${UI_MOUNT_PATH}${path}`;
+}
+
+/** Generate a board URL. */
 export function getBoardUrl(
   boardId: BoardID,
   boardSlug: string | null | undefined,
   baseUrl: string
 ): string {
-  return boardPrefix(boardId, boardSlug, baseUrl);
+  return fullUrl(boardPath(boardId, boardSlug), baseUrl);
 }
 
-/**
- * Generate a worktree-focus URL (`{baseUrl}/ui/b/<board>/w/<worktreeShort>/`).
- * Shareable deep link — visiting the URL switches to the worktree's
- * board (if needed) and recenters the canvas on the worktree card. See
- * `apps/agor-ui/src/hooks/useUrlState.ts` for the consumer.
- *
- * @returns `null` if the worktree isn't placed on a board.
- */
-export function getWorktreeUrl(
-  worktreeId: WorktreeID,
-  boardId: BoardID | null | undefined,
-  boardSlug: string | null | undefined,
-  baseUrl: string
-): string | null {
-  if (!boardId) return null;
-  return `${boardPrefix(boardId, boardSlug, baseUrl)}w/${shortId(worktreeId)}/`;
+/** Generate a session URL. Always returns a URL — the entity resolves
+ *  to its board at click time. */
+export function getSessionUrl(sessionId: SessionID, baseUrl: string): string {
+  return fullUrl(sessionPath(sessionId), baseUrl);
 }
 
-/**
- * Generate an artifact-focus URL (`{baseUrl}/ui/b/<board>/a/<artifactShort>/`).
- * Mirrors `getWorktreeUrl` for artifacts.
- *
- * @returns `null` if the artifact isn't placed on a board.
- */
-export function getArtifactUrl(
-  artifactId: ArtifactID,
-  boardId: BoardID | null | undefined,
-  boardSlug: string | null | undefined,
-  baseUrl: string
-): string | null {
-  if (!boardId) return null;
-  return `${boardPrefix(boardId, boardSlug, baseUrl)}a/${shortId(artifactId)}/`;
+/** Generate a worktree URL. Always returns a URL — the entity resolves
+ *  to its board at click time. */
+export function getWorktreeUrl(worktreeId: WorktreeID, baseUrl: string): string {
+  return fullUrl(worktreePath(worktreeId), baseUrl);
 }
+
+/** Generate an artifact URL. Always returns a URL — the entity
+ *  resolves to its board at click time. */
+export function getArtifactUrl(artifactId: ArtifactID, baseUrl: string): string {
+  return fullUrl(artifactPath(artifactId), baseUrl);
+}
+
+// ---------------------------------------------------------------------------
+// Unrelated user-input validation helpers — kept here for historical
+// reasons. Used by worktree issue_url / pull_request_url normalization
+// and the health-check URL allowlist.
+// ---------------------------------------------------------------------------
 
 /**
  * Normalize an optional HTTP(S) URL string.

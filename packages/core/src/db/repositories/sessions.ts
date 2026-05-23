@@ -4,7 +4,7 @@
  * Type-safe CRUD operations for sessions with short ID support.
  */
 
-import type { Session, UUID } from '@agor/core/types';
+import type { Session, SessionID, UUID } from '@agor/core/types';
 import { SessionStatus, WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
 import { and, desc, eq, inArray, isNotNull, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
@@ -45,25 +45,31 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   constructor(private db: Database) {}
 
   /**
-   * Convert database row to Session type
+   * Convert database row to Session type.
    *
-   * @param row - Database row
-   * @param worktreeBoardId - Board ID from worktree (if JOINed)
-   * @param boardSlug - Board slug from boards table (if JOINed)
-   * @param baseUrl - Base URL for generating session URLs
+   * `worktreeBoardId` is still threaded through because we expose it
+   * as `Session.worktree_board_id` for clients that want to know
+   * without a follow-up worktree fetch — but it's no longer used for
+   * the URL field. URLs are flat (`/s/<short>/`) and resolve to the
+   * session's worktree's board at click time. `_boardSlug` is unused
+   * post-refactor; kept in the signature so we can drop the
+   * `boards` JOIN at call sites incrementally without a churny
+   * signature change.
    */
   private rowToSession(
     row: SessionRow,
     worktreeBoardId?: UUID | null,
-    boardSlug?: string | null,
+    _boardSlug?: string | null,
     baseUrl?: string
   ): Session {
     const genealogyData = row.data.genealogy || { children: [] };
-    const sessionId = row.session_id as UUID;
+    const sessionId = row.session_id as SessionID;
     const boardId = worktreeBoardId ?? null;
 
-    // Compute URL if baseUrl provided, otherwise null
-    const url = baseUrl ? getSessionUrl(sessionId, boardId, boardSlug, baseUrl) : null;
+    // Compute URL if baseUrl provided, otherwise null. With the flat
+    // entity-URL scheme, the session ID is sufficient — board is
+    // looked up at click time.
+    const url = baseUrl ? getSessionUrl(sessionId, baseUrl) : null;
 
     return {
       session_id: sessionId,

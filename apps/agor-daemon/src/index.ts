@@ -17,6 +17,7 @@ import 'dotenv/config';
 
 // Patch console methods to respect LOG_LEVEL env var
 import { patchConsole } from '@agor/core/utils/logger';
+import { UI_MOUNT_PATH } from '@agor/core/utils/url';
 
 patchConsole();
 
@@ -447,19 +448,19 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       console.log(`📂 Serving UI from: ${uiPath}`);
 
       app.use(
-        '/ui',
+        UI_MOUNT_PATH,
         expressStaticGzip(uiPath, {
           enableBrotli: false,
           orderPreference: ['gz'],
           serveStatic: { maxAge: '1y' },
         }) as never
       );
-      app.use('/ui/*', ((_req: unknown, res: express.Response) => {
+      app.use(`${UI_MOUNT_PATH}/*`, ((_req: unknown, res: express.Response) => {
         res.sendFile(path.join(uiPath, 'index.html'));
       }) as never);
       app.use('/', ((req: express.Request, res: express.Response, next: express.NextFunction) => {
         if (req.path === '/' && req.method === 'GET') {
-          res.redirect('/ui/');
+          res.redirect(`${UI_MOUNT_PATH}/`);
         } else {
           next();
         }

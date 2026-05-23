@@ -51,3 +51,19 @@ export {
   mapPermissionMode,
   mapToCodexPermissionConfig,
 } from '../utils/permission-mode-mapper.js';
+// URL / path builders — single source of truth shared by the daemon
+// (full URLs on entity responses), the UI router (relative paths), and
+// agent share-link generation. See `packages/core/src/utils/url.ts` for
+// the path shape and `UI_MOUNT_PATH` convention.
+export {
+  artifactPath,
+  boardPath,
+  ENTITY_PATH_SEGMENTS,
+  getArtifactUrl,
+  getBoardUrl,
+  getSessionUrl,
+  getWorktreeUrl,
+  sessionPath,
+  UI_MOUNT_PATH,
+  worktreePath,
+} from '../utils/url.js';

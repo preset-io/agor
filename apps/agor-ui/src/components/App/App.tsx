@@ -483,9 +483,11 @@ export const App: React.FC<AppProps> = ({
   // Stable handler so SessionPanel's React.memo bailout isn't defeated by a
   // fresh inline arrow on every App render (App re-renders on every live patch).
   // Routes through URL nav so the back button works (push, not replace).
+  // With the flat entity-URL scheme there's no `closeSession` — closing
+  // the panel is the same as navigating to the board we're already on.
   const handleCloseSessionPanel = useCallback(() => {
-    navigation.closeSession();
-  }, [navigation]);
+    if (currentBoardId) navigation.goToBoard(currentBoardId);
+  }, [navigation, currentBoardId]);
 
   const handleCloseTerminal = () => {
     setTerminalOpen(false);

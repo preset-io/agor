@@ -70,16 +70,14 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
    *
    * `baseUrl` (from `getBaseUrl()`) is required to compute the
    * `url` field. When omitted (e.g., tight internal paths that don't
-   * await config), `url` is left null and external links won't work.
-   * Board slug isn't joined here — the URL builder falls back to a
-   * short-ID `<board>` segment, which still resolves correctly via
-   * `useUrlState`'s short-ID resolver. Joining boards for human-readable
-   * URLs is a future optimization.
+   * await config), `url` is left null. With the flat entity-URL
+   * scheme (`/w/<short>/`), no board lookup is needed — the URL is
+   * derived from the worktree ID alone and resolves to the worktree's
+   * current board at click time.
    */
   private rowToWorktree(row: WorktreeRow, baseUrl?: string): Worktree {
     const worktreeId = row.worktree_id as WorktreeID;
-    const boardId = (row.board_id as BoardID | null) ?? null;
-    const url = baseUrl ? getWorktreeUrl(worktreeId, boardId, null, baseUrl) : null;
+    const url = baseUrl ? getWorktreeUrl(worktreeId, baseUrl) : null;
     return {
       worktree_id: worktreeId,
       repo_id: row.repo_id as UUID,
@@ -99,7 +97,7 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       app_url: row.app_url ?? undefined,
       logs_command: row.logs_command ?? undefined,
       environment_variant: row.environment_variant ?? undefined,
-      board_id: boardId ?? undefined, // Top-level column
+      board_id: (row.board_id as BoardID | null) ?? undefined, // Top-level column
       schedule_enabled: Boolean(row.schedule_enabled), // Convert SQLite integer (0/1) to boolean
       schedule_cron: row.schedule_cron ?? undefined,
       schedule_last_triggered_at: row.schedule_last_triggered_at ?? undefined,

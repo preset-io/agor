@@ -17,7 +17,7 @@ import type {
   UUID,
   Worktree,
 } from '@agor-live/client';
-import { getRepoReferenceOptions } from '@agor-live/client';
+import { getRepoReferenceOptions, UI_MOUNT_PATH } from '@agor-live/client';
 import { Alert, App as AntApp, ConfigProvider, Spin, theme } from 'antd';
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
@@ -1474,20 +1474,18 @@ function AppContent() {
             }
           />
 
-          {/* Desktop routes - board with session (Django-style trailing slash) */}
-          <Route path="/b/:boardParam/:sessionParam/" element={desktopAppElement} />
-
-          {/* Desktop routes - board with worktree focus (shareable link
-              that recenters on a specific worktree on visit) */}
-          <Route path="/b/:boardParam/w/:worktreeShortId/" element={desktopAppElement} />
-
-          {/* Desktop routes - board with artifact focus (parallel to /w/) */}
-          <Route path="/b/:boardParam/a/:artifactShortId/" element={desktopAppElement} />
-
-          {/* Desktop routes - board only (Django-style trailing slash) */}
+          {/* Desktop routes — flat entity URLs. Boards have their own
+              path because they're a destination; sub-entities (session,
+              worktree, artifact) get top-level paths keyed by short ID
+              so they're stable across board moves. The app resolves the
+              entity at click time, looks up its current board, and
+              switches if needed. See `packages/core/src/utils/url.ts`. */}
           <Route path="/b/:boardParam/" element={desktopAppElement} />
+          <Route path="/s/:sessionShortId/" element={desktopAppElement} />
+          <Route path="/w/:worktreeShortId/" element={desktopAppElement} />
+          <Route path="/a/:artifactShortId/" element={desktopAppElement} />
 
-          {/* Desktop routes - fallback for root path */}
+          {/* Fallback for unknown / root paths */}
           <Route path="/*" element={desktopAppElement} />
         </Routes>
       </ConnectionProvider>
@@ -1516,8 +1514,11 @@ function AppWrapper() {
 }
 
 function App() {
-  // Determine base path: '/ui' in production (served by daemon), '/' in dev mode
-  const basename = import.meta.env.BASE_URL === '/ui/' ? '/ui' : '';
+  // Determine base path: UI_MOUNT_PATH ('/ui') in production (served by
+  // daemon at that prefix), '' in dev mode (vite serves at /). Pulled
+  // from the shared core constant so this stays consistent with the
+  // daemon's static-serving block and the server-side URL builders.
+  const basename = import.meta.env.BASE_URL === `${UI_MOUNT_PATH}/` ? UI_MOUNT_PATH : '';
 
   return (
     <BrowserRouter basename={basename}>
