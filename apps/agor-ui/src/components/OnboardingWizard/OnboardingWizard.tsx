@@ -936,11 +936,11 @@ export function OnboardingWizard({
         setCurrentStep('launch');
       } else {
         setLoading(false);
-        setError('Failed to create worktree. Please try again.');
+        setError('Failed to create branch. Please try again.');
       }
     } catch (err) {
       setLoading(false);
-      setError(`Failed to create worktree: ${err instanceof Error ? err.message : String(err)}`);
+      setError(`Failed to create branch: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [
     createdRepoId,
@@ -999,7 +999,7 @@ export function OnboardingWizard({
 
   const handleLaunch = useCallback(async () => {
     if (!createdWorktreeId || !createdBoardId || !path) {
-      setError('Missing worktree or board.');
+      setError('Missing branch or board.');
       return;
     }
 
@@ -1371,7 +1371,7 @@ export function OnboardingWizard({
       <div style={{ padding: '16px 0' }}>
         <Title level={4}>Create Your Branch</Title>
         <Paragraph type="secondary">
-          A branch is an isolated copy of your repo with its own branch.
+          A branch is an isolated workspace backed by its own git branch.
           {path === 'assistant'
             ? " We'll set up a branch for your assistant."
             : ' Name it whatever you like.'}
@@ -1379,7 +1379,7 @@ export function OnboardingWizard({
 
         <Form layout="vertical">
           <Form.Item
-            label="Branch / branch name"
+            label="Branch name"
             extra={
               <>
                 Used as both the directory name and the new branch name. Forked from{' '}
@@ -1675,7 +1675,7 @@ export function OnboardingWizard({
       'add-repo': 'Repo',
       clone: path === 'own-repo' ? 'Repo' : 'Clone',
       board: 'Board',
-      worktree: 'Worktree',
+      worktree: 'Branch',
       'api-keys': 'Keys',
       launch: 'Launch',
     };

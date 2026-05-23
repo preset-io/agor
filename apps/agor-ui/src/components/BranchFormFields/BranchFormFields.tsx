@@ -137,7 +137,7 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
         label={refType === 'branch' ? 'Source Branch' : 'Source Tag'}
         rules={[{ required: true, message: `Please enter source ${refType}` }]}
         validateTrigger={['onBlur', 'onChange']}
-        tooltip={`${refType} to use as base for the new branch branch`}
+        tooltip={`${refType} to use as base for the new branch`}
         initialValue={defaultBranch}
       >
         <Input placeholder={refType === 'branch' ? defaultBranch : 'v1.0.0'} />
@@ -165,16 +165,16 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
           onChange={(e) => handleCheckboxChange(e.target.checked)}
         >
           {refType === 'tag'
-            ? 'Use branch name as branch name (new branch from tag)'
-            : 'Use branch name as branch name'}
+            ? 'Use the same name for the git branch (new branch from tag)'
+            : 'Use the same name for the git branch'}
         </Checkbox>
       </Form.Item>
 
       {!useSameBranchName && (
         <Form.Item
           name={`${fieldPrefix}branchName`}
-          label="Branch Name"
-          rules={[{ required: true, message: 'Please enter branch name' }]}
+          label="Git Branch Name"
+          rules={[{ required: true, message: 'Please enter a git branch name' }]}
           validateTrigger={['onBlur', 'onChange']}
         >
           <Input placeholder="feature/auth" />
@@ -217,9 +217,7 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
         <strong>What will happen:</strong>
         <br />• Fetch latest from origin
         <br />• Create new branch{' '}
-        <Typography.Text code>
-          {useSameBranchName ? '<branch-name>' : '<branch-name>'}
-        </Typography.Text>{' '}
+        <Typography.Text code>{useSameBranchName ? '<name>' : '<git-branch-name>'}</Typography.Text>{' '}
         based on {refType === 'tag' ? 'tag' : 'branch'}{' '}
         <Typography.Text code>
           {form.getFieldValue(`${fieldPrefix}sourceBranch`) ||

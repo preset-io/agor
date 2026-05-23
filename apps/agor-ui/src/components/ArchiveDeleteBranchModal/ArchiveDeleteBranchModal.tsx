@@ -34,7 +34,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
   };
 
   // Determine button text and style based on metadata action
-  const okText = metadataAction === 'archive' ? 'Archive Worktree' : 'Delete Permanently';
+  const okText = metadataAction === 'archive' ? 'Archive Branch' : 'Delete Permanently';
   const okButtonProps = metadataAction === 'delete' ? { danger: true } : {};
 
   return (
@@ -49,12 +49,12 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
       width={600}
     >
       <Space orientation="vertical" size="large" style={{ width: '100%' }}>
-        {/* Worktree Info */}
+        {/* Branch Info */}
         <div>
-          <Text strong>Branch: </Text>
+          <Text strong>Name: </Text>
           <Text code>{worktree.name}</Text>
           <br />
-          <Text strong>Branch: </Text>
+          <Text strong>Git ref: </Text>
           <Text>{worktree.ref}</Text>
         </div>
 

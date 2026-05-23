@@ -39,13 +39,13 @@ const PURPOSE_TEXT: Record<ActiveTab, React.ReactNode> = {
   assistant:
     'Assistants are long-lived agents with an identity, purpose, and goals. Think of them like employees. They have memory, can build their own skills, coordinate multiple coding agents, typically operate on their own Agor board, and can act proactively.',
   board:
-    'Boards are spatial canvases for organizing work. They contain worktrees, zones, cards, and other visual elements. Use boards to create workspaces for teams, projects, or assistants.',
+    'Boards are spatial canvases for organizing work. They contain branches, zones, cards, and other visual elements. Use boards to create workspaces for teams, projects, or assistants.',
   repository:
-    'Repositories connect your code to Agor. They can be cloned from GitHub or registered from a local path. Once connected, you can create worktrees for coding tasks.',
+    'Repositories connect your code to Agor. They can be cloned from GitHub or registered from a local path. Once connected, you can create branches for coding tasks.',
 };
 
 const ACTION_LABELS: Record<ActiveTab, string> = {
-  worktree: 'Create Worktree',
+  worktree: 'Create Branch',
   assistant: 'Create Assistant',
   board: 'Create Board',
   repository: 'Add Repository',

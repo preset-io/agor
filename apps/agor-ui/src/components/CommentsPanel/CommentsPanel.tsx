@@ -663,14 +663,14 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
         } else if (parent_type === 'worktree') {
           groupKey = `worktree-${parent_id}`;
           const worktree = worktreeById?.get(parent_id);
-          groupLabel = worktree ? worktree.name : 'Unknown Worktree';
+          groupLabel = worktree ? worktree.name : 'Unknown Branch';
           groupType = 'worktree';
         }
       } else if (thread.worktree_id) {
         // Check for FK-based worktree attachment
         groupKey = `worktree-${thread.worktree_id}`;
         const worktree = worktreeById?.get(thread.worktree_id);
-        groupLabel = worktree ? worktree.name : 'Unknown Worktree';
+        groupLabel = worktree ? worktree.name : 'Unknown Branch';
         groupType = 'worktree';
       }
 

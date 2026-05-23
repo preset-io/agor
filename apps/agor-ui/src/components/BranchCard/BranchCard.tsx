@@ -171,7 +171,7 @@ interface BranchCardProps {
   client: AgorClient | null;
 }
 
-const WorktreeCardComponent = ({
+const BranchCardComponent = ({
   worktree,
   repo,
   sessions,
@@ -1168,6 +1168,6 @@ const WorktreeCardComponent = ({
 
 // Memoize BranchCard to prevent unnecessary re-renders when parent updates
 // Only re-render when worktree, repo, sessions, or callback props actually change
-const BranchCard = React.memo(WorktreeCardComponent);
+const BranchCard = React.memo(BranchCardComponent);
 
 export default BranchCard;

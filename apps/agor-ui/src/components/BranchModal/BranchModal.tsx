@@ -94,7 +94,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
 
   const title = isAnAssistant
     ? `Assistant: ${assistantConfig?.displayName ?? worktree.name}`
-    : `Worktree: ${worktree.name}`;
+    : `Branch: ${worktree.name}`;
 
   const tabItems = [
     // Assistant tab — only for assistants, shown first

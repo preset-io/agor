@@ -474,7 +474,7 @@ function AppContent() {
       const worktree_id = config.worktree_id;
 
       if (!worktree_id) {
-        throw new Error('Worktree ID is required to create a session');
+        throw new Error('Branch ID is required to create a session');
       }
 
       // Create the session with the worktree_id
