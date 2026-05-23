@@ -162,8 +162,14 @@ function renderResult(result: SearchResultItem): {
   }
 }
 
-/** Optional-tolerant wrapper around formatRelativeTime — undefined in, undefined out. */
+/**
+ * Optional- and invalid-tolerant wrapper around formatRelativeTime — undefined
+ * in, undefined out. Without the invalid-date guard, a bad timestamp would
+ * render as "NaNy ago" via the shared formatter.
+ */
 function safeRelativeTime(ts: string | Date | undefined | null): string | undefined {
   if (!ts) return undefined;
-  return formatRelativeTime(ts);
+  const date = typeof ts === 'string' ? new Date(ts) : ts;
+  if (Number.isNaN(date.getTime())) return undefined;
+  return formatRelativeTime(date);
 }

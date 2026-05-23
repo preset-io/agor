@@ -4,6 +4,21 @@ export type SearchEntityType = 'session' | 'worktree' | 'assistant' | 'artifact'
 
 export type ChipFilter = 'all' | SearchEntityType;
 
+/**
+ * Canonical render/iteration order for entity-type sections in the dropdown.
+ * Shared between the keyboard-nav flattener in `GlobalSearch.tsx` and the
+ * section renderer in `GlobalSearchDropdown.tsx` so the visible row order
+ * cannot drift from the cursor index.
+ */
+export const SECTION_ORDER: SearchEntityType[] = [
+  'session',
+  'worktree',
+  'assistant',
+  'artifact',
+  'board',
+  'mcp',
+];
+
 export const TYPE_CHIP_ORDER: ChipFilter[] = [
   'all',
   'session',

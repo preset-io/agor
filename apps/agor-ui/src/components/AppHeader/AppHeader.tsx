@@ -65,7 +65,7 @@ export interface AppHeaderProps {
   boards?: Board[];
   currentBoardId?: string;
   onBoardChange?: (boardId: string) => void;
-  worktreeById?: Map<string, Worktree>;
+  worktreeById: Map<string, Worktree>;
   boardById?: Map<string, Board>; // For looking up board names
   onUserClick?: (
     userId: string,
@@ -147,7 +147,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   boards = [],
   currentBoardId,
   onBoardChange,
-  worktreeById = new Map(),
+  worktreeById,
   boardById,
   onUserClick,
   recentBoards = [],

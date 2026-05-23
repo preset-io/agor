@@ -1,6 +1,6 @@
 import type { Artifact, Board, MCPServer, Session, Worktree } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   EMPTY_RESULTS,
   MIN_QUERY_LENGTH,
@@ -46,6 +46,9 @@ export function useGlobalSearch({
   results: ResultsByType;
   hasAnyResults: boolean;
   debouncedQuery: string;
+  /** Force the debounced query to match the raw query immediately — used by
+   * the Enter handler to honor the design doc's "immediate dispatch on Enter". */
+  flush: () => void;
 } {
   const [debouncedQuery, setDebouncedQuery] = useState(query);
 
@@ -53,6 +56,8 @@ export function useGlobalSearch({
     const handle = setTimeout(() => setDebouncedQuery(query), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(handle);
   }, [query]);
+
+  const flush = useCallback(() => setDebouncedQuery(query), [query]);
 
   const results = useMemo<ResultsByType>(() => {
     const trimmed = debouncedQuery.trim();
@@ -118,9 +123,10 @@ export function useGlobalSearch({
       }
     }
 
-    // Artifacts
+    // Artifacts (filter archived — useAgorData keeps them in the map regardless)
     if (includeType('artifact')) {
       const arts = Array.from(artifactById.values())
+        .filter((a) => !a.archived)
         .filter((a) => !ownedByMe || a.created_by === currentUserId)
         .filter((a) => matchTokens(tokens, [a.name, a.description]))
         .sort(byTimestamp((a) => a.updated_at));
@@ -133,9 +139,10 @@ export function useGlobalSearch({
       }
     }
 
-    // Boards
+    // Boards (filter archived)
     if (includeType('board')) {
       const bs = boards
+        .filter((b) => !b.archived)
         .filter((b) => !ownedByMe || b.created_by === currentUserId)
         .filter((b) => matchTokens(tokens, [b.name]))
         .sort(byTimestamp((b) => b.last_updated));
@@ -176,7 +183,7 @@ export function useGlobalSearch({
     results.board.length > 0 ||
     results.mcp.length > 0;
 
-  return { results, hasAnyResults, debouncedQuery };
+  return { results, hasAnyResults, debouncedQuery, flush };
 }
 
 /** Every token must appear (case-insensitive substring) in at least one field. */

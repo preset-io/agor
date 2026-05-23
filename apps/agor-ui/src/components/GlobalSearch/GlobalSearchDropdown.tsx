@@ -3,7 +3,7 @@ import type React from 'react';
 import { SearchResult } from './SearchResult';
 import {
   type ResultsByType,
-  type SearchEntityType,
+  SECTION_ORDER,
   type SearchResultItem,
   TYPE_CHIP_LABELS,
 } from './types';
@@ -20,15 +20,6 @@ interface GlobalSearchDropdownProps {
   onResultClick: (result: SearchResultItem) => void;
   onResultHover: (index: number) => void;
 }
-
-const SECTION_ORDER: SearchEntityType[] = [
-  'session',
-  'worktree',
-  'assistant',
-  'artifact',
-  'board',
-  'mcp',
-];
 
 export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
   query,
@@ -143,20 +134,21 @@ const EmptyHint: React.FC<{
   </div>
 );
 
-/** Stable React key per result row. */
+/** Stable React key per result row. Uses `-` separator so the same value is a
+ * valid CSS selector when reused as a DOM id (see rowDomId). */
 function resultKey(result: SearchResultItem): string {
   switch (result.type) {
     case 'session':
-      return `session:${result.item.session_id}`;
+      return `session-${result.item.session_id}`;
     case 'worktree':
     case 'assistant':
-      return `${result.type}:${result.item.worktree_id}`;
+      return `${result.type}-${result.item.worktree_id}`;
     case 'artifact':
-      return `artifact:${result.item.artifact_id}`;
+      return `artifact-${result.item.artifact_id}`;
     case 'board':
-      return `board:${result.item.board_id}`;
+      return `board-${result.item.board_id}`;
     case 'mcp':
-      return `mcp:${result.item.mcp_server_id}`;
+      return `mcp-${result.item.mcp_server_id}`;
   }
 }
 

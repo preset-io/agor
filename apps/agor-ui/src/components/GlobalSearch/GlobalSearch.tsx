@@ -5,7 +5,7 @@ import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { GLOBAL_SEARCH_LISTBOX_ID, GlobalSearchDropdown, rowDomId } from './GlobalSearchDropdown';
 import { SearchChipRow } from './SearchChipRow';
-import type { ChipFilter, SearchEntityType, SearchResultItem } from './types';
+import { type ChipFilter, MIN_QUERY_LENGTH, SECTION_ORDER, type SearchResultItem } from './types';
 import { useGlobalSearch } from './useGlobalSearch';
 import { useRecents } from './useRecents';
 
@@ -63,7 +63,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   const [ownedByMe, setOwnedByMe] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
-  const { results, hasAnyResults, debouncedQuery } = useGlobalSearch({
+  const { results, hasAnyResults, debouncedQuery, flush } = useGlobalSearch({
     query,
     ownedByMe,
     activeTypeChip: activeChip,
@@ -82,21 +82,19 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
     artifactById,
   });
 
+  // Below MIN_QUERY_LENGTH (including empty) we show Recents — the hook
+  // returns empty results in that case, and the dropdown branches on this
+  // same predicate, so the keyboard cursor and the visible rows stay in sync.
+  const effectiveQuery =
+    debouncedQuery.trim().length < MIN_QUERY_LENGTH ? '' : debouncedQuery.trim();
+  const showRecents = effectiveQuery.length === 0;
+
   // Flatten current dropdown rows for keyboard nav. Order matches dropdown
-  // section order (session → worktree → assistant → artifact → board → mcp);
-  // recents mode is a single flat list.
+  // section order; recents mode is a single flat list.
   const visibleRows = useMemo<SearchResultItem[]>(() => {
-    if (debouncedQuery.trim().length === 0) return recents;
-    const order: SearchEntityType[] = [
-      'session',
-      'worktree',
-      'assistant',
-      'artifact',
-      'board',
-      'mcp',
-    ];
-    return order.flatMap((t) => results[t]);
-  }, [debouncedQuery, recents, results]);
+    if (showRecents) return recents;
+    return SECTION_ORDER.flatMap((t) => results[t]);
+  }, [showRecents, recents, results]);
 
   // Keep selection inside the row list when results change.
   useEffect(() => {
@@ -202,11 +200,15 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
     }
     if (e.key === 'Enter') {
       e.preventDefault();
-      // If the user pressed Enter before the 220ms debounce settled, the
-      // visible rows are still showing stale results (often Recents while a
-      // new query is in-flight). Don't navigate to a row the user can't see
-      // matches their typed query.
-      if (query.trim() !== debouncedQuery.trim()) return;
+      // Honor the design doc's "immediate dispatch on Enter": if the user
+      // pressed Enter before the 220ms debounce settled, force-flush the
+      // debounced query so the dropdown recomputes on the next render. The
+      // current Enter doesn't navigate (visibleRows are still stale) — the
+      // next Enter does. Cheap, no synchronous filter duplication.
+      if (query.trim() !== debouncedQuery.trim()) {
+        flush();
+        return;
+      }
       const target = visibleRows[selectedIndex];
       if (target) navigateToResult(target);
       return;
@@ -271,7 +273,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
             }}
           />
           <GlobalSearchDropdown
-            query={debouncedQuery.trim()}
+            query={effectiveQuery}
             results={results}
             hasAnyResults={hasAnyResults}
             recents={recents}

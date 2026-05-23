@@ -56,6 +56,7 @@ export function useRecents({
       );
 
     const artifacts = Array.from(artifactById.values())
+      .filter((a) => !a.archived)
       .filter((a) => a.created_by === currentUserId)
       .sort((a, b) => tsValue(b.updated_at) - tsValue(a.updated_at))
       .slice(0, RECENT_ARTIFACT_LIMIT)

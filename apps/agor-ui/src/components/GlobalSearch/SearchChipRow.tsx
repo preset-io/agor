@@ -1,4 +1,4 @@
-import { Tag, Tooltip, theme } from 'antd';
+import { Segmented, Switch, Tag, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { type ChipFilter, TYPE_CHIP_LABELS, TYPE_CHIP_ORDER } from './types';
 
@@ -12,8 +12,9 @@ interface SearchChipRowProps {
 /**
  * Two-row chip surface above search results:
  *   [All] [Session] [Worktree] [Assistant] [Artifact] [Board] [MCP]
- *   [✓ Created by me]
- * Per design doc §3.5. Single-select on type, toggle on scope.
+ *   [Created by me]                                       [BETA]
+ * Per design doc §3.5. Single-select on type (Segmented — keyboard-nav + ARIA
+ * built-in), toggle on scope (Switch).
  */
 export const SearchChipRow: React.FC<SearchChipRowProps> = ({
   activeChip,
@@ -25,27 +26,17 @@ export const SearchChipRow: React.FC<SearchChipRowProps> = ({
 
   return (
     <div style={{ padding: '8px 12px', borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
-        {TYPE_CHIP_ORDER.map((chip) => {
-          const active = chip === activeChip;
-          return (
-            <Tag.CheckableTag
-              key={chip}
-              checked={active}
-              onChange={() => onChipChange(chip)}
-              style={{
-                cursor: 'pointer',
-                userSelect: 'none',
-                fontSize: 12,
-                lineHeight: '20px',
-                padding: '1px 8px',
-              }}
-            >
-              {TYPE_CHIP_LABELS[chip]}
-            </Tag.CheckableTag>
-          );
-        })}
-      </div>
+      <Segmented
+        size="small"
+        value={activeChip}
+        onChange={(value) => onChipChange(value as ChipFilter)}
+        options={TYPE_CHIP_ORDER.map((chip) => ({
+          label: TYPE_CHIP_LABELS[chip],
+          value: chip,
+        }))}
+        style={{ marginBottom: 8, fontSize: 12 }}
+        aria-label="Filter by entity type"
+      />
       <div
         style={{
           display: 'flex',
@@ -54,19 +45,26 @@ export const SearchChipRow: React.FC<SearchChipRowProps> = ({
           gap: 8,
         }}
       >
-        <Tag.CheckableTag
-          checked={ownedByMe}
-          onChange={onOwnedByMeToggle}
+        <label
+          htmlFor="global-search-created-by-me"
           style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: 12,
             cursor: 'pointer',
             userSelect: 'none',
-            fontSize: 12,
-            lineHeight: '20px',
-            padding: '1px 8px',
           }}
         >
-          {ownedByMe ? '✓ ' : ''}Created by me
-        </Tag.CheckableTag>
+          <Switch
+            id="global-search-created-by-me"
+            size="small"
+            checked={ownedByMe}
+            onChange={onOwnedByMeToggle}
+            aria-label="Created by me"
+          />
+          Created by me
+        </label>
         <Tooltip
           title="Global search is in beta — some click targets are still stubs (e.g. MCP opens Settings) and message-content search isn't wired up yet. Expect rough edges."
           placement="bottom"
