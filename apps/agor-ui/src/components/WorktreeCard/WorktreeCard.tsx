@@ -336,15 +336,24 @@ const WorktreeCardComponent = ({
   const assistantConfig = useMemo(() => getAssistantConfig(worktree), [worktree]);
   const isAgent = isAssistant(worktree);
 
+  // True when one of this worktree's sessions is the currently opened
+  // conversation. Drives the "focused" highlight on the canvas card and
+  // also suppresses the louder ready-for-prompt/needs-attention glow —
+  // there's no point screaming for attention at the worktree you're
+  // already looking at.
+  const isFocused = useMemo(
+    () => activeSessions.some((s) => s.session_id === selectedSessionId),
+    [activeSessions, selectedSessionId]
+  );
+
   // Check if worktree needs attention (newly created OR has ready sessions)
   // Don't highlight if a session from this worktree is currently open in the drawer
   const needsAttention = useMemo(() => {
     const hasReadySession = activeSessions.some((s) => s.ready_for_prompt === true);
-    const hasOpenSession = activeSessions.some((s) => s.session_id === selectedSessionId);
-    const shouldHighlight = (worktree.needs_attention || hasReadySession) && !hasOpenSession;
+    const shouldHighlight = (worktree.needs_attention || hasReadySession) && !isFocused;
 
     return shouldHighlight;
-  }, [activeSessions, worktree.needs_attention, selectedSessionId]);
+  }, [activeSessions, worktree.needs_attention, isFocused]);
 
   // Auto-expand all nodes on mount and when new nodes with children are added
   useEffect(() => {
@@ -706,6 +715,11 @@ const WorktreeCardComponent = ({
     return `0 0 0 3px ${glowColor}, 0 0 24px 6px ${glowColor}99`;
   }, [token.colorTextBase, isDarkMode]);
 
+  // Focused-session highlight: solid 2px primary-color ring with no halo.
+  // Deliberately different shape from `attentionGlowShadow` (which has a
+  // wide soft halo) so users can tell the two states apart at a glance.
+  const focusedRingShadow = `0 0 0 2px ${token.colorPrimary}`;
+
   // Ensure pin color is visible (adjust lightness if too pale)
   const visiblePinColor = useMemo(() => {
     if (!zoneColor) return undefined;
@@ -732,17 +746,22 @@ const WorktreeCardComponent = ({
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
         transition:
           'box-shadow 0.6s ease-in-out, border 0.6s ease-in-out, opacity 0.2s ease-in-out',
-        willChange: needsAttention && !inPopover ? 'box-shadow' : 'auto',
-        ...(needsAttention && !inPopover
+        willChange: (needsAttention || isFocused) && !inPopover ? 'box-shadow' : 'auto',
+        ...(isFocused && !inPopover
           ? {
-              boxShadow: attentionGlowShadow,
+              boxShadow: focusedRingShadow,
               border: 'none',
             }
-          : isPinned && zoneColor
-            ? { borderColor: zoneColor, borderWidth: 1 }
-            : isAgent
-              ? { borderColor: token.colorInfo, borderWidth: 1 }
-              : {}),
+          : needsAttention && !inPopover
+            ? {
+                boxShadow: attentionGlowShadow,
+                border: 'none',
+              }
+            : isPinned && zoneColor
+              ? { borderColor: zoneColor, borderWidth: 1 }
+              : isAgent
+                ? { borderColor: token.colorInfo, borderWidth: 1 }
+                : {}),
         ...(isAgent ? { backgroundColor: token.colorInfoBg } : {}),
         // Disconnected chokepoint: block all in-card interactions (clicking
         // into a session, env pill actions, modals) and dim to communicate
