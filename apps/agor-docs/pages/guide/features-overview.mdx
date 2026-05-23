@@ -1,6 +1,6 @@
 ---
 title: Features Overview
-description: A map of what Agor does — worktrees, sessions, boards, assistants, MCP server, rich chat UX, multiplayer, environments, scheduler, cards, artifacts, message gateway.
+description: A map of what Agor does — branches, sessions, boards, assistants, MCP server, rich chat UX, multiplayer, environments, scheduler, cards, artifacts, message gateway.
 ---
 
 # Features Overview
@@ -9,23 +9,23 @@ A map of what Agor does. The first three are the foundation everything else buil
 
 ---
 
-## 🌳 [Worktrees](/guide/worktrees)
+## 🌳 [Branches](/guide/worktrees)
 
-**The unit of work in Agor.** A git worktree pinned to a board — branch, isolated environment, sessions, and conversations all attached. Multiple worktrees coexist with their own ports, dependencies, and database state, so parallel work doesn't collide.
+**The unit of work in Agor.** A git worktree pinned to a board — branch, isolated environment, sessions, and conversations all attached. Multiple branches coexist with their own ports, dependencies, and database state, so parallel work doesn't collide.
 
-**Use when:** Always. Worktrees are how Agor organizes everything — you'll create one for each issue, PR, or experiment.
+**Use when:** Always. Branches are how Agor organizes everything — you'll create one for each issue, PR, or experiment.
 
 ---
 
 ## 🧵 [Sessions & Trees](/guide/sessions)
 
-**Agent conversations with genealogy.** A session is one Claude Code / Codex / Gemini conversation pinned to a worktree. Fork to explore alternatives without losing the original path; spawn subsessions for focused subtasks that report back to the parent. The result is a visual tree of how a piece of work actually unfolded.
+**Agent conversations with genealogy.** A session is one Claude Code / Codex / Gemini conversation pinned to a branch. Fork to explore alternatives without losing the original path; spawn subsessions for focused subtasks that report back to the parent. The result is a visual tree of how a piece of work actually unfolded.
 
 **Use when:** You want to branch a conversation, delegate a subtask, or keep a clean trail of what each agent did and why.
 
 <img
   src="/screenshots/security-review-fanout.png"
-  alt="Worktree card showing a parent coordinator session that spawned eight specialized security-review children running in parallel"
+  alt="Branch card showing a parent coordinator session that spawned eight specialized security-review children running in parallel"
   style={{ maxWidth: '400px', borderRadius: '8px' }}
 />
 
@@ -33,7 +33,7 @@ A map of what Agor does. The first three are the foundation everything else buil
 
 ## 🗺️ [Boards & Zones](/guide/boards)
 
-**Spatial canvas for worktrees.** A board is a 2D Figma-style canvas where worktrees live as cards. Zones are regions on the board that organize work — and can trigger templated prompts when you drop a worktree into them ("analyze this issue", "review this PR", "deploy"). Build kanban flows or freeform pipelines.
+**Spatial canvas for branches.** A board is a 2D Figma-style canvas where branches live as cards. Zones are regions on the board that organize work — and can trigger templated prompts when you drop a branch into them ("analyze this issue", "review this PR", "deploy"). Build kanban flows or freeform pipelines.
 
 **Use when:** You need an at-a-glance view of in-flight work, or want to automate "when something lands here, run this prompt."
 
@@ -49,9 +49,9 @@ A map of what Agor does. The first three are the foundation everything else buil
 
 ## 🔌 [Agor MCP Server](/guide/internal-mcp)
 
-**Anything a user can do in Agor, an agent can do too.** The daemon exposes a Model Context Protocol (MCP) server with tools for sessions, worktrees, boards, zones, users, environments, and more. Every session is auto-issued an MCP token, so agents are self-aware and can act on their own context.
+**Anything a user can do in Agor, an agent can do too.** The daemon exposes a Model Context Protocol (MCP) server with tools for sessions, branches, boards, zones, users, environments, and more. Every session is auto-issued an MCP token, so agents are self-aware and can act on their own context.
 
-**Use when:** You want agents to *operate* Agor itself — spawn peers, reorganize the board, create worktrees, prompt other sessions.
+**Use when:** You want agents to *operate* Agor itself — spawn peers, reorganize the board, create branches, prompt other sessions.
 
 This is the foundational layer that makes assistants, scheduled prompts, message gateway, cards, and artifacts all possible.
 
@@ -67,7 +67,7 @@ This is the foundational layer that makes assistants, scheduled prompts, message
 
 ## 👥 [Multiplayer & Social](/guide/multiplayer-social)
 
-**Figma for AI coding.** Live cursors, facepile, real-time worktree movement, scoped/spatial comments on boards/zones/worktrees/sessions, attention pulse for completed work, and shared multiplayer terminal sessions via tmux.
+**Figma for AI coding.** Live cursors, facepile, real-time branch movement, scoped/spatial comments on boards/zones/branches/sessions, attention pulse for completed work, and shared multiplayer terminal sessions via tmux.
 
 **Use when:** Working with teammates on the same board, or just want spatial awareness of where you've been.
 
@@ -75,7 +75,7 @@ This is the foundational layer that makes assistants, scheduled prompts, message
 
 ## 🌳 [Environments](/guide/environment-configuration)
 
-**One-click dev servers per worktree, with no port collisions.** Configure start/stop commands once on the repo, with templates that derive unique ports from each worktree's ID. Everyone on your team gets one-click start/stop on every worktree, with health checks and live logs.
+**One-click dev servers per branch, with no port collisions.** Configure start/stop commands once on the repo, with templates that derive unique ports from each branch's ID. Everyone on your team gets one-click start/stop on every branch, with health checks and live logs.
 
 **Use when:** Working on multiple PRs simultaneously and tired of "kill your dev server so I can test mine."
 
@@ -83,7 +83,7 @@ This is the foundational layer that makes assistants, scheduled prompts, message
 
 ## ⏰ [Scheduler](/guide/scheduler)
 
-**Cron-style triggers for templated prompts.** Run a prompt every hour, every Monday, on a custom cadence. Targets a specific worktree or session. Powers [assistant](/guide/assistants) heartbeats, daily standups, scheduled audits, periodic backlog grooming.
+**Cron-style triggers for templated prompts.** Run a prompt every hour, every Monday, on a custom cadence. Targets a specific branch or session. Powers [assistant](/guide/assistants) heartbeats, daily standups, scheduled audits, periodic backlog grooming.
 
 **Use when:** Something should happen on a cadence without you remembering to trigger it.
 
@@ -107,7 +107,7 @@ This is the foundational layer that makes assistants, scheduled prompts, message
 
 ## 📨 [Message Gateway](/guide/message-gateway)
 
-**Slack and GitHub as portals to Agor sessions.** DM a Slack bot or `@agor` mention on a PR — Agor spins up a session on the right worktree with the right agent, then routes responses back to the platform.
+**Slack and GitHub as portals to Agor sessions.** DM a Slack bot or `@agor` mention on a PR — Agor spins up a session on the right branch with the right agent, then routes responses back to the platform.
 
 **Use when:** You want to drive Agor from where conversations already happen — chat, PR threads — without switching contexts.
 

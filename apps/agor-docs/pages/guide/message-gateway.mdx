@@ -9,7 +9,7 @@ description: Route messages from Slack, GitHub, and other platforms directly int
 
 **Security — Think Before Enabling**
 
-A Message Gateway channel opens an external pathway (Slack DM, GitHub `@mention`) that can prompt agents holding your worktree's full surface area: code, MCP servers, env vars, and any credentials in scope. Worth thinking through before you flip it on, but not categorically dangerous.
+A Message Gateway channel opens an external pathway (Slack DM, GitHub `@mention`) that can prompt agents holding your branch's full surface area: code, MCP servers, env vars, and any credentials in scope. Worth thinking through before you flip it on, but not categorically dangerous.
 
 Things working in your favor:
 
@@ -20,34 +20,34 @@ Things working in your favor:
 
 Things that still warrant caution:
 
-- **Channels open external pathways into agent context.** Anyone who can DM the bot (or `@mention` it on a watched repo) can ask the agent to read, write, or execute code on the target worktree. If the channel runs in `trust` mode with broad MCP access, that pathway is effectively a remote prompt seat — treat it as such.
+- **Channels open external pathways into agent context.** Anyone who can DM the bot (or `@mention` it on a watched repo) can ask the agent to read, write, or execute code on the target branch. If the channel runs in `trust` mode with broad MCP access, that pathway is effectively a remote prompt seat — treat it as such.
 - **Restrict who can reach the bot.** Limit Slack DM scope (private workspace or app distribution settings); narrow GitHub `watch_repos` to repos where mentions are intended.
-- **Use dedicated worktrees.** Don't point channels at worktrees holding production secrets. Create isolated worktrees scoped to gateway use.
+- **Use dedicated branches.** Don't point channels at branches holding production secrets. Create isolated branches scoped to gateway use.
 - **Pick the right permission mode.** `supervised` or `manual` modes preserve human-in-the-loop on tool calls; `trust` is fine for bounded, well-understood automations but removes that gate.
 - **Mind the [Unix isolation mode](/guide/multiplayer-unix-isolation).** In `simple` mode the agent runs as the daemon user; in `strict` mode it runs as the matched Agor user's Unix identity, which is what you want when channels span teams.
 - **Rotate tokens.** Bot/app tokens and channel keys should be rotated like any other secret.
 
-> **The mental model:** a gateway channel is a remote terminal into an agent that holds the same authority as a human prompting that worktree. Configure who can reach it, what it can do, and which identity it runs as — and the rest is normal Agor surface area.
+> **The mental model:** a gateway channel is a remote terminal into an agent that holds the same authority as a human prompting that branch. Configure who can reach it, what it can do, and which identity it runs as — and the rest is normal Agor surface area.
 
 </div>
 
-The Message Gateway connects external messaging platforms to Agor's agent sessions. Message your Slack bot or mention `@agor` on a GitHub PR, and Agor spins up a coding session on the right worktree with the right agent — then routes responses back to the platform. Follow-up messages continue the conversation in the same session.
+The Message Gateway connects external messaging platforms to Agor's agent sessions. Message your Slack bot or mention `@agor` on a GitHub PR, and Agor spins up a coding session on the right branch with the right agent — then routes responses back to the platform. Follow-up messages continue the conversation in the same session.
 
 > Currently supports **Slack** and **GitHub**. Discord, WhatsApp, and Telegram connectors are planned.
 
 ## What is a Channel?
 
-A **Channel** is a portal into a worktree. It defines:
+A **Channel** is a portal into a branch. It defines:
 
-- **A home worktree** — the persistent worktree where every session spawned by this channel will operate. Think of it as a command center, like an [assistant](/guide/assistants) worktree that supervises a project.
+- **A home branch** — the persistent branch where every session spawned by this channel will operate. Think of it as a command center, like an [assistant](/guide/assistants) branch that supervises a project.
 - **An agentic tool configuration** — which coding agent to use (Claude Code, Codex, Gemini, OpenCode), which model, permission mode, and which MCP servers to attach.
 - **Platform credentials** — bot token, app token, and other secrets needed to send and receive messages (encrypted at rest).
 
-You can create multiple channels for the same or different worktrees. For example:
+You can create multiple channels for the same or different branches. For example:
 
-- **"Optimus Prime"** — Claude Code (Opus 4.6) on your main assistant worktree, with Slack + GitHub MCP servers
-- **"Scout"** — Claude Code (Sonnet 4.5) on a lighter review worktree, trust mode, no MCP servers
-- **"Codex Runner"** — Codex on a `superset-frontend` worktree for quick JS tasks
+- **"Optimus Prime"** — Claude Code (Opus 4.6) on your main assistant branch, with Slack + GitHub MCP servers
+- **"Scout"** — Claude Code (Sonnet 4.5) on a lighter review branch, trust mode, no MCP servers
+- **"Codex Runner"** — Codex on a `superset-frontend` branch for quick JS tasks
 
 Each channel gets a unique **channel key** (a UUID) that authenticates inbound messages. The Slack integration uses Socket Mode and the GitHub integration uses API polling — both are outbound-only, so no public webhook URLs are needed.
 
@@ -56,9 +56,9 @@ Each channel gets a unique **channel key** (a UUID) that authenticates inbound m
 When a message arrives from a platform (e.g., a Slack DM or a GitHub `@agor` mention), the gateway processes it through a simple pipeline:
 
 1. **Authenticate.** The gateway looks up the channel by its key and verifies it's enabled.
-2. **Map thread to session.** If this is a new thread, create a fresh Agor session on the channel's target worktree with the channel's agentic tool configuration. If this thread has been seen before, route to the existing session.
+2. **Map thread to session.** If this is a new thread, create a fresh Agor session on the channel's target branch with the channel's agentic tool configuration. If this thread has been seen before, route to the existing session.
 3. **Send prompt.** The message text is sent to the session via Agor's standard prompt flow — task creation, executor spawn, the full pipeline.
-4. **Agent runs.** The coding agent (Claude Code, Codex, etc.) processes the prompt with full access to the worktree, MCP servers, and any configured tools.
+4. **Agent runs.** The coding agent (Claude Code, Codex, etc.) processes the prompt with full access to the branch, MCP servers, and any configured tools.
 5. **Route response back.** When the agent produces a response, Agor's outbound routing hook intercepts it and posts it back into the same platform thread. Formatting is adapted per platform (Slack mrkdwn conversion, GitHub markdown pass-through).
 6. **Repeat.** Follow-up messages in the same thread continue the same session — the agent has full conversation history.
 
@@ -107,7 +107,7 @@ The outbound routing is a lightweight after-hook on message creation. For sessio
 3. Fill in:
    - **Name** — Give it a memorable name (e.g., "Optimus Prime").
    - **Channel Type** — Select `slack`.
-   - **Target Worktree** — Pick the worktree where sessions will run.
+   - **Target Branch** — Pick the branch where sessions will run.
    - **Bot Token** — Paste the `xoxb-...` token.
    - **App Token** — Paste the `xapp-...` token (required for receiving DMs via Socket Mode).
 4. Optionally expand **Agentic Tool Configuration** to customize the agent, model, permission mode, and MCP servers for sessions created by this channel.
@@ -121,7 +121,7 @@ Open Slack, find your bot under Apps, and send it a message. You should see syst
 
 ### How It Works
 
-When someone mentions `@agor` (or your app's name) in a PR or issue comment, Agor picks it up via API polling and creates a session. The session runs on the target worktree, and the agent's final response is posted back as a PR/issue comment under the app's bot identity (e.g., `agor[bot]`).
+When someone mentions `@agor` (or your app's name) in a PR or issue comment, Agor picks it up via API polling and creates a session. The session runs on the target branch, and the agent's final response is posted back as a PR/issue comment under the app's bot identity (e.g., `agor[bot]`).
 
 Key differences from Slack:
 - **Polling, not WebSocket** — Agor polls the GitHub API every 15 seconds (configurable). No public endpoint needed.
@@ -159,7 +159,7 @@ You can create the app through Agor's setup wizard or manually:
 2. Fill in:
    - **Name** — e.g., "GitHub: preset-io"
    - **Channel Type** — Select `github`.
-   - **Target Worktree** — Pick the worktree where sessions will run. Ideally, this is an [assistant](/guide/assistants) worktree configured for GitHub work.
+   - **Target Branch** — Pick the branch where sessions will run. Ideally, this is an [assistant](/guide/assistants) branch configured for GitHub work.
    - **App ID** — Your GitHub App's ID.
    - **Private Key** — The PEM private key (encrypted at rest).
    - **Installation ID** — Found via the setup wizard or GitHub's API.
@@ -181,7 +181,7 @@ Follow-up `@agor` mentions on the same PR continue the same session — the agen
 
 ### Setting Up the Assistant
 
-The gateway routes messages to a session on the target worktree. What the agent *does* with those messages is up to you — configured via the assistant's instructions on the target worktree.
+The gateway routes messages to a session on the target branch. What the agent *does* with those messages is up to you — configured via the assistant's instructions on the target branch.
 
 A minimal assistant prompt might be:
 
@@ -199,7 +199,7 @@ When mentioned on an issue:
 - Respond with analysis or next steps
 ```
 
-With a capable model (like Claude Opus) and Agor MCP tools available, even a minimal prompt produces good results — the agent figures out how to use worktrees, spawn sessions, and interact with GitHub. Over time, the assistant learns the codebase, team conventions, and review patterns across PRs.
+With a capable model (like Claude Opus) and Agor MCP tools available, even a minimal prompt produces good results — the agent figures out how to use branches, spawn sessions, and interact with GitHub. Over time, the assistant learns the codebase, team conventions, and review patterns across PRs.
 
 ## Agentic Tool Configuration
 
@@ -255,7 +255,7 @@ The `blocks` field is opaque platform-specific data — currently only the Slack
 
 - **Use trust or auto mode for unattended agents.** If you want the agent to operate without human approval on each tool call, set the permission mode accordingly.
 - **Attach relevant MCP servers.** A Slack-connected agent that also has GitHub MCP can create PRs, check CI status, and post updates — all from a DM.
-- **One worktree per concern.** Create separate channels for different projects or responsibilities rather than funneling everything through one worktree.
+- **One branch per concern.** Create separate channels for different projects or responsibilities rather than funneling everything through one branch.
 - **Name channels descriptively.** When you have multiple channels, names like "Frontend Review Bot (Sonnet)" are much more useful than "Channel 1."
 - **Keep credentials rotated.** Bot tokens and app tokens are encrypted at rest, but rotate them periodically through the channel edit UI.
 
@@ -282,7 +282,7 @@ The `blocks` field is opaque platform-specific data — currently only the Slack
 
 ## Related Reading
 
-- [Worktree Scheduler](./scheduler) — Automate recurring work on worktrees (complements gateway for event-driven vs. time-driven automation).
+- [Branch Scheduler](./scheduler) — Automate recurring work on branches (complements gateway for event-driven vs. time-driven automation).
 - [Agor MCP Server](./internal-mcp) — Give gateway-spawned agents full self-awareness and orchestration capabilities.
 - [Agent SDK Comparison](./sdk-comparison) — Choose the right coding agent for your channel's use case.
 - [Spawned Subsessions](./spawned-subsessions) — Gateway-created sessions can themselves spawn child sessions for parallel work.

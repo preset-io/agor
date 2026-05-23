@@ -19,7 +19,7 @@ Just as Figma turned design from a solo activity into real-time collaboration, A
 - Name and avatar
 - What they're hovering or dragging
 
-Cursors update every ~100ms, making collaboration feel fluid. Notice someone hovering over a session? Jump in. See them dragging a worktree to the same zone? Coordinate live instead of stepping on each other.
+Cursors update every ~100ms, making collaboration feel fluid. Notice someone hovering over a session? Jump in. See them dragging a branch to the same zone? Coordinate live instead of stepping on each other.
 
 ---
 
@@ -31,34 +31,34 @@ Cursors update every ~100ms, making collaboration feel fluid. Notice someone hov
 
 ## 💬 Spatial Comments
 
-**Annotate sessions, worktrees, zones, and boards with threaded conversations.**
+**Annotate sessions, branches, zones, and boards with threaded conversations.**
 
 Leave scoped/spatial comments on:
 
 - **Board-level** — Team discussions about workflow or priorities
 - **Zones** — "All sessions in this zone need API keys configured"
-- **Worktrees** — "Ready for review" or "Blocked on API access"
+- **Branches** — "Ready for review" or "Blocked on API access"
 - **Sessions** — "This approach didn't work, try the forked version"
 
 Comments create a **persistent conversation layer** on top of your AI work:
 
 - Thread replies for focused discussion
 - `@username` mentions
-- Direct links to specific sessions or worktrees
+- Direct links to specific sessions or branches
 - Comment history with full timestamps
-- Organized by scope in the comments panel (Board → Zones → Worktrees → Sessions)
+- Organized by scope in the comments panel (Board → Zones → Branches → Sessions)
 
-**The insight:** AI conversations are ephemeral. Claude says something, you respond, it's buried in the chat. Comments are *spatial* and *persistent* — pin them to the exact artifact (zone, worktree, session) where they matter. Teammates discover insights without digging through transcripts.
+**The insight:** AI conversations are ephemeral. Claude says something, you respond, it's buried in the chat. Comments are *spatial* and *persistent* — pin them to the exact artifact (zone, branch, session) where they matter. Teammates discover insights without digging through transcripts.
 
 ---
 
 ## ✨ Attention Pulse
 
-**Worktrees pulse teal when they need attention.** Sessions ready for input, callbacks waiting to be reviewed, completed long-runs — the worktree card pulses on the board so you can pulse-watch from a peripheral browser tab.
+**Branches pulse teal when they need attention.** Sessions ready for input, callbacks waiting to be reviewed, completed long-runs — the branch card pulses on the board so you can pulse-watch from a peripheral browser tab.
 
 <img
   src="/screenshots/worktree-highlighted.png"
-  alt="Worktree card with attention glow"
+  alt="Branch card with attention glow"
   style={{ maxWidth: '400px' }}
 />
 
@@ -68,7 +68,7 @@ Combined with the **[favicon status dots](/guide/rich-chat-ux#-favicon-status-in
 
 ## 🖥️ Multiplayer Terminal Sessions
 
-**Real-time shared terminals via tmux.** When multiple users open the same worktree's terminal, they see each other's keystrokes live.
+**Real-time shared terminals via tmux.** When multiple users open the same branch's terminal, they see each other's keystrokes live.
 
 <img
   src="/screenshots/tmux.png"
@@ -78,8 +78,8 @@ Combined with the **[favicon status dots](/guide/rich-chat-ux#-favicon-status-in
 
 ### How it works
 
-- Each worktree gets a dedicated tmux window in the shared `agor` session
-- Multiple users connecting to the same worktree attach to the same window
+- Each branch gets a dedicated tmux window in the shared `agor` session
+- Multiple users connecting to the same branch attach to the same window
 - WebSocket broadcasting synchronizes keystrokes and output
 - Works automatically when tmux is installed; no configuration
 
@@ -88,9 +88,9 @@ Combined with the **[favicon status dots](/guide/rich-chat-ux#-favicon-status-in
 - **Pair programming** — Two devs in sync on the same feature
 - **Live debugging** — One person navigates while another observes
 - **Onboarding** — Senior dev demos commands; junior follows along
-- **Code review** — Reviewer explores the worktree interactively during review
+- **Code review** — Reviewer explores the branch interactively during review
 
-Terminal sessions are worktree-scoped — users only see terminals for worktrees they're actively using.
+Terminal sessions are branch-scoped — users only see terminals for branches they're actively using.
 
 > **Privacy note:** With `unix_user_mode: simple` (the default), the terminal runs as the daemon user and gives `member+` users access to daemon-readable files (config, DB, JWT secret). Use `insulated` or `strict` mode in shared environments. See [Security](/security).
 
@@ -102,7 +102,7 @@ The combined effect of cursors + facepile + comments + zones + presence is somet
 
 - Watch teammates and agents move across tasks live
 - Cluster sessions, delegate, pivot, iterate together
-- Drag a worktree across the board and the trigger fires for everyone watching
+- Drag a branch across the board and the trigger fires for everyone watching
 
 This is the part that's hard to convey in a doc. Try it on a board with one other person and you'll feel it.
 
@@ -137,7 +137,7 @@ When teammates share a board, sessions still execute under a specific user's ide
 - Env vars merge: `gateway/channel → user globals → session-scoped` — so a Slack-driven session run as you carries *your* `GITHUB_TOKEN`, not a shared bot token.
 - In `unix_user_mode: strict`, the executor process literally runs as the user's Unix account.
 
-This is what makes co-locating teams on one Agor instance work without secret-sharing: everyone keeps their own credentials, but the boards, worktrees, and conversations are shared.
+This is what makes co-locating teams on one Agor instance work without secret-sharing: everyone keeps their own credentials, but the boards, branches, and conversations are shared.
 
 ---
 
@@ -173,7 +173,7 @@ This is how a shared Linear or Slack MCP server can sit on the team's Agor insta
 ## Related
 
 - [Boards & Zones](/guide/boards) — The spatial canvas itself
-- [Worktrees](/guide/worktrees) — The primary entity that pulses, gets commented on, and hosts terminals
+- [Branches](/guide/worktrees) — The primary entity that pulses, gets commented on, and hosts terminals
 - [Rich Chat UX](/guide/rich-chat-ux) — Favicon dots, chimes, queued messages
 - [Agor MCP Server](/guide/internal-mcp) — The other side: Agor exposing itself as an MCP server to agents
 - [Message Gateway](/guide/message-gateway) — How external messaging maps to Agor user identities

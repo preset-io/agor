@@ -51,7 +51,7 @@ Agor's architecture separates the **daemon** (orchestration layer) from the **ex
 | `prompt`              | Execute agent SDK (Claude Code, Gemini, Codex) |
 | `git.clone`           | Clone repository with Unix group setup         |
 | `git.worktree.add`    | Create git worktree with permissions           |
-| `git.worktree.remove` | Remove worktree and cleanup                    |
+| `git.worktree.remove` | Remove branch and cleanup                    |
 | `zellij.attach`       | Attach to terminal session                     |
 | `unix.sync-*`         | Synchronize Unix users/groups                  |
 
@@ -105,7 +105,7 @@ $ whoami
 alice
 ```
 
-Agor's Unix isolation features (per-user UIDs, per-worktree GIDs) require that containers can resolve these IDs to names.
+Agor's Unix isolation features (per-user UIDs, per-branch GIDs) require that containers can resolve these IDs to names.
 
 ### How Identity Resolution Works
 
@@ -177,7 +177,7 @@ Install and configure `sssd` in executor containers to query LDAP directly.
 For production Agor deployments with containerized execution, we recommend:
 
 - **Dedicated Kubernetes cluster** or namespace with specialized configuration
-- **Shared filesystem** (EFS, NFS, GlusterFS) for worktree storage
+- **Shared filesystem** (EFS, NFS, GlusterFS) for branch storage
 - **Shared identity** already configured at the node level
 - **Pod security policies** tuned for development workloads
 - **Longer timeouts** than typical production workloads
@@ -193,7 +193,7 @@ before the rest of the storage discussion.
 
 **If the Agor database is persistent, then `$HOME` (or whichever directory
 holds `repos/` and `worktrees/`) MUST also be persistent.** The database
-stores absolute paths to every repository clone and every worktree on
+stores absolute paths to every repository clone and every branch on
 disk. If the database survives a pod restart but the filesystem does not
 — for example, the database is backed by a `PersistentVolumeClaim` while
 `$HOME` is an `emptyDir` — then on redeploy the daemon will reference
@@ -221,9 +221,9 @@ Safe configurations:
 Agor's development model requires:
 
 1. **Watch mode**: File changes detected in real-time
-2. **Agent access**: AI agents read/write to worktrees
+2. **Agent access**: AI agents read/write to branches
 3. **Terminal access**: Users interact with files via Zellij
-4. **Environment execution**: Docker Compose, npm, etc. run in worktrees
+4. **Environment execution**: Docker Compose, npm, etc. run in branches
 
 All of these need access to the same filesystem.
 
@@ -380,7 +380,7 @@ execution:
 | `{unix_user_uid}` | Target Unix UID                         | `1001`                |
 | `{unix_user_gid}` | Target Unix GID                         | `1001`                |
 | `{session_id}`    | Agor session ID (if available)          | `01abc123...`         |
-| `{worktree_id}`   | Worktree ID (if available)              | `01xyz789...`         |
+| `{worktree_id}`   | Branch ID (if available)              | `01xyz789...`         |
 
 ### How It Works
 
@@ -677,9 +677,9 @@ Agor's isolation model assigns:
 
 - **One UID per user** - your Unix identity
 - **One GID per repository** - shared access for all repo collaborators
-- **One GID per worktree** - scoped access for worktree owners
+- **One GID per branch** - scoped access for branch owners
 
-A user working on multiple worktrees will be a member of multiple groups.
+A user working on multiple branches will be a member of multiple groups.
 
 ### Running as Users (Not Just UIDs)
 
@@ -706,7 +706,7 @@ spec:
       - 3002 # worktree-bugfix-y GID
 ```
 
-The daemon knows the user's group memberships (from worktree ownership records) and can pass them to the executor template.
+The daemon knows the user's group memberships (from branch ownership records) and can pass them to the executor template.
 
 ### With Shared Identity (Recommended)
 
@@ -733,7 +733,7 @@ The executor command template supports these variables:
 | `{unix_user_primary_gid}` | User's primary GID                 |
 | `{supplemental_gids}`     | JSON array of all GIDs user needs  |
 | `{repo_gid}`              | Current repo's GID (if scoped)     |
-| `{worktree_gid}`          | Current worktree's GID (if scoped) |
+| `{worktree_gid}`          | Current branch's GID (if scoped) |
 
 ---
 
@@ -773,7 +773,7 @@ In a fully containerized Agor deployment, there are three distinct tiers:
 
 ### Dev Environment Strategies
 
-In containerized mode, worktree dev environments should also be containerized:
+In containerized mode, branch dev environments should also be containerized:
 
 **Option A: Kubernetes-Native Commands**
 
@@ -945,7 +945,7 @@ kubectl exec -it executor-abc123 -- ls -la /data/agor/worktrees
 
 Verify:
 
-- `fsGroup` matches worktree group
+- `fsGroup` matches branch group
 - EFS access point configured correctly
 - PVC mounted with correct permissions
 
@@ -1043,12 +1043,12 @@ kubectl run test-executor \
 
 ### Step 6: Full Integration Test
 
-Create a worktree and run an agent session through the UI.
+Create a branch and run an agent session through the UI.
 
 ---
 
 ## Related Documentation
 
 - [Full Multiplayer Mode](/guide/multiplayer-unix-isolation) - Unix isolation and RBAC
-- [Environments](/guide/environment-configuration) - Worktree environment templates
+- [Environments](/guide/environment-configuration) - Branch environment templates
 - [Architecture](/guide/architecture) - System design overview

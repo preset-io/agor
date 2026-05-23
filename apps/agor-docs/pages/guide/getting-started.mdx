@@ -25,7 +25,7 @@ agor open           # opens the UI in your browser
 
 ## Follow the onboarding wizard
 
-The first time you open the UI, the **Onboarding Wizard** runs. It picks between cloning the [assistant framework repo](https://github.com/preset-io/agor-assistant) or pointing at one of your own, then walks through **Clone → Board → Worktree → API Keys → Launch** and drops you into a live session.
+The first time you open the UI, the **Onboarding Wizard** runs. It picks between cloning the [assistant framework repo](https://github.com/preset-io/agor-assistant) or pointing at one of your own, then walks through **Clone → Board → Branch → API Keys → Launch** and drops you into a live session.
 
 <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', margin: '24px 0' }}>
   <img
@@ -35,7 +35,7 @@ The first time you open the UI, the **Onboarding Wizard** runs. It picks between
   />
   <img
     src="/screenshots/onboarding-worktree.png"
-    alt="Onboarding: Worktree — name a personal branch"
+    alt="Onboarding: Branch — name a personal branch"
     style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
   />
   <img
@@ -57,7 +57,7 @@ Once you're in the session, your assistant introduces itself — asks for a name
 Agor runs out of the box on SQLite as a single-user instance, but it's designed to scale up:
 
 - **PostgreSQL backend** instead of SQLite, for multi-user / team setups
-- **Multiplayer mode** with worktree-level [RBAC](/guide/multiplayer-unix-isolation) and per-user permissions
+- **Multiplayer mode** with branch-level [RBAC](/guide/multiplayer-unix-isolation) and per-user permissions
 - **Unix-user impersonation** so each Agor user's sessions run as their own OS identity
 - **Docker Compose** and source builds
 - **Custom config / database paths** for non-default install layouts
@@ -66,7 +66,7 @@ For any of those, see [Extended Installation](/guide/extended-install). For cred
 
 ## What's next
 
-- **[Worktrees](/guide/worktrees)** · **[Sessions & Trees](/guide/sessions)** · **[Boards & Zones](/guide/boards)** — the core primitives
+- **[Branches](/guide/worktrees)** · **[Sessions & Trees](/guide/sessions)** · **[Boards & Zones](/guide/boards)** — the core primitives
 - **[Features Overview](/guide/features-overview)** — Assistants, MCP, Rich Chat UX, Multiplayer, Environments, Scheduler, Cards, Artifacts
 - **[Architecture](/guide/architecture)** — system design and the typed TypeScript client
 

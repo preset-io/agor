@@ -9,7 +9,7 @@ description: Agor's chat surface is objectively richer than any CLI — token an
 
 Agor's chat surface exposes everything the SDKs make available — and adds the affordances multiplayer work demands. Live token and dollar accounting, structured tool blocks, todo tracking, queued prompts, autocomplete, completion chimes, and richly rendered streaming markdown.
 
-This isn't decoration. It's how you stay oriented when you have 5 sessions running across 3 worktrees.
+This isn't decoration. It's how you stay oriented when you have 5 sessions running across 3 branches.
 
 <img
   src="/screenshots/context-meter-timeline.png"
@@ -135,7 +135,7 @@ You don't have to wait for a long-running prompt to finish before you start writ
 
 ## 💬 Autocomplete (`@`)
 
-**Type `@` to reference files or users.** Path autocomplete inside a worktree, user autocomplete for `@mentions` in comments and prompts.
+**Type `@` to reference files or users.** Path autocomplete inside a branch, user autocomplete for `@mentions` in comments and prompts.
 
 <img
   src="/screenshots/autocomplete-file-names.png"
@@ -180,13 +180,13 @@ White dot (lower-left) means *something is running*. Green dot (lower-right) mea
 
 ---
 
-## 🎯 Worktree Highlighting
+## 🎯 Branch Highlighting
 
-**Worktree cards pulse with a teal glow when sessions need your attention** — completed work, pending callbacks, or human-input prompts. You can leave the board open in a tab and pulse-watch from your peripheral vision.
+**Branch cards pulse with a teal glow when sessions need your attention** — completed work, pending callbacks, or human-input prompts. You can leave the board open in a tab and pulse-watch from your peripheral vision.
 
 <img
   src="/screenshots/worktree-highlighted.png"
-  alt="Worktree card with attention glow"
+  alt="Branch card with attention glow"
   style={{ maxWidth: '400px' }}
 />
 
@@ -253,11 +253,11 @@ See **[Security](/security)** for the trust boundary on per-user secrets.
 
 ## 📎 File Uploads
 
-**Drop files into the agent's context with one click.** The upload modal lets you choose where the file lands — committable inside the worktree, ephemeral in a temp folder, or shared across sessions in `~/.agor/uploads/`. A toggle auto-prompts the agent with a templated message referencing the file path.
+**Drop files into the agent's context with one click.** The upload modal lets you choose where the file lands — committable inside the branch, ephemeral in a temp folder, or shared across sessions in `~/.agor/uploads/`. A toggle auto-prompts the agent with a templated message referencing the file path.
 
 <img
   src="/screenshots/upload-modal.png"
-  alt="Upload modal with three destination options (worktree, temp folder, global) and a 'Notify the agent about this file' toggle with a templated message using {filepath}"
+  alt="Upload modal with three destination options (branch, temp folder, global) and a 'Notify the agent about this file' toggle with a templated message using {filepath}"
   style={{ maxWidth: '500px' }}
 />
 

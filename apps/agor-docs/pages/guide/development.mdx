@@ -26,12 +26,12 @@ Agor's repo ships [`.agor.yml`](https://github.com/preset-io/agor/blob/main/.ago
 |---|---|---|
 | **`sqlite`** _(default)_ | SQLite, single-user, no RBAC. Fastest to boot. | daemon: `3000 + worktree.unique_id`, UI: `5000 + …` |
 | **`postgres`** | Postgres backend (closer to multi-user prod). RBAC off. | same as `sqlite` |
-| **`full`** | Postgres + worktree RBAC + strict Unix-user impersonation. Requires the sudoers config under `docker/sudoers/`. | same as `sqlite` |
+| **`full`** | Postgres + branch RBAC + strict Unix-user impersonation. Requires the sudoers config under `docker/sudoers/`. | same as `sqlite` |
 | **`docs`** | The Nextra docs site (`apps/agor-docs`) in its own self-contained container. Standalone — no daemon, no DB. | `7000 + worktree.unique_id` |
 
-Ports derive from `worktree.unique_id` so multiple worktrees run side-by-side without colliding. The `docs` variant uses `{{host.ip_address}}` in its app URL so the dev server is reachable from your laptop, not just localhost on the daemon host.
+Ports derive from `worktree.unique_id` so multiple branches run side-by-side without colliding. The `docs` variant uses `{{host.ip_address}}` in its app URL so the dev server is reachable from your laptop, not just localhost on the daemon host.
 
-Pick a variant by setting `AGOR_VARIANT` in your environment or selecting it in the worktree's environment settings — or render it manually with the appropriate `docker compose` invocation from the file.
+Pick a variant by setting `AGOR_VARIANT` in your environment or selecting it in the branch's environment settings — or render it manually with the appropriate `docker compose` invocation from the file.
 
 A representative variant block, abridged from the file:
 
@@ -57,11 +57,11 @@ The whole point of `.agor.yml` is that Agor can develop itself. The natural work
 
 1. **Run a "host" Agor** (any way you like — `npm i -g agor-live`, `docker compose up`, anything).
 2. **Register the agor repo** in your host Agor — clone or point it at your local checkout.
-3. **Create a worktree per feature**. Each worktree gets a unique `worktree.unique_id` → unique ports → fully isolated dev stack.
-4. **Pick a variant** in the worktree's environment settings (sqlite for most things, postgres if you're touching DB code, full if you're testing RBAC, docs for documentation work).
+3. **Create a branch per feature**. Each branch gets a unique `worktree.unique_id` → unique ports → fully isolated dev stack.
+4. **Pick a variant** in the branch's environment settings (sqlite for most things, postgres if you're touching DB code, full if you're testing RBAC, docs for documentation work).
 5. **Spawn an agent session**. The session has [Agor MCP](/guide/internal-mcp) access, so it can spin up environments, monitor health and logs, run tasks against the running stack, and tear it down — without you ever leaving the canvas.
 
-This is also the only sane way to develop multiple Agor features in parallel: each worktree's variant picks its own ports, mounts source for HMR, and persists `node_modules` in a named volume.
+This is also the only sane way to develop multiple Agor features in parallel: each branch's variant picks its own ports, mounts source for HMR, and persists `node_modules` in a named volume.
 
 ## When to use `pnpm dev` instead
 
@@ -275,13 +275,13 @@ See the **[Architecture Guide](/guide/architecture#technology-stack)** for the c
 **Type Reuse:**
 
 - Import types from `packages/core/src/types/`
-- Sessions, Tasks, Worktrees, Messages, Repos, Boards, Users, etc.
+- Sessions, Tasks, Branches, Messages, Repos, Boards, Users, etc.
 - Never redefine canonical types
 
-**Worktree-Centric Architecture:**
+**Branch-Centric Architecture:**
 
-- Boards display **Worktrees** as primary cards (NOT Sessions)
-- Sessions reference worktrees via required FK
+- Boards display **Branches** as primary cards (NOT Sessions)
+- Sessions reference branches via required FK
 - Read `context/concepts/worktrees.md` before touching boards
 
 ## Key Documentation

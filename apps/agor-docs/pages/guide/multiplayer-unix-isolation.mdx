@@ -14,7 +14,7 @@ This guide covers running Agor with full RBAC (Role-Based Access Control) and Un
 Agor's multiplayer mode brings back the power of shared development servers with modern security:
 
 - **Shared development environments** - Multiple users collaborate on the same codebase with proper isolation
-- **OS-level security** - Worktree permissions enforced at the Unix filesystem level
+- **OS-level security** - Branch permissions enforced at the Unix filesystem level
 - **Process impersonation** - Agent sessions run as the actual user who created them
 - **Real-time collaboration** - See what teammates are working on, share terminals, pair program
 
@@ -36,7 +36,7 @@ Agor implements **defense in depth** with multiple security layers:
 ### What the Daemon Can Do (With Proper Sudoers Configuration)
 
 - Create and manage Unix users in the `agor_users` group
-- Create Unix groups for worktree isolation (`agor_wt_*`)
+- Create Unix groups for branch isolation (`agor_wt_*`)
 - Impersonate managed users to run agent sessions
 - Modify filesystem permissions on Agor-managed directories only
 - Execute scoped privileged commands via sudo
@@ -45,7 +45,7 @@ Agor implements **defense in depth** with multiple security layers:
 
 All filesystem operations are **strictly scoped** to Agor-managed paths:
 
-- `/home/*/agor/*` - User worktree symlinks and config
+- `/home/*/agor/*` - User branch symlinks and config
 - `/home/*/.agor/*` - Agor data directories
 - `/var/agor/*` - Optional shared storage directory
 
@@ -76,7 +76,7 @@ All filesystem operations are **strictly scoped** to Agor-managed paths:
 3. **API Key Rotation** - Regularly rotate API keys, especially when users leave
 4. **Monitor Audit Logs** - Check `/var/log/auth.log` for suspicious sudo activity
 5. **Resource Limits** - Use ulimits, cgroups, or quotas to prevent resource exhaustion
-6. **Regular Audits** - Review worktree ownership quarterly with `agor worktree owners audit`
+6. **Regular Audits** - Review branch ownership quarterly with `agor worktree owners audit`
 
 ---
 
@@ -102,7 +102,7 @@ database:
 
 ### 2. Volume Configuration
 
-Configure persistent storage for worktrees and repositories:
+Configure persistent storage for branches and repositories:
 
 ```yaml
 # ~/.agor/config.yaml
@@ -154,7 +154,7 @@ agor ALL=(ALL) NOPASSWD: /usr/sbin/usermod *
 agor ALL=(ALL) NOPASSWD: /usr/sbin/chpasswd
 ```
 
-**Group Management (Worktree Isolation):**
+**Group Management (Branch Isolation):**
 
 ```bash
 # Create Unix groups per worktree (agor_wt_<id>)
@@ -195,7 +195,7 @@ agor ALL=(ALL) NOPASSWD: /usr/bin/readlink *
    - All Agor-managed users automatically added to `agor_users`
 
 2. **Path Scoping** - Filesystem operations restricted to Agor-managed paths:
-   - `/home/*/agor/*` - User worktree symlinks
+   - `/home/*/agor/*` - User branch symlinks
    - `/home/*/.agor/*` - User Agor data
    - `/var/agor/*` - Shared storage (optional)
    - **Cannot access**: `/etc`, `/usr`, `/root`, system directories
@@ -263,8 +263,8 @@ execution:
 Default behavior (flag unset or `true`):
 
 - Any authenticated user with role `member` or higher can open a terminal.
-- Worktree-level permissions still apply — opening a terminal tab against a
-  worktree requires at least `session` permission on that worktree (when
+- Branch-level permissions still apply — opening a terminal tab against a
+  branch requires at least `session` permission on that branch (when
   `worktree_rbac` is on).
 
 When set to `false`:
@@ -313,7 +313,7 @@ metrics:
 Agor combines app-level RBAC with OS-level enforcement:
 
 1. **App Layer** - API validates permissions before operations
-2. **Unix Groups** - Worktree isolation via filesystem permissions
+2. **Unix Groups** - Branch isolation via filesystem permissions
 3. **Process Impersonation** - Agents run as the session creator's Unix user
 
 ### User Management
@@ -325,19 +325,19 @@ When RBAC is enabled (`worktree_rbac: true`):
 3. All managed users added to `agor_users` group
 4. Users can be impersonated by daemon for session execution
 5. Each user gets home directory with:
-   - `~/agor/worktrees/` - Symlinks to authorized worktrees
+   - `~/agor/worktrees/` - Symlinks to authorized branches
    - `~/.ssh/` - User's SSH keys (isolated)
    - `~/.config/gh/` - GitHub CLI credentials (isolated)
    - `~/.claude/` - Claude SDK session state
 
-### Worktree Isolation
+### Branch Isolation
 
-Each worktree gets OS-level protection:
+Each branch gets OS-level protection:
 
 1. **Unix Group** - Dedicated group `agor_wt_<short-id>`
 2. **Filesystem Permissions** - Directory owned by group with proper mode
-3. **Group Membership** - Worktree owners added to group
-4. **Home Symlinks** - Owners get `~/agor/worktrees/<name>` → worktree path
+3. **Group Membership** - Branch owners added to group
+4. **Home Symlinks** - Owners get `~/agor/worktrees/<name>` → branch path
 
 **Example:**
 
@@ -357,9 +357,9 @@ agor_wt_abc123:x:1050:alice,bob
 
 ### Permission Levels
 
-Agor defines three permission levels per worktree:
+Agor defines three permission levels per branch:
 
-| Level    | Filesystem Access | View Sessions | Prompt Sessions | Modify Worktree |
+| Level    | Filesystem Access | View Sessions | Prompt Sessions | Modify Branch |
 | -------- | ----------------- | ------------- | --------------- | --------------- |
 | `view`   | Read-only         | ✅            | ❌              | ❌              |
 | `prompt` | No direct access  | ✅            | ✅              | ❌              |
@@ -367,8 +367,8 @@ Agor defines three permission levels per worktree:
 
 **Permission Grant Levels:**
 
-- **Worktree Owners** - Explicitly granted via `worktree_owners` table
-- **Non-Owners** - Default level set by `others_can` field on worktree
+- **Branch Owners** - Explicitly granted via `worktree_owners` table
+- **Non-Owners** - Default level set by `others_can` field on branch
 
 ### Session Execution Context
 
@@ -407,7 +407,7 @@ Check sudoers configuration:
 sudo -l -U agor
 ```
 
-### Permission Denied on Worktree
+### Permission Denied on Branch
 
 Verify group membership:
 
@@ -430,5 +430,5 @@ getent group agor_users
 
 - [Architecture](/guide/architecture) — System design overview
 - [Multiplayer & Social](/guide/multiplayer-social) — Shared terminals, cursors, comments
-- [Worktrees](/guide/worktrees) and [Sessions & Trees](/guide/sessions) — Core primitives
+- [Branches](/guide/worktrees) and [Sessions & Trees](/guide/sessions) — Core primitives
 - [Security](/security) — Trust boundaries and deployment modes

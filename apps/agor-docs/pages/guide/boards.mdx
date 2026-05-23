@@ -1,17 +1,17 @@
 ---
 title: Boards & Zones
-description: Boards are 2D spatial canvases for organizing worktrees. Zones are spatial regions that trigger templated prompts when worktrees are dropped into them.
+description: Boards are 2D spatial canvases for organizing branches. Zones are spatial regions that trigger templated prompts when branches are dropped into them.
 ---
 
 # Boards & Zones
 
-**Boards are 2D spatial canvases for organizing worktrees.** Like Figma for AI coding work — drag, group, comment, collaborate in real time.
+**Boards are 2D spatial canvases for organizing branches.** Like Figma for AI coding work — drag, group, comment, collaborate in real time.
 
-Instead of linear lists or kanban columns, every [worktree](/guide/worktrees) lives at an `(x, y)` coordinate on a board. Sessions appear as a genealogy tree on the worktree card. Multiple users see the same canvas with live cursors.
+Instead of linear lists or kanban columns, every [branch](/guide/worktrees) lives at an `(x, y)` coordinate on a board. Sessions appear as a genealogy tree on the branch card. Multiple users see the same canvas with live cursors.
 
-![Agor board with custom-styled gradient zones organizing worktrees into a pipeline (MAIN SESH, Agor Coding Tasks, Create a pull request, Codex review, Human review). Each worktree card shows its session tree, env tabs, and PR badge.](/screenshots/board-hero.png)
+![Agor board with custom-styled gradient zones organizing branches into a pipeline (MAIN SESH, Agor Coding Tasks, Create a pull request, Codex review, Human review). Each branch card shows its session tree, env tabs, and PR badge.](/screenshots/board-hero.png)
 
-_An Agor board with custom-styled zones forming a pipeline. Each worktree card shows its session tree, env tabs, and PR badge — and the floating PiP preview shows a session live-streaming as it works._
+_An Agor board with custom-styled zones forming a pipeline. Each branch card shows its session tree, env tabs, and PR badge — and the floating PiP preview shows a session live-streaming as it works._
 
 ---
 
@@ -19,17 +19,17 @@ _An Agor board with custom-styled zones forming a pipeline. Each worktree card s
 
 **Your brain remembers space.** You remember:
 
-- "The auth worktree is in the top-left corner."
+- "The auth branch is in the top-left corner."
 - "Testing sessions cluster on the right."
 - "That failed experiment is way down there."
 
-This is location-based memory — the same reason you remember where you parked but forget a shopping list. A 2D board gives every worktree and session a *place*. Linear lists discard that.
+This is location-based memory — the same reason you remember where you parked but forget a shopping list. A 2D board gives every branch and session a *place*. Linear lists discard that.
 
 **Like Figma did for design**, Agor brings spatial collaboration to AI coding:
 
 - Everyone sees the same board.
 - Real-time cursors show where teammates are working.
-- Drag a worktree, teammates see it move instantly.
+- Drag a branch, teammates see it move instantly.
 
 See **[Multiplayer & Social](/guide/multiplayer-social)** for the full collaboration story (cursors, facepile, comments, attention pulse).
 
@@ -37,9 +37,9 @@ See **[Multiplayer & Social](/guide/multiplayer-social)** for the full collabora
 
 ## Zones
 
-**A zone is a spatial region on a board that triggers a templated prompt when a worktree is dropped into it.**
+**A zone is a spatial region on a board that triggers a templated prompt when a branch is dropped into it.**
 
-Drag a worktree into "Code Review" → auto-prompts the agent for review.
+Drag a branch into "Code Review" → auto-prompts the agent for review.
 Drag into "Needs Tests" → auto-prompts for test generation.
 Drag into "Ship It" → auto-prompts for changelog + PR description.
 
@@ -47,20 +47,20 @@ Zones turn your board into a workflow engine. Spatial position *means something*
 
 ### How zone triggers work
 
-When you drop a worktree into a zone:
+When you drop a branch into a zone:
 
 1. **Session selection** — which session gets the prompt?
    - **Always create new session** (default) — clean slate for the zone's task
    - **Let me pick** — choose which session in the tree has the right context
    - **Most recently active** — usually the session you were just working in
 
-2. **Templated prompt executes** — the zone's Handlebars template renders with dynamic data from the worktree, board, repo, and environment.
+2. **Templated prompt executes** — the zone's Handlebars template renders with dynamic data from the branch, board, repo, and environment.
 
 ### Handlebars template variables
 
 Zone prompts have access to:
 
-- **Worktree** — `{{ worktree.name }}`, `{{ worktree.issue_url }}`, `{{ worktree.pull_request_url }}`, `{{ worktree.unique_id }}`
+- **Branch** — `{{ worktree.name }}`, `{{ worktree.issue_url }}`, `{{ worktree.pull_request_url }}`, `{{ worktree.unique_id }}`
 - **Board** — `{{ board.name }}`, `{{ board.description }}`
 - **Session** — `{{ session.title }}`, `{{ session.description }}`
 - **Environment** — `{{ environment.url }}`, `{{ environment.status }}`
@@ -79,7 +79,7 @@ Check if:
 If approved, comment on {{ worktree.pull_request_url }} with summary.
 ```
 
-Drop a worktree → auto-prompts with issue and PR links pre-filled. **No copy-paste, no forgetting which ticket this was for.**
+Drop a branch → auto-prompts with issue and PR links pre-filled. **No copy-paste, no forgetting which ticket this was for.**
 
 <img
   src="/screenshots/zone-trigger.png"
@@ -101,7 +101,7 @@ The classic pattern: chain zones into a pipeline.
                                               review
 ```
 
-Each zone has a different prompt template. Drag a worktree across the board and it walks through the workflow, picking up context at every step.
+Each zone has a different prompt template. Drag a branch across the board and it walks through the workflow, picking up context at every step.
 
 You can also build asymmetric pipelines: a "Stuck" zone that escalates to a different model, a "Spawn 5 reviewers" zone that fans out to multiple agents, a "Generate tests" zone wired to a Codex template.
 
@@ -109,7 +109,7 @@ You can also build asymmetric pipelines: a "Stuck" zone that escalates to a diff
 
 ## Multiple boards, one workspace
 
-A workspace can have many boards — one per team, one per project, one per long-running initiative. Boards are independent canvases with their own worktrees, zones, and members.
+A workspace can have many boards — one per team, one per project, one per long-running initiative. Boards are independent canvases with their own branches, zones, and members.
 
 Common patterns:
 
@@ -121,14 +121,14 @@ Common patterns:
 
 ## Cards (Beta)
 
-Worktrees aren't the only thing that can live on a board. **[Cards](/guide/cards)** are generic workflow entities — support tickets, sales leads, content pieces — that an [assistant](/guide/assistants) creates and manages via MCP. Same spatial canvas, same zones, same multiplayer presence — just not git-bound.
+Branches aren't the only thing that can live on a board. **[Cards](/guide/cards)** are generic workflow entities — support tickets, sales leads, content pieces — that an [assistant](/guide/assistants) creates and manages via MCP. Same spatial canvas, same zones, same multiplayer presence — just not git-bound.
 
 ---
 
 ## Related
 
-- [Worktrees](/guide/worktrees) — The primary primitive that lives on boards
-- [Sessions & Trees](/guide/sessions) — The genealogy rendered on each worktree card
+- [Branches](/guide/worktrees) — The primary primitive that lives on boards
+- [Sessions & Trees](/guide/sessions) — The genealogy rendered on each branch card
 - [Multiplayer & Social](/guide/multiplayer-social) — Cursors, facepile, comments
-- [Cards](/guide/cards) — Non-worktree entities on boards
-- [Assistants](/guide/assistants) — Agents that orchestrate worktrees and zones
+- [Cards](/guide/cards) — Non-branch entities on boards
+- [Assistants](/guide/assistants) — Agents that orchestrate branches and zones

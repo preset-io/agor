@@ -5,36 +5,36 @@ description: Frequently asked questions about session forking, spawning, and Ago
 
 # FAQ
 
-## What's a worktree?
+## What's a branch?
 
-**A worktree is an isolated working directory for a git repository** - think of it as a checkout of your repo at a specific branch or commit.
+**A branch is an isolated working directory for a git repository** - think of it as a checkout of your repo at a specific branch or commit.
 
-Agor uses **git worktrees** under the hood (same concept as `git worktree` command), but manages them for you automatically. When you create a worktree in Agor, it:
+Agor uses **git worktrees** under the hood (same concept as `git worktree` command), but manages them for you automatically. When you create a branch in Agor, it:
 
 - Creates a git worktree in `~/.agor/worktrees/<repo>/<name>`
 - Optionally creates a new branch or checks out an existing one
 - Tracks metadata (issue URL, PR URL, notes)
-- Associates all sessions within that worktree
+- Associates all sessions within that branch
 
-### Think of a worktree as a unit of work
+### Think of a branch as a unit of work
 
-**Best practice**: 1 worktree = 1 issue = 1 PR = 1 feature
+**Best practice**: 1 branch = 1 issue = 1 PR = 1 feature
 
 ```
-Worktree "auth-feature" (issue #123, PR #456)
+Branch "auth-feature" (issue #123, PR #456)
 ├─ Working directory: ~/.agor/worktrees/myapp/auth-feature
-├─ Branch: feature/oauth2-auth
+├─ Git ref: feature/oauth2-auth
 └─ Sessions: All AI sessions working on this feature
 
-Worktree "payment-integration" (issue #124, PR #457)
+Branch "payment-integration" (issue #124, PR #457)
 ├─ Working directory: ~/.agor/worktrees/myapp/payment-integration
-├─ Branch: feature/stripe-integration
+├─ Git ref: feature/stripe-integration
 └─ Sessions: All AI sessions working on this feature
 ```
 
-Each worktree is completely isolated - changes in one don't affect the other. This lets you work on multiple features simultaneously without switching branches or stashing changes.
+Each branch is completely isolated - changes in one don't affect the other. This lets you work on multiple features simultaneously without switching branches or stashing changes.
 
-**Agor manages the git worktrees for you** - no need to run `git worktree add` manually. Just create a worktree in the UI or CLI, and Agor handles the git operations.
+**Agor manages the git worktrees for you** - no need to run `git worktree add` manually. Just create a branch in the UI or CLI, and Agor handles the git operations.
 
 ## Session trees? WTF?
 
@@ -74,7 +74,7 @@ Most people don't know you can do this! Context engineering is usually about:
 3. Combine both to orchestrate complex multi-agent workflows
 4. Inspect the entire tree to understand how work evolved
 
-**Visual organization**: On boards, you see worktrees (projects) containing session trees (conversation genealogy). It's like Trello for AI conversations, but with git-style branching.
+**Visual organization**: On boards, you see branches (projects) containing session trees (conversation genealogy). It's like Trello for AI conversations, but with git-style branching.
 
 ## Why a spatial layout for AI coding sessions?
 
@@ -88,19 +88,19 @@ Agor uses a **2D spatial canvas** instead. Here's why that matters:
 
 Your brain is wired for spatial reasoning. You remember:
 
-- "The auth worktree is in the top-left corner"
+- "The auth branch is in the top-left corner"
 - "Testing sessions are clustered on the right"
 - "That failed experiment is way down there"
 
 This is **location-based memory** - the same reason you remember where you parked, but forget a shopping list.
 
-**Research shows**: People recall information better when it has spatial location. A 2D board gives every worktree and session a "place."
+**Research shows**: People recall information better when it has spatial location. A 2D board gives every branch and session a "place."
 
 ### Organic organization of complex workflows
 
 Real work doesn't fit into rigid lists. It evolves:
 
-- Start with one worktree for a feature
+- Start with one branch for a feature
 - Fork sessions to explore approaches
 - Spawn subsessions for research
 - Some succeed, some fail, some branch further
@@ -108,7 +108,7 @@ Real work doesn't fit into rigid lists. It evolves:
 **A spatial canvas lets this emerge naturally:**
 
 - Drag active work to the top
-- Group related worktrees together
+- Group related branches together
 - Push failed experiments to the side (but keep them visible)
 - Arrange by priority, status, or relationships - your choice
 
@@ -122,7 +122,7 @@ Zones are spatial regions that trigger actions:
 - **"Needs Tests"** zone triggers test generation
 - **"Deploy to Staging"** zone kicks off deployment
 
-This is **Kanban for AI sessions** - drag a worktree to a zone, workflow happens.
+This is **Kanban for AI sessions** - drag a branch to a zone, workflow happens.
 
 **Visual boundaries create mental models**: Left side = new work, middle = in progress, right = done. Your eyes scan the board and instantly understand status.
 
@@ -139,8 +139,8 @@ Figma revolutionized design collaboration with:
 
 - Everyone sees the same board
 - Cursors show teammates' focus in real-time
-- Scoped/spatial comments on boards, zones, and worktrees
-- Drag your worktree, teammates see it move
+- Scoped/spatial comments on boards, zones, and branches
+- Drag your branch, teammates see it move
 - No "whose terminal is this?" confusion
 - Async-friendly: glance at the board, see full state
 
@@ -168,13 +168,13 @@ You wouldn't manage a large codebase without a file tree. Why manage AI sessions
 
 ## Zones? Zone "triggers"?
 
-**Zones are spatial regions on your board that trigger templated prompts when you drop a worktree into them.**
+**Zones are spatial regions on your board that trigger templated prompts when you drop a branch into them.**
 
-Think: drag a worktree to "Ready for Review" → auto-prompts for code review. Drag to "Needs Tests" → auto-prompts for test generation.
+Think: drag a branch to "Ready for Review" → auto-prompts for code review. Drag to "Needs Tests" → auto-prompts for test generation.
 
 ### How it works
 
-When you drop a worktree into a zone:
+When you drop a branch into a zone:
 
 1. **Session selection** - which session gets the prompt?
    - **Always create new session** (default) - clean slate for the zone's task
@@ -196,7 +196,7 @@ Zone prompts need **dynamism and complexity**. You don't just want "write tests"
 
 **Handlebars templates** let you inject context from:
 
-- **Worktree**: `{{ worktree.name }}`, `{{ worktree.issue_url }}`, `{{ worktree.pull_request_url }}`
+- **Branch**: `{{ worktree.name }}`, `{{ worktree.issue_url }}`, `{{ worktree.pull_request_url }}`
 - **Board**: `{{ board.name }}`, `{{ board.description }}`
 - **Session**: `{{ session.title }}`, `{{ session.description }}`
 - **Environment**: `{{ environment.url }}`, `{{ environment.status }}`
@@ -219,7 +219,7 @@ Check if:
 If approved, comment on {{ worktree.pull_request_url }} with summary.
 ```
 
-Drop a worktree → auto-prompts with issue/PR links pre-filled.
+Drop a branch → auto-prompts with issue/PR links pre-filled.
 
 **2. PR-aware test generation**
 
@@ -270,7 +270,7 @@ Create a demo script highlighting {{ board.custom_context.sprint_goals }}.
 
 ### Custom JSON context
 
-Each object (board, worktree, session, repo) can have a **`custom_context` JSON blob** for your own metadata:
+Each object (board, branch, session, repo) can have a **`custom_context` JSON blob** for your own metadata:
 
 **Board custom context:**
 
@@ -282,7 +282,7 @@ Each object (board, worktree, session, repo) can have a **`custom_context` JSON 
 }
 ```
 
-**Worktree custom context:**
+**Branch custom context:**
 
 ```json
 {
@@ -317,7 +317,7 @@ You: "Review this code. Here's the issue: https://github.com/..."
 **With zones:**
 
 ```
-You: *drag worktree to "Ready for Review" zone*
+You: *drag branch to "Ready for Review" zone*
 AI: "Reviewing implementation of https://github.com/myorg/repo/issues/123..."
      (issue/PR links auto-injected)
 ```
@@ -333,9 +333,9 @@ Drag to trigger. Context flows automatically. No manual copy-paste.
 **IMPORTANT**: You're forking the **CONTEXT WINDOW** (conversation history), NOT the git worktree.
 
 - ✅ **Forked**: Conversation history, AI's memory of what was discussed
-- ❌ **NOT forked**: Git state, filesystem, worktree
+- ❌ **NOT forked**: Git state, filesystem, branch
 
-**Both sessions work on the SAME worktree.** If one session creates a file, the other session sees it immediately. This is NOT like git branches!
+**Both sessions work on the SAME branch.** If one session creates a file, the other session sees it immediately. This is NOT like git branches!
 
 After forking, the conversations diverge. The fork has its own independent conversation history going forward.
 
@@ -360,7 +360,7 @@ Each fork starts with the full context of how auth works, then builds its own co
 
 ### Key insight
 
-Forks **share the worktree** (same filesystem) but **copy the context** (snapshot at fork time, then conversations diverge).
+Forks **share the branch** (same filesystem) but **copy the context** (snapshot at fork time, then conversations diverge).
 
 You're not exploring alternative implementations (they'd conflict on disk!) - you're doing parallel work that starts from the same knowledge but different focus.
 
@@ -445,7 +445,7 @@ Parent orchestrates, children execute focused subsessions with clean context.
 | **Who decides context** | Automatic (SDK copies everything)          | Parent agent packages what's relevant          |
 | **Context size**        | Large (entire parent history)              | Small (only what's needed)                     |
 | **After creation**      | Independent conversations that diverge     | Independent conversations that diverge         |
-| **Worktree**            | **SHARED** (same filesystem)               | **SHARED** (same filesystem)                   |
+| **Branch**            | **SHARED** (same filesystem)               | **SHARED** (same filesystem)                   |
 | **Relationship**        | Sibling (parallel work)                    | Child (delegated work)                         |
 | **Use case**            | Parallel tasks with same starting context  | Delegate focused subsession with clean context |
 | **Parent waits?**       | No                                         | No (currently, may change)                     |
@@ -453,22 +453,22 @@ Parent orchestrates, children execute focused subsessions with clean context.
 
 ---
 
-## When should I fork a session vs create a new worktree?
+## When should I fork a session vs create a new branch?
 
-**Different worktrees = Isolation** (different features, competing implementations, or agents that would conflict)
+**Different branches = Isolation** (different features, competing implementations, or agents that would conflict)
 
-**Fork session = Shared worktree** (parallel work that needs same context but won't conflict)
+**Fork session = Shared branch** (parallel work that needs same context but won't conflict)
 
-### Use different worktrees when:
+### Use different branches when:
 
-- **Working on different features/issues** - Each worktree represents a unit of work
+- **Working on different features/issues** - Each branch represents a unit of work
 - **Trying competing implementations** - Let Claude and Codex both implement the same feature, compare results
-- **Need filesystem isolation** - Changes in one worktree don't affect the other
-- **Working on different git branches** - Each worktree can be on a different branch
+- **Need filesystem isolation** - Changes in one branch don't affect the other
+- **Working on different git branches** - Each branch can be on a different branch
 
-**Best practice**: Think of a worktree as a project or unit of work. Ideally 1 worktree = 1 issue = 1 PR. Agor lets you attach issue URLs and PR URLs to worktrees for this reason.
+**Best practice**: Think of a branch as a project or unit of work. Ideally 1 branch = 1 issue = 1 PR. Agor lets you attach issue URLs and PR URLs to branches for this reason.
 
-### Fork a session within a worktree when:
+### Fork a session within a branch when:
 
 - **Parallel work on same feature** - Write tests while building the next component
 - **Different aspects of same work** - Implementation, documentation, review all need same context
@@ -478,17 +478,17 @@ Parent orchestrates, children execute focused subsessions with clean context.
 **Example:**
 
 ```
-Worktree "auth-feature" (issue #123, PR #456)
+Branch "auth-feature" (issue #123, PR #456)
 └─ Session: "Build OAuth2 authentication"
-   ├─ Fork: "Write unit tests for OAuth2"        <- Same worktree
-   ├─ Fork: "Build user profile that uses auth"  <- Same worktree
-   └─ Fork: "Document OAuth2 API"                <- Same worktree
+   ├─ Fork: "Write unit tests for OAuth2"        <- Same branch
+   ├─ Fork: "Build user profile that uses auth"  <- Same branch
+   └─ Fork: "Document OAuth2 API"                <- Same branch
 
-Worktree "payment-feature" (issue #124, PR #457)  <- Different feature = different worktree
+Branch "payment-feature" (issue #124, PR #457)  <- Different feature = different branch
 └─ Session: "Build Stripe integration"
 ```
 
-**Rule of thumb**: If they're working on the same issue/feature and won't conflict on disk, fork the session. If they're different features or would conflict, use different worktrees.
+**Rule of thumb**: If they're working on the same issue/feature and won't conflict on disk, fork the session. If they're different features or would conflict, use a different Agor branch.
 
 ---
 
@@ -504,7 +504,7 @@ Worktree "payment-feature" (issue #124, PR #457)  <- Different feature = differe
 ### ❌ DON'T:
 
 - **Don't fork to try alternative implementations** (they'll conflict on disk!)
-- Don't forget: **forks share the worktree** - they're not git branches!
+- Don't forget: **forks share the branch** - they're not git branches!
 - Don't nest spawns too deeply (2-3 levels max)
 
 ---
@@ -512,12 +512,12 @@ Worktree "payment-feature" (issue #124, PR #457)  <- Different feature = differe
 ## Summary
 
 **What's forked**: Context window (conversation history snapshot)
-**What's NOT forked**: Git worktree (shared filesystem)
+**What's NOT forked**: Git branch (shared filesystem)
 
 **Fork** = Parallel work with same starting context (sibling sessions)
 **Spawn** = Hierarchical delegation (parent-child sessions)
 
-Both work on the **same worktree**, both start from a **copied context snapshot**, both build **independent conversations** going forward.
+Both work on the **same branch**, both start from a **copied context snapshot**, both build **independent conversations** going forward.
 
 Example: Build Feature 1 once. Fork 3 times:
 

@@ -1,15 +1,15 @@
 ---
-title: Worktrees
-description: Worktrees are the primary unit of work in Agor — isolated git working directories where AI sessions live, organized spatially on boards.
+title: Branches
+description: Branches are the primary unit of work in Agor — isolated git working directories where AI sessions live, organized spatially on boards.
 ---
 
-# Worktrees
+# Branches
 
-**A worktree is the primary unit of work in Agor.** It's an isolated git working directory — a checkout of your repo at a specific branch — paired with a metadata record (issue/PR links, owners, environment, sessions) that gives it identity on the board.
+**A branch is the primary unit of work in Agor.** It's an isolated git working directory — a checkout of your repo at a specific branch — paired with a metadata record (issue/PR links, owners, environment, sessions) that gives it identity on the board.
 
-> **Best practice:** 1 worktree = 1 issue = 1 PR = 1 feature.
+> **Best practice:** 1 branch = 1 issue = 1 PR = 1 feature.
 
-Agor uses [git worktrees](https://git-scm.com/docs/git-worktree) under the hood, so multiple branches of the same repo can be checked out simultaneously without stashing or switching. Agor manages all of that for you — just create a worktree in the UI or CLI and it handles the git plumbing.
+Agor uses [git worktrees](https://git-scm.com/docs/git-worktree) under the hood, so multiple branches of the same repo can be checked out simultaneously without stashing or switching. Agor manages all of that for you — just create a branch in the UI or CLI and it handles the git plumbing.
 
 ```
 ~/.agor/worktrees/<repo>/<name>
@@ -22,61 +22,61 @@ Agor uses [git worktrees](https://git-scm.com/docs/git-worktree) under the hood,
 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'flex-start', marginTop: '16px', marginBottom: '16px' }}>
   <img
     src="/screenshots/worktree-anatomy.png"
-    alt="A worktree card on the board showing branch and PR badges, env / files / schedule tabs, and a list of sessions running inside"
+    alt="A branch card on the board showing branch and PR badges, env / files / schedule tabs, and a list of sessions running inside"
     style={{ width: '100%', borderRadius: '8px' }}
   />
   <img
     src="/screenshots/security-review-fanout.png"
-    alt="A worktree card with a parent coordinator session that fanned out to eight specialized security-review children"
+    alt="A branch card with a parent coordinator session that fanned out to eight specialized security-review children"
     style={{ width: '100%', borderRadius: '8px' }}
   />
 </div>
 
-_Left: a worktree's static anatomy — branch, PR, env, files, sessions in one tile. Right: the same primitive packed with a coordinator and eight running children._
+_Left: a branch's static anatomy — branch, PR, env, files, sessions in one tile. Right: the same primitive packed with a coordinator and eight running children._
 
 ---
 
-## Why worktrees, not branches
+## Why a workspace, not just a git branch
 
-Branches are a git concept. Worktrees are a *workspace* concept.
+A git branch is a ref. An Agor branch is a *workspace*.
 
-- **Parallel work** — Run 5 features in 5 worktrees simultaneously. No `git stash`, no "kill your dev server so I can test mine."
-- **Spatial identity** — Each worktree is a card on a board. You can see, drag, group, and zone them.
-- **Session containers** — Every session belongs to exactly one worktree. The conversation tree lives on the card.
-- **Environment scope** — Dev servers, ports, and processes are scoped to the worktree, not the repo.
+- **Parallel work** — Run 5 features in 5 branches simultaneously. No `git stash`, no "kill your dev server so I can test mine."
+- **Spatial identity** — Each branch is a card on a board. You can see, drag, group, and zone them.
+- **Session containers** — Every session belongs to exactly one branch. The conversation tree lives on the card.
+- **Environment scope** — Dev servers, ports, and processes are scoped to the branch, not the repo.
 
-Each worktree is fully isolated — changes in one don't affect another. AI agents can work on three features in parallel without stepping on each other's filesystem.
+Each branch is fully isolated — changes in one don't affect another. AI agents can work on three features in parallel without stepping on each other's filesystem.
 
 ---
 
 ## Anatomy
 
-A worktree is a filesystem directory plus a database record. The record tracks:
+A branch is a filesystem directory plus a database record. The record tracks:
 
 | Field | Purpose |
 |---|---|
 | `name` | Human-readable label shown on the card |
 | `branch` | Git branch checked out in the working directory |
 | `issue_url`, `pull_request_url` | GitHub linkage — auto-injected into zone prompts |
-| `owners` / `others_can` | RBAC permissions (when worktree RBAC is enabled) |
+| `owners` / `others_can` | RBAC permissions (when branch RBAC is enabled) |
 | `board_id` + `(x, y)` | Where the card lives on the canvas |
-| `environment` | Per-worktree dev environment (start/stop, ports, URL) |
+| `environment` | Per-branch dev environment (start/stop, ports, URL) |
 
 <img
   src="/screenshots/worktree-modal.png"
-  alt="Worktree details modal with tabs for General, Sessions (4), Environment, Files, and Schedule. The General tab shows Name, Repository, Branch, Base Branch, Path, plus a Work Context section with Board picker, Issue, Pull Request, Notes (markdown), MCP Servers, and an Owners & Permissions section with Owners and Others Can fields"
+  alt="Branch details modal with tabs for General, Sessions (4), Environment, Files, and Schedule. The General tab shows Name, Repository, Branch, Base Branch, Path, plus a Work Context section with Board picker, Issue, Pull Request, Notes (markdown), MCP Servers, and an Owners & Permissions section with Owners and Others Can fields"
   style={{ maxWidth: '600px', borderRadius: '8px' }}
 />
 
-_Behind every card: the worktree details modal — General / Sessions / Environment / Files / Schedule tabs. The same fields the table above describes, rendered as actual inputs._
+_Behind every card: the branch details modal — General / Sessions / Environment / Files / Schedule tabs. The same fields the table above describes, rendered as actual inputs._
 
-Sessions, tasks, comments, and artifacts all reference a worktree. **The worktree is the spine.**
+Sessions, tasks, comments, and artifacts all reference a branch. **The branch is the spine.**
 
 ---
 
 ## GitHub-native workflow
 
-Because each worktree carries `issue_url` and `pull_request_url`, AI agents have unambiguous context for what they're working on. Zones can use that context directly:
+Because each branch carries `issue_url` and `pull_request_url`, AI agents have unambiguous context for what they're working on. Zones can use that context directly:
 
 ```
 deeply analyze this github issue: {{ worktree.issue_url }}
@@ -88,9 +88,9 @@ When the agent runs, it sees the link, fetches the issue, and works against the 
 
 ## Environments
 
-Each worktree can have its own **dev environment** — long-running processes (dev server, database, watchers) scoped to that worktree, with auto-assigned unique ports so multiple worktrees can run simultaneously without collisions.
+Each branch can have its own **dev environment** — long-running processes (dev server, database, watchers) scoped to that branch, with auto-assigned unique ports so multiple branches can run simultaneously without collisions.
 
-Configure once on the repo, then everyone on your team gets one-click start/stop on every worktree.
+Configure once on the repo, then everyone on your team gets one-click start/stop on every branch.
 
 ```yaml
 # Per-repo template, ports derived from worktree's unique_id
@@ -109,7 +109,7 @@ When a feature ships and the PR merges, you usually want to clean up disk withou
 
 <img
   src="/screenshots/archive-worktree.png"
-  alt="Archive or Delete Worktree modal showing filesystem and metadata options"
+  alt="Archive or Delete Branch modal showing filesystem and metadata options"
   style={{ maxWidth: '400px' }}
 />
 
@@ -117,37 +117,37 @@ When a feature ships and the PR merges, you usually want to clean up disk withou
 
 - **Leave untouched** — Metadata-only archival. Files stay on disk.
 - **Clean workspace** — Runs `git clean -fdx` (removes `node_modules`, builds, untracked files).
-- **Delete completely** — Removes the worktree directory from disk.
+- **Delete completely** — Removes the branch directory from disk.
 
 **Metadata options:**
 
 - **Archive (recommended)** — Hides from board, preserves all sessions and conversations for analytics and history.
 - **Delete permanently** — Removes all data including sessions and conversations. No undo.
 
-**Best practice:** Archive with filesystem cleanup after PR merge. Only delete permanently for experimental worktrees with no valuable data.
+**Best practice:** Archive with filesystem cleanup after PR merge. Only delete permanently for experimental branches with no valuable data.
 
 ---
 
-## Worktree-level features
+## Branch-level features
 
-The worktree is also where several other features attach:
+The branch is also where several other features attach:
 
-- **[Sessions & Trees](/guide/sessions)** — Every session lives in exactly one worktree. The fork/spawn tree appears on the worktree card.
-- **[Boards & Zones](/guide/boards)** — Worktrees are placed on boards; dropping into zones triggers templated prompts.
-- **[Multiplayer & Social](/guide/multiplayer-social)** — Spatial comments pin to worktrees; shared terminal sessions are worktree-scoped.
-- **[Scheduler](/guide/scheduler)** — Templated prompts can fire on a schedule against a specific worktree (great for assistant heartbeats).
+- **[Sessions & Trees](/guide/sessions)** — Every session lives in exactly one branch. The fork/spawn tree appears on the branch card.
+- **[Boards & Zones](/guide/boards)** — Branches are placed on boards; dropping into zones triggers templated prompts.
+- **[Multiplayer & Social](/guide/multiplayer-social)** — Spatial comments pin to branches; shared terminal sessions are branch-scoped.
+- **[Scheduler](/guide/scheduler)** — Templated prompts can fire on a schedule against a specific branch (great for assistant heartbeats).
 
 ---
 
 ## Permissions (RBAC)
 
-When `execution.worktree_rbac: true` is set, worktrees enforce ownership and a per-tier `others_can` permission:
+When `execution.worktree_rbac: true` is set, branches enforce ownership and a per-tier `others_can` permission:
 
 | Tier | What others can do |
 |---|---|
 | `none` | No access — completely private to owners |
-| `view` | Read worktrees, sessions, tasks, messages |
-| `session` | **Default.** Create their own sessions on this worktree |
+| `view` | Read branches, sessions, tasks, messages |
+| `session` | **Default.** Create their own sessions on this branch |
 | `prompt` | Prompt any session, including others' (but the session still runs as its creator's identity) |
 | `all` | Full control |
 
@@ -157,7 +157,7 @@ See **[Security](/security)** for deployment modes and the trust boundary discus
 
 ## Related
 
-- [Sessions & Trees](/guide/sessions) — Conversations and genealogy that live inside a worktree
-- [Boards & Zones](/guide/boards) — How worktrees are organized spatially
-- [Environments](/guide/environment-configuration) — Per-worktree dev environments
-- [Scheduler](/guide/scheduler) — Time-based prompts targeting worktrees
+- [Sessions & Trees](/guide/sessions) — Conversations and genealogy that live inside a branch
+- [Boards & Zones](/guide/boards) — How branches are organized spatially
+- [Environments](/guide/environment-configuration) — Per-branch dev environments
+- [Scheduler](/guide/scheduler) — Time-based prompts targeting branches

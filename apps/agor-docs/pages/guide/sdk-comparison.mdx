@@ -186,7 +186,7 @@ In every case Agor tracks `genealogy.forked_from_session_id` and `fork_point_mes
 
 - MCP servers configured via per-session `config.toml` under `[mcp_servers.<name>]`
 - Supports both STDIO (`command` + `args`) and streamable HTTP (`url` + `bearer_token_env_var`) transports
-- Agor's built-in MCP server auto-configured for self-awareness (sessions, worktrees, boards, etc.)
+- Agor's built-in MCP server auto-configured for self-awareness (sessions, branches, boards, etc.)
 - Session-level MCP selection via Agor UI, same as Claude and Gemini
 
 **Gemini:** ✅ **Native support**
@@ -293,7 +293,7 @@ In every case Agor tracks `genealogy.forked_from_session_id` and `fork_point_mes
 - Reads project configuration from `opencode.json` in the working directory
 - Supports custom instructions, model defaults, and provider configuration
 - Directory-scoped operations ensure the correct project config is loaded
-- Agor passes the worktree path to scope OpenCode to the correct project
+- Agor passes the branch path to scope OpenCode to the correct project
 
 **Recommendation:** Use Claude Code or Codex for projects with rich context requirements. OpenCode is ideal for teams using multiple LLM providers. For Gemini and Copilot, manage instructions in Agor session config.
 
@@ -743,7 +743,7 @@ When expanded:
 
 - First-class MCP server support across Claude Code, Codex, Gemini, and Copilot
 - Session-level MCP server selection via Agor UI
-- Agor's built-in MCP server for self-awareness (sessions, worktrees, boards)
+- Agor's built-in MCP server for self-awareness (sessions, branches, boards)
 - Supports both STDIO and HTTP transports
 
 ---
@@ -831,7 +831,7 @@ OpenCode uses a **client-server model** unlike other agents:
 
 - **Server:** `opencode serve` runs as a standalone process (user-managed, not started by Agor)
 - **SDK:** `@opencode-ai/sdk` provides a REST client that communicates with the server
-- **Directory Scoping:** Agor passes the worktree path via the `x-opencode-directory` header and `directory` query parameter to scope all operations
+- **Directory Scoping:** Agor passes the branch path via the `x-opencode-directory` header and `directory` query parameter to scope all operations
 
 ### Provider Configuration
 
@@ -851,7 +851,7 @@ OpenCode supports MCP servers via its REST API:
 - **Local (STDIO):** Agor injects `command` + `args` configurations
 - **Remote (Streamable HTTP):** Agor injects its built-in MCP server URL with session token
 - OpenCode tries Streamable HTTP first, then falls back to SSE for remote connections
-- MCP servers are added per-session and scoped to the worktree directory
+- MCP servers are added per-session and scoped to the branch directory
 
 ### Limitations
 

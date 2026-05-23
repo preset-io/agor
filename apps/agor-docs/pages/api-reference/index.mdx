@@ -1,6 +1,6 @@
 ---
 title: API Reference
-description: Interactive REST API documentation for agor daemon. Auto-generated Swagger UI with endpoints for sessions, worktrees, boards, and real-time WebSocket integration.
+description: Interactive REST API documentation for agor daemon. Auto-generated Swagger UI with endpoints for sessions, branches, boards, and real-time WebSocket integration.
 ---
 
 # API Reference
@@ -37,7 +37,7 @@ The Agor daemon serves **live, interactive API documentation** via Swagger UI:
   </p>
 </div>
 
-![Agor REST API interactive documentation with Swagger UI showing endpoints for sessions, worktrees, boards, and real-time collaboration](/swagger.png)
+![Agor REST API interactive documentation with Swagger UI showing endpoints for sessions, branches, boards, and real-time collaboration](/swagger.png)
 
 **Features:**
 
@@ -98,9 +98,9 @@ curl -X GET http://localhost:3030/sessions \
 - **`/sessions`** - AI agent session management with genealogy (fork/spawn)
 - **`/tasks`** - Work units within sessions tracking prompts and execution
 - **`/messages`** - Conversation messages with streaming support
-- **`/repos`** - Git repository management and worktree operations
+- **`/repos`** - Git repository management and branch operations
 - **`/boards`** - Spatial organization of sessions with zones and triggers
-- **`/worktrees`** - Git worktree isolation for sessions
+- **`/worktrees`** - Git branch isolation for sessions
 - **`/users`** - User account management and authentication
 - **`/mcp-servers`** - Model Context Protocol server configurations
 

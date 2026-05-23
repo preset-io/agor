@@ -133,7 +133,7 @@ The unified model is no longer used in current Agor releases.
 - **[FeathersJS](https://feathersjs.com/)** - Unified REST + WebSocket API framework
 - **[Drizzle ORM](https://orm.drizzle.team/)** - Type-safe database layer with LibSQL support
 - **[LibSQL](https://github.com/tursodatabase/libsql)** - Local SQLite-compatible database (future: cloud sync via Turso)
-- **[simple-git](https://github.com/steveukx/simple-git)** - Git operations for worktree management
+- **[simple-git](https://github.com/steveukx/simple-git)** - Git operations for branch management
 
 ### Frontend
 
@@ -233,8 +233,8 @@ The daemon exposes 12 FeathersJS services via REST and WebSocket:
 | **tasks**               | Work units within sessions    | CRUD, completion tracking           |
 | **messages**            | Conversation history          | CRUD, bulk insert, streaming        |
 | **boards**              | Spatial session organization  | CRUD, session positioning           |
-| **worktrees**           | Git worktree isolation        | Create, list, delete worktrees      |
-| **repos**               | Git repository management     | Clone, list, worktree operations    |
+| **branches**           | Git branch isolation        | Create, list, delete branches      |
+| **repos**               | Git repository management     | Clone, list, branch operations    |
 | **users**               | User accounts & auth          | CRUD, JWT authentication            |
 | **mcp-servers**         | MCP server configs            | CRUD, capability queries            |
 | **session-mcp-servers** | Session MCP links             | Associate MCP servers with sessions |
@@ -320,7 +320,7 @@ This enables **autonomous multi-agent workflows** where a parent agent can deleg
 **Internal (Session-Scoped Tokens)**
 
 - **Authentication:** Session-specific tokens (64-char hex, 24h expiration)
-- **Scope:** Full access to own session + read access to other sessions/boards/worktrees
+- **Scope:** Full access to own session + read access to other sessions/boards/branches
 - **Use Case:** Agents running within Agor sessions (primary mode)
 - **Security:** Token is scoped to the user who created the session
 
@@ -355,7 +355,7 @@ https://localhost:3030/
 
 ## MCP Tools Reference
 
-The MCP server provides a growing toolkit across sessions, worktrees, boards, tasks, users, environments, cards, artifacts, and more — enabling structured programmatic access instead of brittle CLI parsing. See the [Agor MCP Server](/guide/internal-mcp) page for the up-to-date capability map.
+The MCP server provides a growing toolkit across sessions, branches, boards, tasks, users, environments, cards, artifacts, and more — enabling structured programmatic access instead of brittle CLI parsing. See the [Agor MCP Server](/guide/internal-mcp) page for the up-to-date capability map.
 
 ```typescript
 // ❌ Brittle approach
@@ -376,13 +376,13 @@ $ agor session list | grep running | wc -l
 | `agor_sessions_get_current` | Get current session (introspection) | `{}` |
 | `agor_sessions_spawn` | Spawn child session & execute prompt | `{ prompt: 'Implement feature X', title: 'Feature X' }` |
 
-**Worktree Tools:**
+**Branch Tools:**
 | Tool | Description | Example |
 |------|-------------|---------|
-| `agor_worktrees_get` | Get worktree details | `{ worktreeId: '...' }` |
-| `agor_worktrees_list` | List all worktrees | `{ limit: 10 }` |
-| `agor_worktrees_create` | Create a worktree with optional issue/PR links | `{ repoId: '019a...', worktreeName: 'feat-x', issueUrl: 'https://...' }` |
-| `agor_worktrees_update` | Update worktree metadata (issue/PR URLs, notes) | `{ worktreeId: '019a...', pullRequestUrl: 'https://...', notes: 'Ready for review' }` |
+| `agor_worktrees_get` | Get branch details | `{ worktreeId: '...' }` |
+| `agor_worktrees_list` | List all branches | `{ limit: 10 }` |
+| `agor_worktrees_create` | Create a branch with optional issue/PR links | `{ repoId: '019a...', worktreeName: 'feat-x', issueUrl: 'https://...' }` |
+| `agor_worktrees_update` | Update branch metadata (issue/PR URLs, notes) | `{ worktreeId: '019a...', pullRequestUrl: 'https://...', notes: 'Ready for review' }` |
 
 **Board Tools:**
 | Tool | Description | Example |
@@ -439,7 +439,7 @@ Planned tools for expanded orchestration capabilities:
 
 - `agor_sessions_fork` - Fork session at decision point (preserve history)
 - `agor_boards_create` - Create new board for organizing sessions
-- `agor_worktrees_clone` - Clone an existing worktree configuration (branch, metadata) for rapid duplication
+- `agor_worktrees_clone` - Clone an existing branch configuration (branch, metadata) for rapid duplication
 
 **Note:** `agor_sessions_spawn` is already live and enables autonomous multi-agent delegation!
 
@@ -466,9 +466,9 @@ Agor uses a **hybrid materialization approach** for cross-database compatibility
 - Fast indexed queries
 - Cross-database compatibility (LibSQL ↔ PostgreSQL)
 
-### Worktree-Based Isolation
+### Branch-Based Isolation
 
-Every session requires a worktree (foreign key constraint):
+Every session requires a branch (foreign key constraint):
 
 ```
 ~/.agor/
@@ -481,7 +481,7 @@ Every session requires a worktree (foreign key constraint):
         └── feat-auth/   # Session 2 worktree
 ```
 
-**Why worktrees?**
+**Why branches?**
 
 - Parallel development without branch switching
 - Session isolation (no shared working directory)

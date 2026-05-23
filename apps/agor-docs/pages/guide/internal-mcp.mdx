@@ -1,6 +1,6 @@
 ---
 title: Agor MCP Server
-description: Agents are first-class users in Agor. The built-in MCP server gives them the same surface area you have in the UI — sessions, worktrees, boards, zones, users, environments — as structured JSON-RPC.
+description: Agents are first-class users in Agor. The built-in MCP server gives them the same surface area you have in the UI — sessions, branches, boards, zones, users, environments — as structured JSON-RPC.
 ---
 
 # Agor MCP Server
@@ -21,10 +21,10 @@ This is the foundational layer: [assistants](/guide/assistants), [scheduled prom
 
 ## Key Ideas
 
-- **Agents as first-class users:** Every MCP tool wraps a FeathersJS service. Sessions, worktrees, boards, zones, users, environments — anything you can click or `agor`-CLI is available as JSON-RPC.
-- **Self-aware sessions:** Each session is auto-issued a scoped MCP token, so the agent already knows *which* session, worktree, and board it's in — and can act on that context.
+- **Agents as first-class users:** Every MCP tool wraps a FeathersJS service. Sessions, branches, boards, zones, users, environments — anything you can click or `agor`-CLI is available as JSON-RPC.
+- **Self-aware sessions:** Each session is auto-issued a scoped MCP token, so the agent already knows *which* session, branch, and board it's in — and can act on that context.
 - **No separate server:** MCP is part of the daemon. Nothing to install, nothing extra to run.
-- **Remote access:** External agents and dashboards can connect over HTTP to drive Agor (create boards, worktrees, or even invite new users).
+- **Remote access:** External agents and dashboards can connect over HTTP to drive Agor (create boards, branches, or even invite new users).
 
 > MCP is enabled by default and every session already has credentials injected — no setup required for in-Agor agents.
 
@@ -34,7 +34,7 @@ This is the foundational layer: [assistants](/guide/assistants), [scheduled prom
 | ---------------------- | ------------------------------------------------------------------------------------------------------- |
 | **Sessions**           | Introspect the current session, list siblings, spawn child sessions with prompts, archive/complete work |
 | **Repositories**       | List repositories, clone remote repos, register local repos, manage repo metadata                       |
-| **Worktrees & Boards** | List or fetch worktrees, create new ones, assign them to boards, update metadata, move cards spatially  |
+| **Branches & Boards** | List or fetch branches, create new ones, assign them to boards, update metadata, move cards spatially  |
 | **Board Zones**        | Create zones on boards, update zone properties (position, size, color), manage zone triggers            |
 | **Tasks & Reports**    | Fetch task history, create follow-up tasks, log progress, generate reports                              |
 | **Users & Teams**      | Create users, update profiles or avatars, assign roles, invite collaborators                            |
@@ -62,21 +62,21 @@ into access logs and browser history.
 
 From there agents can:
 
-- Discover their **current session** and worktree context.
+- Discover their **current session** and branch context.
 - **Spawn subsessions** to fan out work (e.g., spin up multiple coders to process a checklist).
-- Inspect the **board layout** to decide where to place new worktrees or sessions.
+- Inspect the **board layout** to decide where to place new branches or sessions.
 - Update their own **user profile** to signal who is speaking.
 
 This self-awareness is what lets agents behave like team members instead of detached copilots.
 
 ## Automation Examples
 
-- **Repository bootstrap:** "Clone this GitHub repo, create a worktree for the main branch, and start the dev environment automatically."
+- **Repository bootstrap:** "Clone this GitHub repo, create a branch off `main`, and start the dev environment automatically."
 - **Zone-based workflows:** "Create a 'Human PR Review' zone on the board, positioned based on existing zones, with a trigger that prompts for review feedback."
 - **Mass subsession fan-out:** "Read `context/js-to-ts-refactor`, split the file list, create a subsession per chunk, and report back when done."
 - **Bulk account provisioning:** Paste a CSV of emails; the agent calls MCP to create users and invite them automatically.
-- **Issue triage pipeline:** Source GitHub issues by label, triage them, and create worktrees linked to each issue, dropping them onto the active board as cards.
-- **Environment orchestration:** Start/stop worktree environments via MCP before delegating work to collaborators or other agents.
+- **Issue triage pipeline:** Source GitHub issues by label, triage them, and create branches linked to each issue, dropping them onto the active board as cards.
+- **Environment orchestration:** Start/stop branch environments via MCP before delegating work to collaborators or other agents.
 
 Because MCP calls are just JSON-RPC, complex workflows can be scripted once and reused by any tool that speaks the protocol.
 
@@ -118,7 +118,7 @@ already allowed to act as that creator:
 - **`GET /sessions/:id`** — the creator themselves (provided they are still
   `member+`), a superadmin, or the executor's service identity
   (`role: 'service'`, used when spawning the child process). A plain
-  `member+` with `view` permission on the worktree does **not** receive a
+  `member+` with `view` permission on the branch does **not** receive a
   token — handing one out would let them impersonate the creator, sidestepping
   the `session`-tier "own sessions only" rule enforced elsewhere.
 - **`POST /sessions`** — the caller is the creator by construction, so

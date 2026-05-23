@@ -7,7 +7,7 @@ description: Sessions are AI conversations that branch — fork to explore alter
 
 **A session is an AI conversation.** Unlike a CLI where conversations scroll up and disappear, Agor sessions can **branch** — fork siblings, spawn children, or ask side questions — building a genealogy tree you can navigate, resume, and reason about.
 
-Every session lives inside exactly one [worktree](/guide/worktrees). Multiple sessions on the same worktree share a filesystem but have independent conversations.
+Every session lives inside exactly one [branch](/guide/worktrees). Multiple sessions on the same branch share a filesystem but have independent conversations.
 
 ```
 Worktree: "auth-feature"
@@ -21,7 +21,7 @@ Worktree: "auth-feature"
 
 <img
   src="/screenshots/security-review-fanout.png"
-  alt="Worktree card on the board showing a parent coordinator session that spawned eight specialized security-review children in parallel — each child a separately introspectable conversation"
+  alt="Branch card on the board showing a parent coordinator session that spawned eight specialized security-review children in parallel — each child a separately introspectable conversation"
   style={{ maxWidth: '500px', borderRadius: '8px' }}
 />
 
@@ -85,10 +85,10 @@ _A btw question runs in an ephemeral fork; the answer is delivered back inline i
 
 - **Introspectable** — Full conversation history kept on disk; click any node and read it.
 - **Composable** — Fork from forks, spawn from spawns, build deep delegation trees.
-- **Multiplayer-friendly** — Teammates see the tree on the worktree card and understand the exploration.
+- **Multiplayer-friendly** — Teammates see the tree on the branch card and understand the exploration.
 - **Resumable** — Prompt any session in the tree at any time, even after it "completed."
 
-The tree is rendered on the worktree card on the board, and in full detail in the session view.
+The tree is rendered on the branch card on the board, and in full detail in the session view.
 
 ---
 
@@ -190,7 +190,7 @@ Each level delegates to specialized agents. Each session has a focused context w
 
 **Keep prompts focused.** Subsessions work best with specific, isolated tasks. "Update the JWT token validation logic" beats "fix the auth system."
 
-**Mind the filesystem.** Forks and spawns share the worktree's filesystem. Independent edits = no conflict. Parallel edits to the same file = git conflict. Plan accordingly.
+**Mind the filesystem.** Forks and spawns share the branch's filesystem. Independent edits = no conflict. Parallel edits to the same file = git conflict. Plan accordingly.
 
 **Use callbacks wisely.** Include the last message for quick status updates. Include the original prompt only when context might be lost. Add extra instructions when you need a specific report format ("include line numbers for all changes").
 
@@ -222,7 +222,7 @@ _Session Settings modal — model, effort, permissions, MCP, env vars, callbacks
 
 ## Related
 
-- [Worktrees](/guide/worktrees) — The container for sessions
+- [Branches](/guide/worktrees) — The container for sessions
 - [Agor MCP Server](/guide/internal-mcp) — How agents introspect and spawn each other programmatically
 - [Rich Chat UX](/guide/rich-chat-ux) — Token accounting, context window viz, tool blocks, queueing
 - [In-Conversation Widgets](/guide/in-conversation-widgets) — Agent-rendered inline forms (env vars today, more soon) that capture input without it ever entering the model's context

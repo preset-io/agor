@@ -1,21 +1,21 @@
 ---
 title: Environment Configuration
-description: Define named environment variants per repo, layer deployment-local overrides, and render per-worktree command snapshots.
+description: Define named environment variants per repo, layer deployment-local overrides, and render per-branch command snapshots.
 ---
 
 # Environment Configuration
 
-Agor's managed environments let a repo ship a **library of named variants** (`lean`, `postgres`, `full`, …) that every worktree can pick from. Variants are Handlebars-templated and get **rendered into a per-worktree snapshot** that the Start/Stop/Nuke/Logs buttons execute against.
+Agor's managed environments let a repo ship a **library of named variants** (`lean`, `postgres`, `full`, …) that every branch can pick from. Variants are Handlebars-templated and get **rendered into a per-branch snapshot** that the Start/Stop/Nuke/Logs buttons execute against.
 
 This page documents the data model, the template vars, deployment-local overrides, and the permission rules.
 
 <img
   src="/screenshots/env-pill-tooltip.png"
-  alt="Worktree card env pill (green checkmark, 'env' label) with adjacent start/stop/logs/edit icons and a hover tooltip showing 'Open environment - http://10.33.92.175:7760'"
+  alt="Branch card env pill (green checkmark, 'env' label) with adjacent start/stop/logs/edit icons and a hover tooltip showing 'Open environment - http://10.33.92.175:7760'"
   style={{ maxWidth: '460px', borderRadius: '8px' }}
 />
 
-_What it looks like on the card: a green env pill, one-click open, and start/stop/logs/edit icons right next to your worktree's PR badge._
+_What it looks like on the card: a green env pill, one-click open, and start/stop/logs/edit icons right next to your branch's PR badge._
 
 ---
 
@@ -45,13 +45,13 @@ Managed environments are built out of three layers, precedence **low → high**:
 
 - **Layer 1** is authored by repo maintainers and lives in `.agor.yml`. It's portable: clone the repo, `Import .agor.yml`, done.
 - **Layer 2** is where each Agor deployment pins its own values (host IP, internal registry, AWS profile) without touching the shared file. Stored in the DB, never exported.
-- **Layer 3** is the output: a flat set of rendered strings attached to the worktree. Executors run these verbatim — no templating at execute time.
+- **Layer 3** is the output: a flat set of rendered strings attached to the branch. Executors run these verbatim — no templating at execute time.
 
-Re-rendering is **explicit**. Editing a variant or an override does not retroactively rewrite existing worktrees — you hit the **Render** button when you want a worktree to pick up changes.
+Re-rendering is **explicit**. Editing a variant or an override does not retroactively rewrite existing branches — you hit the **Render** button when you want a branch to pick up changes.
 
 <img
   src="/screenshots/env-variants-full.png"
-  alt="Worktree Environment tab showing the YAML variant config with start/stop/nuke/logs commands, the Variant selector dropdown, and the rendered command snapshot below"
+  alt="Branch Environment tab showing the YAML variant config with start/stop/nuke/logs commands, the Variant selector dropdown, and the rendered command snapshot below"
   style={{ maxWidth: '700px', borderRadius: '8px' }}
 />
 
@@ -77,14 +77,14 @@ Every field in a variant is a Handlebars template. The render context is built i
 
 | Variable | Source | Example | Notes |
 |---|---|---|---|
-| `{{worktree.unique_id}}` | Worktree | `3` | Auto-incrementing integer. Use for deterministic port offsets. |
-| `{{worktree.name}}` | Worktree | `feat-new-filter` | Slugified worktree name. Good for `docker compose -p`. |
-| `{{worktree.path}}` | Worktree | `/home/you/agor/feat-new-filter` | Absolute path on disk. |
-| `{{worktree.gid}}` | Worktree | `1042` | Unix GID of the worktree's isolation group. |
+| `{{worktree.unique_id}}` | Branch | `3` | Auto-incrementing integer. Use for deterministic port offsets. |
+| `{{worktree.name}}` | Branch | `feat-new-filter` | Slugified branch name. Good for `docker compose -p`. |
+| `{{worktree.path}}` | Branch | `/home/you/agor/feat-new-filter` | Absolute path on disk. |
+| `{{worktree.gid}}` | Branch | `1042` | Unix GID of the branch's isolation group. |
 | `{{repo.slug}}` | Repo | `preset-io/superset` | Repository slug. |
 | `{{host.ip_address}}` | Auto-detected | `10.0.1.42` | Fallback order: `template_overrides.host.ip_address` → `daemon.host_ip_address` in `~/.agor/config.yaml` → autodetect. |
-| `{{custom.<key>}}` | Worktree custom context | `{{custom.compose_profile}}` | Anything you store in `worktree.custom_context`. |
-| `{{custom.<key>}}` via overrides | `template_overrides.custom.*` | `{{custom.internal_registry}}` | Repo-wide fallback if the worktree doesn't set a key. |
+| `{{custom.<key>}}` | Branch custom context | `{{custom.compose_profile}}` | Anything you store in `worktree.custom_context`. |
+| `{{custom.<key>}}` via overrides | `template_overrides.custom.*` | `{{custom.internal_registry}}` | Repo-wide fallback if the branch doesn't set a key. |
 
 ### Math helpers
 
@@ -96,7 +96,7 @@ Every field in a variant is a Handlebars template. The render context is built i
 | `div` | `{{div 60 worktree.unique_id}}` | `20` |
 | `mod` | `{{mod worktree.unique_id 4}}` | `3` |
 
-Math helpers are deterministic — the same worktree always renders the same ports, which is what keeps parallel worktrees from colliding.
+Math helpers are deterministic — the same branch always renders the same ports, which is what keeps parallel branches from colliding.
 
 > Broken template syntax is reported at **render time**, not at save time. Click Render to see the exact error with a line number.
 
@@ -106,7 +106,7 @@ Math helpers are deterministic — the same worktree always renders the same por
 
 <a id="variants" />
 
-`.agor.yml` lives at the **worktree root** (`$WORKTREE_PATH/.agor.yml`) and is the shared, committed description of a repo's environment variants. It's a regular repo file: you edit it on a branch, open a PR, and it rolls out when merged.
+`.agor.yml` lives at the **branch root** (`$WORKTREE_PATH/.agor.yml`) and is the shared, committed description of a repo's environment variants. It's a regular repo file: you edit it on a branch, open a PR, and it rolls out when merged.
 
 ### Schema
 
@@ -188,17 +188,17 @@ Two admin-only actions in the repo editor header:
 
 | Action | Effect |
 |---|---|
-| **Import `.agor.yml`** | Parses `$WORKTREE_PATH/.agor.yml` and **replaces** `environment.variants` + `environment.default` in the DB. `template_overrides` and worktree snapshots are untouched. |
+| **Import `.agor.yml`** | Parses `$WORKTREE_PATH/.agor.yml` and **replaces** `environment.variants` + `environment.default` in the DB. `template_overrides` and branch snapshots are untouched. |
 | **Export `.agor.yml`** | Writes the current `environment.variants` + `environment.default` to `$WORKTREE_PATH/.agor.yml`. `template_overrides` is **stripped** before writing. |
 
 Both paths go through a confirm dialog. Import is **replace, not merge** — a variant that exists in the DB but not in the file gets dropped.
 
-Because the target is always the file in the **currently open worktree**, the normal workflow is:
+Because the target is always the file in the **currently open branch**, the normal workflow is:
 
 1. Iterate on `.agor.yml` on a branch.
 2. Export (or hand-edit) the file.
 3. Commit and PR it like any other repo change.
-4. On merge, other worktrees can `Import` on their next sync.
+4. On merge, other branches can `Import` on their next sync.
 
 ---
 
@@ -233,7 +233,7 @@ At render time the context is assembled in this order (later wins):
 1. Daemon defaults (autodetected `host.ip_address`, etc.).
 2. `repo.template_overrides` (deep-merged).
 3. `worktree.custom_context` (for `custom.*`).
-4. Worktree identity (`worktree.*`, `repo.*`).
+4. Branch identity (`worktree.*`, `repo.*`).
 
 ### What it is **not**
 
@@ -245,9 +245,9 @@ The import/export parser **refuses** any `template_overrides:` key found in `.ag
 
 ---
 
-## Variants in the worktree
+## Variants in the branch
 
-Each worktree has:
+Each branch has:
 
 - `environment_variant` — the chosen variant name (e.g. `"postgres"`).
 - `start_command`, `stop_command`, `nuke_command`, `logs_command`, `health_check_url`, `app_url` — the **rendered** strings, fully substituted, no Handlebars left.
@@ -257,7 +257,7 @@ The Environment tab has two stacked editors:
 | Editor | Who edits | What it shows |
 |---|---|---|
 | **Repo editor** (top) | Admins only | `version`, `environment.variants`, `environment.default`, `template_overrides` as YAML |
-| **Worktree editor** (bottom) | Admins only | The 6 rendered commands for this worktree |
+| **Branch editor** (bottom) | Admins only | The 6 rendered commands for this branch |
 
 Members see both editors **read-only**. The controls members can use are the **Variant picker** and the **Render** button in between them.
 
@@ -269,13 +269,13 @@ Members see both editors **read-only**. The controls members can use are the **V
 
 1. Pick a variant from the dropdown.
 2. Click **Render**.
-3. Agor re-evaluates `variant + template_overrides` and overwrites the worktree snapshot.
+3. Agor re-evaluates `variant + template_overrides` and overwrites the branch snapshot.
 
 If the snapshot has unsaved manual edits (admins only — members can't make them), Render prompts a confirm: *"Rendering will discard your local edits. Continue?"*
 
 ### No auto-tracking
 
-If an admin edits a variant after a worktree has rendered, **the worktree snapshot does not update** until someone clicks Render. There is no dirty indicator, no banner, no auto-rerender. This is deliberate: worktrees are short-lived, and an environment that could silently change under a running stack is worse than an ossified snapshot the user refreshes when they want to.
+If an admin edits a variant after a branch has rendered, **the branch snapshot does not update** until someone clicks Render. There is no dirty indicator, no banner, no auto-rerender. This is deliberate: branches are short-lived, and an environment that could silently change under a running stack is worse than an ossified snapshot the user refreshes when they want to.
 
 ### Empty state
 
@@ -297,8 +297,8 @@ Two orthogonal axes govern access: **who can edit what**, and **who can run Star
 | Edit `environment.variants` / `environment.default` | ❌ | ✅ |
 | Edit `template_overrides` | ❌ | ✅ |
 | Import / export `.agor.yml` | ❌ | ✅ |
-| Pick variant + Render to worktree | ✅ | ✅ |
-| Hand-edit worktree rendered commands | ❌ | ✅ |
+| Pick variant + Render to branch | ✅ | ✅ |
+| Hand-edit branch rendered commands | ❌ | ✅ |
 
 The reason members **cannot** hand-edit rendered commands: admins curate the set of commands that can run (the variants), members pick from that list. This makes the variant library the effective allowlist and complements the execution-time deny-list guard.
 
@@ -322,11 +322,11 @@ No forced user action. The upgrade is silent:
 | Before | After |
 |---|---|
 | `repos.environment_config: { up_command, down_command, … }` | `repos.environment: { version: 2, default: "default", variants: { default: <old value> }, template_overrides: {} }` |
-| Worktree `start_command` / `stop_command` / … | Unchanged — they're already the rendered snapshot this design formalizes. |
+| Branch `start_command` / `stop_command` / … | Unchanged — they're already the rendered snapshot this design formalizes. |
 | `.agor.yml` v1 (flat `environment: { start, stop, … }`) | Still parses. Loaded as `variants.default`. Export writes v2 going forward. |
 | `daemon.host_ip_address` in `~/.agor/config.yaml` | Still works as the fallback for `{{host.ip_address}}`. For new setups, prefer per-repo `template_overrides.host.ip_address`. |
 
-Existing worktrees keep running against their existing rendered commands. Nothing re-renders until someone hits Render or creates a new worktree.
+Existing branches keep running against their existing rendered commands. Nothing re-renders until someone hits Render or creates a new branch.
 
 ---
 
@@ -338,7 +338,7 @@ Two things worth internalizing before you ship a variant to the rest of the team
 
 The deny-list guard (the thing that blocks destructive commands like `rm -rf /`) runs on the **final rendered command**, **at execute time** — not against the template, and not at save time. That means:
 
-- A template can render to a denied command under some worktree contexts and not others.
+- A template can render to a denied command under some branch contexts and not others.
 - The first visibility you have that a command is denied is when someone clicks Start / Stop / Nuke and it fails.
 - Keep your templates simple — if the rendered shape of a command isn't obvious from reading the template, add a `description:` to the variant so teammates know what they're launching.
 
@@ -347,7 +347,7 @@ The deny-list guard (the thing that blocks destructive commands like `rm -rf /`)
 Restating the callout from above because it's the single most common mistake:
 
 - `template_overrides` values are **visible to every user with repo access**.
-- Values get **baked into shell strings** at render time — anyone who can read the worktree snapshot sees them.
+- Values get **baked into shell strings** at render time — anyone who can read the branch snapshot sees them.
 - Use it for IPs, hostnames, registries, profile names. **Not** for API keys, tokens, or passwords.
 - For secrets, use the per-session env-var system. Scope is per-session, access is limited to the session owner, and values never land in a rendered command.
 

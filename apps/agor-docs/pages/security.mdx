@@ -50,7 +50,7 @@ execution:
   unix_user_mode: simple
 ```
 
-**What it is:** Open access. All authenticated users can act on all worktrees. Everything runs as the daemon user.
+**What it is:** Open access. All authenticated users can act on all branches. Everything runs as the daemon user.
 
 **What's enforced:**
 - ✅ Authentication — REST and WebSocket calls require a JWT
@@ -60,7 +60,7 @@ execution:
 - ✅ Body size limits (10MB)
 
 **What's NOT enforced:**
-- ❌ Per-worktree permissions
+- ❌ Per-branch permissions
 - ❌ Filesystem isolation between users
 - ❌ Process isolation (everything is the daemon user)
 
@@ -78,10 +78,10 @@ execution:
   unix_user_mode: simple
 ```
 
-App-layer permission checks for worktree ownership and access tiers. No OS-level isolation — all execution still runs as the daemon user.
+App-layer permission checks for branch ownership and access tiers. No OS-level isolation — all execution still runs as the daemon user.
 
 **Adds:**
-- ✅ Worktree owners + `others_can` permission tiers (see below)
+- ✅ Branch owners + `others_can` permission tiers (see below)
 - ✅ Settings UI for managing access
 - ✅ API enforcement of view/session/prompt/all permissions
 
@@ -94,7 +94,7 @@ App-layer permission checks for worktree ownership and access tiers. No OS-level
 
 ---
 
-### Mode 3: Insulated (Worktree groups + executor user)
+### Mode 3: Insulated (Branch groups + executor user)
 
 ```yaml
 execution:
@@ -103,12 +103,12 @@ execution:
   executor_unix_user: agor_executor
 ```
 
-Adds per-worktree Unix groups (`agor_wt_*`) and a dedicated executor user. Filesystem permissions naturally enforce worktree boundaries.
+Adds per-branch Unix groups (`agor_wt_*`) and a dedicated executor user. Filesystem permissions naturally enforce branch boundaries.
 
 **Adds (on top of Mode 2):**
-- ✅ Per-worktree Unix groups, scoped filesystem access
+- ✅ Per-branch Unix groups, scoped filesystem access
 - ✅ Executors run as a dedicated, less-privileged user
-- ✅ Sessions can't reach files outside their worktree
+- ✅ Sessions can't reach files outside their branch
 
 **Still missing:**
 - ❌ Per-user identity for processes (everything still runs as the executor user)
@@ -142,14 +142,14 @@ Each Agor user must have a `unix_username`. Sessions execute as that user. Per-u
 
 ---
 
-## Worktree Permission Tiers (RBAC)
+## Branch Permission Tiers (RBAC)
 
-When `worktree_rbac: true` is set, every worktree has owners plus an `others_can` tier that controls what non-owners may do:
+When `worktree_rbac: true` is set, every branch has owners plus an `others_can` tier that controls what non-owners may do:
 
 | Tier | What others can do |
 |---|---|
 | `none` | No access — completely private to owners |
-| `view` | Read worktrees, sessions, tasks, messages |
+| `view` | Read branches, sessions, tasks, messages |
 | **`session`** (default) | Create *their own* sessions; prompt their own sessions only |
 | `prompt` | Prompt **any** session, including others' (but each session still runs as its creator's identity) |
 | `all` | Full control (create/update/delete sessions, change permissions) |
@@ -158,7 +158,7 @@ The `session` tier is the safe default — collaborators can work independently 
 
 ### Session Sharing (`dangerously_allow_session_sharing`)
 
-A worktree-level toggle, **off by default**. When OFF, spawning/forking attributes the new child to the *caller* — it runs as the caller's Unix user. When ON (legacy behavior), children inherit the parent's `created_by`, meaning a collaborator can effectively spawn agents that execute as the original session owner.
+A branch-level toggle, **off by default**. When OFF, spawning/forking attributes the new child to the *caller* — it runs as the caller's Unix user. When ON (legacy behavior), children inherit the parent's `created_by`, meaning a collaborator can effectively spawn agents that execute as the original session owner.
 
 Cross-user spawns under the legacy path emit `[SECURITY]` warning logs. See `context/explorations/session-sharing.md` for the full discussion.
 
@@ -171,7 +171,7 @@ Independent of mode:
 - ✅ **Authentication on every call** — REST and Socket.IO require a JWT, API key, or valid session token. There is no anonymous / unauthenticated path.
 - ✅ **Role-based authorization** — `viewer` / `member` / `admin` / `owner` gate privileged endpoints (terminals, env controls, config, user management).
 - ✅ **Encrypted credentials at rest** — Passwords with bcrypt (12 rounds), API keys and per-user env vars with AES-256-GCM under `AGOR_MASTER_SECRET`.
-- ✅ **Path traversal guards** — File browsing is restricted to `context/` within each worktree with traversal protection.
+- ✅ **Path traversal guards** — File browsing is restricted to `context/` within each branch with traversal protection.
 - ✅ **MCP token security** — Short-lived (24h default) JWTs in `Authorization: Bearer` header. Query-string tokens are rejected.
 - ✅ **Request size limits** — 10MB body cap to prevent oversized-payload DoS.
 - ✅ **Executor isolation** — SDKs run in separate processes; no direct DB access; just-in-time API keys via IPC. See [Architecture](/guide/architecture#current-architecture-executor-isolation).
@@ -198,16 +198,16 @@ The browser terminal is enabled by default for `member+` users. **In `unix_user_
 Three ways to handle this:
 
 1. **`unix_user_mode: strict`** — terminal runs as the user's Unix account. Safe.
-2. **`unix_user_mode: insulated`** — terminal runs as the executor user, scoped by worktree group. Mostly safe.
+2. **`unix_user_mode: insulated`** — terminal runs as the executor user, scoped by branch group. Mostly safe.
 3. **`execution.allow_web_terminal: false`** — disables the terminal entirely.
 
 The daemon prints a startup warning when the unsafe combination is active.
 
 ### Message Gateway is High-Trust
 
-Anyone who can DM the Slack bot (or `@agor`-mention on a wired GitHub repo) can prompt an agent to read, write, and execute code in the configured worktree. Treat enabling the [Message Gateway](/guide/message-gateway) as **giving message senders SSH access to that worktree**.
+Anyone who can DM the Slack bot (or `@agor`-mention on a wired GitHub repo) can prompt an agent to read, write, and execute code in the configured branch. Treat enabling the [Message Gateway](/guide/message-gateway) as **giving message senders SSH access to that branch**.
 
-Mitigations: dedicated worktrees, restricted bot distribution, supervised permission mode, and Unix isolation.
+Mitigations: dedicated branches, restricted bot distribution, supervised permission mode, and Unix isolation.
 
 ### Custom Config Path Is Half-Wired
 
