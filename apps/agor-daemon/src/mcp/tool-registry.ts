@@ -43,7 +43,9 @@ export interface SearchOptions {
 const DOMAIN_DESCRIPTIONS: Record<string, string> = {
   sessions: 'Agent conversations with genealogy (fork/spawn), task tracking, and message history',
   repos: 'Repository registration and management',
-  worktrees: 'Git worktrees with isolated branches, board placement, and zone pinning',
+  worktrees:
+    'Git worktrees with isolated branches, board placement, and zone pinning. ' +
+    'Every `agor_worktrees_*` tool also has an `agor_branches_*` alias — both names work; the worktrees-prefixed names are deprecated.',
   environment: 'Start/stop/health/logs/nuke for worktree dev environments',
   boards: 'Spatial canvases with zones for organizing worktrees and cards',
   cards: 'Kanban-style cards and card type definitions on boards',

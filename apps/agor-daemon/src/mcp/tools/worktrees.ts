@@ -30,7 +30,58 @@ import { assertValidVariant } from './_environment-helpers.js';
 const WORKTREE_NAME_PATTERN = /^[a-z0-9-]+$/;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/i;
 
-export function registerWorktreeTools(server: McpServer, ctx: McpContext): void {
+/**
+ * Wrap the McpServer so every `registerTool('agor_worktrees_X', …)` call
+ * also registers a sibling `agor_branches_X` alias. The new `agor_branches_*`
+ * name gets the original config + handler; the legacy `agor_worktrees_*`
+ * name gets a deprecation-prefixed description and a handler that emits an
+ * `[mcp][deprecation]` log line before delegating.
+ *
+ * This is the §7 rename plan from
+ * docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md:
+ * both names work for 1–2 minor versions; old emits deprecation warnings;
+ * old is removed in a future release. Keeping the wrapper at the file
+ * boundary means the 8 individual tool definitions stay declarative.
+ */
+function withBranchAliases(server: McpServer): McpServer {
+  const proxy = Object.create(server) as McpServer;
+  const original = server.registerTool.bind(server) as (
+    name: string,
+    config: Record<string, unknown>,
+    handler: (args: unknown) => unknown
+  ) => unknown;
+  (proxy as unknown as Record<string, unknown>).registerTool = (
+    name: string,
+    config: Record<string, unknown>,
+    handler: (args: unknown) => unknown
+  ) => {
+    if (!name.startsWith('agor_worktrees_')) {
+      return original(name, config, handler);
+    }
+    const branchName = name.replace('agor_worktrees_', 'agor_branches_');
+    // New name: clean handler + unchanged description.
+    original(branchName, config, handler);
+    // Legacy name: deprecation prefix + log on every invocation.
+    const deprecatedConfig: Record<string, unknown> = {
+      ...config,
+      description:
+        `[Deprecated alias of ${branchName}] ${(config.description as string | undefined) ?? ''}`.trim(),
+    };
+    const deprecatedHandler = async (args: unknown) => {
+      console.log(
+        `[mcp][deprecation] ${name} called; alias ${branchName} is available — ${name} will be removed in a future minor release`
+      );
+      return handler(args);
+    };
+    return original(name, deprecatedConfig, deprecatedHandler);
+  };
+  return proxy;
+}
+
+export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): void {
+  // Tools registered through this server get an automatic `agor_branches_*`
+  // alias. See `withBranchAliases` for the rationale.
+  const server = withBranchAliases(rawServer);
   // Tool 1: agor_worktrees_get
   server.registerTool(
     'agor_worktrees_get',

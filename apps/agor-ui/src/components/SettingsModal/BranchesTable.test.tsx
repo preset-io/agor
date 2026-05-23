@@ -1,6 +1,6 @@
 /**
  * Regression test for BranchesTable source-branch preservation in the
- * Settings → Worktrees → Create Worktree modal.
+ * Settings → Branches → Create Branch modal.
  *
  * Same root cause as NewBranchModal / BranchTab — every `repos.patched`
  * (or `boards.patched`) WebSocket event hands the table new array
@@ -57,7 +57,7 @@ describe('BranchesTable — source-branch preservation', { timeout: 10_000 }, ()
     );
 
     // Open the create modal
-    fireEvent.click(screen.getByRole('button', { name: /Create Worktree/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Create Branch/i }));
 
     // The init effect populates sourceBranch from the repo's default_branch
     const branchInput = screen.getByLabelText(/Source Branch/i) as HTMLInputElement;
