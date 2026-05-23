@@ -10,7 +10,7 @@
  * Accepts the union of `SessionStatus`, `TaskStatus`, and the `'pending'`
  * synonym used by `Pill.StatusPill`. Picked to match the prevailing
  * convention across `TaskStatusIcon`, `TimerPill`, and
- * `WorktreeModal/tabs/SessionsTab` — notably:
+ * `BranchModal/tabs/SessionsTab` — notably:
  * - `stopping` → warning (transitional, not "live")
  * - `awaiting_input` → processing (interactive, awaiting user)
  * - `awaiting_permission` → warning (passive, blocking)

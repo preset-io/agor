@@ -16,12 +16,12 @@ import { useAppMcpData, useAppRepoData, useAppUserData } from '../../contexts/Ap
 import { copyToClipboard } from '../../utils/clipboard';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
+import { BranchHeaderPill } from '../BranchHeaderPill';
 import { ConversationView } from '../ConversationView';
 import { EmbeddedTerminal } from '../EmbeddedTerminal/EmbeddedTerminal';
 import { ForkSpawnModal } from '../ForkSpawnModal';
 import { MCPServerPill } from '../MCPServer';
 import { IssuePill, PullRequestPill } from '../Pill';
-import { WorktreeHeaderPill } from '../WorktreeHeaderPill';
 
 export interface SessionPanelContentProps {
   client: AgorClient | null;
@@ -118,7 +118,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             <Space size={8} wrap style={{ flex: 1 }}>
               {/* Unified Worktree Pill */}
               {worktree && repo && (
-                <WorktreeHeaderPill
+                <BranchHeaderPill
                   repo={repo}
                   worktree={worktree}
                   onOpenWorktree={onOpenWorktree}

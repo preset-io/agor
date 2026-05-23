@@ -8,7 +8,7 @@
  *
  * Note: Custom Context (JSON) has been moved to AdvancedSettingsForm.
  * Issue URL and Pull Request URL have been moved to the Worktree entity.
- * These are now managed in the WorktreeModal instead.
+ * These are now managed in the BranchModal instead.
  */
 
 import { Form, Input } from 'antd';

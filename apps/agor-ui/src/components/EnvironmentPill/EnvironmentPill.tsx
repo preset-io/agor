@@ -19,7 +19,7 @@ import { Tag } from '../Tag';
 interface EnvironmentPillProps {
   repo: Repo; // Need repo for environment_config
   worktree: Worktree; // Has environment_instance (runtime state)
-  onEdit?: () => void; // Opens WorktreeModal → Environment tab
+  onEdit?: () => void; // Opens BranchModal → Environment tab
   onStartEnvironment?: (worktreeId: string) => void;
   onStopEnvironment?: (worktreeId: string) => void;
   onNukeEnvironment?: (worktreeId: string) => void;

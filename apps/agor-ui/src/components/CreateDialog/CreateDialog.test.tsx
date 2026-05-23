@@ -10,7 +10,7 @@
  *     active tab's effect did not re-fire (its own `isFormValid` had not
  *     changed), so nothing re-pushed the true value.
  *
- *  2. A sibling tab's deferred validity push (e.g. WorktreeTab's
+ *  2. A sibling tab's deferred validity push (e.g. BranchTab's
  *     `setTimeout(0)` in its init effect) could land in the shared bucket
  *     after the active tab's valid push, clobbering it.
  *

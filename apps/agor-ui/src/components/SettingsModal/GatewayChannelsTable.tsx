@@ -62,7 +62,7 @@ import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { JSONEditor, validateJSON } from '../JSONEditor';
-import { WorktreeSelect } from './WorktreeSelect';
+import { BranchSelect } from './BranchSelect';
 
 interface GatewayChannelsTableProps {
   client: AgorClient | null;
@@ -350,7 +350,7 @@ const ChannelFormFields: React.FC<{
             : undefined
         }
       >
-        <WorktreeSelect worktreeById={worktreeById} />
+        <BranchSelect worktreeById={worktreeById} />
       </Form.Item>
 
       {/* For GitHub channels, "Post messages as" lives in the User Alignment section */}

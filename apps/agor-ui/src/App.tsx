@@ -30,13 +30,13 @@ import { useEffect, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
 import { App as AgorApp } from './components/App';
+import type { WorktreeUpdate } from './components/BranchModal/tabs/GeneralTab';
 import { ErrorBoundary, setCrashContext } from './components/ErrorBoundary';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
 import { MobileApp } from './components/mobile/MobileApp';
 import { OnboardingWizard } from './components/OnboardingWizard';
-import type { WorktreeUpdate } from './components/WorktreeModal/tabs/GeneralTab';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ServicesConfigContext } from './contexts/ServicesConfigContext';
@@ -926,15 +926,14 @@ function AppContent() {
     }
     try {
       const action = options.metadataAction === 'archive' ? 'archived' : 'deleted';
-      showLoading(
-        `${options.metadataAction === 'archive' ? 'Archiving' : 'Deleting'} worktree...`,
-        { key: 'archive-delete' }
-      );
+      showLoading(`${options.metadataAction === 'archive' ? 'Archiving' : 'Deleting'} branch...`, {
+        key: 'archive-delete',
+      });
       await client.service(`worktrees/${worktreeId}/archive-or-delete`).create(options);
-      showSuccess(`Worktree ${action} successfully!`, { key: 'archive-delete' });
+      showSuccess(`Branch ${action} successfully!`, { key: 'archive-delete' });
     } catch (error) {
       showError(
-        `Failed to ${options.metadataAction} worktree: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to ${options.metadataAction} branch: ${error instanceof Error ? error.message : String(error)}`,
         { key: 'archive-delete' }
       );
       throw error;
@@ -946,12 +945,12 @@ function AppContent() {
       throw new Error('Not connected to daemon');
     }
     try {
-      showLoading('Unarchiving worktree...', { key: 'unarchive' });
+      showLoading('Unarchiving branch...', { key: 'unarchive' });
       await client.service(`worktrees/${worktreeId}/unarchive`).create(options || {});
-      showSuccess('Worktree unarchived successfully!', { key: 'unarchive' });
+      showSuccess('Branch unarchived successfully!', { key: 'unarchive' });
     } catch (error) {
       showError(
-        `Failed to unarchive worktree: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to unarchive branch: ${error instanceof Error ? error.message : String(error)}`,
         { key: 'unarchive' }
       );
       throw error;
@@ -968,10 +967,10 @@ function AppContent() {
       // Cast to Partial<Worktree> to satisfy Feathers type checking
       // The backend MCP handler properly handles null values for clearing fields
       await client.service('worktrees').patch(worktreeId, updates as Partial<Worktree>);
-      if (!options.silent) showSuccess('Worktree updated successfully!');
+      if (!options.silent) showSuccess('Branch updated successfully!');
     } catch (error) {
       showError(
-        `Failed to update worktree: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to update branch: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   };
@@ -993,7 +992,7 @@ function AppContent() {
   ): Promise<Worktree | null> => {
     if (!client) return null;
     try {
-      showLoading('Creating worktree...', { key: 'create-worktree' });
+      showLoading('Creating branch...', { key: 'create-worktree' });
 
       const worktree = (await client.service(`repos/${repoId}/worktrees`).create({
         name: data.name,
@@ -1013,7 +1012,7 @@ function AppContent() {
       return worktree;
     } catch (error) {
       showError(
-        `Failed to create worktree: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to create branch: ${error instanceof Error ? error.message : String(error)}`,
         { key: 'create-worktree' }
       );
       return null;

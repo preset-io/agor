@@ -48,10 +48,13 @@ import type { AgenticToolOption } from '../../types';
 import { createAssistantWorktree } from '../../utils/assistantCreation';
 import { initializeAudioOnInteraction } from '../../utils/audio';
 import { AppHeader } from '../AppHeader';
+import { BranchListDrawer } from '../BranchListDrawer';
+import { BranchModal, type BranchModalTab } from '../BranchModal';
+import type { WorktreeUpdate } from '../BranchModal/tabs/GeneralTab';
 import { CommentsPanel } from '../CommentsPanel';
 import { CreateDialog } from '../CreateDialog';
 import type { AssistantTabResult } from '../CreateDialog/tabs/AssistantTab';
-import type { WorktreeTabConfig } from '../CreateDialog/tabs/WorktreeTab';
+import type { BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
 import { NewSessionButton } from '../NewSessionButton';
@@ -62,9 +65,6 @@ import { SessionSettingsModal } from '../SessionSettingsModal';
 import { SettingsModal, UserSettingsModal } from '../SettingsModal';
 import { TerminalModal, WEB_TERMINAL_MIN_ROLE } from '../TerminalModal';
 import { ThemeEditorModal } from '../ThemeEditorModal';
-import { WorktreeListDrawer } from '../WorktreeListDrawer';
-import { WorktreeModal, type WorktreeModalTab } from '../WorktreeModal';
-import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
 
 const { Content } = Layout;
 
@@ -329,7 +329,7 @@ export const App: React.FC<AppProps> = ({
   const [terminalWorktreeId, setTerminalWorktreeId] = useState<string | undefined>(undefined);
   const [sessionSettingsId, setSessionSettingsId] = useState<string | null>(null);
   const [worktreeModalWorktreeId, setWorktreeModalWorktreeId] = useState<string | null>(null);
-  const [worktreeModalTab, setWorktreeModalTab] = useState<WorktreeModalTab | undefined>(undefined);
+  const [worktreeModalTab, setWorktreeModalTab] = useState<BranchModalTab | undefined>(undefined);
   const [logsModalWorktreeId, setLogsModalWorktreeId] = useState<string | null>(null);
   const [themeEditorOpen, setThemeEditorOpen] = useState(false);
 
@@ -505,7 +505,7 @@ export const App: React.FC<AppProps> = ({
     }
   };
 
-  const handleCreateWorktree = async (config: WorktreeTabConfig) => {
+  const handleCreateWorktree = async (config: BranchTabConfig) => {
     const worktree = await onCreateWorktree?.(config.repoId, {
       name: config.name,
       ref: config.ref,
@@ -549,7 +549,7 @@ export const App: React.FC<AppProps> = ({
   // useCallback deps) keeps the handler's identity stable across
   // socket-driven map churn — important because it flows through
   // SessionCanvas → initialNodes deps and a flipping identity would
-  // cascade re-renders into every WorktreeCard. Inline `useRef(...)`
+  // cascade re-renders into every BranchCard. Inline `useRef(...)`
   // rather than going through a helper so biome's
   // `useExhaustiveDependencies` heuristic recognizes the refs as
   // stable and doesn't false-positive on `.current.get` reads.
@@ -639,7 +639,7 @@ export const App: React.FC<AppProps> = ({
   // Update browser tab title based on current board
   useBoardTitle(currentBoard);
 
-  // Find worktree and repo for WorktreeModal
+  // Find worktree and repo for BranchModal
   const selectedWorktree = worktreeModalWorktreeId
     ? worktreeById.get(worktreeModalWorktreeId)
     : null;
@@ -655,7 +655,7 @@ export const App: React.FC<AppProps> = ({
   // unrelated socket churn (e.g. another user's session patch) doesn't
   // produce a fresh array reference on every render — that array flows into
   // SessionCanvas's `initialNodes` deps and would otherwise cascade into
-  // every WorktreeCard re-rendering.
+  // every BranchCard re-rendering.
   const boardWorktrees = useMemo(
     () =>
       mapToArray(boardObjectById)
@@ -733,7 +733,7 @@ export const App: React.FC<AppProps> = ({
   // Web terminal is gated by both the instance-level feature flag and the
   // user's role (`WEB_TERMINAL_MIN_ROLE`, shared with TerminalModal so the
   // threshold lives in one place). When disabled, we pass `undefined` so
-  // consumers (WorktreeCard, SessionPanel, EventStreamPanel) can hide their
+  // consumers (BranchCard, SessionPanel, EventStreamPanel) can hide their
   // terminal buttons via `{onOpenTerminal && ...}`.
   const canOpenTerminal = webTerminalEnabled && hasMinimumRole(user?.role, WEB_TERMINAL_MIN_ROLE);
 
@@ -753,7 +753,7 @@ export const App: React.FC<AppProps> = ({
       onViewLogs: (worktreeId: string) => setLogsModalWorktreeId(worktreeId),
       onOpenSettings: (sessionId: string) => setSessionSettingsId(sessionId),
       onSessionClick: handleSessionClick,
-      onOpenWorktree: (worktreeId: string, tab?: WorktreeModalTab) => {
+      onOpenWorktree: (worktreeId: string, tab?: BranchModalTab) => {
         setWorktreeModalWorktreeId(worktreeId);
         setWorktreeModalTab(tab);
       },
@@ -1132,7 +1132,7 @@ export const App: React.FC<AppProps> = ({
                 currentUser={user}
               />
             )}
-            <WorktreeModal
+            <BranchModal
               open={!!worktreeModalWorktreeId}
               onClose={() => {
                 setWorktreeModalWorktreeId(null);
@@ -1156,7 +1156,7 @@ export const App: React.FC<AppProps> = ({
               onSessionClick={handleSessionClick}
               onExecuteScheduleNow={onExecuteScheduleNow}
             />
-            <WorktreeListDrawer
+            <BranchListDrawer
               open={listDrawerOpen}
               onClose={() => setListDrawerOpen(false)}
               boards={mapToArray(boardById)}

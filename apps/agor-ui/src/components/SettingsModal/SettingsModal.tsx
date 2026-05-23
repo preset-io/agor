@@ -36,26 +36,26 @@ import type { MenuProps } from 'antd';
 import { Layout, Menu, Modal, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import { useServiceEnabled } from '../../hooks/useServicesConfig';
-import { WorktreeModal } from '../WorktreeModal';
-import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
+import { BranchModal } from '../BranchModal';
+import type { WorktreeUpdate } from '../BranchModal/tabs/GeneralTab';
 import { AboutTab } from './AboutTab';
 import { AgenticToolsSection } from './AgenticToolsSection';
 import { ArtifactsTable } from './ArtifactsTable';
 import { AssistantsTable } from './AssistantsTable';
 import { BoardsTable } from './BoardsTable';
+import { BranchesTable } from './BranchesTable';
 import { CardsTable } from './CardsTable';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
 import { MCPServersTable } from './MCPServersTable';
 import { ReposTable } from './ReposTable';
 import { UsersTable } from './UsersTable';
-import { WorktreesTable } from './WorktreesTable';
 
 const { Sider, Content } = Layout;
 
 export interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
-  client: AgorClient | null; // Still needed for WorktreeModal
+  client: AgorClient | null; // Still needed for BranchModal
   currentUser?: User | null; // Current logged-in user
   boardById: Map<string, Board>;
   boardObjects: BoardEntityObject[];
@@ -360,7 +360,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         );
       case 'worktrees':
         return (
-          <WorktreesTable
+          <BranchesTable
             client={client}
             worktreeById={worktreeById}
             repoById={repoById}
@@ -528,7 +528,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </Sider>
         <Content style={{ padding: '40px 32px 32px', overflow: 'auto' }}>{renderContent()}</Content>
       </Layout>
-      <WorktreeModal
+      <BranchModal
         open={worktreeModalOpen}
         onClose={handleWorktreeModalClose}
         worktree={selectedWorktree}

@@ -4,7 +4,7 @@ import { useThemedModal } from '../utils/modal';
 
 /**
  * Single source of truth for the "nuke environment" confirmation dialog.
- * Callers (EnvironmentPill, WorktreeHeaderPill, EnvironmentTab) must use
+ * Callers (EnvironmentPill, BranchHeaderPill, EnvironmentTab) must use
  * this so the destructive copy and button styling stay consistent.
  */
 export function useConfirmNukeEnvironment() {

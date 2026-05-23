@@ -10,10 +10,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AssistantTabResult } from './tabs/AssistantTab';
 import { AssistantTab } from './tabs/AssistantTab';
 import { BoardTab } from './tabs/BoardTab';
+import type { BranchTabConfig } from './tabs/BranchTab';
+import { BranchTab } from './tabs/BranchTab';
 import type { RepoTabResult } from './tabs/RepoTab';
 import { RepoTab } from './tabs/RepoTab';
-import type { WorktreeTabConfig } from './tabs/WorktreeTab';
-import { WorktreeTab } from './tabs/WorktreeTab';
 
 type ActiveTab = 'worktree' | 'assistant' | 'board' | 'repository';
 
@@ -59,7 +59,7 @@ export interface CreateDialogProps {
   currentBoardId?: string;
   defaultPosition?: { x: number; y: number };
   defaultTab?: ActiveTab;
-  onCreateWorktree: (config: WorktreeTabConfig) => void;
+  onCreateWorktree: (config: BranchTabConfig) => void;
   onCreateBoard: (board: Partial<Board>) => void;
   onCreateRepo: (data: CreateRepoRequest) => void | Promise<void>;
   onCreateLocalRepo: (data: CreateLocalRepoRequest) => void | Promise<void>;
@@ -89,7 +89,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Form submit refs — each tab exposes a submit function
-  const worktreeFormRef = useRef<(() => Promise<WorktreeTabConfig | null>) | null>(null);
+  const worktreeFormRef = useRef<(() => Promise<BranchTabConfig | null>) | null>(null);
   const boardFormRef = useRef<(() => Promise<Partial<Board> | null>) | null>(null);
   const repoFormRef = useRef<(() => Promise<RepoTabResult | null>) | null>(null);
   const assistantFormRef = useRef<(() => Promise<AssistantTabResult | null>) | null>(null);
@@ -194,7 +194,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
             description={PURPOSE_TEXT.worktree}
             style={{ marginBottom: 16 }}
           />
-          <WorktreeTab
+          <BranchTab
             repoById={repoById}
             currentBoardId={currentBoardId}
             defaultPosition={defaultPosition}

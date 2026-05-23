@@ -1,7 +1,7 @@
 import type { PermissionMode, PermissionScope, Session, SpawnConfig } from '@agor-live/client';
 import type React from 'react';
 import { createContext, useContext } from 'react';
-import type { WorktreeModalTab } from '../components/WorktreeModal/WorktreeModal';
+import type { BranchModalTab } from '../components/BranchModal/BranchModal';
 
 /**
  * AppActionsContext - Provides action callbacks for domain operations
@@ -35,7 +35,7 @@ export interface AppActionsContextValue {
   onOpenSettings?: (sessionId: string) => void;
   /** Open / select a session by id (cross-board navigation when needed). */
   onSessionClick?: (sessionId: string) => void;
-  onOpenWorktree?: (worktreeId: string, tab?: WorktreeModalTab) => void;
+  onOpenWorktree?: (worktreeId: string, tab?: BranchModalTab) => void;
   onOpenTerminal?: (commands: string[], worktreeId?: string) => void;
 }
 

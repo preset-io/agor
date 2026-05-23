@@ -67,12 +67,12 @@ import type { AgenticToolOption } from '../../types';
 import { sanitizeBoardCss } from '../../utils/sanitizeCss';
 import { isDarkTheme } from '../../utils/theme';
 import { AutocompleteTextarea } from '../AutocompleteTextarea/AutocompleteTextarea';
+import BranchCard from '../BranchCard';
 import CardModal from '../CardModal';
 import type { CardNodeData } from '../CardNode';
 import CardNode from '../CardNode';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import SessionCard from '../SessionCard';
-import WorktreeCard from '../WorktreeCard';
 import { AppNode } from './canvas/AppNode';
 import { ArtifactNode } from './canvas/ArtifactNode';
 import { CommentNode, ZoneNode } from './canvas/BoardObjectNodes';
@@ -227,12 +227,12 @@ const CardNodeWrapper = React.memo(({ data }: { data: CardNodeData }) => {
   );
 });
 
-// Custom node component that renders WorktreeCard.
+// Custom node component that renders BranchCard.
 //
 // React.memo's default shallow compare runs against the wrapper `{ data }`
 // prop. The `initialNodes` useMemo above rebuilds a fresh `data` object for
 // every worktree on every recomputation, so the default memo always fails
-// and every WorktreeCard re-renders on any session / worktree / board patch
+// and every BranchCard re-renders on any session / worktree / board patch
 // — even unrelated ones. We supply a custom areEqual that compares the
 // individual fields of `data` shallowly so unrelated socket events don't
 // invalidate this node. This is the primary fix for board jank during
@@ -243,7 +243,7 @@ const WorktreeNode = React.memo(
   ({ data }: { data: WorktreeNodeData }) => {
     return (
       <div className="worktree-node">
-        <WorktreeCard
+        <BranchCard
           worktree={data.worktree}
           repo={data.repo}
           sessions={data.sessions}
@@ -275,7 +275,7 @@ const WorktreeNode = React.memo(
   },
   (prev, next) => {
     // Shallow-compare the fields of `data` we actually pass down to
-    // WorktreeCard. If the parent rebuilt `data` but every relevant field
+    // BranchCard. If the parent rebuilt `data` but every relevant field
     // is referentially equal, skip re-rendering this card. The fields here
     // must match the props read from `data` above.
     const p = prev.data;
@@ -669,7 +669,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           position, // When pinned (parentId set), this is relative to zone; otherwise absolute
           // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
           zIndex: 500, // Above zones, below comments
-          // Set dimensions for collision detection (matches WorktreeCard size)
+          // Set dimensions for collision detection (matches BranchCard size)
           width: 500,
           height: 200, // Approximate height, will be measured by React Flow
           // Set parentId for visual nesting but allow dragging outside zone
@@ -820,7 +820,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     }, [board, boardObjectByCard, cardById, zoneLabels, handleCardClick, handleUnpinCard]);
 
     // No edges needed for worktree-centric boards
-    // (Session genealogy is visualized within WorktreeCard, not as canvas edges)
+    // (Session genealogy is visualized within BranchCard, not as canvas edges)
     const initialEdges: Edge[] = useMemo(() => [], []);
 
     // Store ReactFlow instance ref

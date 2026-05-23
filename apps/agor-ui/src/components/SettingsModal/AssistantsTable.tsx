@@ -34,11 +34,11 @@ import { useEnsureFrameworkRepo } from '@/hooks/useEnsureFrameworkRepo';
 import { createAssistantWorktree } from '@/utils/assistantCreation';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
-import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
+import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
+import type { WorktreeUpdate } from '../BranchModal/tabs/GeneralTab';
 import { AssistantFormFields, CREATE_NEW_BOARD } from '../forms/AssistantFormFields';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import { UserAvatar } from '../metadata/UserAvatar';
-import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
 
 interface AssistantsTableProps {
   worktreeById: Map<string, Worktree>;
@@ -436,7 +436,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
 
       {/* Archive/Delete Modal */}
       {selectedWorktree && (
-        <ArchiveDeleteWorktreeModal
+        <ArchiveDeleteBranchModal
           open={archiveDeleteModalOpen}
           worktree={selectedWorktree}
           sessionCount={(sessionsByWorktree.get(selectedWorktree.worktree_id) || []).length}
