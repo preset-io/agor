@@ -3,31 +3,44 @@
  * Codemod: rename "Worktree" → "Branch" in **user-visible UI strings only**.
  *
  * Surgical — uses the TypeScript compiler API to walk each .ts/.tsx file
- * and rewrite ONLY:
+ * with a slot-aware visitor. A node sits in a "user-visible slot" if it is
+ * (transitively, through transparent expressions like ternaries / `||` /
+ * `??` / parens / template-expression literal parts) the value side of:
  *
- *   1. JsxText nodes (text content between JSX tags)
- *   2. String / template literals passed to JSX attributes whose name is
- *      in `UI_LABEL_ATTRS` (title, placeholder, label, tooltip, ...)
- *   3. String / template literals assigned to object-literal keys in
- *      `UI_LABEL_ATTRS` (Modal.confirm({ title: '...' }), notification
- *      args, etc.). Catches `Modal.confirm`, `message.success`-style
- *      callsites by structure, not by callee name.
- *   4. String / template literals passed as the first arg of well-known
- *      notification helpers in `NOTIFY_FUNCS` (showSuccess, showError,
- *      message.success, notification.warning, ...).
+ *   1. A `JsxAttribute` whose name is in `UI_LABEL_ATTRS`
+ *      (`title`, `placeholder`, `label`, `tooltip`, `extra`, `copyLabel`, ...)
+ *   2. A `PropertyAssignment` whose key is in `UI_LABEL_ATTRS`
+ *      (catches Modal.confirm({ title: '...', content: '...' }), etc.)
+ *   3. The first arg of a notification helper call in `NOTIFY_FUNCS`
+ *      (`showSuccess`, `message.success`, `notification.warning`,
+ *      `Modal.confirm`, ...)
+ *   4. A `JsxExpression` that's a direct child of a `JsxElement` /
+ *      `JsxFragment` (catches `<Tag>{x ? 'A' : 'B'}</Tag>`)
+ *
+ * Plus: `JsxText` (raw text between JSX tags) is always rewritten — no
+ * slot wrapping needed.
  *
  * NEVER touched:
  *   - Identifiers (variables, functions, types, props, imports)
  *   - Import / export specifiers, module paths
  *   - JSX element / attribute names
  *   - JSDoc / line / block comments
+ *   - The `${...}` expression parts of template literals (only the literal
+ *     text segments are user-visible)
  *   - String literals that look like git CLI (`git worktree …`)
- *   - String literals that contain `worktree_id`, `worktreeId`, `/worktrees/`,
- *     `worktrees/` paths (URLs, query params, FS paths, DB column names)
+ *   - String literals that contain `worktree_id`, `worktreeId`, `/worktrees/`
+ *     paths (URLs, query params, FS paths, DB column names)
  *
  * Replacement (case-preserved, longest-first so plurals win):
  *   Worktrees → Branches, Worktree → Branch
  *   worktrees → branches, worktree → branch
+ *
+ * Out of reach (deliberately — fix manually):
+ *   - String literals stored in const-extracted maps / records
+ *     (e.g. `const ACTION_LABELS = { worktree: 'Create Worktree', ... }`).
+ *     Their user-visible-ness can't be detected without semantic typing.
+ *   - String literals assigned to bare `const`s (e.g. `const title = ...`)
+ *     even if subsequently used in a UI slot.
  *
  * Usage:
  *   node scripts/codemod-rename-worktree-to-branch.mjs              # apply to apps/agor-ui/src
@@ -75,6 +88,9 @@ const UI_LABEL_ATTRS = new Set([
   'text',
   'tabLabel',
   'emptyText',
+  'emptyMessage',
+  'extra',
+  'copyLabel',
 ]);
 
 // Notification / toast helpers — when these are CALLED, the first string-like
@@ -95,8 +111,9 @@ const NOTIFY_FUNCS = new Set([
 ]);
 const NOTIFY_RECEIVERS = new Set(['message', 'notification', 'Modal', 'toast']);
 
-// Substrings that mark a string literal as machine-facing — skip even inside a UI_LABEL_ATTR.
-// (CSS class names, URL paths, DB columns, IDs, etc.)
+// Substrings that mark a string literal as machine-facing — skip even inside a UI slot.
+// (CSS class names, URL paths, DB columns, IDs, Handlebars vars referencing the
+// canonical Worktree context object, etc.)
 const MACHINE_MARKERS = [
   'worktree_id',
   'worktreeId',
@@ -106,6 +123,8 @@ const MACHINE_MARKERS = [
   'agor_worktrees_',
   'git worktree', // git CLI primitive — not Agor's "branch" concept
   'git worktrees',
+  '{{worktree', // Handlebars template var → canonical Worktree object (renderer-defined)
+  '{{ worktree', // ditto, with whitespace
 ];
 
 // case-preserving replacement
@@ -181,126 +200,164 @@ function isNotifyCall(call) {
   return false;
 }
 
-// Decide whether a string-literal-like node sits inside a user-visible slot.
-function isInUiSlot(node) {
-  const parent = node.parent;
-  if (!parent) return false;
-  // <Foo title="..." />
-  if (parent.kind === ts.SyntaxKind.JsxAttribute) {
-    const attrName = getJsxAttributeName(parent);
-    return attrName != null && UI_LABEL_ATTRS.has(attrName);
+// Rewrite a string literal in-place using the raw source slice. Preserves
+// the original escape spelling and quote character — important because
+// `node.text` is the *cooked* representation (e.g. `\n` → real newline).
+function rewriteStringLiteral(node, sourceFile, edits) {
+  const start = node.getStart(sourceFile);
+  const end = node.getEnd();
+  const raw = sourceFile.text.slice(start, end);
+  if (raw.length < 2) return; // malformed
+  const open = raw[0];
+  const close = raw[raw.length - 1];
+  const inner = raw.slice(1, -1);
+  if (!shouldRewriteText(inner)) return;
+  const newInner = replaceWorktreeText(inner);
+  if (newInner === inner) return;
+  edits.push({ start, end, newText: `${open}${newInner}${close}` });
+}
+
+// Rewrite the head + each span literal of a template expression in-place.
+// Skips the `${…}` expressions — they're code, not user copy.
+function rewriteTemplateExpression(node, sourceFile, edits) {
+  // Head: backtick + text + `${`  →  inner is [pos+1 .. end-2)
+  const head = node.head;
+  const headInnerStart = head.getStart(sourceFile) + 1;
+  const headInnerEnd = head.getEnd() - 2;
+  const headInner = sourceFile.text.slice(headInnerStart, headInnerEnd);
+  if (shouldRewriteText(headInner)) {
+    const next = replaceWorktreeText(headInner);
+    if (next !== headInner) {
+      edits.push({ start: headInnerStart, end: headInnerEnd, newText: next });
+    }
   }
-  // <Foo title={"..."} />
-  if (
-    parent.kind === ts.SyntaxKind.JsxExpression &&
-    parent.parent?.kind === ts.SyntaxKind.JsxAttribute
-  ) {
-    const attrName = getJsxAttributeName(parent.parent);
-    return attrName != null && UI_LABEL_ATTRS.has(attrName);
+  // Spans: `}text${` (middle) or `}text\`` (tail)
+  for (const span of node.templateSpans) {
+    const lit = span.literal;
+    const isTail = lit.kind === ts.SyntaxKind.TemplateTail;
+    const innerStart = lit.getStart(sourceFile) + 1;
+    const innerEnd = isTail ? lit.getEnd() - 1 : lit.getEnd() - 2;
+    const inner = sourceFile.text.slice(innerStart, innerEnd);
+    if (shouldRewriteText(inner)) {
+      const next = replaceWorktreeText(inner);
+      if (next !== inner) edits.push({ start: innerStart, end: innerEnd, newText: next });
+    }
   }
-  // { title: '...' }
-  if (parent.kind === ts.SyntaxKind.PropertyAssignment) {
-    const propName = getPropertyAssignmentName(parent);
-    return propName != null && UI_LABEL_ATTRS.has(propName);
+}
+
+// Expressions that PASS THROUGH the user-visible-slot context to their
+// children. Anything else (CallExpressions, JsxElements, ArrowFunctions,
+// ObjectLiterals, comparison BinaryExpressions like `===`, …) CLOSES the
+// slot — string literals in those subtrees are code, not user copy.
+function isTransparentExpression(node) {
+  switch (node.kind) {
+    case ts.SyntaxKind.ParenthesizedExpression:
+    case ts.SyntaxKind.ConditionalExpression:
+    case ts.SyntaxKind.JsxExpression: // `{ … }` wrapper inside JSX
+    case ts.SyntaxKind.NonNullExpression: // `foo!`
+    case ts.SyntaxKind.AsExpression: // `foo as Bar`
+    case ts.SyntaxKind.TypeAssertionExpression: // `<Bar>foo`
+      return true;
+    case ts.SyntaxKind.BinaryExpression: {
+      const op = node.operatorToken.kind;
+      return (
+        op === ts.SyntaxKind.BarBarToken || // ||
+        op === ts.SyntaxKind.AmpersandAmpersandToken || // &&
+        op === ts.SyntaxKind.QuestionQuestionToken // ??
+      );
+    }
+    default:
+      return false;
   }
-  // showSuccess('...'), message.success(`...`)  — first arg of a notify call.
-  if (parent.kind === ts.SyntaxKind.CallExpression && isNotifyCall(parent)) {
-    return parent.arguments[0] === node;
-  }
-  return false;
 }
 
 function collectEdits(sourceFile) {
-  // Each edit: { start, end, newText }
   const edits = [];
 
-  const visit = (node) => {
-    // 1. JsxText — raw text between JSX tags.
-    //    Note: `node.text` includes leading whitespace, but `node.getStart()`
-    //    skips it. We must use the raw substring (via `node.pos` / `node.end`)
-    //    as both the source and the position so the rewrite is 1:1.
+  /**
+   * Walk `node` with `inSlot` telling us whether we sit inside a
+   * user-visible UI slot. Slot openers set `inSlot=true` on the
+   * value-side child and recurse selectively. Within an open slot,
+   * only `isTransparentExpression` nodes (parens, `?:`, `||`/`&&`/`??`,
+   * template-expression literal parts) propagate the slot to their
+   * children — every other node kind closes it. This prevents
+   * over-rewriting state-machine values, Handlebars var names, set
+   * membership strings, etc. that happen to sit under a JsxExpression
+   * child of JSX.
+   */
+  const visit = (node, inSlot) => {
+    // JsxText: always rewrite, never has rewritable children.
     if (node.kind === ts.SyntaxKind.JsxText) {
       const raw = sourceFile.text.slice(node.pos, node.end);
       if (shouldRewriteText(raw)) {
-        const newText = replaceWorktreeText(raw);
-        if (newText !== raw) {
-          edits.push({ start: node.pos, end: node.end, newText });
-        }
+        const next = replaceWorktreeText(raw);
+        if (next !== raw) edits.push({ start: node.pos, end: node.end, newText: next });
       }
+      return;
     }
-    // 2. StringLiteral in a UI slot.
-    else if (node.kind === ts.SyntaxKind.StringLiteral) {
-      if (isInUiSlot(node)) {
-        const text = node.text;
-        if (shouldRewriteText(text)) {
-          const newText = replaceWorktreeText(text);
-          if (newText !== text) {
-            // Preserve original quotes.
-            const raw = sourceFile.text.slice(node.getStart(sourceFile), node.getEnd());
-            const quote = raw[0];
-            edits.push({
-              start: node.getStart(sourceFile),
-              end: node.getEnd(),
-              newText: `${quote}${newText}${quote}`,
-            });
-          }
-        }
+
+    // In-slot string-like literals: rewrite.
+    if (inSlot) {
+      if (node.kind === ts.SyntaxKind.StringLiteral) {
+        rewriteStringLiteral(node, sourceFile, edits);
+        return;
       }
-    }
-    // 3. NoSubstitutionTemplateLiteral (backtick, no ${}).
-    else if (node.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral) {
-      if (isInUiSlot(node)) {
-        const text = node.text;
-        if (shouldRewriteText(text)) {
-          const newText = replaceWorktreeText(text);
-          if (newText !== text) {
-            edits.push({
-              start: node.getStart(sourceFile),
-              end: node.getEnd(),
-              newText: `\`${newText}\``,
-            });
-          }
-        }
+      if (node.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral) {
+        rewriteStringLiteral(node, sourceFile, edits);
+        return;
       }
-    }
-    // 4. TemplateExpression (backtick with ${}) — rewrite head + each span middle/tail
-    //    when the template lives in a UI slot.
-    else if (node.kind === ts.SyntaxKind.TemplateExpression) {
-      if (isInUiSlot(node)) {
-        // head
-        const head = node.head;
-        if (shouldRewriteText(head.text)) {
-          const newText = replaceWorktreeText(head.text);
-          if (newText !== head.text) {
-            // head raw text is between the opening ` and ${, i.e. starts at getStart()+1
-            // and ends at getEnd()-2. We rewrite the inner text in place.
-            const start = head.getStart(sourceFile) + 1;
-            const end = head.getEnd() - 2;
-            edits.push({ start, end, newText });
-          }
-        }
-        // spans: middle / tail literals
+      if (node.kind === ts.SyntaxKind.TemplateExpression) {
+        rewriteTemplateExpression(node, sourceFile, edits);
+        // Descend into ${…} expressions with inSlot=false — they're code.
         for (const span of node.templateSpans) {
-          const lit = span.literal;
-          if (shouldRewriteText(lit.text)) {
-            const newText = replaceWorktreeText(lit.text);
-            if (newText !== lit.text) {
-              // middle: }text${  → inner is start+1 .. end-2
-              // tail:   }text`   → inner is start+1 .. end-1
-              const isTail = lit.kind === ts.SyntaxKind.TemplateTail;
-              const start = lit.getStart(sourceFile) + 1;
-              const end = isTail ? lit.getEnd() - 1 : lit.getEnd() - 2;
-              edits.push({ start, end, newText });
-            }
-          }
+          visit(span.expression, false);
         }
+        return;
       }
     }
 
-    ts.forEachChild(node, visit);
+    // Slot openers: open or close the slot based on local context, ignoring
+    // whatever `inSlot` we inherited. Attributes and properties have their
+    // own user-visibility rule (UI_LABEL_ATTRS) that overrides any
+    // surrounding slot.
+    if (node.kind === ts.SyntaxKind.JsxAttribute) {
+      const attrName = getJsxAttributeName(node);
+      const isUi = attrName != null && UI_LABEL_ATTRS.has(attrName);
+      // The attribute name itself is never rewritten.
+      if (node.initializer) visit(node.initializer, isUi);
+      return;
+    }
+    if (node.kind === ts.SyntaxKind.PropertyAssignment) {
+      const propName = getPropertyAssignmentName(node);
+      const isUi = propName != null && UI_LABEL_ATTRS.has(propName);
+      if (node.initializer) visit(node.initializer, isUi);
+      return;
+    }
+    if (node.kind === ts.SyntaxKind.CallExpression && isNotifyCall(node)) {
+      // Callee is code; only the first arg is user-visible.
+      visit(node.expression, false);
+      if (node.arguments[0]) visit(node.arguments[0], true);
+      for (let i = 1; i < node.arguments.length; i++) visit(node.arguments[i], false);
+      return;
+    }
+    // `<Tag>{ … }</Tag>` — the expression is JSX child content, user-visible.
+    if (
+      node.kind === ts.SyntaxKind.JsxExpression &&
+      (node.parent?.kind === ts.SyntaxKind.JsxElement ||
+        node.parent?.kind === ts.SyntaxKind.JsxFragment)
+    ) {
+      if (node.expression) visit(node.expression, true);
+      return;
+    }
+
+    // Default: propagate `inSlot` only through transparent expressions.
+    // Opaque nodes (CallExpressions, JsxElements, ArrowFunctions, …) close
+    // the slot — their string-literal descendants are code.
+    const childSlot = inSlot && isTransparentExpression(node);
+    ts.forEachChild(node, (child) => visit(child, childSlot));
   };
 
-  visit(sourceFile);
+  visit(sourceFile, false);
   return edits;
 }
 
