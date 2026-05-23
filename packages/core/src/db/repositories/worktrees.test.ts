@@ -239,19 +239,12 @@ describe('WorktreeRepository.create', () => {
     expect(fetched?.clone_depth).toBe(100);
   });
 
-  dbTest('rejects storage_mode values outside the enum (CHECK constraint)', async ({ db }) => {
-    const repoRepo = new RepoRepository(db);
-    const wtRepo = new WorktreeRepository(db);
-    const repo = await repoRepo.create(createRepoData());
-    const data = {
-      ...createWorktreeData({ repo_id: repo.repo_id, name: 'bad-storage-mode' }),
-      // biome-ignore lint/suspicious/noExplicitAny: deliberately bypassing the
-      // type system to verify the DB-layer CHECK constraint, not the TS type.
-      storage_mode: 'nonsense' as any,
-    };
-
-    await expect(wtRepo.create(data)).rejects.toThrow();
-  });
+  // Note: storage_mode enum validation is enforced at the application
+  // layer (Drizzle schema enum hint, Zod payload schemas, daemon service
+  // checks) — NOT via a DB-side CHECK constraint, per
+  // context/guides/creating-database-migrations.md §"Avoid CHECK constraints
+  // for enum-like columns on SQLite". A bogus literal would pass the DB
+  // here and get rejected at the daemon/MCP boundary instead.
 });
 
 // ============================================================================

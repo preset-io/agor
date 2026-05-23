@@ -454,6 +454,47 @@ export function createGit(
   return { git };
 }
 
+/**
+ * Build a git client pre-scoped for talking to `remoteUrl`. Centralises the
+ * "derive the auth-header host from the URL, then call createGit" two-step
+ * that every remote-talking helper needs (cloneRepo, createBranchAsClone, …).
+ * Keep call sites focused on their domain logic instead of repeating the
+ * auth-host derivation.
+ */
+export function createGitForRemote(
+  remoteUrl: string,
+  env?: Record<string, string>
+): { git: ReturnType<typeof simpleGit> } {
+  return createGit(undefined, env, parseHostFromGitUrl(remoteUrl));
+}
+
+/**
+ * Register `path` as a git `safe.directory` in the daemon user's global
+ * gitconfig. Multi-user setups (worktrees owned by one uid, accessed by
+ * another) trip "dubious ownership" otherwise. Non-fatal: logs a warning
+ * and returns on failure, since the worktree itself is already on disk.
+ *
+ * IMPORTANT: never pass user env here. `createGit(_, env)` activates the
+ * impersonation isolation block (`GIT_CONFIG_GLOBAL=/dev/null`), and
+ * `addConfig(..., 'global')` writes to whatever `GIT_CONFIG_GLOBAL` points
+ * at — git would try to lock `/dev/null` and fail with permission denied.
+ * The safe.directory entry belongs in the daemon user's real `~/.gitconfig`
+ * so daemon-side git ops (which do not load /dev/null) can find it.
+ */
+export async function addSafeDirectoryBestEffort(path: string, logPrefix?: string): Promise<void> {
+  const prefix = logPrefix ? `${logPrefix} ` : '';
+  try {
+    const { git } = createGit(path);
+    await git.addConfig('safe.directory', path, true, 'global');
+    console.log(`${prefix}✅ Added ${path} to git safe.directory`);
+  } catch (error) {
+    console.warn(
+      `${prefix}⚠️  Failed to add ${path} to safe.directory:`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+}
+
 export interface CloneOptions {
   url: string;
   targetDir?: string;
@@ -590,11 +631,10 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
   // http.extraheader; GIT_CONFIG_GLOBAL isolation is active only when env is
   // provided (intentional — callers without env inherit the daemon process
   // environment so they can read /etc/gitconfig, safe.directory, etc.).
-  // Derive the auth-header host from the clone URL so GitHub Enterprise and
-  // self-hosted GitLab work without per-deployment configuration. (Bitbucket
-  // Cloud needs a different username shape — see buildAuthHeaderEnv comments.)
-  const authHost = parseHostFromGitUrl(cloneUrl);
-  const { git } = createGit(undefined, options.env, authHost);
+  // `createGitForRemote` derives the auth-header host from the clone URL so
+  // GitHub Enterprise / self-hosted GitLab work without per-deployment config.
+  // (Bitbucket Cloud needs a different username shape — see buildAuthHeaderEnv.)
+  const { git } = createGitForRemote(cloneUrl, options.env);
 
   if (options.onProgress) {
     git.outputHandler((_command, _stdout, _stderr) => {
@@ -940,27 +980,11 @@ export async function createWorktree(
     }
   }
 
-  // Add worktree to safe.directory to prevent "dubious ownership" errors
-  // This is needed when worktrees are owned by a different user (e.g., daemon user)
-  // but accessed by other users (e.g., in multi-user Linux environments).
-  //
-  // IMPORTANT: do NOT pass the user `env` here. `createGit(_, env)` activates
-  // the impersonation isolation block (`GIT_CONFIG_GLOBAL=/dev/null`), and
-  // `addConfig(..., 'global')` writes to whatever `GIT_CONFIG_GLOBAL` points
-  // at — git would try to lock `/dev/null` and fail with permission denied.
-  // The safe.directory entry belongs in the daemon user's real `~/.gitconfig`
-  // so daemon-side git ops (which do not load /dev/null) can find it.
-  try {
-    const { git: safeDirGit } = createGit(worktreePath);
-    await safeDirGit.addConfig('safe.directory', worktreePath, true, 'global');
-    console.log(`✅ Added ${worktreePath} to git safe.directory`);
-  } catch (error) {
-    // Non-fatal - log warning and continue
-    console.warn(
-      `⚠️  Failed to add ${worktreePath} to safe.directory:`,
-      error instanceof Error ? error.message : String(error)
-    );
-  }
+  // Register the worktree as a safe.directory in the daemon user's
+  // ~/.gitconfig — multi-user setups (worktrees owned by one uid, accessed
+  // by another) trip "dubious ownership" otherwise. Non-fatal; the worktree
+  // itself is already on disk.
+  await addSafeDirectoryBestEffort(worktreePath);
 }
 
 /**
@@ -979,15 +1003,24 @@ export interface CreateBranchAsCloneOptions {
   /** Absolute path where the new clone should land. Must not already exist. */
   targetPath: string;
   /**
-   * Branch to check out after the clone. Forwarded as `--branch <ref>`. The
-   * remote must already have this ref. Use {@link createWorktree} or a
-   * follow-up `git checkout -b` if you need to *create* a new branch.
+   * Branch to clone. Forwarded as `git clone --branch <ref>`. The remote
+   * must already have this ref. When {@link newBranchName} is also set,
+   * this is the *base* ref the new branch is created off (the typical
+   * "feature off main" flow).
    */
   ref: string;
   /**
+   * Optional new branch to create after the clone, via
+   * `git checkout -b <newBranchName>` against the cloned tip of {@link ref}.
+   * Use this when the caller wants `createBranch=true` semantics in
+   * clone-mode: the remote doesn't have the new branch yet, so we clone
+   * the source and fork locally. Omit to just check out `ref` directly.
+   */
+  newBranchName?: string;
+  /**
    * Optional shallow-clone depth. Positive integer → `--depth N`. Omit (or
    * pass `undefined`) for a full clone with complete history. Out of scope
-   * for this PR: `--reference` / `--filter=blob:none` (see design doc §5).
+   * for now: `--reference` / `--filter=blob:none` (see design doc §5).
    */
   depth?: number;
   /**
@@ -1008,31 +1041,43 @@ export interface CreateBranchAsCloneOptions {
 export interface CreateBranchAsCloneResult {
   /** Absolute path of the created clone (echoes back `targetPath`). */
   path: string;
-  /** Branch the clone landed on (echoes back `ref`). */
+  /**
+   * Branch the working tree is actually on after the call. Equal to
+   * `newBranchName` when set (post-checkout); otherwise equal to `ref`.
+   */
   ref: string;
 }
 
 /**
- * Create a self-standing clone of a remote at `targetPath`, checked out to
- * `ref`. Sibling to {@link createWorktree}; chosen at worktree-create time
+ * Create a self-standing clone of a remote at `targetPath` and check out a
+ * branch. Sibling to {@link createWorktree}; chosen at worktree-create time
  * by the `storage_mode = 'clone'` opt-in.
+ *
+ * Two flows:
+ *  - Without `newBranchName`: clone `ref` directly. Equivalent to
+ *    `git clone --branch <ref> [--depth N] --single-branch <remoteUrl> <targetPath>`.
+ *  - With `newBranchName`: clone `ref` as the base, then
+ *    `git checkout -b <newBranchName>`. This is the typical "feature off
+ *    main" flow that the create-time UI emits; the new branch doesn't
+ *    exist on the remote yet, so we can't `git clone --branch <new>`.
  *
  * Unlike {@link createWorktree}, this issues a real `git clone` and does
  * not touch the per-repo base clone at `~/.agor/repos/<slug>/`. The
  * resulting working directory has its own `.git/` directory — `.git/config`,
  * remotes, credentials, hooks, and refs are all branch-local.
  *
- * Implemented via `simple-git`'s `.clone()`; no `execSync`/`spawn`.
- * Credentials are delivered via `http.<host>.extraheader` env vars exactly
- * like {@link cloneRepo}, never on argv.
+ * Implemented via `simple-git`; no `execSync`/`spawn`. Credentials are
+ * delivered via `http.<host>.extraheader` env vars exactly like
+ * {@link cloneRepo}, never on argv.
  *
- * @throws if `targetPath` already exists, the ref is invalid, or the
- *         underlying clone fails (network, auth, missing ref, …).
+ * @throws if `targetPath` already exists, either ref is invalid, the
+ *         underlying clone fails (network, auth, missing base ref, …), or
+ *         the post-clone `checkout -b` fails.
  */
 export async function createBranchAsClone(
   options: CreateBranchAsCloneOptions
 ): Promise<CreateBranchAsCloneResult> {
-  const { remoteUrl, targetPath, ref, depth, env } = options;
+  const { remoteUrl, targetPath, ref, newBranchName, depth, env } = options;
   const singleBranch = options.singleBranch ?? true;
 
   if (!remoteUrl) {
@@ -1042,6 +1087,9 @@ export async function createBranchAsClone(
     throw new Error('targetPath is required');
   }
   await validateGitRef(ref);
+  if (newBranchName !== undefined) {
+    await validateGitRef(newBranchName);
+  }
   if (depth !== undefined && (!Number.isInteger(depth) || depth <= 0)) {
     throw new Error(`Invalid clone depth: expected positive integer, got ${depth}`);
   }
@@ -1053,10 +1101,7 @@ export async function createBranchAsClone(
     );
   }
 
-  // Mirror cloneRepo's auth-header path: derive the host from the URL so
-  // tokens are scoped to the right forge (github.com vs. GHE vs. GitLab).
-  const authHost = parseHostFromGitUrl(remoteUrl);
-  const { git } = createGit(undefined, env, authHost);
+  const { git } = createGitForRemote(remoteUrl, env);
 
   // `--branch <ref>` pins the working tree to the ref instead of remote HEAD.
   // `--single-branch` avoids pulling sibling branches we'll never look at.
@@ -1067,24 +1112,28 @@ export async function createBranchAsClone(
 
   console.log(
     `[createBranchAsClone] Cloning ${remoteUrl} → ${targetPath} ` +
-      `(branch=${ref}, depth=${depth ?? 'full'}, singleBranch=${singleBranch})`
+      `(ref=${ref}${newBranchName ? `, newBranch=${newBranchName}` : ''}, ` +
+      `depth=${depth ?? 'full'}, singleBranch=${singleBranch})`
   );
   await git.clone(remoteUrl, targetPath, cloneArgs);
 
-  // Mirror createWorktree's safe.directory registration. Without this,
-  // ops from a different uid on the same host trip "dubious ownership".
-  try {
-    const { git: safeDirGit } = createGit(targetPath);
-    await safeDirGit.addConfig('safe.directory', targetPath, true, 'global');
-    console.log(`[createBranchAsClone] Added ${targetPath} to git safe.directory`);
-  } catch (error) {
-    console.warn(
-      `[createBranchAsClone] Failed to add ${targetPath} to safe.directory:`,
-      error instanceof Error ? error.message : String(error)
+  // Optional post-clone fork: create the new branch off the cloned tip.
+  // simple-git's `.checkoutLocalBranch` issues `git checkout -b <name>`.
+  // Re-scope to the working tree (not the original `git` instance, which
+  // wasn't bound to a baseDir).
+  let finalRef = ref;
+  if (newBranchName) {
+    console.log(
+      `[createBranchAsClone] Creating local branch '${newBranchName}' off cloned '${ref}'`
     );
+    const { git: cloneGit } = createGit(targetPath, env);
+    await cloneGit.checkoutLocalBranch(newBranchName);
+    finalRef = newBranchName;
   }
 
-  return { path: targetPath, ref };
+  await addSafeDirectoryBestEffort(targetPath, '[createBranchAsClone]');
+
+  return { path: targetPath, ref: finalRef };
 }
 
 /**

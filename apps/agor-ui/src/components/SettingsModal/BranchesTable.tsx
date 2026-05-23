@@ -27,8 +27,7 @@ import { mapToArray } from '@/utils/mapHelpers';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { ArchiveToggleButton } from '../ArchiveToggleButton';
-import { BranchFormFields } from '../BranchFormFields';
-import { parseStorageFormValue } from '../CreateDialog/tabs/BranchTab';
+import { BranchFormFields, parseStorageFormValue } from '../BranchFormFields';
 import { renderEnvCell } from './BranchEnvColumn';
 
 interface BranchesTableProps {

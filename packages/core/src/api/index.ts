@@ -282,16 +282,34 @@ export interface ReposService extends AgorService<Repo> {
   ): Promise<{ unixGroup: string }>;
 
   /**
-   * Create a git worktree for a repository
+   * Create a git worktree for a repository.
+   *
+   * Shape matches the daemon's `/repos/:id/worktrees` route + Feathers
+   * service. Keep this in sync with `RepoService.createWorktree()` in
+   * apps/agor-daemon/src/services/repos.ts — drift here means CLI/client
+   * consumers silently drop fields.
    */
   createWorktree(
     id: string,
     data: {
       name: string;
       ref: string;
+      refType?: 'branch' | 'tag';
       createBranch?: boolean;
       pullLatest?: boolean;
       sourceBranch?: string;
+      issue_url?: string;
+      pull_request_url?: string;
+      boardId?: string;
+      /**
+       * Branch storage model — see
+       * docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.
+       * 'worktree' (default) = native `git worktree add`.
+       * 'clone' = self-standing `git clone` with its own `.git/`.
+       */
+      storage_mode?: 'worktree' | 'clone';
+      /** Shallow clone depth (only when storage_mode='clone'). */
+      clone_depth?: number;
     },
     params?: Params
   ): Promise<Repo>;

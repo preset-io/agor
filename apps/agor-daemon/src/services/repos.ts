@@ -596,9 +596,46 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       throw new Error(`A worktree named '${data.name}' already exists in this repository`);
     }
 
+    // Resolve storage mode at create-time. Default 'worktree' preserves the
+    // legacy `git worktree add` path; 'clone' opts in to self-standing clones
+    // (see docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md).
+    // Resolved early so downstream preflights can gate on it.
+    const storageMode: 'worktree' | 'clone' = data.storage_mode ?? 'worktree';
+    const cloneDepth = data.clone_depth;
+    if (cloneDepth !== undefined) {
+      if (storageMode !== 'clone') {
+        throw new Error(
+          `clone_depth is only meaningful when storage_mode='clone' (got storage_mode='${storageMode}'). ` +
+            `Omit clone_depth or set storage_mode='clone'.`
+        );
+      }
+      if (!Number.isInteger(cloneDepth) || cloneDepth <= 0) {
+        throw new Error(
+          `clone_depth must be a positive integer when set (got ${cloneDepth}). ` +
+            `Omit to make a full clone, or pass a positive int for --depth.`
+        );
+      }
+    }
+    if (storageMode === 'clone' && !repo.remote_url) {
+      throw new Error(
+        `Cannot create a clone-mode worktree for repo '${repo.slug}': repo has no remote_url. ` +
+          `Use storage_mode='worktree' or register the repo with a remote first.`
+      );
+    }
+
     // Pre-flight checks: validate git state before creating DB record
-    // This gives the user immediate feedback instead of a silent fire-and-forget failure
-    if (repo.local_path) {
+    // This gives the user immediate feedback instead of a silent fire-and-forget failure.
+    //
+    // Clone-mode skips these entirely: they all read from the shared base
+    // clone (`git fetch` / `git branch` / `git worktree list` against
+    // repo.local_path), which is irrelevant for self-standing clones. The
+    // authoritative source for clone-mode is the remote URL — `git clone`
+    // surfaces missing-ref / auth / network failures cleanly via the
+    // executor's filesystem_status='failed' path. `git worktree list` is
+    // also blind to clone-mode worktrees by design (see design doc §2
+    // operational caveats), so checking it would be wrong even if it
+    // returned anything useful.
+    if (repo.local_path && storageMode === 'worktree') {
       try {
         // Use the shared factory so the unsafe-ops scanner is opt-in
         // (otherwise a daemon env carrying GIT_SSH_COMMAND or similar
@@ -713,9 +750,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       );
     }
 
-    // Fail-fast: check if the branch is already checked out by another git worktree
-    // (covers non-createBranch cases not handled by the pre-flight check above)
-    if (!data.createBranch && repo.local_path) {
+    // Fail-fast: check if the branch is already checked out by another git
+    // worktree (covers non-createBranch cases not handled by the pre-flight
+    // check above). This is a native-worktree-only invariant: git refuses
+    // to check out the same branch in two `git worktree`s sharing one
+    // `.git/`. Clones are independent and `git worktree list` is blind to
+    // them anyway, so the check is both irrelevant and wrong for clones.
+    if (!data.createBranch && repo.local_path && storageMode === 'worktree') {
       try {
         const gitWorktrees = await listWorktrees(repo.local_path);
         const branchInUse = gitWorktrees.some((wt: { ref?: string }) => wt.ref === data.ref);
@@ -760,25 +801,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // and GID is available, ensuring {{worktree.gid}} is populated in templates.
     // See: packages/executor/src/commands/git.ts:renderEnvironmentTemplates()
 
-    // Resolve storage mode at create-time. Default 'worktree' preserves the
-    // legacy `git worktree add` path; 'clone' opts in to self-standing clones
-    // (see docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md).
-    const storageMode: 'worktree' | 'clone' = data.storage_mode ?? 'worktree';
-    const cloneDepth = data.clone_depth;
-    if (storageMode === 'clone' && cloneDepth !== undefined) {
-      if (!Number.isInteger(cloneDepth) || cloneDepth <= 0) {
-        throw new Error(
-          `clone_depth must be a positive integer when set (got ${cloneDepth}). ` +
-            `Omit to make a full clone, or pass a positive int for --depth.`
-        );
-      }
-    }
-    if (storageMode === 'clone' && !repo.remote_url) {
-      throw new Error(
-        `Cannot create a clone-mode worktree for repo '${repo.slug}': repo has no remote_url. ` +
-          `Use storage_mode='worktree' or register the repo with a remote first.`
-      );
-    }
+    // Storage mode (storageMode + cloneDepth) was resolved + validated up
+    // top so the preflights could gate on it; reuse those vars below.
 
     // Create DB record EARLY with 'creating' status
     // Executor will:

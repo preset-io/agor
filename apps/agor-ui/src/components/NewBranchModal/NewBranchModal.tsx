@@ -2,8 +2,8 @@ import type { Repo } from '@agor-live/client';
 import { Button, Form, Modal } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
-import { BranchFormFields } from '../BranchFormFields';
-import { parseStorageFormValue, type BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
+import { BranchFormFields, parseStorageFormValue } from '../BranchFormFields';
+import type { BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
 
 /** @deprecated Use BranchTabConfig directly. Kept as alias for backward compat. */
 export type NewWorktreeConfig = BranchTabConfig;

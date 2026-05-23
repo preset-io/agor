@@ -263,6 +263,77 @@ describe('GitWorktreeAddPayloadSchema', () => {
     expect(result.params.sourceBranch).toBe('main');
     expect(result.params.createBranch).toBe(true);
   });
+
+  // Clone-mode invariants live on the schema (not just in the executor
+  // handler) so malformed payloads fail at parse time with a clear message.
+  // See enforceClonePayloadInvariants in payload-types.ts.
+  describe('clone-mode invariants (superRefine)', () => {
+    const basePayload = {
+      command: 'git.worktree.add' as const,
+      sessionToken: 'jwt-token-here',
+      params: {
+        worktreeId: '550e8400-e29b-41d4-a716-446655440002',
+        repoId: '550e8400-e29b-41d4-a716-446655440003',
+        repoPath: '/data/agor/repos/github.com/user/repo.git',
+        worktreeName: 'feature-x',
+        worktreePath: '/data/agor/worktrees/user/repo/feature-x',
+      },
+    };
+
+    it('accepts a clone-mode payload with a remoteUrl (and optional cloneDepth)', () => {
+      const result = GitWorktreeAddPayloadSchema.parse({
+        ...basePayload,
+        params: {
+          ...basePayload.params,
+          storageMode: 'clone',
+          remoteUrl: 'https://github.com/user/repo.git',
+          cloneDepth: 100,
+        },
+      });
+      expect(result.params.storageMode).toBe('clone');
+      expect(result.params.remoteUrl).toBe('https://github.com/user/repo.git');
+      expect(result.params.cloneDepth).toBe(100);
+    });
+
+    it('rejects a clone-mode payload missing remoteUrl', () => {
+      expect(() =>
+        GitWorktreeAddPayloadSchema.parse({
+          ...basePayload,
+          params: {
+            ...basePayload.params,
+            storageMode: 'clone',
+            // no remoteUrl
+          },
+        })
+      ).toThrow(/remoteUrl is required/);
+    });
+
+    it('rejects cloneDepth paired with worktree (or undefined) mode', () => {
+      // Explicit worktree mode.
+      expect(() =>
+        GitWorktreeAddPayloadSchema.parse({
+          ...basePayload,
+          params: {
+            ...basePayload.params,
+            storageMode: 'worktree',
+            cloneDepth: 100,
+          },
+        })
+      ).toThrow(/cloneDepth is only meaningful when storageMode === 'clone'/);
+
+      // Mode unset (legacy callers) — same rule: cloneDepth without
+      // explicit clone mode is a config bug, not silently dropped.
+      expect(() =>
+        GitWorktreeAddPayloadSchema.parse({
+          ...basePayload,
+          params: {
+            ...basePayload.params,
+            cloneDepth: 100,
+          },
+        })
+      ).toThrow(/cloneDepth is only meaningful when storageMode === 'clone'/);
+    });
+  });
 });
 
 describe('GitWorktreeRemovePayloadSchema', () => {

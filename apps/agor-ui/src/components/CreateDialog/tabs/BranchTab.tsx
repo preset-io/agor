@@ -2,7 +2,7 @@ import type { Repo } from '@agor-live/client';
 import { Form } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
-import { BranchFormFields } from '../../BranchFormFields';
+import { BranchFormFields, parseStorageFormValue } from '../../BranchFormFields';
 
 export interface BranchTabConfig {
   repoId: string;
@@ -24,24 +24,6 @@ export interface BranchTabConfig {
   storage_mode?: 'worktree' | 'clone';
   /** Shallow-clone depth — only meaningful when storage_mode='clone'. */
   clone_depth?: number;
-}
-
-/**
- * Map the composite "Storage" form value (one of 'worktree', 'clone',
- * 'clone:100') into the {storage_mode, clone_depth} pair the daemon expects.
- * Keeping this in one place so both submit paths (NewWorktreeModal +
- * WorktreeTab) stay in lockstep.
- */
-export function parseStorageFormValue(value: unknown): {
-  storage_mode: 'worktree' | 'clone';
-  clone_depth?: number;
-} {
-  if (typeof value !== 'string') return { storage_mode: 'worktree' };
-  if (value === 'worktree') return { storage_mode: 'worktree' };
-  if (value === 'clone') return { storage_mode: 'clone' };
-  const m = value.match(/^clone:(\d+)$/);
-  if (m) return { storage_mode: 'clone', clone_depth: Number(m[1]) };
-  return { storage_mode: 'worktree' };
 }
 
 export interface BranchTabProps {

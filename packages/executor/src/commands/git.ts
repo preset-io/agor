@@ -26,7 +26,6 @@ import {
   cleanWorktree,
   cloneRepo,
   createBranchAsClone,
-  createGit,
   createWorktree,
   deleteBranch,
   deleteWorktreeDirectory,
@@ -503,7 +502,8 @@ export async function handleGitWorktreeAdd(
       // Self-standing clone path. The remote URL is daemon-resolved from the
       // repo record; refuse to silently fall through to worktree mode if it
       // didn't come along — that would defeat the leak-defense reason for
-      // picking clone mode in the first place.
+      // picking clone mode in the first place. (Belt + braces: the executor
+      // payload schema also enforces this via superRefine.)
       if (!remoteUrl) {
         throw new Error(
           `storageMode='clone' requires remoteUrl in payload (got none). ` +
@@ -511,30 +511,24 @@ export async function handleGitWorktreeAdd(
         );
       }
 
-      // When creating a new branch, clone the source branch and then
-      // `checkout -b <newBranch>` post-clone. The new branch doesn't exist
-      // on the remote yet, so we can't `git clone --branch <newBranch>`
-      // directly. When checking out an existing branch, just clone it.
+      // When creating a new branch, clone the source branch and have the
+      // helper fork off the cloned tip. When checking out an existing
+      // branch, just clone the ref directly. The helper owns both flows so
+      // the executor handler doesn't have to orchestrate post-clone git ops.
       const cloneRef = createBranch ? sourceBranch || branch : branch;
       console.log(
-        `[git.worktree.add] Using createBranchAsClone (remote=${remoteUrl}, ref=${cloneRef}, depth=${cloneDepth ?? 'full'})`
+        `[git.worktree.add] Using createBranchAsClone (remote=${remoteUrl}, ` +
+          `ref=${cloneRef}${createBranch && branch !== cloneRef ? `, newBranch=${branch}` : ''}, ` +
+          `depth=${cloneDepth ?? 'full'})`
       );
       await createBranchAsClone({
         remoteUrl,
         targetPath: worktreePath,
         ref: cloneRef,
+        ...(createBranch && branch !== cloneRef ? { newBranchName: branch } : {}),
         depth: cloneDepth,
         env,
       });
-
-      if (createBranch && branch !== cloneRef) {
-        // Create the new branch off the cloned tip. Route through createGit
-        // for the same env hardening + unsafe-ops scanner config we use for
-        // every other git op in this codebase.
-        console.log(`[git.worktree.add] Creating new branch '${branch}' off cloned '${cloneRef}'`);
-        const { git: checkoutGit } = createGit(worktreePath, env);
-        await checkoutGit.checkoutLocalBranch(branch);
-      }
     } else if (restoreMode && sourceBranch) {
       // Restore mode: smart branch detection — checks if branch exists on remote,
       // falls back to creating from base ref if not. Safe because it only creates
@@ -590,9 +584,15 @@ export async function handleGitWorktreeAdd(
           error instanceof Error ? error.message : String(error)
         );
       }
-    } else if (!payload.params.initUnixGroup) {
-      // RBAC is explicitly disabled - set basic permissions for .git/worktrees/<name>/
-      // This ensures git operations work even without Unix group isolation
+    } else if (!payload.params.initUnixGroup && storageMode === 'worktree') {
+      // RBAC is explicitly disabled — set basic permissions for the base
+      // repo's .git/worktrees/<name>/ entry so git operations work even
+      // without Unix group isolation.
+      //
+      // Clone-mode skips this: there's no `.git/worktrees/<name>/` entry in
+      // any base repo (the working tree owns its own `.git/` directory),
+      // so running this would log a bogus failure on every clone-mode
+      // create. The clone's `.git/` is set up by `git clone` itself.
       try {
         console.log(
           `[git.worktree.add] RBAC disabled, setting basic permissions for .git/worktrees/${worktreeName}`

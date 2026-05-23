@@ -1395,6 +1395,57 @@ describe('createBranchAsClone', () => {
       })
     ).rejects.toThrow();
   });
+
+  it('with newBranchName, clones the base ref and checks out a fresh local branch', async () => {
+    // This is the typical "feature off main" create flow in clone-mode: the
+    // new branch doesn't exist on the remote yet, so the helper clones the
+    // base ref and `git checkout -b`s the new branch on top of the cloned
+    // tip. Pinning this here means the executor handler doesn't have to
+    // orchestrate post-clone git ops — the helper owns the full operation.
+    await seedRemoteWithBranches();
+    const targetPath = path.join(tempDir, 'wt-new-branch');
+
+    const result = await createBranchAsClone({
+      remoteUrl: remoteDir,
+      targetPath,
+      ref: 'main',
+      newBranchName: 'my-new-feature',
+    });
+
+    expect(result).toEqual({ path: targetPath, ref: 'my-new-feature' });
+
+    // Working tree is on the new branch (created locally) with main's tip
+    // as parent — the main marker is present because we forked off main.
+    expect(await getCurrentBranch(targetPath)).toBe('my-new-feature');
+    const mainMarkerExists = await fs
+      .access(path.join(targetPath, 'main-marker.txt'))
+      .then(() => true)
+      .catch(() => false);
+    expect(mainMarkerExists).toBe(true);
+
+    // The new branch is NOT on the remote (we forked locally), so it must
+    // not be in the remote-tracking list. Catches a regression where the
+    // helper would accidentally push or set an upstream during the fork.
+    const cloned = simpleGit(targetPath);
+    const remoteBranches = await cloned.branch(['-r']);
+    expect(remoteBranches.all).not.toContain('origin/my-new-feature');
+  });
+
+  it('rejects newBranchName that fails ref validation', async () => {
+    // The same option-injection guard that protects `ref` must protect
+    // `newBranchName` — both feed into git command argv eventually.
+    await seedRemoteWithBranches();
+    const targetPath = path.join(tempDir, 'wt-bad-new-branch');
+
+    await expect(
+      createBranchAsClone({
+        remoteUrl: remoteDir,
+        targetPath,
+        ref: 'main',
+        newBranchName: '--force',
+      })
+    ).rejects.toThrow(/Invalid git ref/);
+  });
 });
 
 describe('categorizeGitError', () => {

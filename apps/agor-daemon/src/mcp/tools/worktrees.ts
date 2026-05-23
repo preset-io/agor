@@ -258,7 +258,7 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
           .enum(['worktree', 'clone'])
           .optional()
           .describe(
-            'Branch storage model (PR 1 of the worktree→clone migration). ' +
+            'Branch storage model. ' +
               '"worktree" (default) = native `git worktree add` — shares the per-repo base ' +
               '`.git/` and is the legacy behaviour. ' +
               '"clone" = self-standing `git clone` into the branch directory — own `.git/config`, ' +

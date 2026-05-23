@@ -617,11 +617,16 @@ export const worktrees = sqliteTable(
     // Branch storage model — see docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.
     // 'worktree' = native `git worktree add` (shared base .git/config — legacy default).
     // 'clone'    = self-standing `git clone` (own .git/ — closes cross-branch leak vectors).
+    //
+    // Enum is validated at the Drizzle/TS/Zod/service layer (no DB-side
+    // CHECK) per context/guides/creating-database-migrations.md so adding a
+    // value later doesn't force a table-recreation migration on SQLite.
     storage_mode: text('storage_mode', { enum: ['worktree', 'clone'] })
       .notNull()
       .default('worktree'),
     // Only meaningful when storage_mode='clone'. NULL = full clone, positive
-    // integer = `git clone --depth N` (shallow). Ignored for worktree mode.
+    // integer = `git clone --depth N` (shallow). The service layer rejects
+    // a non-null clone_depth on worktree-mode rows.
     clone_depth: integer('clone_depth'),
 
     // JSON blob for everything else

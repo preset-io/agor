@@ -244,74 +244,110 @@ export type GitClonePayload = z.infer<typeof GitClonePayloadSchema>;
  * 2. Sets up Unix group/ACLs (if initUnixGroup is true)
  * 3. Patches the worktree record to filesystem_status: 'ready' (or 'failed')
  */
+/**
+ * Cross-field invariants for the `git.worktree.add` params:
+ *  - clone-mode requires a `remoteUrl` (the executor has no other way to
+ *    learn where to clone from, since `repoPath` points at the daemon-owned
+ *    base clone that clone-mode intentionally bypasses).
+ *  - shallow-clone depth only applies to clone-mode (worktree mode has no
+ *    `--depth` knob); reject `cloneDepth` paired with worktree mode rather
+ *    than silently dropping it.
+ *
+ * These are also belt-and-suspenders-checked in the daemon service and the
+ * executor handler, but having them at the schema boundary means malformed
+ * payloads fail at parse time with a clear message.
+ */
+const enforceClonePayloadInvariants = (
+  params: { storageMode?: 'worktree' | 'clone'; remoteUrl?: string; cloneDepth?: number },
+  ctx: z.RefinementCtx
+): void => {
+  if (params.storageMode === 'clone' && !params.remoteUrl) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['remoteUrl'],
+      message: "remoteUrl is required when storageMode === 'clone'",
+    });
+  }
+  if (params.cloneDepth !== undefined && params.storageMode !== 'clone') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['cloneDepth'],
+      message:
+        "cloneDepth is only meaningful when storageMode === 'clone'; omit it for worktree mode",
+    });
+  }
+};
+
 export const GitWorktreeAddPayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.worktree.add'),
 
   /** JWT for Feathers authentication */
   sessionToken: z.string(),
 
-  params: z.object({
-    /** Worktree ID (UUID) - DB record already exists with filesystem_status: 'creating' */
-    worktreeId: z.string().uuid(),
+  params: z
+    .object({
+      /** Worktree ID (UUID) - DB record already exists with filesystem_status: 'creating' */
+      worktreeId: z.string().uuid(),
 
-    /** Repo ID (UUID) */
-    repoId: z.string().uuid(),
+      /** Repo ID (UUID) */
+      repoId: z.string().uuid(),
 
-    /** Path to the repository */
-    repoPath: z.string(),
+      /** Path to the repository */
+      repoPath: z.string(),
 
-    /** Name for the worktree */
-    worktreeName: z.string(),
+      /** Name for the worktree */
+      worktreeName: z.string(),
 
-    /** Path where worktree will be created */
-    worktreePath: z.string(),
+      /** Path where worktree will be created */
+      worktreePath: z.string(),
 
-    /** Branch to checkout or create */
-    branch: z.string().optional(),
+      /** Branch to checkout or create */
+      branch: z.string().optional(),
 
-    /** Source branch when creating new branch */
-    sourceBranch: z.string().optional(),
+      /** Source branch when creating new branch */
+      sourceBranch: z.string().optional(),
 
-    /** Create new branch */
-    createBranch: z.boolean().optional(),
+      /** Create new branch */
+      createBranch: z.boolean().optional(),
 
-    /** Use restore mode: smart branch detection via ls-remote, falls back to creating from sourceBranch */
-    restoreMode: z.boolean().optional(),
+      /** Use restore mode: smart branch detection via ls-remote, falls back to creating from sourceBranch */
+      restoreMode: z.boolean().optional(),
 
-    /** Type of ref (branch or tag) */
-    refType: z.enum(['branch', 'tag']).optional(),
+      /** Type of ref (branch or tag) */
+      refType: z.enum(['branch', 'tag']).optional(),
 
-    /** Initialize Unix group for worktree isolation (default: false, requires RBAC enabled) */
-    initUnixGroup: z.boolean().optional().default(false),
+      /** Initialize Unix group for worktree isolation (default: false, requires RBAC enabled) */
+      initUnixGroup: z.boolean().optional().default(false),
 
-    /** Access level for non-owners ('none' | 'read' | 'write') */
-    othersAccess: z.enum(['none', 'read', 'write']).optional().default('read'),
+      /** Access level for non-owners ('none' | 'read' | 'write') */
+      othersAccess: z.enum(['none', 'read', 'write']).optional().default('read'),
 
-    /** User ID of the requesting user (for per-user credential resolution) */
-    userId: z.string().uuid().optional(),
+      /** User ID of the requesting user (for per-user credential resolution) */
+      userId: z.string().uuid().optional(),
 
-    /**
-     * Branch storage model. Default 'worktree' (native `git worktree add`,
-     * legacy behaviour). 'clone' routes through `createBranchAsClone` for a
-     * self-standing `git clone` — closes cross-branch leak vectors at the
-     * `.git/config` layer. Forwarded from the worktrees DB record.
-     */
-    storageMode: z.enum(['worktree', 'clone']).optional(),
+      /**
+       * Branch storage model. Default 'worktree' (native `git worktree add`,
+       * legacy behaviour). 'clone' routes through `createBranchAsClone` for a
+       * self-standing `git clone` — closes cross-branch leak vectors at the
+       * `.git/config` layer. Forwarded from the worktrees DB record.
+       */
+      storageMode: z.enum(['worktree', 'clone']).optional(),
 
-    /**
-     * Shallow-clone depth. Only meaningful when storageMode='clone'. Positive
-     * integer → `git clone --depth N`. Omit (or pass null/undefined) for a
-     * full clone with complete history.
-     */
-    cloneDepth: z.number().int().positive().optional(),
+      /**
+       * Shallow-clone depth. Only meaningful when storageMode='clone'. Positive
+       * integer → `git clone --depth N`. Omit (or pass null/undefined) for a
+       * full clone with complete history.
+       */
+      cloneDepth: z.number().int().positive().optional(),
 
-    /**
-     * Remote URL for clone-mode. Daemon resolves from the repo record and
-     * forwards it; the executor uses it as the `git clone` source. Ignored
-     * when storageMode='worktree'.
-     */
-    remoteUrl: z.string().optional(),
-  }),
+      /**
+       * Remote URL for clone-mode. Daemon resolves from the repo record and
+       * forwards it; the executor uses it as the `git clone` source. Ignored
+       * when storageMode='worktree'.
+       */
+      remoteUrl: z.string().optional(),
+    })
+    .superRefine(enforceClonePayloadInvariants),
 });
 
 export type GitWorktreeAddPayload = z.infer<typeof GitWorktreeAddPayloadSchema>;

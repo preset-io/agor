@@ -728,6 +728,24 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       // owns all worktrees and impersonation would resolve getWorktreesDir()
       // to the wrong home directory, causing safety check failures.
 
+      // Mirror the create path's storage-mode forwarding. Without this, a
+      // clone-mode worktree that was archived with filesystemAction='deleted'
+      // would silently rebuild as native worktree mode, leaving the DB row
+      // (storage_mode='clone') and disk (.git pointer file) inconsistent.
+      const storageMode = worktree.storage_mode ?? 'worktree';
+      if (storageMode === 'clone' && !repo.remote_url) {
+        const errMsg =
+          `Cannot unarchive clone-mode worktree '${worktree.name}' for repo '${repo.slug}': ` +
+          `repo has no remote_url. The clone source URL is unknown.`;
+        console.error(`⚠️  ${errMsg}`);
+        await this.patch(
+          id,
+          { filesystem_status: 'failed', error_message: errMsg },
+          { provider: undefined }
+        );
+        return unarchivedWorktree;
+      }
+
       try {
         // Use a service JWT so the executor can patch rendered env command
         // templates without tripping requireAdminForEnvConfig when unarchive
@@ -760,6 +778,11 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
               othersAccess: worktree.others_fs_access || 'read',
               daemonUser,
               repoUnixGroup: repo.unix_group,
+              // Branch storage mode — preserves the worktree's original
+              // storage_mode across archive → delete → unarchive.
+              storageMode,
+              ...(worktree.clone_depth !== undefined ? { cloneDepth: worktree.clone_depth } : {}),
+              ...(storageMode === 'clone' && repo.remote_url ? { remoteUrl: repo.remote_url } : {}),
             },
           },
           {
