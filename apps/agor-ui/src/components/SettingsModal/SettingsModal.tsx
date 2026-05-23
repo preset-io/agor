@@ -372,6 +372,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             onRowClick={handleWorktreeRowClick}
             onStartEnvironment={onStartEnvironment}
             onStopEnvironment={onStopEnvironment}
+            onClose={onClose}
           />
         );
       case 'assistants':
