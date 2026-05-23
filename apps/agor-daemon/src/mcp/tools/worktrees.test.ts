@@ -27,6 +27,7 @@ vi.mock('@agor/core/config', async (importOriginal) => {
 });
 
 vi.mock('@agor/core/db', () => ({
+  // shortid-guard:ignore vi.mock factory — stand-in for the canonical shortId helper
   shortId: (id: string) => id.slice(0, 8),
   WorktreeRepository: class FakeWorktreeRepository {
     async getActiveNamesByRepo() {
