@@ -282,17 +282,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               onBoardChange={onBoardChange || (() => {})}
               token={token}
             />
-            <GlobalSearch
-              currentUserId={currentUserId}
-              sessionById={sessionById ?? new Map()}
-              worktreeById={worktreeById}
-              artifactById={artifactById ?? new Map()}
-              boards={boards}
-              mcpServerById={mcpServerById ?? new Map()}
-              onBoardChange={onBoardChange}
-              onWorktreeFocus={onWorktreeFocus}
-              onSettingsClick={onSettingsClick}
-            />
           </>
         )}
         {currentBoardName && (
@@ -331,6 +320,18 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           connecting={connecting}
           onRetry={onRetryConnection}
         />
+        <GlobalSearch
+          currentUserId={currentUserId}
+          sessionById={sessionById ?? new Map()}
+          worktreeById={worktreeById}
+          artifactById={artifactById ?? new Map()}
+          boards={boards}
+          mcpServerById={mcpServerById ?? new Map()}
+          onBoardChange={onBoardChange}
+          onWorktreeFocus={onWorktreeFocus}
+          onSettingsClick={onSettingsClick}
+        />
+        <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
         {activeUsers.length > 0 && (
           <>
             <Facepile

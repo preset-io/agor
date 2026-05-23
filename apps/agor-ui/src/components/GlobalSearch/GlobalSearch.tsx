@@ -9,7 +9,7 @@ import { GlobalSearchDropdown } from './GlobalSearchDropdown';
 import { SearchChipRow } from './SearchChipRow';
 import { type ChipFilter, type SearchEntityType, type SearchResultItem } from './types';
 
-const INPUT_WIDTH = 320;
+const INPUT_WIDTH = 260;
 
 interface GlobalSearchProps {
   currentUserId?: string;
