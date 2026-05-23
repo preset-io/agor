@@ -833,6 +833,9 @@ export const App: React.FC<AppProps> = ({
               instanceLabel={instanceLabel}
               recentBoards={recentBoards}
               instanceDescription={instanceDescription}
+              sessionById={sessionById}
+              artifactById={artifactById}
+              mcpServerById={mcpServerById}
             />
             <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
               <PanelGroup

@@ -1,4 +1,13 @@
-import type { ActiveUser, Board, BoardID, User, Worktree } from '@agor-live/client';
+import type {
+  ActiveUser,
+  Artifact,
+  Board,
+  BoardID,
+  MCPServer,
+  Session,
+  User,
+  Worktree,
+} from '@agor-live/client';
 import {
   ApiOutlined,
   CommentOutlined,
@@ -28,6 +37,7 @@ import { BoardSwitcher } from '../BoardSwitcher';
 import { BrandLogo } from '../BrandLogo';
 import { ConnectionStatus } from '../ConnectionStatus';
 import { Facepile } from '../Facepile';
+import { GlobalSearch } from '../GlobalSearch';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { ThemeSwitcher } from '../ThemeSwitcher';
 
@@ -68,6 +78,13 @@ export interface AppHeaderProps {
   instanceLabel?: string;
   /** Instance description (markdown) shown in popover around the instance label */
   instanceDescription?: string;
+  /** Live entity maps for the global-search dropdown. Passed through from App.tsx. */
+  sessionById?: Map<string, Session>;
+  artifactById?: Map<string, Artifact>;
+  mcpServerById?: Map<string, MCPServer>;
+  /** Optional sibling-PR primitive: pan/zoom the canvas to a specific worktree.
+   * When absent, GlobalSearch falls back to onBoardChange. */
+  onWorktreeFocus?: (worktreeId: string) => void;
 }
 
 const RecentBoardPills: React.FC<{
@@ -136,6 +153,10 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   recentBoards = [],
   instanceLabel,
   instanceDescription,
+  sessionById,
+  artifactById,
+  mcpServerById,
+  onWorktreeFocus,
 }) => {
   const { token } = theme.useToken();
   // Single source of truth for "is the daemon usable right now?". Captures
@@ -260,6 +281,17 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               recentBoards={recentBoards}
               onBoardChange={onBoardChange || (() => {})}
               token={token}
+            />
+            <GlobalSearch
+              currentUserId={currentUserId}
+              sessionById={sessionById ?? new Map()}
+              worktreeById={worktreeById}
+              artifactById={artifactById ?? new Map()}
+              boards={boards}
+              mcpServerById={mcpServerById ?? new Map()}
+              onBoardChange={onBoardChange}
+              onWorktreeFocus={onWorktreeFocus}
+              onSettingsClick={onSettingsClick}
             />
           </>
         )}
