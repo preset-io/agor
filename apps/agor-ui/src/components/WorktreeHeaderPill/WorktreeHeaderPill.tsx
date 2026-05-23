@@ -151,7 +151,7 @@ export function WorktreeHeaderPill({
       }}
     >
       {/* Section 1: Repo + Branch — click opens modal (General tab) */}
-      <Tooltip title="Open worktree settings">
+      <Tooltip title="Open branch settings">
         <button
           type="button"
           onClick={openModal}

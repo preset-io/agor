@@ -312,7 +312,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       confirm({
         title: 'Discard local snapshot edits?',
         content:
-          'The worktree has unsaved manual edits in the snapshot editor. Rendering will overwrite them.',
+          'The branch has unsaved manual edits in the snapshot editor. Rendering will overwrite them.',
         okText: 'Render anyway',
         okType: 'danger',
         cancelText: 'Cancel',
@@ -426,7 +426,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         <div>
           <p>
             This will replace your repo-level variants with the contents of <code>.agor.yml</code>{' '}
-            in this worktree.
+            in this branch.
           </p>
           {variantNamesToOverwrite.length > 0 && (
             <p style={{ marginBottom: 4 }}>
@@ -439,7 +439,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
             </p>
           )}
           <p style={{ marginTop: 8 }}>
-            Your <code>template_overrides</code> and worktree-level snapshots are preserved.
+            Your <code>template_overrides</code> and branch-level snapshots are preserved.
           </p>
         </div>
       ),
@@ -470,8 +470,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       content: (
         <div>
           <p>
-            This will overwrite <code>.agor.yml</code> in the repo root (this worktree&apos;s
-            working copy).
+            This will overwrite <code>.agor.yml</code> in the repo root (this branch&apos;s working
+            copy).
           </p>
           <p>
             <code>template_overrides</code> stays local and will not be written.
@@ -727,7 +727,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
               <CodeOutlined />
               <span>Repository environment (shared)</span>
               <Tag color="orange" style={{ fontSize: 10 }}>
-                Affects all worktrees on this repo
+                Affects all branches on this repo
               </Tag>
             </Space>
           }
@@ -879,7 +879,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
           title={
             <Space>
               <PlayCircleOutlined />
-              <span>Worktree environment: {worktree.name}</span>
+              <span>Branch environment: {worktree.name}</span>
               {worktree.environment_variant && (
                 <Tag color="blue" style={{ fontSize: 10 }}>
                   rendered from: {worktree.environment_variant}
@@ -913,7 +913,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         >
           <Space orientation="vertical" size="small" style={{ width: '100%' }}>
             <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-              Rendered snapshot persisted on this worktree (fields: <code>start</code>,{' '}
+              Rendered snapshot persisted on this branch (fields: <code>start</code>,{' '}
               <code>stop</code>, <code>nuke</code>, <code>logs</code>, <code>health</code>,{' '}
               <code>app</code>). Click Render above to regenerate from the variant.
             </Typography.Text>

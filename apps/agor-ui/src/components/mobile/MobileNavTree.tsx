@@ -132,7 +132,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
             ),
             children:
               boardWorktrees.length === 0 ? (
-                <Text type="secondary">No worktrees on this board</Text>
+                <Text type="secondary">No branches on this board</Text>
               ) : (
                 <Collapse
                   defaultActiveKey={[]}

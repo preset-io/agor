@@ -889,7 +889,7 @@ const WorktreeCardComponent = ({
                   e.stopPropagation();
                   onOpenTerminal([`cd ${worktree.path}`], worktree.worktree_id);
                 }}
-                title="Open terminal in worktree directory"
+                title="Open terminal in branch directory"
               />
             )}
             {/*
@@ -931,7 +931,7 @@ const WorktreeCardComponent = ({
                   e.stopPropagation();
                   onOpenSettings(worktree.worktree_id);
                 }}
-                title="Edit worktree"
+                title="Edit branch"
               />
             )}
             {!inPopover && onArchiveOrDelete && (
@@ -944,7 +944,7 @@ const WorktreeCardComponent = ({
                   e.stopPropagation();
                   setArchiveDeleteModalOpen(true);
                 }}
-                title="Archive or delete worktree"
+                title="Archive or delete branch"
                 danger
               />
             )}
@@ -1032,13 +1032,13 @@ const WorktreeCardComponent = ({
             }}
           >
             {isCreating ? (
-              <Typography.Text type="secondary">Creating worktree on filesystem...</Typography.Text>
+              <Typography.Text type="secondary">Creating branch on filesystem...</Typography.Text>
             ) : isFailed ? (
               <div
                 style={{ display: 'flex', flexDirection: 'column', gap: 8, textAlign: 'center' }}
               >
                 <Typography.Text type="danger" strong>
-                  Worktree creation failed
+                  Branch creation failed
                 </Typography.Text>
                 {worktree.error_message && (
                   <Tooltip title={worktree.error_message} placement="bottom">

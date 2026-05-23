@@ -234,7 +234,7 @@ export const AboutTab: React.FC<AboutTabProps> = ({
                   )}
                   {healthInfo?.execution && (
                     <>
-                      <Descriptions.Item label="Worktree RBAC">
+                      <Descriptions.Item label="Branch RBAC">
                         {healthInfo.execution.worktreeRbac ? (
                           <span style={{ color: '#52c41a' }}>🛡️ Enabled</span>
                         ) : (
@@ -250,7 +250,7 @@ export const AboutTab: React.FC<AboutTabProps> = ({
                         )}
                         {healthInfo.execution.unixUserMode === 'insulated' && (
                           <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
-                            (worktree groups)
+                            (branch groups)
                           </Typography.Text>
                         )}
                         {healthInfo.execution.unixUserMode === 'strict' && (

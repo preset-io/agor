@@ -102,7 +102,7 @@ export const SessionMetadataCard: React.FC<SessionMetadataCardProps> = ({
       {/* Worktree context (if available) */}
       {worktree && repo && (
         <div style={{ marginBottom: 12 }}>
-          <div style={{ fontWeight: 600, fontSize: '0.85em', marginBottom: 8 }}>Worktree</div>
+          <div style={{ fontWeight: 600, fontSize: '0.85em', marginBottom: 8 }}>Branch</div>
           <Space size={4} wrap>
             <RepoPill repoName={repo.slug} />
             <Tag icon={<FolderOutlined />} color={PILL_COLORS.worktree}>

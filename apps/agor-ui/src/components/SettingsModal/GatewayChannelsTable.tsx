@@ -341,9 +341,9 @@ const ChannelFormFields: React.FC<{
       </Form.Item>
 
       <Form.Item
-        label="Target Worktree"
+        label="Target Branch"
         name="target_worktree_id"
-        rules={[{ required: true, message: 'Please select a target worktree' }]}
+        rules={[{ required: true, message: 'Please select a target branch' }]}
         tooltip={
           mode === 'create'
             ? 'New sessions from this channel will be created in this worktree'
@@ -1558,7 +1558,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       ),
     },
     {
-      title: 'Target Worktree',
+      title: 'Target Branch',
       dataIndex: 'target_worktree_id',
       key: 'target_worktree_id',
       width: 180,
@@ -1654,7 +1654,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           <>
             The Message Gateway is a <strong>beta feature</strong>. Connecting external messaging
             platforms grants anyone who can message your bot potential access to Agor sessions and
-            the underlying worktree environment.{' '}
+            the underlying branch environment.{' '}
             <Typography.Link
               href="https://docs.agor.live/guide/message-gateway"
               target="_blank"

@@ -198,7 +198,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
             <Space orientation="vertical">
               <Radio value="worktree">
                 <Space orientation="vertical" size={0}>
-                  <Text>Worktree (.agor/uploads/)</Text>
+                  <Text>Branch (.agor/uploads/)</Text>
                   <Text type="secondary" style={{ fontSize: '12px' }}>
                     Default - Agent-accessible, can be committed
                   </Text>

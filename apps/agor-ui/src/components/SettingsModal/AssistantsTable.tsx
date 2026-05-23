@@ -351,7 +351,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
       >
         <Typography.Text type="secondary">
           Assistants are persistent AI companions backed by a framework repo. They maintain memory,
-          orchestrate work across worktrees, and run on scheduled heartbeats.
+          orchestrate work across branches, and run on scheduled heartbeats.
         </Typography.Text>
         <Space style={{ width: '100%', display: 'flex', justifyContent: 'space-between' }}>
           <Input

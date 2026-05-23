@@ -1002,7 +1002,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               </Tooltip>
             )}
             {onOpenTerminal && worktree && (
-              <Tooltip title="Open terminal in worktree directory">
+              <Tooltip title="Open terminal in branch directory">
                 <Button
                   type="text"
                   icon={<CodeOutlined />}

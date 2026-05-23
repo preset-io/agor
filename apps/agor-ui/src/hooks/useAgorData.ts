@@ -30,7 +30,7 @@ import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 const INITIAL_LOAD_ITEMS = [
   { key: 'sessions', label: 'Sessions' },
   { key: 'boards', label: 'Boards' },
-  { key: 'worktrees', label: 'Worktrees' },
+  { key: 'worktrees', label: 'Branches' },
   { key: 'repos', label: 'Repos' },
   { key: 'users', label: 'Users' },
   { key: 'cards', label: 'Cards' },

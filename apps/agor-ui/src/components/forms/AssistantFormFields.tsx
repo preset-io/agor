@@ -182,7 +182,7 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
 
                 <Form.Item
                   name="name"
-                  label="Worktree Name"
+                  label="Branch Name"
                   rules={[
                     {
                       pattern: /^[a-z0-9-]+$/,

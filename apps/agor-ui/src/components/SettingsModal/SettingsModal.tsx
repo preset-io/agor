@@ -227,7 +227,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           },
           {
             key: 'worktrees',
-            label: 'Worktrees',
+            label: 'Branches',
             icon: <BranchesOutlined />,
           },
           {

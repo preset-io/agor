@@ -134,7 +134,7 @@ export const NewWorktreeModal: React.FC<NewWorktreeModalProps> = ({
 
   return (
     <Modal
-      title="Create New Worktree"
+      title="Create New Branch"
       open={open}
       onCancel={handleCancel}
       width={700}
@@ -143,7 +143,7 @@ export const NewWorktreeModal: React.FC<NewWorktreeModalProps> = ({
           Cancel
         </Button>,
         <Button key="create" type="primary" onClick={handleCreate} disabled={!isFormValid}>
-          Create Worktree
+          Create Branch
         </Button>,
       ]}
     >

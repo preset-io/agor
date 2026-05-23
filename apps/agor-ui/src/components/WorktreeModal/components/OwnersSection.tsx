@@ -345,7 +345,7 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
               showIcon
               icon={<WarningOutlined />}
               title="Dangerous: identity borrowing on spawn/fork"
-              description="With this enabled, sessions spawned or forked by other users in this worktree run under the original creator's OS identity, credentials, and environment variables. A collaborator can effectively execute code as you. Only enable for fully trusted collaborators or legacy automation that depends on the old behavior."
+              description="With this enabled, sessions spawned or forked by other users in this branch run under the original creator's OS identity, credentials, and environment variables. A collaborator can effectively execute code as you. Only enable for fully trusted collaborators or legacy automation that depends on the old behavior."
             />
           </Form.Item>
         )}

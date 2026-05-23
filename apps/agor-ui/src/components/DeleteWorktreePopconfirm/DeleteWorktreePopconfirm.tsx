@@ -28,12 +28,12 @@ export const DeleteWorktreePopconfirm: React.FC<DeleteWorktreePopconfirmProps> =
 
   return (
     <Popconfirm
-      title="Delete worktree?"
+      title="Delete branch?"
       overlayStyle={{ maxWidth: 500 }}
       onCancel={handleCancel}
       description={
         <div style={{ width: '100%' }}>
-          <p>Are you sure you want to delete worktree "{worktree.name}"?</p>
+          <p>Are you sure you want to delete branch "{worktree.name}"?</p>
           {sessionCount > 0 && (
             <Alert
               title={`Note: This will also delete ${sessionCount} related session(s)`}
@@ -47,7 +47,7 @@ export const DeleteWorktreePopconfirm: React.FC<DeleteWorktreePopconfirmProps> =
             onChange={(e) => setDeleteFromFilesystem(e.target.checked)}
             style={{ marginTop: 8 }}
           >
-            Also delete worktree from filesystem
+            Also delete branch from filesystem
           </Checkbox>
           <div style={{ marginTop: 4, marginBottom: 0 }}>
             <Typography.Text type="secondary">Path: </Typography.Text>

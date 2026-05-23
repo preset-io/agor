@@ -196,7 +196,7 @@ export const WorktreeListDrawer: React.FC<WorktreeListDrawerProps> = ({
                       </Typography.Text>
                     ) : (
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        No worktree
+                        No branch
                       </Typography.Text>
                     )}
                   </div>

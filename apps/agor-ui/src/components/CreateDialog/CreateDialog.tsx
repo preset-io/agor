@@ -27,7 +27,7 @@ const INITIAL_VALIDITY: Record<ActiveTab, boolean> = {
 const PURPOSE_TEXT: Record<ActiveTab, React.ReactNode> = {
   worktree: (
     <>
-      A worktree (built on{' '}
+      A branch (built on{' '}
       <a href="https://git-scm.com/docs/git-worktree" target="_blank" rel="noopener noreferrer">
         git worktrees
       </a>
@@ -183,7 +183,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
       label: (
         <span>
           <BranchesOutlined style={{ marginRight: 8 }} />
-          Worktree
+          Branch
         </span>
       ),
       children: (

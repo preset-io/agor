@@ -39,7 +39,7 @@ export const ArchiveDeleteWorktreeModal: React.FC<ArchiveDeleteWorktreeModalProp
 
   return (
     <Modal
-      title="Archive or Delete Worktree"
+      title="Archive or Delete Branch"
       open={open}
       onOk={handleOk}
       onCancel={onCancel}
@@ -51,7 +51,7 @@ export const ArchiveDeleteWorktreeModal: React.FC<ArchiveDeleteWorktreeModalProp
       <Space orientation="vertical" size="large" style={{ width: '100%' }}>
         {/* Worktree Info */}
         <div>
-          <Text strong>Worktree: </Text>
+          <Text strong>Branch: </Text>
           <Text code>{worktree.name}</Text>
           <br />
           <Text strong>Branch: </Text>
@@ -98,7 +98,7 @@ export const ArchiveDeleteWorktreeModal: React.FC<ArchiveDeleteWorktreeModalProp
                 <div>
                   <div>Delete completely</div>
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    Removes entire worktree directory from disk
+                    Removes entire branch directory from disk
                   </Text>
                 </div>
               </Radio>

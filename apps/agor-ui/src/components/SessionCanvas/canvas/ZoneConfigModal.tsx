@@ -161,7 +161,7 @@ export const ZoneConfigModal = ({
           help="Leave empty for an organizational-only zone (no trigger fires on drop)."
         >
           <Input.TextArea
-            placeholder="Enter the prompt template that will be triggered when a worktree is dropped here..."
+            placeholder="Enter the prompt template that will be triggered when a branch is dropped here..."
             rows={6}
           />
         </Form.Item>
@@ -181,7 +181,7 @@ export const ZoneConfigModal = ({
                   <code>{'{{ worktree.pull_request_url }}'}</code> - Pull request URL
                 </li>
                 <li>
-                  <code>{'{{ worktree.notes }}'}</code> - Worktree notes
+                  <code>{'{{ worktree.notes }}'}</code> - Branch notes
                 </li>
                 <li>
                   <code>{'{{ session.description }}'}</code> - Session description

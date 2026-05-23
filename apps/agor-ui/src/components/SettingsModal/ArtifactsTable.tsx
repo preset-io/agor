@@ -152,7 +152,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
       },
     },
     {
-      title: 'Worktree',
+      title: 'Branch',
       dataIndex: 'worktree_id',
       key: 'worktree_id',
       width: 160,

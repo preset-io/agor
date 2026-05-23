@@ -283,7 +283,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
           <Card size="small" title="Prompt Template">
             <Space orientation="vertical" size="small" style={{ width: '100%' }}>
               <Text type="secondary" style={{ fontSize: '12px' }}>
-                Use Handlebars syntax for dynamic values. Available variables: worktree, board
+                Use Handlebars syntax for dynamic values. Available variables: branch, board
               </Text>
               <TextArea
                 value={promptTemplate}
@@ -293,7 +293,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
                 style={{ fontFamily: 'monospace', fontSize: '13px' }}
               />
               <Paragraph type="secondary" style={{ fontSize: '11px', margin: 0 }}>
-                Example: "Review worktree <code>{'{{worktree.name}}'}</code> and provide status
+                Example: "Review branch <code>{'{{worktree.name}}'}</code> and provide status
                 update."
               </Paragraph>
             </Space>

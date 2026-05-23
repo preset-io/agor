@@ -323,7 +323,7 @@ export const ZoneTriggerModal = ({
           </Radio.Group>
           {worktreeSessions.length === 0 && (
             <Alert
-              title="No existing sessions in this worktree"
+              title="No existing sessions in this branch"
               type="info"
               showIcon
               style={{ marginTop: 12 }}

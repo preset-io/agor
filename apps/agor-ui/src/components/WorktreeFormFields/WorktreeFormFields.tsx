@@ -92,7 +92,7 @@ export const WorktreeFormFields: React.FC<WorktreeFormFieldsProps> = ({
         <Form.Item
           name={`${fieldPrefix}boardId`}
           label="Board (optional)"
-          tooltip="Add this worktree to a board for organization"
+          tooltip="Add this branch to a board for organization"
         >
           <Select
             placeholder="Select board (optional)..."
@@ -137,7 +137,7 @@ export const WorktreeFormFields: React.FC<WorktreeFormFieldsProps> = ({
         label={refType === 'branch' ? 'Source Branch' : 'Source Tag'}
         rules={[{ required: true, message: `Please enter source ${refType}` }]}
         validateTrigger={['onBlur', 'onChange']}
-        tooltip={`${refType} to use as base for the new worktree branch`}
+        tooltip={`${refType} to use as base for the new branch branch`}
         initialValue={defaultBranch}
       >
         <Input placeholder={refType === 'branch' ? defaultBranch : 'v1.0.0'} />
@@ -145,9 +145,9 @@ export const WorktreeFormFields: React.FC<WorktreeFormFieldsProps> = ({
 
       <Form.Item
         name={`${fieldPrefix}name`}
-        label="Worktree Name"
+        label="Branch Name"
         rules={[
-          { required: true, message: 'Please enter a worktree name' },
+          { required: true, message: 'Please enter a branch name' },
           {
             pattern: /^[a-z0-9-]+$/,
             message: 'Only lowercase letters, numbers, and hyphens allowed',
@@ -225,7 +225,7 @@ export const WorktreeFormFields: React.FC<WorktreeFormFieldsProps> = ({
           {form.getFieldValue(`${fieldPrefix}sourceBranch`) ||
             (refType === 'tag' ? '<tag-name>' : defaultBranch)}
         </Typography.Text>
-        <br />• Worktree location:{' '}
+        <br />• Branch location:{' '}
         <Typography.Text code>
           ~/.agor/worktrees/{'<repo>'}/<Typography.Text italic>{'<name>'}</Typography.Text>
         </Typography.Text>

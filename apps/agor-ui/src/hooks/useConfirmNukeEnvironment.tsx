@@ -22,7 +22,7 @@ export function useConfirmNukeEnvironment() {
           </p>
           <p>
             This typically removes all Docker volumes, databases, and other environment state.
-            Source files in the worktree are not deleted, but anything stored inside containers or
+            Source files in the branch are not deleted, but anything stored inside containers or
             volumes may be lost.
           </p>
         </>

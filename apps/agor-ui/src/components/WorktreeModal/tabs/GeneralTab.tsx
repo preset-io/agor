@@ -297,7 +297,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
                 <TextArea
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Freeform notes about this worktree..."
+                  placeholder="Freeform notes about this branch..."
                   rows={4}
                   disabled={!canEdit}
                 />
@@ -348,7 +348,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
             onClick={() => setArchiveDeleteModalOpen(true)}
             disabled={!canEdit}
           >
-            Archive/Delete Worktree
+            Archive/Delete Branch
           </Button>
           {/* TODO: Add "Open in Terminal" button once terminal integration is ready */}
         </Space>

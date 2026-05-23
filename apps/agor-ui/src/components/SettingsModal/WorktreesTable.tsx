@@ -535,7 +535,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
             onClick={() => setCreateModalOpen(true)}
             disabled={repos.length === 0}
           >
-            Create Worktree
+            Create Branch
           </Button>
         </Space>
       </Space>
@@ -551,7 +551,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
         >
           <Empty description="No repositories configured">
             <Typography.Text type="secondary">
-              Create a repository first in the Repositories tab to enable worktrees.
+              Create a repository first in the Repositories tab to enable branches.
             </Typography.Text>
           </Empty>
         </div>
@@ -566,9 +566,9 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
             minHeight: 400,
           }}
         >
-          <Empty description="No worktrees yet">
+          <Empty description="No branches yet">
             <Typography.Text type="secondary">
-              Worktrees will appear here once created from sessions or the CLI.
+              Branches will appear here once created from sessions or the CLI.
             </Typography.Text>
           </Empty>
         </div>
@@ -589,7 +589,7 @@ export const WorktreesTable: React.FC<WorktreesTableProps> = ({
       )}
 
       <Modal
-        title="Create Worktree"
+        title="Create Branch"
         open={createModalOpen}
         onOk={handleCreate}
         onCancel={handleCancel}

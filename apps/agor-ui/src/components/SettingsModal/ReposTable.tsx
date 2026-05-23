@@ -301,7 +301,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
                   <Space orientation="vertical" size={8} style={{ width: '100%' }}>
                     <Typography.Text strong>Remove from Agor (Keep Files)</Typography.Text>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      Remove from database only. Repository and worktree directories in{' '}
+                      Remove from database only. Repository and branch directories in{' '}
                       <Typography.Text code>~/.agor/repos/</Typography.Text> and{' '}
                       <Typography.Text code>~/.agor/worktrees/</Typography.Text> will remain on
                       disk.
@@ -317,7 +317,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
                     <Typography.Text strong>Delete Completely (Remove Files)</Typography.Text>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                       ⚠️ Remove from database AND delete all filesystem directories (repository +
-                      worktrees). This will free up disk space but cannot be undone.
+                      branches). This will free up disk space but cannot be undone.
                     </Typography.Text>
                     <Button
                       danger
