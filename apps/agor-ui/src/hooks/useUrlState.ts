@@ -249,6 +249,14 @@ export function useUrlState(options: UseUrlStateOptions) {
       lastUrlSessionShortIdRef.current = urlSessionShortId;
       lastUrlWorktreeShortIdRef.current = urlWorktreeShortId;
       lastUrlArtifactShortIdRef.current = urlArtifactShortId;
+      // Cancel any pending deferred recenter from the previous URL —
+      // not just when scheduling a new one. Otherwise `/w/old → /b/board/`
+      // within 50ms would let the old recenter fire after we've
+      // navigated away.
+      if (deferredRecenterTimerRef.current) {
+        clearTimeout(deferredRecenterTimerRef.current);
+        deferredRecenterTimerRef.current = null;
+      }
     }
 
     const fullyResolved =
@@ -351,9 +359,8 @@ export function useUrlState(options: UseUrlStateOptions) {
     // recenter animation. Stored in a ref so a follow-up URL change
     // can cancel a stale pending recenter before it fires.
     if (urlParamsChanged && recenterTargetId && resolvedBoardId) {
-      if (deferredRecenterTimerRef.current) {
-        clearTimeout(deferredRecenterTimerRef.current);
-      }
+      // Any pending timer was cleared at the top of this effect when
+      // `urlParamsChanged` flipped — safe to schedule fresh.
       const target = recenterTargetId;
       const boardId = resolvedBoardId;
       deferredRecenterTimerRef.current = setTimeout(() => {

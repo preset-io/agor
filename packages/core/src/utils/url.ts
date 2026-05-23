@@ -101,8 +101,10 @@ export function artifactPath(artifactId: ArtifactID): string {
 
 /** Compose a full external URL from a relative entity path.
  *  Strips a trailing slash off `baseUrl` defensively so misconfigured
- *  `daemon.public_url` values (e.g. `https://agor.example.com/`) don't
- *  produce double-slashed URLs like `https://agor.example.com//ui/...`. */
+ *  `daemon.base_url` values (e.g. `https://agor.example.com/`) don't
+ *  produce double-slashed URLs like `https://agor.example.com//ui/...`.
+ *  `baseUrl` here comes from `getBaseUrl()` in config-manager, which
+ *  reads `daemon.base_url` (with an `AGOR_BASE_URL` env override). */
 function fullUrl(path: string, baseUrl: string): string {
   return `${baseUrl.replace(/\/$/, '')}${UI_MOUNT_PATH}${path}`;
 }
