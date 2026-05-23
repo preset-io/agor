@@ -346,6 +346,16 @@ export const GitWorktreeAddPayloadSchema = BasePayloadSchema.extend({
        * when storageMode='worktree'.
        */
       remoteUrl: z.string().optional(),
+
+      /**
+       * Optional `git clone --reference <path>` hint. Daemon resolves this
+       * to the per-repo base clone (e.g. `~/.agor/repos/<slug>/`) and
+       * forwards it; the executor checks the path on its own filesystem
+       * before adding `--reference` to the clone command. Path missing
+       * (different mount, base not seeded yet) → silent fallback to a
+       * full clone. Ignored when storageMode='worktree'.
+       */
+      referencePath: z.string().optional(),
     })
     .superRefine(enforceClonePayloadInvariants),
 });

@@ -1467,6 +1467,64 @@ describe('createBranchAsClone', () => {
       })
     ).rejects.toThrow(/Invalid git ref/);
   });
+
+  it('uses --reference when referencePath exists on disk (alternates pointer)', async () => {
+    // The whole point of `--reference`: the new clone's .git/objects/ is
+    // empty and instead points at a base-cache via alternates. This is
+    // the design-doc §5 self-hosted default — drops per-branch .git size
+    // from ~repo.pack to ~few-MB. Test pins the alternates-file artifact
+    // so a regression that silently drops the flag fails loudly.
+    await seedRemoteWithBranches();
+
+    // Seed a base clone of the remote — this stands in for the per-repo
+    // base at `~/.agor/repos/<slug>/` that the daemon would manage.
+    const baseClone = path.join(tempDir, 'base-cache');
+    await simpleGit().clone(remoteDir, baseClone, ['--no-single-branch']);
+
+    const targetPath = path.join(tempDir, 'wt-with-reference');
+    await createBranchAsClone({
+      remoteUrl: remoteDir,
+      targetPath,
+      ref: 'feature-x',
+      referencePath: baseClone,
+    });
+
+    // The alternates file is the canonical signal that --reference took.
+    // Its content points into the base clone's objects directory.
+    const alternatesPath = path.join(targetPath, '.git', 'objects', 'info', 'alternates');
+    const alternates = await fs.readFile(alternatesPath, 'utf-8');
+    expect(alternates).toContain(path.join(baseClone, '.git', 'objects'));
+
+    // Working tree is on the requested branch.
+    expect(await getCurrentBranch(targetPath)).toBe('feature-x');
+  });
+
+  it('falls back to a plain clone (no --reference) when referencePath is missing', async () => {
+    // Daemon/executor mount asymmetry: daemon hands the executor a hint
+    // that may or may not resolve on the executor's filesystem. Missing
+    // path must NOT fail the clone — it just costs more disk. Pinning
+    // this so a future "throw on missing reference" regression fails.
+    await seedRemoteWithBranches();
+    const targetPath = path.join(tempDir, 'wt-missing-reference');
+    const missingReference = path.join(tempDir, 'does-not-exist-on-this-filesystem');
+
+    const result = await createBranchAsClone({
+      remoteUrl: remoteDir,
+      targetPath,
+      ref: 'main',
+      referencePath: missingReference,
+    });
+
+    expect(result.ref).toBe('main');
+
+    // No alternates file → no --reference was applied. Clone is
+    // self-standing and complete on its own.
+    const alternatesExists = await fs
+      .access(path.join(targetPath, '.git', 'objects', 'info', 'alternates'))
+      .then(() => true)
+      .catch(() => false);
+    expect(alternatesExists).toBe(false);
+  });
 });
 
 describe('categorizeGitError', () => {

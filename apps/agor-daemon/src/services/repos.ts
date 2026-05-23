@@ -872,6 +872,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             storageMode,
             ...(cloneDepth !== undefined ? { cloneDepth } : {}),
             ...(storageMode === 'clone' && repo.remote_url ? { remoteUrl: repo.remote_url } : {}),
+            // Hand the executor the per-repo base clone as a `--reference`
+            // hint. The executor checks `existsSync` on its own filesystem;
+            // missing path → silent fallback to a full clone. Lets daemon
+            // and executor live on different mounts without coupling.
+            ...(storageMode === 'clone' && repo.local_path
+              ? { referencePath: repo.local_path }
+              : {}),
           },
         },
         {

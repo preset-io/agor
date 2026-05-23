@@ -1033,8 +1033,7 @@ export interface CreateBranchAsCloneOptions {
   newBranchName?: string;
   /**
    * Optional shallow-clone depth. Positive integer → `--depth N`. Omit (or
-   * pass `undefined`) for a full clone with complete history. Out of scope
-   * for now: `--reference` / `--filter=blob:none` (see design doc §5).
+   * pass `undefined`) for a full clone with complete history.
    */
   depth?: number;
   /**
@@ -1043,6 +1042,32 @@ export interface CreateBranchAsCloneOptions {
    * rare case where you want every remote ref locally.
    */
   singleBranch?: boolean;
+  /**
+   * Optional `git clone --reference <path>` object-cache borrow.
+   *
+   * When set AND the path exists on the calling process's filesystem at
+   * runtime, this turns the per-branch `.git/objects/` into an `alternates`
+   * pointer at `<path>/.git/objects/` — disk drops from "full pack copy"
+   * (hundreds of MB for big repos) to "a few MB of refs/config". The
+   * config/credentials isolation that clone mode buys is preserved: only
+   * the immutable object store is shared with the daemon-owned base clone.
+   *
+   * When set but the path does NOT exist (executor running in a different
+   * mount, base clone not yet seeded, etc.), the `--reference` flag is
+   * silently dropped and a regular clone runs — at higher disk cost but
+   * still correct. This lets the daemon hand the executor a "use this if
+   * you have it" hint without coupling the two filesystems.
+   *
+   * NEVER paired with `--dissociate`: dissociate copies all reachable
+   * objects out of the reference into the new clone (~equivalent to a
+   * naïve clone), defeating the purpose. See design doc §5.
+   *
+   * Operational caveat: `git gc --prune=now` against the reference can
+   * orphan objects that branches' alternates pointers still depend on.
+   * Daemon-side base-cache management must avoid `--prune=now` (a future
+   * `branch_storage.base_cache_gc_prune` config knob will enforce this).
+   */
+  referencePath?: string;
   /** Per-user environment variables (GITHUB_TOKEN, GH_TOKEN, …). */
   env?: Record<string, string>;
 }
@@ -1091,7 +1116,7 @@ export interface CreateBranchAsCloneResult {
 export async function createBranchAsClone(
   options: CreateBranchAsCloneOptions
 ): Promise<CreateBranchAsCloneResult> {
-  const { remoteUrl, targetPath, ref, newBranchName, depth, env } = options;
+  const { remoteUrl, targetPath, ref, newBranchName, depth, referencePath, env } = options;
   const singleBranch = options.singleBranch ?? true;
 
   if (!remoteUrl) {
@@ -1115,19 +1140,43 @@ export async function createBranchAsClone(
     );
   }
 
+  // Resolve `--reference` opportunistically: caller passes the base-cache
+  // path they'd *like* to use; we check on this process's filesystem and
+  // either use it or fall back silently. This decouples the daemon's
+  // knowledge of "where the base clone lives" from the executor's
+  // filesystem reality, so future mount asymmetry (remote executors,
+  // hosted env-pods, etc.) doesn't break clone creation — it just costs
+  // more disk for branches that can't see the cache.
+  let useReference = false;
+  if (referencePath) {
+    if (existsSync(referencePath)) {
+      useReference = true;
+    } else {
+      console.log(
+        `[createBranchAsClone] referencePath '${referencePath}' not present on this filesystem — ` +
+          `falling back to a full clone without --reference.`
+      );
+    }
+  }
+
   const { git } = createGitForRemote(remoteUrl, env);
 
   // `--branch <ref>` pins the working tree to the ref instead of remote HEAD.
   // `--single-branch` avoids pulling sibling branches we'll never look at.
   // `--depth N` (optional) shallow-truncates history.
+  // `--reference <path>` (optional) borrows objects from a local base
+  // clone via alternates; deliberately NOT paired with `--dissociate`
+  // (see option doc above + design doc §5).
   const cloneArgs: string[] = ['--branch', ref];
   if (singleBranch) cloneArgs.push('--single-branch');
   if (depth !== undefined) cloneArgs.push('--depth', String(depth));
+  if (useReference && referencePath) cloneArgs.push('--reference', referencePath);
 
   console.log(
     `[createBranchAsClone] Cloning ${remoteUrl} → ${targetPath} ` +
       `(ref=${ref}${newBranchName ? `, newBranch=${newBranchName}` : ''}, ` +
-      `depth=${depth ?? 'full'}, singleBranch=${singleBranch})`
+      `depth=${depth ?? 'full'}, singleBranch=${singleBranch}, ` +
+      `reference=${useReference ? referencePath : 'none'})`
   );
   await git.clone(remoteUrl, targetPath, cloneArgs);
 

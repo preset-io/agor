@@ -783,6 +783,12 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
               storageMode,
               ...(worktree.clone_depth !== undefined ? { cloneDepth: worktree.clone_depth } : {}),
               ...(storageMode === 'clone' && repo.remote_url ? { remoteUrl: repo.remote_url } : {}),
+              // `--reference` hint: see the create-path call site in
+              // ReposService.createWorktree for the rationale (executor
+              // existsSync's the path and falls back gracefully).
+              ...(storageMode === 'clone' && repo.local_path
+                ? { referencePath: repo.local_path }
+                : {}),
             },
           },
           {

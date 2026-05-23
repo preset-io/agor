@@ -463,6 +463,7 @@ export async function handleGitWorktreeAdd(
         storageMode: payload.params.storageMode,
         cloneDepth: payload.params.cloneDepth,
         remoteUrl: payload.params.remoteUrl,
+        referencePath: payload.params.referencePath,
       },
     };
   }
@@ -491,6 +492,7 @@ export async function handleGitWorktreeAdd(
     const storageMode = payload.params.storageMode ?? 'worktree';
     const cloneDepth = payload.params.cloneDepth;
     const remoteUrl = payload.params.remoteUrl;
+    const referencePath = payload.params.referencePath;
 
     console.log(`[git.worktree.add] Creating worktree at ${worktreePath}...`);
     console.log(
@@ -519,7 +521,7 @@ export async function handleGitWorktreeAdd(
       console.log(
         `[git.worktree.add] Using createBranchAsClone (remote=${remoteUrl}, ` +
           `ref=${cloneRef}${createBranch && branch !== cloneRef ? `, newBranch=${branch}` : ''}, ` +
-          `depth=${cloneDepth ?? 'full'})`
+          `depth=${cloneDepth ?? 'full'}, referenceHint=${referencePath ?? 'none'})`
       );
       await createBranchAsClone({
         remoteUrl,
@@ -527,6 +529,10 @@ export async function handleGitWorktreeAdd(
         ref: cloneRef,
         ...(createBranch && branch !== cloneRef ? { newBranchName: branch } : {}),
         depth: cloneDepth,
+        // Pass the daemon's hint through unconditionally. The helper does
+        // the existsSync check on the executor's filesystem and falls back
+        // gracefully if the path isn't actually mounted here.
+        ...(referencePath ? { referencePath } : {}),
         env,
       });
     } else if (restoreMode && sourceBranch) {
