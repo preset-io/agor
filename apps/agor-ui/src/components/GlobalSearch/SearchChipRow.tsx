@@ -1,4 +1,4 @@
-import { Tag, theme } from 'antd';
+import { Tag, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { type ChipFilter, TYPE_CHIP_LABELS, TYPE_CHIP_ORDER } from './types';
 
@@ -46,19 +46,46 @@ export const SearchChipRow: React.FC<SearchChipRowProps> = ({
           );
         })}
       </div>
-      <Tag.CheckableTag
-        checked={ownedByMe}
-        onChange={onOwnedByMeToggle}
+      <div
         style={{
-          cursor: 'pointer',
-          userSelect: 'none',
-          fontSize: 12,
-          lineHeight: '20px',
-          padding: '1px 8px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
         }}
       >
-        {ownedByMe ? '✓ ' : ''}Created by me
-      </Tag.CheckableTag>
+        <Tag.CheckableTag
+          checked={ownedByMe}
+          onChange={onOwnedByMeToggle}
+          style={{
+            cursor: 'pointer',
+            userSelect: 'none',
+            fontSize: 12,
+            lineHeight: '20px',
+            padding: '1px 8px',
+          }}
+        >
+          {ownedByMe ? '✓ ' : ''}Created by me
+        </Tag.CheckableTag>
+        <Tooltip
+          title="Global search is in beta — some click targets and entity types are still wired up. Expect rough edges."
+          placement="bottom"
+        >
+          <Tag
+            color="orange"
+            style={{
+              fontSize: 10,
+              lineHeight: '16px',
+              padding: '0 6px',
+              margin: 0,
+              cursor: 'help',
+              userSelect: 'none',
+            }}
+          >
+            BETA
+          </Tag>
+        </Tooltip>
+      </div>
     </div>
   );
 };
