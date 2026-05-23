@@ -26,8 +26,13 @@
  * for unrelated user-input validation (kept here for historical reasons).
  */
 
-import { shortId } from '../lib/ids';
+// Import `shortId` directly from `types/id` (not `lib/ids`). `lib/ids`
+// re-exports `shortId` for Node consumers but also imports
+// `node:crypto` for `generateId()`. Going through it pulls a Node-only
+// dependency into the browser bundle, which Vite externalizes and
+// errors on at runtime (`crypto.randomBytes` not in browser scope).
 import type { ArtifactID, BoardID, SessionID, WorktreeID } from '../types/id';
+import { shortId } from '../types/id';
 
 // ---------------------------------------------------------------------------
 // Constants — shared by daemon static-serving, UI router basename, and the
