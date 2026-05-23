@@ -79,9 +79,9 @@ export interface AppHeaderProps {
   /** Instance description (markdown) shown in popover around the instance label */
   instanceDescription?: string;
   /** Live entity maps for the global-search dropdown. Passed through from App.tsx. */
-  sessionById?: Map<string, Session>;
-  artifactById?: Map<string, Artifact>;
-  mcpServerById?: Map<string, MCPServer>;
+  sessionById: Map<string, Session>;
+  artifactById: Map<string, Artifact>;
+  mcpServerById: Map<string, MCPServer>;
   /** Optional sibling-PR primitive: pan/zoom the canvas to a specific worktree.
    * When absent, GlobalSearch falls back to onBoardChange. */
   onWorktreeFocus?: (worktreeId: string) => void;
@@ -322,11 +322,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         />
         <GlobalSearch
           currentUserId={currentUserId}
-          sessionById={sessionById ?? new Map()}
+          sessionById={sessionById}
           worktreeById={worktreeById}
-          artifactById={artifactById ?? new Map()}
+          artifactById={artifactById}
           boards={boards}
-          mcpServerById={mcpServerById ?? new Map()}
+          mcpServerById={mcpServerById}
           onBoardChange={onBoardChange}
           onWorktreeFocus={onWorktreeFocus}
           onSettingsClick={onSettingsClick}

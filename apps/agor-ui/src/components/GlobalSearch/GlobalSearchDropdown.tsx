@@ -59,6 +59,7 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
             recents.map((result, index) => (
               <SearchResult
                 key={resultKey(result)}
+                rowId={rowDomId(result)}
                 result={result}
                 selected={index === selectedIndex}
                 onClick={() => onResultClick(result)}
@@ -92,6 +93,7 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
                 return (
                   <SearchResult
                     key={resultKey(result)}
+                    rowId={rowDomId(result)}
                     result={result}
                     selected={flatIndex === selectedIndex}
                     onClick={() => onResultClick(result)}
@@ -141,6 +143,7 @@ const EmptyHint: React.FC<{
   </div>
 );
 
+/** Stable React key per result row. */
 function resultKey(result: SearchResultItem): string {
   switch (result.type) {
     case 'session':
@@ -155,4 +158,12 @@ function resultKey(result: SearchResultItem): string {
     case 'mcp':
       return `mcp:${result.item.mcp_server_id}`;
   }
+}
+
+/** DOM id namespace for combobox aria-activedescendant wiring. */
+export const GLOBAL_SEARCH_LISTBOX_ID = 'global-search-listbox';
+
+/** Stable DOM id for a result row — used by aria-activedescendant. */
+export function rowDomId(result: SearchResultItem): string {
+  return `global-search-row-${resultKey(result)}`;
 }

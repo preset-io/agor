@@ -1,4 +1,5 @@
 import type { Artifact, Board, MCPServer, Session, Worktree } from '@agor-live/client';
+import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import { useEffect, useMemo, useState } from 'react';
 import {
   EMPTY_RESULTS,
@@ -8,7 +9,8 @@ import {
   SECTION_LIMIT,
   SECTION_LIMIT_EXPANDED,
   type SearchResultItem,
-} from '../components/GlobalSearch/types';
+} from './types';
+import { byTimestamp } from './utils';
 
 interface UseGlobalSearchInput {
   query: string;
@@ -87,19 +89,27 @@ export function useGlobalSearch({
       }
     }
 
-    // Worktrees + Assistants share the same table, split by data.custom_context.assistant
+    // Worktrees + Assistants share the same table — split via the canonical
+    // isAssistant() helper from @agor-live/client. Assistants' user-visible
+    // displayName lives in custom_context.assistant and must be searchable too.
     if (includeType('worktree') || includeType('assistant')) {
       const allWorktrees = Array.from(worktreeById.values())
         .filter((w) => !ownedByMe || w.created_by === currentUserId)
-        .filter((w) => matchTokens(tokens, [w.name, w.issue_url, w.pull_request_url]))
+        .filter((w) =>
+          matchTokens(tokens, [
+            w.name,
+            w.issue_url,
+            w.pull_request_url,
+            getAssistantConfig(w)?.displayName,
+          ])
+        )
         .sort(byTimestamp((w) => w.updated_at));
 
       for (const w of allWorktrees) {
-        const isAssistant = Boolean(w.custom_context?.assistant ?? w.custom_context?.agent);
-        if (isAssistant && includeType('assistant') && buckets.assistant.length < sectionLimit) {
+        if (isAssistant(w) && includeType('assistant') && buckets.assistant.length < sectionLimit) {
           buckets.assistant.push({ type: 'assistant', item: w });
         } else if (
-          !isAssistant &&
+          !isAssistant(w) &&
           includeType('worktree') &&
           buckets.worktree.length < sectionLimit
         ) {
@@ -123,12 +133,12 @@ export function useGlobalSearch({
       }
     }
 
-    // Boards have no updated_at on the type — fall back to created_at for ordering.
+    // Boards
     if (includeType('board')) {
       const bs = boards
         .filter((b) => !ownedByMe || b.created_by === currentUserId)
         .filter((b) => matchTokens(tokens, [b.name]))
-        .sort(byTimestamp((b) => b.created_at));
+        .sort(byTimestamp((b) => b.last_updated));
       for (const b of bs.slice(0, sectionLimit)) {
         buckets.board.push({ type: 'board', item: b });
       }
@@ -176,22 +186,4 @@ function matchTokens(tokens: string[], fields: Array<string | undefined | null>)
     .join(' \n ')
     .toLowerCase();
   return tokens.every((t) => haystack.includes(t));
-}
-
-/**
- * Generic timestamp-DESC sorter. Each entity type carries its own timestamp
- * field name and type (Session uses `last_updated`; Board has no updated_at;
- * MCPServer uses Date objects), so callers pass an accessor.
- */
-function byTimestamp<T>(
-  getTs: (item: T) => string | Date | undefined | null
-): (a: T, b: T) => number {
-  return (a, b) => tsValue(getTs(b)) - tsValue(getTs(a));
-}
-
-function tsValue(ts: string | Date | undefined | null): number {
-  if (!ts) return 0;
-  if (ts instanceof Date) return ts.getTime();
-  const parsed = Date.parse(ts);
-  return Number.isNaN(parsed) ? 0 : parsed;
 }

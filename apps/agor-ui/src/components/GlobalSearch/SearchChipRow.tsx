@@ -68,7 +68,7 @@ export const SearchChipRow: React.FC<SearchChipRowProps> = ({
           {ownedByMe ? '✓ ' : ''}Created by me
         </Tag.CheckableTag>
         <Tooltip
-          title="Global search is in beta — some click targets and entity types are still wired up. Expect rough edges."
+          title="Global search is in beta — some click targets are still stubs (e.g. MCP opens Settings) and message-content search isn't wired up yet. Expect rough edges."
           placement="bottom"
         >
           <Tag

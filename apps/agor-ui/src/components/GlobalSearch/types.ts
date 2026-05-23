@@ -1,4 +1,4 @@
-import type { Artifact, Board, MCPServer, Repo, Session, Worktree } from '@agor-live/client';
+import type { Artifact, Board, MCPServer, Session, Worktree } from '@agor-live/client';
 
 export type SearchEntityType = 'session' | 'worktree' | 'assistant' | 'artifact' | 'board' | 'mcp';
 
@@ -34,10 +34,10 @@ export const TYPE_CHIP_ICONS: Record<SearchEntityType, string> = {
 };
 
 export type SearchResultItem =
-  | { type: 'session'; item: Session; parentWorktree?: Worktree; parentRepo?: Repo }
-  | { type: 'worktree'; item: Worktree; parentRepo?: Repo }
-  | { type: 'assistant'; item: Worktree; parentRepo?: Repo }
-  | { type: 'artifact'; item: Artifact; parentWorktree?: Worktree; parentBoard?: Board }
+  | { type: 'session'; item: Session; parentWorktree?: Worktree }
+  | { type: 'worktree'; item: Worktree }
+  | { type: 'assistant'; item: Worktree }
+  | { type: 'artifact'; item: Artifact; parentWorktree?: Worktree }
   | { type: 'board'; item: Board }
   | { type: 'mcp'; item: MCPServer };
 

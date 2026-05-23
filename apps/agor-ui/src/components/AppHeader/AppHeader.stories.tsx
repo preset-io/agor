@@ -21,8 +21,15 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
+const EMPTY_DATA_MAPS = {
+  sessionById: new Map(),
+  artifactById: new Map(),
+  mcpServerById: new Map(),
+};
+
 export const Default: Story = {
   args: {
+    ...EMPTY_DATA_MAPS,
     onMenuClick: () => console.log('Menu clicked'),
     onSettingsClick: () => console.log('Settings clicked'),
   },
@@ -30,6 +37,7 @@ export const Default: Story = {
 
 export const WithActions: Story = {
   args: {
+    ...EMPTY_DATA_MAPS,
     onMenuClick: () => alert('Menu clicked'),
     onSettingsClick: () => alert('Settings clicked'),
   },

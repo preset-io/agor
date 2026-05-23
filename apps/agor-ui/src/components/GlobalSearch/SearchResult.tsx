@@ -1,6 +1,8 @@
+import { getAssistantConfig } from '@agor-live/client';
 import { Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
+import { formatRelativeTime } from '../../utils/time';
 import { type SearchResultItem, TYPE_CHIP_ICONS } from './types';
 
 const { Text } = Typography;
@@ -10,6 +12,8 @@ interface SearchResultProps {
   selected: boolean;
   onClick: () => void;
   onHover?: () => void;
+  /** Stable DOM id so the input's aria-activedescendant can point at the row. */
+  rowId?: string;
 }
 
 /**
@@ -24,6 +28,7 @@ export const SearchResult: React.FC<SearchResultProps> = ({
   selected,
   onClick,
   onHover,
+  rowId,
 }) => {
   const { token } = theme.useToken();
   const { title, tag, secondary, time, icon } = renderResult(result);
@@ -34,6 +39,9 @@ export const SearchResult: React.FC<SearchResultProps> = ({
       onClick={onClick}
       onMouseEnter={onHover}
       aria-label={title}
+      role="option"
+      aria-selected={selected}
+      id={rowId}
       style={{
         display: 'flex',
         alignItems: 'flex-start',
@@ -108,7 +116,7 @@ function renderResult(result: SearchResultItem): {
         title,
         tag: result.item.agentic_tool,
         secondary: result.parentWorktree ? `in ${result.parentWorktree.name}` : undefined,
-        time: relativeTime(result.item.last_updated),
+        time: safeRelativeTime(result.item.last_updated),
       };
     }
     case 'worktree': {
@@ -116,21 +124,15 @@ function renderResult(result: SearchResultItem): {
         icon: TYPE_CHIP_ICONS.worktree,
         title: result.item.name,
         tag: result.item.ref,
-        secondary: result.parentRepo?.name,
-        time: relativeTime(result.item.updated_at),
+        time: safeRelativeTime(result.item.updated_at),
       };
     }
     case 'assistant': {
-      const assistantConfig =
-        result.item.custom_context?.assistant ?? result.item.custom_context?.agent;
-      const displayName =
-        (assistantConfig as { displayName?: string } | undefined)?.displayName ?? result.item.name;
-      const emoji = (assistantConfig as { emoji?: string } | undefined)?.emoji;
+      const config = getAssistantConfig(result.item);
       return {
-        icon: emoji || TYPE_CHIP_ICONS.assistant,
-        title: displayName,
-        secondary: result.parentRepo?.name,
-        time: relativeTime(result.item.updated_at),
+        icon: config?.emoji || TYPE_CHIP_ICONS.assistant,
+        title: config?.displayName ?? result.item.name,
+        time: safeRelativeTime(result.item.updated_at),
       };
     }
     case 'artifact': {
@@ -138,18 +140,15 @@ function renderResult(result: SearchResultItem): {
         icon: TYPE_CHIP_ICONS.artifact,
         title: result.item.name,
         tag: result.item.template,
-        secondary: result.parentWorktree
-          ? `in ${result.parentWorktree.name}`
-          : result.parentBoard
-            ? `on ${result.parentBoard.name}`
-            : undefined,
-        time: relativeTime(result.item.updated_at),
+        secondary: result.parentWorktree ? `in ${result.parentWorktree.name}` : undefined,
+        time: safeRelativeTime(result.item.updated_at),
       };
     }
     case 'board': {
       return {
         icon: result.item.icon || TYPE_CHIP_ICONS.board,
         title: result.item.name,
+        time: safeRelativeTime(result.item.last_updated),
       };
     }
     case 'mcp': {
@@ -163,22 +162,8 @@ function renderResult(result: SearchResultItem): {
   }
 }
 
-/** Minimal relative-time formatter — keeps the dropdown free of date-fns weight. */
-function relativeTime(iso?: string): string | undefined {
-  if (!iso) return undefined;
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return undefined;
-  const diffMs = Date.now() - then;
-  if (diffMs < 0) return 'just now';
-  const sec = Math.floor(diffMs / 1000);
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const day = Math.floor(hr / 24);
-  if (day < 30) return `${day}d ago`;
-  const mo = Math.floor(day / 30);
-  if (mo < 12) return `${mo}mo ago`;
-  return `${Math.floor(mo / 12)}y ago`;
+/** Optional-tolerant wrapper around formatRelativeTime — undefined in, undefined out. */
+function safeRelativeTime(ts: string | Date | undefined | null): string | undefined {
+  if (!ts) return undefined;
+  return formatRelativeTime(ts);
 }

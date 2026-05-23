@@ -3,11 +3,11 @@ import { SearchOutlined } from '@ant-design/icons';
 import { Input, type InputRef, theme } from 'antd';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useGlobalSearch } from '../../hooks/useGlobalSearch';
-import { useRecents } from '../../hooks/useRecents';
-import { GlobalSearchDropdown } from './GlobalSearchDropdown';
+import { GLOBAL_SEARCH_LISTBOX_ID, GlobalSearchDropdown, rowDomId } from './GlobalSearchDropdown';
 import { SearchChipRow } from './SearchChipRow';
 import type { ChipFilter, SearchEntityType, SearchResultItem } from './types';
+import { useGlobalSearch } from './useGlobalSearch';
+import { useRecents } from './useRecents';
 
 const INPUT_WIDTH = 260;
 
@@ -157,12 +157,13 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
         }
         case 'artifact': {
           const worktree = result.parentWorktree;
-          if (worktree) {
-            if (onWorktreeFocus) {
-              onWorktreeFocus(worktree.worktree_id);
-            } else if (worktree.board_id) {
-              onBoardChange?.(worktree.board_id);
-            }
+          if (worktree && onWorktreeFocus) {
+            onWorktreeFocus(worktree.worktree_id);
+          } else if (worktree?.board_id) {
+            onBoardChange?.(worktree.board_id);
+          } else {
+            // Artifact.board_id is required on the schema — always a safe fallback.
+            onBoardChange?.(result.item.board_id);
           }
           break;
         }
@@ -201,6 +202,11 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
     }
     if (e.key === 'Enter') {
       e.preventDefault();
+      // If the user pressed Enter before the 220ms debounce settled, the
+      // visible rows are still showing stale results (often Recents while a
+      // new query is in-flight). Don't navigate to a row the user can't see
+      // matches their typed query.
+      if (query.trim() !== debouncedQuery.trim()) return;
       const target = visibleRows[selectedIndex];
       if (target) navigateToResult(target);
       return;
@@ -217,16 +223,27 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
         onChange={(e) => {
           setQuery(e.target.value);
           setOpen(true);
+          // Reset the keyboard cursor on every keystroke so it doesn't track
+          // a stale row across debounce boundaries.
+          setSelectedIndex(0);
         }}
         onFocus={() => setOpen(true)}
         onKeyDown={handleKeyDown}
         allowClear
         aria-label="Global search"
+        aria-autocomplete="list"
+        aria-expanded={open}
+        aria-controls={GLOBAL_SEARCH_LISTBOX_ID}
+        aria-activedescendant={
+          open && visibleRows[selectedIndex] ? rowDomId(visibleRows[selectedIndex]) : undefined
+        }
+        role="combobox"
         style={{ width: '100%' }}
       />
       {open && (
         <div
           role="listbox"
+          id={GLOBAL_SEARCH_LISTBOX_ID}
           style={{
             position: 'absolute',
             top: '100%',

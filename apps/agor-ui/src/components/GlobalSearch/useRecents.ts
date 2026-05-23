@@ -1,6 +1,8 @@
 import type { Artifact, Session, Worktree } from '@agor-live/client';
+import { isAssistant } from '@agor-live/client';
 import { useMemo } from 'react';
-import type { SearchResultItem } from '../components/GlobalSearch/types';
+import type { SearchResultItem } from './types';
+import { tsValue } from './utils';
 
 interface UseRecentsInput {
   currentUserId?: string;
@@ -14,13 +16,17 @@ const RECENT_WORKTREE_LIMIT = 3;
 const RECENT_ARTIFACT_LIMIT = 2;
 
 /**
- * Backend-free recents — "stuff I created, most-recently-updated first."
+ * Backend-free recents — "stuff I created."
  *
  * Sources directly from the in-memory entity maps that useAgorData keeps
  * WebSocket-synced. No localStorage, no new schema. Per design doc §3.2.
  *
- * Sessions dominate because they're the highest-churn surface and most likely
- * what the user is looking for when they pop the dropdown open.
+ * Note: recents are **section-biased** by entity type (5 sessions / 3 worktrees /
+ * 2 artifacts) and concatenated in that order — NOT globally sorted by recency.
+ * Sessions are the highest-churn / highest-signal surface, so we always lead
+ * with them even when a recently-updated worktree edges out the 5th-place session
+ * on raw timestamp. If we ever want true global ordering, merge the three lists
+ * and re-sort by their per-entity timestamp before slicing.
  */
 export function useRecents({
   currentUserId,
@@ -45,10 +51,9 @@ export function useRecents({
       .filter((w) => w.created_by === currentUserId)
       .sort((a, b) => tsValue(b.updated_at) - tsValue(a.updated_at))
       .slice(0, RECENT_WORKTREE_LIMIT)
-      .map<SearchResultItem>((w) => {
-        const isAssistant = Boolean(w.custom_context?.assistant ?? w.custom_context?.agent);
-        return isAssistant ? { type: 'assistant', item: w } : { type: 'worktree', item: w };
-      });
+      .map<SearchResultItem>((w) =>
+        isAssistant(w) ? { type: 'assistant', item: w } : { type: 'worktree', item: w }
+      );
 
     const artifacts = Array.from(artifactById.values())
       .filter((a) => a.created_by === currentUserId)
@@ -60,15 +65,6 @@ export function useRecents({
         parentWorktree: a.worktree_id ? worktreeById.get(a.worktree_id) : undefined,
       }));
 
-    // Interleave with sessions first (highest signal), then worktrees, then artifacts —
-    // matches the section order in the design doc but flattened for the Recents view.
     return [...sessions, ...worktrees, ...artifacts];
   }, [currentUserId, sessionById, worktreeById, artifactById]);
-}
-
-function tsValue(ts: string | Date | undefined | null): number {
-  if (!ts) return 0;
-  if (ts instanceof Date) return ts.getTime();
-  const parsed = Date.parse(ts);
-  return Number.isNaN(parsed) ? 0 : parsed;
 }
