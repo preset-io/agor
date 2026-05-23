@@ -388,8 +388,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             onCreateWorktree={onCreateWorktree}
             onUpdateWorktree={onUpdateWorktree}
             onCreateRepo={onCreateRepo}
-            onStartEnvironment={onStartEnvironment}
-            onStopEnvironment={onStopEnvironment}
           />
         );
       case 'cards':

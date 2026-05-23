@@ -32,7 +32,6 @@ import { AssistantFormFields, CREATE_NEW_BOARD } from '../forms/AssistantFormFie
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import { UserAvatar } from '../metadata/UserAvatar';
 import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
-import { renderEnvCell } from './WorktreeEnvColumn';
 
 interface AssistantsTableProps {
   worktreeById: Map<string, Worktree>;
@@ -62,8 +61,6 @@ interface AssistantsTableProps {
   ) => Promise<Worktree | null>;
   onUpdateWorktree?: (worktreeId: string, updates: WorktreeUpdate) => void;
   onCreateRepo?: (data: CreateRepoRequest) => void | Promise<void>;
-  onStartEnvironment?: (worktreeId: string) => void;
-  onStopEnvironment?: (worktreeId: string) => void;
 }
 
 export const AssistantsTable: React.FC<AssistantsTableProps> = ({
@@ -78,8 +75,6 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
   onCreateWorktree,
   onUpdateWorktree,
   onCreateRepo,
-  onStartEnvironment,
-  onStopEnvironment,
 }) => {
   const repos = mapToArray(repoById);
   const boards = mapToArray(boardById);
@@ -268,16 +263,6 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
           );
         }
         return <UserAvatar user={user} showName size="small" />;
-      },
-    },
-    {
-      title: 'Env',
-      key: 'env',
-      width: 120,
-      align: 'center' as const,
-      render: (_: unknown, record: Worktree) => {
-        const repo = repos.find((r: Repo) => r.repo_id === record.repo_id);
-        return renderEnvCell(record, repo, token, { onStartEnvironment, onStopEnvironment });
       },
     },
     {
