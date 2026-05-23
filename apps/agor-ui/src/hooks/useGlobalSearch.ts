@@ -72,12 +72,12 @@ export function useGlobalSearch({
     const includeType = (t: SearchResultItem['type']) =>
       activeTypeChip === 'all' || activeTypeChip === t;
 
-    // Sessions
+    // Sessions (timestamp field is `last_updated`, not `updated_at`)
     if (includeType('session')) {
       const sessions = Array.from(sessionById.values())
         .filter((s) => !ownedByMe || s.created_by === currentUserId)
         .filter((s) => matchTokens(tokens, [s.title, s.description]))
-        .sort(byUpdatedAt);
+        .sort(byTimestamp((s) => s.last_updated));
       for (const s of sessions.slice(0, sectionLimit)) {
         buckets.session.push({
           type: 'session',
@@ -92,13 +92,17 @@ export function useGlobalSearch({
       const allWorktrees = Array.from(worktreeById.values())
         .filter((w) => !ownedByMe || w.created_by === currentUserId)
         .filter((w) => matchTokens(tokens, [w.name, w.issue_url, w.pull_request_url]))
-        .sort(byUpdatedAt);
+        .sort(byTimestamp((w) => w.updated_at));
 
       for (const w of allWorktrees) {
         const isAssistant = Boolean(w.custom_context?.assistant ?? w.custom_context?.agent);
         if (isAssistant && includeType('assistant') && buckets.assistant.length < sectionLimit) {
           buckets.assistant.push({ type: 'assistant', item: w });
-        } else if (!isAssistant && includeType('worktree') && buckets.worktree.length < sectionLimit) {
+        } else if (
+          !isAssistant &&
+          includeType('worktree') &&
+          buckets.worktree.length < sectionLimit
+        ) {
           buckets.worktree.push({ type: 'worktree', item: w });
         }
       }
@@ -109,7 +113,7 @@ export function useGlobalSearch({
       const arts = Array.from(artifactById.values())
         .filter((a) => !ownedByMe || a.created_by === currentUserId)
         .filter((a) => matchTokens(tokens, [a.name, a.description]))
-        .sort(byUpdatedAt);
+        .sort(byTimestamp((a) => a.updated_at));
       for (const a of arts.slice(0, sectionLimit)) {
         buckets.artifact.push({
           type: 'artifact',
@@ -119,23 +123,23 @@ export function useGlobalSearch({
       }
     }
 
-    // Boards
+    // Boards have no updated_at on the type — fall back to created_at for ordering.
     if (includeType('board')) {
       const bs = boards
         .filter((b) => !ownedByMe || b.created_by === currentUserId)
         .filter((b) => matchTokens(tokens, [b.name]))
-        .sort(byUpdatedAt);
+        .sort(byTimestamp((b) => b.created_at));
       for (const b of bs.slice(0, sectionLimit)) {
         buckets.board.push({ type: 'board', item: b });
       }
     }
 
-    // MCP servers (uses owner_user_id instead of created_by per design doc §6)
+    // MCP servers (uses owner_user_id instead of created_by; updated_at is a Date object)
     if (includeType('mcp')) {
       const servers = Array.from(mcpServerById.values())
         .filter((m) => !ownedByMe || m.owner_user_id === currentUserId)
         .filter((m) => matchTokens(tokens, [m.name, m.display_name, m.description]))
-        .sort(byUpdatedAt);
+        .sort(byTimestamp((m) => m.updated_at));
       for (const m of servers.slice(0, sectionLimit)) {
         buckets.mcp.push({ type: 'mcp', item: m });
       }
@@ -174,8 +178,20 @@ function matchTokens(tokens: string[], fields: Array<string | undefined | null>)
   return tokens.every((t) => haystack.includes(t));
 }
 
-function byUpdatedAt(a: { updated_at?: string }, b: { updated_at?: string }): number {
-  const at = a.updated_at ?? '';
-  const bt = b.updated_at ?? '';
-  return bt.localeCompare(at);
+/**
+ * Generic timestamp-DESC sorter. Each entity type carries its own timestamp
+ * field name and type (Session uses `last_updated`; Board has no updated_at;
+ * MCPServer uses Date objects), so callers pass an accessor.
+ */
+function byTimestamp<T>(
+  getTs: (item: T) => string | Date | undefined | null
+): (a: T, b: T) => number {
+  return (a, b) => tsValue(getTs(b)) - tsValue(getTs(a));
+}
+
+function tsValue(ts: string | Date | undefined | null): number {
+  if (!ts) return 0;
+  if (ts instanceof Date) return ts.getTime();
+  const parsed = Date.parse(ts);
+  return Number.isNaN(parsed) ? 0 : parsed;
 }

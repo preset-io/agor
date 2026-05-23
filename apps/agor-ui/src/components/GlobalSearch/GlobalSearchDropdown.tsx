@@ -54,10 +54,7 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
       {showRecents ? (
         <SectionShell title="Recent" token={token}>
           {recents.length === 0 ? (
-            <EmptyHint
-              text="Recent items you've created will show up here."
-              token={token}
-            />
+            <EmptyHint text="Recent items you've created will show up here." token={token} />
           ) : (
             recents.map((result, index) => (
               <SearchResult

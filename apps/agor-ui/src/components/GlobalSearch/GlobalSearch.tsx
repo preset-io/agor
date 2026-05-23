@@ -7,7 +7,7 @@ import { useGlobalSearch } from '../../hooks/useGlobalSearch';
 import { useRecents } from '../../hooks/useRecents';
 import { GlobalSearchDropdown } from './GlobalSearchDropdown';
 import { SearchChipRow } from './SearchChipRow';
-import { type ChipFilter, type SearchEntityType, type SearchResultItem } from './types';
+import type { ChipFilter, SearchEntityType, SearchResultItem } from './types';
 
 const INPUT_WIDTH = 260;
 

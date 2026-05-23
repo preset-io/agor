@@ -1,7 +1,7 @@
 import { Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
-import { TYPE_CHIP_ICONS, type SearchResultItem } from './types';
+import { type SearchResultItem, TYPE_CHIP_ICONS } from './types';
 
 const { Text } = Typography;
 
@@ -108,7 +108,7 @@ function renderResult(result: SearchResultItem): {
         title,
         tag: result.item.agentic_tool,
         secondary: result.parentWorktree ? `in ${result.parentWorktree.name}` : undefined,
-        time: relativeTime(result.item.updated_at),
+        time: relativeTime(result.item.last_updated),
       };
     }
     case 'worktree': {
@@ -137,7 +137,7 @@ function renderResult(result: SearchResultItem): {
       return {
         icon: TYPE_CHIP_ICONS.artifact,
         title: result.item.name,
-        tag: result.item.kind,
+        tag: result.item.template,
         secondary: result.parentWorktree
           ? `in ${result.parentWorktree.name}`
           : result.parentBoard

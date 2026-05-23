@@ -1,12 +1,6 @@
 import type { Artifact, Board, MCPServer, Repo, Session, Worktree } from '@agor-live/client';
 
-export type SearchEntityType =
-  | 'session'
-  | 'worktree'
-  | 'assistant'
-  | 'artifact'
-  | 'board'
-  | 'mcp';
+export type SearchEntityType = 'session' | 'worktree' | 'assistant' | 'artifact' | 'board' | 'mcp';
 
 export type ChipFilter = 'all' | SearchEntityType;
 

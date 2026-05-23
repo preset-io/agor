@@ -33,7 +33,7 @@ export function useRecents({
 
     const sessions = Array.from(sessionById.values())
       .filter((s) => s.created_by === currentUserId)
-      .sort(byUpdatedAt)
+      .sort((a, b) => tsValue(b.last_updated) - tsValue(a.last_updated))
       .slice(0, RECENT_SESSION_LIMIT)
       .map<SearchResultItem>((s) => ({
         type: 'session',
@@ -43,18 +43,16 @@ export function useRecents({
 
     const worktrees = Array.from(worktreeById.values())
       .filter((w) => w.created_by === currentUserId)
-      .sort(byUpdatedAt)
+      .sort((a, b) => tsValue(b.updated_at) - tsValue(a.updated_at))
       .slice(0, RECENT_WORKTREE_LIMIT)
       .map<SearchResultItem>((w) => {
         const isAssistant = Boolean(w.custom_context?.assistant ?? w.custom_context?.agent);
-        return isAssistant
-          ? { type: 'assistant', item: w }
-          : { type: 'worktree', item: w };
+        return isAssistant ? { type: 'assistant', item: w } : { type: 'worktree', item: w };
       });
 
     const artifacts = Array.from(artifactById.values())
       .filter((a) => a.created_by === currentUserId)
-      .sort(byUpdatedAt)
+      .sort((a, b) => tsValue(b.updated_at) - tsValue(a.updated_at))
       .slice(0, RECENT_ARTIFACT_LIMIT)
       .map<SearchResultItem>((a) => ({
         type: 'artifact',
@@ -68,8 +66,9 @@ export function useRecents({
   }, [currentUserId, sessionById, worktreeById, artifactById]);
 }
 
-function byUpdatedAt(a: { updated_at?: string }, b: { updated_at?: string }): number {
-  const at = a.updated_at ?? '';
-  const bt = b.updated_at ?? '';
-  return bt.localeCompare(at);
+function tsValue(ts: string | Date | undefined | null): number {
+  if (!ts) return 0;
+  if (ts instanceof Date) return ts.getTime();
+  const parsed = Date.parse(ts);
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
