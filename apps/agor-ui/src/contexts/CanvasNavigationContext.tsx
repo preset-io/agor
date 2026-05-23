@@ -63,33 +63,30 @@ export function CanvasNavigationProvider({ children }: { children: ReactNode }) 
   );
 }
 
-/** Single-owner registration. Last caller to mount wins. */
-export function useRegisterRecenter(fn: RecenterMapFn): void {
-  const ctx = useContext(CanvasNavigationContext);
+/** Mount a single-owner registration into a ref. Last caller wins;
+ *  unmount nulls the ref only if it still holds *this* fn (guards
+ *  against a newer owner having taken over). */
+function useRegisterRef<T>(ref: React.MutableRefObject<T | null> | undefined, fn: T): void {
   useEffect(() => {
-    if (!ctx) return;
-    ctx.recenterRef.current = fn;
+    if (!ref) return;
+    ref.current = fn;
     return () => {
-      if (ctx.recenterRef.current === fn) {
-        ctx.recenterRef.current = null;
+      if (ref.current === fn) {
+        ref.current = null;
       }
     };
-  }, [ctx, fn]);
+  }, [ref, fn]);
+}
+
+/** Single-owner registration. Last caller to mount wins. */
+export function useRegisterRecenter(fn: RecenterMapFn): void {
+  useRegisterRef(useContext(CanvasNavigationContext)?.recenterRef, fn);
 }
 
 /** App owns the board state — register its setter so cross-board recenter
  *  can ask for a switch. */
 export function useRegisterBoardSwitcher(fn: BoardSwitcherFn): void {
-  const ctx = useContext(CanvasNavigationContext);
-  useEffect(() => {
-    if (!ctx) return;
-    ctx.boardSwitcherRef.current = fn;
-    return () => {
-      if (ctx.boardSwitcherRef.current === fn) {
-        ctx.boardSwitcherRef.current = null;
-      }
-    };
-  }, [ctx, fn]);
+  useRegisterRef(useContext(CanvasNavigationContext)?.boardSwitcherRef, fn);
 }
 
 /** SessionCanvas drains the stash once its new board's nodes are ready.

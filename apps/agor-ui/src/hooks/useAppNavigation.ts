@@ -86,13 +86,22 @@ export function useAppNavigation({
   const locationPathnameRef = useRef(location.pathname);
   locationPathnameRef.current = location.pathname;
 
-  const goToBoard = useCallback(
-    (boardId: string, opts?: NavigationOpts) => {
-      const target = buildBoardPath(boardId, boardByIdRef.current);
-      if (canonical(target) === canonical(locationPathnameRef.current)) return;
+  /** Navigate to a target path (push by default, replace on opts). Returns
+   *  `true` if the URL changed, `false` when target === current path. */
+  const pushPath = useCallback(
+    (target: string, opts?: NavigationOpts): boolean => {
+      if (canonical(target) === canonical(locationPathnameRef.current)) return false;
       navigate(target, { replace: opts?.replace ?? false });
+      return true;
     },
     [navigate]
+  );
+
+  const goToBoard = useCallback(
+    (boardId: string, opts?: NavigationOpts) => {
+      pushPath(buildBoardPath(boardId, boardByIdRef.current), opts);
+    },
+    [pushPath]
   );
 
   const goToSession = useCallback(
@@ -102,15 +111,14 @@ export function useAppNavigation({
       const worktree: Worktree | undefined = worktreeByIdRef.current.get(session.worktree_id);
       if (!worktree?.board_id) return;
       const target = buildSessionPath(worktree.board_id, sessionId, boardByIdRef.current);
-      if (canonical(target) === canonical(locationPathnameRef.current)) {
-        // Same URL — no history transition fires, so the URL→state recenter
-        // effect won't run. Recenter directly.
+      // pushPath returns false when target === current path — in that case
+      // no history transition fires, so the URL→state recenter effect
+      // won't run. Fall back to a direct recenter.
+      if (!pushPath(target, opts)) {
         recenterMap(worktree.worktree_id, { boardId: worktree.board_id });
-        return;
       }
-      navigate(target, { replace: opts?.replace ?? false });
     },
-    [navigate, recenterMap]
+    [pushPath, recenterMap]
   );
 
   const goToWorktree = useCallback(
@@ -118,18 +126,15 @@ export function useAppNavigation({
       const worktree = worktreeByIdRef.current.get(worktreeId);
       if (!worktree?.board_id) return;
       // Push the shareable worktree URL — useUrlState's URL→state effect
-      // will resolve it and call recenterMap. We still call recenterMap
-      // directly here as a same-tick fallback: if the URL doesn't change
-      // (already on this worktree's board path), the effect won't re-fire,
-      // so the imperative call is what actually moves the camera. The
-      // redundant call for the cross-board case is idempotent.
+      // resolves it and fires recenterMap. We also call recenterMap
+      // directly as a same-tick fallback for the no-URL-change case (the
+      // effect won't re-fire). The redundant call for the cross-board
+      // case is idempotent.
       const target = buildWorktreePath(worktree.board_id, worktreeId, boardByIdRef.current);
       recenterMap(worktreeId, { boardId: worktree.board_id });
-      if (canonical(target) !== canonical(locationPathnameRef.current)) {
-        navigate(target, { replace: opts?.replace ?? false });
-      }
+      pushPath(target, opts);
     },
-    [navigate, recenterMap]
+    [pushPath, recenterMap]
   );
 
   const closeSession = useCallback(
@@ -138,11 +143,9 @@ export function useAppNavigation({
       // the URL doesn't match `/b/:board/...` there's no session to close.
       const match = locationPathnameRef.current.match(/^\/b\/([^/]+)/);
       if (!match) return;
-      const target = `/b/${match[1]}/`;
-      if (canonical(target) === canonical(locationPathnameRef.current)) return;
-      navigate(target, { replace: opts?.replace ?? false });
+      pushPath(`/b/${match[1]}/`, opts);
     },
-    [navigate]
+    [pushPath]
   );
 
   return useMemo(

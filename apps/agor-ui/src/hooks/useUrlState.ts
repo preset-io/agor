@@ -107,10 +107,35 @@ export function buildWorktreePath(
 }
 
 /**
- * Pure resolver: short-ID prefix → board ID, with ambiguity treated as
- * not-found. Extracted from the hook closure so it can be unit-tested
- * directly. See the doc on `resolveSessionFromShortIdPure` for why we
- * refuse to guess on ambiguous matches.
+ * Pure resolver: short-ID prefix → entity ID. Ambiguity is treated as
+ * not-found (we'd rather 404 a deep link than mis-route it to the wrong
+ * entity). Historically the session resolver routed to the
+ * lexicographically-greatest match (newest by UUIDv7) as a "don't 500
+ * the page" hack when 8-char URLs were collision-prone; with
+ * `SHORT_ID_LENGTH` now 24 (~290K same-ms IDs before 1% collision),
+ * realistic URLs are unambiguous and silent mis-routing is the worse
+ * failure mode.
+ */
+export function resolveByShortIdPure<T>(
+  prefix: string,
+  entries: Iterable<T>,
+  getId: (entry: T) => string,
+  onAmbiguous?: (prefix: string, matchCount: number) => void
+): string | null {
+  const matches = findByShortIdPrefix(
+    prefix,
+    Array.from(entries, (e) => ({ id: getId(e) }))
+  );
+  if (matches.length === 0) return null;
+  if (matches.length === 1) return matches[0].id;
+  onAmbiguous?.(prefix, matches.length);
+  return null;
+}
+
+/**
+ * Pure resolver: board param (slug or short-ID prefix) → board ID. Slug
+ * match wins (exact match on `board.slug`); short-ID match falls back to
+ * `resolveByShortIdPure`. Same ambiguity policy: refuse to guess.
  */
 export function resolveBoardFromUrlPure(
   boardParam: string,
@@ -122,56 +147,35 @@ export function resolveBoardFromUrlPure(
       return board.board_id;
     }
   }
-  const matches = findByShortIdPrefix(
-    boardParam,
-    Array.from(boardById.values(), (b) => ({ id: b.board_id }))
-  );
-  if (matches.length === 0) return null;
-  if (matches.length === 1) return matches[0].id;
-  onAmbiguous?.(boardParam, matches.length);
-  return null;
+  return resolveByShortIdPure(boardParam, boardById.values(), (b) => b.board_id, onAmbiguous);
 }
 
-/**
- * Pure resolver: short-ID prefix → session ID, with ambiguity treated as
- * not-found. Previously this silently routed to the lexicographically-
- * greatest match (newest by UUIDv7's time ordering); that was a deliberate
- * "don't 500 the page" choice when 8-char URLs were collision-prone, but
- * it could silently land a stale deep link on the *wrong* session. With
- * `SHORT_ID_LENGTH` now 24 (~290K same-ms IDs before 1% collision),
- * realistic new URLs are unambiguous, so we'd rather surface the failure
- * than mis-route.
- */
+/** Pure resolver: short-ID prefix → session ID. Convenience wrapper. */
 export function resolveSessionFromShortIdPure(
   sessionShortId: string,
   sessionById: Map<string, { session_id: string }>,
   onAmbiguous?: (shortId: string, matchCount: number) => void
 ): string | null {
-  const matches = findByShortIdPrefix(
+  return resolveByShortIdPure(
     sessionShortId,
-    Array.from(sessionById.values(), (s) => ({ id: s.session_id }))
+    sessionById.values(),
+    (s) => s.session_id,
+    onAmbiguous
   );
-  if (matches.length === 0) return null;
-  if (matches.length === 1) return matches[0].id;
-  onAmbiguous?.(sessionShortId, matches.length);
-  return null;
 }
 
-/** Pure resolver: short-ID prefix → worktree ID. Same ambiguity policy as
- *  the session resolver. */
+/** Pure resolver: short-ID prefix → worktree ID. Convenience wrapper. */
 export function resolveWorktreeFromShortIdPure(
   worktreeShortId: string,
   worktreeById: Map<string, { worktree_id: string }>,
   onAmbiguous?: (shortId: string, matchCount: number) => void
 ): string | null {
-  const matches = findByShortIdPrefix(
+  return resolveByShortIdPure(
     worktreeShortId,
-    Array.from(worktreeById.values(), (w) => ({ id: w.worktree_id }))
+    worktreeById.values(),
+    (w) => w.worktree_id,
+    onAmbiguous
   );
-  if (matches.length === 0) return null;
-  if (matches.length === 1) return matches[0].id;
-  onAmbiguous?.(worktreeShortId, matches.length);
-  return null;
 }
 
 /**
@@ -254,6 +258,19 @@ export function useUrlState(options: UseUrlStateOptions) {
       return;
     }
 
+    // Sticky worktree URLs: if we're already on `/b/<board>/w/<...>/` for
+    // the current board AND no session is open, the URL is "more specific"
+    // than the (boardId, sessionId) state vector — preserve it so share
+    // links stay in the address bar instead of being rewritten to
+    // `/b/<board>/`. The URL→state recenter has already fired by the time
+    // this effect runs, so suppressing the rewrite is safe.
+    if (currentBoardId && currentSessionId === null) {
+      const boardPrefix = buildBoardPath(currentBoardId, boardById).replace(/\/$/, '');
+      if (location.pathname.startsWith(`${boardPrefix}/w/`)) {
+        return;
+      }
+    }
+
     const newUrl = buildUrl(currentBoardId, currentSessionId);
     // Normalize current path (add trailing slash if missing)
     const currentPath = `${(location.pathname + location.search).replace(/\/$/, '')}/`;
@@ -264,7 +281,15 @@ export function useUrlState(options: UseUrlStateOptions) {
       lastNavigatedRef.current = newUrl;
       navigate(newUrl, { replace: true });
     }
-  }, [currentBoardId, currentSessionId, buildUrl, location.pathname, location.search, navigate]);
+  }, [
+    currentBoardId,
+    currentSessionId,
+    boardById,
+    buildUrl,
+    location.pathname,
+    location.search,
+    navigate,
+  ]);
 
   // Dev-only warning on ambiguous URL prefixes — see `resolveSessionFromShortIdPure`
   // for the rationale. Returning `null` (not-found) is the production behavior.
