@@ -289,6 +289,28 @@ export const GitWorktreeAddPayloadSchema = BasePayloadSchema.extend({
 
     /** User ID of the requesting user (for per-user credential resolution) */
     userId: z.string().uuid().optional(),
+
+    /**
+     * Branch storage model. Default 'worktree' (native `git worktree add`,
+     * legacy behaviour). 'clone' routes through `createBranchAsClone` for a
+     * self-standing `git clone` — closes cross-branch leak vectors at the
+     * `.git/config` layer. Forwarded from the worktrees DB record.
+     */
+    storageMode: z.enum(['worktree', 'clone']).optional(),
+
+    /**
+     * Shallow-clone depth. Only meaningful when storageMode='clone'. Positive
+     * integer → `git clone --depth N`. Omit (or pass null/undefined) for a
+     * full clone with complete history.
+     */
+    cloneDepth: z.number().int().positive().optional(),
+
+    /**
+     * Remote URL for clone-mode. Daemon resolves from the repo record and
+     * forwards it; the executor uses it as the `git clone` source. Ignored
+     * when storageMode='worktree'.
+     */
+    remoteUrl: z.string().optional(),
   }),
 });
 
@@ -330,6 +352,15 @@ export const GitWorktreeRemovePayloadSchema = BasePayloadSchema.extend({
 
     /** Whether to delete the branch after worktree removal (default: false) */
     deleteBranch: z.boolean().optional().default(false),
+
+    /**
+     * Storage mode of the worktree being removed. Forwarded from the DB
+     * record by the daemon. When 'clone', the executor skips the
+     * `git worktree remove --force` call (clones aren't registered with the
+     * base repo) and just removes the directory. Defaults to 'worktree' for
+     * back-compat with payloads issued before this field existed.
+     */
+    storageMode: z.enum(['worktree', 'clone']).optional(),
   }),
 });
 

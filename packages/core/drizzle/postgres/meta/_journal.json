@@ -239,6 +239,13 @@
       "when": 1778688000000,
       "tag": "0034_artifacts_files_to_jsonb",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1779840000000,
+      "tag": "0035_add_worktree_storage_mode",
+      "breakpoints": true
     }
   ]
 }

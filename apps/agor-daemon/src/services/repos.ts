@@ -567,6 +567,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       others_can?: WorktreePermissionLevel;
       others_fs_access?: 'none' | 'read' | 'write';
       environment_variant?: string;
+      /**
+       * Branch storage model — see docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.
+       * 'worktree' (default) = native `git worktree add`. 'clone' = self-standing `git clone`.
+       */
+      storage_mode?: 'worktree' | 'clone';
+      /** Shallow clone depth (only when storage_mode='clone'). NULL/undefined = full clone. */
+      clone_depth?: number;
     },
     params?: RepoParams
   ): Promise<Worktree> {
@@ -753,6 +760,26 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // and GID is available, ensuring {{worktree.gid}} is populated in templates.
     // See: packages/executor/src/commands/git.ts:renderEnvironmentTemplates()
 
+    // Resolve storage mode at create-time. Default 'worktree' preserves the
+    // legacy `git worktree add` path; 'clone' opts in to self-standing clones
+    // (see docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md).
+    const storageMode: 'worktree' | 'clone' = data.storage_mode ?? 'worktree';
+    const cloneDepth = data.clone_depth;
+    if (storageMode === 'clone' && cloneDepth !== undefined) {
+      if (!Number.isInteger(cloneDepth) || cloneDepth <= 0) {
+        throw new Error(
+          `clone_depth must be a positive integer when set (got ${cloneDepth}). ` +
+            `Omit to make a full clone, or pass a positive int for --depth.`
+        );
+      }
+    }
+    if (storageMode === 'clone' && !repo.remote_url) {
+      throw new Error(
+        `Cannot create a clone-mode worktree for repo '${repo.slug}': repo has no remote_url. ` +
+          `Use storage_mode='worktree' or register the repo with a remote first.`
+      );
+    }
+
     // Create DB record EARLY with 'creating' status
     // Executor will:
     // 1. Create git worktree on filesystem
@@ -775,6 +802,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         ...(data.others_can ? { others_can: data.others_can } : {}),
         ...(data.others_fs_access ? { others_fs_access: data.others_fs_access } : {}),
         ...(data.environment_variant ? { environment_variant: data.environment_variant } : {}),
+        storage_mode: storageMode,
+        ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
         sessions: [],
         last_used: new Date().toISOString(),
         issue_url: data.issue_url,
@@ -928,6 +957,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             // Unix group isolation (only when RBAC is enabled)
             initUnixGroup: rbacEnabled,
             othersAccess: data.others_fs_access || worktree.others_fs_access || 'read',
+            // Branch storage mode (forwarded for the clone-mode code path)
+            storageMode,
+            ...(cloneDepth !== undefined ? { cloneDepth } : {}),
+            ...(storageMode === 'clone' && repo.remote_url ? { remoteUrl: repo.remote_url } : {}),
           },
         },
         {

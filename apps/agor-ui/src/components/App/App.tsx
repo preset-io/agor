@@ -139,6 +139,8 @@ export interface AppProps {
       pullLatest: boolean;
       issue_url?: string;
       pull_request_url?: string;
+      storage_mode?: 'worktree' | 'clone';
+      clone_depth?: number;
     }
   ) => Promise<Worktree | null>;
   onStartEnvironment?: (worktreeId: string) => void;
@@ -515,6 +517,8 @@ export const App: React.FC<AppProps> = ({
       pullLatest: config.pullLatest,
       issue_url: config.issue_url,
       pull_request_url: config.pull_request_url,
+      ...(config.storage_mode ? { storage_mode: config.storage_mode } : {}),
+      ...(config.clone_depth !== undefined ? { clone_depth: config.clone_depth } : {}),
     });
 
     // If board_id is provided and worktree was created, assign it to the board

@@ -988,6 +988,8 @@ function AppContent() {
       pull_request_url?: string;
       boardId?: string;
       position?: { x: number; y: number };
+      storage_mode?: 'worktree' | 'clone';
+      clone_depth?: number;
     }
   ): Promise<Worktree | null> => {
     if (!client) return null;
@@ -1005,6 +1007,8 @@ function AppContent() {
         pull_request_url: data.pull_request_url,
         boardId: data.boardId, // Optional: add to board
         position: data.position, // Optional: position on board (defaults to center of viewport)
+        storage_mode: data.storage_mode,
+        clone_depth: data.clone_depth,
       })) as Worktree;
 
       // Dismiss loading message - worktree will appear on board via WebSocket broadcast

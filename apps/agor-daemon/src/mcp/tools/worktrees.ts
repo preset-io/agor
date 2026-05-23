@@ -254,6 +254,28 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
               'When omitted, the repo default variant is used. ' +
               'Use agor_environment_set later to switch variants on an existing branch.'
           ),
+        storage_mode: z
+          .enum(['worktree', 'clone'])
+          .optional()
+          .describe(
+            'Branch storage model (PR 1 of the worktree→clone migration). ' +
+              '"worktree" (default) = native `git worktree add` — shares the per-repo base ' +
+              '`.git/` and is the legacy behaviour. ' +
+              '"clone" = self-standing `git clone` into the branch directory — own `.git/config`, ' +
+              'closes cross-branch credential/config leak vectors. ' +
+              'See docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.'
+          ),
+        clone_depth: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            'Shallow-clone depth (only meaningful when storage_mode="clone"). ' +
+              'Positive integer → `git clone --depth N`. Omit for a full clone. ' +
+              'Common shallow value: 100. Trade-off: smaller disk footprint, but ' +
+              '`git log` past N commits is broken and some rebase operations fail.'
+          ),
       }),
     },
     async (args) => {
@@ -332,6 +354,8 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
 
       const othersCan = args.othersCan as WorktreePermissionLevel | undefined;
       const othersFsAccess = args.othersFsAccess as 'none' | 'read' | 'write' | undefined;
+      const storageMode = args.storage_mode as 'worktree' | 'clone' | undefined;
+      const cloneDepth = typeof args.clone_depth === 'number' ? args.clone_depth : undefined;
 
       const worktree = await reposService.createWorktree(
         repoId,
@@ -349,6 +373,8 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
           ...(othersCan ? { others_can: othersCan } : {}),
           ...(othersFsAccess ? { others_fs_access: othersFsAccess } : {}),
           ...(variant ? { environment_variant: variant } : {}),
+          ...(storageMode ? { storage_mode: storageMode } : {}),
+          ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
         },
         ctx.baseServiceParams
       );

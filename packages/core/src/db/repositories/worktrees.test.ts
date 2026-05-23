@@ -56,6 +56,8 @@ function createWorktreeData(overrides?: {
   custom_context?: Record<string, unknown>;
   created_at?: string;
   updated_at?: string;
+  storage_mode?: 'worktree' | 'clone';
+  clone_depth?: number;
 }) {
   const name = overrides?.name ?? 'feature-branch';
   const repoId = overrides?.repo_id ?? (generateId() as UUID);
@@ -83,6 +85,8 @@ function createWorktreeData(overrides?: {
     custom_context: overrides?.custom_context,
     created_at: overrides?.created_at,
     updated_at: overrides?.updated_at,
+    storage_mode: overrides?.storage_mode,
+    clone_depth: overrides?.clone_depth,
   } as const;
 }
 
@@ -190,6 +194,63 @@ describe('WorktreeRepository.create', () => {
     const created = await wtRepo.create(data);
 
     expect(created.created_at).toBe(createdAt);
+  });
+
+  // Migration 0044 (sqlite) / 0035 (postgres): storage_mode + clone_depth.
+  // Validates both the schema (column exists, default applies, CHECK enforces
+  // the enum) and the repository's round-tripping of the new fields. If the
+  // migration didn't run, `wtRepo.create` would fail with `no such column`.
+  dbTest(
+    'defaults storage_mode to "worktree" and leaves clone_depth NULL when unset',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const wtRepo = new WorktreeRepository(db);
+      const repo = await repoRepo.create(createRepoData());
+      const data = createWorktreeData({ repo_id: repo.repo_id });
+
+      const created = await wtRepo.create(data);
+
+      expect(created.storage_mode).toBe('worktree');
+      expect(created.clone_depth).toBeUndefined();
+
+      // Round-trip through findById to catch any rowToWorktree drift.
+      const fetched = await wtRepo.findById(created.worktree_id);
+      expect(fetched?.storage_mode).toBe('worktree');
+      expect(fetched?.clone_depth).toBeUndefined();
+    }
+  );
+
+  dbTest('round-trips storage_mode="clone" with a positive clone_depth', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new WorktreeRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const data = {
+      ...createWorktreeData({ repo_id: repo.repo_id, name: 'shallow-clone-branch' }),
+      storage_mode: 'clone' as const,
+      clone_depth: 100,
+    };
+
+    const created = await wtRepo.create(data);
+    expect(created.storage_mode).toBe('clone');
+    expect(created.clone_depth).toBe(100);
+
+    const fetched = await wtRepo.findById(created.worktree_id);
+    expect(fetched?.storage_mode).toBe('clone');
+    expect(fetched?.clone_depth).toBe(100);
+  });
+
+  dbTest('rejects storage_mode values outside the enum (CHECK constraint)', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new WorktreeRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const data = {
+      ...createWorktreeData({ repo_id: repo.repo_id, name: 'bad-storage-mode' }),
+      // biome-ignore lint/suspicious/noExplicitAny: deliberately bypassing the
+      // type system to verify the DB-layer CHECK constraint, not the TS type.
+      storage_mode: 'nonsense' as any,
+    };
+
+    await expect(wtRepo.create(data)).rejects.toThrow();
   });
 });
 

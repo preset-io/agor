@@ -2457,6 +2457,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           issue_url?: string;
           pull_request_url?: string;
           boardId?: string;
+          // Branch storage model — see docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.
+          storage_mode?: 'worktree' | 'clone';
+          clone_depth?: number;
         },
         params: RouteParams
       ) {

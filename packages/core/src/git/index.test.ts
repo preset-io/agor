@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   categorizeGitError,
   cloneRepo,
+  createBranchAsClone,
   createWorktree,
   extractRepoName,
   getCurrentBranch,
@@ -1232,6 +1233,167 @@ describe('cloneRepo', () => {
     await cloneRepo({ url: remoteDir });
 
     await expect(cloneRepo({ url: remoteDir, branch: 'does-not-exist' })).rejects.toThrow();
+  });
+});
+
+describe('createBranchAsClone', () => {
+  // Sibling to createWorktree for the new `storage_mode='clone'` opt-in.
+  // Covers: happy-path clone of an existing branch, shallow-depth knob,
+  // collision with existing targetPath, and ref validation. We exercise the
+  // real `git clone` against a local bare repo (no network) — same pattern
+  // as the cloneRepo tests above.
+  let tempDir: string;
+  let remoteDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-git-test-clone-'));
+    remoteDir = path.join(tempDir, 'remote.git');
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  async function seedRemoteWithBranches(): Promise<void> {
+    // Build a bare remote with `main` + `feature-x`, each with a marker
+    // file. Lets a test assert which branch was actually checked out.
+    await createBareRepo(remoteDir);
+    const sourceDir = path.join(tempDir, 'seed');
+    await createTestRepo(sourceDir);
+    const git = simpleGit(sourceDir);
+    await git.addRemote('origin', remoteDir);
+    await fs.writeFile(path.join(sourceDir, 'main-marker.txt'), 'main', 'utf-8');
+    await git.add('main-marker.txt');
+    await git.commit('main marker');
+    await git.push('origin', 'main');
+    await git.checkoutLocalBranch('feature-x');
+    await fs.writeFile(path.join(sourceDir, 'feature-marker.txt'), 'feature', 'utf-8');
+    await git.add('feature-marker.txt');
+    await git.commit('feature marker');
+    await git.push('origin', 'feature-x');
+  }
+
+  it('clones the requested branch into targetPath with a real .git/ directory', async () => {
+    await seedRemoteWithBranches();
+    const targetPath = path.join(tempDir, 'wt');
+
+    const result = await createBranchAsClone({
+      remoteUrl: remoteDir,
+      targetPath,
+      ref: 'feature-x',
+    });
+
+    expect(result).toEqual({ path: targetPath, ref: 'feature-x' });
+
+    // Working tree is on feature-x — marker is materialised.
+    const featureMarker = await fs
+      .access(path.join(targetPath, 'feature-marker.txt'))
+      .then(() => true)
+      .catch(() => false);
+    expect(featureMarker).toBe(true);
+
+    // The .git is a real directory (clone), not a `gitdir:` pointer file
+    // (worktree). This is the whole point of storage_mode='clone'.
+    const gitStat = await fs.stat(path.join(targetPath, '.git'));
+    expect(gitStat.isDirectory()).toBe(true);
+
+    // Current branch matches the requested ref.
+    expect(await getCurrentBranch(targetPath)).toBe('feature-x');
+  });
+
+  it('supports --depth N for shallow clones', async () => {
+    await seedRemoteWithBranches();
+    const targetPath = path.join(tempDir, 'wt-shallow');
+
+    // Use a `file://` URL — git silently drops `--depth` on bare-path local
+    // clones (it hard-links instead of going through the wire protocol);
+    // file:// forces the real network code path. The warning the helper
+    // would otherwise log here is exactly the symptom that bit this test.
+    await createBranchAsClone({
+      remoteUrl: `file://${remoteDir}`,
+      targetPath,
+      ref: 'feature-x',
+      depth: 1,
+    });
+
+    // shallow=true file in .git is the canonical signal that --depth took.
+    // Don't assert on log length — that's a less stable proxy across git versions.
+    const shallowMarkerExists = await fs
+      .access(path.join(targetPath, '.git', 'shallow'))
+      .then(() => true)
+      .catch(() => false);
+    expect(shallowMarkerExists).toBe(true);
+  });
+
+  it('refuses to clone over a pre-existing target directory', async () => {
+    await seedRemoteWithBranches();
+    const targetPath = path.join(tempDir, 'wt-collision');
+    await fs.mkdir(targetPath, { recursive: true });
+    await fs.writeFile(path.join(targetPath, 'preexisting.txt'), 'x', 'utf-8');
+
+    await expect(
+      createBranchAsClone({
+        remoteUrl: remoteDir,
+        targetPath,
+        ref: 'feature-x',
+      })
+    ).rejects.toThrow(/already exists/);
+
+    // The pre-existing content is untouched.
+    const preserved = await fs
+      .access(path.join(targetPath, 'preexisting.txt'))
+      .then(() => true)
+      .catch(() => false);
+    expect(preserved).toBe(true);
+  });
+
+  it('rejects refs that start with `-` (option-injection guard)', async () => {
+    await seedRemoteWithBranches();
+    const targetPath = path.join(tempDir, 'wt-bad-ref');
+
+    await expect(
+      createBranchAsClone({
+        remoteUrl: remoteDir,
+        targetPath,
+        ref: '--upload-pack=/tmp/payload',
+      })
+    ).rejects.toThrow(/Invalid git ref/);
+  });
+
+  it('rejects non-positive depth values', async () => {
+    await seedRemoteWithBranches();
+    const targetPath = path.join(tempDir, 'wt-bad-depth');
+
+    await expect(
+      createBranchAsClone({
+        remoteUrl: remoteDir,
+        targetPath,
+        ref: 'feature-x',
+        depth: 0,
+      })
+    ).rejects.toThrow(/Invalid clone depth/);
+
+    await expect(
+      createBranchAsClone({
+        remoteUrl: remoteDir,
+        targetPath,
+        ref: 'feature-x',
+        depth: -5,
+      })
+    ).rejects.toThrow(/Invalid clone depth/);
+  });
+
+  it('surfaces git-side failures when the ref does not exist on the remote', async () => {
+    await seedRemoteWithBranches();
+    const targetPath = path.join(tempDir, 'wt-missing-ref');
+
+    await expect(
+      createBranchAsClone({
+        remoteUrl: remoteDir,
+        targetPath,
+        ref: 'does-not-exist',
+      })
+    ).rejects.toThrow();
   });
 });
 

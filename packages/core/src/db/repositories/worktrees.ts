@@ -110,6 +110,9 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       others_can: row.others_can ?? undefined,
       others_fs_access: row.others_fs_access ?? undefined,
       unix_group: row.unix_group ?? undefined,
+      // Branch storage mode
+      storage_mode: row.storage_mode ?? 'worktree',
+      clone_depth: row.clone_depth ?? undefined,
       ...row.data,
       url,
     };
@@ -158,6 +161,9 @@ export class WorktreeRepository implements BaseRepository<Worktree, Partial<Work
       others_can: worktree.others_can ?? 'session',
       others_fs_access: worktree.others_fs_access ?? null,
       unix_group: worktree.unix_group ?? null,
+      // Branch storage mode (default 'worktree' matches schema default)
+      storage_mode: worktree.storage_mode ?? 'worktree',
+      clone_depth: worktree.clone_depth ?? null,
       data: {
         path: worktree.path!,
         base_ref: worktree.base_ref,

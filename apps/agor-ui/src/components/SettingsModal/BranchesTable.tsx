@@ -28,6 +28,7 @@ import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { ArchiveToggleButton } from '../ArchiveToggleButton';
 import { BranchFormFields } from '../BranchFormFields';
+import { parseStorageFormValue } from '../CreateDialog/tabs/BranchTab';
 import { renderEnvCell } from './BranchEnvColumn';
 
 interface BranchesTableProps {
@@ -53,6 +54,8 @@ interface BranchesTableProps {
       sourceBranch: string;
       pullLatest: boolean;
       boardId?: string;
+      storage_mode?: 'worktree' | 'clone';
+      clone_depth?: number;
     }
   ) => void;
   onRowClick?: (worktree: Worktree) => void;
@@ -272,6 +275,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
         localStorage.setItem('agor:lastUsedBoardId', values.boardId);
       }
 
+      const storage = parseStorageFormValue(values.storage_mode);
       onCreate?.(values.repoId, {
         name: values.name,
         ref: branchName,
@@ -279,6 +283,8 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
         sourceBranch: values.sourceBranch,
         pullLatest: true, // Always fetch latest before creating worktree
         boardId: values.boardId, // Optional: add to board
+        storage_mode: storage.storage_mode,
+        ...(storage.clone_depth !== undefined ? { clone_depth: storage.clone_depth } : {}),
       });
       setCreateModalOpen(false);
       form.resetFields();

@@ -964,6 +964,130 @@ export async function createWorktree(
 }
 
 /**
+ * Options for {@link createBranchAsClone} — the self-standing-clone
+ * counterpart to {@link createWorktree}.
+ *
+ * Branch storage mode = 'clone' produces a working directory whose `.git/`
+ * is a real directory (not a `gitdir:` pointer file), with its own
+ * `.git/config`, refs, and credentials surface. Closes the cross-branch
+ * leak vectors that the Layer A defenses exist to mitigate. See
+ * `docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md` §1.
+ */
+export interface CreateBranchAsCloneOptions {
+  /** Remote URL to clone from (https://, ssh://, git@host:path, file://, or local path). */
+  remoteUrl: string;
+  /** Absolute path where the new clone should land. Must not already exist. */
+  targetPath: string;
+  /**
+   * Branch to check out after the clone. Forwarded as `--branch <ref>`. The
+   * remote must already have this ref. Use {@link createWorktree} or a
+   * follow-up `git checkout -b` if you need to *create* a new branch.
+   */
+  ref: string;
+  /**
+   * Optional shallow-clone depth. Positive integer → `--depth N`. Omit (or
+   * pass `undefined`) for a full clone with complete history. Out of scope
+   * for this PR: `--reference` / `--filter=blob:none` (see design doc §5).
+   */
+  depth?: number;
+  /**
+   * `--single-branch`. Defaults to `true` — we only need the one branch we
+   * just asked for, and skipping the rest is cheaper. Pass `false` for the
+   * rare case where you want every remote ref locally.
+   */
+  singleBranch?: boolean;
+  /** Per-user environment variables (GITHUB_TOKEN, GH_TOKEN, …). */
+  env?: Record<string, string>;
+}
+
+/**
+ * Result of {@link createBranchAsClone}. Shape mirrors what the executor
+ * handler wants out of {@link createWorktree} so the call sites can stay
+ * uniform across storage modes.
+ */
+export interface CreateBranchAsCloneResult {
+  /** Absolute path of the created clone (echoes back `targetPath`). */
+  path: string;
+  /** Branch the clone landed on (echoes back `ref`). */
+  ref: string;
+}
+
+/**
+ * Create a self-standing clone of a remote at `targetPath`, checked out to
+ * `ref`. Sibling to {@link createWorktree}; chosen at worktree-create time
+ * by the `storage_mode = 'clone'` opt-in.
+ *
+ * Unlike {@link createWorktree}, this issues a real `git clone` and does
+ * not touch the per-repo base clone at `~/.agor/repos/<slug>/`. The
+ * resulting working directory has its own `.git/` directory — `.git/config`,
+ * remotes, credentials, hooks, and refs are all branch-local.
+ *
+ * Implemented via `simple-git`'s `.clone()`; no `execSync`/`spawn`.
+ * Credentials are delivered via `http.<host>.extraheader` env vars exactly
+ * like {@link cloneRepo}, never on argv.
+ *
+ * @throws if `targetPath` already exists, the ref is invalid, or the
+ *         underlying clone fails (network, auth, missing ref, …).
+ */
+export async function createBranchAsClone(
+  options: CreateBranchAsCloneOptions
+): Promise<CreateBranchAsCloneResult> {
+  const { remoteUrl, targetPath, ref, depth, env } = options;
+  const singleBranch = options.singleBranch ?? true;
+
+  if (!remoteUrl) {
+    throw new Error('remoteUrl is required');
+  }
+  if (!targetPath) {
+    throw new Error('targetPath is required');
+  }
+  await validateGitRef(ref);
+  if (depth !== undefined && (!Number.isInteger(depth) || depth <= 0)) {
+    throw new Error(`Invalid clone depth: expected positive integer, got ${depth}`);
+  }
+
+  if (existsSync(targetPath)) {
+    throw new Error(
+      `Target directory '${targetPath}' already exists. ` +
+        `Refusing to clone over existing contents — pick a different path or remove the directory first.`
+    );
+  }
+
+  // Mirror cloneRepo's auth-header path: derive the host from the URL so
+  // tokens are scoped to the right forge (github.com vs. GHE vs. GitLab).
+  const authHost = parseHostFromGitUrl(remoteUrl);
+  const { git } = createGit(undefined, env, authHost);
+
+  // `--branch <ref>` pins the working tree to the ref instead of remote HEAD.
+  // `--single-branch` avoids pulling sibling branches we'll never look at.
+  // `--depth N` (optional) shallow-truncates history.
+  const cloneArgs: string[] = ['--branch', ref];
+  if (singleBranch) cloneArgs.push('--single-branch');
+  if (depth !== undefined) cloneArgs.push('--depth', String(depth));
+
+  console.log(
+    `[createBranchAsClone] Cloning ${remoteUrl} → ${targetPath} ` +
+      `(branch=${ref}, depth=${depth ?? 'full'}, singleBranch=${singleBranch})`
+  );
+  await git.clone(remoteUrl, targetPath, cloneArgs);
+
+  // Mirror createWorktree's safe.directory registration. Without this,
+  // ops from a different uid on the same host trip "dubious ownership".
+  try {
+    const { git: safeDirGit } = createGit(targetPath);
+    await safeDirGit.addConfig('safe.directory', targetPath, true, 'global');
+    console.log(`[createBranchAsClone] Added ${targetPath} to git safe.directory`);
+  } catch (error) {
+    console.warn(
+      `[createBranchAsClone] Failed to add ${targetPath} to safe.directory:`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+
+  return { path: targetPath, ref };
+}
+
+/**
  * Result of a worktree restoration attempt
  */
 export interface RestoreWorktreeResult {

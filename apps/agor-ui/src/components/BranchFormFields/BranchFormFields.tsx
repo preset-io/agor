@@ -181,6 +181,28 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
         </Form.Item>
       )}
 
+      <Form.Item
+        name={`${fieldPrefix}storage_mode`}
+        label="Storage"
+        initialValue="worktree"
+        tooltip={
+          'How the branch is materialised on disk. ' +
+          '"Worktree" uses git\'s native shared-base model (legacy default). ' +
+          '"Full clone" / "Shallow clone" give the branch its own .git/, ' +
+          'isolating credentials and config from sibling branches. ' +
+          'See docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.'
+        }
+      >
+        <Select
+          options={[
+            { value: 'worktree', label: 'Worktree (default)' },
+            { value: 'clone', label: 'Full clone' },
+            { value: 'clone:100', label: 'Shallow clone (depth 100)' },
+          ]}
+          onChange={() => onFormChange?.()}
+        />
+      </Form.Item>
+
       {showUrlFields && (
         <Space orientation="vertical" style={{ width: '100%' }}>
           <Form.Item

@@ -185,6 +185,32 @@ describe('executeCommand - git.worktree.add', () => {
       createBranch: true,
     });
   });
+
+  it('should round-trip storageMode / cloneDepth / remoteUrl in dry-run response', async () => {
+    // PR 1 of the worktree→clone storage migration. The daemon forwards
+    // these three knobs; the executor branches on storageMode at run time.
+    // Pin them through the dry-run echo so the daemon-side test fixture
+    // can assert payload-shape correctness without spinning up a real git.
+    const clonePayload: GitWorktreeAddPayload = {
+      ...worktreeAddPayload,
+      params: {
+        ...worktreeAddPayload.params,
+        branch: 'feature-x',
+        storageMode: 'clone',
+        cloneDepth: 100,
+        remoteUrl: 'https://github.com/org/repo.git',
+      },
+    };
+
+    const result = await executeCommand(clonePayload, { dryRun: true });
+
+    expect(result.success).toBe(true);
+    expect(result.data).toMatchObject({
+      storageMode: 'clone',
+      cloneDepth: 100,
+      remoteUrl: 'https://github.com/org/repo.git',
+    });
+  });
 });
 
 describe('executeCommand - git.worktree.remove', () => {
@@ -221,6 +247,27 @@ describe('executeCommand - git.worktree.remove', () => {
     expect(result.success).toBe(true);
     expect(result.data).toMatchObject({
       force: true,
+    });
+  });
+
+  it('should round-trip storageMode in dry-run response', async () => {
+    // The daemon-side worktrees service reads storage_mode from the DB row
+    // and forwards it; the executor's remove handler uses it to pick the
+    // teardown path (clone-mode = rm -rf, worktree-mode = git worktree
+    // remove --force). Pin the round-trip so the contract stays explicit.
+    const clonePayload: GitWorktreeRemovePayload = {
+      ...worktreeRemovePayload,
+      params: {
+        ...worktreeRemovePayload.params,
+        storageMode: 'clone',
+      },
+    };
+
+    const result = await executeCommand(clonePayload, { dryRun: true });
+
+    expect(result.success).toBe(true);
+    expect(result.data).toMatchObject({
+      storageMode: 'clone',
     });
   });
 });

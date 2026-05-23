@@ -486,6 +486,10 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
                 // Clean up the branch if it was created by Agor
                 branch: worktree.ref,
                 deleteBranch: worktree.new_branch,
+                // Branch storage mode — executor needs this to pick the right
+                // teardown path (clone-mode just rm -rf; worktree-mode also
+                // runs `git worktree remove --force` against the base repo).
+                storageMode: worktree.storage_mode ?? 'worktree',
               },
             },
             {
@@ -601,6 +605,9 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
                 // Clean up the branch if it was created by Agor
                 branch: worktree.ref,
                 deleteBranch: worktree.new_branch,
+                // Branch storage mode — see sibling call site comment in
+                // `WorktreesService.remove` above for why this matters.
+                storageMode: worktree.storage_mode ?? 'worktree',
               },
             },
             {

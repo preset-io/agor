@@ -97,6 +97,8 @@ export interface SettingsModalProps {
       pullLatest: boolean;
       issue_url?: string;
       pull_request_url?: string;
+      storage_mode?: 'worktree' | 'clone';
+      clone_depth?: number;
     }
   ) => Promise<Worktree | null>;
   onStartEnvironment?: (worktreeId: string) => void;

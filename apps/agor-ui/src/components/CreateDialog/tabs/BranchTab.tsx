@@ -16,6 +16,32 @@ export interface BranchTabConfig {
   pull_request_url?: string;
   board_id?: string;
   position?: { x: number; y: number };
+  /**
+   * Branch storage model. 'worktree' = legacy `git worktree add`. 'clone' =
+   * self-standing `git clone`. Default 'worktree' preserves existing flow.
+   * See docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.
+   */
+  storage_mode?: 'worktree' | 'clone';
+  /** Shallow-clone depth — only meaningful when storage_mode='clone'. */
+  clone_depth?: number;
+}
+
+/**
+ * Map the composite "Storage" form value (one of 'worktree', 'clone',
+ * 'clone:100') into the {storage_mode, clone_depth} pair the daemon expects.
+ * Keeping this in one place so both submit paths (NewWorktreeModal +
+ * WorktreeTab) stay in lockstep.
+ */
+export function parseStorageFormValue(value: unknown): {
+  storage_mode: 'worktree' | 'clone';
+  clone_depth?: number;
+} {
+  if (typeof value !== 'string') return { storage_mode: 'worktree' };
+  if (value === 'worktree') return { storage_mode: 'worktree' };
+  if (value === 'clone') return { storage_mode: 'clone' };
+  const m = value.match(/^clone:(\d+)$/);
+  if (m) return { storage_mode: 'clone', clone_depth: Number(m[1]) };
+  return { storage_mode: 'worktree' };
 }
 
 export interface BranchTabProps {
@@ -90,6 +116,7 @@ export const BranchTab: React.FC<BranchTabProps> = ({
     try {
       const values = await form.validateFields();
       const refType = values.refType || 'branch';
+      const storage = parseStorageFormValue(values.storage_mode);
       const config: BranchTabConfig = {
         repoId: values.repoId,
         name: values.name,
@@ -102,6 +129,8 @@ export const BranchTab: React.FC<BranchTabProps> = ({
         pull_request_url: values.pull_request_url,
         board_id: currentBoardId,
         position: defaultPosition,
+        storage_mode: storage.storage_mode,
+        ...(storage.clone_depth !== undefined ? { clone_depth: storage.clone_depth } : {}),
       };
 
       if (values.repoId) {

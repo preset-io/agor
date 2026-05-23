@@ -399,6 +399,34 @@ export interface Worktree {
    */
   others_fs_access?: 'none' | 'read' | 'write';
 
+  // ===== Branch Storage Mode =====
+  // See docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md (PR #1234).
+
+  /**
+   * How this branch's filesystem is materialised.
+   *
+   * - 'worktree' (default, legacy): native `git worktree add` — the working
+   *   dir's `.git` is a `gitdir:` pointer file into the shared base repo at
+   *   `~/.agor/repos/<slug>/`. Object store and `.git/config` are shared
+   *   with siblings.
+   * - 'clone': self-standing `git clone` — the working dir has its own real
+   *   `.git/` directory, isolated `.git/config`, no `gitdir:` pointer. Closes
+   *   the cross-branch credential/config leak vectors (Layer A defenses are
+   *   then belt-and-braces, not load-bearing).
+   *
+   * Selected at create time. Existing rows default to 'worktree'.
+   */
+  storage_mode?: 'worktree' | 'clone';
+
+  /**
+   * Optional `git clone --depth N` for shallow clones. Only meaningful when
+   * `storage_mode === 'clone'`. NULL/undefined = full clone (preserve all
+   * history). A positive integer N = shallow clone of N commits — smaller
+   * disk footprint, but `git log` past N commits is broken and some rebase
+   * operations fail.
+   */
+  clone_depth?: number;
+
   // ===== Session Sharing (legacy identity-borrow opt-in) =====
 
   /**

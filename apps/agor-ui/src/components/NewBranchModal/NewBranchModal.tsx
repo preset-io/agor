@@ -3,7 +3,7 @@ import { Button, Form, Modal } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { BranchFormFields } from '../BranchFormFields';
-import type { BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
+import { parseStorageFormValue, type BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
 
 /** @deprecated Use BranchTabConfig directly. Kept as alias for backward compat. */
 export type NewWorktreeConfig = BranchTabConfig;
@@ -97,6 +97,7 @@ export const NewBranchModal: React.FC<NewBranchModalProps> = ({
     const values = await form.validateFields();
 
     const refType = values.refType || 'branch';
+    const storage = parseStorageFormValue(values.storage_mode);
     const config: NewWorktreeConfig = {
       repoId: values.repoId,
       name: values.name,
@@ -109,6 +110,8 @@ export const NewBranchModal: React.FC<NewBranchModalProps> = ({
       pull_request_url: values.pull_request_url,
       board_id: currentBoardId, // Include board_id if provided
       position: defaultPosition, // Include position if provided
+      storage_mode: storage.storage_mode,
+      ...(storage.clone_depth !== undefined ? { clone_depth: storage.clone_depth } : {}),
     };
 
     // Remember last used repo
