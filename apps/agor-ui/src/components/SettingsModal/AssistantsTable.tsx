@@ -169,10 +169,19 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
     return assistantWorktrees.filter((w) => {
       const config = getAssistantConfig(w);
       const repo = repoById.get(w.repo_id);
-      const haystacks = [config?.displayName, w.name, repo?.name, repo?.slug];
+      const creator = userById.get(w.created_by);
+      const haystacks = [
+        config?.displayName,
+        w.name,
+        w.notes,
+        creator?.name,
+        creator?.email,
+        repo?.name,
+        repo?.slug,
+      ];
       return haystacks.some((v) => v?.toLowerCase().includes(term));
     });
-  }, [worktreeById, repoById, searchTerm]);
+  }, [worktreeById, repoById, userById, searchTerm]);
 
   const columns = [
     {
