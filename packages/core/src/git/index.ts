@@ -869,6 +869,20 @@ export async function createWorktree(
     throw new Error('repoPath is required but was null/undefined');
   }
 
+  // Refuse to clobber an existing directory. Matches createBranchAsClone's
+  // guard, so worktree-mode and clone-mode surface the same user-facing
+  // error when the path is already taken (typically by an archived or
+  // partially-cleaned worktree). Used to live in the daemon as a
+  // synchronous preflight; moved here so the executor / core layer is the
+  // single source of truth for filesystem facts.
+  if (existsSync(worktreePath)) {
+    throw new Error(
+      `Target directory '${worktreePath}' already exists on disk. ` +
+        `This usually means an archived or partially-cleaned worktree still occupies this path. ` +
+        `Please choose a different name or clean up the existing directory.`
+    );
+  }
+
   // Validate caller-supplied refs before they hit the git CLI, to prevent
   // option injection (e.g. ref = "--upload-pack=/tmp/payload") and command
   // smuggling via newlines.

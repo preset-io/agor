@@ -9,6 +9,7 @@ import yaml from 'js-yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetConfigCacheForTests,
+  ensureBranchStorageModeAllowed,
   expandHomePath,
   getAgorHome,
   getConfigPath,
@@ -24,6 +25,7 @@ import {
   loadConfigSync,
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
+  resolveBranchStorageConfig,
   saveConfig,
   setConfigValue,
   unsetConfigValue,
@@ -1053,5 +1055,92 @@ describe('getWorktreePath', () => {
 
     const worktreePath = getWorktreePath('org/repo', 'feature-branch');
     expect(worktreePath).toBe('/env/data/worktrees/org/repo/feature-branch');
+  });
+});
+
+describe('resolveBranchStorageConfig + ensureBranchStorageModeAllowed', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-branch-storage-test-'));
+    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
+    __resetConfigCacheForTests();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+    __resetConfigCacheForTests();
+  });
+
+  async function writeConfig(config: AgorConfig): Promise<void> {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(path.join(agorDir, 'config.yaml'), yaml.dump(config), 'utf-8');
+    __resetConfigCacheForTests();
+  }
+
+  it('defaults to worktree-only when execution.branch_storage is not configured', () => {
+    // No config file present.
+    const resolved = resolveBranchStorageConfig();
+    expect(resolved).toEqual({ defaultMode: 'worktree', allowedModes: ['worktree'] });
+  });
+
+  it('honours operator-configured allowed_modes + default_mode', async () => {
+    await writeConfig({
+      daemon: { port: 3030 },
+      execution: {
+        branch_storage: {
+          default_mode: 'clone',
+          allowed_modes: ['worktree', 'clone'],
+        },
+      },
+    });
+
+    const resolved = resolveBranchStorageConfig();
+    expect(resolved.defaultMode).toBe('clone');
+    expect(resolved.allowedModes).toEqual(['worktree', 'clone']);
+  });
+
+  it('falls back default_mode into allowed_modes when operator misconfigures them', async () => {
+    // Operator set default_mode: clone but forgot to add 'clone' to
+    // allowed_modes. Resolver must not hand out a default that the gate
+    // would immediately reject.
+    await writeConfig({
+      daemon: { port: 3030 },
+      execution: {
+        branch_storage: {
+          default_mode: 'clone',
+          allowed_modes: ['worktree'],
+        },
+      },
+    });
+
+    const resolved = resolveBranchStorageConfig();
+    expect(resolved.defaultMode).toBe('worktree');
+    expect(resolved.allowedModes).toEqual(['worktree']);
+  });
+
+  it('ensureBranchStorageModeAllowed throws a clear message for disallowed modes', () => {
+    // Default config: only worktree allowed.
+    expect(() => ensureBranchStorageModeAllowed('worktree')).not.toThrow();
+    expect(() => ensureBranchStorageModeAllowed('clone')).toThrow(/not enabled/);
+    expect(() => ensureBranchStorageModeAllowed('clone')).toThrow(
+      /execution\.branch_storage\.allowed_modes/
+    );
+  });
+
+  it('ensureBranchStorageModeAllowed passes once the operator opts in', async () => {
+    await writeConfig({
+      daemon: { port: 3030 },
+      execution: {
+        branch_storage: {
+          default_mode: 'worktree',
+          allowed_modes: ['worktree', 'clone'],
+        },
+      },
+    });
+
+    expect(() => ensureBranchStorageModeAllowed('clone')).not.toThrow();
   });
 });

@@ -746,6 +746,27 @@ describe('createWorktree', () => {
     const tags = await wtGit.tags();
     expect(tags.all).toContain('v1.0.0');
   });
+
+  it('refuses to clobber a pre-existing target directory (parity with createBranchAsClone)', async () => {
+    // The daemon used to gate this synchronously before fire-and-forget'ing
+    // the executor. With the daemon→executor split (daemon = DB, executor
+    // = filesystem), the guard moved into the core helper so worktree-mode
+    // and clone-mode surface the same user-facing error.
+    await createTestRepo(repoDir);
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(worktreeDir, 'preexisting.txt'), 'x', 'utf-8');
+
+    await expect(createWorktree(repoDir, worktreeDir, 'some-branch', true, false)).rejects.toThrow(
+      /already exists on disk/
+    );
+
+    // The pre-existing content is untouched.
+    const preserved = await fs
+      .access(path.join(worktreeDir, 'preexisting.txt'))
+      .then(() => true)
+      .catch(() => false);
+    expect(preserved).toBe(true);
+  });
 });
 
 describe('listWorktrees', () => {

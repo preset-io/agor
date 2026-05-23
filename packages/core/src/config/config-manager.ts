@@ -782,6 +782,56 @@ export function isUnixImpersonationEnabled(): boolean {
 }
 
 /**
+ * Resolve `execution.branch_storage` with defaults applied.
+ *
+ * Default posture preserves legacy behaviour: only the native worktree
+ * mode is enabled and selected by default. Operators opt in to clone mode
+ * by adding `'clone'` to `allowed_modes` in `~/.agor/config.yaml`.
+ *
+ * `default_mode` always falls back into `allowed_modes` if the operator
+ * configured an inconsistent shape (e.g. set `default_mode: clone` but
+ * forgot to add `clone` to `allowed_modes`) — load-time normalisation
+ * keeps service code from needing to defensively re-validate.
+ */
+export function resolveBranchStorageConfig(): {
+  defaultMode: import('./types').BranchStorageMode;
+  allowedModes: import('./types').BranchStorageMode[];
+} {
+  let raw: import('./types').AgorBranchStorageSettings | undefined;
+  try {
+    raw = loadConfigSync().execution?.branch_storage;
+  } catch {
+    // Config unloadable (no file, parse error, etc.) — fall through to
+    // the safe legacy default.
+    raw = undefined;
+  }
+  const allowed: import('./types').BranchStorageMode[] =
+    raw?.allowed_modes && raw.allowed_modes.length > 0 ? raw.allowed_modes : ['worktree'];
+  const requestedDefault = raw?.default_mode ?? 'worktree';
+  // Normalise: if the operator's default_mode isn't in allowed_modes, fall
+  // back to the first allowed mode so we never hand out a default that the
+  // gate would immediately reject.
+  const defaultMode = allowed.includes(requestedDefault) ? requestedDefault : allowed[0];
+  return { defaultMode, allowedModes: allowed };
+}
+
+/**
+ * Throw a clear error if `mode` isn't in the operator-allowed set.
+ * Centralised so the same wording appears across the daemon service, the
+ * REST route, and the MCP tool.
+ */
+export function ensureBranchStorageModeAllowed(mode: import('./types').BranchStorageMode): void {
+  const { allowedModes } = resolveBranchStorageConfig();
+  if (!allowedModes.includes(mode)) {
+    throw new Error(
+      `storage_mode='${mode}' is not enabled on this Agor instance. ` +
+        `Enable it by adding '${mode}' to execution.branch_storage.allowed_modes ` +
+        `in ~/.agor/config.yaml. Currently allowed: ${allowedModes.map((m) => `'${m}'`).join(', ')}.`
+    );
+  }
+}
+
+/**
  * Whether the daemon needs to wrap git operations in `sudo -u` to pick up
  * supplemental Unix groups created after daemon startup.
  *

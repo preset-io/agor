@@ -425,6 +425,58 @@ export interface AgorExecutionSettings {
    * of this flag when `worktree_rbac: true`.
    */
   managed_envs_minimum_role?: ManagedEnvsMinimumRole;
+
+  /**
+   * Branch storage configuration — operator gate for which storage modes a
+   * worktree can be created with. The API/UI/MCP `storage_mode` field is
+   * always exposed (stable shape), but requests for a mode not listed in
+   * `allowed_modes` are rejected at the daemon service boundary with a
+   * clear "enable it in config" error.
+   *
+   * See docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.
+   *
+   * @example Operator opt-in to clone mode
+   * ```yaml
+   * execution:
+   *   branch_storage:
+   *     default_mode: worktree
+   *     allowed_modes:
+   *       - worktree
+   *       - clone
+   * ```
+   */
+  branch_storage?: AgorBranchStorageSettings;
+}
+
+/**
+ * Storage model for a worktree's filesystem.
+ *
+ * - `'worktree'` — native `git worktree add` (shared base `.git/config`,
+ *   legacy default).
+ * - `'clone'` — self-standing `git clone` with its own `.git/` directory;
+ *   closes cross-branch credential/config leak vectors.
+ */
+export type BranchStorageMode = 'worktree' | 'clone';
+
+/**
+ * Operator gate for which storage modes can be selected at worktree-create
+ * time. Defaults preserve legacy behaviour: only `'worktree'` is enabled
+ * and `default_mode` is `'worktree'`. Adding `'clone'` to `allowed_modes`
+ * opts the instance in to the self-standing-clone path.
+ */
+export interface AgorBranchStorageSettings {
+  /**
+   * Mode used when a create request doesn't specify one. Must also appear
+   * in `allowed_modes`. Default: `'worktree'`.
+   */
+  default_mode?: BranchStorageMode;
+
+  /**
+   * Storage modes the operator has enabled for this instance. Requests for
+   * a mode not in this list are rejected. Default: `['worktree']` — clone
+   * mode is opt-in until promoted in a later cycle.
+   */
+  allowed_modes?: BranchStorageMode[];
 }
 
 /**

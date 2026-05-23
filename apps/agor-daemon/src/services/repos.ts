@@ -9,10 +9,10 @@
  * the daemon handles database records and business logic.
  */
 
-import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import {
+  ensureBranchStorageModeAllowed,
   extractSlugFromUrl,
   isValidGitUrl,
   isValidSlug,
@@ -20,20 +20,19 @@ import {
   normalizeRepoUrl,
   PAGINATION,
   parseAgorYml,
+  resolveBranchStorageConfig,
   writeAgorYml,
 } from '@agor/core/config';
 import { type Database, RepoRepository, shortId, WorktreeRepository } from '@agor/core/db';
 import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
-  createGit,
   extractRepoName,
   getDefaultBranch,
   getRemoteUrl,
   getReposDir,
   getWorktreePath,
   isValidGitRepo,
-  listWorktrees,
 } from '@agor/core/git';
 import type {
   AuthenticatedParams,
@@ -596,11 +595,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       throw new Error(`A worktree named '${data.name}' already exists in this repository`);
     }
 
-    // Resolve storage mode at create-time. Default 'worktree' preserves the
-    // legacy `git worktree add` path; 'clone' opts in to self-standing clones
-    // (see docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md).
-    // Resolved early so downstream preflights can gate on it.
-    const storageMode: 'worktree' | 'clone' = data.storage_mode ?? 'worktree';
+    // Resolve + validate the storage mode. The daemon owns DB/auth/config
+    // shape; everything else (git/filesystem inspection, conflict detection,
+    // path-exists checks) belongs to the executor (see operator's layering
+    // rule: "daemon/client = database, executor = filesystem").
+    const { defaultMode } = resolveBranchStorageConfig();
+    const storageMode: 'worktree' | 'clone' = data.storage_mode ?? defaultMode;
+    ensureBranchStorageModeAllowed(storageMode);
     const cloneDepth = data.clone_depth;
     if (cloneDepth !== undefined) {
       if (storageMode !== 'clone') {
@@ -623,96 +624,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       );
     }
 
-    // Pre-flight checks: validate git state before creating DB record
-    // This gives the user immediate feedback instead of a silent fire-and-forget failure.
-    //
-    // Clone-mode skips these entirely: they all read from the shared base
-    // clone (`git fetch` / `git branch` / `git worktree list` against
-    // repo.local_path), which is irrelevant for self-standing clones. The
-    // authoritative source for clone-mode is the remote URL — `git clone`
-    // surfaces missing-ref / auth / network failures cleanly via the
-    // executor's filesystem_status='failed' path. `git worktree list` is
-    // also blind to clone-mode worktrees by design (see design doc §2
-    // operational caveats), so checking it would be wrong even if it
-    // returned anything useful.
-    if (repo.local_path && storageMode === 'worktree') {
-      try {
-        // Use the shared factory so the unsafe-ops scanner is opt-in
-        // (otherwise a daemon env carrying GIT_SSH_COMMAND or similar
-        // would throw before the fetch even ran).
-        const { git } = createGit(repo.local_path);
-
-        // Check 1: Validate sourceBranch exists on remote (if specified)
-        // Skip for tags — tags are validated differently (they don't have origin/ prefix)
-        if (data.sourceBranch && data.createBranch && data.refType !== 'tag') {
-          try {
-            await git.fetch(['origin']);
-            const remoteBranches = await git.branch(['-r']);
-            const remoteRef = `origin/${data.sourceBranch}`;
-            if (!remoteBranches.all.includes(remoteRef)) {
-              // Also check local branches as fallback
-              const localBranches = await git.branch();
-              if (!localBranches.all.includes(data.sourceBranch)) {
-                throw new Error(
-                  `Source branch '${data.sourceBranch}' does not exist on remote or locally. ` +
-                    `Available remote branches can be listed with 'git branch -r'. ` +
-                    `Please specify a valid sourceBranch.`
-                );
-              }
-            }
-          } catch (error) {
-            if (
-              error instanceof Error &&
-              error.message.includes('does not exist on remote or locally')
-            ) {
-              throw error;
-            }
-            // Fetch failed — log warning but continue (executor will retry)
-            console.warn(
-              `⚠️  Pre-flight sourceBranch check failed (continuing anyway):`,
-              error instanceof Error ? error.message : String(error)
-            );
-          }
-        }
-
-        // Check 2: Detect stale or conflicting branches
-        if (data.createBranch) {
-          const branches = await git.branch();
-          const branchName = data.ref || data.name;
-
-          if (branches.all.includes(branchName)) {
-            // Branch exists — check if it's in use by another worktree
-            const gitWorktrees = await listWorktrees(repo.local_path);
-            const branchInUse = gitWorktrees.some((wt: { ref?: string }) => wt.ref === branchName);
-
-            if (branchInUse) {
-              throw new Error(
-                `A branch named '${branchName}' already exists and is in use by another worktree. Please choose a different name.`
-              );
-            }
-
-            // Branch exists but is orphaned — the executor will clean it up automatically
-            console.log(
-              `⚠️  Branch '${branchName}' exists but is orphaned (stale). Executor will clean it up.`
-            );
-          }
-        }
-      } catch (error) {
-        // Re-throw user-facing errors
-        if (
-          error instanceof Error &&
-          (error.message.includes('already exists and is in use') ||
-            error.message.includes('does not exist on remote or locally'))
-        ) {
-          throw error;
-        }
-        // Log but don't block creation for other git errors (e.g., repo not accessible)
-        console.warn(
-          `⚠️  Pre-flight branch check failed (continuing anyway):`,
-          error instanceof Error ? error.message : String(error)
-        );
-      }
-    }
+    // NOTE: Filesystem / git-state preflights (target-dir-exists, source-ref
+    // existence, branch-already-checked-out) used to live here. They have
+    // moved to the executor / core helpers — they're git/filesystem facts,
+    // not DB facts. The executor surfaces failures via
+    // `filesystem_status='failed'` + `error_message`, which the UI already
+    // renders cleanly. Daemon stays focused on DB/auth/config validation.
+    // See `core.createWorktree` / `createBranchAsClone` for the equivalent
+    // checks at the materialisation boundary.
 
     // Validate boardId exists before creating DB record (FK constraint would reject it)
     // Board is stored for later use in smart positioning
@@ -741,43 +660,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
     const worktreePath = getWorktreePath(repo.slug, data.name);
 
-    // Fail-fast: check if target directory already exists on disk
-    if (existsSync(worktreePath)) {
-      throw new Error(
-        `Target directory '${worktreePath}' already exists on disk. ` +
-          `This usually means an archived or partially-cleaned worktree still occupies this path. ` +
-          `Please choose a different name or clean up the existing directory.`
-      );
-    }
-
-    // Fail-fast: check if the branch is already checked out by another git
-    // worktree (covers non-createBranch cases not handled by the pre-flight
-    // check above). This is a native-worktree-only invariant: git refuses
-    // to check out the same branch in two `git worktree`s sharing one
-    // `.git/`. Clones are independent and `git worktree list` is blind to
-    // them anyway, so the check is both irrelevant and wrong for clones.
-    if (!data.createBranch && repo.local_path && storageMode === 'worktree') {
-      try {
-        const gitWorktrees = await listWorktrees(repo.local_path);
-        const branchInUse = gitWorktrees.some((wt: { ref?: string }) => wt.ref === data.ref);
-        if (branchInUse) {
-          throw new Error(
-            `Branch '${data.ref}' is already checked out by another worktree. ` +
-              `Git does not allow the same branch to be checked out in multiple worktrees. ` +
-              `Please choose a different branch or create a new branch.`
-          );
-        }
-      } catch (error) {
-        if (error instanceof Error && error.message.includes('already checked out')) {
-          throw error;
-        }
-        // Don't block creation for transient git errors
-        console.warn(
-          `⚠️  Pre-flight branch checkout check failed (continuing anyway):`,
-          error instanceof Error ? error.message : String(error)
-        );
-      }
-    }
+    // Path existence + branch-in-use checks have moved to the executor /
+    // core git helpers — see the "filesystem preflights" note above. Both
+    // `createWorktree()` and `createBranchAsClone()` refuse to clobber an
+    // existing `targetPath` and surface that failure through
+    // `filesystem_status='failed'` on the DB row.
 
     console.log('🔍 RepoService.createWorktree - computed paths:', {
       worktreePath,
