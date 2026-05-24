@@ -24,7 +24,7 @@ import {
   resolveSessionId,
 } from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
-import { coerceString, textResult } from '../server.js';
+import { coerceString, sessionContextRequiredResult, textResult } from '../server.js';
 import { assertValidVariant } from './_environment-helpers.js';
 
 const BRANCH_NAME_PATTERN = /^[a-z0-9-]+$/;
@@ -469,6 +469,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       if (coerceString(args.branchId)) {
         resolvedBranchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
       } else {
+        if (!ctx.sessionId) return sessionContextRequiredResult();
         const currentSession = await ctx.app.service('sessions').get(ctx.sessionId);
         const sessionBranchId = currentSession.branch_id;
         if (!sessionBranchId)

@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import express from 'express';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { coerceJsonRecord, setupMCPRoutes } from './server.js';
 
@@ -66,9 +67,22 @@ describe('coerceJsonRecord', () => {
  */
 function captureMcpHandler() {
   let handler: ((req: Request, res: Response) => Promise<unknown> | unknown) | null = null;
+  const register = (_path: string, fn: typeof handler) => {
+    handler = fn;
+  };
   const app = {
-    post: (_path: string, fn: typeof handler) => {
-      handler = fn;
+    post: register,
+    get: register,
+    delete: register,
+    service: (name: string) => {
+      if (name !== 'users' && name !== 'sessions') {
+        throw new Error(`Unexpected service lookup: ${name}`);
+      }
+      return {
+        get: vi.fn(async () => {
+          throw new Error(`Unexpected ${name}.get call`);
+        }),
+      };
     },
   } as unknown as Parameters<typeof setupMCPRoutes>[0];
   setupMCPRoutes(app, {} as never, /* toolSearchEnabled */ false);
@@ -143,6 +157,27 @@ describe('POST /mcp token source', () => {
     expect(body?.error?.message).toMatch(/authorization: bearer/i);
   });
 
+  it('rejects an invalid personal API key from X-API-Key (401)', async () => {
+    const { UserApiKeysRepository } = await import('@agor/core/db');
+    vi.spyOn(UserApiKeysRepository.prototype, 'verifyKey').mockResolvedValue(null);
+    const handler = captureMcpHandler();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const req = {
+      method: 'POST',
+      query: {},
+      headers: { 'x-api-key': 'agor_sk_invalid' },
+      body: { id: 10 },
+      ip: '127.0.0.1',
+      socket: { remoteAddress: '127.0.0.1' },
+    } as unknown as Request;
+    const res = buildRes();
+    await handler(req, res as unknown as Response);
+    expect(res.statusCode).toBe(401);
+    const body = res.body as { error?: { message?: string }; id?: number };
+    expect(body.id).toBe(10);
+    expect(body.error?.message).toMatch(/invalid personal api key/i);
+  });
+
   it('rejects even when query has both ?sessionToken= and an Authorization header (query wins → 400)', async () => {
     const handler = captureMcpHandler();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -194,5 +229,80 @@ describe('POST /mcp token source', () => {
     await handler(otherReq, buildRes() as unknown as Response);
     expect(warn.mock.calls.length).toBe(firstCount + 1);
     warn.mockRestore();
+  });
+});
+
+describe('POST /mcp with personal API keys', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('can call a non-session-scoped tool without X-Agor-Session-Id / ?sessionId', async () => {
+    const { UserApiKeysRepository } = await import('@agor/core/db');
+    vi.spyOn(UserApiKeysRepository.prototype, 'verifyKey').mockResolvedValue({
+      id: 'key-1',
+      user_id: 'user-1',
+      name: 'orchestrator',
+      prefix: 'agor_sk_123',
+      key_hash: 'hash',
+      created_at: new Date(),
+      last_used_at: null,
+    });
+    vi.spyOn(UserApiKeysRepository.prototype, 'updateLastUsed').mockResolvedValue();
+
+    const webApp = express();
+    webApp.use(express.json());
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+    }));
+    (webApp as unknown as { service: (name: string) => unknown }).service = (name: string) => {
+      if (name !== 'users') throw new Error(`Unexpected service lookup: ${name}`);
+      return { get: getUser };
+    };
+
+    setupMCPRoutes(webApp as never, {} as never, /* toolSearchEnabled */ false);
+
+    const httpServer = webApp.listen(0);
+    try {
+      const address = httpServer.address();
+      if (!address || typeof address === 'string') throw new Error('no listen address');
+      const resp = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json, text/event-stream',
+          'Content-Type': 'application/json',
+          'X-API-Key': 'agor_sk_valid',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name: 'agor_users_get_current', arguments: {} },
+        }),
+      });
+
+      expect(resp.status).toBe(200);
+      const responseText = await resp.text();
+      const dataLine = responseText
+        .split('\n')
+        .find((line) => line.startsWith('data: '))
+        ?.slice('data: '.length);
+      if (!dataLine) throw new Error(`No SSE data line in response: ${responseText}`);
+      const body = JSON.parse(dataLine) as {
+        result?: { content: Array<{ text: string }> };
+        error?: { message: string };
+      };
+      expect(body.error).toBeUndefined();
+      const result = JSON.parse(body.result!.content[0].text);
+      expect(result.user_id).toBe('user-1');
+      expect(getUser).toHaveBeenCalledWith('user-1');
+      expect(UserApiKeysRepository.prototype.updateLastUsed).toHaveBeenCalledWith('key-1');
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
   });
 });

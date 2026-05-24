@@ -29,6 +29,8 @@ vi.mock('../../utils/branch-authorization.js', () => ({
 
 vi.mock('@agor/core/db', () => ({
   BranchRepository: class FakeBranchRepository {},
+  UserApiKeysRepository: class FakeUserApiKeysRepository {},
+  shortId: (id: string) => id,
 }));
 
 // Helper to build a minimal fake Feathers app. Each test supplies spies for
@@ -49,6 +51,7 @@ function makeFakeApp(services: Record<string, ServiceStub>) {
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
   content: Array<{ type: string; text: string }>;
+  isError?: boolean;
 }>;
 
 /** Cfg captured alongside the handler — includes inputSchema for tests that
@@ -60,7 +63,7 @@ async function registerAndCaptureTools(
   ctx: {
     app: unknown;
     userId: string;
-    sessionId: string;
+    sessionId?: string;
   },
   toolNames: string[]
 ): Promise<Record<string, CapturedTool>> {
@@ -90,12 +93,58 @@ async function registerAndCaptureTools(
 }
 
 async function registerAndCaptureHandlers(
-  ctx: { app: unknown; userId: string; sessionId: string },
+  ctx: { app: unknown; userId: string; sessionId?: string },
   toolNames: string[]
 ): Promise<Record<string, ToolHandler>> {
   const tools = await registerAndCaptureTools(ctx, toolNames);
   return Object.fromEntries(Object.entries(tools).map(([name, { cb }]) => [name, cb]));
 }
+
+describe('sessionless MCP context', () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it('agor_sessions_get_current returns an actionable session-context error', async () => {
+    const sessionsGet = vi.fn();
+    const app = makeFakeApp({
+      sessions: { get: sessionsGet },
+    });
+    const { agor_sessions_get_current } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1' },
+      ['agor_sessions_get_current']
+    );
+
+    const result = await agor_sessions_get_current({});
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(parsed.error).toMatch(/requires current Agor session context/i);
+    expect(parsed.error).toMatch(/X-Agor-Session-Id/);
+    expect(parsed.error).toMatch(/\\?sessionId=/);
+    expect(sessionsGet).not.toHaveBeenCalled();
+  });
+
+  it('agor_sessions_spawn returns an actionable session-context error', async () => {
+    const spawn = vi.fn();
+    const app = makeFakeApp({
+      sessions: { spawn },
+      '/sessions/:id/prompt': { create: vi.fn() },
+    });
+    const { agor_sessions_spawn } = await registerAndCaptureHandlers({ app, userId: 'user-1' }, [
+      'agor_sessions_spawn',
+    ]);
+
+    const result = await agor_sessions_spawn({ prompt: 'delegate this' });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(parsed.error).toMatch(/requires current Agor session context/i);
+    expect(parsed.error).toMatch(/X-Agor-Session-Id/);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+});
 
 describe('agor_sessions_create', () => {
   const baseBranch = {

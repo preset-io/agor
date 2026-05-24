@@ -20,7 +20,6 @@ import type {
   EnvVarScope,
   MessageID,
   Session,
-  SessionID,
   TaskID,
   User,
   UserID,
@@ -32,7 +31,7 @@ import { appendSystemMessage } from '../../utils/append-system-message.js';
 import { findHostTaskForSession } from '../../utils/session-tasks.js';
 import { type EnvVarsParams, envVarsParamsSchema } from '../../widgets/env-vars/index.js';
 import type { McpContext } from '../server.js';
-import { textResult } from '../server.js';
+import { sessionContextRequiredResult, textResult } from '../server.js';
 
 /**
  * Build a short, user-visible message body for the widget transcript row.
@@ -77,6 +76,8 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       inputSchema: envVarsParamsSchema,
     },
     async (args) => {
+      if (!ctx.sessionId) return sessionContextRequiredResult();
+      const currentSessionId = ctx.sessionId;
       // Validated by Zod via the SDK; `args` has Zod defaults applied.
       const params: EnvVarsParams = args as EnvVarsParams;
 
@@ -85,7 +86,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       // matches the `dangerously_allow_session_sharing: false` semantics.
       const session = (await ctx.app
         .service('sessions')
-        .get(ctx.sessionId, ctx.baseServiceParams)) as Session;
+        .get(currentSessionId, ctx.baseServiceParams)) as Session;
       const sessionCreatorId = session.created_by as UserID;
       const creator = (await ctx.app
         .service('users')
@@ -120,7 +121,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       // semantics (active-first, recency-DESC fallback).
       const hostTask = await findHostTaskForSession(
         ctx.app,
-        ctx.sessionId as SessionID,
+        currentSessionId,
         ctx.baseServiceParams
       );
       const hostTaskId = hostTask?.task_id as TaskID | undefined;
@@ -128,7 +129,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       const created = await appendSystemMessage({
         app: ctx.app,
         db: ctx.db,
-        sessionId: ctx.sessionId,
+        sessionId: currentSessionId,
         taskId: hostTaskId,
         content: widgetContentPreview(params),
         contentPreview: `Widget: env_vars (${params.names.join(', ')})`,
@@ -198,7 +199,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
                 widget_id: widgetId,
               },
             },
-            { ...ctx.baseServiceParams, route: { id: ctx.sessionId as SessionID } }
+            { ...ctx.baseServiceParams, route: { id: currentSessionId } }
           );
         }
         return textResult({ widget_id: widgetId, status: 'already_present' });
