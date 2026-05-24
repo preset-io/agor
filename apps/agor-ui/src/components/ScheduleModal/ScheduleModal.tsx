@@ -463,7 +463,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
           </Form.Item>
         )}
 
-        <Form.Item label="Agent">
+        <Form.Item label="Agentic tool">
           <AgentSelectionGrid
             agents={AVAILABLE_AGENTS}
             selectedAgentId={agentTool}
