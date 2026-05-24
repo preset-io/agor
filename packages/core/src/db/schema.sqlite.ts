@@ -92,6 +92,7 @@ export const sessions = sqliteTable(
     // Scheduler tracking (materialized for deduplication and retention cleanup)
     scheduled_run_at: integer('scheduled_run_at'), // Unix timestamp (ms) - authoritative run ID
     scheduled_from_branch: t.bool('scheduled_from_branch').notNull().default(false),
+    schedule_id: text('schedule_id', { length: 36 }), // FK to schedules.schedule_id; ON DELETE SET NULL (see schedules table below)
 
     // UI state (materialized for efficient highlighting queries)
     ready_for_prompt: t.bool('ready_for_prompt').notNull().default(false),
@@ -220,6 +221,7 @@ export const sessions = sqliteTable(
     forkedIdx: index('sessions_forked_idx').on(table.forked_from_session_id),
     // Scheduler indexes (note: partial indexes defined in migration, not here)
     scheduledFromBranchIdx: index('sessions_scheduled_flag_idx').on(table.scheduled_from_branch),
+    scheduleIdIdx: index('sessions_schedule_id_idx').on(table.schedule_id, table.scheduled_run_at),
   })
 );
 
@@ -582,12 +584,6 @@ export const branches = sqliteTable(
       onDelete: 'set null', // If board is deleted, branch remains but loses board association
     }),
 
-    // Scheduler config (materialized for efficient queries)
-    schedule_enabled: t.bool('schedule_enabled').notNull().default(false),
-    schedule_cron: text('schedule_cron'), // Cron expression (e.g., "0 9 * * 1-5")
-    schedule_last_triggered_at: integer('schedule_last_triggered_at'), // Unix timestamp (ms)
-    schedule_next_run_at: integer('schedule_next_run_at'), // Unix timestamp (ms)
-
     // UI state (materialized for efficient highlighting queries)
     needs_attention: t.bool('needs_attention').notNull().default(true), // Default true for new branches
 
@@ -684,29 +680,6 @@ export const branches = sqliteTable(
         // Unix integration
         // Note: unix_gid was previously stored here but is now resolved dynamically
         // via getGidFromGroupName(unix_group) at execution time. See id-lookups.ts.
-
-        // Schedule configuration (full config in JSON blob)
-        schedule?: {
-          timezone: string; // IANA timezone (default: 'UTC')
-          prompt_template: string; // Handlebars template
-          agentic_tool:
-            | 'claude-code'
-            | 'claude-code-cli'
-            | 'codex'
-            | 'gemini'
-            | 'opencode'
-            | 'copilot';
-          retention: number; // How many sessions to keep (0 = keep forever)
-          permission_mode?: string; // Permission mode for spawned sessions
-          model_config?: {
-            mode: 'default' | 'custom';
-            model?: string;
-          };
-          mcp_server_ids?: string[]; // MCP servers to attach (default: ['agor'])
-          context_files?: string[]; // Additional context files
-          created_at: number; // When schedule was created
-          created_by: string; // User ID who created
-        };
       }>()
       .notNull(),
   },
@@ -719,12 +692,6 @@ export const branches = sqliteTable(
     updatedIdx: index('branches_updated_idx').on(table.updated_at),
     // Composite unique constraint (repo + name)
     uniqueRepoName: index('branches_repo_name_unique').on(table.repo_id, table.name),
-    // Scheduler indexes (note: partial indexes with WHERE clauses defined in migration)
-    scheduleEnabledIdx: index('branches_schedule_enabled_idx').on(table.schedule_enabled),
-    boardScheduleIdx: index('branches_board_schedule_idx').on(
-      table.board_id,
-      table.schedule_enabled
-    ),
   })
 );
 
@@ -748,6 +715,63 @@ export const branchOwners = sqliteTable(
   (table) => ({
     // Composite primary key matching migration 0016
     pk: primaryKey({ columns: [table.branch_id, table.user_id] }),
+  })
+);
+
+/**
+ * Schedules table - First-class scheduled prompts per branch.
+ *
+ * Multiple schedules per branch (e.g. hourly heartbeat + daily summary).
+ * Replaces the four `branches.schedule_*` columns and `branches.data.schedule`
+ * blob; sessions backlink via `sessions.schedule_id`.
+ *
+ * Enums (`timezone_mode`) are validated at the app layer (no DB CHECK
+ * constraint) per context/guides/creating-database-migrations.md.
+ */
+export const schedules = sqliteTable(
+  'schedules',
+  {
+    schedule_id: text('schedule_id', { length: 36 }).primaryKey(),
+    branch_id: text('branch_id', { length: 36 })
+      .notNull()
+      .references(() => branches.branch_id, { onDelete: 'cascade' }),
+
+    name: text('name').notNull(),
+    description: text('description'),
+
+    cron_expression: text('cron_expression').notNull(),
+    timezone_mode: text('timezone_mode', { enum: ['local', 'utc'] })
+      .notNull()
+      .default('local'),
+    timezone: text('timezone'), // IANA, required when timezone_mode='local'
+
+    prompt: text('prompt').notNull(), // Handlebars template
+
+    // jsonb on PG; mirrors BranchScheduleConfig minus promoted fields.
+    agentic_tool_config: t.json<unknown>('agentic_tool_config').notNull(),
+
+    enabled: t.bool('enabled').notNull().default(true),
+    allow_concurrent_runs: t.bool('allow_concurrent_runs').notNull().default(false),
+    retention: integer('retention').notNull().default(5), // 0 = keep all
+
+    last_run_at: integer('last_run_at'), // Unix timestamp (ms)
+    last_run_session_id: text('last_run_session_id', { length: 36 }).references(
+      () => sessions.session_id,
+      { onDelete: 'set null' }
+    ),
+    next_run_at: integer('next_run_at'), // Unix timestamp (ms), denormalized for scheduler
+
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    created_by: text('created_by', { length: 36 })
+      .notNull()
+      .references(() => users.user_id),
+  },
+  (table) => ({
+    // Scheduler hot path: WHERE enabled = true AND next_run_at <= ?
+    enabledNextRunIdx: index('schedules_enabled_next_run_idx').on(table.enabled, table.next_run_at),
+    branchIdx: index('schedules_branch_idx').on(table.branch_id),
+    createdByIdx: index('schedules_created_by_idx').on(table.created_by),
   })
 );
 
@@ -1533,6 +1557,8 @@ export type RepoRow = typeof repos.$inferSelect;
 export type RepoInsert = typeof repos.$inferInsert;
 export type BranchRow = typeof branches.$inferSelect;
 export type BranchInsert = typeof branches.$inferInsert;
+export type ScheduleRow = typeof schedules.$inferSelect;
+export type ScheduleInsert = typeof schedules.$inferInsert;
 export type UserRow = typeof users.$inferSelect;
 export type UserInsert = typeof users.$inferInsert;
 export type MCPServerRow = typeof mcpServers.$inferSelect;
@@ -1569,8 +1595,21 @@ export const sessionsRelations = relations(sessions, ({ one }) => ({
     fields: [sessions.branch_id],
     references: [branches.branch_id],
   }),
+  schedule: one(schedules, {
+    fields: [sessions.schedule_id],
+    references: [schedules.schedule_id],
+  }),
 }));
 
 export const branchesRelations = relations(branches, ({ many }) => ({
+  sessions: many(sessions),
+  schedules: many(schedules),
+}));
+
+export const schedulesRelations = relations(schedules, ({ one, many }) => ({
+  branch: one(branches, {
+    fields: [schedules.branch_id],
+    references: [branches.branch_id],
+  }),
   sessions: many(sessions),
 }));

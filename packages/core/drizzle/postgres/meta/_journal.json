@@ -253,6 +253,13 @@
       "when": 1780100000000,
       "tag": "0036_rename_worktree_to_branch",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1780300000000,
+      "tag": "0037_schedules_table",
+      "breakpoints": true
     }
   ]
 }
