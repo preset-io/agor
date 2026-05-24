@@ -9,28 +9,29 @@
 
 ## 1. TL;DR
 
-Promote schedules from a one-per-worktree blob of columns on `worktrees` into a first-class `schedules` table with full CRUD, a list-of-runs view, and a per-schedule timezone mode (`local` / `utc`). The current design forces agents to write artifact-checking logic to fake "hourly + daily" coexistence, and bakes UTC-only semantics into a JSON `timezone` field that is *stored but never honored*. The proposed model is:
+Promote schedules from a one-per-branch blob of columns on `branches` into a first-class `schedules` table with full CRUD, a list-of-runs view, and a per-schedule timezone mode (`local` / `utc`). The current design forces agents to write artifact-checking logic to fake "hourly + daily" coexistence, and bakes UTC-only semantics into a JSON `timezone` field that is *stored but never honored*. The proposed model is:
 
-- **`schedules`** table — UUIDv7 PK, FK to `worktrees(worktree_id) ON DELETE CASCADE`, plus `name`, `cron_expression`, `timezone_mode` (`local`/`utc`), `timezone` (IANA, when mode=local), `prompt`, `agentic_tool_config` (jsonb), `enabled`, `last_run_at`, `last_run_session_id`, `next_run_at`, audit columns.
-- **Runs = sessions** — no separate `runs` table. Sessions already carry `scheduled_run_at` + `scheduled_from_worktree`. Rename the marker FK to `schedule_id` (nullable; null for ad-hoc sessions) and we keep one canonical "open the run" path.
-- **Scheduler** keeps the 30s ticker + 2min grace window — but the hot-path query becomes a real indexed `WHERE enabled = true AND next_run_at <= ?` over `schedules`, replacing today's "load every worktree, filter in memory" scan ([`scheduler.ts:214`](../../apps/agor-daemon/src/services/scheduler.ts#L214)).
-- **Migration** is a single PR: add `schedules`, backfill existing enabled schedules with `timezone_mode='utc'`, ship UI, and drop the four `schedule_*` columns + `data.schedule` JSON blob from `worktrees` in the same migration. (Per Max — no PR stacking.)
+- **`schedules`** table — UUIDv7 PK, FK to `branches(branch_id) ON DELETE CASCADE`, plus `name`, `cron_expression`, `timezone_mode` (`local`/`utc`), `timezone` (IANA, when mode=local), `prompt`, `agentic_tool_config` (jsonb), `enabled`, `last_run_at`, `last_run_session_id`, `next_run_at`, audit columns.
+- **Runs = sessions** — no separate `runs` table. Sessions already carry `scheduled_run_at` + `scheduled_from_branch`. Rename the marker FK to `schedule_id` (nullable; null for ad-hoc sessions) and we keep one canonical "open the run" path.
+- **Scheduler** keeps the 30s ticker + 2min grace window — but the hot-path query becomes a real indexed `WHERE enabled = true AND next_run_at <= ?` over `schedules`, replacing today's "load every branch, filter in memory" scan ([`scheduler.ts:214`](../../apps/agor-daemon/src/services/scheduler.ts#L214)).
+- **Migration** is a single PR: add `schedules`, backfill existing enabled schedules with `timezone_mode='utc'`, ship UI, and drop the four `schedule_*` columns + `data.schedule` JSON blob from `branches` in the same migration. (Per Max — no PR stacking.)
 - **Modal** rewrite — **prompt textarea up top**, compact agent picker, advanced settings collapsed. Add IANA tz dropdown only when `mode=local`.
+- **RBAC:** the schedules service reuses the branch-tier helpers that sessions already uses (`ensureBranchPermission`, `loadBranch`, `injectCreatedBy`, etc. — see §4.4). Tier requirements mirror sessions: `view` to list/get, `session` to create, `session`-for-own / `all`-for-others to patch, `all` to delete, `prompt`-or-own-`session` to `run_now`. Same `config.execution.branch_rbac` feature flag. One new helper: `scopeScheduleQuery` (SQL-JOIN find filter).
 - **Cross-cutting:** HA design ([#1252](https://github.com/preset-io/agor/pull/1252)) wants Postgres advisory locks around the tick — first-class schedules makes the locked region per-schedule instead of per-tick, which is the right scaling shape anyway.
 
-Recommended data-model shape (one paragraph): a `schedules` row owns its own cron, timezone-mode, prompt, agentic-tool config, and enabled flag; `(enabled, next_run_at)` index drives the scheduler; sessions get a nullable `schedule_id` FK so "click a run, open the session" is one join; multiple schedules per worktree fall out for free.
+Recommended data-model shape (one paragraph): a `schedules` row owns its own cron, timezone-mode, prompt, agentic-tool config, and enabled flag; `(enabled, next_run_at)` index drives the scheduler; sessions get a nullable `schedule_id` FK so "click a run, open the session" is one join; multiple schedules per branch fall out for free.
 
 ---
 
 ## 2. The current pain (concrete)
 
-### 2a. One schedule per worktree forces artifact-juggling
+### 2a. One schedule per branch forces artifact-juggling
 
-Today `worktrees.schedule_*` columns ([`schema.sqlite.ts:588-591`](../../packages/core/src/db/schema.sqlite.ts#L588-L591)) hold a single cron expression and a single `schedule` JSON config ([`schema.sqlite.ts:691-711`](../../packages/core/src/db/schema.sqlite.ts#L691-L711)). If a user wants "hourly status check + daily summary + weekly retrospective" on the same worktree, the only solution is one cron that fires every hour and an agent that reads file timestamps to decide which mode it's in. That's the kind of glue that makes a scheduler feel half-built.
+Today `branches.schedule_*` columns ([`schema.sqlite.ts:586-589`](../../packages/core/src/db/schema.sqlite.ts#L586-L589)) hold a single cron expression and a single `schedule` JSON config ([`schema.sqlite.ts:689-709`](../../packages/core/src/db/schema.sqlite.ts#L689-L709)). If a user wants "hourly status check + daily summary + weekly retrospective" on the same branch, the only solution is one cron that fires every hour and an agent that reads file timestamps to decide which mode it's in. That's the kind of glue that makes a scheduler feel half-built.
 
 ### 2b. The `timezone` field is a lie
 
-`WorktreeScheduleConfig.timezone` is defined ([`worktree.ts:473-566`](../../packages/core/src/types/worktree.ts#L473-L566)) and the UI shows a timezone-related caveat, but the actual cron parsing is hardcoded to UTC in every callsite — six of them ([`cron.ts:21,39,85,105,130,158`](../../packages/core/src/utils/cron.ts#L21)). The UI writes `timezone: 'UTC'` on save ([`ScheduleTab.tsx:122`](../../apps/agor-ui/src/components/BranchModal/tabs/ScheduleTab.tsx#L122)) and warns "All cron expressions are evaluated in UTC" ([`ScheduleTab.tsx:195`](../../apps/agor-ui/src/components/BranchModal/tabs/ScheduleTab.tsx#L195)). So the stored field is dead code that pretends to be configuration — confusing to anyone who finds it.
+`BranchScheduleConfig.timezone` is defined ([`branch.ts:473-566`](../../packages/core/src/types/branch.ts#L473-L566)) and the UI shows a timezone-related caveat, but the actual cron parsing is hardcoded to UTC in every callsite — six of them ([`cron.ts:21,39,85,105,130,158`](../../packages/core/src/utils/cron.ts#L21)). The UI writes `timezone: 'UTC'` on save ([`ScheduleTab.tsx:122`](../../apps/agor-ui/src/components/BranchModal/tabs/ScheduleTab.tsx#L122)) and warns "All cron expressions are evaluated in UTC" ([`ScheduleTab.tsx:195`](../../apps/agor-ui/src/components/BranchModal/tabs/ScheduleTab.tsx#L195)). So the stored field is dead code that pretends to be configuration — confusing to anyone who finds it.
 
 ### 2c. Modal field ordering buries the most important field
 
@@ -46,23 +47,23 @@ Current order ([`ScheduleTab.tsx:163-388`](../../apps/agor-ui/src/components/Bra
 
 Prompt belongs near the top; the cron + agent config are configuration *of* the prompt's invocation.
 
-### 2d. Scheduler hot path is O(N) per tick over all worktrees
+### 2d. Scheduler hot path is O(N) per tick over all branches
 
-`getEnabledSchedules()` calls `worktreeRepo.findAll({ includeArchived: false })` and filters in JS ([`scheduler.ts:212-220`](../../apps/agor-daemon/src/services/scheduler.ts#L212-L220)). Deduplication and retention each call `sessionRepo.findAll()` and filter in JS too ([`scheduler.ts:439-441,675-677`](../../apps/agor-daemon/src/services/scheduler.ts#L439-L441)). On a single-user instance this is fine; on a shared deployment with 1000 worktrees and 50K sessions this is three full table scans every 30 seconds. Indexes exist on `worktrees.schedule_enabled` ([`schema.sqlite.ts:725`](../../packages/core/src/db/schema.sqlite.ts#L725)) but they're not actually consulted by the in-memory filter path.
+`getEnabledSchedules()` calls `branchRepo.findAll({ includeArchived: false })` and filters in JS ([`scheduler.ts:212-220`](../../apps/agor-daemon/src/services/scheduler.ts#L212-L220)). Deduplication and retention each call `sessionRepo.findAll()` and filter in JS too ([`scheduler.ts:439-441,675-677`](../../apps/agor-daemon/src/services/scheduler.ts#L439-L441)). On a single-user instance this is fine; on a shared deployment with 1000 branches and 50K sessions this is three full table scans every 30 seconds. Indexes exist on `branches.schedule_enabled` ([`schema.sqlite.ts:723`](../../packages/core/src/db/schema.sqlite.ts#L723)) but they're not actually consulted by the in-memory filter path.
 
-### 2e. The "schedule" config lives inside `worktrees.data` JSON
+### 2e. The "schedule" config lives inside `branches.data` JSON
 
-The 11-field schedule object is a key in the `worktrees.data` JSON blob ([`schema.sqlite.ts:691-711`](../../packages/core/src/db/schema.sqlite.ts#L691-L711)). To read schedule config the scheduler loads the entire worktree row. To migrate it out we need `json_extract` on SQLite / `->'schedule'` on Postgres — backfill is non-trivial but tractable. Called out in §5.
+The 11-field schedule object is a key in the `branches.data` JSON blob ([`schema.sqlite.ts:689-709`](../../packages/core/src/db/schema.sqlite.ts#L689-L709)). To read schedule config the scheduler loads the entire branch row. To migrate it out we need `json_extract` on SQLite / `->'schedule'` on Postgres — backfill is non-trivial but tractable. Called out in §5.
 
 ### 2f. No CRUD surface
 
-There is no `/schedules` REST endpoint, no `agor_schedules_*` MCP tool, no CLI command. All schedule lifecycle is performed via `PATCH /worktrees/:id` with the four columns + nested JSON. The only schedule-shaped affordance is `POST /worktrees/:id/execute-schedule-now` ([`register-routes.ts:2886`](../../apps/agor-daemon/src/register-routes.ts#L2886)) which is a "fire the (single) schedule" verb, not CRUD.
+There is no `/schedules` REST endpoint, no `agor_schedules_*` MCP tool, no CLI command. All schedule lifecycle is performed via `PATCH /branches/:id` with the four columns + nested JSON. The only schedule-shaped affordance is `POST /branches/:id/execute-schedule-now` ([`register-routes.ts:2866`](../../apps/agor-daemon/src/register-routes.ts#L2866)) which is a "fire the (single) schedule" verb, not CRUD.
 
 ### 2g. Critical review of what works
 
 Not everything is wrong — keep these:
 
-- **Sessions-as-runs** is right. Don't introduce a runs table; sessions already carry the marker fields ([`session.ts:362,370`](../../packages/core/src/types/session.ts#L362)) and the UI already filters by `scheduled_from_worktree` ([`BranchCard.tsx:301`](../../apps/agor-ui/src/components/BranchCard/BranchCard.tsx#L301)).
+- **Sessions-as-runs** is right. Don't introduce a runs table; sessions already carry the marker fields ([`session.ts:362,370`](../../packages/core/src/types/session.ts#L362)) and the UI already filters by `scheduled_from_branch` ([`BranchCard.tsx:301`](../../apps/agor-ui/src/components/BranchCard/BranchCard.tsx#L301)).
 - **`scheduled_run_at` as minute-rounded dedup key** ([`scheduler.ts:318`](../../apps/agor-daemon/src/services/scheduler.ts#L318), [`cron.ts:214`](../../packages/core/src/utils/cron.ts#L214)) is clean. Keep the rule.
 - **`allow_concurrent_runs` with cron=silent-skip, manual=409** ([`scheduler.ts:449-470`](../../apps/agor-daemon/src/services/scheduler.ts#L449-L470)) is right; promote the field to a column.
 - **Smart recovery (no catchup, 2min grace window)** ([`scheduler.ts:114, 232-258`](../../apps/agor-daemon/src/services/scheduler.ts#L114)) is the right default. Document it.
@@ -72,25 +73,25 @@ Not everything is wrong — keep these:
 
 ## 3. Investigation findings
 
-All file:line cites point to the head of `main` at `776a1088` (this worktree's base).
+All file:line cites point to the head of `main` at `2ed5cefd` (this branch's base, post the Worktree→Branch rename in #1250). Throughout this doc, the user-facing concept is **Branch**, the table is `branches`, the FK is `branch_id`. Schedule column names themselves are unchanged by the rename — they live on `branches.schedule_*`.
 
-### 3.1 Schema columns on `worktrees`
+### 3.1 Schema columns on `branches`
 
 | Column | Type (SQLite) | Type (Postgres) | Source |
 |---|---|---|---|
-| `schedule_enabled` | `int NOT NULL DEFAULT false` | `boolean NOT NULL DEFAULT false` | [`schema.sqlite.ts:588`](../../packages/core/src/db/schema.sqlite.ts#L588) / [`schema.postgres.ts:582`](../../packages/core/src/db/schema.postgres.ts#L582) |
-| `schedule_cron` | `text NULL` | `text NULL` | `:589` / `:583` |
-| `schedule_last_triggered_at` | `integer NULL` (ms) | `bigint NULL` (ms) | `:590` / `:584` |
-| `schedule_next_run_at` | `integer NULL` (ms) | `bigint NULL` (ms) | `:591` / `:585` |
+| `schedule_enabled` | `int NOT NULL DEFAULT false` | `boolean NOT NULL DEFAULT false` | [`schema.sqlite.ts:586`](../../packages/core/src/db/schema.sqlite.ts#L586) / [`schema.postgres.ts:580`](../../packages/core/src/db/schema.postgres.ts#L580) |
+| `schedule_cron` | `text NULL` | `text NULL` | `:587` / `:581` |
+| `schedule_last_triggered_at` | `integer NULL` (ms) | `bigint NULL` (ms) | `:588` / `:582` |
+| `schedule_next_run_at` | `integer NULL` (ms) | `bigint NULL` (ms) | `:589` / `:583` |
 
-Plus indexes [`schema.sqlite.ts:725-728`](../../packages/core/src/db/schema.sqlite.ts#L725-L728):
+Plus indexes [`schema.sqlite.ts:723-726`](../../packages/core/src/db/schema.sqlite.ts#L723-L726):
 
 ```ts
-scheduleEnabledIdx: index('worktrees_schedule_enabled_idx').on(table.schedule_enabled),
-boardScheduleIdx:   index('worktrees_board_schedule_idx').on(table.board_id, table.schedule_enabled),
+scheduleEnabledIdx: index('branches_schedule_enabled_idx').on(table.schedule_enabled),
+boardScheduleIdx:   index('branches_board_schedule_idx').on(table.board_id, table.schedule_enabled),
 ```
 
-Plus the JSON `schedule` blob nested inside `worktrees.data` ([`schema.sqlite.ts:691-711`](../../packages/core/src/db/schema.sqlite.ts#L691-L711)):
+Plus the JSON `schedule` blob nested inside `branches.data` ([`schema.sqlite.ts:689-709`](../../packages/core/src/db/schema.sqlite.ts#L689-L709)):
 
 ```ts
 schedule?: {
@@ -104,7 +105,7 @@ schedule?: {
   context_files?: string[];
   created_at: number;
   created_by: string;
-  allow_concurrent_runs?: boolean;   // worktree.ts:524 only — schema doesn't restate
+  allow_concurrent_runs?: boolean;   // branch.ts:524 only — schema doesn't restate
 };
 ```
 
@@ -131,7 +132,7 @@ schedule?: {
 Sessions carry two materialized columns ([`schema.sqlite.ts:93-94`](../../packages/core/src/db/schema.sqlite.ts#L93-L94), [`schema.postgres.ts:105-106`](../../packages/core/src/db/schema.postgres.ts#L105-L106)):
 
 - `scheduled_run_at: integer NULL` — minute-rounded ms timestamp, dedup key
-- `scheduled_from_worktree: int NOT NULL DEFAULT false`
+- `scheduled_from_branch: int NOT NULL DEFAULT false`
 
 Plus the run metadata blob inside `sessions.data.custom_context.scheduled_run` ([`schema.sqlite.ts:158-167`](../../packages/core/src/db/schema.sqlite.ts#L158-L167)):
 
@@ -161,7 +162,7 @@ Reusable components:
 
 - All cron evaluation in UTC — see 3.2.
 - User-side timezone known **only client-side** (`Intl.DateTimeFormat().resolvedOptions().timeZone` would be the way). No `users.timezone` column.
-- The current `WorktreeScheduleConfig.timezone` field is dead.
+- The current `BranchScheduleConfig.timezone` field is dead.
 
 ### 3.6 Migrations doc
 
@@ -178,15 +179,15 @@ Gotchas to honor:
 - **Monotonic journal `when`** ([`:88-94`](../../context/guides/creating-database-migrations.md#L88-L94)) — strictly greater than every prior entry, tracked per dialect.
 - **No CHECK on enum columns** ([`:96-100`](../../context/guides/creating-database-migrations.md#L96-L100)) — validate at app layer. The `timezone_mode` enum in our proposed schema follows this rule (Drizzle-only enum, no DB CHECK).
 
-Next migration numbers: **`0045`** for SQLite (last is [`0044_add_worktree_storage_mode.sql`](../../packages/core/drizzle/sqlite/0044_add_worktree_storage_mode.sql)), **`0036`** for Postgres (last is [`0035_add_worktree_storage_mode.sql`](../../packages/core/drizzle/postgres/0035_add_worktree_storage_mode.sql)). Existing migrations show the project's style — short SQL files, design-doc reference in the SQL header comment, app-layer enum validation, no DB CHECK constraints.
+Next migration numbers: **`0046`** for SQLite (last is [`0045_rename_worktree_to_branch.sql`](../../packages/core/drizzle/sqlite/0045_rename_worktree_to_branch.sql)), **`0037`** for Postgres (last is [`0036_rename_worktree_to_branch.sql`](../../packages/core/drizzle/postgres/0036_rename_worktree_to_branch.sql)). Existing migrations show the project's style — short SQL files, design-doc reference in the SQL header comment, app-layer enum validation, no DB CHECK constraints.
 
 ### 3.7 Backwards-compat surface
 
-Schedule-bearing rows today are extremely few (one per worktree, opt-in). Estimating production count requires DB access we don't have here, but the **upper bound** is `SELECT COUNT(*) FROM worktrees WHERE schedule_enabled = true` — typically a handful per instance. Backfill is small.
+Schedule-bearing rows today are extremely few (one per branch, opt-in). Estimating production count requires DB access we don't have here, but the **upper bound** is `SELECT COUNT(*) FROM branches WHERE schedule_enabled = true` — typically a handful per instance. Backfill is small.
 
 Field mapping (current → proposed):
 
-| Current (on `worktrees`) | Proposed (on `schedules`) |
+| Current (on `branches`) | Proposed (on `schedules`) |
 |---|---|
 | `schedule_enabled` | `enabled` |
 | `schedule_cron` | `cron_expression` |
@@ -209,7 +210,7 @@ Field mapping (current → proposed):
 -- SQLite dialect (Postgres mirror in §5)
 CREATE TABLE schedules (
   schedule_id           text PRIMARY KEY,                              -- UUIDv7
-  worktree_id           text NOT NULL REFERENCES worktrees(worktree_id) ON DELETE CASCADE,
+  branch_id             text NOT NULL REFERENCES branches(branch_id) ON DELETE CASCADE,
 
   name                  text NOT NULL,                                 -- "hourly heartbeat"
   description           text,                                          -- nullable, freeform
@@ -240,7 +241,7 @@ CREATE TABLE schedules (
 );
 
 CREATE INDEX schedules_enabled_next_run_idx ON schedules(enabled, next_run_at);
-CREATE INDEX schedules_worktree_idx        ON schedules(worktree_id);
+CREATE INDEX schedules_branch_idx          ON schedules(branch_id);
 CREATE INDEX schedules_created_by_idx      ON schedules(created_by);
 ```
 
@@ -255,7 +256,7 @@ CREATE INDEX sessions_schedule_id_idx ON sessions(schedule_id, scheduled_run_at)
 
 **`schedule_id`** — UUIDv7 to match every other primary key in the project ([`schema.sqlite.ts`](../../packages/core/src/db/schema.sqlite.ts)). Short-ID resolution at the API boundary uses the existing `resolveShortId` hook (CLAUDE.md glossary).
 
-**`worktree_id`** — required FK. A schedule without a worktree is meaningless (it needs a working directory, env, and creator). `ON DELETE CASCADE` because archiving the worktree (the existing `archived: bool` flag at [`schema.sqlite.ts:597`](../../packages/core/src/db/schema.sqlite.ts#L597)) and tombstone-deleting it should take its schedules with it.
+**`branch_id`** — required FK. A schedule without a branch is meaningless (it needs a working directory, env, and creator). `ON DELETE CASCADE` because archiving the branch (the existing `archived: bool` flag at [`schema.sqlite.ts:597`](../../packages/core/src/db/schema.sqlite.ts#L597)) and tombstone-deleting it should take its schedules with it.
 
 **`name`** + **`description`** — user-facing labels. The list view (§6a) sorts by name. Description is freeform notes for "what this schedule is supposed to do."
 
@@ -267,26 +268,26 @@ CREATE INDEX sessions_schedule_id_idx ON sessions(schedule_id, scheduled_run_at)
 
 **`prompt`** — the Handlebars template. Required. Moved to its own column (out of jsonb) because it's the primary field, the largest free-text input, and the thing users edit most.
 
-**`agentic_tool_config`** — jsonb (Postgres) / text (SQLite). Mirrors the current `WorktreeScheduleConfig` minus the fields we promoted to columns: `{ agentic_tool, permission_mode?, model_config?, mcp_server_ids?, context_files? }`. Justification: these change together (the model picker affects the permission picker affects MCP attach behavior), they're a unit, and they don't drive any query.
+**`agentic_tool_config`** — jsonb (Postgres) / text (SQLite). Mirrors the current `BranchScheduleConfig` minus the fields we promoted to columns: `{ agentic_tool, permission_mode?, model_config?, mcp_server_ids?, context_files? }`. Justification: these change together (the model picker affects the permission picker affects MCP attach behavior), they're a unit, and they don't drive any query.
 
 **`enabled`** — boolean. Default `true` (new schedules are typically created on intent). The `(enabled, next_run_at)` index makes "find due schedules" indexed.
 
-**`allow_concurrent_runs`** — promoted from the JSON blob ([`worktree.ts:524`](../../packages/core/src/types/worktree.ts#L524)). Default `false` (block). Behavior unchanged from today ([`scheduler.ts:449-470`](../../apps/agor-daemon/src/services/scheduler.ts#L449-L470)) — cron silently skips, manual returns 409.
+**`allow_concurrent_runs`** — promoted from the JSON blob ([`branch.ts:524`](../../packages/core/src/types/branch.ts#L524)). Default `false` (block). Behavior unchanged from today ([`scheduler.ts:449-470`](../../apps/agor-daemon/src/services/scheduler.ts#L449-L470)) — cron silently skips, manual returns 409.
 
-**`retention`** — number of run sessions to keep. `0 = keep all`. Same semantics as today ([`scheduler.ts:665-705`](../../apps/agor-daemon/src/services/scheduler.ts#L665-L705)) but per-schedule, not per-worktree.
+**`retention`** — number of run sessions to keep. `0 = keep all`. Same semantics as today ([`scheduler.ts:665-705`](../../apps/agor-daemon/src/services/scheduler.ts#L665-L705)) but per-schedule, not per-branch.
 
 **`last_run_at` / `last_run_session_id`** — denormalized so the list view doesn't need a subquery per row. `last_run_session_id` lets the UI render "last run" as a clickable link without joining. `ON DELETE SET NULL` so retention-deleted sessions don't dangle.
 
 **`next_run_at`** — denormalized so the scheduler's hot path is a single indexed query. Computed via `getNextRunTime()` after each fire (mirrors today's [`scheduler.ts:644`](../../apps/agor-daemon/src/services/scheduler.ts#L644)) and on enable / config change.
 
-**Audit columns** — `created_at`, `updated_at`, `created_by`. `created_by` is the schedule's owner; the scheduler resolves their `unix_username` for execution (same path as today's [`scheduler.ts:349-386`](../../apps/agor-daemon/src/services/scheduler.ts#L349-L386), keyed on the schedule's owner instead of the worktree's).
+**Audit columns** — `created_at`, `updated_at`, `created_by`. `created_by` is the schedule's owner; the scheduler resolves their `unix_username` for execution (same path as today's [`scheduler.ts:349-386`](../../apps/agor-daemon/src/services/scheduler.ts#L349-L386), keyed on the schedule's owner instead of the branch's).
 
 ### 4.3 Open decisions, recommended
 
 **Q: Should runs be a separate `schedule_runs` table?**
 **Recommended: No.** Use `sessions` with a nullable `schedule_id` FK.
 
-Reasoning: A "run" today already *is* a session — it has messages, status, env, an executor, MCP servers, the whole apparatus. The marker columns already exist ([`session.ts:362,370`](../../packages/core/src/types/session.ts#L362-L370)) and the UI already filters by them ([`BranchCard.tsx:301`](../../apps/agor-ui/src/components/BranchCard/BranchCard.tsx#L301)). A separate runs table would either (a) duplicate everything, or (b) be a join table that adds nothing the FK doesn't. Adding `sessions.schedule_id` is one column and gives us cheap "runs of this schedule" via index. Keep `scheduled_from_worktree`/`scheduled_run_at` for dedup and back-compat; `schedule_id` is the new canonical link.
+Reasoning: A "run" today already *is* a session — it has messages, status, env, an executor, MCP servers, the whole apparatus. The marker columns already exist ([`session.ts:362,370`](../../packages/core/src/types/session.ts#L362-L370)) and the UI already filters by them ([`BranchCard.tsx:301`](../../apps/agor-ui/src/components/BranchCard/BranchCard.tsx#L301)). A separate runs table would either (a) duplicate everything, or (b) be a join table that adds nothing the FK doesn't. Adding `sessions.schedule_id` is one column and gives us cheap "runs of this schedule" via index. Keep `scheduled_from_branch`/`scheduled_run_at` for dedup and back-compat; `schedule_id` is the new canonical link.
 
 Alternatives considered:
 1. Dedicated `schedule_runs` table that pairs `(schedule_id, session_id, scheduled_for, dedup_key)` — pure relational, but doubles the write path and gives us nothing the FK doesn't.
@@ -295,7 +296,7 @@ Alternatives considered:
 **Q: Concurrency — if a previous run is still going, do we skip / queue / kill / parallel?**
 **Recommended: Skip (current behavior), opt-in to parallel via `allow_concurrent_runs`.**
 
-Reasoning: Today's behavior is correct ([`scheduler.ts:449-470`](../../apps/agor-daemon/src/services/scheduler.ts#L449-L470)) — agents touching the same worktree can step on each other. Queueing is Temporal-shaped and complex; killing is destructive; parallel is the opt-in escape hatch that already exists. No change.
+Reasoning: Today's behavior is correct ([`scheduler.ts:449-470`](../../apps/agor-daemon/src/services/scheduler.ts#L449-L470)) — agents touching the same branch can step on each other. Queueing is Temporal-shaped and complex; killing is destructive; parallel is the opt-in escape hatch that already exists. No change.
 
 Alternatives:
 1. Add `'queue'` as a third mode — schedule advances `next_run_at`, the missed firing goes onto the existing per-session task queue ([`task-queueing.md`](../../context/concepts/task-queueing.md)). Reasonable V2 if users ask.
@@ -312,17 +313,17 @@ Alternative: per-schedule `catchup_policy: 'latest_only' | 'none'`. **Don't add 
 **Decided: standard CRUD, six tools.**
 
 ```
-agor_schedules_list      (worktreeId? boardId? createdBy? enabled?)
+agor_schedules_list      (branchId? boardId? createdBy? enabled?)
 agor_schedules_get       (scheduleId)
-agor_schedules_create    (worktreeId, name, cron_expression, timezone_mode, timezone?, prompt, agentic_tool_config, ...)
+agor_schedules_create    (branchId, name, cron_expression, timezone_mode, timezone?, prompt, agentic_tool_config, ...)
 agor_schedules_patch     (scheduleId, partial updates)
 agor_schedules_delete    (scheduleId)
 agor_schedules_run_now   (scheduleId) → returns session_id
 ```
 
-Reasoning: every other domain follows this shape (`agor_worktrees_*`, `agor_sessions_*`, `agor_boards_*`, `agor_cards_*`). The discoverability story is "find the entity, then `_list` / `_get` / `_create` / `_patch` / `_delete`" — `_upsert` is a one-off that breaks the muscle memory. `run_now` is the domain-specific verb that doesn't fit CRUD, same way `agor_sessions_spawn` is a domain-specific verb.
+Reasoning: every other domain follows this shape (`agor_branches_*`, `agor_sessions_*`, `agor_boards_*`, `agor_cards_*`). The discoverability story is "find the entity, then `_list` / `_get` / `_create` / `_patch` / `_delete`" — `_upsert` is a one-off that breaks the muscle memory. `run_now` is the domain-specific verb that doesn't fit CRUD, same way `agor_sessions_spawn` is a domain-specific verb.
 
-The REST layer follows the same shape automatically because Feathers services give us `/schedules` (list/create), `/schedules/:id` (get/patch/delete), and `/schedules/:id/run-now` (custom verb, mirrors today's `/worktrees/:id/execute-schedule-now` at [`register-routes.ts:2886`](../../apps/agor-daemon/src/register-routes.ts#L2886)).
+The REST layer follows the same shape automatically because Feathers services give us `/schedules` (list/create), `/schedules/:id` (get/patch/delete), and `/schedules/:id/run-now` (custom verb, mirrors today's `/branches/:id/execute-schedule-now` at [`register-routes.ts:2866`](../../apps/agor-daemon/src/register-routes.ts#L2866)).
 
 **Q: On-failure behavior — retry, pause, mark broken?**
 **Recommended: None of the above in V1 — fail loud, surface in the UI, keep scheduling.**
@@ -331,13 +332,131 @@ Reasoning: An agent session "failing" is a fuzzy concept (did it error out? fini
 
 ---
 
+### 4.4 RBAC — reuse the branch-tier helpers
+
+The schedules service inherits its access control from the parent branch's RBAC tier (same model as sessions). No new permission system — we wire the **existing** helpers, gated by the same `config.execution.branch_rbac` flag ([`index.ts:567`](../../apps/agor-daemon/src/index.ts#L567), passed through as `branchRbacEnabled`) that gates sessions / tasks.
+
+#### Helpers to reuse
+
+| Helper | Source | What it does |
+|---|---|---|
+| `BRANCH_PERMISSION_LEVELS`, `BranchPermissionLevel` | [`branch.ts:460,465`](../../packages/core/src/types/branch.ts#L460-L465) | Tier enum: `none / view / session / prompt / all` |
+| `PERMISSION_RANK` | [`branch-authorization.ts:38-40`](../../apps/agor-daemon/src/utils/branch-authorization.ts#L38-L40) | Rank map `-1 / 0 / 1 / 2 / 3` |
+| `hasBranchPermission(branch, userId, isOwner, tier, role?, allowSuperadmin)` | [`branch-authorization.ts:59-83`](../../apps/agor-daemon/src/utils/branch-authorization.ts#L59-L83) | Bool: does user meet the tier? Owners and superadmins → always `all`. |
+| `resolveBranchPermission(...)` | [`branch-authorization.ts:96-111`](../../apps/agor-daemon/src/utils/branch-authorization.ts#L96-L111) | Returns effective tier for display |
+| `ensureBranchPermission(tier, action?, opts)` | [`branch-authorization.ts:194-242`](../../apps/agor-daemon/src/utils/branch-authorization.ts#L194-L242) | Feathers hook; throws `Forbidden` |
+| `loadBranch(repo, idField='branch_id')` | [`branch-authorization.ts:125-180`](../../apps/agor-daemon/src/utils/branch-authorization.ts#L125-L180) | Caches `params.branch` + `params.isBranchOwner` (confirmed against `register-hooks.ts:1679-1680`). Must run before `ensureBranchPermission`. |
+| `scopeSessionQuery(sessionRepo, opts)` | [`branch-authorization.ts:380-447`](../../apps/agor-daemon/src/utils/branch-authorization.ts#L380-L447) | SQL-JOIN `find()` filter for sessions; we'll write the schedules analog (see below) |
+| `BranchRepository.isOwner(id, userId)` | [`branches.ts:414-427`](../../packages/core/src/db/repositories/branches.ts#L414-L427) | Owner check |
+| `injectCreatedBy()` | [`inject-created-by.ts:24-56`](../../apps/agor-daemon/src/utils/inject-created-by.ts#L24-L56) | Stamps `created_by` from authenticated user |
+| `requireMinimumRole(role, action?)` | [`authorization.ts:46-51`](../../apps/agor-daemon/src/utils/authorization.ts#L46-L51) | Global-role gate (`ROLES.MEMBER` etc.) |
+
+#### One new helper to add
+
+The existing `scopeSessionQuery` ([`branch-authorization.ts:380-447`](../../apps/agor-daemon/src/utils/branch-authorization.ts#L380-L447)) does a SQL JOIN against `sessions`. We add the same shape for `schedules` — a `scopeScheduleQuery(scheduleRepo, opts)` that calls a new `ScheduleRepository.findAccessibleSchedules(userId)` returning only schedules whose parent branch the user can `view`. The query shape mirrors `SessionRepository.findAccessibleSessions`. Co-locate the new hook in `branch-authorization.ts` next to its siblings.
+
+Reuses existing tables: joins `schedules` → `branches` → checks `branches.created_by = ?` OR `branch_owners.user_id = ?` OR `branches.others_can != 'none'`. Single round-trip.
+
+#### Per-verb tier requirements
+
+Pick the tier that mirrors the **session** equivalent (the schedule represents the intent to spawn a session; same surface area, same risk):
+
+| Schedule verb | Branch tier | Global role | Rationale |
+|---|---|---|---|
+| `find` / `list` | `view` (via `scopeScheduleQuery`) | (any) | Same as `sessions.find` ([`register-hooks.ts:1645`](../../apps/agor-daemon/src/register-hooks.ts#L1645)) — read-only list, filtered to what you can see |
+| `get` | `view` | (any) | Same as `sessions.get` |
+| `create` | `session` | `MEMBER` | Creating a schedule *is* creating a recurring session-creation intent. Matches `sessions.create` at tier `session` via `ensureCanCreateSession` ([`register-hooks.ts:1656-1690`](../../apps/agor-daemon/src/register-hooks.ts#L1656-L1690), helper at [`branch-authorization.ts:1081-1083`](../../apps/agor-daemon/src/utils/branch-authorization.ts#L1081-L1083)). |
+| `patch` | `session` for own schedule, `all` for others' | `MEMBER` | Same branch logic as sessions ([`register-hooks.ts:1765-1791`](../../apps/agor-daemon/src/register-hooks.ts#L1765-L1791)): "own" check via `schedule.created_by === userId`. |
+| `delete` / `remove` | `all` | `MEMBER` | Destructive; matches `sessions.remove` ([`register-hooks.ts:1810-1817`](../../apps/agor-daemon/src/register-hooks.ts#L1810-L1817)). |
+| `run_now` | `prompt` for any schedule, `session` for own | `MEMBER` | Mirrors `ensureCanPromptInSession` ([`branch-authorization.ts:1111-1179`](../../apps/agor-daemon/src/utils/branch-authorization.ts#L1111-L1179)). Today's `execute-schedule-now` requires `'all'` ([`register-routes.ts:2928`](../../apps/agor-daemon/src/register-routes.ts#L2928)); **we're loosening that** to match session-prompt semantics, because "run my own schedule now" should not require admin-tier branch access. |
+
+The `run_now` change is the only behavior change in RBAC vs today. Worth flagging — see Open Q below.
+
+#### Hook wiring (sketch)
+
+```ts
+// register-hooks.ts — analogous to sessions block at :1640-1819
+app.service('schedules').hooks({
+  before: {
+    find: [
+      requireAuth,
+      ...(branchRbacEnabled
+        ? [scopeScheduleQuery(scheduleRepo, superadminOpts)]
+        : []),
+    ],
+    get: [
+      requireAuth,
+      ...(branchRbacEnabled
+        ? [loadBranchFromSchedule(scheduleRepo, branchRepo), ensureBranchPermission('view', 'view schedule')]
+        : []),
+    ],
+    create: [
+      requireAuth,
+      requireMinimumRole(ROLES.MEMBER, 'create schedules'),
+      ...(branchRbacEnabled
+        ? [
+            loadBranch(branchRepo, 'branch_id'),  // reads context.data.branch_id
+            ensureBranchPermission('session', 'create schedules', superadminOpts),
+          ]
+        : []),
+      injectCreatedBy(),
+      validateScheduleConfig(),  // cron valid, prompt non-empty, IANA tz valid
+    ],
+    patch: [
+      requireAuth,
+      requireMinimumRole(ROLES.MEMBER),
+      ...(branchRbacEnabled
+        ? [
+            loadScheduleAndBranch(scheduleRepo, branchRepo),
+            ensureCanModifySchedule(superadminOpts),  // session-tier for own, all-tier for others'
+          ]
+        : []),
+      validateScheduleConfig(),
+    ],
+    remove: [
+      requireAuth,
+      requireMinimumRole(ROLES.MEMBER),
+      ...(branchRbacEnabled
+        ? [
+            loadScheduleAndBranch(scheduleRepo, branchRepo),
+            ensureBranchPermission('all', 'delete schedule', superadminOpts),
+          ]
+        : []),
+    ],
+  },
+});
+
+// Custom verb (mirrors /branches/:id/execute-schedule-now at register-routes.ts:2866)
+app.use('/schedules/:id/run-now', { /* ... */ });
+app.service('/schedules/:id/run-now').hooks({
+  before: {
+    create: [
+      requireAuth,
+      requireMinimumRole(ROLES.MEMBER, 'run schedule'),
+      ...(branchRbacEnabled
+        ? [
+            loadScheduleAndBranch(scheduleRepo, branchRepo),
+            ensureCanRunSchedule(superadminOpts),  // prompt-tier OR (session-tier AND own schedule)
+          ]
+        : []),
+    ],
+  },
+});
+```
+
+#### Execution identity (carry-over)
+
+The scheduler currently runs scheduled sessions as the **branch's `created_by` user** ([`scheduler.ts:349-386`](../../apps/agor-daemon/src/services/scheduler.ts#L349-L386), via `resolveCreatorUnixUsername`). With first-class schedules, the source of truth becomes `schedules.created_by`. Same `unix_username` resolution logic, just keyed off the new column. No new security flag needed — this matches how the legacy `dangerously_allow_session_sharing` story already works for spawned sessions ([`schema.sqlite.ts:682`](../../packages/core/src/db/schema.sqlite.ts#L682)).
+
+---
+
 ## 5. Migration plan
 
-Single PR (Max: no PR stacking). One SQLite migration, one Postgres migration: create `schedules`, backfill from `worktrees`, drop the four old columns + the `data.schedule` blob in the same file. SQLite gets one table recreation for `worktrees` (Drizzle's `__new_worktrees` dance); Postgres gets four `DROP COLUMN`s. Net schema delta on `worktrees`: -4 cols + a smaller `data` JSON. Net schema delta on `sessions`: +1 col (`schedule_id`).
+Single PR (Max: no PR stacking). One SQLite migration, one Postgres migration: create `schedules`, backfill from `branches`, drop the four old columns + the `data.schedule` blob in the same file. SQLite gets one table recreation for `branches` (Drizzle's `__new_branches` dance); Postgres gets four `DROP COLUMN`s. Net schema delta on `branches`: -4 cols + a smaller `data` JSON. Net schema delta on `sessions`: +1 col (`schedule_id`).
 
 ### 5.1 SQLite migration
 
-**`packages/core/drizzle/sqlite/0045_schedules_table.sql`:**
+**`packages/core/drizzle/sqlite/0046_schedules_table.sql`:**
 
 ```sql
 -- First-class schedules table. Design doc:
@@ -349,7 +468,7 @@ Single PR (Max: no PR stacking). One SQLite migration, one Postgres migration: c
 
 CREATE TABLE `schedules` (
   `schedule_id`           text PRIMARY KEY NOT NULL,
-  `worktree_id`           text NOT NULL,
+  `branch_id`             text NOT NULL,
   `name`                  text NOT NULL,
   `description`           text,
   `cron_expression`       text NOT NULL,
@@ -366,93 +485,93 @@ CREATE TABLE `schedules` (
   `created_at`            integer NOT NULL,
   `updated_at`            integer NOT NULL,
   `created_by`            text NOT NULL,
-  FOREIGN KEY (`worktree_id`)         REFERENCES `worktrees`(`worktree_id`) ON DELETE CASCADE,
+  FOREIGN KEY (`branch_id`)           REFERENCES `branches`(`branch_id`)   ON DELETE CASCADE,
   FOREIGN KEY (`last_run_session_id`) REFERENCES `sessions`(`session_id`)   ON DELETE SET NULL,
   FOREIGN KEY (`created_by`)          REFERENCES `users`(`user_id`)
 );--> statement-breakpoint
 
 CREATE INDEX `schedules_enabled_next_run_idx` ON `schedules`(`enabled`, `next_run_at`);--> statement-breakpoint
-CREATE INDEX `schedules_worktree_idx`         ON `schedules`(`worktree_id`);--> statement-breakpoint
+CREATE INDEX `schedules_branch_idx`           ON `schedules`(`branch_id`);--> statement-breakpoint
 CREATE INDEX `schedules_created_by_idx`       ON `schedules`(`created_by`);--> statement-breakpoint
 
 ALTER TABLE `sessions` ADD COLUMN `schedule_id` text REFERENCES `schedules`(`schedule_id`) ON DELETE SET NULL;--> statement-breakpoint
 CREATE INDEX `sessions_schedule_id_idx` ON `sessions`(`schedule_id`, `scheduled_run_at`);--> statement-breakpoint
 
--- Backfill: one row per worktree with an enabled+configured schedule.
+-- Backfill: one row per branch with an enabled+configured schedule.
 -- Skip rows where the cron or the data.schedule blob is missing
 -- (these are 'half-configured' states that never fire today — see §5b).
 -- timezone_mode='utc' preserves current behavior.
 INSERT INTO schedules (
-  schedule_id, worktree_id, name, cron_expression,
+  schedule_id, branch_id, name, cron_expression,
   timezone_mode, timezone, prompt, agentic_tool_config,
   enabled, allow_concurrent_runs, retention,
   last_run_at, next_run_at,
   created_at, updated_at, created_by
 )
 SELECT
-  -- UUIDv7 deterministic-ish from worktree_id; alternative: app-side backfill script
+  -- UUIDv7 deterministic-ish from branch_id; alternative: app-side backfill script
   lower(hex(randomblob(16))),
-  w.worktree_id,
+  b.branch_id,
   'Default',
-  w.schedule_cron,
+  b.schedule_cron,
   'utc',
   NULL,
-  json_extract(w.data, '$.schedule.prompt_template'),
+  json_extract(b.data, '$.schedule.prompt_template'),
   json_object(
-    'agentic_tool',     json_extract(w.data, '$.schedule.agentic_tool'),
-    'permission_mode',  json_extract(w.data, '$.schedule.permission_mode'),
-    'model_config',     json_extract(w.data, '$.schedule.model_config'),
-    'mcp_server_ids',   json_extract(w.data, '$.schedule.mcp_server_ids'),
-    'context_files',    json_extract(w.data, '$.schedule.context_files')
+    'agentic_tool',     json_extract(b.data, '$.schedule.agentic_tool'),
+    'permission_mode',  json_extract(b.data, '$.schedule.permission_mode'),
+    'model_config',     json_extract(b.data, '$.schedule.model_config'),
+    'mcp_server_ids',   json_extract(b.data, '$.schedule.mcp_server_ids'),
+    'context_files',    json_extract(b.data, '$.schedule.context_files')
   ),
-  w.schedule_enabled,
-  COALESCE(json_extract(w.data, '$.schedule.allow_concurrent_runs'), 0),
-  COALESCE(json_extract(w.data, '$.schedule.retention'), 5),
-  w.schedule_last_triggered_at,
-  w.schedule_next_run_at,
-  COALESCE(json_extract(w.data, '$.schedule.created_at'), w.created_at),
-  w.updated_at,
-  COALESCE(json_extract(w.data, '$.schedule.created_by'), w.created_by)
-FROM worktrees w
-WHERE w.schedule_cron IS NOT NULL
-  AND json_extract(w.data, '$.schedule.prompt_template') IS NOT NULL;--> statement-breakpoint
+  b.schedule_enabled,
+  COALESCE(json_extract(b.data, '$.schedule.allow_concurrent_runs'), 0),
+  COALESCE(json_extract(b.data, '$.schedule.retention'), 5),
+  b.schedule_last_triggered_at,
+  b.schedule_next_run_at,
+  COALESCE(json_extract(b.data, '$.schedule.created_at'), b.created_at),
+  b.updated_at,
+  COALESCE(json_extract(b.data, '$.schedule.created_by'), b.created_by)
+FROM branches b
+WHERE b.schedule_cron IS NOT NULL
+  AND json_extract(b.data, '$.schedule.prompt_template') IS NOT NULL;--> statement-breakpoint
 
 -- Backfill: link existing scheduled sessions to their schedule.
--- Each worktree has at most one schedule today, so the mapping is unambiguous.
+-- Each branch has at most one schedule today, so the mapping is unambiguous.
 UPDATE sessions
 SET schedule_id = (
-  SELECT s.schedule_id FROM schedules s WHERE s.worktree_id = sessions.worktree_id
+  SELECT s.schedule_id FROM schedules s WHERE s.branch_id = sessions.branch_id
 )
-WHERE sessions.scheduled_from_worktree = 1
-  AND sessions.worktree_id IN (SELECT worktree_id FROM schedules);--> statement-breakpoint
+WHERE sessions.scheduled_from_branch = 1
+  AND sessions.branch_id IN (SELECT branch_id FROM schedules);--> statement-breakpoint
 
--- Drop the old materialized columns from `worktrees`. SQLite recreates the
--- table (the `__new_worktrees` dance) — review the generated INSERT carefully
+-- Drop the old materialized columns from `branches`. SQLite recreates the
+-- table (the `__new_branches` dance) — review the generated INSERT carefully
 -- per context/guides/creating-database-migrations.md §"Removing columns".
 --
 -- Drizzle generates this automatically when the schema.sqlite.ts file removes
 -- the four columns. Shown here for documentation; do not hand-write.
-ALTER TABLE `worktrees` DROP COLUMN `schedule_enabled`;--> statement-breakpoint
-ALTER TABLE `worktrees` DROP COLUMN `schedule_cron`;--> statement-breakpoint
-ALTER TABLE `worktrees` DROP COLUMN `schedule_last_triggered_at`;--> statement-breakpoint
-ALTER TABLE `worktrees` DROP COLUMN `schedule_next_run_at`;--> statement-breakpoint
-DROP INDEX `worktrees_schedule_enabled_idx`;--> statement-breakpoint
-DROP INDEX `worktrees_board_schedule_idx`;--> statement-breakpoint
+ALTER TABLE `branches` DROP COLUMN `schedule_enabled`;--> statement-breakpoint
+ALTER TABLE `branches` DROP COLUMN `schedule_cron`;--> statement-breakpoint
+ALTER TABLE `branches` DROP COLUMN `schedule_last_triggered_at`;--> statement-breakpoint
+ALTER TABLE `branches` DROP COLUMN `schedule_next_run_at`;--> statement-breakpoint
+DROP INDEX `branches_schedule_enabled_idx`;--> statement-breakpoint
+DROP INDEX `branches_board_schedule_idx`;--> statement-breakpoint
 
 -- Remove the schedule key from the data JSON. SQLite 3.38+ supports json_remove.
-UPDATE worktrees SET data = json_remove(data, '$.schedule') WHERE json_extract(data, '$.schedule') IS NOT NULL;
+UPDATE branches SET data = json_remove(data, '$.schedule') WHERE json_extract(data, '$.schedule') IS NOT NULL;
 ```
 
 ### 5.2 Postgres migration
 
-**`packages/core/drizzle/postgres/0036_schedules_table.sql`:**
+**`packages/core/drizzle/postgres/0037_schedules_table.sql`:**
 
 ```sql
 -- (Same header comment.)
 
 CREATE TABLE "schedules" (
   "schedule_id"           text PRIMARY KEY NOT NULL,
-  "worktree_id"           text NOT NULL REFERENCES "worktrees"("worktree_id") ON DELETE CASCADE,
+  "branch_id"             text NOT NULL REFERENCES "branches"("branch_id") ON DELETE CASCADE,
   "name"                  text NOT NULL,
   "description"           text,
   "cron_expression"       text NOT NULL,
@@ -472,7 +591,7 @@ CREATE TABLE "schedules" (
 );--> statement-breakpoint
 
 CREATE INDEX "schedules_enabled_next_run_idx" ON "schedules"("enabled", "next_run_at");--> statement-breakpoint
-CREATE INDEX "schedules_worktree_idx"         ON "schedules"("worktree_id");--> statement-breakpoint
+CREATE INDEX "schedules_branch_idx"           ON "schedules"("branch_id");--> statement-breakpoint
 CREATE INDEX "schedules_created_by_idx"       ON "schedules"("created_by");--> statement-breakpoint
 
 ALTER TABLE "sessions" ADD COLUMN "schedule_id" text REFERENCES "schedules"("schedule_id") ON DELETE SET NULL;--> statement-breakpoint
@@ -480,7 +599,7 @@ CREATE INDEX "sessions_schedule_id_idx" ON "sessions"("schedule_id", "scheduled_
 
 -- Backfill (Postgres uses ->/->> for JSON access; the data column is jsonb).
 INSERT INTO schedules (
-  schedule_id, worktree_id, name, cron_expression,
+  schedule_id, branch_id, name, cron_expression,
   timezone_mode, timezone, prompt, agentic_tool_config,
   enabled, allow_concurrent_runs, retention,
   last_run_at, next_run_at,
@@ -488,47 +607,47 @@ INSERT INTO schedules (
 )
 SELECT
   gen_random_uuid()::text,                           -- pgcrypto; UUIDv4 acceptable for backfill
-  w.worktree_id,
+  b.branch_id,
   'Default',
-  w.schedule_cron,
+  b.schedule_cron,
   'utc',
   NULL,
-  w.data->'schedule'->>'prompt_template',
+  b.data->'schedule'->>'prompt_template',
   jsonb_build_object(
-    'agentic_tool',    w.data->'schedule'->>'agentic_tool',
-    'permission_mode', w.data->'schedule'->>'permission_mode',
-    'model_config',    w.data->'schedule'->'model_config',
-    'mcp_server_ids',  w.data->'schedule'->'mcp_server_ids',
-    'context_files',   w.data->'schedule'->'context_files'
+    'agentic_tool',    b.data->'schedule'->>'agentic_tool',
+    'permission_mode', b.data->'schedule'->>'permission_mode',
+    'model_config',    b.data->'schedule'->'model_config',
+    'mcp_server_ids',  b.data->'schedule'->'mcp_server_ids',
+    'context_files',   b.data->'schedule'->'context_files'
   ),
-  w.schedule_enabled,
-  COALESCE((w.data->'schedule'->>'allow_concurrent_runs')::boolean, false),
-  COALESCE((w.data->'schedule'->>'retention')::int, 5),
-  w.schedule_last_triggered_at,
-  w.schedule_next_run_at,
-  COALESCE((w.data->'schedule'->>'created_at')::bigint, w.created_at),
-  w.updated_at,
-  COALESCE(w.data->'schedule'->>'created_by', w.created_by)
-FROM worktrees w
-WHERE w.schedule_cron IS NOT NULL
-  AND w.data->'schedule'->>'prompt_template' IS NOT NULL;--> statement-breakpoint
+  b.schedule_enabled,
+  COALESCE((b.data->'schedule'->>'allow_concurrent_runs')::boolean, false),
+  COALESCE((b.data->'schedule'->>'retention')::int, 5),
+  b.schedule_last_triggered_at,
+  b.schedule_next_run_at,
+  COALESCE((b.data->'schedule'->>'created_at')::bigint, b.created_at),
+  b.updated_at,
+  COALESCE(b.data->'schedule'->>'created_by', b.created_by)
+FROM branches b
+WHERE b.schedule_cron IS NOT NULL
+  AND b.data->'schedule'->>'prompt_template' IS NOT NULL;--> statement-breakpoint
 
 UPDATE sessions
 SET schedule_id = s.schedule_id
 FROM schedules s
-WHERE sessions.scheduled_from_worktree = true
-  AND sessions.worktree_id = s.worktree_id;--> statement-breakpoint
+WHERE sessions.scheduled_from_branch = true
+  AND sessions.branch_id = s.branch_id;--> statement-breakpoint
 
 -- Drop the old materialized columns + indexes.
-DROP INDEX IF EXISTS "worktrees_schedule_enabled_idx";--> statement-breakpoint
-DROP INDEX IF EXISTS "worktrees_board_schedule_idx";--> statement-breakpoint
-ALTER TABLE "worktrees" DROP COLUMN "schedule_enabled";--> statement-breakpoint
-ALTER TABLE "worktrees" DROP COLUMN "schedule_cron";--> statement-breakpoint
-ALTER TABLE "worktrees" DROP COLUMN "schedule_last_triggered_at";--> statement-breakpoint
-ALTER TABLE "worktrees" DROP COLUMN "schedule_next_run_at";--> statement-breakpoint
+DROP INDEX IF EXISTS "branches_schedule_enabled_idx";--> statement-breakpoint
+DROP INDEX IF EXISTS "branches_board_schedule_idx";--> statement-breakpoint
+ALTER TABLE "branches" DROP COLUMN "schedule_enabled";--> statement-breakpoint
+ALTER TABLE "branches" DROP COLUMN "schedule_cron";--> statement-breakpoint
+ALTER TABLE "branches" DROP COLUMN "schedule_last_triggered_at";--> statement-breakpoint
+ALTER TABLE "branches" DROP COLUMN "schedule_next_run_at";--> statement-breakpoint
 
 -- Remove the schedule key from the data jsonb.
-UPDATE worktrees SET data = data - 'schedule' WHERE data ? 'schedule';
+UPDATE branches SET data = data - 'schedule' WHERE data ? 'schedule';
 ```
 
 ### 5.3 Single-PR vs split — why this is OK
@@ -560,14 +679,14 @@ Encoded in the WHERE clauses above.
 The hot path is the scheduler tick:
 
 ```sql
-SELECT schedule_id, worktree_id, cron_expression, timezone_mode, timezone,
+SELECT schedule_id, branch_id, cron_expression, timezone_mode, timezone,
        prompt, agentic_tool_config, allow_concurrent_runs, retention,
        last_run_at, next_run_at, created_by
 FROM schedules
 WHERE enabled = true AND (next_run_at IS NULL OR next_run_at <= ?);
 ```
 
-Index: `schedules_enabled_next_run_idx ON (enabled, next_run_at)`. This replaces today's "load every worktree" approach ([`scheduler.ts:212-220`](../../apps/agor-daemon/src/services/scheduler.ts#L212-L220)) with an indexed range scan touching only due schedules.
+Index: `schedules_enabled_next_run_idx ON (enabled, next_run_at)`. This replaces today's "load every branch" approach ([`scheduler.ts:212-220`](../../apps/agor-daemon/src/services/scheduler.ts#L212-L220)) with an indexed range scan touching only due schedules.
 
 Secondary: `sessions_schedule_id_idx ON (schedule_id, scheduled_run_at)` for two queries — dedup ("does a session already exist for this schedule + scheduled_run_at?") and runs-list ("most recent N sessions for this schedule").
 
@@ -607,12 +726,12 @@ Order, top to bottom (this is what Max called out):
 │  ── Prompt ─────────────────────────────────────────────────  │
 │  Prompt *                                                      │
 │  ┌──────────────────────────────────────────────────────────┐  │
-│  │ Review the current state of {{worktree.name}} and post  │  │
+│  │ Review the current state of {{branch.name}} and post  │  │
 │  │ a status update.                                         │  │
 │  │                                                          │  │
 │  │                                                          │  │
 │  └──────────────────────────────────────────────────────────┘  │
-│  Handlebars: {{worktree.*}}, {{board.*}}, {{schedule.*}}      │
+│  Handlebars: {{branch.*}}, {{board.*}}, {{schedule.*}}      │
 │                                                                │
 │  ── When ───────────────────────────────────────────────────  │
 │  Cron *           [ 0 * * * *                  ] ⓘ Every hour │
@@ -669,7 +788,7 @@ Opens a side panel from the right. Shows the last N=20 sessions for the schedule
 ### 7a. Hot-path query
 
 Today: `findAll() → filter()` in JS for every tick ([`scheduler.ts:212-220`](../../apps/agor-daemon/src/services/scheduler.ts#L212-L220)).
-Proposed: `SELECT … FROM schedules WHERE enabled = true AND (next_run_at IS NULL OR next_run_at <= ?)` indexed by `schedules_enabled_next_run_idx`. Touches O(due_schedules), not O(all_worktrees).
+Proposed: `SELECT … FROM schedules WHERE enabled = true AND (next_run_at IS NULL OR next_run_at <= ?)` indexed by `schedules_enabled_next_run_idx`. Touches O(due_schedules), not O(all_branches).
 
 ### 7b. Tick interval
 
@@ -677,7 +796,7 @@ Keep 30s — it's the right granularity (cron's minimum is 1min so 30s gives 2 t
 
 ### 7c. Dedup query
 
-Today: `sessionRepo.findAll() → .filter(worktree_id) → .find(scheduled_run_at)` ([`scheduler.ts:439-441`](../../apps/agor-daemon/src/services/scheduler.ts#L439-L441)).
+Today: `sessionRepo.findAll() → .filter(branch_id) → .find(scheduled_run_at)` ([`scheduler.ts:439-441`](../../apps/agor-daemon/src/services/scheduler.ts#L439-L441)).
 Proposed: `SELECT 1 FROM sessions WHERE schedule_id = ? AND scheduled_run_at = ? LIMIT 1` using `sessions_schedule_id_idx`. Indexed lookup.
 
 ### 7d. HA / lock semantics (cross-ref #1252)
@@ -693,7 +812,7 @@ if (!acquired) continue;  // another daemon is handling this one
 // transaction commit auto-releases the lock
 ```
 
-This lets two daemons share the work — each picks up whichever schedules they can lock — instead of "one daemon owns the entire scheduler at a time." It's also *strictly easier* with first-class schedules than with the current denormalized worktree column: today's tick scans every worktree, so a per-worktree lock would gate everything behind one round-trip; per-schedule locks only fire for the handful of due schedules per tick.
+This lets two daemons share the work — each picks up whichever schedules they can lock — instead of "one daemon owns the entire scheduler at a time." It's also *strictly easier* with first-class schedules than with the current denormalized branch column: today's tick scans every branch, so a per-branch lock would gate everything behind one round-trip; per-schedule locks only fire for the handful of due schedules per tick.
 
 **SQLite path:** the lock attempt is a no-op (or skipped at the dialect-detection layer in [`schema-factory.ts`](../../packages/core/src/db/schema-factory.ts)). SQLite is single-node by definition — no lock needed.
 
@@ -738,7 +857,7 @@ Max wrote it. Concepts that translate:
 - **`catchup=False` as the default** — adopted ([§4.3](#43-open-decisions-recommended)). Airflow's experience is the right argument here.
 - **`max_active_runs=1` as the default** — adopted, called `allow_concurrent_runs=false`. Same idea.
 - **DAGs / task dependencies / sensors / SLAs** — **not borrowing.** A schedule is a single prompt; no dependencies between schedules in V1. Sensors (poll an external signal) are interesting for V3+ but not needed.
-- **Pools** (concurrency caps across schedules) — V3 if anyone asks. Worktree boundaries are already a natural pool.
+- **Pools** (concurrency caps across schedules) — V3 if anyone asks. Branch boundaries are already a natural pool.
 
 ### Temporal
 
@@ -769,13 +888,14 @@ Max wrote it. Concepts that translate:
 
 **V1 (this PR — one PR, one merge)**
 - `schedules` table + `sessions.schedule_id` FK + indexes
-- Backfill from `worktrees.schedule_*` and `data.schedule`
-- **Drop** the four `worktrees.schedule_*` columns + `data.schedule` blob in the same migration (§5.3)
+- Backfill from `branches.schedule_*` and `data.schedule`
+- **Drop** the four `branches.schedule_*` columns + `data.schedule` blob in the same migration (§5.3)
 - Schedules CRUD service (Feathers + REST + WebSocket events)
+- Branch-tier RBAC wired via existing helpers, gated by `execution.branch_rbac` (§4.4)
 - Scheduler reads from `schedules`, honors `timezone_mode`, takes per-schedule `pg_try_advisory_xact_lock` (§7d)
 - New modal with prompt-on-top, local-mode default, IANA tz dropdown
 - Runs side panel
-- 6 MCP tools (§4.4): `agor_schedules_{list,get,create,patch,delete,run_now}`
+- 6 MCP tools (§4.3): `agor_schedules_{list,get,create,patch,delete,run_now}`
 
 **V2 (later, if asked)**
 - `auto_pause_after_n_failures` if real users hit the foot-gun
@@ -795,12 +915,14 @@ Max wrote it. Concepts that translate:
 1. ✅ **Backfill ambiguity** — skip silently AND prevent saving invalid/misconfigured schedules going forward. Encoded as `NOT NULL` on `cron_expression` + `prompt`, plus Zod / service-hook validation. See §5.4.
 2. ✅ **Default `timezone_mode = 'local'`.** Backfilled rows get `'utc'` to preserve current behavior. See §4.2.
 3. ✅ **Single PR** — no stacking. `schedules` create + backfill + old-column drop all in one migration per dialect, transaction-wrapped. See §5.3.
-4. ✅ **MCP tool surface — standard CRUD.** Six tools: `agor_schedules_list`, `agor_schedules_get`, `agor_schedules_create`, `agor_schedules_patch`, `agor_schedules_delete`, `agor_schedules_run_now`. Mirrors `agor_worktrees_*` / `agor_sessions_*` / `agor_boards_*` conventions. See §4.4.
+4. ✅ **MCP tool surface — standard CRUD.** Six tools: `agor_schedules_list`, `agor_schedules_get`, `agor_schedules_create`, `agor_schedules_patch`, `agor_schedules_delete`, `agor_schedules_run_now`. Mirrors `agor_branches_*` / `agor_sessions_*` / `agor_boards_*` conventions. See §4.3.
 5. ✅ **Per-schedule Postgres advisory lock in V1.** Cheap (`pg_try_advisory_xact_lock(hash(schedule_id))` per row) and forward-compatible with #1252 HA. SQLite single-node tick stays lock-free. See §7d.
 
 ### Remaining items needing review
 
-None blocking. Two minor follow-ups, called out where they live:
+- **`run_now` RBAC tier** (§4.4) — recommending we loosen from today's `'all'` ([`register-routes.ts:2928`](../../apps/agor-daemon/src/register-routes.ts#L2928)) to `'prompt'`-or-own-`'session'` to match `ensureCanPromptInSession` semantics. This lets a member run *their own* schedule without admin tier on the branch. **Flag for Max** — this is the only behavioral RBAC change vs today; defensible either way.
+
+Non-blocking follow-ups, called out where they live:
 
 - §6b — the modal mockup uses a wall-of-text wireframe; final visual will land in the implementation PR (no design-level decision pending).
 - §12 — the existing `custom_context.scheduled_run.schedule_config_snapshot` blob on sessions should add `schedule_id` to its payload; bookkeeping, not a design question.
@@ -809,17 +931,17 @@ None blocking. Two minor follow-ups, called out where they live:
 
 ## 12. Out of scope
 
-- **Multi-worktree schedules.** A schedule is bound to exactly one worktree (FK). "Fire across all worktrees on this board" is a different feature.
+- **Multi-branch schedules.** A schedule is bound to exactly one branch (FK). "Fire across all branches on this board" is a different feature.
 - **Schedule chaining / dependencies.** No "schedule B fires after schedule A completes" in V1.
 - **Run-history beyond retention.** When retention deletes a session, it's gone. Future audit table is a separate design.
 - **`users.timezone` user preference.** Modal seeds from the browser; user picks per-schedule. Adding a user pref is an obvious follow-up but isn't load-bearing for this design.
-- **Backfill of in-flight scheduled sessions across the migration boundary.** The PR 1 backfill links existing scheduled sessions to their backfilled schedule via `worktree_id` (one-to-one today). If any session is mid-flight when the migration runs, it inherits the `schedule_id` correctly.
+- **Backfill of in-flight scheduled sessions across the migration boundary.** The PR 1 backfill links existing scheduled sessions to their backfilled schedule via `branch_id` (one-to-one today). If any session is mid-flight when the migration runs, it inherits the `schedule_id` correctly.
 - **Renaming of the JSON `custom_context.scheduled_run.schedule_config_snapshot`** ([`schema.sqlite.ts:158-167`](../../packages/core/src/db/schema.sqlite.ts#L158-L167)) — left as-is for now; the snapshot semantics still apply but should add `schedule_id` to the snapshot. Bookkeeping for the implementation PR.
 
 ---
 
 ## Cross-references
 
-- **[#1246 — global search design](https://github.com/preset-io/agor/pull/1246)** — schedules should be a searchable entity in V1 (name + description). Same pattern as worktrees/sessions/boards in #1246's static registry. Also: that PR's `?focus=<id>` work on SessionCanvas is what "Open in canvas" in the runs view (§6c) would use.
+- **[#1246 — global search design](https://github.com/preset-io/agor/pull/1246)** — schedules should be a searchable entity in V1 (name + description). Same pattern as branches/sessions/boards in #1246's static registry. Also: that PR's `?focus=<id>` work on SessionCanvas is what "Open in canvas" in the runs view (§6c) would use.
 - **[#1251 — reconnection & state refresh](https://github.com/preset-io/agor/pull/1251)** — minor: when the daemon reconnects after a long drop, the schedules list should be in the rehydrate set. No structural overlap.
 - **[#1252 — daemon HA](https://github.com/preset-io/agor/pull/1252)** — direct overlap. The recommended Postgres advisory lock around the scheduler tick ([`scheduler.ts:142`](../../apps/agor-daemon/src/services/scheduler.ts#L142)) is per-tick today; first-class schedules unlocks per-schedule locking, which is the right HA shape. See §7d. Coordinate ordering with that work.
