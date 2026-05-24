@@ -14,7 +14,7 @@ import {
   PlusOutlined,
   UnorderedListOutlined,
 } from '@ant-design/icons';
-import { Button, Empty, Popconfirm, Space, Spin, Switch, Table, Tag, Typography } from 'antd';
+import { Button, Empty, Popconfirm, Space, Spin, Switch, Table, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
 import { ScheduleModal } from '../../ScheduleModal';
@@ -38,13 +38,6 @@ const formatHumanizedCron = (cron: string): string => {
   } catch {
     return cron;
   }
-};
-
-const tzPill = (mode: 'local' | 'utc', tz?: string | null) => {
-  if (mode === 'utc') return 'UTC';
-  if (!tz) return 'local';
-  const tail = tz.split('/').pop() ?? tz;
-  return tail.replace(/_/g, ' ');
 };
 
 export const ScheduleTab: React.FC<ScheduleTabProps> = ({
@@ -155,6 +148,14 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
 
   const columns = [
     {
+      title: 'On',
+      key: 'enabled',
+      width: 60,
+      render: (s: Schedule) => (
+        <Switch checked={s.enabled} onChange={(v) => handleToggleEnabled(s, v)} size="small" />
+      ),
+    },
+    {
       title: 'Name',
       key: 'name',
       render: (s: Schedule) => (
@@ -166,19 +167,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
     {
       title: 'When',
       key: 'cron',
-      render: (s: Schedule) => (
-        <span>
-          <Text>{formatHumanizedCron(s.cron_expression)}</Text>
-          <Tag style={{ marginLeft: 8 }}>{tzPill(s.timezone_mode, s.timezone)}</Tag>
-        </span>
-      ),
-    },
-    {
-      title: 'Enabled',
-      key: 'enabled',
-      render: (s: Schedule) => (
-        <Switch checked={s.enabled} onChange={(v) => handleToggleEnabled(s, v)} size="small" />
-      ),
+      render: (s: Schedule) => <Text>{formatHumanizedCron(s.cron_expression)}</Text>,
     },
     {
       title: 'Last run',
@@ -191,11 +180,6 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
         ) : (
           formatTimestamp(s.last_run_at)
         ),
-    },
-    {
-      title: 'Next run',
-      key: 'next_run_at',
-      render: (s: Schedule) => formatTimestamp(s.next_run_at),
     },
     {
       title: 'Actions',
