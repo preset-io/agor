@@ -445,12 +445,31 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
       const detail = (event as CustomEvent<RefreshResult>).detail;
       if (!detail || !client) return;
       if (!client.io.connected) return;
-      client.authenticate({ strategy: 'jwt', accessToken: detail.accessToken }).catch((err) => {
-        // Best-effort — if this fails, the next service call will 401
-        // and the around-hook will take the standard refresh-and-retry
-        // path. Log so the cause isn't invisible.
-        console.error('In-place re-authentication failed after token refresh:', err);
-      });
+      client
+        .authenticate({ strategy: 'jwt', accessToken: detail.accessToken })
+        .then(() => {
+          // Publish recovery to React state. The connect handler above can
+          // strand the UI at `connecting=true, connected=false` when its own
+          // refresh attempt fails transiently (network half-restored, daemon
+          // briefly 5xxs, etc.) — see the `setConnecting(true); return;`
+          // branch above. Without this `setConnected(true)`, a later
+          // successful refresh from any source (proactive timer, around-hook
+          // on a user click, visibility-change handler) re-authenticates the
+          // socket but the navbar stays stuck on "Reconnecting" until page
+          // refresh. We're safe to publish here because (a) `client.io.connected`
+          // was true at entry, (b) `authenticate()` just resolved, so the
+          // socket is connected AND authenticated.
+          if (!mounted) return;
+          setConnected(true);
+          setConnecting(false);
+          setError(null);
+        })
+        .catch((err) => {
+          // Best-effort — if this fails, the next service call will 401
+          // and the around-hook will take the standard refresh-and-retry
+          // path. Log so the cause isn't invisible.
+          console.error('In-place re-authentication failed after token refresh:', err);
+        });
     };
     window.addEventListener(TOKENS_REFRESHED_EVENT, handleTokensRefreshed);
 
