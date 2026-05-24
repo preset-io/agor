@@ -1,13 +1,13 @@
 import type {
   AgenticToolName,
   AgorClient,
+  Branch,
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
   MCPServer,
   PermissionMode,
   User,
-  Worktree,
 } from '@agor-live/client';
 import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
@@ -24,7 +24,7 @@ import type { ModelConfig } from '../ModelSelector';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 
 export interface NewSessionConfig {
-  worktree_id: string; // Required - sessions are always created from a worktree
+  branch_id: string; // Required - sessions are always created from a branch
   agent: string;
   title?: string;
   initialPrompt?: string;
@@ -49,8 +49,8 @@ export interface NewSessionModalProps {
   onClose: () => void;
   onCreate: (config: NewSessionConfig) => void;
   availableAgents: AgenticToolOption[];
-  worktreeId: string; // Required - the worktree to create the session in
-  worktree?: Worktree; // Optional - worktree details for display
+  branchId: string; // Required - the branch to create the session in
+  branch?: Branch; // Optional - branch details for display
   mcpServerById?: Map<string, MCPServer>;
   currentUser?: User | null; // Optional - current user for default settings
   client: AgorClient | null;
@@ -62,8 +62,8 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   onClose,
   onCreate,
   availableAgents,
-  worktreeId,
-  worktree,
+  branchId,
+  branch,
   mcpServerById = new Map(),
   currentUser,
   client,
@@ -76,7 +76,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   const isFormValid = !!selectedAgent;
 
   // Reset form when modal opens, using user defaults if available
-  // Only depends on `open` — worktree/user refs may change while modal is open
+  // Only depends on `open` — branch/user refs may change while modal is open
   // and we must not wipe user edits on live WebSocket refreshes.
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally only reset on modal open
   useEffect(() => {
@@ -90,15 +90,15 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     const agentDefaults = currentUser?.default_agentic_config?.['claude-code'];
     const baseValues = getFormValuesFromConfig('claude-code', agentDefaults);
 
-    // MCP inheritance: worktree config > user defaults
-    const worktreeMcpIds = worktree?.mcp_server_ids;
+    // MCP inheritance: branch config > user defaults
+    const branchMcpIds = branch?.mcp_server_ids;
 
     form.setFieldsValue({
       title: '',
       initialPrompt: '',
       ...baseValues,
       mcpServerIds:
-        worktreeMcpIds && worktreeMcpIds.length > 0 ? worktreeMcpIds : baseValues.mcpServerIds,
+        branchMcpIds && branchMcpIds.length > 0 ? branchMcpIds : baseValues.mcpServerIds,
     });
   }, [open, form]);
 
@@ -109,12 +109,12 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       const agentDefaults = currentUser?.default_agentic_config?.[tool];
       const baseValues = getFormValuesFromConfig(tool, agentDefaults);
 
-      // MCP inheritance: worktree config > user defaults
+      // MCP inheritance: branch config > user defaults
       form.setFieldsValue({
         ...baseValues,
         mcpServerIds:
-          worktree?.mcp_server_ids && worktree.mcp_server_ids.length > 0
-            ? worktree.mcp_server_ids
+          branch?.mcp_server_ids && branch.mcp_server_ids.length > 0
+            ? branch.mcp_server_ids
             : baseValues.mcpServerIds,
         // Clear codex fields when switching away from codex
         ...(tool !== 'codex' && {
@@ -124,7 +124,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         }),
       });
     }
-  }, [selectedAgent, form, currentUser, worktree?.mcp_server_ids]);
+  }, [selectedAgent, form, currentUser, branch?.mcp_server_ids]);
 
   const handleCreate = () => {
     form.validateFields().then(() => {
@@ -136,10 +136,10 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       // Get user defaults for the selected agent (fallback if form fields weren't mounted)
       const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
 
-      // MCP fallback must respect worktree > user defaults (same as open-reset effect)
-      const worktreeMcpIds = worktree?.mcp_server_ids;
+      // MCP fallback must respect branch > user defaults (same as open-reset effect)
+      const branchMcpIds = branch?.mcp_server_ids;
       const fallbackMcpServerIds =
-        worktreeMcpIds && worktreeMcpIds.length > 0 ? worktreeMcpIds : agentDefaults?.mcpServerIds;
+        branchMcpIds && branchMcpIds.length > 0 ? branchMcpIds : agentDefaults?.mcpServerIds;
 
       const permissionMode: PermissionMode =
         (values.permissionMode as PermissionMode | undefined) ??
@@ -147,7 +147,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         getDefaultPermissionMode(selectedAgent as AgenticToolName);
 
       const config: NewSessionConfig = {
-        worktree_id: worktreeId,
+        branch_id: branchId,
         agent: selectedAgent,
         title: values.title,
         initialPrompt: values.initialPrompt,
@@ -200,12 +200,12 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       }}
     >
       <Form form={form} layout="vertical" style={{ marginTop: 16 }} preserve={false}>
-        {/* Worktree Info */}
-        {worktree && (
+        {/* Branch Info */}
+        {branch && (
           <Alert
             title={
               <>
-                Creating session in branch: <strong>{worktree.name}</strong> ({worktree.ref})
+                Creating session in branch: <strong>{branch.name}</strong> ({branch.ref})
               </>
             }
             type="info"

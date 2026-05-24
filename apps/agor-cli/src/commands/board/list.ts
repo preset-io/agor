@@ -38,7 +38,7 @@ export default class BoardList extends BaseCommand {
         return;
       }
 
-      // Fetch all board objects to count worktrees per board
+      // Fetch all board objects to count branches per board
       const boardObjects = await client
         .service('board-objects')
         .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } });
@@ -52,7 +52,7 @@ export default class BoardList extends BaseCommand {
         head: [
           chalk.cyan('ID'),
           chalk.cyan('Name'),
-          chalk.cyan('Worktrees'),
+          chalk.cyan('Branches'),
           chalk.cyan('Description'),
           chalk.cyan('Created'),
         ],
@@ -62,13 +62,11 @@ export default class BoardList extends BaseCommand {
 
       // Add rows
       for (const board of displayBoards) {
-        const worktreeCount = typedBoardObjects.filter(
-          (bo) => bo.board_id === board.board_id
-        ).length;
+        const branchCount = typedBoardObjects.filter((bo) => bo.board_id === board.board_id).length;
         table.push([
           shortId(board.board_id),
           `${board.icon || '📋'} ${board.name}`,
-          worktreeCount.toString(),
+          branchCount.toString(),
           board.description || '',
           new Date(board.created_at).toLocaleDateString(),
         ]);

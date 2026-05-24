@@ -1,9 +1,9 @@
-import type { Worktree } from '@agor-live/client';
+import type { Branch } from '@agor-live/client';
 import { Select } from 'antd';
 import { useMemo } from 'react';
 
 interface BranchSelectProps {
-  worktreeById: Map<string, Worktree>;
+  branchById: Map<string, Branch>;
   value?: string;
   onChange?: (value: string) => void;
   placeholder?: string;
@@ -12,7 +12,7 @@ interface BranchSelectProps {
 }
 
 export const BranchSelect: React.FC<BranchSelectProps> = ({
-  worktreeById,
+  branchById,
   value,
   onChange,
   placeholder = 'Select a branch',
@@ -21,15 +21,15 @@ export const BranchSelect: React.FC<BranchSelectProps> = ({
 }) => {
   const options = useMemo(
     () =>
-      Array.from(worktreeById.values())
+      Array.from(branchById.values())
         .sort((a, b) =>
-          (a.name || a.ref || a.worktree_id).localeCompare(b.name || b.ref || b.worktree_id)
+          (a.name || a.ref || a.branch_id).localeCompare(b.name || b.ref || b.branch_id)
         )
         .map((wt) => ({
-          value: wt.worktree_id,
-          label: `${wt.name || wt.ref || wt.worktree_id}${includeArchivedLabel && wt.archived ? ' (archived)' : ''}`,
+          value: wt.branch_id,
+          label: `${wt.name || wt.ref || wt.branch_id}${includeArchivedLabel && wt.archived ? ' (archived)' : ''}`,
         })),
-    [includeArchivedLabel, worktreeById]
+    [includeArchivedLabel, branchById]
   );
 
   return (

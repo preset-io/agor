@@ -176,7 +176,7 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
           .string()
           .optional()
           .describe(
-            'Default branch name used as the source for new worktrees that do not specify a sourceBranch.'
+            'Default branch name used as the source for new branches that do not specify a sourceBranch.'
           ),
       }),
     },

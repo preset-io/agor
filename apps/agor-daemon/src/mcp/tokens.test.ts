@@ -2,7 +2,7 @@
  * MCP token module tests.
  *
  * Exercises the issue → verify cycle against an in-memory SQLite database.
- * A minimal repo/worktree/session fixture is seeded so the session-existence
+ * A minimal repo/branch/session fixture is seeded so the session-existence
  * check in validate has something to read.
  *
  * Coverage:
@@ -14,6 +14,7 @@
  */
 
 import {
+  branches,
   type Database,
   deleteFrom,
   eq,
@@ -22,7 +23,6 @@ import {
   RepoRepository,
   sessions,
   shortId,
-  worktrees,
 } from '@agor/core/db';
 import type { SessionID, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
@@ -67,16 +67,16 @@ async function seedSession(
     default_branch: 'main',
   });
 
-  const worktreeId = generateId();
-  await insert(db, worktrees)
+  const branchId = generateId();
+  await insert(db, branches)
     .values({
-      worktree_id: worktreeId,
+      branch_id: branchId,
       repo_id: repo.repo_id,
       created_at: new Date(),
       created_by: 'test-user',
       name: 'main',
       ref: 'main',
-      worktree_unique_id: 1,
+      branch_unique_id: 1,
       data: { path: '/tmp/test/wt', git_state: { ref_at_start: 'main' } },
     })
     .run();
@@ -87,7 +87,7 @@ async function seedSession(
       created_at: new Date(),
       status: 'idle',
       agentic_tool: 'claude-code',
-      worktree_id: worktreeId,
+      branch_id: branchId,
       created_by: 'test-user',
       data: { genealogy: { children: [] }, contextFiles: [], tasks: [], git_state: {} },
     })

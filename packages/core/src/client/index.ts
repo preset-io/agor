@@ -11,6 +11,7 @@ export type {
   AgorClient,
   AgorService,
   BoardsService,
+  BranchesService,
   MessagesService,
   ReposCloneService,
   ReposLocalService,
@@ -26,7 +27,6 @@ export type {
   TemplateRenderRequest,
   TemplateRenderResponse,
   TemplatesService,
-  WorktreesService,
 } from '../api/index.js';
 export {
   createClient,
@@ -37,6 +37,14 @@ export {
 
 export * from '../config/browser.js';
 export type { AgorConfig } from '../config/types.js';
+// Global-search field registry — same module on client (V1 in-memory filter)
+// and server (future V2 SQL fan-out per design doc §5.7).
+export {
+  matchSearchTokens,
+  SEARCHABLE_FIELDS,
+  type SearchFieldExtractor,
+  tokenizeSearchQuery,
+} from '../search/index.js';
 // Browser-safe zone-trigger context builder (pure JS, no Handlebars). The
 // daemon and MCP path render against this shape too — keep them in sync.
 export {
@@ -58,12 +66,12 @@ export {
 export {
   artifactPath,
   boardPath,
+  branchPath,
   ENTITY_PATH_SEGMENTS,
   getArtifactUrl,
   getBoardUrl,
+  getBranchUrl,
   getSessionUrl,
-  getWorktreeUrl,
   sessionPath,
   UI_MOUNT_PATH,
-  worktreePath,
 } from '../utils/url.js';

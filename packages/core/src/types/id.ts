@@ -287,14 +287,14 @@ export type MessageID = UUID;
 export type UserID = UUID;
 
 /**
- * Worktree identifier
+ * Branch identifier
  *
- * Uniquely identifies a git worktree (isolated work context).
+ * Uniquely identifies a git branch (isolated work context).
  *
  * @example
- * const worktreeId: WorktreeID = "0193g1h2-3i4j-7k5l-a8f3-9d2e1c4b5a6f";
+ * const branchId: BranchID = "0193g1h2-3i4j-7k5l-a8f3-9d2e1c4b5a6f";
  */
-export type WorktreeID = UUID;
+export type BranchID = UUID;
 
 /**
  * Repository identifier
@@ -310,7 +310,7 @@ export type RepoID = UUID;
  * Comment identifier
  *
  * Uniquely identifies a board comment (human-to-human conversation).
- * Comments can be attached to boards, sessions, tasks, messages, or worktrees.
+ * Comments can be attached to boards, sessions, tasks, messages, or branches.
  *
  * @example
  * const commentId: CommentID = "0193h1i2-3j4k-7l5m-a8f3-9d2e1c4b5a6f";

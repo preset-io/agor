@@ -5,16 +5,16 @@
  * injectCreatedBy() hook must satisfy before calling create().
  */
 
-import type { UUID, WorktreeID } from '@agor/core/types';
+import type { BranchID, UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { dbTest } from '../test-helpers';
+import { BranchRepository } from './branches';
 import { GatewayChannelRepository } from './gateway-channels';
 import { RepoRepository } from './repos';
-import { WorktreeRepository } from './worktrees';
 
-async function seedWorktree(db: Database) {
+async function seedBranch(db: Database) {
   const repoRepo = new RepoRepository(db);
   const repo = await repoRepo.create({
     repo_id: generateId() as UUID,
@@ -26,18 +26,18 @@ async function seedWorktree(db: Database) {
     default_branch: 'main',
   });
 
-  const worktreeRepo = new WorktreeRepository(db);
-  const worktree = await worktreeRepo.create({
-    worktree_id: generateId() as WorktreeID,
+  const branchRepo = new BranchRepository(db);
+  const branch = await branchRepo.create({
+    branch_id: generateId() as BranchID,
     repo_id: repo.repo_id as UUID,
     name: 'main',
     ref: 'refs/heads/main',
-    worktree_unique_id: 1,
+    branch_unique_id: 1,
     path: '/home/user/.agor/worktrees/test/repo/main',
     created_by: generateId() as UUID,
   });
 
-  return worktree;
+  return branch;
 }
 
 describe('GatewayChannelRepository', () => {
@@ -49,14 +49,14 @@ describe('GatewayChannelRepository', () => {
   });
 
   dbTest('create stamps created_by on the returned channel', async ({ db }) => {
-    const worktree = await seedWorktree(db);
+    const branch = await seedBranch(db);
     const repo = new GatewayChannelRepository(db);
     const userId = generateId() as UUID;
 
     const channel = await repo.create({
       name: 'Test Channel',
       created_by: userId,
-      target_worktree_id: worktree.worktree_id as UUID,
+      target_branch_id: branch.branch_id as UUID,
     });
 
     expect(channel.created_by).toBe(userId);

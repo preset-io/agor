@@ -14,7 +14,7 @@
  */
 
 import { generateId, shortId } from '../../lib/ids';
-import type { Session, TaskID, UserID, WorktreeID } from '../../types';
+import type { BranchID, Session, TaskID, UserID } from '../../types';
 import { SessionStatus, TaskStatus } from '../../types';
 import { createDatabase } from '../client';
 import { initializeDatabase, seedInitialData } from '../migrate';
@@ -84,7 +84,7 @@ async function testSessionRepository(db: ReturnType<typeof createDatabase>) {
     agentic_tool: 'claude-code',
     status: SessionStatus.IDLE,
     created_by: 'test-user' as UserID,
-    worktree_id: 'test-worktree-id' as WorktreeID,
+    branch_id: 'test-branch-id' as BranchID,
     git_state: {
       ref: 'main',
       base_sha: 'abc123',
@@ -203,7 +203,7 @@ async function testBoardRepository(db: ReturnType<typeof createDatabase>, sessio
 
   console.log(`  ✅ Created board: ${shortId(board.board_id)}`);
 
-  // TODO: Update board tests for worktree-centric model
+  // TODO: Update board tests for branch-centric model
   // Old session-based board API is deprecated
   /*
   // Add session to board
@@ -213,7 +213,7 @@ async function testBoardRepository(db: ReturnType<typeof createDatabase>, sessio
   }
   */
 
-  console.log('  ✅ Board test skipped (TODO: update for worktree-centric model)');
+  console.log('  ✅ Board test skipped (TODO: update for branch-centric model)');
 
   // Test findBySlug
   const foundBySlug = await repo.findBySlug('test-board');
@@ -243,7 +243,7 @@ async function testRepoRepository(db: ReturnType<typeof createDatabase>) {
 
   console.log(`  ✅ Created repo: ${shortId(repoData.repo_id)}`);
 
-  // Note: Worktrees are now managed separately in the worktrees table
+  // Note: Branches are now managed separately in the branches table
   console.log('  ✅ Repo created successfully');
 
   // Test findBySlug
@@ -267,7 +267,7 @@ async function testGenealogy(db: ReturnType<typeof createDatabase>) {
     agentic_tool: 'claude-code',
     status: TaskStatus.COMPLETED,
     created_by: 'test-user' as UserID,
-    worktree_id: 'test-worktree-id' as WorktreeID,
+    branch_id: 'test-branch-id' as BranchID,
     git_state: { ref: 'main', base_sha: 'abc', current_sha: 'def' },
     genealogy: { children: [] },
     contextFiles: [],
@@ -281,7 +281,7 @@ async function testGenealogy(db: ReturnType<typeof createDatabase>) {
     agentic_tool: 'claude-code',
     status: SessionStatus.IDLE,
     created_by: 'test-user' as UserID,
-    worktree_id: 'test-worktree-id' as WorktreeID,
+    branch_id: 'test-branch-id' as BranchID,
     git_state: { ref: 'main', base_sha: 'def', current_sha: 'def' },
     genealogy: {
       forked_from_session_id: parent.session_id,
@@ -299,7 +299,7 @@ async function testGenealogy(db: ReturnType<typeof createDatabase>) {
     agentic_tool: 'codex',
     status: SessionStatus.IDLE,
     created_by: 'test-user' as UserID,
-    worktree_id: 'test-worktree-id' as WorktreeID,
+    branch_id: 'test-branch-id' as BranchID,
     git_state: { ref: 'main', base_sha: 'def', current_sha: 'def' },
     genealogy: {
       parent_session_id: parent.session_id,

@@ -26,11 +26,11 @@ import { resolveDaemonUserForGroupRefresh } from './git-impersonation.js';
  * to get fresh Unix group memberships. Falls back to direct shell execution
  * when no daemon user is configured.
  *
- * @param worktreePath - Path to the git worktree
+ * @param branchPath - Path to the git branch
  * @returns Object with sha (includes -dirty suffix) and ref (branch name)
  */
 export async function captureGitStateViaShell(
-  worktreePath: string
+  branchPath: string
 ): Promise<{ sha: string; ref: string }> {
   const daemonUser = await resolveDaemonUserForGroupRefresh();
   const runOpts = { asUser: daemonUser, timeout: 10000 };
@@ -40,32 +40,32 @@ export async function captureGitStateViaShell(
 
   try {
     // Get current HEAD SHA
-    const rawSha = runAsUser(`git -C ${escapeForShell(worktreePath)} rev-parse HEAD`, runOpts);
+    const rawSha = runAsUser(`git -C ${escapeForShell(branchPath)} rev-parse HEAD`, runOpts);
     sha = rawSha.trim();
   } catch (error) {
-    console.warn(`[git-shell-capture] Failed to get SHA for ${worktreePath}:`, error);
+    console.warn(`[git-shell-capture] Failed to get SHA for ${branchPath}:`, error);
     return { sha, ref };
   }
 
   try {
     // Get current branch name
     const rawRef = runAsUser(
-      `git -C ${escapeForShell(worktreePath)} rev-parse --abbrev-ref HEAD`,
+      `git -C ${escapeForShell(branchPath)} rev-parse --abbrev-ref HEAD`,
       runOpts
     );
     ref = rawRef.trim();
   } catch (error) {
-    console.warn(`[git-shell-capture] Failed to get branch for ${worktreePath}:`, error);
+    console.warn(`[git-shell-capture] Failed to get branch for ${branchPath}:`, error);
   }
 
   try {
     // Check if working directory is dirty
-    const status = runAsUser(`git -C ${escapeForShell(worktreePath)} status --porcelain`, runOpts);
+    const status = runAsUser(`git -C ${escapeForShell(branchPath)} status --porcelain`, runOpts);
     if (status.trim().length > 0) {
       sha = `${sha}-dirty`;
     }
   } catch (error) {
-    console.warn(`[git-shell-capture] Failed to check dirty state for ${worktreePath}:`, error);
+    console.warn(`[git-shell-capture] Failed to check dirty state for ${branchPath}:`, error);
     // If we can't check dirty state, still return the SHA without -dirty suffix
   }
 

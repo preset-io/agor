@@ -3,10 +3,10 @@ import type {
   Artifact,
   Board,
   BoardID,
+  Branch,
   MCPServer,
   Session,
   User,
-  Worktree,
 } from '@agor-live/client';
 import {
   ApiOutlined,
@@ -65,7 +65,7 @@ export interface AppHeaderProps {
   boards?: Board[];
   currentBoardId?: string;
   onBoardChange?: (boardId: string) => void;
-  worktreeById: Map<string, Worktree>;
+  branchById: Map<string, Branch>;
   boardById: Map<string, Board>; // For looking up board names; required because GlobalSearch hands it to useAppNavigation for slug-aware path building
   onUserClick?: (
     userId: string,
@@ -146,7 +146,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   boards = [],
   currentBoardId,
   onBoardChange,
-  worktreeById,
+  branchById,
   boardById,
   onUserClick,
   recentBoards = [],
@@ -272,7 +272,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                 boards={boards}
                 currentBoardId={currentBoardId}
                 onBoardChange={onBoardChange || (() => {})}
-                worktreeById={worktreeById}
+                branchById={branchById}
               />
             </div>
             <RecentBoardPills
@@ -318,16 +318,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           connecting={connecting}
           onRetry={onRetryConnection}
         />
-        <GlobalSearch
-          currentUserId={currentUserId}
-          sessionById={sessionById}
-          worktreeById={worktreeById}
-          artifactById={artifactById}
-          boardById={boardById}
-          mcpServerById={mcpServerById}
-          onSettingsClick={onSettingsClick}
-        />
-        <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
         {activeUsers.length > 0 && (
           <>
             <Facepile
@@ -343,6 +333,16 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
           </>
         )}
+        <GlobalSearch
+          currentUserId={currentUserId}
+          sessionById={sessionById}
+          branchById={branchById}
+          artifactById={artifactById}
+          boardById={boardById}
+          mcpServerById={mcpServerById}
+          onSettingsClick={onSettingsClick}
+        />
+        <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
         {eventStreamEnabled && (
           <Tooltip title="Live Event Stream" placement="bottom">
             <Button

@@ -3,6 +3,7 @@ import type {
   AuthCheckResult,
   Board,
   BoardID,
+  Branch,
   CreateLocalRepoRequest,
   CreateMCPServerInput,
   CreateRepoRequest,
@@ -16,7 +17,6 @@ import type {
   UpdateUserInput,
   User,
   UUID,
-  Worktree,
 } from '@agor-live/client';
 import {
   boardPath,
@@ -30,7 +30,7 @@ import { useEffect, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
 import { App as AgorApp } from './components/App';
-import type { WorktreeUpdate } from './components/BranchModal/tabs/GeneralTab';
+import type { BranchUpdate } from './components/BranchModal/tabs/GeneralTab';
 import { ErrorBoundary, setCrashContext } from './components/ErrorBoundary';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
@@ -156,14 +156,14 @@ function AppContent() {
   // Skip data fetch if user needs to change password — the ForcePasswordChangeModal handles that.
   const {
     sessionById,
-    sessionsByWorktree,
+    sessionsByBranch,
     boardById,
     boardObjectById,
     commentById,
     cardById,
     cardTypeById,
     repoById,
-    worktreeById,
+    branchById,
     userById,
     mcpServerById,
     gatewayChannelById,
@@ -189,7 +189,7 @@ function AppContent() {
   // Onboarding state (for new users)
   const [settingsTabToOpen, setSettingsTabToOpen] = useState<string | null>(null);
   const [openUserSettings, setOpenUserSettings] = useState(false);
-  const [openNewWorktree, setOpenNewWorktree] = useState(false);
+  const [openNewBranch, setOpenNewBranch] = useState(false);
 
   // Detect GitHub App setup callback URL and auto-open gateway settings
   const location = useLocation();
@@ -261,7 +261,7 @@ function AppContent() {
 
   // Handle wizard completion
   const handleOnboardingComplete = async (result: {
-    worktreeId: string;
+    branchId: string;
     sessionId: string;
     boardId: string;
     path: 'assistant' | 'own-repo';
@@ -281,7 +281,7 @@ function AppContent() {
           mainBoardId: result.boardId || currentUser.preferences?.mainBoardId,
           onboarding: {
             path: result.path,
-            worktreeId: result.worktreeId,
+            branchId: result.branchId,
             boardId: result.boardId,
           },
         },
@@ -471,16 +471,16 @@ function AppContent() {
   // biome-ignore lint/suspicious/noExplicitAny: Config type from AgorApp component props
   const handleCreateSession = async (config: any, boardId: string) => {
     try {
-      const worktree_id = config.worktree_id;
+      const branch_id = config.branch_id;
 
-      if (!worktree_id) {
+      if (!branch_id) {
         throw new Error('Branch ID is required to create a session');
       }
 
-      // Create the session with the worktree_id
+      // Create the session with the branch_id
       const session = await createSession({
         ...config,
-        worktree_id,
+        branch_id,
       });
 
       if (session) {
@@ -914,8 +914,8 @@ function AppContent() {
     }
   };
 
-  const handleArchiveOrDeleteWorktree = async (
-    worktreeId: string,
+  const handleArchiveOrDeleteBranch = async (
+    branchId: string,
     options: {
       metadataAction: 'archive' | 'delete';
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
@@ -929,7 +929,7 @@ function AppContent() {
       showLoading(`${options.metadataAction === 'archive' ? 'Archiving' : 'Deleting'} branch...`, {
         key: 'archive-delete',
       });
-      await client.service(`worktrees/${worktreeId}/archive-or-delete`).create(options);
+      await client.service(`branches/${branchId}/archive-or-delete`).create(options);
       showSuccess(`Branch ${action} successfully!`, { key: 'archive-delete' });
     } catch (error) {
       showError(
@@ -940,13 +940,13 @@ function AppContent() {
     }
   };
 
-  const handleUnarchiveWorktree = async (worktreeId: string, options?: { boardId?: string }) => {
+  const handleUnarchiveBranch = async (branchId: string, options?: { boardId?: string }) => {
     if (!client) {
       throw new Error('Not connected to daemon');
     }
     try {
       showLoading('Unarchiving branch...', { key: 'unarchive' });
-      await client.service(`worktrees/${worktreeId}/unarchive`).create(options || {});
+      await client.service(`branches/${branchId}/unarchive`).create(options || {});
       showSuccess('Branch unarchived successfully!', { key: 'unarchive' });
     } catch (error) {
       showError(
@@ -957,16 +957,16 @@ function AppContent() {
     }
   };
 
-  const handleUpdateWorktree = async (
-    worktreeId: string,
-    updates: WorktreeUpdate,
+  const handleUpdateBranch = async (
+    branchId: string,
+    updates: BranchUpdate,
     options: { silent?: boolean } = {}
   ) => {
     if (!client) return;
     try {
-      // Cast to Partial<Worktree> to satisfy Feathers type checking
+      // Cast to Partial<Branch> to satisfy Feathers type checking
       // The backend MCP handler properly handles null values for clearing fields
-      await client.service('worktrees').patch(worktreeId, updates as Partial<Worktree>);
+      await client.service('branches').patch(branchId, updates as Partial<Branch>);
       if (!options.silent) showSuccess('Branch updated successfully!');
     } catch (error) {
       showError(
@@ -975,7 +975,7 @@ function AppContent() {
     }
   };
 
-  const handleCreateWorktree = async (
+  const handleCreateBranch = async (
     repoId: string,
     data: {
       name: string;
@@ -991,12 +991,12 @@ function AppContent() {
       storage_mode?: 'worktree' | 'clone';
       clone_depth?: number;
     }
-  ): Promise<Worktree | null> => {
+  ): Promise<Branch | null> => {
     if (!client) return null;
     try {
-      showLoading('Creating branch...', { key: 'create-worktree' });
+      showLoading('Creating branch...', { key: 'create-branch' });
 
-      const worktree = (await client.service(`repos/${repoId}/worktrees`).create({
+      const branch = (await client.service(`repos/${repoId}/branches`).create({
         name: data.name,
         ref: data.ref,
         refType: data.refType,
@@ -1009,26 +1009,26 @@ function AppContent() {
         position: data.position, // Optional: position on board (defaults to center of viewport)
         storage_mode: data.storage_mode,
         clone_depth: data.clone_depth,
-      })) as Worktree;
+      })) as Branch;
 
-      // Dismiss loading message - worktree will appear on board via WebSocket broadcast
-      destroy('create-worktree');
-      return worktree;
+      // Dismiss loading message - branch will appear on board via WebSocket broadcast
+      destroy('create-branch');
+      return branch;
     } catch (error) {
       showError(
         `Failed to create branch: ${error instanceof Error ? error.message : String(error)}`,
-        { key: 'create-worktree' }
+        { key: 'create-branch' }
       );
       return null;
     }
   };
 
   // Handle environment control
-  const handleStartEnvironment = async (worktreeId: string) => {
+  const handleStartEnvironment = async (branchId: string) => {
     if (!client) return;
     try {
       showLoading('Starting environment...', { key: 'start-env' });
-      await client.service(`worktrees/${worktreeId}/start`).create({});
+      await client.service(`branches/${branchId}/start`).create({});
       showSuccess('Environment started successfully!', { key: 'start-env' });
     } catch (error) {
       showError(
@@ -1038,11 +1038,11 @@ function AppContent() {
     }
   };
 
-  const handleStopEnvironment = async (worktreeId: string) => {
+  const handleStopEnvironment = async (branchId: string) => {
     if (!client) return;
     try {
       showLoading('Stopping environment...', { key: 'stop-env' });
-      await client.service(`worktrees/${worktreeId}/stop`).create({});
+      await client.service(`branches/${branchId}/stop`).create({});
       showSuccess('Environment stopped successfully!', { key: 'stop-env' });
     } catch (error) {
       showError(
@@ -1052,11 +1052,11 @@ function AppContent() {
     }
   };
 
-  const handleNukeEnvironment = async (worktreeId: string) => {
+  const handleNukeEnvironment = async (branchId: string) => {
     if (!client) return;
     try {
       showLoading('Nuking environment...', { key: 'nuke-env' });
-      await client.service(`worktrees/${worktreeId}/nuke`).create({});
+      await client.service(`branches/${branchId}/nuke`).create({});
       showSuccess('Environment nuked successfully!', { key: 'nuke-env' });
     } catch (error) {
       showError(
@@ -1066,14 +1066,14 @@ function AppContent() {
     }
   };
 
-  // Manually trigger a scheduled run for a worktree (execute-now).
+  // Manually trigger a scheduled run for a branch (execute-now).
   // Reuses the scheduler's spawn path server-side so the session is a
   // first-class scheduled session, just with triggered_manually=true.
-  const handleExecuteScheduleNow = async (worktreeId: string) => {
+  const handleExecuteScheduleNow = async (branchId: string) => {
     if (!client) return;
     try {
       showLoading('Starting scheduled run...', { key: 'execute-now' });
-      await client.service(`worktrees/${worktreeId}/execute-schedule-now`).create({});
+      await client.service(`branches/${branchId}/execute-schedule-now`).create({});
       showSuccess('Scheduled run started!', { key: 'execute-now' });
     } catch (error) {
       // Surface 409 (schedule_busy) and 400 (schedule_disabled/incomplete)
@@ -1298,9 +1298,9 @@ function AppContent() {
   // Generate repo reference options for dropdowns
   const allOptions = getRepoReferenceOptions(
     Array.from(repoById.values()),
-    Array.from(worktreeById.values())
+    Array.from(branchById.values())
   );
-  const _worktreeOptions = allOptions.filter((opt) => opt.type === 'managed-worktree');
+  const _branchOptions = allOptions.filter((opt) => opt.type === 'managed-branch');
   const _repoOptions = allOptions.filter((opt) => opt.type === 'managed');
 
   // Modal close handlers
@@ -1312,14 +1312,14 @@ function AppContent() {
     setOpenUserSettings(false);
   };
 
-  const handleNewWorktreeModalClose = () => {
-    setOpenNewWorktree(false);
+  const handleNewBranchModalClose = () => {
+    setOpenNewBranch(false);
   };
 
   // All desktop entity URLs (/b/, /s/, /w/, /a/) render the same
   // AgorApp — the multiple routes exist so react-router's useParams
   // (read inside useUrlState) populates the right named params for
-  // each URL shape (board / session / worktree / artifact). Extract
+  // each URL shape (board / session / branch / artifact). Extract
   // the element once instead of duplicating the (long) prop list.
   const desktopAppElement = (
     <AgorApp
@@ -1328,7 +1328,7 @@ function AppContent() {
       connected={connected}
       connecting={connecting}
       sessionById={sessionById}
-      sessionsByWorktree={sessionsByWorktree}
+      sessionsByBranch={sessionsByBranch}
       availableAgents={AVAILABLE_AGENTS}
       boardById={boardById}
       boardObjectById={boardObjectById}
@@ -1336,7 +1336,7 @@ function AppContent() {
       cardById={cardById}
       cardTypeById={cardTypeById}
       repoById={repoById}
-      worktreeById={worktreeById}
+      branchById={branchById}
       userById={userById}
       mcpServerById={mcpServerById}
       sessionMcpServerIds={sessionMcpServerIds}
@@ -1346,8 +1346,8 @@ function AppContent() {
       onSettingsClose={handleSettingsClose}
       openUserSettings={openUserSettings}
       onUserSettingsClose={handleUserSettingsClose}
-      openNewWorktreeModal={openNewWorktree}
-      onNewWorktreeModalClose={handleNewWorktreeModalClose}
+      openNewBranchModal={openNewBranch}
+      onNewBranchModalClose={handleNewBranchModalClose}
       onCreateSession={handleCreateSession}
       onForkSession={handleForkSession}
       onBtwForkSession={handleBtwForkSession}
@@ -1364,10 +1364,10 @@ function AppContent() {
       onCreateLocalRepo={handleCreateLocalRepo}
       onUpdateRepo={handleUpdateRepo}
       onDeleteRepo={handleDeleteRepo}
-      onArchiveOrDeleteWorktree={handleArchiveOrDeleteWorktree}
-      onUnarchiveWorktree={handleUnarchiveWorktree}
-      onUpdateWorktree={handleUpdateWorktree}
-      onCreateWorktree={handleCreateWorktree}
+      onArchiveOrDeleteBranch={handleArchiveOrDeleteBranch}
+      onUnarchiveBranch={handleUnarchiveBranch}
+      onUpdateBranch={handleUpdateBranch}
+      onCreateBranch={handleCreateBranch}
       onStartEnvironment={handleStartEnvironment}
       onStopEnvironment={handleStopEnvironment}
       onNukeEnvironment={handleNukeEnvironment}
@@ -1423,17 +1423,17 @@ function AppContent() {
           open={onboardingWizardOpen}
           onComplete={handleOnboardingComplete}
           repoById={repoById}
-          worktreeById={worktreeById}
+          branchById={branchById}
           boardById={boardById}
           user={currentUser}
           client={client}
           onCreateRepo={handleCreateRepo}
           onCreateLocalRepo={handleCreateLocalRepo}
-          onCreateWorktree={handleCreateWorktree}
+          onCreateBranch={handleCreateBranch}
           onCreateSession={handleCreateSession}
           onUpdateUser={(userId, updates) => handleUpdateUser(userId, updates, { silent: true })}
-          onUpdateWorktree={(worktreeId, updates) =>
-            handleUpdateWorktree(worktreeId, updates, { silent: true })
+          onUpdateBranch={(branchId, updates) =>
+            handleUpdateBranch(branchId, updates, { silent: true })
           }
           onCheckAuth={async (tool, apiKey) => {
             if (!client) return { authenticated: false, method: 'none' as const };
@@ -1468,11 +1468,11 @@ function AppContent() {
                 client={client}
                 user={user}
                 sessionById={sessionById}
-                sessionsByWorktree={sessionsByWorktree}
+                sessionsByBranch={sessionsByBranch}
                 boardById={boardById}
                 commentById={commentById}
                 repoById={repoById}
-                worktreeById={worktreeById}
+                branchById={branchById}
                 userById={userById}
                 onSendPrompt={handleSendPrompt}
                 onSendComment={handleSendComment}
@@ -1489,7 +1489,7 @@ function AppContent() {
 
           {/* Desktop routes — flat entity URLs. Boards have their own
               path because they're a destination; sub-entities (session,
-              worktree, artifact) get top-level paths keyed by short ID
+              branch, artifact) get top-level paths keyed by short ID
               so they're stable across board moves. The app resolves the
               entity at click time, looks up its current board, and
               switches if needed. Path segments come from the shared
@@ -1502,7 +1502,7 @@ function AppContent() {
             element={desktopAppElement}
           />
           <Route
-            path={`/${ENTITY_PATH_SEGMENTS.worktree}/:worktreeShortId/`}
+            path={`/${ENTITY_PATH_SEGMENTS.branch}/:branchShortId/`}
             element={desktopAppElement}
           />
           <Route

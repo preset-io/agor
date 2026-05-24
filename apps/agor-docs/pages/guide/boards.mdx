@@ -7,7 +7,7 @@ description: Boards are 2D spatial canvases for organizing branches. Zones are s
 
 **Boards are 2D spatial canvases for organizing branches.** Like Figma for AI coding work — drag, group, comment, collaborate in real time.
 
-Instead of linear lists or kanban columns, every [branch](/guide/worktrees) lives at an `(x, y)` coordinate on a board. Sessions appear as a genealogy tree on the branch card. Multiple users see the same canvas with live cursors.
+Instead of linear lists or kanban columns, every [branch](/guide/branches) lives at an `(x, y)` coordinate on a board. Sessions appear as a genealogy tree on the branch card. Multiple users see the same canvas with live cursors.
 
 ![Agor board with custom-styled gradient zones organizing branches into a pipeline (MAIN SESH, Agor Coding Tasks, Create a pull request, Codex review, Human review). Each branch card shows its session tree, env tabs, and PR badge.](/screenshots/board-hero.png)
 
@@ -60,7 +60,7 @@ When you drop a branch into a zone:
 
 Zone prompts have access to:
 
-- **Branch** — `{{ worktree.name }}`, `{{ worktree.issue_url }}`, `{{ worktree.pull_request_url }}`, `{{ worktree.unique_id }}`
+- **Branch** — `{{ branch.name }}`, `{{ branch.issue_url }}`, `{{ branch.pull_request_url }}`, `{{ branch.unique_id }}`
 - **Board** — `{{ board.name }}`, `{{ board.description }}`
 - **Session** — `{{ session.title }}`, `{{ session.description }}`
 - **Environment** — `{{ environment.url }}`, `{{ environment.status }}`
@@ -69,21 +69,21 @@ Zone prompts have access to:
 ### Example zone prompt
 
 ```
-Review the implementation of {{ worktree.issue_url }}.
+Review the implementation of {{ branch.issue_url }}.
 
 Check if:
 1. All acceptance criteria from the issue are met
 2. Edge cases are handled
 3. Error messages are user-friendly
 
-If approved, comment on {{ worktree.pull_request_url }} with summary.
+If approved, comment on {{ branch.pull_request_url }} with summary.
 ```
 
 Drop a branch → auto-prompts with issue and PR links pre-filled. **No copy-paste, no forgetting which ticket this was for.**
 
 <img
   src="/screenshots/zone-trigger.png"
-  alt="Zone Trigger modal for a 'Codex review' zone — toggles between 'Create a new session' and 'Reuse a session', picks an action (Prompt / Fork / Spawn), and shows the editable templated prompt with mustache placeholders like {{ worktree.name }} and {{ worktree.pull_request_url }}"
+  alt="Zone Trigger modal for a 'Codex review' zone — toggles between 'Create a new session' and 'Reuse a session', picks an action (Prompt / Fork / Spawn), and shows the editable templated prompt with mustache placeholders like {{ branch.name }} and {{ branch.pull_request_url }}"
   style={{ maxWidth: '600px' }}
 />
 
@@ -127,7 +127,7 @@ Branches aren't the only thing that can live on a board. **[Cards](/guide/cards)
 
 ## Related
 
-- [Branches](/guide/worktrees) — The primary primitive that lives on boards
+- [Branches](/guide/branches) — The primary primitive that lives on boards
 - [Sessions & Trees](/guide/sessions) — The genealogy rendered on each branch card
 - [Multiplayer & Social](/guide/multiplayer-social) — Cursors, facepile, comments
 - [Cards](/guide/cards) — Non-branch entities on boards

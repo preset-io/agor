@@ -1,71 +1,87 @@
-import type { Artifact, Session, Worktree } from '@agor-live/client';
 import { isAssistant } from '@agor-live/client';
 import { useMemo } from 'react';
-import type { SearchResultItem } from './types';
-import { tsValue } from './utils';
+import {
+  EMPTY_RESULTS,
+  type GlobalSearchEntityMaps,
+  RECENTS_SECTION_LIMIT,
+  type ResultsByType,
+} from './types';
+import { byTimestamp } from './utils';
 
-interface UseRecentsInput {
+type UseRecentsInput = GlobalSearchEntityMaps & {
   currentUserId?: string;
-  sessionById: Map<string, Session>;
-  worktreeById: Map<string, Worktree>;
-  artifactById: Map<string, Artifact>;
-}
-
-const RECENT_SESSION_LIMIT = 5;
-const RECENT_WORKTREE_LIMIT = 3;
-const RECENT_ARTIFACT_LIMIT = 2;
+};
 
 /**
- * Backend-free recents — "stuff I created."
+ * Backend-free recents — "stuff I created, most-recently-updated first," now
+ * grouped by entity type so the dropdown can reuse the same section renderer
+ * as live search results.
  *
  * Sources directly from the in-memory entity maps that useAgorData keeps
- * WebSocket-synced. No localStorage, no new schema. Per design doc §3.2.
+ * WebSocket-synced (per design doc §3.2 — no localStorage, no new tracking
+ * tables). Each section caps at RECENTS_SECTION_LIMIT.
  *
- * Note: recents are **section-biased** by entity type (5 sessions / 3 worktrees /
- * 2 artifacts) and concatenated in that order — NOT globally sorted by recency.
- * Sessions are the highest-churn / highest-signal surface, so we always lead
- * with them even when a recently-updated worktree edges out the 5th-place session
- * on raw timestamp. If we ever want true global ordering, merge the three lists
- * and re-sort by their per-entity timestamp before slicing.
+ * Coverage matches the live-search section set: sessions, branches,
+ * assistants, artifacts, boards, MCP servers.
  */
 export function useRecents({
   currentUserId,
   sessionById,
-  worktreeById,
+  branchById,
   artifactById,
-}: UseRecentsInput): SearchResultItem[] {
+  boardById,
+  mcpServerById,
+}: UseRecentsInput): ResultsByType {
   return useMemo(() => {
-    if (!currentUserId) return [];
+    if (!currentUserId) return EMPTY_RESULTS;
 
     const sessions = Array.from(sessionById.values())
       .filter((s) => s.created_by === currentUserId)
-      .sort((a, b) => tsValue(b.last_updated) - tsValue(a.last_updated))
-      .slice(0, RECENT_SESSION_LIMIT)
-      .map<SearchResultItem>((s) => ({
-        type: 'session',
-        item: s,
-        parentWorktree: worktreeById.get(s.worktree_id),
-      }));
+      .sort(byTimestamp((s) => s.last_updated))
+      .slice(0, RECENTS_SECTION_LIMIT);
 
-    const worktrees = Array.from(worktreeById.values())
-      .filter((w) => w.created_by === currentUserId)
-      .sort((a, b) => tsValue(b.updated_at) - tsValue(a.updated_at))
-      .slice(0, RECENT_WORKTREE_LIMIT)
-      .map<SearchResultItem>((w) =>
-        isAssistant(w) ? { type: 'assistant', item: w } : { type: 'worktree', item: w }
-      );
+    // Pre-sort all the user's branches once, then bucket into branch vs.
+    // assistant — preserves recency order within each sub-type without two
+    // separate passes through the map.
+    const myBranches = Array.from(branchById.values())
+      .filter((b) => b.created_by === currentUserId)
+      .sort(byTimestamp((b) => b.updated_at));
+    const branches = myBranches.filter((b) => !isAssistant(b)).slice(0, RECENTS_SECTION_LIMIT);
+    const assistants = myBranches.filter((b) => isAssistant(b)).slice(0, RECENTS_SECTION_LIMIT);
 
     const artifacts = Array.from(artifactById.values())
       .filter((a) => !a.archived)
       .filter((a) => a.created_by === currentUserId)
-      .sort((a, b) => tsValue(b.updated_at) - tsValue(a.updated_at))
-      .slice(0, RECENT_ARTIFACT_LIMIT)
-      .map<SearchResultItem>((a) => ({
-        type: 'artifact',
-        item: a,
-        parentWorktree: a.worktree_id ? worktreeById.get(a.worktree_id) : undefined,
-      }));
+      .sort(byTimestamp((a) => a.updated_at))
+      .slice(0, RECENTS_SECTION_LIMIT);
 
-    return [...sessions, ...worktrees, ...artifacts];
-  }, [currentUserId, sessionById, worktreeById, artifactById]);
+    const boards = Array.from(boardById.values())
+      .filter((b) => !b.archived)
+      .filter((b) => b.created_by === currentUserId)
+      .sort(byTimestamp((b) => b.last_updated))
+      .slice(0, RECENTS_SECTION_LIMIT);
+
+    // MCP uses owner_user_id (not created_by) and a Date timestamp.
+    const mcpServers = Array.from(mcpServerById.values())
+      .filter((m) => m.owner_user_id === currentUserId)
+      .sort(byTimestamp((m) => m.updated_at))
+      .slice(0, RECENTS_SECTION_LIMIT);
+
+    return {
+      session: sessions.map((s) => ({
+        type: 'session' as const,
+        item: s,
+        parentBranch: branchById.get(s.branch_id),
+      })),
+      branch: branches.map((b) => ({ type: 'branch' as const, item: b })),
+      assistant: assistants.map((b) => ({ type: 'assistant' as const, item: b })),
+      artifact: artifacts.map((a) => ({
+        type: 'artifact' as const,
+        item: a,
+        parentBranch: a.branch_id ? branchById.get(a.branch_id) : undefined,
+      })),
+      board: boards.map((b) => ({ type: 'board' as const, item: b })),
+      mcp: mcpServers.map((m) => ({ type: 'mcp' as const, item: m })),
+    };
+  }, [currentUserId, sessionById, branchById, artifactById, boardById, mcpServerById]);
 }

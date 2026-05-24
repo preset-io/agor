@@ -34,6 +34,7 @@ export type {
   AgorClient,
   AgorService,
   BoardsService,
+  BranchesService,
   MessagesService,
   ReposCloneService,
   ReposLocalService,
@@ -41,7 +42,6 @@ export type {
   ServiceTypes,
   SessionsService,
   TasksService,
-  WorktreesService,
 } from '@agor/core/client';
 export * from '@agor/core/client';
 // `shortId` is the canonical display helper (always SHORT_ID_LENGTH chars).

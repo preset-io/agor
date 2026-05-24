@@ -7,7 +7,7 @@ import { slugify } from '@/utils/repoSlug';
  * Shared assistant form logic used by both CreateDialog's AssistantTab
  * and SettingsModal's AssistantsTable create modal.
  *
- * Encapsulates: form instance, validation, display-name-to-worktree-name
+ * Encapsulates: form instance, validation, display-name-to-branch-name
  * auto-generation, framework repo auto-select, and custom repo tracking.
  */
 export function useAssistantForm(frameworkRepo: Repo | undefined) {

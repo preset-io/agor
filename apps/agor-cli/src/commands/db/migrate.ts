@@ -113,7 +113,7 @@ export default class DbMigrate extends Command {
         this.log('');
         this.log(chalk.bold('Diagnostic steps:'));
         this.log('  1. Check if columns already exist:');
-        this.log(chalk.cyan(`     sqlite3 ${dbFilePath} "PRAGMA table_info(worktrees)"`));
+        this.log(chalk.cyan(`     sqlite3 ${dbFilePath} "PRAGMA table_info(branches)"`));
         this.log('  2. Rebuild core package:');
         this.log(chalk.cyan('     cd packages/core && pnpm build'));
         this.log('  3. Check migration hashes:');

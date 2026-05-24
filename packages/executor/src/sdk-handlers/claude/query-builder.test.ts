@@ -1,4 +1,4 @@
-import type { SessionID, TaskID, WorktreeID } from '@agor/core/types';
+import type { BranchID, SessionID, TaskID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock minimal dependencies
@@ -34,10 +34,10 @@ describe('setupQuery - Local Settings Support', () => {
       sessionsRepo: {
         findById: vi.fn().mockResolvedValue({
           session_id: 'test-session' as SessionID,
-          worktree_id: 'test-worktree' as WorktreeID,
+          branch_id: 'test-branch' as BranchID,
         }),
       } as any,
-      worktreesRepo: {
+      branchesRepo: {
         findById: vi.fn().mockResolvedValue({ path: '/test/project/path' }),
       } as any,
       permissionLocks: new Map(),
@@ -60,15 +60,15 @@ describe('setupQuery - Local Settings Support', () => {
   });
 
   // Pin the literal disallow list so a stray edit to the constant
-  // (e.g. dropping `ExitWorktree`) trips this test, not just the plumbing one.
+  // (e.g. dropping `ExitBranch`) trips this test, not just the plumbing one.
   // See `constants.ts` for why each name is on the list — #1177 covers
   // AskUserQuestion; the rest were operator-approved at the same time.
   it('locks the disallowed-tools list to the four operator-approved names', () => {
     expect(CLAUDE_CODE_DISALLOWED_TOOLS).toEqual([
       'AskUserQuestion',
       'ExitPlanMode',
-      'EnterWorktree',
-      'ExitWorktree',
+      'EnterBranch',
+      'ExitBranch',
     ]);
   });
 
@@ -97,10 +97,10 @@ describe('setupQuery - canUseTool registration', () => {
       sessionsRepo: {
         findById: vi.fn().mockResolvedValue({
           session_id: 'test-session' as SessionID,
-          worktree_id: 'test-worktree' as WorktreeID,
+          branch_id: 'test-branch' as BranchID,
         }),
       } as any,
-      worktreesRepo: {
+      branchesRepo: {
         findById: vi.fn().mockResolvedValue({ path: '/test/project/path' }),
       } as any,
       messagesRepo: {} as any,

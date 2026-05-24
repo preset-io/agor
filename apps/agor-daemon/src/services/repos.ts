@@ -4,7 +4,7 @@
  * Provides REST + WebSocket API for repository management.
  * Uses DrizzleService adapter with RepoRepository.
  *
- * Git operations (clone, worktree add) are delegated to the executor process
+ * Git operations (clone, branch add) are delegated to the executor process
  * for proper Unix isolation. The executor handles filesystem operations while
  * the daemon handles database records and business logic.
  */
@@ -14,28 +14,30 @@ import path from 'node:path';
 import {
   ensureBranchStorageModeAllowed,
   extractSlugFromUrl,
+  isBranchRbacEnabled,
   isValidGitUrl,
   isValidSlug,
-  isWorktreeRbacEnabled,
   normalizeRepoUrl,
   PAGINATION,
   parseAgorYml,
   resolveBranchStorageConfig,
   writeAgorYml,
 } from '@agor/core/config';
-import { type Database, RepoRepository, shortId, WorktreeRepository } from '@agor/core/db';
-import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
+import { BranchRepository, type Database, RepoRepository, shortId } from '@agor/core/db';
+import { autoAssignBranchUniqueId } from '@agor/core/environment/variable-resolver';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
   extractRepoName,
+  getBranchPath,
   getDefaultBranch,
   getRemoteUrl,
   getReposDir,
-  getWorktreePath,
   isValidGitRepo,
 } from '@agor/core/git';
 import type {
   AuthenticatedParams,
+  Branch,
+  BranchPermissionLevel,
   CloneRepositoryResult,
   QueryParams,
   Repo,
@@ -43,8 +45,6 @@ import type {
   RepoSlug,
   UserID,
   UUID,
-  Worktree,
-  WorktreePermissionLevel,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import { resolveGitImpersonationForUser } from '../utils/git-impersonation.js';
@@ -172,7 +172,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Slug-collision policy:
     // - `clone_status: 'failed'` → previous attempt left a tombstone row;
     //   delete it so the user can retry without manually cleaning up.
-    //   Cascades to any half-initialized worktree rows (FK onDelete: cascade).
+    //   Cascades to any half-initialized branch rows (FK onDelete: cascade).
     // - any other state (ready / cloning / undefined-legacy) → surface
     //   `'exists'` so callers don't unintentionally clobber a working repo
     //   or interrupt an in-flight clone.
@@ -186,7 +186,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // remove. A REST caller hitting `/repos/clone?cleanup=true` would
     // otherwise trip the filesystem-cleanup branch on the placeholder
     // (which doesn't exist on disk anyway, but the side-effects matter for
-    // worktrees that may have been pre-created). Pass an explicitly empty
+    // branches that may have been pre-created). Pass an explicitly empty
     // query so retry is always a DB-only tombstone removal.
     const existing = await this.repoRepo.findBySlug(slug);
     if (existing) {
@@ -213,7 +213,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     );
 
     // Unix group initialization gates on RBAC explicitly.
-    const rbacEnabled = isWorktreeRbacEnabled();
+    const rbacEnabled = isBranchRbacEnabled();
 
     // Sudo wrap (asUser) is gated inside the resolver — returns undefined
     // in simple/no-RBAC mode so hosts without passwordless sudoers work
@@ -386,7 +386,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
    * - Resulting `repo_type: 'remote'` requires a `remote_url` (the patch's
    *   own field or the existing row's).
    *
-   * Slug renames are DB-only — `local_path` on disk is not moved. Worktrees
+   * Slug renames are DB-only — `local_path` on disk is not moved. Branches
    * and running sessions hold absolute paths into the old directory, so a
    * directory move is intentionally out of scope (do delete + re-clone).
    */
@@ -544,13 +544,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   }
 
   /**
-   * Custom method: Create worktree
+   * Custom method: Create branch
    *
    * Delegates git worktree add to executor process for Unix isolation.
    * Executor handles filesystem operations, daemon handles DB record creation
    * and template rendering.
    */
-  async createWorktree(
+  async createBranch(
     id: string,
     data: {
       name: string;
@@ -563,11 +563,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       pull_request_url?: string;
       boardId?: string;
       zoneId?: string;
-      others_can?: WorktreePermissionLevel;
+      others_can?: BranchPermissionLevel;
       others_fs_access?: 'none' | 'read' | 'write';
       environment_variant?: string;
       /**
-       * Branch storage model — see docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.
+       * Branch storage model — see context/explorations/clone-redesign.md.
        * 'worktree' (default) = native `git worktree add`. 'clone' = self-standing `git clone`.
        */
       storage_mode?: 'worktree' | 'clone';
@@ -575,24 +575,24 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       clone_depth?: number;
     },
     params?: RepoParams
-  ): Promise<Worktree> {
+  ): Promise<Branch> {
     const repo = await this.get(id, params);
 
-    console.log('🔍 RepoService.createWorktree - repo lookup result:', {
+    console.log('🔍 RepoService.createBranch - repo lookup result:', {
       repo_id: repo.repo_id,
       slug: repo.slug,
       local_path: repo.local_path,
       remote_url: repo.remote_url,
     });
 
-    // Check for duplicate worktree name in this repo (non-archived only)
-    const worktreeRepo = new WorktreeRepository(this.db);
-    const existingWorktree = await worktreeRepo.findActiveByRepoAndName(
+    // Check for duplicate branch name in this repo (non-archived only)
+    const branchRepo = new BranchRepository(this.db);
+    const existingBranch = await branchRepo.findActiveByRepoAndName(
       repo.repo_id as UUID,
       data.name
     );
-    if (existingWorktree) {
-      throw new Error(`A worktree named '${data.name}' already exists in this repository`);
+    if (existingBranch) {
+      throw new Error(`A branch named '${data.name}' already exists in this repository`);
     }
 
     // Resolve + validate the storage mode. The daemon owns DB/auth/config
@@ -619,7 +619,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     }
     if (storageMode === 'clone' && !repo.remote_url) {
       throw new Error(
-        `Cannot create a clone-mode worktree for repo '${repo.slug}': repo has no remote_url. ` +
+        `Cannot create a clone-mode branch for repo '${repo.slug}': repo has no remote_url. ` +
           `Use storage_mode='worktree' or register the repo with a remote first.`
       );
     }
@@ -630,7 +630,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // not DB facts. The executor surfaces failures via
     // `filesystem_status='failed'` + `error_message`, which the UI already
     // renders cleanly. Daemon stays focused on DB/auth/config validation.
-    // See `core.createWorktree` / `createBranchAsClone` for the equivalent
+    // See `core.createBranch` / `createBranchAsClone` for the equivalent
     // checks at the materialisation boundary.
 
     // Validate boardId exists before creating DB record (FK constraint would reject it)
@@ -658,16 +658,16 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       }
     }
 
-    const worktreePath = getWorktreePath(repo.slug, data.name);
+    const branchPath = getBranchPath(repo.slug, data.name);
 
     // Path existence + branch-in-use checks have moved to the executor /
     // core git helpers — see the "filesystem preflights" note above. Both
-    // `createWorktree()` and `createBranchAsClone()` refuse to clobber an
+    // `createBranch()` and `createBranchAsClone()` refuse to clobber an
     // existing `targetPath` and surface that failure through
     // `filesystem_status='failed'` on the DB row.
 
-    console.log('🔍 RepoService.createWorktree - computed paths:', {
-      worktreePath,
+    console.log('🔍 RepoService.createBranch - computed paths:', {
+      branchPath,
       repoLocalPath: repo.local_path,
     });
 
@@ -675,17 +675,17 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // the time we get here. Asserting non-null rather than re-checking.
     const userId = (params as AuthenticatedParams).user!.user_id as UserID;
 
-    // Get ALL used unique IDs (including archived worktrees) to avoid collisions.
-    // Previously this queried via Feathers which excluded archived worktrees by default,
-    // causing ID collisions when archived worktrees held the assigned ID.
-    const allUsedIds = await worktreeRepo.getAllUsedUniqueIds();
-    const worktreeUniqueId = autoAssignWorktreeUniqueId(allUsedIds);
+    // Get ALL used unique IDs (including archived branches) to avoid collisions.
+    // Previously this queried via Feathers which excluded archived branches by default,
+    // causing ID collisions when archived branches held the assigned ID.
+    const allUsedIds = await branchRepo.getAllUsedUniqueIds();
+    const branchUniqueId = autoAssignBranchUniqueId(allUsedIds);
 
-    const worktreesService = this.app.service('worktrees');
+    const branchesService = this.app.service('branches');
 
     // NOTE: Environment command templates (start_command, stop_command, etc.) are NOT
     // rendered here. They will be rendered by the executor after Unix groups are created
-    // and GID is available, ensuring {{worktree.gid}} is populated in templates.
+    // and GID is available, ensuring {{branch.gid}} is populated in templates.
     // See: packages/executor/src/commands/git.ts:renderEnvironmentTemplates()
 
     // Storage mode (storageMode + cloneDepth) was resolved + validated up
@@ -693,20 +693,20 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
     // Create DB record EARLY with 'creating' status
     // Executor will:
-    // 1. Create git worktree on filesystem
+    // 1. Create git branch on filesystem
     // 2. Initialize Unix groups (if RBAC enabled)
     // 3. Render environment templates with full context including GID
-    // 4. Patch worktree to 'ready' with rendered templates
-    const worktree = (await worktreesService.create(
+    // 4. Patch branch to 'ready' with rendered templates
+    const branch = (await branchesService.create(
       {
         repo_id: repo.repo_id,
         name: data.name,
-        path: worktreePath,
+        path: branchPath,
         ref: data.ref,
         ref_type: data.refType,
         base_ref: data.sourceBranch,
         new_branch: data.createBranch ?? false,
-        worktree_unique_id: worktreeUniqueId,
+        branch_unique_id: branchUniqueId,
         filesystem_status: 'creating', // Will be set to 'ready' by executor
         // Environment templates will be rendered by executor after Unix group creation
         // RBAC fields (optional, defaults handled by repository layer)
@@ -723,13 +723,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         created_by: userId,
       },
       params
-    )) as Worktree;
+    )) as Branch;
 
-    // Add creating user as owner of the worktree
+    // Add creating user as owner of the branch
     {
-      const worktreeRepo = new WorktreeRepository(this.db);
-      await worktreeRepo.addOwner(worktree.worktree_id, userId);
-      console.log(`✓ Added user ${shortId(userId)} as owner of worktree ${worktree.name}`);
+      const branchRepo = new BranchRepository(this.db);
+      await branchRepo.addOwner(branch.branch_id, userId);
+      console.log(`✓ Added user ${shortId(userId)} as owner of branch ${branch.name}`);
     }
 
     if (data.boardId) {
@@ -770,27 +770,27 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             }
           ).data;
 
-          // Filter to active (non-archived) worktree entities via single batch query
-          const worktreeEntities = existing.filter(
+          // Filter to active (non-archived) branch entities via single batch query
+          const branchEntities = existing.filter(
             (obj: import('@agor/core/types').BoardEntityObject) =>
-              obj.entity_type === 'worktree' && obj.worktree_id
+              obj.entity_type === 'branch' && obj.branch_id
           );
 
-          let activeEntities = worktreeEntities;
-          if (worktreeEntities.length > 0) {
-            const worktreesResult = await this.app.service('worktrees').find({
+          let activeEntities = branchEntities;
+          if (branchEntities.length > 0) {
+            const branchesResult = await this.app.service('branches').find({
               query: { repo_id: repo.repo_id, $limit: 500 },
               paginate: false,
             });
-            const worktreesList = Array.isArray(worktreesResult)
-              ? worktreesResult
-              : (worktreesResult as { data: { worktree_id: string; archived: boolean }[] }).data;
+            const branchesList = Array.isArray(branchesResult)
+              ? branchesResult
+              : (branchesResult as { data: { branch_id: string; archived: boolean }[] }).data;
             const archivedIds = new Set(
-              worktreesList
+              branchesList
                 .filter((wt: { archived: boolean }) => wt.archived)
-                .map((wt: { worktree_id: string }) => wt.worktree_id)
+                .map((wt: { branch_id: string }) => wt.branch_id)
             );
-            activeEntities = worktreeEntities.filter((e) => !archivedIds.has(e.worktree_id!));
+            activeEntities = branchEntities.filter((e) => !archivedIds.has(e.branch_id!));
           }
 
           // Extract zones from THIS board's objects
@@ -818,7 +818,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       await boardObjectsService.create(
         {
           board_id: data.boardId,
-          worktree_id: worktree.worktree_id,
+          branch_id: branch.branch_id,
           position,
           ...(resolvedZoneId ? { zone_id: resolvedZoneId } : {}),
         },
@@ -826,23 +826,23 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       );
     }
 
-    // Fire-and-forget: spawn executor to create git worktree on filesystem.
+    // Fire-and-forget: spawn executor to create git branch on filesystem.
     // Executor will patch filesystem_status to 'ready' when done (or 'failed'
     // on error), and along the way render environment command templates
-    // (start_command, stop_command, etc.) onto the worktree. Those fields
+    // (start_command, stop_command, etc.) onto the branch. Those fields
     // trip the requireAdminForEnvConfig hook on patch, so we authenticate
     // the executor with a service JWT to bypass admin checks for internal
     // materialization of admin-defined templates.
     //
     // Per-user credentials: Feathers RPC (users.getGitEnvironment)
-    // Unix group init: Feathers RPC (worktrees.initializeUnixGroup) — runs daemon-side
+    // Unix group init: Feathers RPC (branches.initializeUnixGroup) — runs daemon-side
     try {
       const sessionToken = generateSessionToken(
         this.app as unknown as { settings: { authentication?: { secret?: string } } }
       );
 
       // Unix group initialization gates on RBAC explicitly.
-      const rbacEnabled = isWorktreeRbacEnabled();
+      const rbacEnabled = isBranchRbacEnabled();
 
       // Sudo wrap (asUser) is gated inside the resolver — returns undefined
       // in simple/no-RBAC mode so hosts without passwordless sudoers work
@@ -851,15 +851,15 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
       spawnExecutorFireAndForget(
         {
-          command: 'git.worktree.add',
+          command: 'git.branch.add',
           sessionToken,
           daemonUrl: getDaemonUrl(),
           params: {
-            worktreeId: worktree.worktree_id,
+            branchId: branch.branch_id,
             repoId: repo.repo_id,
             repoPath: repo.local_path,
-            worktreeName: data.name,
-            worktreePath,
+            branchName: data.name,
+            branchPath,
             branch: data.ref,
             sourceBranch: data.sourceBranch,
             createBranch: data.createBranch,
@@ -867,7 +867,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             userId: userId as string | undefined,
             // Unix group isolation (only when RBAC is enabled)
             initUnixGroup: rbacEnabled,
-            othersAccess: data.others_fs_access || worktree.others_fs_access || 'read',
+            othersAccess: data.others_fs_access || branch.others_fs_access || 'read',
             // Branch storage mode (forwarded for the clone-mode code path)
             storageMode,
             ...(cloneDepth !== undefined ? { cloneDepth } : {}),
@@ -882,66 +882,66 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           },
         },
         {
-          logPrefix: `[ReposService.createWorktree ${data.name}]`,
+          logPrefix: `[ReposService.createBranch ${data.name}]`,
           asUser, // Run as resolved user (fresh groups via sudo -u)
         }
       );
     } catch (error) {
       console.error(
-        '[ReposService.createWorktree] Failed to spawn executor:',
+        '[ReposService.createBranch] Failed to spawn executor:',
         error instanceof Error ? error.message : String(error)
       );
     }
 
     // Return immediately with 'creating' status - UI will see updates via WebSocket
-    return worktree;
+    return branch;
   }
 
   /**
    * Resolve the `.agor.yml` location for an import/export request.
    *
-   * Always reads from / writes to the given worktree's working directory:
+   * Always reads from / writes to the given branch's working directory:
    * `.agor.yml` is a branch-scoped file, so every import/export must name
-   * which branch (worktree) it targets. Reading from the repo's base path
+   * which branch (branch) it targets. Reading from the repo's base path
    * would silently cross branch boundaries and is never what the caller
    * wants.
    *
-   * Routes through the worktrees service so RBAC hooks (loadWorktree +
+   * Routes through the branches service so RBAC hooks (loadBranch +
    * ensureCanView) fire against the caller's params — calling the repository
-   * directly would bypass worktree-level permission checks and let a user
-   * with repo access read/write a worktree path they cannot see.
+   * directly would bypass branch-level permission checks and let a user
+   * with repo access read/write a branch path they cannot see.
    */
   private async resolveAgorYmlPath(
     repo: Repo,
-    worktreeId: string,
+    branchId: string,
     params?: RepoParams
   ): Promise<string> {
-    const worktreesService = this.app.service('worktrees');
-    const worktree = (await worktreesService.get(worktreeId, params)) as Worktree;
-    if (worktree.repo_id !== repo.repo_id) {
-      throw new Error(`Worktree ${worktreeId} does not belong to repo ${repo.repo_id}`);
+    const branchesService = this.app.service('branches');
+    const branch = (await branchesService.get(branchId, params)) as Branch;
+    if (branch.repo_id !== repo.repo_id) {
+      throw new Error(`Branch ${branchId} does not belong to repo ${repo.repo_id}`);
     }
-    return path.join(worktree.path, '.agor.yml');
+    return path.join(branch.path, '.agor.yml');
   }
 
   /**
    * Custom method: Import environment config from .agor.yml
    *
-   * Requires `worktree_id` in `data` — `.agor.yml` is branch-scoped, so the
-   * caller must name which worktree's working copy to read. This is a
+   * Requires `branch_id` in `data` — `.agor.yml` is branch-scoped, so the
+   * caller must name which branch's working copy to read. This is a
    * one-shot manual import — the repo is NOT re-ingested automatically on
    * subsequent operations.
    */
   async importFromAgorYml(
     id: string,
-    data: { worktree_id: string },
+    data: { branch_id: string },
     params?: RepoParams
   ): Promise<Repo> {
-    if (!data?.worktree_id) {
-      throw new Error('worktree_id is required to import .agor.yml');
+    if (!data?.branch_id) {
+      throw new Error('branch_id is required to import .agor.yml');
     }
     const repo = await this.get(id, params);
-    const agorYmlPath = await this.resolveAgorYmlPath(repo, data.worktree_id, params);
+    const agorYmlPath = await this.resolveAgorYmlPath(repo, data.branch_id, params);
 
     // Parse .agor.yml (returns v2 RepoEnvironment; v1 is wrapped automatically).
     // `template_overrides:` at any level throws — it is DB-only.
@@ -973,8 +973,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   /**
    * Custom method: Export environment config to .agor.yml
    *
-   * Requires `worktree_id` in `data` — `.agor.yml` is branch-scoped, so the
-   * caller must name which worktree's working copy to write into (admins then
+   * Requires `branch_id` in `data` — `.agor.yml` is branch-scoped, so the
+   * caller must name which branch's working copy to write into (admins then
    * commit the file on that branch).
    *
    * `template_overrides` are DB-only and are stripped by `writeAgorYml` — the
@@ -982,11 +982,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
    */
   async exportToAgorYml(
     id: string,
-    data: { worktree_id: string },
+    data: { branch_id: string },
     params?: RepoParams
   ): Promise<{ path: string }> {
-    if (!data?.worktree_id) {
-      throw new Error('worktree_id is required to export .agor.yml');
+    if (!data?.branch_id) {
+      throw new Error('branch_id is required to export .agor.yml');
     }
     const repo = await this.get(id, params);
 
@@ -995,7 +995,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       throw new Error('Repository has no environment configuration to export');
     }
 
-    const agorYmlPath = await this.resolveAgorYmlPath(repo, data.worktree_id, params);
+    const agorYmlPath = await this.resolveAgorYmlPath(repo, data.branch_id, params);
 
     // Prefer v2 source of truth; fall back to legacy v1 view if somehow the
     // v2 wrapper wasn't materialized (writeAgorYml handles both).
@@ -1017,61 +1017,61 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const repo = await this.get(id, params);
     const cleanup = params?.query?.cleanup === true;
 
-    // Get ALL worktrees for this repo (needed for both filesystem and database cleanup)
+    // Get ALL branches for this repo (needed for both filesystem and database cleanup)
     // CRITICAL: Use internal call (no provider) to avoid RBAC hooks that bypass repo_id filter.
-    // Spreading external params with provider causes scopeWorktreeQuery to return ALL accessible
-    // worktrees instead of filtering by repo_id, leading to cross-repo deletion.
-    const worktreesService = this.app.service('worktrees');
-    const worktreesResult = await worktreesService.find({
+    // Spreading external params with provider causes scopeBranchQuery to return ALL accessible
+    // branches instead of filtering by repo_id, leading to cross-repo deletion.
+    const branchesService = this.app.service('branches');
+    const branchesResult = await branchesService.find({
       query: { repo_id: repo.repo_id },
       paginate: false,
     });
 
-    const worktrees = (
-      Array.isArray(worktreesResult) ? worktreesResult : worktreesResult.data
-    ) as Worktree[];
+    const branches = (
+      Array.isArray(branchesResult) ? branchesResult : branchesResult.data
+    ) as Branch[];
 
-    // Safety check: verify all worktrees belong to this repo (defense in depth)
-    const foreignWorktrees = worktrees.filter((wt) => wt.repo_id !== repo.repo_id);
-    if (foreignWorktrees.length > 0) {
+    // Safety check: verify all branches belong to this repo (defense in depth)
+    const foreignBranches = branches.filter((wt) => wt.repo_id !== repo.repo_id);
+    if (foreignBranches.length > 0) {
       throw new Error(
-        `SAFETY CHECK FAILED: Found ${foreignWorktrees.length} worktree(s) not belonging to repo ${repo.repo_id}. ` +
+        `SAFETY CHECK FAILED: Found ${foreignBranches.length} branch(s) not belonging to repo ${repo.repo_id}. ` +
           `Aborting deletion to prevent cross-repo data loss. This is a bug — please report it.`
       );
     }
 
     console.log(
-      `🗑️  Repo deletion: Found ${worktrees.length} worktree(s) for repo ${repo.slug} (${repo.repo_id})`
+      `🗑️  Repo deletion: Found ${branches.length} branch(s) for repo ${repo.slug} (${repo.repo_id})`
     );
 
     // If cleanup is requested and this is a remote repo, delete filesystem directories FIRST
     if (cleanup && repo.repo_type === 'remote') {
-      const { deleteRepoDirectory, deleteWorktreeDirectory } = await import('@agor/core/git');
+      const { deleteRepoDirectory, deleteBranchDirectory } = await import('@agor/core/git');
 
       // Track successfully deleted paths for honest error reporting
       const deletedPaths: string[] = [];
 
       // FAIL FAST: Stop on first filesystem deletion failure
-      // Delete worktree directories from filesystem
-      for (const worktree of worktrees) {
+      // Delete branch directories from filesystem
+      for (const branch of branches) {
         try {
-          await deleteWorktreeDirectory(worktree.path);
-          deletedPaths.push(worktree.path);
-          console.log(`🗑️  Deleted worktree directory: ${worktree.path}`);
+          await deleteBranchDirectory(branch.path);
+          deletedPaths.push(branch.path);
+          console.log(`🗑️  Deleted branch directory: ${branch.path}`);
         } catch (error) {
           const errorMsg = error instanceof Error ? error.message : String(error);
-          console.error(`❌ Failed to delete worktree directory ${worktree.path}:`, errorMsg);
+          console.error(`❌ Failed to delete branch directory ${branch.path}:`, errorMsg);
 
           // Be honest about partial deletion
           if (deletedPaths.length > 0) {
             throw new Error(
               `Partial deletion occurred: Successfully deleted ${deletedPaths.length} path(s): ${deletedPaths.join(', ')}. ` +
-                `Failed at ${worktree.path}: ${errorMsg}. ` +
+                `Failed at ${branch.path}: ${errorMsg}. ` +
                 `Database NOT modified. Manual cleanup required for deleted paths.`
             );
           } else {
             throw new Error(
-              `Cannot delete repository: Failed to delete worktree at ${worktree.path}: ${errorMsg}. ` +
+              `Cannot delete repository: Failed to delete branch at ${branch.path}: ${errorMsg}. ` +
                 `No files were deleted. Please fix this issue and retry.`
             );
           }
@@ -1087,7 +1087,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         const errorMsg = error instanceof Error ? error.message : String(error);
         console.error(`❌ Failed to delete repository directory ${repo.local_path}:`, errorMsg);
 
-        // Be honest about partial deletion (worktrees were deleted, repo failed)
+        // Be honest about partial deletion (branches were deleted, repo failed)
         throw new Error(
           `Partial deletion occurred: Successfully deleted ${deletedPaths.length} path(s): ${deletedPaths.join(', ')}. ` +
             `Failed to delete repository directory at ${repo.local_path}: ${errorMsg}. ` +
@@ -1096,28 +1096,28 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       }
 
       console.log(
-        `✅ Successfully deleted ${worktrees.length} worktree director${worktrees.length === 1 ? 'y' : 'ies'} and repository directory`
+        `✅ Successfully deleted ${branches.length} branch director${branches.length === 1 ? 'y' : 'ies'} and repository directory`
       );
     }
 
     // Only reach here if filesystem cleanup succeeded (or wasn't requested)
     // Now safe to delete from database
 
-    // IMPORTANT: Use Feathers service to delete worktrees (not direct DB cascade) because:
+    // IMPORTANT: Use Feathers service to delete branches (not direct DB cascade) because:
     // 1. WebSocket events broadcast to all clients (real-time UI updates)
     // 2. Service hooks run properly (lifecycle, validation, etc.)
     // 3. Session cascades trigger (sessions → tasks → messages)
     // 4. Foreign key cascades may not be reliable (pragmas are async fire-and-forget)
     // NOTE: Don't spread external params — use internal call to bypass auth/RBAC hooks.
-    // The repo deletion itself is already authorized; individual worktree permission checks
-    // would incorrectly block cleanup of worktrees the user doesn't directly own.
-    for (const worktree of worktrees) {
+    // The repo deletion itself is already authorized; individual branch permission checks
+    // would incorrectly block cleanup of branches the user doesn't directly own.
+    for (const branch of branches) {
       try {
-        await worktreesService.remove(worktree.worktree_id);
-        console.log(`🗑️  Deleted worktree from database: ${worktree.name}`);
+        await branchesService.remove(branch.branch_id);
+        console.log(`🗑️  Deleted branch from database: ${branch.name}`);
       } catch (error) {
         console.warn(
-          `⚠️  Failed to delete worktree ${worktree.name} from database:`,
+          `⚠️  Failed to delete branch ${branch.name} from database:`,
           error instanceof Error ? error.message : String(error)
         );
       }

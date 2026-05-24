@@ -56,7 +56,7 @@ export const PILL_COLORS = {
   // Features
   report: 'green', // Has report
   concept: 'geekblue', // Loaded concepts
-  worktree: 'blue', // Managed worktree
+  branch: 'blue', // Managed branch
 } as const;
 
 interface BasePillProps {
@@ -545,14 +545,14 @@ export const GitShaPill: React.FC<GitShaPillProps> = ({
 interface GitStatePillProps extends BasePillProps {
   branch?: string; // Branch name (renamed from 'ref' to avoid React reserved word)
   sha: string;
-  worktreeName?: string; // Hide branch name if it matches worktree name
+  branchName?: string; // Hide branch name if it matches branch name
   showDirtyIndicator?: boolean;
 }
 
 export const GitStatePill: React.FC<GitStatePillProps> = ({
   branch,
   sha,
-  worktreeName,
+  branchName,
   showDirtyIndicator = true,
   style,
 }) => {
@@ -561,8 +561,8 @@ export const GitStatePill: React.FC<GitStatePillProps> = ({
   const displaySha = cleanSha.substring(0, 7);
   const showDirty = isDirty && showDirtyIndicator;
 
-  // Only show branch if it differs from worktree name
-  const shouldShowBranch = branch && branch !== worktreeName;
+  // Only show branch if it differs from branch name
+  const shouldShowBranch = branch && branch !== branchName;
 
   const tooltip = showDirty
     ? 'Git commit SHA (working tree has uncommitted changes) · click to copy'
@@ -814,20 +814,6 @@ export const ConceptPill: React.FC<ConceptPillProps> = ({ name, style }) => (
   </Tag>
 );
 
-interface WorktreePillProps extends BasePillProps {
-  managed?: boolean;
-}
-
-export const WorktreePill: React.FC<WorktreePillProps> = ({ managed = true, style }) => {
-  const { token } = theme.useToken();
-
-  return (
-    <Tag color={PILL_COLORS.worktree} style={style}>
-      <span style={{ fontFamily: token.fontFamilyCode }}>{managed ? 'Managed' : 'Branch'}</span>
-    </Tag>
-  );
-};
-
 interface DirtyStatePillProps extends BasePillProps {}
 
 export const DirtyStatePill: React.FC<DirtyStatePillProps> = ({ style }) => {
@@ -856,7 +842,7 @@ export const BranchPill: React.FC<BranchPillProps> = ({ branch, style }) => {
 
 interface RepoPillProps extends BasePillProps {
   repoName: string;
-  worktreeName?: string;
+  branchName?: string;
   onClick?: () => void;
   /** Tag color. Defaults to 'cyan'; pass 'default' for a muted theme-neutral tag. */
   color?: string;
@@ -864,7 +850,7 @@ interface RepoPillProps extends BasePillProps {
 
 export const RepoPill: React.FC<RepoPillProps> = ({
   repoName,
-  worktreeName,
+  branchName,
   onClick,
   color = 'cyan',
   size,
@@ -881,10 +867,10 @@ export const RepoPill: React.FC<RepoPillProps> = ({
     >
       <span style={{ fontFamily: token.fontFamilyCode }}>
         {repoName}
-        {worktreeName && (
+        {branchName && (
           <>
             {' '}
-            <ApartmentOutlined style={{ fontSize: '0.85em', opacity: 0.7 }} /> {worktreeName}
+            <ApartmentOutlined style={{ fontSize: '0.85em', opacity: 0.7 }} /> {branchName}
           </>
         )}
       </span>

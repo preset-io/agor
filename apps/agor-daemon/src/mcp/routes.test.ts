@@ -90,9 +90,9 @@ describeIntegration('MCP Tools - Session Tools', () => {
     expect(toolNames).toContain('agor_repos_create_remote');
     expect(toolNames).toContain('agor_repos_create_local');
     expect(toolNames).toContain('agor_repos_update');
-    expect(toolNames).toContain('agor_worktrees_get');
-    expect(toolNames).toContain('agor_worktrees_list');
-    expect(toolNames).toContain('agor_worktrees_update');
+    expect(toolNames).toContain('agor_branches_get');
+    expect(toolNames).toContain('agor_branches_list');
+    expect(toolNames).toContain('agor_branches_update');
     expect(toolNames).toContain('agor_boards_get');
     expect(toolNames).toContain('agor_boards_list');
     expect(toolNames).toContain('agor_boards_update');
@@ -143,7 +143,7 @@ describeIntegration('MCP Tools - Session Tools', () => {
     expect(result.session).toHaveProperty('session_id');
     expect(result.session.genealogy).toHaveProperty('parent_session_id');
     expect(result.session).toHaveProperty('status');
-    expect(result.session).toHaveProperty('worktree_id');
+    expect(result.session).toHaveProperty('branch_id');
     expect(result).toHaveProperty('taskId');
   });
 
@@ -164,19 +164,19 @@ describeIntegration('MCP Tools - Session Tools', () => {
   });
 
   it('agor_sessions_create creates new session with initialPrompt', async () => {
-    // Get a worktree to create session in
-    const worktrees = await callMCPTool('agor_worktrees_list', { limit: 1 });
+    // Get a branch to create session in
+    const branches = await callMCPTool('agor_branches_list', { limit: 1 });
 
-    if (worktrees.data.length === 0) {
-      console.log('No worktrees found, skipping test');
+    if (branches.data.length === 0) {
+      console.log('No branches found, skipping test');
       return;
     }
 
-    const worktreeId = worktrees.data[0].worktree_id;
+    const branchId = branches.data[0].branch_id;
 
     // Create session with initial prompt
     const result = await callMCPTool('agor_sessions_create', {
-      worktreeId,
+      branchId,
       agenticTool: 'claude-code',
       title: 'Test Created Session',
       description: 'Session created via MCP tool',
@@ -184,7 +184,7 @@ describeIntegration('MCP Tools - Session Tools', () => {
     });
 
     expect(result.session).toHaveProperty('session_id');
-    expect(result.session.worktree_id).toBe(worktreeId);
+    expect(result.session.branch_id).toBe(branchId);
     expect(result.session.agentic_tool).toBe('claude-code');
     expect(result.session.title).toBe('Test Created Session');
     expect(result.session.description).toBe('Session created via MCP tool');
@@ -221,19 +221,19 @@ describeIntegration('MCP Tools - Session Tools', () => {
       },
     });
 
-    // Get a worktree to create session in
-    const worktrees = await callMCPTool('agor_worktrees_list', { limit: 1 });
+    // Get a branch to create session in
+    const branches = await callMCPTool('agor_branches_list', { limit: 1 });
 
-    if (worktrees.data.length === 0) {
-      console.log('No worktrees found, skipping test');
+    if (branches.data.length === 0) {
+      console.log('No branches found, skipping test');
       return;
     }
 
-    const worktreeId = worktrees.data[0].worktree_id;
+    const branchId = branches.data[0].branch_id;
 
     // Create session WITHOUT specifying permissionMode (should use user default)
     const result = await callMCPTool('agor_sessions_create', {
-      worktreeId,
+      branchId,
       agenticTool: 'claude-code',
       title: 'Test User Defaults Session',
     });
@@ -347,62 +347,62 @@ describeIntegration('MCP Tools - Repository Tools', () => {
   });
 });
 
-describeIntegration('MCP Tools - Worktree Tools', () => {
-  it('agor_worktrees_list returns worktrees', async () => {
-    const result = await callMCPTool('agor_worktrees_list', { limit: 5 });
+describeIntegration('MCP Tools - Branch Tools', () => {
+  it('agor_branches_list returns branches', async () => {
+    const result = await callMCPTool('agor_branches_list', { limit: 5 });
 
     expect(result).toHaveProperty('total');
     expect(result).toHaveProperty('data');
     expect(Array.isArray(result.data)).toBe(true);
   });
 
-  it('agor_worktrees_get returns specific worktree', async () => {
-    // First get a worktree ID
-    const worktrees = await callMCPTool('agor_worktrees_list', { limit: 1 });
+  it('agor_branches_get returns specific branch', async () => {
+    // First get a branch ID
+    const branches = await callMCPTool('agor_branches_list', { limit: 1 });
 
-    if (worktrees.data.length === 0) {
-      console.log('No worktrees found, skipping test');
+    if (branches.data.length === 0) {
+      console.log('No branches found, skipping test');
       return;
     }
 
-    const worktreeId = worktrees.data[0].worktree_id;
+    const branchId = branches.data[0].branch_id;
 
     // Then fetch it specifically
-    const result = await callMCPTool('agor_worktrees_get', { worktreeId });
+    const result = await callMCPTool('agor_branches_get', { branchId });
 
-    expect(result.worktree_id).toBe(worktreeId);
+    expect(result.branch_id).toBe(branchId);
     expect(result).toHaveProperty('path');
   });
 
-  it('agor_worktrees_update updates worktree metadata', async () => {
-    const worktrees = await callMCPTool('agor_worktrees_list', { limit: 1 });
+  it('agor_branches_update updates branch metadata', async () => {
+    const branches = await callMCPTool('agor_branches_list', { limit: 1 });
 
-    if (worktrees.data.length === 0) {
-      console.log('No worktrees found, skipping test');
+    if (branches.data.length === 0) {
+      console.log('No branches found, skipping test');
       return;
     }
 
-    const worktree = worktrees.data[0];
-    const worktreeId = worktree.worktree_id;
+    const branch = branches.data[0];
+    const branchId = branch.branch_id;
 
-    const updated = await callMCPTool('agor_worktrees_update', {
-      worktreeId,
+    const updated = await callMCPTool('agor_branches_update', {
+      branchId,
       issueUrl: 'https://example.com/issues/123',
       pullRequestUrl: null,
       notes: 'Updated via MCP test',
     });
 
-    expect(updated.worktree.worktree_id).toBe(worktreeId);
-    expect(updated.worktree.issue_url).toBe('https://example.com/issues/123');
-    expect(updated.worktree.pull_request_url).toBeNull();
-    expect(updated.worktree.notes).toBe('Updated via MCP test');
+    expect(updated.branch.branch_id).toBe(branchId);
+    expect(updated.branch.issue_url).toBe('https://example.com/issues/123');
+    expect(updated.branch.pull_request_url).toBeNull();
+    expect(updated.branch.notes).toBe('Updated via MCP test');
 
     // Restore original state
-    await callMCPTool('agor_worktrees_update', {
-      worktreeId,
-      issueUrl: worktree.issue_url ?? null,
-      pullRequestUrl: worktree.pull_request_url ?? null,
-      notes: worktree.notes ?? null,
+    await callMCPTool('agor_branches_update', {
+      branchId,
+      issueUrl: branch.issue_url ?? null,
+      pullRequestUrl: branch.pull_request_url ?? null,
+      notes: branch.notes ?? null,
     });
   });
 });

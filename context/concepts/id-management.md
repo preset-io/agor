@@ -4,7 +4,7 @@
 
 ## Format: UUIDv7
 
-All entity IDs (Session, Task, Worktree, Board, Repo, etc.) are **UUIDv7** — RFC 9562, time-ordered. The first 48 bits encode the creation timestamp (ms precision).
+All entity IDs (Session, Task, Branch, Board, Repo, etc.) are **UUIDv7** — RFC 9562, time-ordered. The first 48 bits encode the creation timestamp (ms precision).
 
 Why: globally unique, sortable by creation time (no separate index on `created_at` needed for ordering), B-tree friendly, IETF-standard, native UUID types in Postgres.
 
@@ -32,7 +32,7 @@ shortId('01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f')
 1. If the input is a full 36-char UUID → use directly.
 2. Otherwise → `SELECT … WHERE id LIKE prefix% LIMIT 11`. Exactly one row → resolve. Zero → `EntityNotFoundError`. Multiple → `AmbiguousIdError` with disambiguation hint.
 
-Repositories (`cards`, `users`, `mcp-servers`, `board-comments`, `card-types`, `worktrees`, `tasks`, `sessions`, `boards`, `repos`) all delegate to it — never write a new resolver inline.
+Repositories (`cards`, `users`, `mcp-servers`, `board-comments`, `card-types`, `branches`, `tasks`, `sessions`, `boards`, `repos`) all delegate to it — never write a new resolver inline.
 
 **Don't roll your own truncation.** `scripts/check-no-ad-hoc-shortid.mjs` greps for `xxxId.substring(0, N)` / `.slice(0, N)` / `.replace(/-/g, '').slice(0, N)` patterns and fails CI. Use `shortId(id)` for display, `toShortId(id, length)` for the rare documented non-canonical case (e.g. Unix-name 8-char carve-out in `unix/short-id-naming.ts`). Pragma escape hatch: `// shortid-guard:ignore <reason>` on the offending line or the line above.
 
@@ -42,7 +42,7 @@ Repositories (`cards`, `users`, `mcp-servers`, `board-comments`, `card-types`, `
 
 ```ts
 type SessionId = string & { __brand: 'SessionId' };
-type WorktreeId = string & { __brand: 'WorktreeId' };
+type BranchId = string & { __brand: 'BranchId' };
 // etc.
 ```
 

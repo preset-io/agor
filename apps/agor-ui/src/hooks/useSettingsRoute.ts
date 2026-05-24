@@ -8,7 +8,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 export const SETTINGS_SECTIONS = [
   'boards',
   'repos',
-  'worktrees',
+  'branches',
   'assistants',
   'cards',
   'artifacts',

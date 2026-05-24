@@ -17,13 +17,13 @@ import type { CopilotSession } from '@github/copilot-sdk';
 import { CopilotClient } from '@github/copilot-sdk';
 import { getDaemonUrl } from '../../config.js';
 import type {
+  BranchRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
   SessionMCPServerRepository,
   SessionRepository,
   UsersRepository,
-  WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { TokenUsage } from '../../types/token-usage.js';
@@ -118,7 +118,7 @@ export class CopilotPromptService {
     messagesRepo: MessagesRepository,
     private sessionsRepo: SessionRepository,
     private sessionMCPServerRepo?: SessionMCPServerRepository,
-    private worktreesRepo?: WorktreeRepository,
+    private branchesRepo?: BranchRepository,
     private reposRepo?: RepoRepository,
     apiKey?: string,
     private mcpServerRepo?: MCPServerRepository,
@@ -211,7 +211,7 @@ export class CopilotPromptService {
   private async buildSystemMessage(sessionId: SessionID): Promise<string> {
     return renderAgorSystemPrompt(sessionId, {
       sessions: this.sessionsRepo,
-      worktrees: this.worktreesRepo,
+      branches: this.branchesRepo,
       repos: this.reposRepo,
       users: this.usersRepo,
     });
@@ -249,15 +249,13 @@ export class CopilotPromptService {
       `   Existing SDK session ID: ${session.sdk_session_id || 'none (will create new)'}`
     );
 
-    // Fetch worktree to get working directory
-    const worktree = this.worktreesRepo
-      ? await this.worktreesRepo.findById(session.worktree_id)
-      : null;
-    if (!worktree) {
-      throw new Error(`Worktree ${session.worktree_id} not found for session ${sessionId}`);
+    // Fetch branch to get working directory
+    const branch = this.branchesRepo ? await this.branchesRepo.findById(session.branch_id) : null;
+    if (!branch) {
+      throw new Error(`Branch ${session.branch_id} not found for session ${sessionId}`);
     }
 
-    console.log(`   Working directory: ${worktree.path}`);
+    console.log(`   Working directory: ${branch.path}`);
 
     // Create CopilotClient (spawns CLI process)
     this.client = new CopilotClient({
@@ -309,7 +307,7 @@ export class CopilotPromptService {
       // Create or resume session
       let copilotSession: CopilotSession;
       const sessionConfig = {
-        workingDirectory: worktree.path,
+        workingDirectory: branch.path,
         streaming: true,
         model: resolvedModel,
         onPermissionRequest: permissionHandler,

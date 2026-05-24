@@ -11,6 +11,7 @@ import type {
   Board,
   BoardComment,
   BoardEntityObject,
+  Branch,
   CardType,
   CardWithType,
   GatewayChannel,
@@ -18,7 +19,6 @@ import type {
   Repo,
   Session,
   User,
-  Worktree,
 } from '@agor-live/client';
 import { PAGINATION } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -30,7 +30,7 @@ import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 const INITIAL_LOAD_ITEMS = [
   { key: 'sessions', label: 'Sessions' },
   { key: 'boards', label: 'Boards' },
-  { key: 'worktrees', label: 'Branches' },
+  { key: 'branches', label: 'Branches' },
   { key: 'repos', label: 'Repos' },
   { key: 'users', label: 'Users' },
   { key: 'cards', label: 'Cards' },
@@ -58,14 +58,14 @@ export interface InitialLoadItem {
  */
 type DataMaps = {
   sessionById: Map<string, Session>;
-  sessionsByWorktree: Map<string, Session[]>;
+  sessionsByBranch: Map<string, Session[]>;
   boardById: Map<string, Board>;
   boardObjectById: Map<string, BoardEntityObject>;
   commentById: Map<string, BoardComment>;
   cardById: Map<string, CardWithType>;
   cardTypeById: Map<string, CardType>;
   repoById: Map<string, Repo>;
-  worktreeById: Map<string, Worktree>;
+  branchById: Map<string, Branch>;
   userById: Map<string, User>;
   mcpServerById: Map<string, MCPServer>;
   gatewayChannelById: Map<string, GatewayChannel>;
@@ -76,14 +76,14 @@ type DataMaps = {
 
 const EMPTY_MAPS: DataMaps = {
   sessionById: new Map(),
-  sessionsByWorktree: new Map(),
+  sessionsByBranch: new Map(),
   boardById: new Map(),
   boardObjectById: new Map(),
   commentById: new Map(),
   cardById: new Map(),
   cardTypeById: new Map(),
   repoById: new Map(),
-  worktreeById: new Map(),
+  branchById: new Map(),
   userById: new Map(),
   mcpServerById: new Map(),
   gatewayChannelById: new Map(),
@@ -123,10 +123,10 @@ export function useAgorData(
   // a biome-ignore instead of listing every setter in the dep arrays.
   const setSessionById = (v) =>
     setMaps((m) => ({ ...m, sessionById: typeof v === 'function' ? v(m.sessionById) : v }));
-  const setSessionsByWorktree = (v) =>
+  const setSessionsByBranch = (v) =>
     setMaps((m) => ({
       ...m,
-      sessionsByWorktree: typeof v === 'function' ? v(m.sessionsByWorktree) : v,
+      sessionsByBranch: typeof v === 'function' ? v(m.sessionsByBranch) : v,
     }));
   const setBoardById = (v) =>
     setMaps((m) => ({ ...m, boardById: typeof v === 'function' ? v(m.boardById) : v }));
@@ -140,8 +140,8 @@ export function useAgorData(
     setMaps((m) => ({ ...m, cardTypeById: typeof v === 'function' ? v(m.cardTypeById) : v }));
   const setRepoById = (v) =>
     setMaps((m) => ({ ...m, repoById: typeof v === 'function' ? v(m.repoById) : v }));
-  const setWorktreeById = (v) =>
-    setMaps((m) => ({ ...m, worktreeById: typeof v === 'function' ? v(m.worktreeById) : v }));
+  const setBranchById = (v) =>
+    setMaps((m) => ({ ...m, branchById: typeof v === 'function' ? v(m.branchById) : v }));
   const setUserById = (v) =>
     setMaps((m) => ({ ...m, userById: typeof v === 'function' ? v(m.userById) : v }));
   const setMcpServerById = (v) =>
@@ -232,7 +232,7 @@ export function useAgorData(
             return r;
           });
 
-        // Fetch sessions, boards, board-objects, comments, repos, worktrees, users, mcp servers, session-mcp relationships in parallel.
+        // Fetch sessions, boards, board-objects, comments, repos, branches, users, mcp servers, session-mcp relationships in parallel.
         // Task/message detail now comes from per-session reactive state in conversation components.
         const [
           sessionsList,
@@ -242,7 +242,7 @@ export function useAgorData(
           cardsList,
           cardTypesList,
           reposList,
-          worktreesList,
+          branchesList,
           usersList,
           mcpServersList,
           sessionMcpList,
@@ -276,9 +276,9 @@ export function useAgorData(
             client.service('repos').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
           ),
           track(
-            'worktrees',
+            'branches',
             client
-              .service('worktrees')
+              .service('branches')
               .findAll({ query: { archived: false, $limit: PAGINATION.DEFAULT_LIMIT } })
           ),
           track(
@@ -307,22 +307,22 @@ export function useAgorData(
 
         // Build session Maps for efficient lookups
         const sessionsById = new Map<string, Session>();
-        const sessionsByWorktreeId = new Map<string, Session[]>();
+        const sessionsByBranchId = new Map<string, Session[]>();
 
         for (const session of sessionsList) {
           // sessionById: O(1) ID lookups
           sessionsById.set(session.session_id, session);
 
-          // sessionsByWorktree: O(1) worktree-scoped filtering
-          const worktreeId = session.worktree_id;
-          if (!sessionsByWorktreeId.has(worktreeId)) {
-            sessionsByWorktreeId.set(worktreeId, []);
+          // sessionsByBranch: O(1) branch-scoped filtering
+          const branchId = session.branch_id;
+          if (!sessionsByBranchId.has(branchId)) {
+            sessionsByBranchId.set(branchId, []);
           }
-          sessionsByWorktreeId.get(worktreeId)!.push(session);
+          sessionsByBranchId.get(branchId)!.push(session);
         }
 
         setSessionById(sessionsById);
-        setSessionsByWorktree(sessionsByWorktreeId);
+        setSessionsByBranch(sessionsByBranchId);
 
         // Build board Map for efficient lookups
         const boardsMap = new Map<string, Board>();
@@ -366,12 +366,12 @@ export function useAgorData(
         }
         setRepoById(reposMap);
 
-        // Build worktree Map for efficient lookups
-        const worktreesMap = new Map<string, Worktree>();
-        for (const worktree of worktreesList) {
-          worktreesMap.set(worktree.worktree_id, worktree);
+        // Build branch Map for efficient lookups
+        const branchesMap = new Map<string, Branch>();
+        for (const branch of branchesList) {
+          branchesMap.set(branch.branch_id, branch);
         }
-        setWorktreeById(worktreesMap);
+        setBranchById(branchesMap);
 
         // Build user Map for efficient lookups
         const usersMap = new Map<string, User>();
@@ -485,28 +485,28 @@ export function useAgorData(
         return next;
       });
 
-      // Update sessionsByWorktree - only create new Map when adding new session
-      setSessionsByWorktree((prev) => {
-        const worktreeSessions = prev.get(session.worktree_id) || [];
-        // Check if session already exists in this worktree (duplicate event)
-        if (worktreeSessions.some((s) => s.session_id === session.session_id)) return prev;
+      // Update sessionsByBranch - only create new Map when adding new session
+      setSessionsByBranch((prev) => {
+        const branchSessions = prev.get(session.branch_id) || [];
+        // Check if session already exists in this branch (duplicate event)
+        if (branchSessions.some((s) => s.session_id === session.session_id)) return prev;
 
         const next = new Map(prev);
-        next.set(session.worktree_id, [...worktreeSessions, session]);
+        next.set(session.branch_id, [...branchSessions, session]);
         return next;
       });
     };
     const handleSessionPatched = (session: Session) => {
       const isArchived = session.archived === true;
-      // Track old worktree_id for migration detection
-      let oldWorktreeId: string | null = null;
+      // Track old branch_id for migration detection
+      let oldBranchId: string | null = null;
 
       // Update sessionById - add/update active sessions, remove archived sessions
       setSessionById((prev) => {
         const existing = prev.get(session.session_id);
 
-        // Capture old worktree_id before updating
-        oldWorktreeId = existing?.worktree_id || null;
+        // Capture old branch_id before updating
+        oldBranchId = existing?.branch_id || null;
 
         if (isArchived) {
           if (!existing) return prev;
@@ -522,54 +522,54 @@ export function useAgorData(
         return next;
       });
 
-      // Update sessionsByWorktree - keep active sessions only
-      setSessionsByWorktree((prev) => {
+      // Update sessionsByBranch - keep active sessions only
+      setSessionsByBranch((prev) => {
         let changed = false;
         const next = new Map(prev);
-        const newWorktreeId = session.worktree_id;
+        const newBranchId = session.branch_id;
 
-        const removeFromWorktree = (worktreeId: string) => {
-          const bucket = next.get(worktreeId) || [];
+        const removeFromBranch = (branchId: string) => {
+          const bucket = next.get(branchId) || [];
           const filtered = bucket.filter((s) => s.session_id !== session.session_id);
           if (filtered.length !== bucket.length) {
             changed = true;
             if (filtered.length > 0) {
-              next.set(worktreeId, filtered);
+              next.set(branchId, filtered);
             } else {
-              next.delete(worktreeId);
+              next.delete(branchId);
             }
           }
         };
 
         if (isArchived) {
-          if (oldWorktreeId) {
-            removeFromWorktree(oldWorktreeId);
+          if (oldBranchId) {
+            removeFromBranch(oldBranchId);
           }
-          removeFromWorktree(newWorktreeId);
+          removeFromBranch(newBranchId);
           return changed ? next : prev;
         }
 
-        // Session moved between worktrees - remove from old bucket first
-        const worktreeMigrated = oldWorktreeId && oldWorktreeId !== newWorktreeId;
-        if (worktreeMigrated) {
-          removeFromWorktree(oldWorktreeId!);
+        // Session moved between branches - remove from old bucket first
+        const branchMigrated = oldBranchId && oldBranchId !== newBranchId;
+        if (branchMigrated) {
+          removeFromBranch(oldBranchId!);
         }
 
-        const worktreeSessions = next.get(newWorktreeId) || [];
-        const index = worktreeSessions.findIndex((s) => s.session_id === session.session_id);
+        const branchSessions = next.get(newBranchId) || [];
+        const index = branchSessions.findIndex((s) => s.session_id === session.session_id);
 
         if (index === -1) {
-          next.set(newWorktreeId, [...worktreeSessions, session]);
+          next.set(newBranchId, [...branchSessions, session]);
           return next;
         }
 
-        if (worktreeSessions[index] === session) {
+        if (branchSessions[index] === session) {
           return changed ? next : prev;
         }
 
-        const updatedSessions = [...worktreeSessions];
+        const updatedSessions = [...branchSessions];
         updatedSessions[index] = session;
-        next.set(newWorktreeId, updatedSessions);
+        next.set(newBranchId, updatedSessions);
         return next;
       });
     };
@@ -581,16 +581,16 @@ export function useAgorData(
         return next;
       });
 
-      // Update sessionsByWorktree
-      setSessionsByWorktree((prev) => {
+      // Update sessionsByBranch
+      setSessionsByBranch((prev) => {
         const next = new Map(prev);
-        const worktreeSessions = next.get(session.worktree_id) || [];
-        const filtered = worktreeSessions.filter((s) => s.session_id !== session.session_id);
+        const branchSessions = next.get(session.branch_id) || [];
+        const filtered = branchSessions.filter((s) => s.session_id !== session.session_id);
         if (filtered.length > 0) {
-          next.set(session.worktree_id, filtered);
+          next.set(session.branch_id, filtered);
         } else {
           // Clean up empty arrays
-          next.delete(session.worktree_id);
+          next.delete(session.branch_id);
         }
         return next;
       });
@@ -702,40 +702,40 @@ export function useAgorData(
     reposService.on('updated', handleRepoPatched);
     reposService.on('removed', handleRepoRemoved);
 
-    // Subscribe to worktree events
-    const worktreesService = client.service('worktrees');
-    const handleWorktreeCreated = (worktree: Worktree) => {
-      if (worktree.archived) return;
+    // Subscribe to branch events
+    const branchesService = client.service('branches');
+    const handleBranchCreated = (branch: Branch) => {
+      if (branch.archived) return;
 
-      setWorktreeById((prev) => {
-        if (prev.has(worktree.worktree_id)) return prev; // Already exists, shouldn't happen
+      setBranchById((prev) => {
+        if (prev.has(branch.branch_id)) return prev; // Already exists, shouldn't happen
         const next = new Map(prev);
-        next.set(worktree.worktree_id, worktree);
+        next.set(branch.branch_id, branch);
         return next;
       });
     };
-    const handleWorktreePatched = (worktree: Worktree) => {
-      if (worktree.archived) {
-        // Remove archived worktree from core map
-        setWorktreeById((prev) => {
-          if (!prev.has(worktree.worktree_id)) return prev;
+    const handleBranchPatched = (branch: Branch) => {
+      if (branch.archived) {
+        // Remove archived branch from core map
+        setBranchById((prev) => {
+          if (!prev.has(branch.branch_id)) return prev;
           const next = new Map(prev);
-          next.delete(worktree.worktree_id);
+          next.delete(branch.branch_id);
           return next;
         });
 
-        // Remove sessions under archived worktree from core maps
-        setSessionsByWorktree((prev) => {
-          if (!prev.has(worktree.worktree_id)) return prev;
+        // Remove sessions under archived branch from core maps
+        setSessionsByBranch((prev) => {
+          if (!prev.has(branch.branch_id)) return prev;
           const next = new Map(prev);
-          next.delete(worktree.worktree_id);
+          next.delete(branch.branch_id);
           return next;
         });
         setSessionById((prev) => {
           let changed = false;
           const next = new Map(prev);
           for (const [sessionId, session] of prev.entries()) {
-            if (session.worktree_id === worktree.worktree_id) {
+            if (session.branch_id === branch.branch_id) {
               next.delete(sessionId);
               changed = true;
             }
@@ -745,27 +745,27 @@ export function useAgorData(
         return;
       }
 
-      setWorktreeById((prev) => {
-        const existing = prev.get(worktree.worktree_id);
-        if (existing === worktree) return prev; // Same reference, no change
+      setBranchById((prev) => {
+        const existing = prev.get(branch.branch_id);
+        if (existing === branch) return prev; // Same reference, no change
         const next = new Map(prev);
-        next.set(worktree.worktree_id, worktree);
+        next.set(branch.branch_id, branch);
         return next;
       });
     };
-    const handleWorktreeRemoved = (worktree: Worktree) => {
-      setWorktreeById((prev) => {
-        if (!prev.has(worktree.worktree_id)) return prev; // Doesn't exist, nothing to remove
+    const handleBranchRemoved = (branch: Branch) => {
+      setBranchById((prev) => {
+        if (!prev.has(branch.branch_id)) return prev; // Doesn't exist, nothing to remove
         const next = new Map(prev);
-        next.delete(worktree.worktree_id);
+        next.delete(branch.branch_id);
         return next;
       });
     };
 
-    worktreesService.on('created', handleWorktreeCreated);
-    worktreesService.on('patched', handleWorktreePatched);
-    worktreesService.on('updated', handleWorktreePatched);
-    worktreesService.on('removed', handleWorktreeRemoved);
+    branchesService.on('created', handleBranchCreated);
+    branchesService.on('patched', handleBranchPatched);
+    branchesService.on('updated', handleBranchPatched);
+    branchesService.on('removed', handleBranchRemoved);
 
     // Subscribe to user events
     const usersService = client.service('users');
@@ -1154,7 +1154,7 @@ export function useAgorData(
     // initial mount. Feathers real-time events (`created`/`patched`/`removed`)
     // that fired while we were disconnected are gone — the daemon doesn't
     // keep a per-subscriber replay log — so without this, the app keeps
-    // showing stale state (vanished worktrees still on the board, missed new
+    // showing stale state (vanished branches still on the board, missed new
     // sessions, etc.) until the user refreshes the page.
     //
     // We skip the very first connect: the initial fetch above (gated on
@@ -1215,10 +1215,10 @@ export function useAgorData(
       reposService.removeListener('updated', handleRepoPatched);
       reposService.removeListener('removed', handleRepoRemoved);
 
-      worktreesService.removeListener('created', handleWorktreeCreated);
-      worktreesService.removeListener('patched', handleWorktreePatched);
-      worktreesService.removeListener('updated', handleWorktreePatched);
-      worktreesService.removeListener('removed', handleWorktreeRemoved);
+      branchesService.removeListener('created', handleBranchCreated);
+      branchesService.removeListener('patched', handleBranchPatched);
+      branchesService.removeListener('updated', handleBranchPatched);
+      branchesService.removeListener('removed', handleBranchRemoved);
 
       usersService.removeListener('created', handleUserCreated);
       usersService.removeListener('patched', handleUserPatched);

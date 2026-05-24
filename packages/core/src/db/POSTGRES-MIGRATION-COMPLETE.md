@@ -41,7 +41,7 @@ Created a blanket solution that eliminates all dialect-specific code:
 | `mcp-servers.ts`         | ✅ (3 occurrences)   | ✅ (2 occurrences)   | ✅ No transactions        |
 | `board-objects.ts`       | ✅ (8 occurrences)   | ✅ (2 occurrences)   | ✅ No transactions        |
 | `session-mcp-servers.ts` | ✅ (2 occurrences)   | ✅ (1 occurrence)    | ✅ No transactions        |
-| `worktrees.ts`           | ✅ (1 occurrence)    | ✅ No `.all()`       | ✅ select(tx), update(tx) |
+| `branches.ts`            | ✅ (1 occurrence)    | ✅ No `.all()`       | ✅ select(tx), update(tx) |
 | `base.ts`                | ✅ No changes needed | ✅ No changes needed | ✅ N/A                    |
 
 **Total:** 40+ `.get()` calls, 20+ `.all()` calls, 15+ `.run()` calls migrated
@@ -60,7 +60,7 @@ All transaction code now uses wrapped functions:
 - `sessions.ts` - Read-merge-write atomic updates
 - `repos.ts` - Atomic repo updates
 - `tasks.ts` - Atomic task updates
-- `worktrees.ts` - Atomic worktree updates
+- `branches.ts` - Atomic branch updates
 
 ### 5. ✅ Variable Shadowing Fixes
 

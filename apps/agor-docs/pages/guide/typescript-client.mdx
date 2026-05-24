@@ -34,9 +34,9 @@ import { createRestClient, getApiKeyFromEnv } from '@agor-live/client';
 const apiKey = getApiKeyFromEnv() ?? 'agor_sk_…'; // from User Settings → Personal API Keys
 const client = await createRestClient('http://localhost:3030', apiKey);
 
-const worktrees = await client.service('worktrees').find({ query: { $limit: 50 } });
+const branches = await client.service('branches').find({ query: { $limit: 50 } });
 const session = await client.service('sessions').create({
-  worktree_id: worktrees.data[0].worktree_id,
+  branch_id: branches.data[0].branch_id,
   agentic_tool: 'claude-code',
   initial_prompt: 'Run the test suite and summarize the output.',
 });
@@ -147,7 +147,7 @@ Issue API keys from **User Settings → Personal API Keys**. Keys are scoped to 
 
 ## What's in the surface
 
-Service types are exported and fully typed — `client.service('sessions')`, `client.service('worktrees')`, `client.service('boards')`, `client.service('messages')`, `client.service('tasks')`, `client.service('repos')`, `client.service('users')`, and the rest. Every model lives in `@agor/core/types` (re-exported from `@agor-live/client`), so `Session`, `Worktree`, `Task`, `Message`, `Board`, etc. are available without round-tripping through `any`.
+Service types are exported and fully typed — `client.service('sessions')`, `client.service('branches')`, `client.service('boards')`, `client.service('messages')`, `client.service('tasks')`, `client.service('repos')`, `client.service('users')`, and the rest. Every model lives in `@agor/core/types` (re-exported from `@agor-live/client`), so `Session`, `Branch`, `Task`, `Message`, `Board`, etc. are available without round-tripping through `any`.
 
 Helpers worth knowing:
 

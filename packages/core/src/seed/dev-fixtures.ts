@@ -11,15 +11,15 @@
 
 import os from 'node:os';
 import path from 'node:path';
-import type { RepoID, UUID, WorktreeID } from '@agor/core/types';
-import { isWorktreeRbacEnabled, loadConfigSync } from '../config/config-manager';
+import type { BranchID, RepoID, UUID } from '@agor/core/types';
+import { isBranchRbacEnabled, loadConfigSync } from '../config/config-manager';
 import {
   BoardObjectRepository,
   BoardRepository,
+  BranchRepository,
   RepoRepository,
-  WorktreeRepository,
 } from '../db/repositories';
-import { cloneRepo, createWorktree, getWorktreePath } from '../git';
+import { cloneRepo, createBranch, getBranchPath } from '../git';
 import { generateId } from '../lib/ids';
 import { DirectExecutor, UnixIntegrationService } from '../unix';
 
@@ -44,7 +44,7 @@ export interface SeedOptions {
 
 export interface SeedResult {
   repo_id: UUID;
-  worktree_id: WorktreeID;
+  branch_id: BranchID;
   skipped: boolean;
 }
 
@@ -75,13 +75,13 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
   const { createDatabase } = await import('../db/client');
   const db = createDatabase({ url: databaseUrl });
   const repoRepo = new RepoRepository(db);
-  const worktreeRepo = new WorktreeRepository(db);
+  const branchRepo = new BranchRepository(db);
   const boardRepo = new BoardRepository(db);
   const boardObjectRepo = new BoardObjectRepository(db);
 
   // Setup Unix integration if RBAC is enabled
   let unixIntegrationService: UnixIntegrationService | null = null;
-  const rbacEnabled = isWorktreeRbacEnabled();
+  const rbacEnabled = isBranchRbacEnabled();
   if (rbacEnabled) {
     const config = loadConfigSync();
     const daemonUser = config.daemon?.unix_user || os.userInfo().username;
@@ -100,13 +100,13 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
   if (existing && options.skipIfExists) {
     console.log('✓ Dev fixtures already exist, skipping...');
 
-    // Find the test-worktree
-    const worktrees = await worktreeRepo.findAll({ repo_id: existing.repo_id });
-    const testWorktree = worktrees.find((w) => w.name === 'test-worktree');
+    // Find the test-branch
+    const branches = await branchRepo.findAll({ repo_id: existing.repo_id });
+    const testBranch = branches.find((w) => w.name === 'test-branch');
 
     return {
       repo_id: existing.repo_id,
-      worktree_id: testWorktree?.worktree_id ?? (generateId() as WorktreeID),
+      branch_id: testBranch?.branch_id ?? (generateId() as BranchID),
       skipped: true,
     };
   }
@@ -162,34 +162,34 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
   const defaultBoard = await boardRepo.getDefault();
   console.log(`   ✓ Using default board: ${defaultBoard.name} (${defaultBoard.board_id})`);
 
-  // STEP 3: Create test-worktree
-  console.log('3️⃣  Creating test-worktree...');
+  // STEP 3: Create test-branch
+  console.log('3️⃣  Creating test-branch...');
 
-  const worktreeName = 'test-worktree';
-  const worktreePath = getWorktreePath(repoSlug, worktreeName);
+  const branchName = 'test-branch';
+  const branchPath = getBranchPath(repoSlug, branchName);
 
-  // Generate unique numeric ID for worktree (used for port allocation)
-  const worktreeUniqueId = Math.floor(Math.random() * 1000) + 1;
+  // Generate unique numeric ID for branch (used for port allocation)
+  const branchUniqueId = Math.floor(Math.random() * 1000) + 1;
 
-  // Create worktree with its own branch (can't checkout main twice)
-  const worktree = await worktreeRepo.create({
+  // Create branch with its own branch (can't checkout main twice)
+  const branch = await branchRepo.create({
     repo_id: repo.repo_id,
-    name: worktreeName,
-    ref: worktreeName, // Use worktree name as branch name
-    path: worktreePath,
+    name: branchName,
+    ref: branchName, // Use branch name as branch name
+    path: branchPath,
     base_ref: defaultBranch,
     new_branch: true, // Create new branch from main
-    worktree_unique_id: worktreeUniqueId,
+    branch_unique_id: branchUniqueId,
     created_by: userId,
     board_id: defaultBoard.board_id,
     needs_attention: false,
   });
 
-  // Create actual git worktree on disk
-  await createWorktree(
+  // Create actual git branch on disk
+  await createBranch(
     repoPath,
-    worktreePath,
-    worktreeName, // ref - new branch with same name as worktree
+    branchPath,
+    branchName, // ref - new branch with same name as branch
     true, // createBranch
     false, // pullLatest (just cloned)
     defaultBranch, // sourceBranch
@@ -197,16 +197,16 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
     'branch' // refType
   );
 
-  // Add user as owner of the worktree
-  await worktreeRepo.addOwner(worktree.worktree_id, userId);
+  // Add user as owner of the branch
+  await branchRepo.addOwner(branch.branch_id, userId);
 
-  // Unix Integration: Create worktree group and add owner (same as daemon hook does)
+  // Unix Integration: Create branch group and add owner (same as daemon hook does)
   if (unixIntegrationService) {
     try {
-      const groupName = await unixIntegrationService.createWorktreeGroup(worktree.worktree_id);
-      await unixIntegrationService.addUserToWorktreeGroup(worktree.worktree_id, userId);
+      const groupName = await unixIntegrationService.createBranchGroup(branch.branch_id);
+      await unixIntegrationService.addUserToBranchGroup(branch.branch_id, userId);
       // Fix permissions on .git/worktrees/<name>/ directory
-      await unixIntegrationService.fixWorktreeGitDirPermissions(worktree.worktree_id);
+      await unixIntegrationService.fixBranchGitDirPermissions(branch.branch_id);
       console.log(`   Unix group: ${groupName}`);
     } catch (error) {
       console.error(
@@ -216,10 +216,10 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
     }
   }
 
-  console.log(`   ✓ Created worktree: ${worktree.name} (${worktree.worktree_id})`);
+  console.log(`   ✓ Created branch: ${branch.name} (${branch.branch_id})`);
 
-  // STEP 4: Create board object to position worktree on board
-  console.log('4️⃣  Creating board object for worktree...');
+  // STEP 4: Create board object to position branch on board
+  console.log('4️⃣  Creating board object for branch...');
 
   // Position near viewport center (0,0) with random jitter
   // Jitter area = 2 * card width (card width ~500px, so jitter within ±1000px)
@@ -237,7 +237,7 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
 
   await boardObjectRepo.create({
     board_id: defaultBoard.board_id,
-    worktree_id: worktree.worktree_id,
+    branch_id: branch.branch_id,
     position: fallbackPosition,
   });
 
@@ -248,12 +248,12 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
   console.log('✅ Dev fixtures seeded successfully!');
   console.log('');
   console.log(`   Repo:     ${repo.slug} (${repo.repo_id})`);
-  console.log(`   Worktree: ${worktree.name} (${worktree.worktree_id})`);
+  console.log(`   Branch: ${branch.name} (${branch.branch_id})`);
   console.log('');
 
   return {
     repo_id: repo.repo_id,
-    worktree_id: worktree.worktree_id,
+    branch_id: branch.branch_id,
     skipped: false,
   };
 }

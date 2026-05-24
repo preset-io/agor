@@ -2,7 +2,7 @@
  * Card Repository
  *
  * Type-safe CRUD operations for cards with short ID support.
- * Cards live on boards alongside worktrees and can be placed in zones.
+ * Cards live on boards alongside branches and can be placed in zones.
  */
 
 import type { BoardID, Card, CardType, CardTypeID, CardWithType, UUID } from '@agor/core/types';

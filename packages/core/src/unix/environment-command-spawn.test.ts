@@ -3,9 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { captureWorktreeBuildSha, redactCommandForAudit } from './environment-command-spawn.js';
+import { captureBranchBuildSha, redactCommandForAudit } from './environment-command-spawn.js';
 
-describe('captureWorktreeBuildSha', () => {
+describe('captureBranchBuildSha', () => {
   let tmpDir: string;
 
   beforeEach(async () => {
@@ -27,17 +27,17 @@ describe('captureWorktreeBuildSha', () => {
     await git.add('README.md');
     await git.commit('Initial commit');
 
-    const sha = await captureWorktreeBuildSha(repoPath);
+    const sha = await captureBranchBuildSha(repoPath);
     expect(sha).toMatch(/^[0-9a-f]{7}$/);
   });
 
   it('returns undefined for a non-git path', async () => {
-    const sha = await captureWorktreeBuildSha(tmpDir);
+    const sha = await captureBranchBuildSha(tmpDir);
     expect(sha).toBeUndefined();
   });
 
   it('returns undefined for a nonexistent path', async () => {
-    const sha = await captureWorktreeBuildSha(path.join(tmpDir, 'does-not-exist'));
+    const sha = await captureBranchBuildSha(path.join(tmpDir, 'does-not-exist'));
     expect(sha).toBeUndefined();
   });
 
@@ -47,7 +47,7 @@ describe('captureWorktreeBuildSha', () => {
     const git = simpleGit(repoPath);
     await git.init(['--initial-branch=main']);
 
-    const sha = await captureWorktreeBuildSha(repoPath);
+    const sha = await captureBranchBuildSha(repoPath);
     expect(sha).toBeUndefined();
   });
 });

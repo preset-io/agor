@@ -51,12 +51,12 @@ function parseMcpToolName(rawName: string): { server: string; tool: string } | n
  * MCP execute/search proxy tools when possible.
  *
  * When input IS available (from message content blocks):
- * - mcp__agor__agor_execute_tool + input.tool_name="agor_worktrees_create"
- *   → "agor_worktrees_create"
- * - agor.agor_execute_tool + input.tool_name="agor_worktrees_create"
- *   → "agor_worktrees_create"
- * - mcp__agor__agor_search_tools + input.query="worktrees"
- *   → "search_tools: worktrees"
+ * - mcp__agor__agor_execute_tool + input.tool_name="agor_branches_create"
+ *   → "agor_branches_create"
+ * - agor.agor_execute_tool + input.tool_name="agor_branches_create"
+ *   → "agor_branches_create"
+ * - mcp__agor__agor_search_tools + input.query="branches"
+ *   → "search_tools: branches"
  *
  * When input is NOT available (real-time streaming events):
  * - mcp__agor__agor_execute_tool → "agor_execute_tool"

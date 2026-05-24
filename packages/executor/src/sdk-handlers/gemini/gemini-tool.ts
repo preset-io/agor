@@ -13,13 +13,13 @@
 import { execSync } from 'node:child_process';
 import { generateId } from '@agor/core/db';
 import type {
+  BranchRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
   SessionMCPServerRepository,
   SessionRepository,
   UsersRepository,
-  WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 import type { TokenUsage } from '../../types/token-usage.js';
@@ -66,7 +66,7 @@ export class GeminiTool implements ITool {
     apiKey?: string,
     private messagesService?: MessagesService,
     private tasksService?: TasksService,
-    worktreesRepo?: WorktreeRepository,
+    branchesRepo?: BranchRepository,
     reposRepo?: RepoRepository,
     mcpServerRepo?: MCPServerRepository,
     sessionMCPRepo?: SessionMCPServerRepository,
@@ -79,7 +79,7 @@ export class GeminiTool implements ITool {
         messagesRepo,
         sessionsRepo,
         apiKey,
-        worktreesRepo,
+        branchesRepo,
         reposRepo,
         mcpServerRepo,
         sessionMCPRepo,

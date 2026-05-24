@@ -25,7 +25,7 @@ graph TB
     subgraph "Agor Daemon (Trusted Zone)"
         Feathers["<b>FeathersJS Server</b>"]
         MCP["<b>MCP HTTP Endpoint</b><br/>POST /mcp?sessionToken=..."]
-        Services["<b>Services</b><br/>Sessions, Tasks, Messages<br/>Boards, Worktrees, Repos<br/>Users, MCP, Context, Health"]
+        Services["<b>Services</b><br/>Sessions, Tasks, Messages<br/>Boards, Branches, Repos<br/>Users, MCP, Context, Health"]
         ExecutorPool["<b>Executor Pool</b><br/>Spawn & manage executors"]
         IPCService["<b>IPC Service</b><br/>Unix socket server"]
         ORM["<b>Drizzle ORM</b><br/>Type-safe queries"]
@@ -50,7 +50,7 @@ graph TB
 
     subgraph Storage
         DB[("<b>LibSQL Database</b><br/>~/.agor/agor.db<br/>🔒 Daemon access only")]
-        Git["<b>Git Worktrees</b><br/>~/.agor/worktrees/"]
+        Git["<b>Git Branches</b><br/>~/.agor/worktrees/"]
         Config["<b>Config</b><br/>~/.agor/config.yaml<br/>🔒 Daemon access only"]
     end
 
@@ -153,12 +153,12 @@ const agor = createAgorClient({ url: 'http://localhost:3030' });
 await agor.authenticate({ strategy: 'local', email, password });
 
 // Strongly-typed CRUD across every service
-const { data: worktrees } = await agor.service('worktrees').find({
+const { data: branches } = await agor.service('branches').find({
   query: { board_id: boardId },
 });
 
 const session = await agor.service('sessions').create({
-  worktree_id: worktrees[0].id,
+  branch_id: branches[0].id,
   agentic_tool: 'claude-code',
   initial_prompt: 'Add OAuth login',
 });
@@ -171,7 +171,7 @@ agor.service('messages').on('created', (msg) => {
 
 **What you get:**
 
-- **Branded ID types** — `WorktreeId`, `SessionId`, `BoardId` aren't interchangeable; the compiler catches mix-ups.
+- **Branded ID types** — `BranchId`, `SessionId`, `BoardId` aren't interchangeable; the compiler catches mix-ups.
 - **Service hooks across REST + WebSocket** — One subscription, one event API; the same `created`/`patched`/`removed` pattern for every entity.
 - **Schema-driven types** — Generated from Drizzle ORM models so DB schema changes propagate to clients at compile time.
 - **Authentication strategies built in** — `local`, `jwt`, `api-key`, and session-token strategies share one client surface.
@@ -283,7 +283,7 @@ Agents running in Agor sessions can **introspect their own execution context**:
 ← {
     session_id: "019a1...",
     agentic_tool: "claude-code",
-    worktree_id: "019a2...",
+    branch_id: "019a2...",
     board_id: "019a3...",
     status: "running"
   }
@@ -379,10 +379,10 @@ $ agor session list | grep running | wc -l
 **Branch Tools:**
 | Tool | Description | Example |
 |------|-------------|---------|
-| `agor_worktrees_get` | Get branch details | `{ worktreeId: '...' }` |
-| `agor_worktrees_list` | List all branches | `{ limit: 10 }` |
-| `agor_worktrees_create` | Create a branch with optional issue/PR links | `{ repoId: '019a...', worktreeName: 'feat-x', issueUrl: 'https://...' }` |
-| `agor_worktrees_update` | Update branch metadata (issue/PR URLs, notes) | `{ worktreeId: '019a...', pullRequestUrl: 'https://...', notes: 'Ready for review' }` |
+| `agor_branches_get` | Get branch details | `{ branchId: '...' }` |
+| `agor_branches_list` | List all branches | `{ limit: 10 }` |
+| `agor_branches_create` | Create a branch with optional issue/PR links | `{ repoId: '019a...', branchName: 'feat-x', issueUrl: 'https://...' }` |
+| `agor_branches_update` | Update branch metadata (issue/PR URLs, notes) | `{ branchId: '019a...', pullRequestUrl: 'https://...', notes: 'Ready for review' }` |
 
 **Board Tools:**
 | Tool | Description | Example |
@@ -439,7 +439,7 @@ Planned tools for expanded orchestration capabilities:
 
 - `agor_sessions_fork` - Fork session at decision point (preserve history)
 - `agor_boards_create` - Create new board for organizing sessions
-- `agor_worktrees_clone` - Clone an existing branch configuration (branch, metadata) for rapid duplication
+- `agor_branches_clone` - Clone an existing branch configuration (branch, metadata) for rapid duplication
 
 **Note:** `agor_sessions_spawn` is already live and enables autonomous multi-agent delegation!
 
@@ -475,10 +475,10 @@ Every session requires a branch (foreign key constraint):
 ├── agor.db              # Database
 ├── repos/               # Bare repositories
 │   └── myapp/
-└── worktrees/           # Session worktrees
+└── branches/           # Session branches
     └── myapp/
-        ├── main/        # Session 1 worktree
-        └── feat-auth/   # Session 2 worktree
+        ├── main/        # Session 1 branch
+        └── feat-auth/   # Session 2 branch
 ```
 
 **Why branches?**

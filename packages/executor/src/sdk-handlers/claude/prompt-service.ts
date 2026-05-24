@@ -8,12 +8,12 @@
 import { shortId } from '@agor/core/db';
 import type { PermissionMode, SDKResultMessage } from '@agor/core/sdk';
 import type {
+  BranchRepository,
   MCPServerRepository,
   MessagesRepository,
   SessionMCPServerRepository,
   SessionRepository,
   UsersRepository,
-  WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { SessionID, TaskID } from '../../types.js';
@@ -63,7 +63,7 @@ export class ClaudePromptService {
     private permissionService?: PermissionService,
     private tasksService?: TasksService,
     private sessionsService?: SessionsPatchClient, // FeathersJS Sessions service for WebSocket broadcasting
-    private worktreesRepo?: WorktreeRepository,
+    private branchesRepo?: BranchRepository,
     private reposRepo?: import('../../db/feathers-repositories').RepoRepository,
     private messagesService?: MessagesService, // FeathersJS Messages service for creating permission requests
     private mcpEnabled?: boolean,
@@ -189,7 +189,7 @@ If you continue to see authentication errors, please contact your Agor administr
         mcpEnabled: this.mcpEnabled,
         sessionsService: this.sessionsService,
         messagesService: this.messagesService,
-        worktreesRepo: this.worktreesRepo,
+        branchesRepo: this.branchesRepo,
         usersRepo: this.usersRepo,
         permissionLocks: this.permissionLocks,
       },
@@ -355,7 +355,7 @@ If you continue to see authentication errors, please contact your Agor administr
         mcpEnabled: this.mcpEnabled,
         sessionsService: this.sessionsService,
         messagesService: this.messagesService,
-        worktreesRepo: this.worktreesRepo,
+        branchesRepo: this.branchesRepo,
         usersRepo: this.usersRepo,
         permissionLocks: this.permissionLocks,
       },

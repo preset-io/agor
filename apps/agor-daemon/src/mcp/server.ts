@@ -31,6 +31,7 @@ import { ToolRegistry } from './tool-registry.js';
 import { registerAnalyticsTools } from './tools/analytics.js';
 import { registerArtifactTools } from './tools/artifacts.js';
 import { registerBoardTools } from './tools/boards.js';
+import { registerBranchTools } from './tools/branches.js';
 import { registerCardTypeTools } from './tools/card-types.js';
 import { registerCardTools } from './tools/cards.js';
 import { registerEnvironmentTools } from './tools/environment.js';
@@ -43,7 +44,6 @@ import { registerSessionTools } from './tools/sessions.js';
 import { registerTaskTools } from './tools/tasks.js';
 import { registerUserTools } from './tools/users.js';
 import { registerWidgetTools } from './tools/widgets.js';
-import { registerWorktreeTools } from './tools/worktrees.js';
 
 /**
  * Shared context passed to every tool handler.
@@ -92,7 +92,7 @@ export function textResult(data: unknown) {
 }
 
 /** Server instructions shown to agents when tool search is enabled. */
-const SERVER_INSTRUCTIONS = `Agor is a multiplayer canvas for orchestrating AI coding agents. It manages branches (isolated workspaces backed by git worktrees), tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration.
+const SERVER_INSTRUCTIONS = `Agor is a multiplayer canvas for orchestrating AI coding agents. It manages branches (isolated workspaces backed by git branches), tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration.
 
 This server uses progressive tool discovery. Only 2 tools are listed directly — use them to discover and call all available tools:
 
@@ -102,7 +102,7 @@ This server uses progressive tool discovery. Only 2 tools are listed directly �
 Domains:
 - sessions: Agent conversations with genealogy (fork/spawn), task tracking, and message history
 - repos: Repository registration and management
-- worktrees: Branches with isolated git refs, board placement, zone pinning, and assistant discovery. Every \`agor_worktrees_*\` tool also has an \`agor_branches_*\` alias; the worktrees-prefixed names are deprecated.
+- branches: Branches with isolated git refs, board placement, zone pinning, and assistant discovery.
 - environment: Start/stop/health/logs for branch dev environments
 - boards: Spatial canvases with zones for organizing branches and cards
 - cards: Kanban-style cards and card type definitions on boards
@@ -116,8 +116,8 @@ Common workflows:
 Create a branch and start a session:
 1. agor_repos_list → get repoId
 2. agor_boards_list → get boardId
-3. agor_branches_create(repoId, boardId, worktreeName) → get worktreeId
-4. agor_sessions_create(worktreeId, agenticTool, initialPrompt)
+3. agor_branches_create(repoId, boardId, branchName) → get branchId
+4. agor_sessions_create(branchId, agenticTool, initialPrompt)
 
 Delegate a subtask to a child agent:
 1. agor_sessions_spawn(prompt) — inherits current branch, tracks parent-child genealogy
@@ -229,9 +229,9 @@ function buildRegistry(servicesConfig?: DaemonServicesConfig): ToolRegistry {
     registerRepoTools(tempServer, dummyCtx);
   }
 
-  if (isDomainEnabled('worktrees', servicesConfig)) {
-    registry.setCurrentDomain('worktrees');
-    registerWorktreeTools(tempServer, dummyCtx);
+  if (isDomainEnabled('branches', servicesConfig)) {
+    registry.setCurrentDomain('branches');
+    registerBranchTools(tempServer, dummyCtx);
     registry.setCurrentDomain('environment');
     registerEnvironmentTools(tempServer, dummyCtx);
   }
@@ -387,8 +387,8 @@ function createMcpServer(
   });
   domainRegister('widgets', registerWidgetTools);
   domainRegister('repos', registerRepoTools);
-  domainRegister('worktrees', (s, c) => {
-    registerWorktreeTools(s, c);
+  domainRegister('branches', (s, c) => {
+    registerBranchTools(s, c);
     registerEnvironmentTools(s, c);
   });
   domainRegister('boards', registerBoardTools);

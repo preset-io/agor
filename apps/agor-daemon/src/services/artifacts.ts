@@ -28,9 +28,9 @@ import {
   ArtifactRepository,
   ArtifactTrustGrantRepository,
   BoardRepository,
+  BranchRepository,
   type Database,
   shortId,
-  WorktreeRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
@@ -43,13 +43,13 @@ import type {
   ArtifactStatus,
   ArtifactTrustScopeType,
   BoardID,
+  BranchID,
   QueryParams,
   SandpackConfig,
   SandpackError,
   SandpackTemplate,
   UserID,
   UserRole,
-  WorktreeID,
 } from '@agor/core/types';
 import {
   ARTIFACT_SCOPED_ONLY_GRANT_KEYS,
@@ -203,7 +203,7 @@ function readArtifactSidecar(folderPath: string): ArtifactSidecar | null {
 
 export type ArtifactParams = QueryParams<{
   board_id?: BoardID;
-  worktree_id?: WorktreeID;
+  branch_id?: BranchID;
   archived?: boolean;
 }>;
 
@@ -215,7 +215,7 @@ const SYNTHESIZED_ENV_PATH = '/.env';
 export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>, ArtifactParams> {
   private artifactRepo: ArtifactRepository;
   private trustRepo: ArtifactTrustGrantRepository;
-  private worktreeRepo: WorktreeRepository;
+  private branchRepo: BranchRepository;
   private boardRepo: BoardRepository;
   private app: Application;
   /** Held for `resolveUserEnvironment` (scope-aware env-var resolution). */
@@ -279,7 +279,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     });
     this.artifactRepo = artifactRepo;
     this.trustRepo = new ArtifactTrustGrantRepository(db);
-    this.worktreeRepo = new WorktreeRepository(db);
+    this.branchRepo = new BranchRepository(db);
     this.boardRepo = new BoardRepository(db);
     this.app = app;
     this.dbRef = db;
@@ -400,10 +400,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   ): Promise<Artifact> {
     const folderPath = path.resolve(data.folderPath);
 
-    // Path containment: only allow reading from worktree paths or temp dirs.
-    // The matching worktree id (if any) is stored on the row for provenance
-    // + future "list artifacts I published from worktree X" filtering.
-    const matchedWorktreeId = await this.validatePublishPath(folderPath);
+    // Path containment: only allow reading from branch paths or temp dirs.
+    // The matching branch id (if any) is stored on the row for provenance
+    // + future "list artifacts I published from branch X" filtering.
+    const matchedBranchId = await this.validatePublishPath(folderPath);
 
     if (!fs.existsSync(folderPath)) {
       throw new Error(`Folder not found: ${folderPath}`);
@@ -473,7 +473,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
       const updated = await this.artifactRepo.update(existing.artifact_id, {
         name: resolvedName,
-        worktree_id: matchedWorktreeId ?? existing.worktree_id ?? null,
+        branch_id: matchedBranchId ?? existing.branch_id ?? null,
         files,
         dependencies: cachedDeps,
         entry: cachedEntry,
@@ -506,7 +506,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const artifact = await this.artifactRepo.create({
       artifact_id: artifactId,
       board_id: resolvedBoardId,
-      worktree_id: matchedWorktreeId,
+      branch_id: matchedBranchId,
       name: resolvedName,
       path: folderPath,
       template,
@@ -703,13 +703,13 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   /**
-   * Materialize an artifact's stored file map to a destination under a worktree.
+   * Materialize an artifact's stored file map to a destination under a branch.
    * Inverse of publishArtifact(). Sandpack metadata is reconstructed as a sidecar
    * `agor.artifact.json` so a round-trip via publishArtifact() round-trips the
    * metadata that doesn't live in the file map.
    *
    * Security:
-   * - destination must resolve strictly inside the worktree root.
+   * - destination must resolve strictly inside the branch root.
    * - per-file paths from the artifact's `files` map are re-validated to
    *   block traversal keys.
    * - when overwriting, uses `fs.rm` which removes symlinks rather than
@@ -717,7 +717,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    */
   async land(
     artifactId: string,
-    worktreePath: string,
+    branchPath: string,
     options?: { subpath?: string; overwrite?: boolean }
   ): Promise<{ destinationPath: string; fileCount: number; bytesWritten: number }> {
     const artifact = await this.artifactRepo.findById(artifactId);
@@ -726,10 +726,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       throw new Error(`Artifact ${artifactId} has no stored files to land`);
     }
 
-    if (!fs.existsSync(worktreePath)) {
-      throw new Error(`Worktree path does not exist: ${worktreePath}`);
+    if (!fs.existsSync(branchPath)) {
+      throw new Error(`Branch path does not exist: ${branchPath}`);
     }
-    const worktreeRoot = await realpath(worktreePath);
+    const branchRoot = await realpath(branchPath);
 
     const rawSubpath =
       options?.subpath && options.subpath.trim().length > 0
@@ -737,19 +737,19 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         : path.join('.agor', 'artifacts', defaultLandFolderName(artifact));
 
     if (path.isAbsolute(rawSubpath)) {
-      throw new Error(`subpath must be relative to the worktree root: ${rawSubpath}`);
+      throw new Error(`subpath must be relative to the branch root: ${rawSubpath}`);
     }
 
-    const destination = path.resolve(worktreeRoot, rawSubpath);
+    const destination = path.resolve(branchRoot, rawSubpath);
     const canonicalDestination = await canonicalizeExistingPrefix(destination);
 
     const assertInsideRoot = (candidate: string, reason: string): void => {
-      if (candidate === worktreeRoot) {
-        throw new Error(`${reason}: must not resolve to the worktree root`);
+      if (candidate === branchRoot) {
+        throw new Error(`${reason}: must not resolve to the branch root`);
       }
-      const rel = path.relative(worktreeRoot, candidate);
+      const rel = path.relative(branchRoot, candidate);
       if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
-        throw new Error(`${reason}: escapes worktree root`);
+        throw new Error(`${reason}: escapes branch root`);
       }
     };
     assertInsideRoot(destination, `subpath ${rawSubpath}`);
@@ -1680,12 +1680,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
   /**
    * Restrict publish folder paths to known-safe roots: any registered
-   * worktree path, or /tmp / /var/tmp. Returns the matching worktree's id
-   * when the path is inside a worktree (caller persists this on the
-   * artifact row for provenance + by-worktree filtering); returns null for
+   * branch path, or /tmp / /var/tmp. Returns the matching branch's id
+   * when the path is inside a branch (caller persists this on the
+   * artifact row for provenance + by-branch filtering); returns null for
    * temp-dir paths.
    */
-  private async validatePublishPath(folderPath: string): Promise<WorktreeID | null> {
+  private async validatePublishPath(folderPath: string): Promise<BranchID | null> {
     const resolved = path.resolve(folderPath);
 
     const allowedTempRoots = ['/tmp', '/var/tmp'];
@@ -1693,16 +1693,16 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       if (resolved.startsWith(root + path.sep) || resolved === root) return null;
     }
 
-    const worktrees = await this.worktreeRepo.findAll();
-    for (const wt of worktrees) {
+    const branches = await this.branchRepo.findAll();
+    for (const wt of branches) {
       const wtPath = path.resolve(wt.path);
       if (resolved.startsWith(wtPath + path.sep) || resolved === wtPath) {
-        return wt.worktree_id as WorktreeID;
+        return wt.branch_id as BranchID;
       }
     }
 
     throw new Error(
-      `Publish path rejected: ${folderPath} is not inside a known worktree or temp directory`
+      `Publish path rejected: ${folderPath} is not inside a known branch or temp directory`
     );
   }
 

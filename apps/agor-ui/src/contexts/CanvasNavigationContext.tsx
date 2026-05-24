@@ -18,7 +18,7 @@ import {
  * prop-drilling a callback through the App tree.
  *
  * `nodeId` is whatever id React Flow uses for the target node. For
- * worktrees that's `worktree_id`; the same plumbing works for any other
+ * branches that's `branch_id`; the same plumbing works for any other
  * node type rendered on the canvas (artifacts, cards, comments, zones) as
  * long as the id matches the rendered node.
  *

@@ -231,12 +231,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
           // Realign on terminal transition — decoupled from session-state
           // updates and callback delivery so an error there doesn't skip it.
-          if (session.worktree_id) {
+          if (session.branch_id) {
             this.app
-              .service('worktrees')
-              .get(session.worktree_id, params)
-              .then((worktree) => {
-                const repoId = worktree?.repo_id;
+              .service('branches')
+              .get(session.branch_id, params)
+              .then((branch) => {
+                const repoId = branch?.repo_id;
                 if (!repoId) return;
                 return ensureRepoOriginAlignedById(this.app, repoId);
               })

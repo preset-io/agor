@@ -1,4 +1,4 @@
-import type { Artifact, Board, Worktree } from '@agor-live/client';
+import type { Artifact, Board, Branch } from '@agor-live/client';
 import { shortId } from '@agor-live/client';
 import { AimOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons';
 import {
@@ -22,7 +22,7 @@ import { useAppNavigation } from '../../hooks/useAppNavigation';
 
 interface ArtifactsTableProps {
   artifactById: Map<string, Artifact>;
-  worktreeById: Map<string, Worktree>;
+  branchById: Map<string, Branch>;
   boardById: Map<string, Board>;
   onUpdate?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDelete?: (artifactId: string) => void;
@@ -40,7 +40,7 @@ const templateColors: Record<string, string> = {
 
 export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
   artifactById,
-  worktreeById,
+  branchById,
   boardById,
   onUpdate,
   onDelete,
@@ -153,16 +153,14 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
     },
     {
       title: 'Branch',
-      dataIndex: 'worktree_id',
-      key: 'worktree_id',
+      dataIndex: 'branch_id',
+      key: 'branch_id',
       width: 160,
-      render: (worktreeId: string | null) => {
-        if (!worktreeId) return <Typography.Text type="secondary">—</Typography.Text>;
-        const worktree = worktreeById.get(worktreeId);
+      render: (branchId: string | null) => {
+        if (!branchId) return <Typography.Text type="secondary">—</Typography.Text>;
+        const branch = branchById.get(branchId);
         return (
-          <Typography.Text type="secondary">
-            {worktree?.name || shortId(worktreeId)}
-          </Typography.Text>
+          <Typography.Text type="secondary">{branch?.name || shortId(branchId)}</Typography.Text>
         );
       },
     },

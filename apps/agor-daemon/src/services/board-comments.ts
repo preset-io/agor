@@ -6,7 +6,7 @@
  *
  * Features:
  * - Board-level conversations (Phase 1)
- * - Object attachments: session, task, message, worktree (Phase 2)
+ * - Object attachments: session, task, message, branch (Phase 2)
  * - Spatial positioning: absolute/relative (Phase 3)
  * - Mentions and notifications (Phase 4)
  */
@@ -24,7 +24,7 @@ export type BoardCommentsParams = QueryParams<{
   session_id?: string;
   task_id?: string;
   message_id?: string;
-  worktree_id?: string;
+  branch_id?: string;
   resolved?: boolean;
   created_by?: string;
 }>;
@@ -66,7 +66,7 @@ export class BoardCommentsService extends DrizzleService<
       session_id: filters.session_id,
       task_id: filters.task_id,
       message_id: filters.message_id,
-      worktree_id: filters.worktree_id,
+      branch_id: filters.branch_id,
       resolved: filters.resolved,
       created_by: filters.created_by,
     });

@@ -27,8 +27,8 @@ export const SERVICE_TIER_RANK: Record<ServiceTier, number> = {
 export interface DaemonServicesConfig {
   /** sessions, tasks, messages — the prompt loop */
   core?: ServiceTier;
-  /** worktree CRUD + board placement */
-  worktrees?: ServiceTier;
+  /** branch CRUD + board placement */
+  branches?: ServiceTier;
   /** repository management */
   repos?: ServiceTier;
   /** user accounts + auth */
@@ -63,7 +63,7 @@ export type ServiceGroupName = Exclude<keyof DaemonServicesConfig, 'static_files
 /** All service group names as an array (useful for iteration) */
 export const SERVICE_GROUP_NAMES: ServiceGroupName[] = [
   'core',
-  'worktrees',
+  'branches',
   'repos',
   'users',
   'boards',
@@ -79,12 +79,12 @@ export const SERVICE_GROUP_NAMES: ServiceGroupName[] = [
 
 /**
  * Allowed tiers per service group.
- * Core infrastructure services (core, worktrees, repos, users) cannot be turned off —
+ * Core infrastructure services (core, branches, repos, users) cannot be turned off —
  * the daemon doesn't function without them.
  */
 export const ALLOWED_SERVICE_TIERS: Record<ServiceGroupName, readonly ServiceTier[]> = {
   core: ['on', 'readonly', 'internal'],
-  worktrees: ['on', 'readonly', 'internal'],
+  branches: ['on', 'readonly', 'internal'],
   repos: ['on', 'readonly', 'internal'],
   users: ['on', 'readonly', 'internal'],
   boards: ['on', 'readonly', 'internal', 'off'],
@@ -102,12 +102,12 @@ export const ALLOWED_SERVICE_TIERS: Record<ServiceGroupName, readonly ServiceTie
  * Cross-service dependency declarations.
  *
  * Key = service group, Value = groups it depends on (must be at least 'internal').
- * e.g., core depends on users (sessions→users.get) and worktrees (sessions→worktrees.get)
+ * e.g., core depends on users (sessions→users.get) and branches (sessions→branches.get)
  */
 export const SERVICE_DEPENDENCIES: Partial<Record<ServiceGroupName, ServiceGroupName[]>> = {
-  core: ['users', 'worktrees'],
-  scheduler: ['core', 'worktrees'],
-  gateway: ['core', 'worktrees'],
+  core: ['users', 'branches'],
+  scheduler: ['core', 'branches'],
+  gateway: ['core', 'branches'],
 };
 
 /**
@@ -121,7 +121,7 @@ export const DEFAULT_SERVICE_TIER: ServiceTier = 'on';
  */
 export const SERVICE_GROUP_TO_MCP_DOMAINS: Partial<Record<ServiceGroupName, string[]>> = {
   core: ['sessions', 'widgets'],
-  worktrees: ['worktrees', 'environment'],
+  branches: ['branches', 'environment'],
   repos: ['repos'],
   users: ['users'],
   boards: ['boards'],

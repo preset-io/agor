@@ -3,7 +3,7 @@
  *
  * These handlers execute privileged Unix operations directly in the executor process.
  * They implement high-level "sync" operations that are idempotent and handle all
- * necessary Unix state for a given entity (worktree, repo, or user).
+ * necessary Unix state for a given entity (branch, repo, or user).
  *
  * Architecture:
  * - Daemon fires-and-forgets these commands via spawnExecutorFireAndForget()
@@ -20,13 +20,13 @@ import { exec, execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { shortId } from '@agor/core/db';
-import type { RepoID, WorktreeID } from '@agor/core/types';
+import type { BranchID, RepoID } from '@agor/core/types';
 import {
   AGOR_USERS_GROUP,
   assertChpasswdInputSafe,
+  generateBranchGroupName,
   generateRepoGroupName,
-  generateWorktreeGroupName,
-  getWorktreePermissionMode,
+  getBranchPermissionMode,
   isValidUnixUsername,
   REPO_GIT_PERMISSION_MODE,
   UnixGroupCommands,
@@ -34,9 +34,9 @@ import {
 } from '@agor/core/unix';
 import type {
   ExecutorResult,
+  UnixSyncBranchPayload,
   UnixSyncRepoPayload,
   UnixSyncUserPayload,
-  UnixSyncWorktreePayload,
 } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
 import { createExecutorClient } from '../services/feathers-client.js';
@@ -46,12 +46,12 @@ const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
 /**
- * Shape-check for a worktree name before it is embedded in a shell or
+ * Shape-check for a branch name before it is embedded in a shell or
  * passed to privileged tools. Matches conservative filesystem-friendly set:
  * starts with alnum, followed by alnum / dot / dash / underscore, max 64
  * chars. Rejects `..`, `/`, shell metachars, leading `-`.
  */
-export function isValidWorktreeName(name: string): boolean {
+export function isValidBranchName(name: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name);
 }
 
@@ -133,7 +133,7 @@ async function runCommands(commands: string[]): Promise<void> {
  * - Ensure repo Unix group exists
  * - Set permissions on .git/ directory
  * - Add daemon user to group (if provided)
- * - Add all worktree owners to repo group
+ * - Add all branch owners to repo group
  */
 export async function handleUnixSyncRepo(
   payload: UnixSyncRepoPayload,
@@ -219,17 +219,17 @@ export async function handleUnixSyncRepo(
       console.log(`[unix.sync-repo] Updated repo record with unix_group`);
     }
 
-    // Fetch all worktrees for this repo and add their owners to repo group
-    const worktreesResult = await client.service('worktrees').find({
+    // Fetch all branches for this repo and add their owners to repo group
+    const branchesResult = await client.service('branches').find({
       query: { repo_id: repoId, $limit: 1000 },
     });
-    const worktrees = Array.isArray(worktreesResult) ? worktreesResult : worktreesResult.data;
+    const branches = Array.isArray(branchesResult) ? branchesResult : branchesResult.data;
 
     const addedUsers = new Set<string>();
-    for (const wt of worktrees) {
-      // Get owners for this worktree
+    for (const wt of branches) {
+      // Get owners for this branch
       try {
-        const ownersResult = await client.service(`worktrees/${wt.worktree_id}/owners`).find({});
+        const ownersResult = await client.service(`branches/${wt.branch_id}/owners`).find({});
         const owners = Array.isArray(ownersResult) ? ownersResult : ownersResult.data || [];
 
         for (const owner of owners as Array<{ unix_username?: string }>) {
@@ -245,10 +245,8 @@ export async function handleUnixSyncRepo(
           }
         }
       } catch (_error) {
-        // Worktree owners service might not exist if RBAC is disabled
-        console.log(
-          `[unix.sync-repo] Could not fetch owners for worktree ${shortId(wt.worktree_id)}`
-        );
+        // Branch owners service might not exist if RBAC is disabled
+        console.log(`[unix.sync-repo] Could not fetch owners for branch ${shortId(wt.branch_id)}`);
       }
     }
 
@@ -279,29 +277,29 @@ export async function handleUnixSyncRepo(
 }
 
 // ============================================================
-// WORKTREE SYNC OPERATIONS
+// BRANCH SYNC OPERATIONS
 // ============================================================
 
 /**
- * Sync Unix state for a worktree
+ * Sync Unix state for a branch
  *
  * This is idempotent - safe to call multiple times.
  * Handles:
- * - Ensure worktree Unix group exists
+ * - Ensure branch Unix group exists
  * - Set permissions based on others_fs_access
  * - Add daemon user to group (if provided)
- * - Add all owners to worktree group
+ * - Add all owners to branch group
  * - Add owners to repo group (for .git/ access)
  * - Fix .git/worktrees/<name>/ permissions
  */
-export async function handleUnixSyncWorktree(
-  payload: UnixSyncWorktreePayload,
+export async function handleUnixSyncBranch(
+  payload: UnixSyncBranchPayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
   if (options.dryRun) {
     return {
       success: true,
-      data: { dryRun: true, command: 'unix.sync-worktree', worktreeId: payload.params.worktreeId },
+      data: { dryRun: true, command: 'unix.sync-branch', branchId: payload.params.branchId },
     };
   }
 
@@ -310,64 +308,62 @@ export async function handleUnixSyncWorktree(
   try {
     const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
     client = await createExecutorClient(daemonUrl, payload.sessionToken);
-    console.log('[unix.sync-worktree] Connected to daemon');
+    console.log('[unix.sync-branch] Connected to daemon');
 
-    const worktreeId = payload.params.worktreeId;
+    const branchId = payload.params.branchId;
 
     // Handle delete mode
     if (payload.params.delete) {
-      // Fetch worktree to get group name
+      // Fetch branch to get group name
       try {
-        const worktree = await client.service('worktrees').get(worktreeId);
-        if (worktree.unix_group) {
-          const exists = await checkCommand(UnixGroupCommands.groupExists(worktree.unix_group));
+        const branch = await client.service('branches').get(branchId);
+        if (branch.unix_group) {
+          const exists = await checkCommand(UnixGroupCommands.groupExists(branch.unix_group));
           if (exists) {
-            await runCommand(UnixGroupCommands.deleteGroup(worktree.unix_group));
-            console.log(`[unix.sync-worktree] Deleted group ${worktree.unix_group}`);
+            await runCommand(UnixGroupCommands.deleteGroup(branch.unix_group));
+            console.log(`[unix.sync-branch] Deleted group ${branch.unix_group}`);
           }
         }
       } catch {
-        // Worktree might already be deleted from DB
-        console.log(`[unix.sync-worktree] Worktree ${worktreeId} not found in DB, skipping`);
+        // Branch might already be deleted from DB
+        console.log(`[unix.sync-branch] Branch ${branchId} not found in DB, skipping`);
       }
-      return { success: true, data: { worktreeId, deleted: true } };
+      return { success: true, data: { branchId, deleted: true } };
     }
 
-    // Fetch worktree details
-    const worktree = await client.service('worktrees').get(worktreeId);
-    if (!worktree.path) {
+    // Fetch branch details
+    const branch = await client.service('branches').get(branchId);
+    if (!branch.path) {
       return {
         success: false,
-        error: { code: 'WORKTREE_NO_PATH', message: 'Worktree has no path' },
+        error: { code: 'BRANCH_NO_PATH', message: 'Branch has no path' },
       };
     }
 
-    const groupName = generateWorktreeGroupName(worktreeId as WorktreeID);
-    console.log(
-      `[unix.sync-worktree] Syncing worktree ${shortId(worktreeId)} with group ${groupName}`
-    );
+    const groupName = generateBranchGroupName(branchId as BranchID);
+    console.log(`[unix.sync-branch] Syncing branch ${shortId(branchId)} with group ${groupName}`);
 
     // Ensure group exists
     const groupExists = await checkCommand(UnixGroupCommands.groupExists(groupName));
     if (!groupExists) {
       await runCommand(UnixGroupCommands.createGroup(groupName));
-      console.log(`[unix.sync-worktree] Created group ${groupName}`);
+      console.log(`[unix.sync-branch] Created group ${groupName}`);
     }
 
-    // Set permissions on worktree directory
-    const othersAccess = (worktree.others_fs_access as 'none' | 'read' | 'write') || 'read';
-    const permissionMode = getWorktreePermissionMode(othersAccess);
+    // Set permissions on branch directory
+    const othersAccess = (branch.others_fs_access as 'none' | 'read' | 'write') || 'read';
+    const permissionMode = getBranchPermissionMode(othersAccess);
     const permCommands = UnixGroupCommands.setDirectoryGroup(
-      worktree.path,
+      branch.path,
       groupName,
       permissionMode
     );
     await runCommands(permCommands);
     // Set explicit user ACL for daemon to bypass stale supplementary groups
     if (payload.params.daemonUser) {
-      await runCommands(UnixGroupCommands.setUserAcl(worktree.path, payload.params.daemonUser));
+      await runCommands(UnixGroupCommands.setUserAcl(branch.path, payload.params.daemonUser));
     }
-    console.log(`[unix.sync-worktree] Set worktree permissions (mode: ${permissionMode})`);
+    console.log(`[unix.sync-branch] Set branch permissions (mode: ${permissionMode})`);
 
     // Add daemon user if provided
     if (payload.params.daemonUser) {
@@ -376,22 +372,22 @@ export async function handleUnixSyncWorktree(
       );
       if (!inGroup) {
         await runCommand(UnixGroupCommands.addUserToGroup(payload.params.daemonUser, groupName));
-        console.log(`[unix.sync-worktree] Added daemon user to worktree group`);
+        console.log(`[unix.sync-branch] Added daemon user to branch group`);
       }
     }
 
-    // Update worktree record with group name
-    if (worktree.unix_group !== groupName) {
-      await client.service('worktrees').patch(worktreeId, { unix_group: groupName });
-      console.log(`[unix.sync-worktree] Updated worktree record with unix_group`);
+    // Update branch record with group name
+    if (branch.unix_group !== groupName) {
+      await client.service('branches').patch(branchId, { unix_group: groupName });
+      console.log(`[unix.sync-branch] Updated branch record with unix_group`);
     }
 
-    // Fetch and add all owners to worktree group
+    // Fetch and add all owners to branch group
     let ownersAdded = 0;
     // Collect owner unix_usernames to avoid re-adding them as session users
     const ownerUsernames = new Set<string>();
     try {
-      const ownersResult = await client.service(`worktrees/${worktreeId}/owners`).find({});
+      const ownersResult = await client.service(`branches/${branchId}/owners`).find({});
       const owners = Array.isArray(ownersResult) ? ownersResult : ownersResult.data || [];
 
       for (const owner of owners as Array<{ unix_username?: string }>) {
@@ -403,17 +399,17 @@ export async function handleUnixSyncWorktree(
           if (!inGroup) {
             await runCommand(UnixGroupCommands.addUserToGroup(owner.unix_username, groupName));
             ownersAdded++;
-            console.log(`[unix.sync-worktree] Added user ${owner.unix_username} to worktree group`);
+            console.log(`[unix.sync-branch] Added user ${owner.unix_username} to branch group`);
           }
         }
       }
     } catch (_error) {
-      console.log(`[unix.sync-worktree] Could not fetch owners, skipping user sync`);
+      console.log(`[unix.sync-branch] Could not fetch owners, skipping user sync`);
     }
 
-    // When others_fs_access is 'write', non-owner session users need worktree group
+    // When others_fs_access is 'write', non-owner session users need branch group
     // membership for full read-write access. For 'read' mode, they rely on ACL "others"
-    // bits (o::rX) on the worktree directory — adding them to the worktree group would
+    // bits (o::rX) on the branch directory — adding them to the branch group would
     // escalate to write access since the group always has rwx.
     //
     // For both 'read' and 'write', non-owners still need repo group membership (added
@@ -423,7 +419,7 @@ export async function handleUnixSyncWorktree(
       try {
         const sessionsResult = await client.service('sessions').find({
           query: {
-            worktree_id: worktreeId,
+            branch_id: branchId,
             $select: ['unix_username'],
             $limit: 500,
           },
@@ -444,19 +440,19 @@ export async function handleUnixSyncWorktree(
             await runCommand(UnixGroupCommands.addUserToGroup(username, groupName));
             sessionUsersAdded++;
             console.log(
-              `[unix.sync-worktree] Added session user ${username} to worktree group (others_fs_access: ${othersAccess})`
+              `[unix.sync-branch] Added session user ${username} to branch group (others_fs_access: ${othersAccess})`
             );
           }
         }
       } catch (_error) {
-        console.log(`[unix.sync-worktree] Could not fetch sessions for non-owner group sync`);
+        console.log(`[unix.sync-branch] Could not fetch sessions for non-owner group sync`);
       }
     }
 
     // Also sync repo group (ensure owners and authorized session users have .git/ access)
-    if (worktree.repo_id) {
+    if (branch.repo_id) {
       try {
-        const repo = await client.service('repos').get(worktree.repo_id);
+        const repo = await client.service('repos').get(branch.repo_id);
         if (repo.unix_group) {
           // Add daemon user to repo group if provided
           if (payload.params.daemonUser) {
@@ -467,16 +463,14 @@ export async function handleUnixSyncWorktree(
               await runCommand(
                 UnixGroupCommands.addUserToGroup(payload.params.daemonUser, repo.unix_group)
               );
-              console.log(
-                `[unix.sync-worktree] Added daemon user to repo group ${repo.unix_group}`
-              );
+              console.log(`[unix.sync-branch] Added daemon user to repo group ${repo.unix_group}`);
             }
           }
 
-          // Add all worktree owners to repo group (for .git/ access)
+          // Add all branch owners to repo group (for .git/ access)
           // This ensures owners can run git commands which need .git/ access
           try {
-            const ownersResult = await client.service(`worktrees/${worktreeId}/owners`).find({});
+            const ownersResult = await client.service(`branches/${branchId}/owners`).find({});
             const owners = Array.isArray(ownersResult) ? ownersResult : ownersResult.data || [];
 
             for (const owner of owners as Array<{ unix_username?: string }>) {
@@ -489,13 +483,13 @@ export async function handleUnixSyncWorktree(
                     UnixGroupCommands.addUserToGroup(owner.unix_username, repo.unix_group)
                   );
                   console.log(
-                    `[unix.sync-worktree] Added owner ${owner.unix_username} to repo group ${repo.unix_group}`
+                    `[unix.sync-branch] Added owner ${owner.unix_username} to repo group ${repo.unix_group}`
                   );
                 }
               }
             }
           } catch (_error) {
-            console.log(`[unix.sync-worktree] Could not fetch owners for repo group sync`);
+            console.log(`[unix.sync-branch] Could not fetch owners for repo group sync`);
           }
 
           // Add non-owner session users to repo group when others_fs_access allows
@@ -505,7 +499,7 @@ export async function handleUnixSyncWorktree(
             try {
               const sessionsResult = await client.service('sessions').find({
                 query: {
-                  worktree_id: worktreeId,
+                  branch_id: branchId,
                   $select: ['unix_username'],
                   $limit: 500,
                 },
@@ -528,22 +522,22 @@ export async function handleUnixSyncWorktree(
                 if (!inRepoGroup) {
                   await runCommand(UnixGroupCommands.addUserToGroup(username, repo.unix_group));
                   console.log(
-                    `[unix.sync-worktree] Added session user ${username} to repo group ${repo.unix_group} (others_fs_access: ${othersAccess})`
+                    `[unix.sync-branch] Added session user ${username} to repo group ${repo.unix_group} (others_fs_access: ${othersAccess})`
                   );
                 }
               }
             } catch (_error) {
-              console.log(`[unix.sync-worktree] Could not fetch sessions for repo group sync`);
+              console.log(`[unix.sync-branch] Could not fetch sessions for repo group sync`);
             }
           }
 
           // Fix .git/worktrees/<name>/ permissions
-          const worktreeName = worktree.path.split('/').pop();
-          if (worktreeName && repo.local_path) {
-            const worktreeGitDir = `${repo.local_path}/.git/worktrees/${worktreeName}`;
+          const branchName = branch.path.split('/').pop();
+          if (branchName && repo.local_path) {
+            const branchGitDir = `${repo.local_path}/.git/worktrees/${branchName}`;
             try {
               const fixCommands = UnixGroupCommands.setDirectoryGroup(
-                worktreeGitDir,
+                branchGitDir,
                 repo.unix_group,
                 REPO_GIT_PERMISSION_MODE
               );
@@ -551,27 +545,27 @@ export async function handleUnixSyncWorktree(
               // Set explicit user ACL for daemon to bypass stale supplementary groups
               if (payload.params.daemonUser) {
                 await runCommands(
-                  UnixGroupCommands.setUserAcl(worktreeGitDir, payload.params.daemonUser)
+                  UnixGroupCommands.setUserAcl(branchGitDir, payload.params.daemonUser)
                 );
               }
-              console.log(`[unix.sync-worktree] Fixed .git/worktrees/${worktreeName}/ permissions`);
+              console.log(`[unix.sync-branch] Fixed .git/worktrees/${branchName}/ permissions`);
             } catch {
               // Directory might not exist yet
               console.log(
-                `[unix.sync-worktree] Could not fix .git/worktrees permissions (dir may not exist)`
+                `[unix.sync-branch] Could not fix .git/worktrees permissions (dir may not exist)`
               );
             }
           }
         }
       } catch {
-        console.log(`[unix.sync-worktree] Could not fetch repo, skipping repo group sync`);
+        console.log(`[unix.sync-branch] Could not fetch repo, skipping repo group sync`);
       }
     }
 
     return {
       success: true,
       data: {
-        worktreeId,
+        branchId,
         groupName,
         ownersAdded,
         sessionUsersAdded,
@@ -579,10 +573,10 @@ export async function handleUnixSyncWorktree(
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('[unix.sync-worktree] Failed:', errorMessage);
+    console.error('[unix.sync-branch] Failed:', errorMessage);
     return {
       success: false,
-      error: { code: 'UNIX_SYNC_WORKTREE_FAILED', message: errorMessage },
+      error: { code: 'UNIX_SYNC_BRANCH_FAILED', message: errorMessage },
     };
   } finally {
     if (client) {
@@ -689,9 +683,9 @@ export async function handleUnixSyncUser(
       console.log(`[unix.sync-user] Added ${unixUsername} to ${AGOR_USERS_GROUP}`);
     }
 
-    // Configure git safe.directory for worktrees (if requested by daemon)
+    // Configure git safe.directory for branches (if requested by daemon)
     // This prevents "dubious ownership" errors when user runs git commands
-    // in worktrees owned by the daemon user (only needed when unix impersonation is enabled)
+    // in branches owned by the daemon user (only needed when unix impersonation is enabled)
     //
     // NOTE: Git does NOT support wildcard patterns like /path/*/* in safe.directory.
     // The only wildcard supported is a literal '*' which trusts ALL directories (security risk).
@@ -712,7 +706,7 @@ export async function handleUnixSyncUser(
 
         if (!existingEntries.includes(trustAllPattern)) {
           // Add '*' to trust all directories for this user
-          // This is acceptable because each user is isolated and only accesses their assigned worktrees
+          // This is acceptable because each user is isolated and only accesses their assigned branches
           await runCommand(
             `sudo -u ${unixUsername} git config --global --add safe.directory '${trustAllPattern}'`
           );
@@ -790,41 +784,41 @@ export async function handleUnixSyncUser(
 // ============================================================
 //
 // Privileged group/ACL setup for newly cloned repos and freshly created
-// worktrees lives in the daemon (apps/agor-daemon/src/utils/unix-group-init.ts)
+// branches lives in the daemon (apps/agor-daemon/src/utils/unix-group-init.ts)
 // and is invoked via Feathers RPC: `repos.initializeUnixGroup` and
-// `worktrees.initializeUnixGroup`. This keeps the privileged work running with
+// `branches.initializeUnixGroup`. This keeps the privileged work running with
 // daemon sudo regardless of executor impersonation mode. The executor only
 // retains the basic-mode chmod helper below for non-RBAC paths.
 
 /**
- * Fix permissions on worktree's .git/worktrees/<name>/ directory without RBAC
+ * Fix permissions on branch's .git/worktrees/<name>/ directory without RBAC
  *
  * This ensures basic accessibility for git operations when RBAC is disabled.
  * Sets world-readable permissions (755) so users can access the git metadata.
  */
-export async function fixWorktreeGitDirPermissionsBasic(
+export async function fixBranchGitDirPermissionsBasic(
   repoPath: string,
-  worktreeName: string
+  branchName: string
 ): Promise<void> {
-  // Worktree names flow into a path that is then passed to chmod under
+  // Branch names flow into a path that is then passed to chmod under
   // sudo. Validate aggressively at the call site — metacharacters in the
-  // name would mean command execution. (The worktree service should also
-  // validate at ingest; that's cross-worktree scope and intentionally not
+  // name would mean command execution. (The branch service should also
+  // validate at ingest; that's cross-branch scope and intentionally not
   // fixed in this pass.)
-  if (!isValidWorktreeName(worktreeName)) {
+  if (!isValidBranchName(branchName)) {
     throw new Error(
-      `Invalid worktree name: ${JSON.stringify(worktreeName)}. ` +
+      `Invalid branch name: ${JSON.stringify(branchName)}. ` +
         `Must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.`
     );
   }
 
-  const worktreeGitDir = `${repoPath}/.git/worktrees/${worktreeName}`;
+  const branchGitDir = `${repoPath}/.git/worktrees/${branchName}`;
 
-  console.log(`[unix] Setting basic permissions for .git/worktrees/${worktreeName}`);
+  console.log(`[unix] Setting basic permissions for .git/worktrees/${branchName}`);
 
   // Use argv form (execFile) so the name cannot be interpreted as shell even
   // if validation were weaker. Use absolute chmod path so a poisoned $PATH
   // can't substitute the binary. u+rwX,g+rX,o+rX: capital X only adds execute
   // bit to directories, not files — so metadata files stay non-executable.
-  await execFileAsync(CHMOD_BIN, ['-R', 'u+rwX,g+rX,o+rX', worktreeGitDir]);
+  await execFileAsync(CHMOD_BIN, ['-R', 'u+rwX,g+rX,o+rX', branchGitDir]);
 }

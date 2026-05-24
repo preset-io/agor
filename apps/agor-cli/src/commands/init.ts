@@ -33,7 +33,7 @@ export default class Init extends Command {
     force: Flags.boolean({
       char: 'f',
       description:
-        'Force re-initialization without prompts (deletes database, repos, and worktrees)',
+        'Force re-initialization without prompts (deletes database, repos, and branches)',
       default: false,
     }),
     'skip-if-exists': Flags.boolean({
@@ -108,7 +108,7 @@ export default class Init extends Command {
   }
 
   /**
-   * List directories in a path (repos, worktrees)
+   * List directories in a path (repos, branches)
    */
   private async listDirs(path: string): Promise<string[]> {
     try {
@@ -174,13 +174,13 @@ export default class Init extends Command {
     try {
       const dbPath = join(baseDir, 'agor.db');
       const reposDir = join(baseDir, 'repos');
-      const worktreesDir = join(baseDir, 'worktrees');
+      const branchesDir = join(baseDir, 'worktrees');
 
       // Check if already initialized
       const alreadyExists = await this.pathExists(baseDir);
       const dbExists = await this.pathExists(dbPath);
       const reposExist = await this.pathExists(reposDir);
-      const worktreesExist = await this.pathExists(worktreesDir);
+      const branchesExist = await this.pathExists(branchesDir);
 
       if (!alreadyExists) {
         // Fresh initialization
@@ -195,7 +195,7 @@ export default class Init extends Command {
       // Gather information about what exists
       const dbStats = dbExists ? await this.getDbStats(dbPath) : null;
       const repos = reposExist ? await this.listDirs(reposDir) : [];
-      const worktrees = worktreesExist ? await this.listDirs(worktreesDir) : [];
+      const branches = branchesExist ? await this.listDirs(branchesDir) : [];
 
       // Show what will be deleted
       this.log(chalk.bold.red('⚠  Re-initialization will delete:'));
@@ -222,13 +222,13 @@ export default class Init extends Command {
         }
       }
 
-      if (worktrees.length > 0) {
-        this.log(`${chalk.cyan('  Worktrees:')} ${worktreesDir}`);
-        for (const wt of worktrees.slice(0, 5)) {
+      if (branches.length > 0) {
+        this.log(`${chalk.cyan('  Branches:')} ${branchesDir}`);
+        for (const wt of branches.slice(0, 5)) {
           this.log(chalk.dim(`    - ${wt}`));
         }
-        if (worktrees.length > 5) {
-          this.log(chalk.dim(`    ... and ${worktrees.length - 5} more`));
+        if (branches.length > 5) {
+          this.log(chalk.dim(`    ... and ${branches.length - 5} more`));
         }
       }
 
@@ -237,7 +237,7 @@ export default class Init extends Command {
       // If --force, skip prompts and nuke everything
       if (flags.force) {
         this.log(chalk.yellow('🗑️  --force flag set: deleting everything without prompts...'));
-        await this.cleanupExisting(baseDir, dbPath, reposDir, worktreesDir);
+        await this.cleanupExisting(baseDir, dbPath, reposDir, branchesDir);
         await this.performInit(baseDir, dbPath, true);
         return;
       }
@@ -259,7 +259,7 @@ export default class Init extends Command {
       }
 
       // User confirmed - clean up and reinitialize
-      await this.cleanupExisting(baseDir, dbPath, reposDir, worktreesDir);
+      await this.cleanupExisting(baseDir, dbPath, reposDir, branchesDir);
       await this.performInit(baseDir, dbPath, false);
     } catch (error) {
       this.error(
@@ -275,7 +275,7 @@ export default class Init extends Command {
     _baseDir: string,
     dbPath: string,
     reposDir: string,
-    worktreesDir: string
+    branchesDir: string
   ): Promise<void> {
     this.log('');
     this.log('🗑️  Cleaning up existing installation...');
@@ -292,10 +292,10 @@ export default class Init extends Command {
       this.log(`${chalk.green('   ✓')} Deleted repos`);
     }
 
-    // Delete worktrees
-    if (await this.pathExists(worktreesDir)) {
-      await rm(worktreesDir, { recursive: true, force: true });
-      this.log(`${chalk.green('   ✓')} Deleted worktrees`);
+    // Delete branches
+    if (await this.pathExists(branchesDir)) {
+      await rm(branchesDir, { recursive: true, force: true });
+      this.log(`${chalk.green('   ✓')} Deleted branches`);
     }
   }
 
@@ -373,7 +373,7 @@ export default class Init extends Command {
     this.log('');
     this.log(`   Database: ${chalk.cyan(dbPath)}`);
     this.log(`   Repos: ${chalk.cyan(join(baseDir, 'repos'))}`);
-    this.log(`   Worktrees: ${chalk.cyan(join(baseDir, 'worktrees'))}`);
+    this.log(`   Branches: ${chalk.cyan(join(baseDir, 'worktrees'))}`);
     this.log(`   Concepts: ${chalk.cyan(join(baseDir, 'concepts'))}`);
     this.log(`   Logs: ${chalk.cyan(join(baseDir, 'logs'))}`);
     this.log('');

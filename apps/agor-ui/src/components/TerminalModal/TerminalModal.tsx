@@ -74,7 +74,7 @@ export interface TerminalModalProps {
   onClose: () => void;
   client: AgorClient | null;
   user?: User | null;
-  worktreeId?: string; // Worktree context for Zellij integration
+  branchId?: string; // Branch context for Zellij integration
   initialCommands?: string[]; // Commands to execute after connection
 }
 
@@ -83,7 +83,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
   onClose,
   client,
   user,
-  worktreeId,
+  branchId,
   initialCommands = [],
 }) => {
   const { modal } = App.useApp();
@@ -95,7 +95,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
   const [sessionInfo, setSessionInfo] = useState<{
     zellijSession?: string;
     zellijReused?: boolean;
-    worktreeName?: string;
+    branchName?: string;
   }>({});
 
   // The instance-level `execution.allow_web_terminal` flag is enforced
@@ -223,13 +223,13 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         const result = (await client.service('terminals').create({
           rows: 40,
           cols: 160,
-          worktreeId,
+          branchId,
         })) as {
           userId: UserID;
           channel: string;
           sessionName: string;
           isNew: boolean;
-          worktreeName?: string;
+          branchName?: string;
         };
 
         if (!mounted) {
@@ -242,7 +242,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         setSessionInfo({
           zellijSession: result.sessionName,
           zellijReused: !result.isNew,
-          worktreeName: result.worktreeName,
+          branchName: result.branchName,
         });
         // Only clear for new sessions - reconnections will get screen via redraw
         if (result.isNew) {
@@ -326,7 +326,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       setSessionInfo({});
       setZellijMissing(false);
     };
-  }, [open, modalReady, client, initialCommands, canUseTerminal, worktreeId, user?.user_id]);
+  }, [open, modalReady, client, initialCommands, canUseTerminal, branchId, user?.user_id]);
 
   const handleClose = () => {
     if (isConnected) {
@@ -348,7 +348,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
 
   return (
     <Modal
-      title={`Terminal${sessionInfo.worktreeName ? ` - ${sessionInfo.worktreeName}` : ''}`}
+      title={`Terminal${sessionInfo.branchName ? ` - ${sessionInfo.branchName}` : ''}`}
       open={open}
       onCancel={handleClose}
       afterOpenChange={setModalReady}

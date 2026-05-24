@@ -3,60 +3,60 @@ environment:
   variants:
     docs:
       start: >-
-        PORT={{add 7000 worktree.unique_id}} docker compose -f apps/agor-docs/docker-compose.yml -p
-        agor-docs-{{worktree.name}} up -d --build
-      stop: docker compose -f apps/agor-docs/docker-compose.yml -p agor-docs-{{worktree.name}} down
+        PORT={{add 7000 branch.unique_id}} docker compose -f apps/agor-docs/docker-compose.yml -p
+        agor-docs-{{branch.name}} up -d --build
+      stop: docker compose -f apps/agor-docs/docker-compose.yml -p agor-docs-{{branch.name}} down
       description: >-
         Nextra docs site (apps/agor-docs) for previewing documentation edits. Runs `next dev` in a
         self-contained Docker container — no daemon, no database, no host-side `pnpm install`
-        needed. Port = {{add 7000 worktree.unique_id}}; app URL uses {{host.ip_address}} so it's
+        needed. Port = {{add 7000 branch.unique_id}}; app URL uses {{host.ip_address}} so it's
         reachable from outside the daemon host.
       nuke: >-
-        docker compose -f apps/agor-docs/docker-compose.yml -p agor-docs-{{worktree.name}} down -v
+        docker compose -f apps/agor-docs/docker-compose.yml -p agor-docs-{{branch.name}} down -v
         --rmi local
       logs: >-
-        docker compose -f apps/agor-docs/docker-compose.yml -p agor-docs-{{worktree.name}} logs
+        docker compose -f apps/agor-docs/docker-compose.yml -p agor-docs-{{branch.name}} logs
         --tail=100
-      health: http://localhost:{{add 7000 worktree.unique_id}}
-      app: http://{{host.ip_address}}:{{add 7000 worktree.unique_id}}
+      health: http://localhost:{{add 7000 branch.unique_id}}
+      app: http://{{host.ip_address}}:{{add 7000 branch.unique_id}}
     full:
       start: >-
-        UID=$(id -u) GID=$(id -g) DAEMON_PORT={{add 3000 worktree.unique_id}} UI_PORT={{add 5000
-        worktree.unique_id}} AGOR_RBAC_ENABLED=true AGOR_UNIX_USER_MODE=strict docker compose -f
-        docker-compose.yml -f docker-compose.override.postgres.yml -p agor-{{worktree.name}}
+        UID=$(id -u) GID=$(id -g) DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
+        branch.unique_id}} AGOR_RBAC_ENABLED=true AGOR_UNIX_USER_MODE=strict docker compose -f
+        docker-compose.yml -f docker-compose.override.postgres.yml -p agor-{{branch.name}}
         --profile postgres up -d --build
       stop: >-
         docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
-        agor-{{worktree.name}} --profile postgres down
+        agor-{{branch.name}} --profile postgres down
       description: >-
-        Production-like: PostgreSQL + worktree RBAC + strict Unix user impersonation (each Agor user
+        Production-like: PostgreSQL + branch RBAC + strict Unix user impersonation (each Agor user
         runs sessions as their own Unix identity). Requires the sudoers config shipped under
         docker/sudoers/.
       extends: sqlite
       nuke: >-
         docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
-        agor-{{worktree.name}} --profile postgres down -v
+        agor-{{branch.name}} --profile postgres down -v
     sqlite:
       start: >-
-        UID=$(id -u) GID=$(id -g) DAEMON_PORT={{add 3000 worktree.unique_id}} UI_PORT={{add 5000
-        worktree.unique_id}} SEED=true docker compose -p agor-{{worktree.name}} up -d --build
-      stop: docker compose -p agor-{{worktree.name}} down
+        UID=$(id -u) GID=$(id -g) DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
+        branch.unique_id}} SEED=true docker compose -p agor-{{branch.name}} up -d --build
+      stop: docker compose -p agor-{{branch.name}} down
       description: Single-user dev with SQLite. No RBAC. Fastest to boot.
-      nuke: docker compose -p agor-{{worktree.name}} down -v
-      logs: docker compose -p agor-{{worktree.name}} logs --tail=100
-      health: http://localhost:{{add 3000 worktree.unique_id}}/health
-      app: http://{{host.ip_address}}:{{add 5000 worktree.unique_id}}
+      nuke: docker compose -p agor-{{branch.name}} down -v
+      logs: docker compose -p agor-{{branch.name}} logs --tail=100
+      health: http://localhost:{{add 3000 branch.unique_id}}/health
+      app: http://{{host.ip_address}}:{{add 5000 branch.unique_id}}
     postgres:
       start: >-
-        UID=$(id -u) GID=$(id -g) DAEMON_PORT={{add 3000 worktree.unique_id}} UI_PORT={{add 5000
-        worktree.unique_id}} SEED=true docker compose -f docker-compose.yml -f
-        docker-compose.override.postgres.yml -p agor-{{worktree.name}} --profile postgres up -d
+        UID=$(id -u) GID=$(id -g) DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
+        branch.unique_id}} SEED=true docker compose -f docker-compose.yml -f
+        docker-compose.override.postgres.yml -p agor-{{branch.name}} --profile postgres up -d
         --build
       stop: >-
         docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
-        agor-{{worktree.name}} --profile postgres down
+        agor-{{branch.name}} --profile postgres down
       description: Dev with PostgreSQL. RBAC off. Closer to multi-user prod layout.
       extends: sqlite
       nuke: >-
         docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
-        agor-{{worktree.name}} --profile postgres down -v
+        agor-{{branch.name}} --profile postgres down -v

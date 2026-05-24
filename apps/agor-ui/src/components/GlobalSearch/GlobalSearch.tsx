@@ -1,26 +1,24 @@
-import type { Artifact, Board, MCPServer, Session, Worktree } from '@agor-live/client';
-import { SearchOutlined } from '@ant-design/icons';
-import { Input, type InputRef, theme } from 'antd';
+import { CloseOutlined } from '@ant-design/icons';
+import { Button, Input, type InputRef, theme } from 'antd';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { GLOBAL_SEARCH_LISTBOX_ID, GlobalSearchDropdown, rowDomId } from './GlobalSearchDropdown';
 import { SearchChipRow } from './SearchChipRow';
-import { type ChipFilter, MIN_QUERY_LENGTH, SECTION_ORDER, type SearchResultItem } from './types';
+import {
+  type ChipFilter,
+  type GlobalSearchEntityMaps,
+  MIN_QUERY_LENGTH,
+  type SearchResultItem,
+} from './types';
 import { useGlobalSearch } from './useGlobalSearch';
 import { useRecents } from './useRecents';
+import { flattenResults, hasAnyEntries } from './utils';
 
 const INPUT_WIDTH = 260;
 
-interface GlobalSearchProps {
+interface GlobalSearchProps extends GlobalSearchEntityMaps {
   currentUserId?: string;
-  /** Live entity maps from useAgorData / contexts — passed in by AppHeader. */
-  sessionById: Map<string, Session>;
-  worktreeById: Map<string, Worktree>;
-  artifactById: Map<string, Artifact>;
-  boardById: Map<string, Board>;
-  mcpServerById: Map<string, MCPServer>;
-
   /**
    * Open the Settings modal — used as a coarse landing for entity types
    * that don't live on the canvas (MCP servers today). Stays as a callback
@@ -39,7 +37,7 @@ interface GlobalSearchProps {
 export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   currentUserId,
   sessionById,
-  worktreeById,
+  branchById,
   artifactById,
   boardById,
   mcpServerById,
@@ -58,17 +56,17 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   const navigation = useAppNavigation({
     boardById,
     sessionById,
-    worktreeById,
+    branchById,
     artifactById,
   });
 
-  const { results, hasAnyResults, debouncedQuery, flush } = useGlobalSearch({
+  const { results, counts, hasAnyResults, debouncedQuery, flush } = useGlobalSearch({
     query,
     ownedByMe,
     activeTypeChip: activeChip,
     currentUserId,
     sessionById,
-    worktreeById,
+    branchById,
     artifactById,
     boardById,
     mcpServerById,
@@ -77,9 +75,12 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   const recents = useRecents({
     currentUserId,
     sessionById,
-    worktreeById,
+    branchById,
     artifactById,
+    boardById,
+    mcpServerById,
   });
+  const hasAnyRecents = hasAnyEntries(recents);
 
   // Recents/results predicate is derived from the **raw** query so deleting
   // a long query back to <MIN_QUERY_LENGTH feels immediate — without this,
@@ -88,12 +89,12 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   const showRecents = query.trim().length < MIN_QUERY_LENGTH;
   const effectiveQuery = showRecents ? '' : debouncedQuery.trim();
 
-  // Flatten current dropdown rows for keyboard nav. Order matches dropdown
-  // section order; recents mode is a single flat list.
-  const visibleRows = useMemo<SearchResultItem[]>(() => {
-    if (showRecents) return recents;
-    return SECTION_ORDER.flatMap((t) => results[t]);
-  }, [showRecents, recents, results]);
+  // Flatten current dropdown rows for keyboard nav. Recents and live results
+  // share the same sectioned shape, so the flattening is identical.
+  const visibleRows = useMemo<SearchResultItem[]>(
+    () => flattenResults(showRecents ? recents : results),
+    [showRecents, recents, results]
+  );
 
   // Keep selection inside the row list when results change.
   useEffect(() => {
@@ -140,9 +141,9 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
         case 'board':
           navigation.goToBoard(result.item.board_id);
           break;
-        case 'worktree':
+        case 'branch':
         case 'assistant':
-          navigation.goToWorktree(result.item.worktree_id);
+          navigation.goToBranch(result.item.branch_id);
           break;
         case 'session':
           navigation.goToSession(result.item.session_id);
@@ -161,6 +162,12 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
     },
     [navigation, onSettingsClick]
   );
+
+  const handleClose = useCallback(() => {
+    setOpen(false);
+    setQuery('');
+    inputRef.current?.blur();
+  }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape') {
@@ -183,30 +190,27 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
       setSelectedIndex((idx) => Math.max(idx - 1, 0));
       return;
     }
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      // If the user pressed Enter before the 220ms debounce settled, flush
-      // the debounced query so the dropdown shows fresh rows on the next
-      // render. The current Enter doesn't navigate — the next one does.
-      // This is intentionally a 2-press UX in the (rare) stale case; doing
-      // a true single-press would require synchronous filter computation
-      // outside React's render cycle. Acceptable since debounce is 220ms.
-      if (query.trim() !== debouncedQuery.trim()) {
-        flush();
-        return;
-      }
-      const target = visibleRows[selectedIndex];
-      if (target) navigateToResult(target);
+    // Enter is handled by `<Input.Search>`'s onSearch — see handleSubmit.
+  };
+
+  // Fired by `<Input.Search>` on both Enter keypress and click of the
+  // built-in search-icon button. If the user submits before the 220ms
+  // debounce settled, flush instead of navigating — next press will land
+  // on fresh rows. Acceptable 2-press UX in the rare stale case.
+  const handleSubmit = (value: string) => {
+    if (value.trim() !== debouncedQuery.trim()) {
+      flush();
       return;
     }
+    const target = visibleRows[selectedIndex];
+    if (target) navigateToResult(target);
   };
 
   return (
     <div ref={containerRef} style={{ position: 'relative', width: INPUT_WIDTH }}>
-      <Input
+      <Input.Search
         ref={inputRef}
         placeholder="Search…  ⌘K"
-        prefix={<SearchOutlined style={{ color: token.colorTextQuaternary }} />}
         value={query}
         onChange={(e) => {
           setQuery(e.target.value);
@@ -217,6 +221,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
         }}
         onFocus={() => setOpen(true)}
         onKeyDown={handleKeyDown}
+        onSearch={handleSubmit}
         allowClear
         aria-label="Global search"
         aria-autocomplete="list"
@@ -230,8 +235,10 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
       />
       {open && (
         <div
-          role="listbox"
-          id={GLOBAL_SEARCH_LISTBOX_ID}
+          // Plain popover wrapper. `role="listbox"` lives on the inner result-rows
+          // container in `GlobalSearchDropdown` — this outer div also holds the
+          // chip row, close button, and BETA tag, which aren't list options.
+          //
           // Anchored to the right edge of the input (input lives in the
           // right cluster of the navbar) so the popover grows leftward
           // and doesn't overflow the viewport.
@@ -256,6 +263,30 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
             zIndex: 1000,
           }}
         >
+          {/*
+           * Close affordance. Esc still works (combobox keyboard contract);
+           * this is for users reaching for the mouse. Absolute-positioned so
+           * it doesn't reflow the chip row, sized to match the BETA tag's
+           * visual weight on the second chip row.
+           */}
+          <Button
+            type="text"
+            size="small"
+            icon={<CloseOutlined />}
+            onClick={handleClose}
+            aria-label="Close search"
+            style={{
+              position: 'absolute',
+              top: 4,
+              right: 4,
+              width: 24,
+              height: 24,
+              minWidth: 24,
+              padding: 0,
+              color: token.colorTextTertiary,
+              zIndex: 1,
+            }}
+          />
           <SearchChipRow
             activeChip={activeChip}
             onChipChange={(chip) => {
@@ -267,12 +298,14 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
               setOwnedByMe((v) => !v);
               setSelectedIndex(0);
             }}
+            counts={showRecents ? undefined : counts}
           />
           <GlobalSearchDropdown
             query={effectiveQuery}
             results={results}
             hasAnyResults={hasAnyResults}
             recents={recents}
+            hasAnyRecents={hasAnyRecents}
             selectedIndex={selectedIndex}
             onResultClick={navigateToResult}
             onResultHover={setSelectedIndex}

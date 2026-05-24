@@ -13,12 +13,12 @@ import { describe, expect, it } from 'vitest';
 vi.mock('../resolve-ids.js', () => ({
   resolveBoardId: async (_ctx: unknown, id: string) => id,
   resolveSessionId: async (_ctx: unknown, id: string) => id,
-  resolveWorktreeId: async (_ctx: unknown, id: string) => id,
+  resolveBranchId: async (_ctx: unknown, id: string) => id,
   resolveMcpServerId: async (_ctx: unknown, id: string) => `full-${id}`,
 }));
 
 vi.mock('@agor/core/db', () => ({
-  WorktreeRepository: class FakeWorktreeRepository {},
+  BranchRepository: class FakeBranchRepository {},
 }));
 
 import { vi } from 'vitest';

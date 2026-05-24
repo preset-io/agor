@@ -9,9 +9,9 @@ description: Frequently asked questions about session forking, spawning, and Ago
 
 **A branch is an isolated working directory for a git repository** - think of it as a checkout of your repo at a specific branch or commit.
 
-Agor uses **git worktrees** under the hood (same concept as `git worktree` command), but manages them for you automatically. When you create a branch in Agor, it:
+Agor uses **git branches** under the hood (same concept as `git branch` command), but manages them for you automatically. When you create a branch in Agor, it:
 
-- Creates a git worktree in `~/.agor/worktrees/<repo>/<name>`
+- Creates a git branch in `~/.agor/worktrees/<repo>/<name>`
 - Optionally creates a new branch or checks out an existing one
 - Tracks metadata (issue URL, PR URL, notes)
 - Associates all sessions within that branch
@@ -34,7 +34,7 @@ Branch "payment-integration" (issue #124, PR #457)
 
 Each branch is completely isolated - changes in one don't affect the other. This lets you work on multiple features simultaneously without switching branches or stashing changes.
 
-**Agor manages the git worktrees for you** - no need to run `git worktree add` manually. Just create a branch in the UI or CLI, and Agor handles the git operations.
+**Agor manages the git branches for you** - no need to run `git worktree add` manually. Just create a branch in the UI or CLI, and Agor handles the git operations.
 
 ## Session trees? WTF?
 
@@ -188,15 +188,15 @@ When you drop a branch into a zone:
 Zone prompts need **dynamism and complexity**. You don't just want "write tests" - you want:
 
 ```
-"Review this implementation of {{ worktree.issue_url }} and check:
-- Does it match the requirements in {{ worktree.pull_request_url }}?
+"Review this implementation of {{ branch.issue_url }} and check:
+- Does it match the requirements in {{ branch.pull_request_url }}?
 - Are there edge cases we missed?
 - Should we add tests for {{ session.title }}?"
 ```
 
 **Handlebars templates** let you inject context from:
 
-- **Branch**: `{{ worktree.name }}`, `{{ worktree.issue_url }}`, `{{ worktree.pull_request_url }}`
+- **Branch**: `{{ branch.name }}`, `{{ branch.issue_url }}`, `{{ branch.pull_request_url }}`
 - **Board**: `{{ board.name }}`, `{{ board.description }}`
 - **Session**: `{{ session.title }}`, `{{ session.description }}`
 - **Environment**: `{{ environment.url }}`, `{{ environment.status }}`
@@ -209,14 +209,14 @@ Zone prompts need **dynamism and complexity**. You don't just want "write tests"
 Zone: "Ready for Review"
 
 ```
-Review the implementation of {{ worktree.issue_url }}.
+Review the implementation of {{ branch.issue_url }}.
 
 Check if:
 1. All acceptance criteria from the issue are met
 2. Edge cases are handled
 3. Error messages are user-friendly
 
-If approved, comment on {{ worktree.pull_request_url }} with summary.
+If approved, comment on {{ branch.pull_request_url }} with summary.
 ```
 
 Drop a branch → auto-prompts with issue/PR links pre-filled.
@@ -226,12 +226,12 @@ Drop a branch → auto-prompts with issue/PR links pre-filled.
 Zone: "Needs Tests"
 
 ```
-Generate comprehensive tests for {{ worktree.name }}.
+Generate comprehensive tests for {{ branch.name }}.
 
 Context:
-- Issue: {{ worktree.issue_url }}
-- PR: {{ worktree.pull_request_url }}
-- Branch: {{ worktree.ref }}
+- Issue: {{ branch.issue_url }}
+- PR: {{ branch.pull_request_url }}
+- Branch: {{ branch.ref }}
 
 Focus on scenarios mentioned in the PR description.
 Write tests to tests/ directory.
@@ -242,13 +242,13 @@ Write tests to tests/ directory.
 Zone: "Deploy to Staging"
 
 ```
-Deploy {{ worktree.name }} to {{ environment.url }}.
+Deploy {{ branch.name }} to {{ environment.url }}.
 
 Steps:
-1. Run build in {{ worktree.path }}
-2. Push to {{ repo.name }}/{{ worktree.ref }}
+1. Run build in {{ branch.path }}
+2. Push to {{ repo.name }}/{{ branch.ref }}
 3. Trigger deployment to staging
-4. Update {{ worktree.pull_request_url }} with deployment URL
+4. Update {{ branch.pull_request_url }} with deployment URL
 
 Environment: {{ environment.status }}
 ```
@@ -261,9 +261,9 @@ Zone: "Sprint Review Demo"
 Prepare demo for {{ board.name }}.
 
 Show:
-- Feature: {{ worktree.name }}
-- Related issue: {{ worktree.issue_url }}
-- Key changes in this PR: {{ worktree.pull_request_url }}
+- Feature: {{ branch.name }}
+- Related issue: {{ branch.issue_url }}
+- Key changes in this PR: {{ branch.pull_request_url }}
 
 Create a demo script highlighting {{ board.custom_context.sprint_goals }}.
 ```
@@ -295,9 +295,9 @@ Each object (board, branch, session, repo) can have a **`custom_context` JSON bl
 **Use in templates:**
 
 ```
-Priority: {{ worktree.custom_context.priority }}
-Estimated effort: {{ worktree.custom_context.estimated_hours }}h
-Dependencies: {{ worktree.custom_context.dependencies }}
+Priority: {{ branch.custom_context.priority }}
+Estimated effort: {{ branch.custom_context.estimated_hours }}h
+Dependencies: {{ branch.custom_context.dependencies }}
 
 {{ board.custom_context.sprint_goals }}
 Demo stakeholders: {{ board.custom_context.stakeholders }}
@@ -330,7 +330,7 @@ Drag to trigger. Context flows automatically. No manual copy-paste.
 
 **Forking creates a sibling session with a COPY of the conversation context at that moment** - perfect for parallel work streams that need the same starting knowledge but different focus.
 
-**IMPORTANT**: You're forking the **CONTEXT WINDOW** (conversation history), NOT the git worktree.
+**IMPORTANT**: You're forking the **CONTEXT WINDOW** (conversation history), NOT the git branch.
 
 - ✅ **Forked**: Conversation history, AI's memory of what was discussed
 - ❌ **NOT forked**: Git state, filesystem, branch

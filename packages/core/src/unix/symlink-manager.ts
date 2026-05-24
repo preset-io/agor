@@ -1,28 +1,28 @@
 /**
  * Symlink Management Utilities
  *
- * Provides utilities for managing worktree symlinks in user home directories.
- * Each user gets symlinks at ~/agor/worktrees/<worktree-name> pointing to actual worktree paths.
+ * Provides utilities for managing branch symlinks in user home directories.
+ * Each user gets symlinks at ~/agor/worktrees/<branch-name> pointing to actual branch paths.
  *
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import { AGOR_HOME_BASE, AGOR_WORKTREES_DIR } from './user-manager.js';
+import { AGOR_BRANCHES_DIR, AGOR_HOME_BASE } from './user-manager.js';
 
 /**
- * Get the symlink path for a worktree in a user's home
+ * Get the symlink path for a branch in a user's home
  *
  * @param username - Unix username
- * @param worktreeName - Worktree name/slug
+ * @param branchName - Branch name/slug
  * @param homeBase - Base directory for homes (default: /home)
  * @returns Full symlink path (e.g., /home/alice/agor/worktrees/my-feature)
  */
-export function getWorktreeSymlinkPath(
+export function getBranchSymlinkPath(
   username: string,
-  worktreeName: string,
+  branchName: string,
   homeBase: string = AGOR_HOME_BASE
 ): string {
-  return `${homeBase}/${username}/${AGOR_WORKTREES_DIR}/${worktreeName}`;
+  return `${homeBase}/${username}/${AGOR_BRANCHES_DIR}/${branchName}`;
 }
 
 /**
@@ -51,7 +51,7 @@ export const SymlinkCommands = {
   /**
    * Create a symlink
    *
-   * @param target - Target path (the actual worktree directory)
+   * @param target - Target path (the actual branch directory)
    * @param linkPath - Symlink path (in user's ~/agor/worktrees/)
    * @returns Command string
    */
@@ -100,7 +100,7 @@ export const SymlinkCommands = {
    * Returns an array of commands to be executed sequentially.
    * Each command should be run with sudo separately (no sh -c wrapper needed).
    *
-   * @param target - Target path (actual worktree)
+   * @param target - Target path (actual branch)
    * @param linkPath - Symlink path
    * @param username - Owner of the symlink
    * @returns Array of command strings to execute sequentially
@@ -134,35 +134,35 @@ export const SymlinkCommands = {
 } as const;
 
 /**
- * Worktree symlink info
+ * Branch symlink info
  */
-export interface WorktreeSymlinkInfo {
+export interface BranchSymlinkInfo {
   /** Symlink path in user's home */
   linkPath: string;
-  /** Target worktree path */
+  /** Target branch path */
   targetPath: string;
-  /** Worktree name/slug */
-  worktreeName: string;
+  /** Branch name/slug */
+  branchName: string;
 }
 
 /**
- * Build symlink info for a worktree
+ * Build symlink info for a branch
  *
  * @param username - Unix username
- * @param worktreeName - Worktree name/slug
- * @param worktreePath - Actual worktree filesystem path
+ * @param branchName - Branch name/slug
+ * @param branchPath - Actual branch filesystem path
  * @param homeBase - Home directory base
  * @returns Symlink info object
  */
 export function buildSymlinkInfo(
   username: string,
-  worktreeName: string,
-  worktreePath: string,
+  branchName: string,
+  branchPath: string,
   homeBase: string = AGOR_HOME_BASE
-): WorktreeSymlinkInfo {
+): BranchSymlinkInfo {
   return {
-    linkPath: getWorktreeSymlinkPath(username, worktreeName, homeBase),
-    targetPath: worktreePath,
-    worktreeName,
+    linkPath: getBranchSymlinkPath(username, branchName, homeBase),
+    targetPath: branchPath,
+    branchName,
   };
 }

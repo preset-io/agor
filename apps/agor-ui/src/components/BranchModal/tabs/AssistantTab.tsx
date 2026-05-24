@@ -1,4 +1,4 @@
-import type { AgorClient, AssistantConfig, Worktree } from '@agor-live/client';
+import type { AgorClient, AssistantConfig, Branch } from '@agor-live/client';
 import { getAssistantConfig } from '@agor-live/client';
 import { RobotOutlined } from '@ant-design/icons';
 import { Button, Descriptions, Form, Input, Space, Typography } from 'antd';
@@ -6,44 +6,44 @@ import { useEffect, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
 import { EmojiPickerInput } from '../../EmojiPickerInput/EmojiPickerInput';
 import { Tag } from '../../Tag';
-import type { WorktreeUpdate } from './GeneralTab';
+import type { BranchUpdate } from './GeneralTab';
 
 interface AssistantTabProps {
-  worktree: Worktree;
-  onUpdate?: (worktreeId: string, updates: WorktreeUpdate) => void;
+  branch: Branch;
+  onUpdate?: (branchId: string, updates: BranchUpdate) => void;
   onClose?: () => void;
   client?: AgorClient | null;
 }
 
 export const AssistantTab: React.FC<AssistantTabProps> = ({
-  worktree,
+  branch,
   onUpdate,
   onClose,
   client,
 }) => {
-  const config = getAssistantConfig(worktree);
+  const config = getAssistantConfig(branch);
   const { showSuccess } = useThemedMessage();
 
   const [displayName, setDisplayName] = useState(config?.displayName || '');
   const [emoji, setEmoji] = useState(config?.emoji || '');
-  const [description, setDescription] = useState(worktree.notes || '');
+  const [description, setDescription] = useState(branch.notes || '');
   const [isInitialized, setIsInitialized] = useState(false);
 
   useEffect(() => {
     if (!isInitialized) {
       setDisplayName(config?.displayName || '');
       setEmoji(config?.emoji || '');
-      setDescription(worktree.notes || '');
+      setDescription(branch.notes || '');
       setIsInitialized(true);
     }
-  }, [isInitialized, config?.displayName, config?.emoji, worktree.notes]);
+  }, [isInitialized, config?.displayName, config?.emoji, branch.notes]);
 
   if (!config) return null;
 
   const hasChanges =
     displayName.trim() !== config.displayName ||
     emoji !== (config.emoji || '') ||
-    description.trim() !== (worktree.notes || '');
+    description.trim() !== (branch.notes || '');
 
   const handleSave = async () => {
     const updatedConfig: AssistantConfig = {
@@ -52,15 +52,15 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
       displayName: displayName.trim(),
       emoji: emoji || undefined,
     };
-    onUpdate?.(worktree.worktree_id, {
+    onUpdate?.(branch.branch_id, {
       custom_context: { assistant: updatedConfig },
       notes: description.trim() || null,
     });
 
     // Also update the associated board icon if emoji changed
-    if (emoji !== (config.emoji || '') && client && worktree.board_id) {
+    if (emoji !== (config.emoji || '') && client && branch.board_id) {
       try {
-        await client.service('boards').patch(worktree.board_id, {
+        await client.service('boards').patch(branch.board_id, {
           icon: emoji || '🤖',
         });
       } catch (err) {
@@ -75,7 +75,7 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
   const handleCancel = () => {
     setDisplayName(config.displayName);
     setEmoji(config.emoji || '');
-    setDescription(worktree.notes || '');
+    setDescription(branch.notes || '');
   };
 
   return (

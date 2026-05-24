@@ -209,7 +209,7 @@ Agent: "I found these API keys: ..." ❌
 │  - Database connection string                           │
 │  - API keys in environment (requests per-call)          │
 │  - Access to daemon files                               │
-│  - Access to other users' worktrees (Unix permissions)  │
+│  - Access to other users' branches (Unix permissions)  │
 └─────────────────────────────────────────────────────────┘
               ↓ Executes
 ┌─────────────────────────────────────────────────────────┐
@@ -221,7 +221,7 @@ Agent: "I found these API keys: ..." ❌
 │  - Tool execution (file operations, commands)           │
 │                                                          │
 │  Filesystem Isolation:                                  │
-│  - CWD: /path/to/worktree (bind-mounted, read-write)    │
+│  - CWD: /path/to/branch (bind-mounted, read-write)    │
 │  - Home: /home/agor_executor (isolated)                 │
 │  - Cannot access: /home/agor/, ~/.agor/config.yaml      │
 │                                                          │
@@ -238,9 +238,9 @@ Agent: "I found these API keys: ..." ❌
 | **No database access**         | Executor doesn't receive connection string        | Database exfiltration         |
 | **No API keys in memory**      | Executor requests keys per-call, daemon validates | API key theft                 |
 | **Unix user separation**       | Executor runs as different UID/GID                | Credential isolation          |
-| **Filesystem isolation**       | Bind mount or chroot to worktree                  | File system traversal         |
+| **Filesystem isolation**       | Bind mount or chroot to branch                    | File system traversal         |
 | **Opaque session tokens**      | Non-reusable, time-limited tokens                 | Session hijacking             |
-| **IPC audit trail**            | All daemon↔executor calls logged                 | Forensics, compliance         |
+| **IPC audit trail**            | All daemon↔executor calls logged                  | Forensics, compliance         |
 | **Network isolation (future)** | Network namespace, egress filtering               | Data exfiltration via network |
 
 ---
@@ -378,7 +378,7 @@ interface ExecutePromptRequest {
   params: {
     session_token: string; // Opaque, single-use token
     prompt: string; // User's question/instruction
-    cwd: string; // Working directory (worktree path)
+    cwd: string; // Working directory (branch path)
     tools: string[]; // Authorized tools (Read, Write, Bash, etc)
     permission_mode: PermissionMode; // default, acceptEdits, bypassPermissions
     timeout_ms: number; // Max execution time
@@ -849,7 +849,7 @@ async function executeViaExecutor(session: Session, task: Task, prompt: string) 
   });
 
   // Resolve working directory
-  const worktree = await worktreesRepo.findById(session.worktree_id);
+  const branch = await branchesRepo.findById(session.branch_id);
 
   // Spawn executor process
   const executor = await executorPool.spawn({
@@ -863,7 +863,7 @@ async function executeViaExecutor(session: Session, task: Task, prompt: string) 
     params: {
       session_token,
       prompt,
-      cwd: worktree.path,
+      cwd: branch.path,
       tools: ['Read', 'Write', 'Bash', 'Grep', 'Glob'],
       permission_mode: session.permission_mode || 'default',
       timeout_ms: 300000,
@@ -1248,7 +1248,7 @@ User (Browser): xterm.js
 ```typescript
 export class TerminalsService {
   async create(data: CreateTerminalData, params: Params) {
-    const { cwd, shell, userId, worktreeId, useTmux } = data;
+    const { cwd, shell, userId, branchId, useTmux } = data;
 
     const useExecutor = this.config.execution?.run_as_unix_user ?? false;
 
@@ -1260,7 +1260,7 @@ export class TerminalsService {
   }
 
   private async createViaExecutor(data: CreateTerminalData, params: Params) {
-    const { cwd, shell, userId, worktreeId, useTmux } = data;
+    const { cwd, shell, userId, branchId, useTmux } = data;
 
     // Resolve user's Unix username
     const user = userId ? await this.usersRepo.findById(userId) : null;
@@ -1283,7 +1283,7 @@ export class TerminalsService {
         env: await this.resolveUserEnvironment(userId),
         use_tmux: useTmux ?? true,
         tmux_session_name: useTmux ? this.getTmuxSessionName(userId) : undefined,
-        tmux_window_name: worktreeId ? await this.getTmuxWindowName(worktreeId) : undefined,
+        tmux_window_name: branchId ? await this.getTmuxWindowName(branchId) : undefined,
       },
     });
 
@@ -1447,7 +1447,7 @@ export async function setupQueryViaExecutor(
   const session = await deps.sessionsRepo.findById(sessionId);
 
   // 3. Resolve working directory
-  const worktree = await deps.worktreesRepo.findById(session.worktree_id);
+  const branch = await deps.branchesRepo.findById(session.branch_id);
 
   // 4. Generate executor session token
   const session_token = generateSecureToken();
@@ -1471,7 +1471,7 @@ export async function setupQueryViaExecutor(
       params: {
         session_token,
         prompt,
-        cwd: worktree.path,
+        cwd: branch.path,
         tools: ['Read', 'Write', 'Bash', 'Grep', 'Glob'],
         permission_mode: session.permission_mode || 'default',
         timeout_ms: options.timeout || 300000,
@@ -1539,13 +1539,13 @@ Same pattern applies to all SDK tools:
 │  - No database connection                                 │
 │  - No API keys in memory (requests just-in-time)          │
 │  - Runs as unprivileged user (agor_executor or per-user)  │
-│  - CWD: worktree only (bind mount, future)                │
+│  - CWD: branch only (bind mount, future)                │
 │                                                            │
 │  Threats Mitigated:                                       │
 │  ✓ Can't read database                                    │
 │  ✓ Can't steal API keys                                   │
 │  ✓ Can't access other users' files (Unix permissions)     │
-│  ✓ Can't escape worktree (filesystem isolation, future)   │
+│  ✓ Can't escape branch (filesystem isolation, future)   │
 └───────────────────────────────────────────────────────────┘
               ↓ Executes
 ┌───────────────────────────────────────────────────────────┐
@@ -1557,11 +1557,11 @@ Same pattern applies to all SDK tools:
 │  - MCP servers (untrusted npm packages)                   │
 │                                                            │
 │  Blast Radius (if compromised):                           │
-│  ⚠️ Can modify files in CWD (worktree)                    │
+│  ⚠️ Can modify files in CWD (branch)                    │
 │  ⚠️ Can make API calls (via requested keys)               │
 │  ✓ CANNOT access database                                 │
 │  ✓ CANNOT access daemon secrets                           │
-│  ✓ CANNOT access other users' worktrees                   │
+│  ✓ CANNOT access other users' branches                   │
 └───────────────────────────────────────────────────────────┘
 ```
 
@@ -1572,9 +1572,9 @@ Same pattern applies to all SDK tools:
 | **Database exfiltration**      | ❌ Possible                | ✅ Blocked                | ✓ None (no DB connection)         |
 | **API key theft**              | ❌ In memory               | ✅ Just-in-time           | ⚠️ Key can be logged during use   |
 | **Credential isolation**       | ❌ Shared                  | ✅ Per-user Unix accounts | ⚠️ Requires Unix user setup       |
-| **File system traversal**      | ❌ Unbounded               | ✅ Limited to worktree    | ⚠️ Bind mount not enforced yet    |
+| **File system traversal**      | ❌ Unbounded               | ✅ Limited to branch      | ⚠️ Bind mount not enforced yet    |
 | **Session hijacking**          | ❌ Session IDs predictable | ✅ Opaque tokens          | ⚠️ Token replay within 24h window |
-| **MCP server compromise**      | ❌ Full daemon access      | ✅ Sandboxed in executor  | ⚠️ Can modify worktree files      |
+| **MCP server compromise**      | ❌ Full daemon access      | ✅ Sandboxed in executor  | ⚠️ Can modify branch files        |
 | **Malicious prompt injection** | ❌ Full system access      | ✅ Sandboxed              | ⚠️ Can make authorized API calls  |
 
 ### Defense-in-Depth Layers
@@ -1601,7 +1601,7 @@ Same pattern applies to all SDK tools:
 
 **Layer 5: Filesystem Isolation (Future)**
 
-- Bind mount worktree directory
+- Bind mount branch directory
 - Chroot or namespaces (Linux)
 
 **Layer 6: Network Isolation (Future)**
@@ -1643,7 +1643,7 @@ execution:
 
   # Filesystem isolation (future)
   filesystem_isolation:
-    enabled: false # Bind mount worktree
+    enabled: false # Bind mount branch
     mount_options: bind,rw # Mount options
 
   # Network isolation (future)
@@ -1758,7 +1758,7 @@ To create per-user Unix accounts (recommended):
 
 **Goal:** Harden sandbox, add monitoring
 
-- [ ] Filesystem isolation (bind mount worktree)
+- [ ] Filesystem isolation (bind mount branch)
 - [ ] Network isolation (network namespace, egress filtering)
 - [ ] Resource limits (cgroups, systemd slices)
 - [ ] Rate limiting per session token
@@ -1768,7 +1768,7 @@ To create per-user Unix accounts (recommended):
 
 **Success Criteria:**
 
-- Executor can't escape worktree (filesystem boundary)
+- Executor can't escape branch (filesystem boundary)
 - Executor can't access arbitrary network hosts
 - Audit trail complete and queryable
 - Compliance-ready (SOC2, HIPAA)
@@ -1845,7 +1845,7 @@ To create per-user Unix accounts (recommended):
 
 - ❌ Heavy (container overhead, memory usage)
 - ❌ Complex lifecycle (container startup time)
-- ❌ Sharing worktrees tricky (volume mounts)
+- ❌ Sharing branches tricky (volume mounts)
 - ❌ Not suitable for local dev tool
 
 **Verdict:** Better for cloud-only, but overkill for local + cloud hybrid

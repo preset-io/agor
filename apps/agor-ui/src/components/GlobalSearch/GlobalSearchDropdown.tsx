@@ -1,16 +1,50 @@
+import { tokenizeSearchQuery } from '@agor-live/client';
+import {
+  ApiOutlined,
+  AppstoreOutlined,
+  BranchesOutlined,
+  ExperimentOutlined,
+  MessageOutlined,
+  RobotOutlined,
+} from '@ant-design/icons';
 import { Typography, theme } from 'antd';
 import type React from 'react';
+import { useMemo } from 'react';
 import { SearchResult } from './SearchResult';
-import { type ResultsByType, SECTION_LABELS, SECTION_ORDER, type SearchResultItem } from './types';
+import {
+  type ResultsByType,
+  SECTION_LABELS,
+  SECTION_ORDER,
+  type SearchEntityType,
+  type SearchResultItem,
+} from './types';
+import { sectionOffsets } from './utils';
 
 const { Text } = Typography;
+
+/**
+ * AntD icon per entity type for the dropdown's section headers. Mirrors the
+ * Settings modal's tab icons (apps/agor-ui/src/components/SettingsModal/
+ * SettingsModal.tsx) so users see the same glyph in both surfaces. Sessions
+ * don't have a Settings tab — `MessageOutlined` is the conversational match.
+ */
+const SECTION_ICONS: Record<SearchEntityType, React.ReactNode> = {
+  session: <MessageOutlined />,
+  branch: <BranchesOutlined />,
+  assistant: <RobotOutlined />,
+  artifact: <ExperimentOutlined />,
+  board: <AppstoreOutlined />,
+  mcp: <ApiOutlined />,
+};
 
 interface GlobalSearchDropdownProps {
   /** Trimmed query (post-debounce). Empty string = render Recents view. */
   query: string;
   results: ResultsByType;
   hasAnyResults: boolean;
-  recents: SearchResultItem[];
+  /** Recents reuse `ResultsByType` so the section renderer is shared. */
+  recents: ResultsByType;
+  hasAnyRecents: boolean;
   selectedIndex: number;
   onResultClick: (result: SearchResultItem) => void;
   onResultHover: (index: number) => void;
@@ -21,6 +55,7 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
   results,
   hasAnyResults,
   recents,
+  hasAnyRecents,
   selectedIndex,
   onResultClick,
   onResultHover,
@@ -28,9 +63,28 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
   const { token } = theme.useToken();
 
   const showRecents = query.length === 0;
+  const sectioned = showRecents ? recents : results;
+  // Tokens drive hit highlighting inside rendered result rows. Reusing the
+  // same tokenizer that the search hook uses keeps highlight ranges aligned
+  // with what the filter actually matched against. Empty in recents mode.
+  const tokens = useMemo(
+    () => (showRecents ? [] : tokenizeSearchQuery(query)),
+    [showRecents, query]
+  );
+
+  // Precompute per-section flat-index offsets so the keyboard cursor index
+  // resolves to the right row across sections — single pass instead of
+  // re-scanning the section order for each row.
+  const offsets = useMemo(() => sectionOffsets(sectioned), [sectioned]);
 
   return (
+    // The listbox role is anchored here, not on the outer popover: the popover
+    // also contains the chip row, switch, close button, and BETA tag — none
+    // are list options. The Input's `aria-controls` points at this id so the
+    // combobox contract is intact.
     <div
+      role="listbox"
+      id={GLOBAL_SEARCH_LISTBOX_ID}
       // Fills the remaining space inside the popover's flex column. The
       // popover caps total height at 85vh; the chip row above is fixed
       // height, so this scroll area grows to use whatever's left.
@@ -41,41 +95,25 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
         padding: '2px 0',
       }}
     >
-      {showRecents ? (
-        <SectionShell title="Recent" token={token}>
-          {recents.length === 0 ? (
-            <EmptyHint text="Recent items you've created will show up here." token={token} />
-          ) : (
-            recents.map((result, index) => (
-              <SearchResult
-                key={resultKey(result)}
-                rowId={rowDomId(result)}
-                result={result}
-                selected={index === selectedIndex}
-                onClick={() => onResultClick(result)}
-                onHover={() => onResultHover(index)}
-              />
-            ))
-          )}
-        </SectionShell>
-      ) : !hasAnyResults ? (
+      {showRecents && !hasAnyRecents ? (
+        <EmptyHint text="Recent items you've created will show up here." token={token} />
+      ) : !showRecents && !hasAnyResults ? (
         <EmptyHint text={`No matches for "${query}"`} token={token} />
       ) : (
         SECTION_ORDER.map((type) => {
-          const items = results[type];
+          const items = sectioned[type];
           if (items.length === 0) return null;
+          const offset = offsets.get(type) ?? 0;
 
-          // Compute global index offset so the keyboard cursor lines up.
-          let offset = 0;
-          for (const t of SECTION_ORDER) {
-            if (t === type) break;
-            offset += results[t].length;
-          }
-
+          // Recents reuse the live-search section labels (e.g. "Sessions") so
+          // the visual contract stays identical between empty-query and
+          // typed-query states. A single header rule above the column makes it
+          // clear the whole list is "recent."
           return (
             <SectionShell
               key={type}
-              title={`${SECTION_LABELS[type]} · ${items.length}`}
+              title={SECTION_LABELS[type]}
+              icon={SECTION_ICONS[type]}
               token={token}
             >
               {items.map((result, i) => {
@@ -88,6 +126,7 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
                     selected={flatIndex === selectedIndex}
                     onClick={() => onResultClick(result)}
                     onHover={() => onResultHover(flatIndex)}
+                    tokens={tokens}
                   />
                 );
               })}
@@ -101,14 +140,20 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
 
 interface SectionShellProps {
   title: string;
+  /** AntD icon rendered to the left of the section label, matching the
+   * Settings modal's tab glyphs. */
+  icon?: React.ReactNode;
   token: ReturnType<typeof theme.useToken>['token'];
   children: React.ReactNode;
 }
 
-const SectionShell: React.FC<SectionShellProps> = ({ title, token, children }) => (
+const SectionShell: React.FC<SectionShellProps> = ({ title, icon, token, children }) => (
   <div style={{ padding: '2px 0' }}>
     <div
       style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
         padding: '2px 16px 1px',
         fontSize: 11,
         textTransform: 'uppercase',
@@ -116,6 +161,7 @@ const SectionShell: React.FC<SectionShellProps> = ({ title, token, children }) =
         color: token.colorTextTertiary,
       }}
     >
+      {icon}
       {title}
     </div>
     {children}
@@ -139,9 +185,9 @@ function resultKey(result: SearchResultItem): string {
   switch (result.type) {
     case 'session':
       return `session-${result.item.session_id}`;
-    case 'worktree':
+    case 'branch':
     case 'assistant':
-      return `${result.type}-${result.item.worktree_id}`;
+      return `${result.type}-${result.item.branch_id}`;
     case 'artifact':
       return `artifact-${result.item.artifact_id}`;
     case 'board':

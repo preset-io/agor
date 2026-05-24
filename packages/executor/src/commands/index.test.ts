@@ -4,9 +4,9 @@
 
 import { describe, expect, it } from 'vitest';
 import type {
+  GitBranchAddPayload,
+  GitBranchRemovePayload,
   GitClonePayload,
-  GitWorktreeAddPayload,
-  GitWorktreeRemovePayload,
   PromptPayload,
   ZellijAttachPayload,
 } from '../payload-types.js';
@@ -17,16 +17,16 @@ describe('Command Registry', () => {
     const commands = getRegisteredCommands();
     expect(commands).toContain('prompt');
     expect(commands).toContain('git.clone');
-    expect(commands).toContain('git.worktree.add');
-    expect(commands).toContain('git.worktree.remove');
+    expect(commands).toContain('git.branch.add');
+    expect(commands).toContain('git.branch.remove');
     expect(commands).toContain('zellij.attach');
   });
 
   it('hasCommand should return true for registered commands', () => {
     expect(hasCommand('prompt')).toBe(true);
     expect(hasCommand('git.clone')).toBe(true);
-    expect(hasCommand('git.worktree.add')).toBe(true);
-    expect(hasCommand('git.worktree.remove')).toBe(true);
+    expect(hasCommand('git.branch.add')).toBe(true);
+    expect(hasCommand('git.branch.remove')).toBe(true);
     expect(hasCommand('zellij.attach')).toBe(true);
   });
 
@@ -141,35 +141,35 @@ describe('executeCommand - git.clone', () => {
   // Integration tests should cover the full git.clone flow
 });
 
-describe('executeCommand - git.worktree.add', () => {
-  const worktreeAddPayload: GitWorktreeAddPayload = {
-    command: 'git.worktree.add',
+describe('executeCommand - git.branch.add', () => {
+  const branchAddPayload: GitBranchAddPayload = {
+    command: 'git.branch.add',
     sessionToken: 'jwt-token',
     params: {
       repoPath: '/data/agor/repos/repo.git',
-      worktreeName: 'feature-x',
-      worktreePath: '/data/agor/worktrees/repo/feature-x',
+      branchName: 'feature-x',
+      branchPath: '/data/agor/worktrees/repo/feature-x',
     },
   };
 
-  it('should handle git.worktree.add in dry-run mode', async () => {
-    const result = await executeCommand(worktreeAddPayload, { dryRun: true });
+  it('should handle git.branch.add in dry-run mode', async () => {
+    const result = await executeCommand(branchAddPayload, { dryRun: true });
 
     expect(result.success).toBe(true);
     expect(result.data).toMatchObject({
       dryRun: true,
-      command: 'git.worktree.add',
-      repoPath: worktreeAddPayload.params.repoPath,
-      worktreeName: worktreeAddPayload.params.worktreeName,
-      worktreePath: worktreeAddPayload.params.worktreePath,
+      command: 'git.branch.add',
+      repoPath: branchAddPayload.params.repoPath,
+      branchName: branchAddPayload.params.branchName,
+      branchPath: branchAddPayload.params.branchPath,
     });
   });
 
   it('should include optional fields in dry-run response', async () => {
-    const payloadWithOptions: GitWorktreeAddPayload = {
-      ...worktreeAddPayload,
+    const payloadWithOptions: GitBranchAddPayload = {
+      ...branchAddPayload,
       params: {
-        ...worktreeAddPayload.params,
+        ...branchAddPayload.params,
         branch: 'feature-x',
         sourceBranch: 'main',
         createBranch: true,
@@ -187,14 +187,14 @@ describe('executeCommand - git.worktree.add', () => {
   });
 
   it('should round-trip storageMode / cloneDepth / remoteUrl in dry-run response', async () => {
-    // PR 1 of the worktree→clone storage migration. The daemon forwards
+    // PR 1 of the branch→clone storage migration. The daemon forwards
     // these three knobs; the executor branches on storageMode at run time.
     // Pin them through the dry-run echo so the daemon-side test fixture
     // can assert payload-shape correctness without spinning up a real git.
-    const clonePayload: GitWorktreeAddPayload = {
-      ...worktreeAddPayload,
+    const clonePayload: GitBranchAddPayload = {
+      ...branchAddPayload,
       params: {
-        ...worktreeAddPayload.params,
+        ...branchAddPayload.params,
         branch: 'feature-x',
         storageMode: 'clone',
         cloneDepth: 100,
@@ -213,31 +213,31 @@ describe('executeCommand - git.worktree.add', () => {
   });
 });
 
-describe('executeCommand - git.worktree.remove', () => {
-  const worktreeRemovePayload: GitWorktreeRemovePayload = {
-    command: 'git.worktree.remove',
+describe('executeCommand - git.branch.remove', () => {
+  const branchRemovePayload: GitBranchRemovePayload = {
+    command: 'git.branch.remove',
     sessionToken: 'jwt-token',
     params: {
-      worktreePath: '/data/agor/worktrees/repo/feature-x',
+      branchPath: '/data/agor/worktrees/repo/feature-x',
     },
   };
 
-  it('should handle git.worktree.remove in dry-run mode', async () => {
-    const result = await executeCommand(worktreeRemovePayload, { dryRun: true });
+  it('should handle git.branch.remove in dry-run mode', async () => {
+    const result = await executeCommand(branchRemovePayload, { dryRun: true });
 
     expect(result.success).toBe(true);
     expect(result.data).toMatchObject({
       dryRun: true,
-      command: 'git.worktree.remove',
-      worktreePath: worktreeRemovePayload.params.worktreePath,
+      command: 'git.branch.remove',
+      branchPath: branchRemovePayload.params.branchPath,
     });
   });
 
   it('should include force option in dry-run response', async () => {
-    const payloadWithForce: GitWorktreeRemovePayload = {
-      ...worktreeRemovePayload,
+    const payloadWithForce: GitBranchRemovePayload = {
+      ...branchRemovePayload,
       params: {
-        ...worktreeRemovePayload.params,
+        ...branchRemovePayload.params,
         force: true,
       },
     };
@@ -251,14 +251,14 @@ describe('executeCommand - git.worktree.remove', () => {
   });
 
   it('should round-trip storageMode in dry-run response', async () => {
-    // The daemon-side worktrees service reads storage_mode from the DB row
+    // The daemon-side branches service reads storage_mode from the DB row
     // and forwards it; the executor's remove handler uses it to pick the
     // teardown path (clone-mode = rm -rf, worktree-mode = git worktree
     // remove --force). Pin the round-trip so the contract stays explicit.
-    const clonePayload: GitWorktreeRemovePayload = {
-      ...worktreeRemovePayload,
+    const clonePayload: GitBranchRemovePayload = {
+      ...branchRemovePayload,
       params: {
-        ...worktreeRemovePayload.params,
+        ...branchRemovePayload.params,
         storageMode: 'clone',
       },
     };

@@ -2,11 +2,11 @@ import type {
   AgorClient,
   Board,
   BoardEntityObject,
+  Branch,
   MCPServer,
   Repo,
   Session,
   User,
-  Worktree,
 } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import { Badge, Modal, Tabs, theme } from 'antd';
@@ -15,7 +15,7 @@ import { mapToArray } from '@/utils/mapHelpers';
 import { AssistantTab } from './tabs/AssistantTab';
 import { EnvironmentTab } from './tabs/EnvironmentTab';
 import { FilesTab } from './tabs/FilesTab';
-import { GeneralTab, type WorktreeUpdate } from './tabs/GeneralTab';
+import { type BranchUpdate, GeneralTab } from './tabs/GeneralTab';
 import { ScheduleTab } from './tabs/ScheduleTab';
 import { SessionsTab } from './tabs/SessionsTab';
 
@@ -30,7 +30,7 @@ export type BranchModalTab =
 export interface BranchModalProps {
   open: boolean;
   onClose: () => void;
-  worktree: Worktree | null;
+  branch: Branch | null;
   repo: Repo | null;
   sessions: Session[]; // Used for GeneralTab session count
   boardById?: Map<string, Board>;
@@ -38,10 +38,10 @@ export interface BranchModalProps {
   mcpServerById?: Map<string, MCPServer>;
   client: AgorClient | null;
   currentUser?: User | null; // Current user for RBAC
-  onUpdateWorktree?: (worktreeId: string, updates: WorktreeUpdate) => void;
+  onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onArchiveOrDelete?: (
-    worktreeId: string,
+    branchId: string,
     options: {
       metadataAction: 'archive' | 'delete';
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
@@ -49,14 +49,14 @@ export interface BranchModalProps {
   ) => void;
   onOpenSettings?: () => void; // Navigate to Settings → Repositories
   onSessionClick?: (sessionId: string) => void;
-  onExecuteScheduleNow?: (worktreeId: string) => Promise<void>;
+  onExecuteScheduleNow?: (branchId: string) => Promise<void>;
   defaultTab?: BranchModalTab; // Open modal to a specific tab
 }
 
 export const BranchModal: React.FC<BranchModalProps> = ({
   open,
   onClose,
-  worktree,
+  branch,
   repo,
   sessions,
   boardById = new Map(),
@@ -64,7 +64,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   mcpServerById = new Map(),
   client,
   currentUser,
-  onUpdateWorktree,
+  onUpdateBranch,
   onUpdateRepo,
   onArchiveOrDelete,
   onOpenSettings,
@@ -82,19 +82,16 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     }
   }, [open, defaultTab]);
 
-  const isAnAssistant = worktree ? isAssistant(worktree) : false;
-  const assistantConfig = useMemo(
-    () => (worktree ? getAssistantConfig(worktree) : null),
-    [worktree]
-  );
+  const isAnAssistant = branch ? isAssistant(branch) : false;
+  const assistantConfig = useMemo(() => (branch ? getAssistantConfig(branch) : null), [branch]);
 
-  if (!worktree || !repo) {
+  if (!branch || !repo) {
     return null;
   }
 
   const title = isAnAssistant
-    ? `Assistant: ${assistantConfig?.displayName ?? worktree.name}`
-    : `Branch: ${worktree.name}`;
+    ? `Assistant: ${assistantConfig?.displayName ?? branch.name}`
+    : `Branch: ${branch.name}`;
 
   const tabItems = [
     // Assistant tab — only for assistants, shown first
@@ -105,8 +102,8 @@ export const BranchModal: React.FC<BranchModalProps> = ({
             label: 'Assistant',
             children: (
               <AssistantTab
-                worktree={worktree}
-                onUpdate={onUpdateWorktree}
+                branch={branch}
+                onUpdate={onUpdateBranch}
                 onClose={onClose}
                 client={client}
               />
@@ -119,14 +116,14 @@ export const BranchModal: React.FC<BranchModalProps> = ({
       label: 'General',
       children: (
         <GeneralTab
-          worktree={worktree}
+          branch={branch}
           repo={repo}
           sessions={sessions}
           boards={mapToArray(boardById)}
           mcpServers={mapToArray(mcpServerById)}
           client={client}
           currentUser={currentUser}
-          onUpdate={onUpdateWorktree}
+          onUpdate={onUpdateBranch}
           onArchiveOrDelete={onArchiveOrDelete}
           onClose={onClose}
         />
@@ -147,7 +144,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
       ),
       children: (
         <SessionsTab
-          worktree={worktree}
+          branch={branch}
           sessions={sessions}
           client={client}
           onSessionClick={(sessionId) => {
@@ -162,27 +159,27 @@ export const BranchModal: React.FC<BranchModalProps> = ({
       label: 'Environment',
       children: (
         <EnvironmentTab
-          worktree={worktree}
+          branch={branch}
           repo={repo}
           client={client}
           onUpdateRepo={onUpdateRepo}
-          onUpdateWorktree={onUpdateWorktree}
+          onUpdateBranch={onUpdateBranch}
         />
       ),
     },
     {
       key: 'files',
       label: 'Files',
-      children: <FilesTab worktree={worktree} client={client} />,
+      children: <FilesTab branch={branch} client={client} />,
     },
     {
       key: 'schedule',
       label: 'Schedule',
       children: (
         <ScheduleTab
-          worktree={worktree}
+          branch={branch}
           mcpServerById={mcpServerById}
-          onUpdate={onUpdateWorktree}
+          onUpdate={onUpdateBranch}
           onExecuteScheduleNow={onExecuteScheduleNow}
         />
       ),

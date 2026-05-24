@@ -36,7 +36,7 @@ export const ENVIRONMENT = {
   HEALTH_CHECK_TIMEOUT_MS: 1000, // 1 second
 
   /**
-   * Maximum number of log lines to store per worktree
+   * Maximum number of log lines to store per branch
    * (Not stored in DB - reference for future log file implementation)
    */
   MAX_LOG_LINES: 100,
@@ -129,9 +129,9 @@ export const PAGINATION = {
  */
 export const GIT = {
   /**
-   * Default worktree base path (relative to ~/.agor)
+   * Default branch base path (relative to ~/.agor)
    */
-  WORKTREE_BASE_PATH: 'worktrees',
+  BRANCH_BASE_PATH: 'branches',
 
   /**
    * Default repo clone path (relative to ~/.agor)

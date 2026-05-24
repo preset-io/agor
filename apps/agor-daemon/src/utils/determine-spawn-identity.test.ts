@@ -7,21 +7,21 @@
  * The default behavior MUST be "attribute child to caller" so that user A
  * spawning from user B's session does NOT inherit user B's Unix identity,
  * credentials, or env vars. The legacy parent-inheriting "identity borrowing"
- * is gated behind the worktree opt-in `dangerously_allow_session_sharing`.
+ * is gated behind the branch opt-in `dangerously_allow_session_sharing`.
  */
 
 import { Forbidden } from '@agor/core/feathers';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { determineSpawnIdentity } from './worktree-authorization';
+import { determineSpawnIdentity } from './branch-authorization';
 
 const ALICE = 'user-alice';
 const BOB = 'user-bob';
 const ADMIN = 'user-admin';
 const SUPER = 'user-super';
-const WT_FLAG_OFF = { worktree_id: 'wt-off', dangerously_allow_session_sharing: false };
-const WT_FLAG_ON = { worktree_id: 'wt-on', dangerously_allow_session_sharing: true };
-const WT_UNSET = { worktree_id: 'wt-unset' };
+const WT_FLAG_OFF = { branch_id: 'wt-off', dangerously_allow_session_sharing: false };
+const WT_FLAG_ON = { branch_id: 'wt-on', dangerously_allow_session_sharing: true };
+const WT_UNSET = { branch_id: 'wt-unset' };
 
 describe('determineSpawnIdentity', () => {
   it('flag disabled: cross-user spawn (Alice spawns from Bob) attributes child to Alice', () => {
@@ -82,7 +82,7 @@ describe('determineSpawnIdentity', () => {
         event: 'legacy_session_sharing',
         caller_id: ALICE,
         parent_owner_id: BOB,
-        worktree_id: 'wt-on',
+        branch_id: 'wt-on',
       });
     } finally {
       warnSpy.mockRestore();
@@ -155,7 +155,7 @@ describe('determineSpawnIdentity', () => {
     ).toThrow(Forbidden);
   });
 
-  it('falls back safely when worktree is undefined (treated as flag-off)', () => {
+  it('falls back safely when branch is undefined (treated as flag-off)', () => {
     const result = determineSpawnIdentity(
       { created_by: BOB },
       { user_id: ALICE, role: ROLES.MEMBER },

@@ -852,18 +852,18 @@ describe('RepoRepository.count', () => {
 // ============================================================================
 
 describe('RepoRepository deprecated methods', () => {
-  dbTest('should throw error for addWorktree (deprecated)', async ({ db }) => {
+  dbTest('should throw error for addBranch (deprecated)', async ({ db }) => {
     const repo = new RepoRepository(db);
 
-    await expect((repo as any).addWorktree()).rejects.toThrow('deprecated');
-    await expect((repo as any).addWorktree()).rejects.toThrow('WorktreeRepository');
+    await expect((repo as any).addBranch()).rejects.toThrow('deprecated');
+    await expect((repo as any).addBranch()).rejects.toThrow('BranchRepository');
   });
 
-  dbTest('should throw error for removeWorktree (deprecated)', async ({ db }) => {
+  dbTest('should throw error for removeBranch (deprecated)', async ({ db }) => {
     const repo = new RepoRepository(db);
 
-    await expect((repo as any).removeWorktree()).rejects.toThrow('deprecated');
-    await expect((repo as any).removeWorktree()).rejects.toThrow('WorktreeRepository');
+    await expect((repo as any).removeBranch()).rejects.toThrow('deprecated');
+    await expect((repo as any).removeBranch()).rejects.toThrow('BranchRepository');
   });
 });
 

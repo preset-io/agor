@@ -35,13 +35,13 @@ import type { CodexSandboxMode, EffortLevel } from '@agor/core/types';
 import { getDefaultCodexPermissionConfig } from '@agor/core/utils/permission-mode-mapper';
 import { getDaemonUrl } from '../../config.js';
 import type {
+  BranchRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
   SessionMCPServerRepository,
   SessionRepository,
   UsersRepository,
-  WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
@@ -80,7 +80,7 @@ type CodexConfigValue = CodexConfigObject[string];
  * server prompt that defaults to `Prompt`; in headless `exec --json`
  * (what `@openai/codex-sdk` uses), prompts resolve to "user cancelled
  * MCP tool call". Setting `default_tools_approval_mode = "approve"`
- * short-circuits that prompt and matches Agor's "trust the worktree
+ * short-circuits that prompt and matches Agor's "trust the branch
  * sandbox, don't gate every MCP self-call" model. See
  * `codex-rs/codex-mcp/src/mcp/mod.rs::mcp_permission_prompt_is_auto_approved`
  * — without this, only `danger-full-access` (which grants full-disk-write)
@@ -204,7 +204,7 @@ export class CodexPromptService {
     _messagesRepo: MessagesRepository,
     private sessionsRepo: SessionRepository,
     private sessionMCPServerRepo?: SessionMCPServerRepository,
-    private worktreesRepo?: WorktreeRepository,
+    private branchesRepo?: BranchRepository,
     private reposRepo?: RepoRepository,
     apiKey?: string,
     private mcpServerRepo?: MCPServerRepository,
@@ -419,7 +419,7 @@ export class CodexPromptService {
   private async ensureCodexInstructionsFile(sessionId: SessionID): Promise<string> {
     const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
       sessions: this.sessionsRepo,
-      worktrees: this.worktreesRepo,
+      branches: this.branchesRepo,
       repos: this.reposRepo,
       users: this.usersRepo,
     });
@@ -913,15 +913,13 @@ export class CodexPromptService {
       `   Configured: sandboxMode=${sandboxMode}, approvalPolicy=${approvalPolicy}, networkAccess=${networkAccess}, ${mcpServerCount} MCP server(s)`
     );
 
-    // Fetch worktree to get working directory
-    const worktree = this.worktreesRepo
-      ? await this.worktreesRepo.findById(session.worktree_id)
-      : null;
-    if (!worktree) {
-      throw new Error(`Worktree ${session.worktree_id} not found for session ${sessionId}`);
+    // Fetch branch to get working directory
+    const branch = this.branchesRepo ? await this.branchesRepo.findById(session.branch_id) : null;
+    if (!branch) {
+      throw new Error(`Branch ${session.branch_id} not found for session ${sessionId}`);
     }
 
-    console.log(`   Working directory: ${worktree.path}`);
+    console.log(`   Working directory: ${branch.path}`);
 
     await this.ensureForkedCodexThread(sessionId, session);
 
@@ -932,7 +930,7 @@ export class CodexPromptService {
     const sessionModel = session.model_config?.model;
     const sessionEffort = toCodexReasoningEffort(session.model_config?.effort);
     const threadOptions = {
-      workingDirectory: worktree.path,
+      workingDirectory: branch.path,
       skipGitRepoCheck: false,
       sandboxMode,
       approvalPolicy,
@@ -1273,7 +1271,7 @@ export class CodexPromptService {
               const guidance = hasApiKey
                 ? 'Your OPENAI_API_KEY may be invalid or expired. Check Settings > Codex > Authentication, or run `codex login` for ChatGPT subscription auth.'
                 : this.useNativeAuth
-                  ? 'No API key configured and ChatGPT subscription auth (~/.codex/auth.json) was rejected or missing. Run `codex login` from the worktree terminal, or add an API key in Settings > Codex > Authentication.'
+                  ? 'No API key configured and ChatGPT subscription auth (~/.codex/auth.json) was rejected or missing. Run `codex login` from the branch terminal, or add an API key in Settings > Codex > Authentication.'
                   : 'No API key configured. Add one in Settings > Codex > Authentication, or sign in via `codex login`.';
               console.error(
                 `❌ [Codex] Authentication failed for session ${shortId(sessionId)}: ${guidance}`

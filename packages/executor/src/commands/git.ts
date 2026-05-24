@@ -4,14 +4,14 @@
  * These handlers execute git operations directly in the executor process.
  * This enables:
  * 1. Running as a different Unix user with fresh group memberships
- * 2. Proper isolation for RBAC-protected worktrees
+ * 2. Proper isolation for RBAC-protected branches
  * 3. Consistent environment (credentials, env vars) resolution
  *
  * The executor handles the complete transaction:
  * 1. Filesystem operations (git clone, git worktree add/remove)
  * 2. Database record creation via Feathers services
  * 3. Privileged Unix group/ACL setup is delegated to the daemon via Feathers RPC
- *    (`repos.initializeUnixGroup`, `worktrees.initializeUnixGroup`) so it runs
+ *    (`repos.initializeUnixGroup`, `branches.initializeUnixGroup`) so it runs
  *    with daemon sudo privileges regardless of executor impersonation mode.
  *
  * Feathers hooks handle WebSocket broadcasts automatically when records are created/updated.
@@ -23,27 +23,27 @@ import { parseAgorYml } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import {
   categorizeGitError,
-  cleanWorktree,
+  cleanBranch,
   cloneRepo,
+  createBranch,
   createBranchAsClone,
-  createWorktree,
   deleteBranch,
-  deleteWorktreeDirectory,
+  deleteBranchDirectory,
   getReposDir,
-  removeWorktree,
-  restoreWorktreeFilesystem,
+  removeGitWorktree,
+  restoreBranchFilesystem,
 } from '@agor/core/git';
 import type {
   ExecutorResult,
+  GitBranchAddPayload,
+  GitBranchCleanPayload,
+  GitBranchRemovePayload,
   GitClonePayload,
-  GitWorktreeAddPayload,
-  GitWorktreeCleanPayload,
-  GitWorktreeRemovePayload,
 } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
 import { createExecutorClient } from '../services/feathers-client.js';
 import type { CommandOptions } from './index.js';
-import { fixWorktreeGitDirPermissionsBasic } from './unix.js';
+import { fixBranchGitDirPermissionsBasic } from './unix.js';
 
 /**
  * Fetch the requesting user's git environment via Feathers RPC.
@@ -348,11 +348,11 @@ export async function handleGitClone(
 /**
  * Render environment command templates with full context including GID
  *
- * Fetches worktree and repo from database, gets GID from Unix group (if available),
+ * Fetches branch and repo from database, gets GID from Unix group (if available),
  * and renders all environment templates with complete context.
  *
  * @param client - Feathers client
- * @param worktreeId - Worktree ID
+ * @param branchId - Branch ID
  * @param repoId - Repo ID
  * @param unixGroup - Unix group name (to look up GID), undefined if RBAC disabled
  * @param configuredHostIp - Host IP override from daemon-resolved config (config.daemon.host_ip_address)
@@ -360,7 +360,7 @@ export async function handleGitClone(
  */
 async function renderEnvironmentTemplates(
   client: AgorClient,
-  worktreeId: string,
+  branchId: string,
   repoId: string,
   unixGroup: string | undefined,
   configuredHostIp: string | undefined
@@ -374,12 +374,12 @@ async function renderEnvironmentTemplates(
   environment_variant?: string;
 }> {
   // Import dependencies dynamically
-  const { renderWorktreeSnapshot } = await import('@agor/core/environment/render-snapshot');
+  const { renderBranchSnapshot } = await import('@agor/core/environment/render-snapshot');
   const { getGidFromGroupName } = await import('@agor/core/unix');
   const { resolveHostIpAddress } = await import('@agor/core/utils/host-ip');
 
-  // Fetch worktree and repo from database
-  const worktree = await client.service('worktrees').get(worktreeId);
+  // Fetch branch and repo from database
+  const branch = await client.service('branches').get(branchId);
   const repo = await client.service('repos').get(repoId);
 
   // v2 environment is the source of truth; `environment_config` is a derived
@@ -396,25 +396,25 @@ async function renderEnvironmentTemplates(
   // happens inside resolveHostIpAddress when undefined.
   const hostIpAddress = resolveHostIpAddress(configuredHostIp);
 
-  // Honor an explicit variant override if the worktree already picked one;
-  // otherwise fall through to `environment.default` inside renderWorktreeSnapshot.
-  let snapshot: ReturnType<typeof renderWorktreeSnapshot>;
+  // Honor an explicit variant override if the branch already picked one;
+  // otherwise fall through to `environment.default` inside renderBranchSnapshot.
+  let snapshot: ReturnType<typeof renderBranchSnapshot>;
   try {
-    snapshot = renderWorktreeSnapshot(
+    snapshot = renderBranchSnapshot(
       { slug: repo.slug, environment: repo.environment },
       {
-        worktree_unique_id: worktree.worktree_unique_id,
-        name: worktree.name,
-        path: worktree.path,
-        custom_context: worktree.custom_context,
+        branch_unique_id: branch.branch_unique_id,
+        name: branch.name,
+        path: branch.path,
+        custom_context: branch.custom_context,
         unix_gid: unixGid,
         host_ip_address: hostIpAddress,
       },
-      worktree.environment_variant
+      branch.environment_variant
     );
   } catch (err) {
     console.warn(
-      `[renderEnvironmentTemplates] Failed to render environment for ${worktree.name}:`,
+      `[renderEnvironmentTemplates] Failed to render environment for ${branch.name}:`,
       err
     );
     return {};
@@ -433,17 +433,17 @@ async function renderEnvironmentTemplates(
 }
 
 /**
- * Handle git.worktree.add command
+ * Handle git.branch.add command
  *
- * Creates a git worktree at the specified path.
+ * Creates a git branch at the specified path.
  * The DB record is created by the daemon BEFORE this runs (with filesystem_status: 'creating').
- * This handler patches the worktree to 'ready' when complete (or leaves as 'creating' on failure).
+ * This handler patches the branch to 'ready' when complete (or leaves as 'creating' on failure).
  */
-export async function handleGitWorktreeAdd(
-  payload: GitWorktreeAddPayload,
+export async function handleGitBranchAdd(
+  payload: GitBranchAddPayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
-  const worktreeId = payload.params.worktreeId;
+  const branchId = payload.params.branchId;
 
   // Dry run mode
   if (options.dryRun) {
@@ -451,12 +451,12 @@ export async function handleGitWorktreeAdd(
       success: true,
       data: {
         dryRun: true,
-        command: 'git.worktree.add',
-        worktreeId,
+        command: 'git.branch.add',
+        branchId,
         repoId: payload.params.repoId,
         repoPath: payload.params.repoPath,
-        worktreeName: payload.params.worktreeName,
-        worktreePath: payload.params.worktreePath,
+        branchName: payload.params.branchName,
+        branchPath: payload.params.branchPath,
         branch: payload.params.branch,
         sourceBranch: payload.params.sourceBranch,
         createBranch: payload.params.createBranch,
@@ -474,18 +474,18 @@ export async function handleGitWorktreeAdd(
     // Connect to daemon
     const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
     client = await createExecutorClient(daemonUrl, payload.sessionToken);
-    console.log('[git.worktree.add] Connected to daemon');
+    console.log('[git.branch.add] Connected to daemon');
 
     // Fetch per-user git credentials via Feathers RPC
     const env = await fetchUserGitEnvironment(client, payload.params.userId);
 
     // Get parameters
     const repoId = payload.params.repoId;
-    const worktreePath = payload.params.worktreePath;
+    const branchPath = payload.params.branchPath;
     const repoPath = payload.params.repoPath;
-    const worktreeName = payload.params.worktreeName;
-    const branch = payload.params.branch || worktreeName;
-    const createBranch = payload.params.createBranch ?? false;
+    const branchName = payload.params.branchName;
+    const branch = payload.params.branch || branchName;
+    const shouldCreateBranch = payload.params.createBranch ?? false;
     const sourceBranch = payload.params.sourceBranch;
     const refType = payload.params.refType;
     const restoreMode = payload.params.restoreMode ?? false;
@@ -494,12 +494,12 @@ export async function handleGitWorktreeAdd(
     const remoteUrl = payload.params.remoteUrl;
     const referencePath = payload.params.referencePath;
 
-    console.log(`[git.worktree.add] Creating worktree at ${worktreePath}...`);
+    console.log(`[git.branch.add] Creating branch at ${branchPath}...`);
     console.log(
-      `[git.worktree.add] Repo: ${repoPath}, Branch: ${branch}, CreateBranch: ${createBranch}, RestoreMode: ${restoreMode}, RefType: ${refType || 'branch'}, StorageMode: ${storageMode}`
+      `[git.branch.add] Repo: ${repoPath}, Branch: ${branch}, CreateBranch: ${shouldCreateBranch}, RestoreMode: ${restoreMode}, RefType: ${refType || 'branch'}, StorageMode: ${storageMode}`
     );
 
-    // Create the git worktree on filesystem
+    // Create the git branch on filesystem
     if (storageMode === 'clone') {
       // Self-standing clone path. The remote URL is daemon-resolved from the
       // repo record; refuse to silently fall through to worktree mode if it
@@ -517,17 +517,17 @@ export async function handleGitWorktreeAdd(
       // helper fork off the cloned tip. When checking out an existing
       // branch, just clone the ref directly. The helper owns both flows so
       // the executor handler doesn't have to orchestrate post-clone git ops.
-      const cloneRef = createBranch ? sourceBranch || branch : branch;
+      const cloneRef = shouldCreateBranch ? sourceBranch || branch : branch;
       console.log(
-        `[git.worktree.add] Using createBranchAsClone (remote=${remoteUrl}, ` +
-          `ref=${cloneRef}${createBranch && branch !== cloneRef ? `, newBranch=${branch}` : ''}, ` +
+        `[git.branch.add] Using createBranchAsClone (remote=${remoteUrl}, ` +
+          `ref=${cloneRef}${shouldCreateBranch && branch !== cloneRef ? `, newBranch=${branch}` : ''}, ` +
           `depth=${cloneDepth ?? 'full'}, referenceHint=${referencePath ?? 'none'})`
       );
       await createBranchAsClone({
         remoteUrl,
-        targetPath: worktreePath,
+        targetPath: branchPath,
         ref: cloneRef,
-        ...(createBranch && branch !== cloneRef ? { newBranchName: branch } : {}),
+        ...(shouldCreateBranch && branch !== cloneRef ? { newBranchName: branch } : {}),
         depth: cloneDepth,
         // Pass the daemon's hint through unconditionally. The helper does
         // the existsSync check on the executor's filesystem and falls back
@@ -540,25 +540,19 @@ export async function handleGitWorktreeAdd(
       // falls back to creating from base ref if not. Safe because it only creates
       // a new branch when ls-remote confirms the branch doesn't exist anywhere.
       console.log(
-        `[git.worktree.add] Using restoreWorktreeFilesystem (branch: ${branch}, base: ${sourceBranch})`
+        `[git.branch.add] Using restoreBranchFilesystem (branch: ${branch}, base: ${sourceBranch})`
       );
-      const result = await restoreWorktreeFilesystem(
-        repoPath,
-        worktreePath,
-        branch,
-        sourceBranch,
-        env
-      );
+      const result = await restoreBranchFilesystem(repoPath, branchPath, branch, sourceBranch, env);
       if (!result.success) {
-        throw new Error(`restoreWorktreeFilesystem failed: ${result.error}`);
+        throw new Error(`restoreBranchFilesystem failed: ${result.error}`);
       }
-      console.log(`[git.worktree.add] Restored worktree via ${result.strategy} strategy`);
+      console.log(`[git.branch.add] Restored branch via ${result.strategy} strategy`);
     } else {
-      await createWorktree(
+      await createBranch(
         repoPath,
-        worktreePath,
+        branchPath,
         branch,
-        createBranch,
+        shouldCreateBranch,
         true, // pullLatest
         sourceBranch,
         env,
@@ -566,27 +560,25 @@ export async function handleGitWorktreeAdd(
       );
     }
 
-    console.log(`[git.worktree.add] Worktree created at ${worktreePath}`);
+    console.log(`[git.branch.add] Branch created at ${branchPath}`);
 
-    // Initialize Unix group for worktree isolation via daemon RPC (if requested).
+    // Initialize Unix group for branch isolation via daemon RPC (if requested).
     // Runs daemon-side so that groupadd/chgrp/setfacl execute with daemon
     // sudo privileges regardless of executor impersonation mode.
     let unixGroup: string | undefined;
-    if (payload.params.initUnixGroup && worktreeId) {
+    if (payload.params.initUnixGroup && branchId) {
       try {
         const othersAccess = payload.params.othersAccess || 'read';
-        console.log(
-          `[git.worktree.add] Initializing Unix group for worktree ${shortId(worktreeId)}`
-        );
+        console.log(`[git.branch.add] Initializing Unix group for branch ${shortId(branchId)}`);
         const result = await client
-          .service('worktrees')
-          .initializeUnixGroup({ worktreeId, othersAccess });
+          .service('branches')
+          .initializeUnixGroup({ branchId, othersAccess });
         unixGroup = result.unixGroup;
-        console.log(`[git.worktree.add] Unix group initialized: ${unixGroup}`);
+        console.log(`[git.branch.add] Unix group initialized: ${unixGroup}`);
       } catch (error) {
         // Log but don't fail the entire operation
         console.error(
-          `[git.worktree.add] Failed to initialize Unix group:`,
+          `[git.branch.add] Failed to initialize Unix group:`,
           error instanceof Error ? error.message : String(error)
         );
       }
@@ -601,17 +593,17 @@ export async function handleGitWorktreeAdd(
       // create. The clone's `.git/` is set up by `git clone` itself.
       try {
         console.log(
-          `[git.worktree.add] RBAC disabled, setting basic permissions for .git/worktrees/${worktreeName}`
+          `[git.branch.add] RBAC disabled, setting basic permissions for .git/worktrees/${branchName}`
         );
-        await fixWorktreeGitDirPermissionsBasic(repoPath, worktreeName);
+        await fixBranchGitDirPermissionsBasic(repoPath, branchName);
       } catch (error) {
         console.error(
-          `[git.worktree.add] Failed to set basic .git/worktrees permissions:`,
+          `[git.branch.add] Failed to set basic .git/worktrees permissions:`,
           error instanceof Error ? error.message : String(error)
         );
       }
     }
-    // else: initUnixGroup is true but worktreeId is missing - skip both paths (this shouldn't happen)
+    // else: initUnixGroup is true but branchId is missing - skip both paths (this shouldn't happen)
 
     // Render environment command templates (after Unix group creation if applicable)
     // Templates should be rendered regardless of RBAC status, but GID will only be available
@@ -627,62 +619,62 @@ export async function handleGitWorktreeAdd(
         }
       | undefined;
 
-    if (worktreeId) {
+    if (branchId) {
       try {
         const logSuffix = unixGroup
-          ? `with GID for worktree ${shortId(worktreeId)}`
-          : `for worktree ${shortId(worktreeId)} (no Unix group)`;
-        console.log(`[git.worktree.add] Rendering environment templates ${logSuffix}`);
+          ? `with GID for branch ${shortId(branchId)}`
+          : `for branch ${shortId(branchId)} (no Unix group)`;
+        console.log(`[git.branch.add] Rendering environment templates ${logSuffix}`);
         renderedTemplates = await renderEnvironmentTemplates(
           client,
-          worktreeId,
+          branchId,
           repoId,
           unixGroup,
           payload.resolvedConfig?.daemon?.host_ip_address
         );
-        console.log(`[git.worktree.add] Templates rendered successfully`);
+        console.log(`[git.branch.add] Templates rendered successfully`);
       } catch (error) {
         console.error(
-          `[git.worktree.add] Failed to render templates:`,
+          `[git.branch.add] Failed to render templates:`,
           error instanceof Error ? error.message : String(error)
         );
         // Don't fail the entire operation if template rendering fails
       }
     }
 
-    // Patch worktree status to 'ready' (DB record was created by daemon with 'creating')
-    if (worktreeId) {
-      console.log(`[git.worktree.add] Marking worktree ${shortId(worktreeId)} as ready`);
-      await client.service('worktrees').patch(worktreeId, {
+    // Patch branch status to 'ready' (DB record was created by daemon with 'creating')
+    if (branchId) {
+      console.log(`[git.branch.add] Marking branch ${shortId(branchId)} as ready`);
+      await client.service('branches').patch(branchId, {
         filesystem_status: 'ready',
         ...(unixGroup ? { unix_group: unixGroup } : {}),
         ...(renderedTemplates || {}),
       });
-      console.log(`[git.worktree.add] Worktree marked as ready`);
+      console.log(`[git.branch.add] Branch marked as ready`);
     }
 
     return {
       success: true,
       data: {
-        worktreePath,
-        worktreeName,
+        branchPath,
+        branchName,
         branch,
         repoPath,
         repoId,
-        worktreeId,
+        branchId,
         unixGroup,
       },
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('[git.worktree.add] Failed:', errorMessage);
+    console.error('[git.branch.add] Failed:', errorMessage);
 
     // Fallback: ensure the directory exists with correct perms/ACLs even when
     // git worktree add fails (e.g., branch deleted during archive). This
     // unblocks sync-unix, sessions, and manual recovery — the directory just
-    // won't be a proper git worktree. Also repairs perms if a prior attempt
+    // won't be a proper git branch. Also repairs perms if a prior attempt
     // created the dir but failed on group initialization.
-    const fallbackPath = payload.params.worktreePath;
+    const fallbackPath = payload.params.branchPath;
     let fallbackCreated = false;
     let fallbackPermissionsApplied = false;
     if (fallbackPath) {
@@ -690,26 +682,26 @@ export async function handleGitWorktreeAdd(
       if (!existsSync(fallbackPath)) {
         try {
           mkdirSync(fallbackPath, { recursive: true });
-          console.log(`[git.worktree.add] Fallback: created empty directory ${fallbackPath}`);
+          console.log(`[git.branch.add] Fallback: created empty directory ${fallbackPath}`);
           fallbackCreated = true;
         } catch (mkdirError) {
           console.error(
-            '[git.worktree.add] Fallback: failed to create directory:',
+            '[git.branch.add] Fallback: failed to create directory:',
             mkdirError instanceof Error ? mkdirError.message : String(mkdirError)
           );
         }
       }
 
       // Step 2: Apply perms/ACLs via daemon RPC (runs even if dir already existed from a prior attempt)
-      if (existsSync(fallbackPath) && payload.params.initUnixGroup && worktreeId && client) {
+      if (existsSync(fallbackPath) && payload.params.initUnixGroup && branchId && client) {
         try {
           const othersAccess = payload.params.othersAccess || 'read';
-          await client.service('worktrees').initializeUnixGroup({ worktreeId, othersAccess });
-          console.log(`[git.worktree.add] Fallback: applied Unix group permissions`);
+          await client.service('branches').initializeUnixGroup({ branchId, othersAccess });
+          console.log(`[git.branch.add] Fallback: applied Unix group permissions`);
           fallbackPermissionsApplied = true;
         } catch (permError) {
           console.error(
-            '[git.worktree.add] Fallback: failed to set Unix group permissions:',
+            '[git.branch.add] Fallback: failed to set Unix group permissions:',
             permError instanceof Error ? permError.message : String(permError)
           );
         }
@@ -720,23 +712,23 @@ export async function handleGitWorktreeAdd(
     let userMessage = errorMessage;
     if (errorMessage.includes('already exists')) {
       if (errorMessage.includes('branch')) {
-        userMessage = `A branch named '${payload.params.branch || payload.params.worktreeName}' already exists and is in use by another worktree. Please choose a different name.`;
+        userMessage = `A branch named '${payload.params.branch || payload.params.branchName}' already exists and is in use by another branch. Please choose a different name.`;
       } else {
-        userMessage = `Directory '${payload.params.worktreePath || payload.params.worktreeName}' already exists. An archived or partially-cleaned worktree may still occupy this path.`;
+        userMessage = `Directory '${payload.params.branchPath || payload.params.branchName}' already exists. An archived or partially-cleaned branch may still occupy this path.`;
       }
     }
 
-    // Try to mark worktree as failed with error details (if we have a worktreeId and client)
-    if (worktreeId && client) {
+    // Try to mark branch as failed with error details (if we have a branchId and client)
+    if (branchId && client) {
       try {
-        await client.service('worktrees').patch(worktreeId, {
+        await client.service('branches').patch(branchId, {
           filesystem_status: 'failed',
           error_message: userMessage,
         });
-        console.log(`[git.worktree.add] Marked worktree as failed`);
+        console.log(`[git.branch.add] Marked branch as failed`);
       } catch (patchError) {
         console.error(
-          '[git.worktree.add] Failed to mark worktree as failed:',
+          '[git.branch.add] Failed to mark branch as failed:',
           patchError instanceof Error ? patchError.message : String(patchError)
         );
       }
@@ -745,14 +737,14 @@ export async function handleGitWorktreeAdd(
     return {
       success: false,
       error: {
-        code: 'GIT_WORKTREE_ADD_FAILED',
+        code: 'GIT_BRANCH_ADD_FAILED',
         message: userMessage,
         details: {
-          worktreeId,
+          branchId,
           repoId: payload.params.repoId,
           repoPath: payload.params.repoPath,
-          worktreeName: payload.params.worktreeName,
-          worktreePath: payload.params.worktreePath,
+          branchName: payload.params.branchName,
+          branchPath: payload.params.branchPath,
           fallbackDirectoryCreated: fallbackCreated,
           fallbackPermissionsApplied,
         },
@@ -770,13 +762,13 @@ export async function handleGitWorktreeAdd(
 }
 
 /**
- * Handle git.worktree.remove command
+ * Handle git.branch.remove command
  *
- * Removes a worktree from the filesystem and deletes the database record.
+ * Removes a branch from the filesystem and deletes the database record.
  * This is a complete transaction - filesystem + DB in one atomic operation.
  */
-export async function handleGitWorktreeRemove(
-  payload: GitWorktreeRemovePayload,
+export async function handleGitBranchRemove(
+  payload: GitBranchRemovePayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
   const deleteDbRecord = payload.params.deleteDbRecord ?? true;
@@ -787,9 +779,9 @@ export async function handleGitWorktreeRemove(
       success: true,
       data: {
         dryRun: true,
-        command: 'git.worktree.remove',
-        worktreeId: payload.params.worktreeId,
-        worktreePath: payload.params.worktreePath,
+        command: 'git.branch.remove',
+        branchId: payload.params.branchId,
+        branchPath: payload.params.branchPath,
         force: payload.params.force,
         deleteDbRecord,
         storageMode: payload.params.storageMode,
@@ -803,37 +795,37 @@ export async function handleGitWorktreeRemove(
     // Connect to daemon
     const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
     client = await createExecutorClient(daemonUrl, payload.sessionToken);
-    console.log('[git.worktree.remove] Connected to daemon');
+    console.log('[git.branch.remove] Connected to daemon');
 
-    const worktreeId = payload.params.worktreeId;
-    const worktreePath = payload.params.worktreePath;
+    const branchId = payload.params.branchId;
+    const branchPath = payload.params.branchPath;
     const storageMode = payload.params.storageMode ?? 'worktree';
 
     console.log(
-      `[git.worktree.remove] Removing worktree at ${worktreePath} (storageMode=${storageMode})...`
+      `[git.branch.remove] Removing branch at ${branchPath} (storageMode=${storageMode})...`
     );
 
-    // Find the repo path from the worktree's .git file
+    // Find the repo path from the branch's .git file
     const { readFile, stat } = await import('node:fs/promises');
     const { existsSync } = await import('node:fs');
     const { join, dirname, basename } = await import('node:path');
 
-    const gitPath = join(worktreePath, '.git');
+    const gitPath = join(branchPath, '.git');
     let filesystemRemoved = false;
 
     // Clone-mode short-circuit: there's no parent base repo to deregister
     // from, no `gitdir:` pointer file, and `git worktree remove --force`
     // would fail (or worse, mis-target). Just blow away the directory.
     if (storageMode === 'clone') {
-      if (existsSync(worktreePath)) {
+      if (existsSync(branchPath)) {
         console.log(
-          `[git.worktree.remove] Clone mode — removing self-standing directory ${worktreePath}`
+          `[git.branch.remove] Clone mode — removing self-standing directory ${branchPath}`
         );
-        await deleteWorktreeDirectory(worktreePath);
+        await deleteBranchDirectory(branchPath);
         filesystemRemoved = true;
       } else {
         console.log(
-          '[git.worktree.remove] Clone mode — directory already absent, skipping filesystem removal'
+          '[git.branch.remove] Clone mode — directory already absent, skipping filesystem removal'
         );
       }
     } else if (existsSync(gitPath)) {
@@ -848,9 +840,9 @@ export async function handleGitWorktreeRemove(
       const gitStat = await stat(gitPath);
       if (gitStat.isDirectory()) {
         console.warn(
-          `[git.worktree.remove] DB says storage_mode='worktree' but ${gitPath} is a directory — treating as clone-mode removal`
+          `[git.branch.remove] DB says storage_mode='worktree' but ${gitPath} is a directory — treating as clone-mode removal`
         );
-        await deleteWorktreeDirectory(worktreePath);
+        await deleteBranchDirectory(branchPath);
         filesystemRemoved = true;
       } else {
         // Read .git file to find the main repo
@@ -859,108 +851,107 @@ export async function handleGitWorktreeRemove(
         const match = gitContent.match(/gitdir:\s*(.+)/);
 
         if (!match) {
-          throw new Error(`Invalid .git file in worktree: ${gitPath}`);
+          throw new Error(`Invalid .git file in branch: ${gitPath}`);
         }
 
         // Extract repo path from gitdir path
         // gitdir points to: <repo>/.git/worktrees/<name>
         // We need: <repo>
         const gitdirPath = match[1].trim();
-        const gitWorktreesDir = dirname(gitdirPath); // <repo>/.git/worktrees
-        const dotGitDir = dirname(gitWorktreesDir); // <repo>/.git
+        const gitBranchesDir = dirname(gitdirPath); // <repo>/.git/worktrees
+        const dotGitDir = dirname(gitBranchesDir); // <repo>/.git
         const repoPath = dirname(dotGitDir); // <repo>
 
-        const worktreeName = basename(worktreePath);
+        const branchName = basename(branchPath);
 
-        console.log(`[git.worktree.remove] Repo path: ${repoPath}, Worktree name: ${worktreeName}`);
+        console.log(`[git.branch.remove] Repo path: ${repoPath}, Branch name: ${branchName}`);
 
-        // Remove the worktree using git (deregisters from .git/worktrees/)
-        await removeWorktree(repoPath, worktreeName);
-        console.log(`[git.worktree.remove] Git worktree deregistered`);
+        // Deregister the git worktree (removes the `.git/worktrees/<name>/`
+        // entry from the base repo). Wraps `git worktree remove --force`.
+        await removeGitWorktree(repoPath, branchName);
+        console.log(`[git.branch.remove] Git worktree deregistered`);
 
         // git worktree remove --force may leave residual files on disk.
         // Fully delete the directory to reclaim all disk space.
-        if (existsSync(worktreePath)) {
-          console.log(`[git.worktree.remove] Directory still exists, removing residual files...`);
-          await deleteWorktreeDirectory(worktreePath);
-          console.log(`[git.worktree.remove] Directory fully removed`);
+        if (existsSync(branchPath)) {
+          console.log(`[git.branch.remove] Directory still exists, removing residual files...`);
+          await deleteBranchDirectory(branchPath);
+          console.log(`[git.branch.remove] Directory fully removed`);
         }
 
         filesystemRemoved = true;
-        console.log(`[git.worktree.remove] Worktree removed from filesystem`);
+        console.log(`[git.branch.remove] Branch removed from filesystem`);
 
         // Delete the associated branch if requested
         if (payload.params.deleteBranch && payload.params.branch) {
           const branchToDelete = payload.params.branch;
           try {
-            console.log(`[git.worktree.remove] Deleting branch '${branchToDelete}'...`);
+            console.log(`[git.branch.remove] Deleting branch '${branchToDelete}'...`);
             const deleted = await deleteBranch(repoPath, branchToDelete);
             if (deleted) {
-              console.log(`[git.worktree.remove] Branch '${branchToDelete}' deleted`);
+              console.log(`[git.branch.remove] Branch '${branchToDelete}' deleted`);
             } else {
               console.log(
-                `[git.worktree.remove] Branch '${branchToDelete}' not found (already deleted)`
+                `[git.branch.remove] Branch '${branchToDelete}' not found (already deleted)`
               );
             }
           } catch (branchError) {
             // Log but don't fail the overall operation
             console.warn(
-              `[git.worktree.remove] Failed to delete branch '${branchToDelete}':`,
+              `[git.branch.remove] Failed to delete branch '${branchToDelete}':`,
               branchError instanceof Error ? branchError.message : String(branchError)
             );
           }
         }
       }
-    } else if (existsSync(worktreePath)) {
+    } else if (existsSync(branchPath)) {
       // No .git file but directory exists — orphaned directory from a previous partial removal.
       // Clean it up completely.
       console.log(
-        '[git.worktree.remove] No .git file but directory exists (orphaned), removing directory...'
+        '[git.branch.remove] No .git file but directory exists (orphaned), removing directory...'
       );
-      await deleteWorktreeDirectory(worktreePath);
+      await deleteBranchDirectory(branchPath);
       filesystemRemoved = true;
-      console.log('[git.worktree.remove] Orphaned directory removed');
+      console.log('[git.branch.remove] Orphaned directory removed');
     } else {
-      console.log(
-        '[git.worktree.remove] Worktree does not exist on filesystem, skipping git removal'
-      );
+      console.log('[git.branch.remove] Branch does not exist on filesystem, skipping git removal');
     }
 
     // Delete DB record if requested (default: true)
     let dbRecordDeleted = false;
 
     if (deleteDbRecord) {
-      console.log(`[git.worktree.remove] Deleting worktree record: ${worktreeId}`);
+      console.log(`[git.branch.remove] Deleting branch record: ${branchId}`);
 
-      // Delete worktree via Feathers service
-      // The daemon's worktrees service handles cascades and hooks
-      await client.service('worktrees').remove(worktreeId);
+      // Delete branch via Feathers service
+      // The daemon's branches service handles cascades and hooks
+      await client.service('branches').remove(branchId);
       dbRecordDeleted = true;
 
-      console.log(`[git.worktree.remove] Worktree record deleted`);
+      console.log(`[git.branch.remove] Branch record deleted`);
     }
 
     return {
       success: true,
       data: {
-        worktreeId,
-        worktreePath,
+        branchId,
+        branchPath,
         filesystemRemoved,
         dbRecordDeleted,
       },
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('[git.worktree.remove] Failed:', errorMessage);
+    console.error('[git.branch.remove] Failed:', errorMessage);
 
     return {
       success: false,
       error: {
-        code: 'GIT_WORKTREE_REMOVE_FAILED',
+        code: 'GIT_BRANCH_REMOVE_FAILED',
         message: errorMessage,
         details: {
-          worktreeId: payload.params.worktreeId,
-          worktreePath: payload.params.worktreePath,
+          branchId: payload.params.branchId,
+          branchPath: payload.params.branchPath,
         },
       },
     };
@@ -976,14 +967,14 @@ export async function handleGitWorktreeRemove(
 }
 
 /**
- * Handle git.worktree.clean command
+ * Handle git.branch.clean command
  *
- * Removes untracked files and build artifacts from the worktree.
+ * Removes untracked files and build artifacts from the branch.
  * Uses `git clean -fdx` which removes untracked files, directories,
  * and ignored files (node_modules, build artifacts, etc.)
  */
-export async function handleGitWorktreeClean(
-  payload: GitWorktreeCleanPayload,
+export async function handleGitBranchClean(
+  payload: GitBranchCleanPayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
   // Dry run mode
@@ -992,40 +983,40 @@ export async function handleGitWorktreeClean(
       success: true,
       data: {
         dryRun: true,
-        command: 'git.worktree.clean',
-        worktreePath: payload.params.worktreePath,
+        command: 'git.branch.clean',
+        branchPath: payload.params.branchPath,
       },
     };
   }
 
   try {
-    const worktreePath = payload.params.worktreePath;
+    const branchPath = payload.params.branchPath;
 
-    console.log(`[git.worktree.clean] Cleaning worktree at ${worktreePath}...`);
+    console.log(`[git.branch.clean] Cleaning branch at ${branchPath}...`);
 
-    // Clean the worktree
-    const result = await cleanWorktree(worktreePath);
+    // Clean the branch
+    const result = await cleanBranch(branchPath);
 
-    console.log(`[git.worktree.clean] Cleaned ${result.filesRemoved} files from ${worktreePath}`);
+    console.log(`[git.branch.clean] Cleaned ${result.filesRemoved} files from ${branchPath}`);
 
     return {
       success: true,
       data: {
-        worktreePath,
+        branchPath,
         filesRemoved: result.filesRemoved,
       },
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('[git.worktree.clean] Failed:', errorMessage);
+    console.error('[git.branch.clean] Failed:', errorMessage);
 
     return {
       success: false,
       error: {
-        code: 'GIT_WORKTREE_CLEAN_FAILED',
+        code: 'GIT_BRANCH_CLEAN_FAILED',
         message: errorMessage,
         details: {
-          worktreePath: payload.params.worktreePath,
+          branchPath: payload.params.branchPath,
         },
       },
     };

@@ -2,12 +2,12 @@
  * Model configuration normalization
  *
  * Single source of truth for turning a partial model-config input (from an
- * MCP tool arg, a user default, a worktree setting, etc.) into the canonical
+ * MCP tool arg, a user default, a branch setting, etc.) into the canonical
  * shape persisted on `Session['model_config']`.
  *
  * Callers compose these helpers into a precedence chain instead of hand-rolling
  * the normalization at every session-creation site (MCP create, spawn service,
- * worktree auto-create, gateway session creation, ...). Centralizing here:
+ * branch auto-create, gateway session creation, ...). Centralizing here:
  *
  * - Guarantees every site writes the same shape (mode default, updated_at
  *   stamp, conditional effort/provider inclusion), avoiding drift.
@@ -22,7 +22,7 @@ import type { EffortLevel, Session } from '../types/session.js';
  * Loose input shape accepted by the resolver.
  *
  * Mirrors `Session['model_config']` but every field is optional so we can
- * accept partials from MCP Zod schemas, user/tool defaults, worktree
+ * accept partials from MCP Zod schemas, user/tool defaults, branch
  * overrides, and legacy callers — then either normalize or reject them
  * based on whether `model` is set.
  */
@@ -68,13 +68,13 @@ export function resolveModelConfig(
 /**
  * Walk a precedence list (highest priority first) and return the first
  * source that yields a resolvable model config. Mirrors the "explicit arg >
- * worktree override > user default" pattern used at session-create time.
+ * branch override > user default" pattern used at session-create time.
  *
  * Example:
  * ```ts
  * const modelConfig = resolveModelConfigPrecedence([
  *   args.modelConfig,              // explicit MCP arg
- *   worktree.modelConfig,          // worktree override
+ *   branch.modelConfig,          // branch override
  *   userToolDefaults?.modelConfig, // user default
  * ]);
  * ```

@@ -4,10 +4,10 @@
 // Composed from existing canonical types using Pick<> — never disconnected.
 
 import type { AgenticToolName } from './agentic-tool';
+import type { Branch } from './branch';
 import type { Repo } from './repo';
 import type { PermissionMode } from './session';
 import type { User } from './user';
-import type { Worktree } from './worktree';
 
 // ---------------------------------------------------------------------------
 // Repo config: identity + clone info
@@ -25,12 +25,12 @@ export type ResourceRepoConfig = Pick<
 };
 
 // ---------------------------------------------------------------------------
-// Worktree config: identity + git ref + permissions
+// Branch config: identity + git ref + permissions
 // ---------------------------------------------------------------------------
 
-export type ResourceWorktreeConfig = Pick<
-  Worktree,
-  'worktree_id' | 'name' | 'ref' | 'ref_type' | 'others_can' | 'mcp_server_ids'
+export type ResourceBranchConfig = Pick<
+  Branch,
+  'branch_id' | 'name' | 'ref' | 'ref_type' | 'others_can' | 'mcp_server_ids'
 > & {
   /** Repo slug reference — resolved to repo_id during sync */
   repo: string;
@@ -40,7 +40,7 @@ export type ResourceWorktreeConfig = Pick<
    */
   readonly?: boolean;
   /**
-   * Enforced agent settings for all sessions on this worktree
+   * Enforced agent settings for all sessions on this branch
    * @todo Not yet applied during sync — parsed and validated but not wired into provisioning logic.
    */
   agent?: EnforcedAgentConfig;
@@ -78,6 +78,6 @@ export interface EnforcedAgentConfig {
 
 export interface DaemonResourcesConfig {
   repos?: ResourceRepoConfig[];
-  worktrees?: ResourceWorktreeConfig[];
+  branches?: ResourceBranchConfig[];
   users?: ResourceUserConfig[];
 }

@@ -25,18 +25,18 @@ export interface AppActionsContextValue {
     scope: PermissionScope
   ) => void;
 
-  // Worktree/Environment actions
-  onStartEnvironment?: (worktreeId: string) => void;
-  onStopEnvironment?: (worktreeId: string) => void;
-  onNukeEnvironment?: (worktreeId: string) => void;
-  onViewLogs?: (worktreeId: string) => void;
+  // Branch/Environment actions
+  onStartEnvironment?: (branchId: string) => void;
+  onStopEnvironment?: (branchId: string) => void;
+  onNukeEnvironment?: (branchId: string) => void;
+  onViewLogs?: (branchId: string) => void;
 
   // Navigation/UI actions
   onOpenSettings?: (sessionId: string) => void;
   /** Open / select a session by id (cross-board navigation when needed). */
   onSessionClick?: (sessionId: string) => void;
-  onOpenWorktree?: (worktreeId: string, tab?: BranchModalTab) => void;
-  onOpenTerminal?: (commands: string[], worktreeId?: string) => void;
+  onOpenBranch?: (branchId: string, tab?: BranchModalTab) => void;
+  onOpenTerminal?: (commands: string[], branchId?: string) => void;
 }
 
 const AppActionsContext = createContext<AppActionsContextValue | undefined>(undefined);

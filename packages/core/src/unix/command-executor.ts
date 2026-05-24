@@ -315,7 +315,7 @@ export class SudoCliExecutor implements CommandExecutor {
 
   async exec(command: string): Promise<CommandResult> {
     // For SudoCliExecutor, the "command" is the admin subcommand
-    // e.g., "create-worktree-group --worktree-id abc123"
+    // e.g., "create-branch-group --branch-id abc123"
     const fullCommand = this.buildCommand(command);
 
     console.log(`[SudoCliExecutor] Executing: ${fullCommand}`);

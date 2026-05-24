@@ -605,7 +605,7 @@ export class GatewayService {
       const session = await sessionsService.create({
         title: data.text.substring(0, 100),
         description: data.text,
-        worktree_id: channel.target_worktree_id,
+        branch_id: channel.target_branch_id,
         created_by: user.user_id,
         // Stamp session with creator's unix_username for executor impersonation.
         // Normally set by the setSessionUnixUsername hook, but that hook skips
@@ -678,7 +678,7 @@ export class GatewayService {
         channel_id: channel.id,
         thread_id: data.thread_id,
         session_id: session.session_id,
-        worktree_id: channel.target_worktree_id,
+        branch_id: channel.target_branch_id,
         status: 'active',
         metadata: data.metadata ?? null,
       });

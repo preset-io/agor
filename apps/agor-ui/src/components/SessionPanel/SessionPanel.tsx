@@ -1,5 +1,6 @@
 import type {
   AgorClient,
+  Branch,
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
@@ -9,7 +10,6 @@ import type {
   SpawnConfig,
   Task,
   User,
-  Worktree,
 } from '@agor-live/client';
 import {
   AGENTIC_TOOL_CAPABILITIES,
@@ -211,7 +211,7 @@ PromptInput.displayName = 'PromptInput';
 export interface SessionPanelProps {
   client: AgorClient | null;
   session: Session | null;
-  worktree?: Worktree | null;
+  branch?: Branch | null;
   currentUserId?: string;
   sessionMcpServerIds?: string[];
   open: boolean;
@@ -221,7 +221,7 @@ export interface SessionPanelProps {
 const SessionPanel: React.FC<SessionPanelProps> = ({
   client,
   session,
-  worktree = null,
+  branch = null,
   currentUserId,
   sessionMcpServerIds = [],
   open,
@@ -234,7 +234,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const recenterMap = useRecenterMap();
 
   // Subscribe only to the entity families this panel needs. SessionPanel
-  // intentionally does NOT subscribe to live (sessions / worktrees / boards)
+  // intentionally does NOT subscribe to live (sessions / branches / boards)
   // data here, so streaming session patches don't trigger re-renders through
   // context; user and MCP updates are also isolated from repo edits.
   const { userById } = useAppUserData();
@@ -988,25 +988,25 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </div>
           </Space>
           <Space size={4}>
-            {worktree && (
-              <Tooltip title="Center map on worktree">
+            {branch && (
+              <Tooltip title="Center map on branch">
                 <Button
                   type="text"
                   icon={<AimOutlined />}
                   onClick={() =>
-                    recenterMap(worktree.worktree_id, {
-                      boardId: worktree.board_id ?? undefined,
+                    recenterMap(branch.branch_id, {
+                      boardId: branch.board_id ?? undefined,
                     })
                   }
                 />
               </Tooltip>
             )}
-            {onOpenTerminal && worktree && (
+            {onOpenTerminal && branch && (
               <Tooltip title="Open terminal in branch directory">
                 <Button
                   type="text"
                   icon={<CodeOutlined />}
-                  onClick={() => onOpenTerminal([`cd ${worktree.path}`], worktree.worktree_id)}
+                  onClick={() => onOpenTerminal([`cd ${branch.path}`], branch.branch_id)}
                 />
               </Tooltip>
             )}
@@ -1049,7 +1049,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         <SessionPanelContent
           client={client}
           session={session}
-          worktree={worktree}
+          branch={branch}
           currentUserId={currentUserId}
           sessionMcpServerIds={sessionMcpServerIds}
           scrollToBottom={scrollToBottom}
@@ -1102,7 +1102,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 };
 
 // SessionPanel reads only entity-context data (users, MCP servers) and receives
-// session/worktree as props. Wrapping with React.memo (default shallow compare)
+// session/branch as props. Wrapping with React.memo (default shallow compare)
 // lets it bail out of re-renders triggered by App's live-context updates as
 // long as its props are referentially stable. Callers MUST pass stable
 // `onClose` and `sessionMcpServerIds` (use EMPTY_STRING_ARRAY for empty).

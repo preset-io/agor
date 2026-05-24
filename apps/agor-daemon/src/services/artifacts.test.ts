@@ -365,7 +365,7 @@ describe('ArtifactsService.land', () => {
     expect(manifest.template).toBe('react');
   });
 
-  dbTest('writes to a custom subpath inside the worktree', async ({ db }) => {
+  dbTest('writes to a custom subpath inside the branch', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
     const board = await seedBoard(db);
     const artifact = await seedArtifact(db, board.board_id);
@@ -377,14 +377,14 @@ describe('ArtifactsService.land', () => {
     expect(result.destinationPath).toBe(path.join(tmpRoot, 'apps', 'frontend', 'demo'));
   });
 
-  dbTest('rejects subpath that escapes the worktree via ".."', async ({ db }) => {
+  dbTest('rejects subpath that escapes the branch via ".."', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
     const board = await seedBoard(db);
     const artifact = await seedArtifact(db, board.board_id);
 
     await expect(
       service.land(artifact.artifact_id, tmpRoot, { subpath: '../escape' })
-    ).rejects.toThrow(/escapes worktree root/i);
+    ).rejects.toThrow(/escapes branch root/i);
   });
 
   dbTest('rejects absolute subpath', async ({ db }) => {
@@ -397,17 +397,17 @@ describe('ArtifactsService.land', () => {
     ).rejects.toThrow(/must be relative/i);
   });
 
-  dbTest('rejects subpath that resolves to the worktree root', async ({ db }) => {
+  dbTest('rejects subpath that resolves to the branch root', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
     const board = await seedBoard(db);
     const artifact = await seedArtifact(db, board.board_id);
 
     await expect(service.land(artifact.artifact_id, tmpRoot, { subpath: '.' })).rejects.toThrow(
-      /worktree root/i
+      /branch root/i
     );
   });
 
-  dbTest('rejects when worktree path does not exist', async ({ db }) => {
+  dbTest('rejects when branch path does not exist', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
     const board = await seedBoard(db);
     const artifact = await seedArtifact(db, board.board_id);
@@ -468,14 +468,14 @@ describe('ArtifactsService.land', () => {
   });
 
   dbTest(
-    'rejects subpath that escapes through a symlinked directory inside the worktree',
+    'rejects subpath that escapes through a symlinked directory inside the branch',
     async ({ db }) => {
       const service = new ArtifactsService(db, makeFakeApp());
       const board = await seedBoard(db);
       const artifact = await seedArtifact(db, board.board_id);
 
-      // Attack shape: the worktree contains a symlink `.agor` -> `/tmp/...`
-      // that points outside the worktree. The default subpath uses `.agor/...`,
+      // Attack shape: the branch contains a symlink `.agor` -> `/tmp/...`
+      // that points outside the branch. The default subpath uses `.agor/...`,
       // so without realpath canonicalization, a lexical containment check
       // would let the write escape into the symlink target.
       const outside = mkdtempSync(path.join(tmpdir(), 'agor-land-outside-'));
@@ -483,7 +483,7 @@ describe('ArtifactsService.land', () => {
         symlinkSync(outside, path.join(tmpRoot, '.agor'), 'dir');
 
         await expect(service.land(artifact.artifact_id, tmpRoot)).rejects.toThrow(
-          /escapes worktree root/i
+          /escapes branch root/i
         );
       } finally {
         rmSync(outside, { recursive: true, force: true });
@@ -491,24 +491,24 @@ describe('ArtifactsService.land', () => {
     }
   );
 
-  dbTest('canonicalizes a symlinked worktree path before containment check', async ({ db }) => {
+  dbTest('canonicalizes a symlinked branch path before containment check', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
     const board = await seedBoard(db);
     const artifact = await seedArtifact(db, board.board_id);
 
-    // The worktree.path column may be a symlink (common when cloning the
+    // The branch.path column may be a symlink (common when cloning the
     // repo under /home vs. /var/home). Landing must still write inside the
-    // real (canonicalized) worktree — it should not throw and not land
+    // real (canonicalized) branch — it should not throw and not land
     // somewhere else.
-    const realWorktree = path.join(tmpRoot, 'real-worktree');
-    mkdirSync(realWorktree, { recursive: true });
-    const symlinkedWorktree = path.join(tmpRoot, 'linked-worktree');
-    symlinkSync(realWorktree, symlinkedWorktree, 'dir');
+    const realBranch = path.join(tmpRoot, 'real-branch');
+    mkdirSync(realBranch, { recursive: true });
+    const symlinkedBranch = path.join(tmpRoot, 'linked-branch');
+    symlinkSync(realBranch, symlinkedBranch, 'dir');
 
-    const result = await service.land(artifact.artifact_id, symlinkedWorktree);
+    const result = await service.land(artifact.artifact_id, symlinkedBranch);
 
     // Destination path is reported under the real root (post-canonicalize).
-    expect(result.destinationPath.startsWith(realWorktree)).toBe(true);
+    expect(result.destinationPath.startsWith(realBranch)).toBe(true);
     expect(readFileSync(path.join(result.destinationPath, 'index.js'), 'utf-8')).toBe(
       'console.log("hello")'
     );

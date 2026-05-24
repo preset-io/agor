@@ -2,13 +2,14 @@
  * Leaderboard Service
  *
  * Provides usage analytics endpoint for token and cost tracking.
- * Allows breakdown by user, worktree, repo, model, and agentic tool, with
+ * Allows breakdown by user, branch, repo, model, and agentic tool, with
  * optional time bucketing (hour/day/week/month) and flexible filtering.
  */
 
 import {
   and,
   asc,
+  branches,
   type Database,
   type DateBucket,
   dateTruncUtc,
@@ -22,7 +23,6 @@ import {
   sql,
   tasks,
   users,
-  worktrees,
 } from '@agor/core/db';
 
 interface Params {
@@ -31,16 +31,16 @@ interface Params {
 
 /**
  * Supported groupBy dimensions. Callers can combine these in a comma-separated string,
- * e.g. `'user,model'` or `'tool,worktree,repo'`.
+ * e.g. `'user,model'` or `'tool,branch,repo'`.
  */
-export type LeaderboardDimension = 'user' | 'worktree' | 'repo' | 'model' | 'tool';
+export type LeaderboardDimension = 'user' | 'branch' | 'repo' | 'model' | 'tool';
 
-const ALL_DIMENSIONS: LeaderboardDimension[] = ['user', 'worktree', 'repo', 'model', 'tool'];
+const ALL_DIMENSIONS: LeaderboardDimension[] = ['user', 'branch', 'repo', 'model', 'tool'];
 
 export interface LeaderboardQuery {
   // Filters
   userId?: string;
-  worktreeId?: string;
+  branchId?: string;
   repoId?: string;
 
   // Time period (optional - ISO timestamps)
@@ -48,7 +48,7 @@ export interface LeaderboardQuery {
   endDate?: string;
 
   // Group by dimensions (optional, comma-separated). Default matches legacy behaviour.
-  // Supported values: 'user' | 'worktree' | 'repo' | 'model' | 'tool' (any combination).
+  // Supported values: 'user' | 'branch' | 'repo' | 'model' | 'tool' (any combination).
   groupBy?: string;
 
   // Time bucket (optional). When set, adds a `bucket` field (ISO-8601 UTC timestamp
@@ -71,8 +71,8 @@ export interface LeaderboardEntry {
   userName?: string;
   userEmail?: string;
   userEmoji?: string;
-  worktreeId?: string;
-  worktreeName?: string;
+  branchId?: string;
+  branchName?: string;
   repoId?: string;
   repoName?: string;
   model?: string;
@@ -143,11 +143,11 @@ export class LeaderboardService {
     // Extract query params
     const {
       userId,
-      worktreeId,
+      branchId,
       repoId,
       startDate,
       endDate,
-      groupBy = 'user,worktree,repo',
+      groupBy = 'user,branch,repo',
       bucket,
       sortBy = 'cost',
       sortOrder = 'desc',
@@ -162,7 +162,7 @@ export class LeaderboardService {
     // Parse groupBy dimensions
     const dims = parseGroupBy(groupBy);
     const includeUser = dims.has('user');
-    const includeWorktree = dims.has('worktree');
+    const includeBranch = dims.has('branch');
     const includeRepo = dims.has('repo');
     const includeModel = dims.has('model');
     const includeTool = dims.has('tool');
@@ -174,12 +174,12 @@ export class LeaderboardService {
       conditions.push(eq(tasks.created_by, userId));
     }
 
-    if (worktreeId) {
-      conditions.push(eq(sessions.worktree_id, worktreeId));
+    if (branchId) {
+      conditions.push(eq(sessions.branch_id, branchId));
     }
 
     if (repoId) {
-      conditions.push(eq(worktrees.repo_id, repoId));
+      conditions.push(eq(branches.repo_id, repoId));
     }
 
     // Use gte/lte so drizzle encodes the bound via the column's timestamp mapper
@@ -262,12 +262,12 @@ export class LeaderboardService {
       selectFields.userEmail = users.email;
       selectFields.userEmoji = users.emoji;
     }
-    if (includeWorktree) {
-      selectFields.worktreeId = worktrees.worktree_id;
-      selectFields.worktreeName = worktrees.name;
+    if (includeBranch) {
+      selectFields.branchId = branches.branch_id;
+      selectFields.branchName = branches.name;
     }
     if (includeRepo) {
-      selectFields.repoId = worktrees.repo_id;
+      selectFields.repoId = branches.repo_id;
     }
     if (includeModel) {
       selectFields.model = sql<string>`${modelExpr}`.as('model');
@@ -291,11 +291,11 @@ export class LeaderboardService {
       groupByFields.push(users.email);
       groupByFields.push(users.emoji);
     }
-    if (includeWorktree) {
-      groupByFields.push(worktrees.worktree_id);
-      groupByFields.push(worktrees.name);
+    if (includeBranch) {
+      groupByFields.push(branches.branch_id);
+      groupByFields.push(branches.name);
     }
-    if (includeRepo) groupByFields.push(worktrees.repo_id);
+    if (includeRepo) groupByFields.push(branches.repo_id);
     if (includeModel) groupByFields.push(sql`${modelExpr}`);
     if (includeTool) groupByFields.push(sessions.agentic_tool);
     if (bucketExpr) groupByFields.push(sql`${bucketExpr}`);
@@ -307,7 +307,7 @@ export class LeaderboardService {
     const orderClauses = bucketExpr ? [asc(sql`bucket`), metricOrder] : [metricOrder];
 
     // Execute aggregation query
-    // Join: tasks -> sessions -> worktrees, optionally LEFT JOIN users for display info
+    // Join: tasks -> sessions -> branches, optionally LEFT JOIN users for display info
     // Cast required: Database is a LibSQL|Postgres union; TypeScript cannot narrow the union
     // for dynamic-field SELECT queries even though both dialects share identical .select() API.
     // biome-ignore lint/suspicious/noExplicitAny: Database union type prevents calling .select() with dynamic fields
@@ -315,7 +315,7 @@ export class LeaderboardService {
       .select(selectFields)
       .from(tasks)
       .innerJoin(sessions, eq(tasks.session_id, sessions.session_id))
-      .innerJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id));
+      .innerJoin(branches, eq(sessions.branch_id, branches.branch_id));
 
     if (includeUser) {
       qb = qb.leftJoin(users, eq(tasks.created_by, users.user_id));
@@ -342,7 +342,7 @@ export class LeaderboardService {
         .select({ one: sql`1` })
         .from(tasks)
         .innerJoin(sessions, eq(tasks.session_id, sessions.session_id))
-        .innerJoin(worktrees, eq(sessions.worktree_id, worktrees.worktree_id));
+        .innerJoin(branches, eq(sessions.branch_id, branches.branch_id));
 
       if (includeUser) {
         countInner = countInner.leftJoin(users, eq(tasks.created_by, users.user_id));
@@ -367,8 +367,8 @@ export class LeaderboardService {
       userName?: string | null;
       userEmail?: string | null;
       userEmoji?: string | null;
-      worktreeId?: string;
-      worktreeName?: string;
+      branchId?: string;
+      branchName?: string;
       repoId?: string;
       model?: string | null;
       tool?: string | null;
@@ -392,9 +392,9 @@ export class LeaderboardService {
           userEmail: r.userEmail || undefined,
           userEmoji: r.userEmoji || undefined,
         }),
-        ...(includeWorktree && {
-          worktreeId: r.worktreeId as string,
-          worktreeName: r.worktreeName as string,
+        ...(includeBranch && {
+          branchId: r.branchId as string,
+          branchName: r.branchName as string,
         }),
         ...(includeRepo && { repoId: r.repoId as string }),
         ...(includeModel && { model: r.model || undefined }),

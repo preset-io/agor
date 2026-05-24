@@ -48,7 +48,7 @@ export interface DrizzleAdapterOptions {
   multi?: boolean | string[];
 
   /**
-   * Resource type name for error messages (e.g., 'Worktree', 'Session')
+   * Resource type name for error messages (e.g., 'Branch', 'Session')
    */
   resourceType?: string;
 }

@@ -18,7 +18,7 @@ import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAppLiveData, useAppRepoData, useAppUserData } from '../../contexts/AppDataContext';
 import type { SocketEvent } from '../../hooks/useEventStream';
 import { Tag } from '../Tag';
-import { EventItem, type WorktreeActions } from './EventItem';
+import { type BranchActions, EventItem } from './EventItem';
 
 const { Text, Title } = Typography;
 
@@ -30,7 +30,7 @@ export interface EventStreamPanelProps {
   width?: number | string;
   currentUserId?: string;
   selectedSessionId?: string | null;
-  worktreeActions?: WorktreeActions;
+  branchActions?: BranchActions;
   currentBoard?: Board | null;
   client: AgorClient | null;
 }
@@ -43,7 +43,7 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
   width = 700,
   currentUserId,
   selectedSessionId,
-  worktreeActions,
+  branchActions,
   currentBoard,
   client,
 }) => {
@@ -51,9 +51,9 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
 
   // EventStreamPanel inherently shows live socket activity, so subscribing
   // to AppLiveDataContext is correct — we *want* re-renders on session /
-  // worktree mutations. Repo/user data are split so edits in one entity
+  // branch mutations. Repo/user data are split so edits in one entity
   // family don't invalidate the other.
-  const { worktreeById, sessionById, sessionsByWorktree } = useAppLiveData();
+  const { branchById, sessionById, sessionsByBranch } = useAppLiveData();
   const { repoById } = useAppRepoData();
   const { userById } = useAppUserData();
   const repos = useMemo(() => Array.from(repoById.values()), [repoById]);
@@ -69,9 +69,9 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
   } = useAppActions();
 
   // Merge context actions with UI-specific actions from props
-  const mergedWorktreeActions: WorktreeActions = useMemo(
+  const mergedBranchActions: BranchActions = useMemo(
     () => ({
-      ...worktreeActions,
+      ...branchActions,
       onForkSession: onFork,
       onSpawnSession: onSubsession,
       onOpenTerminal,
@@ -80,7 +80,7 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
       onViewLogs,
     }),
     [
-      worktreeActions,
+      branchActions,
       onFork,
       onSubsession,
       onOpenTerminal,
@@ -387,14 +387,14 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
               <EventItem
                 key={event.id}
                 event={event}
-                worktreeById={worktreeById}
+                branchById={branchById}
                 sessionById={sessionById}
-                sessionsByWorktree={sessionsByWorktree}
+                sessionsByBranch={sessionsByBranch}
                 repos={repos}
                 userById={userById}
                 currentUserId={currentUserId}
                 selectedSessionId={selectedSessionId}
-                worktreeActions={mergedWorktreeActions}
+                branchActions={mergedBranchActions}
                 client={client}
               />
             ))}

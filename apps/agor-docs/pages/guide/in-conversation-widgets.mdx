@@ -113,7 +113,7 @@ If a particular request is sensitive enough that even the name shouldn't appear 
 
 ## Multi-user behavior
 
-When `worktree_rbac: true` and someone other than the session creator submits the widget (under `others_can: prompt`), the env var lands in **the session creator's** identity — that's whose env the agent will read at retry. The submitting user is recorded in `result_meta.submitted_by` for audit.
+When `branch_rbac: true` and someone other than the session creator submits the widget (under `others_can: prompt`), the env var lands in **the session creator's** identity — that's whose env the agent will read at retry. The submitting user is recorded in `result_meta.submitted_by` for audit.
 
 This is consistent with `dangerously_allow_session_sharing: false` (the default-safe posture). For the full multi-user story see [Multiplayer Unix Isolation](./multiplayer-unix-isolation.mdx).
 

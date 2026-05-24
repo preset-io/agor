@@ -37,7 +37,7 @@ Managed environments are built out of three layers, precedence **low → high**:
                               │ deep-merged into render context
                               ▼
   ┌────────────────────────────────────────────────────────┐
-  │ 3. worktree rendered snapshot — plain strings          │
+  │ 3. branch rendered snapshot — plain strings          │
   │    start_command, stop_command, nuke_command,          │
   │    logs_command, health_check_url, app_url             │
   └────────────────────────────────────────────────────────┘
@@ -55,7 +55,7 @@ Re-rendering is **explicit**. Editing a variant or an override does not retroact
   style={{ maxWidth: '700px', borderRadius: '8px' }}
 />
 
-_Worktree Environment tab — variant YAML on top, picker in the middle, rendered snapshot below. The `extends: sqlite` line on the `postgres` variant shows variants can inherit from each other._
+_Branch Environment tab — variant YAML on top, picker in the middle, rendered snapshot below. The `extends: sqlite` line on the `postgres` variant shows variants can inherit from each other._
 
 <img
   src="/screenshots/env-variants-dropdown.png"
@@ -77,24 +77,24 @@ Every field in a variant is a Handlebars template. The render context is built i
 
 | Variable | Source | Example | Notes |
 |---|---|---|---|
-| `{{worktree.unique_id}}` | Branch | `3` | Auto-incrementing integer. Use for deterministic port offsets. |
-| `{{worktree.name}}` | Branch | `feat-new-filter` | Slugified branch name. Good for `docker compose -p`. |
-| `{{worktree.path}}` | Branch | `/home/you/agor/feat-new-filter` | Absolute path on disk. |
-| `{{worktree.gid}}` | Branch | `1042` | Unix GID of the branch's isolation group. |
+| `{{branch.unique_id}}` | Branch | `3` | Auto-incrementing integer. Use for deterministic port offsets. |
+| `{{branch.name}}` | Branch | `feat-new-filter` | Slugified branch name. Good for `docker compose -p`. |
+| `{{branch.path}}` | Branch | `/home/you/agor/feat-new-filter` | Absolute path on disk. |
+| `{{branch.gid}}` | Branch | `1042` | Unix GID of the branch's isolation group. |
 | `{{repo.slug}}` | Repo | `preset-io/superset` | Repository slug. |
 | `{{host.ip_address}}` | Auto-detected | `10.0.1.42` | Fallback order: `template_overrides.host.ip_address` → `daemon.host_ip_address` in `~/.agor/config.yaml` → autodetect. |
-| `{{custom.<key>}}` | Branch custom context | `{{custom.compose_profile}}` | Anything you store in `worktree.custom_context`. |
+| `{{custom.<key>}}` | Branch custom context | `{{custom.compose_profile}}` | Anything you store in `branch.custom_context`. |
 | `{{custom.<key>}}` via overrides | `template_overrides.custom.*` | `{{custom.internal_registry}}` | Repo-wide fallback if the branch doesn't set a key. |
 
 ### Math helpers
 
 | Helper | Example | Result (with `unique_id = 3`) |
 |---|---|---|
-| `add` | `{{add 9000 worktree.unique_id}}` | `9003` |
-| `sub` | `{{sub 9000 worktree.unique_id}}` | `8997` |
-| `mul` | `{{mul worktree.unique_id 10}}` | `30` |
-| `div` | `{{div 60 worktree.unique_id}}` | `20` |
-| `mod` | `{{mod worktree.unique_id 4}}` | `3` |
+| `add` | `{{add 9000 branch.unique_id}}` | `9003` |
+| `sub` | `{{sub 9000 branch.unique_id}}` | `8997` |
+| `mul` | `{{mul branch.unique_id 10}}` | `30` |
+| `div` | `{{div 60 branch.unique_id}}` | `20` |
+| `mod` | `{{mod branch.unique_id 4}}` | `3` |
 
 Math helpers are deterministic — the same branch always renders the same ports, which is what keeps parallel branches from colliding.
 
@@ -106,7 +106,7 @@ Math helpers are deterministic — the same branch always renders the same ports
 
 <a id="variants" />
 
-`.agor.yml` lives at the **branch root** (`$WORKTREE_PATH/.agor.yml`) and is the shared, committed description of a repo's environment variants. It's a regular repo file: you edit it on a branch, open a PR, and it rolls out when merged.
+`.agor.yml` lives at the **branch root** (`$BRANCH_PATH/.agor.yml`) and is the shared, committed description of a repo's environment variants. It's a regular repo file: you edit it on a branch, open a PR, and it rolls out when merged.
 
 ### Schema
 
@@ -114,7 +114,7 @@ Math helpers are deterministic — the same branch always renders the same ports
 version: 2
 
 environment:
-  default: lean                    # which variant new worktrees get
+  default: lean                    # which variant new branches get
   variants:
     <variant-name>:
       description: "Human-readable one-liner"
@@ -156,28 +156,28 @@ environment:
   variants:
     lean:
       description: "SQLite-backed, single-container, fast iteration"
-      start:  "docker compose -f docker-compose-light.yml -p agor-{{worktree.name}} up -d"
-      stop:   "docker compose -f docker-compose-light.yml -p agor-{{worktree.name}} down"
-      nuke:   "docker compose -f docker-compose-light.yml -p agor-{{worktree.name}} down -v"
-      logs:   "docker compose -f docker-compose-light.yml -p agor-{{worktree.name}} logs --tail=100"
-      health: "http://{{host.ip_address}}:{{add 9000 worktree.unique_id}}/health"
-      app:    "http://{{host.ip_address}}:{{add 5000 worktree.unique_id}}"
+      start:  "docker compose -f docker-compose-light.yml -p agor-{{branch.name}} up -d"
+      stop:   "docker compose -f docker-compose-light.yml -p agor-{{branch.name}} down"
+      nuke:   "docker compose -f docker-compose-light.yml -p agor-{{branch.name}} down -v"
+      logs:   "docker compose -f docker-compose-light.yml -p agor-{{branch.name}} logs --tail=100"
+      health: "http://{{host.ip_address}}:{{add 9000 branch.unique_id}}/health"
+      app:    "http://{{host.ip_address}}:{{add 5000 branch.unique_id}}"
 
     postgres:
       description: "Postgres + Redis + Celery — closer to prod"
       extends: lean                # inherits health + app from lean
-      start:  "docker compose -p agor-{{worktree.name}} up -d --build"
-      stop:   "docker compose -p agor-{{worktree.name}} down"
-      nuke:   "docker compose -p agor-{{worktree.name}} down -v"
-      logs:   "docker compose -p agor-{{worktree.name}} logs --tail=100"
+      start:  "docker compose -p agor-{{branch.name}} up -d --build"
+      stop:   "docker compose -p agor-{{branch.name}} down"
+      nuke:   "docker compose -p agor-{{branch.name}} down -v"
+      logs:   "docker compose -p agor-{{branch.name}} logs --tail=100"
 
     full:
       description: "Postgres + Redis + Celery + worker + beat"
       extends: lean                # NOT extends: postgres — chains are not allowed
-      start:  "COMPOSE_PROFILES=full docker compose -p agor-{{worktree.name}} up -d --build"
-      stop:   "docker compose -p agor-{{worktree.name}} down"
-      nuke:   "docker compose -p agor-{{worktree.name}} down -v"
-      logs:   "docker compose -p agor-{{worktree.name}} logs --tail=100"
+      start:  "COMPOSE_PROFILES=full docker compose -p agor-{{branch.name}} up -d --build"
+      stop:   "docker compose -p agor-{{branch.name}} down"
+      nuke:   "docker compose -p agor-{{branch.name}} down -v"
+      logs:   "docker compose -p agor-{{branch.name}} logs --tail=100"
 ```
 
 Notice that `postgres` and `full` both extend `lean` (not each other) — that's the single-level rule. Both inherit `health` and `app` from `lean` and override the rest.
@@ -188,8 +188,8 @@ Two admin-only actions in the repo editor header:
 
 | Action | Effect |
 |---|---|
-| **Import `.agor.yml`** | Parses `$WORKTREE_PATH/.agor.yml` and **replaces** `environment.variants` + `environment.default` in the DB. `template_overrides` and branch snapshots are untouched. |
-| **Export `.agor.yml`** | Writes the current `environment.variants` + `environment.default` to `$WORKTREE_PATH/.agor.yml`. `template_overrides` is **stripped** before writing. |
+| **Import `.agor.yml`** | Parses `$BRANCH_PATH/.agor.yml` and **replaces** `environment.variants` + `environment.default` in the DB. `template_overrides` and branch snapshots are untouched. |
+| **Export `.agor.yml`** | Writes the current `environment.variants` + `environment.default` to `$BRANCH_PATH/.agor.yml`. `template_overrides` is **stripped** before writing. |
 
 Both paths go through a confirm dialog. Import is **replace, not merge** — a variant that exists in the DB but not in the file gets dropped.
 
@@ -232,8 +232,8 @@ At render time the context is assembled in this order (later wins):
 
 1. Daemon defaults (autodetected `host.ip_address`, etc.).
 2. `repo.template_overrides` (deep-merged).
-3. `worktree.custom_context` (for `custom.*`).
-4. Branch identity (`worktree.*`, `repo.*`).
+3. `branch.custom_context` (for `custom.*`).
+4. Branch identity (`branch.*`, `repo.*`).
 
 ### What it is **not**
 

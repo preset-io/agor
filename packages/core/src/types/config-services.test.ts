@@ -143,7 +143,7 @@ describe('ALLOWED_SERVICE_TIERS', () => {
   });
 
   it('core infrastructure services cannot be off', () => {
-    for (const group of ['core', 'worktrees', 'repos', 'users'] as const) {
+    for (const group of ['core', 'branches', 'repos', 'users'] as const) {
       expect(ALLOWED_SERVICE_TIERS[group]).not.toContain('off');
       expect(ALLOWED_SERVICE_TIERS[group]).toContain('on');
       expect(ALLOWED_SERVICE_TIERS[group]).toContain('internal');
@@ -218,7 +218,7 @@ describe('validateServiceDependencies', () => {
   });
 
   it('returns no violations when all dependencies are at least internal', () => {
-    const config: DaemonServicesConfig = { core: 'on', users: 'internal', worktrees: 'readonly' };
+    const config: DaemonServicesConfig = { core: 'on', users: 'internal', branches: 'readonly' };
     expect(validateServiceDependencies(config)).toEqual([]);
   });
 
@@ -231,20 +231,20 @@ describe('validateServiceDependencies', () => {
     expect(validateServiceDependencies(config)).toEqual([]);
   });
 
-  it('validates scheduler depends on core and worktrees (pure function, ignoring allowed tiers)', () => {
-    // Note: core/worktrees: 'off' would be rejected by validateAllowedTiers first,
+  it('validates scheduler depends on core and branches (pure function, ignoring allowed tiers)', () => {
+    // Note: core/branches: 'off' would be rejected by validateAllowedTiers first,
     // but this tests the pure dependency validation logic in isolation.
     const config: DaemonServicesConfig = {
       scheduler: 'on',
       core: 'off' as any,
-      worktrees: 'off' as any,
+      branches: 'off' as any,
     };
     const violations = validateServiceDependencies(config);
     expect(
       violations.find((v) => v.service === 'scheduler' && v.dependency === 'core')
     ).toBeDefined();
     expect(
-      violations.find((v) => v.service === 'scheduler' && v.dependency === 'worktrees')
+      violations.find((v) => v.service === 'scheduler' && v.dependency === 'branches')
     ).toBeDefined();
   });
 });
@@ -255,10 +255,10 @@ describe('validateServiceDependencies', () => {
 
 describe('autoPromoteDependencies', () => {
   it('does not demote existing higher tiers', () => {
-    const config: DaemonServicesConfig = { core: 'on', users: 'on', worktrees: 'readonly' };
+    const config: DaemonServicesConfig = { core: 'on', users: 'on', branches: 'readonly' };
     const { config: result, promotions } = autoPromoteDependencies(config);
     expect(result.users).toBe('on');
-    expect(result.worktrees).toBe('readonly');
+    expect(result.branches).toBe('readonly');
     expect(promotions).toHaveLength(0);
   });
 
@@ -275,7 +275,7 @@ describe('autoPromoteDependencies', () => {
     const config: DaemonServicesConfig = {
       core: 'on',
       users: 'internal',
-      worktrees: 'internal',
+      branches: 'internal',
       scheduler: 'on',
       gateway: 'on',
     };
@@ -284,16 +284,16 @@ describe('autoPromoteDependencies', () => {
   });
 
   it('promotes off deps to internal (pure function, bypassing allowed-tiers check)', () => {
-    // In practice, core/worktrees can't be 'off' (blocked by validateAllowedTiers),
+    // In practice, core/branches can't be 'off' (blocked by validateAllowedTiers),
     // but autoPromoteDependencies is a pure function that handles it correctly.
     const config = {
       scheduler: 'on',
       core: 'off',
-      worktrees: 'off',
+      branches: 'off',
     } as DaemonServicesConfig;
     const { config: result, promotions } = autoPromoteDependencies(config);
     expect(result.core).toBe('internal');
-    expect(result.worktrees).toBe('internal');
+    expect(result.branches).toBe('internal');
     expect(promotions.length).toBeGreaterThanOrEqual(2);
   });
 });
@@ -310,7 +310,7 @@ describe('SERVICE_GROUP_NAMES', () => {
   it('includes the expected groups', () => {
     const expected = [
       'core',
-      'worktrees',
+      'branches',
       'repos',
       'users',
       'boards',
@@ -356,9 +356,9 @@ describe('SERVICE_GROUP_TO_MCP_DOMAINS', () => {
     expect(SERVICE_GROUP_TO_MCP_DOMAINS.core).toContain('sessions');
   });
 
-  it('maps worktrees to both worktrees and environment domains', () => {
-    expect(SERVICE_GROUP_TO_MCP_DOMAINS.worktrees).toContain('worktrees');
-    expect(SERVICE_GROUP_TO_MCP_DOMAINS.worktrees).toContain('environment');
+  it('maps branches to both branches and environment domains', () => {
+    expect(SERVICE_GROUP_TO_MCP_DOMAINS.branches).toContain('branches');
+    expect(SERVICE_GROUP_TO_MCP_DOMAINS.branches).toContain('environment');
   });
 });
 
@@ -369,7 +369,7 @@ describe('SERVICE_GROUP_TO_MCP_DOMAINS', () => {
 describe('executor pod config scenario', () => {
   const executorConfig: DaemonServicesConfig = {
     core: 'on',
-    worktrees: 'on',
+    branches: 'on',
     repos: 'readonly',
     mcp_servers: 'readonly',
     users: 'internal',
@@ -393,7 +393,7 @@ describe('executor pod config scenario', () => {
 
   it('core services are fully accessible', () => {
     expect(isServiceFullAccess(executorConfig, 'core')).toBe(true);
-    expect(isServiceFullAccess(executorConfig, 'worktrees')).toBe(true);
+    expect(isServiceFullAccess(executorConfig, 'branches')).toBe(true);
   });
 
   it('readonly services allow external reads but not writes', () => {

@@ -22,7 +22,6 @@ export {
   StatusPill,
   TokenCountPill,
   ToolCountPill,
-  WorktreePill,
 } from './Pill';
 export { SessionMetadataCard } from './SessionMetadataCard';
 export { TimerPill } from './TimerPill';

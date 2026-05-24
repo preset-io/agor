@@ -10,13 +10,13 @@ import { MessageRole } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { dbTest } from '../test-helpers';
+import { BranchRepository } from './branches';
 import { MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { TaskRepository } from './tasks';
-import { WorktreeRepository } from './worktrees';
 
-// Counter to ensure unique repo/worktree names across tests
+// Counter to ensure unique repo/branch names across tests
 let testCounter = 0;
 
 /**
@@ -55,10 +55,10 @@ function createMessageData(overrides?: {
  */
 async function createTestSession(
   db: any,
-  overrides?: { session_id?: UUID; worktree_id?: UUID }
+  overrides?: { session_id?: UUID; branch_id?: UUID }
 ): Promise<SessionID> {
   const sessionRepo = new SessionRepository(db);
-  const worktreeRepo = new WorktreeRepository(db);
+  const branchRepo = new BranchRepository(db);
   const repoRepo = new RepoRepository(db);
 
   // Generate unique identifiers to avoid conflicts across tests
@@ -74,21 +74,21 @@ async function createTestSession(
     default_branch: 'main',
   });
 
-  // Create worktree
-  const worktree = await worktreeRepo.create({
-    worktree_id: overrides?.worktree_id,
+  // Create branch
+  const branch = await branchRepo.create({
+    branch_id: overrides?.branch_id,
     repo_id: repo.repo_id,
-    name: `test-worktree-${uniqueId}`,
-    path: `/test/worktree/${uniqueId}`,
+    name: `test-branch-${uniqueId}`,
+    path: `/test/branch/${uniqueId}`,
     ref: 'main',
-    worktree_unique_id: uniqueId,
+    branch_unique_id: uniqueId,
     created_by: 'test-user' as UUID,
   });
 
   // Create session
   const session = await sessionRepo.create({
     session_id: overrides?.session_id,
-    worktree_id: worktree.worktree_id,
+    branch_id: branch.branch_id,
     title: 'Test Session',
     created_by: 'test-user' as UUID,
   });

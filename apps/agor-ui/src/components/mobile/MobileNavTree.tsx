@@ -1,4 +1,4 @@
-import type { Board, BoardComment, Session, Worktree } from '@agor-live/client';
+import type { Board, BoardComment, Branch, Session } from '@agor-live/client';
 import { CommentOutlined, DownOutlined } from '@ant-design/icons';
 import { Badge, Button, Collapse, Space, Typography, theme } from 'antd';
 import { useNavigate } from 'react-router-dom';
@@ -10,16 +10,16 @@ const { Text } = Typography;
 
 interface MobileNavTreeProps {
   boardById: Map<string, Board>;
-  worktreeById: Map<string, Worktree>;
-  sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
+  branchById: Map<string, Branch>;
+  sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
   commentById: Map<string, BoardComment>;
   onNavigate?: () => void;
 }
 
 export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   boardById,
-  worktreeById,
-  sessionsByWorktree,
+  branchById,
+  sessionsByBranch,
   commentById,
   onNavigate,
 }) => {
@@ -44,22 +44,22 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
     ).length;
   };
 
-  // Group worktrees by board
-  const worktreesByBoard = {} as Record<string, Worktree[]>;
-  for (const worktree of worktreeById.values()) {
-    const boardId = worktree.board_id || 'unassigned';
-    if (!worktreesByBoard[boardId]) {
-      worktreesByBoard[boardId] = [];
+  // Group branches by board
+  const branchesByBoard = {} as Record<string, Branch[]>;
+  for (const branch of branchById.values()) {
+    const boardId = branch.board_id || 'unassigned';
+    if (!branchesByBoard[boardId]) {
+      branchesByBoard[boardId] = [];
     }
-    worktreesByBoard[boardId].push(worktree);
+    branchesByBoard[boardId].push(branch);
   }
 
-  // Sort sessions within each worktree by last_updated (most recent first)
+  // Sort sessions within each branch by last_updated (most recent first)
   // Convert Map to sorted Map for consistent rendering
-  const sortedSessionsByWorktree = new Map(
-    Array.from(sessionsByWorktree.entries()).map(([worktreeId, worktreeSessions]) => [
-      worktreeId,
-      [...worktreeSessions].sort((a, b) => {
+  const sortedSessionsByBranch = new Map(
+    Array.from(sessionsByBranch.entries()).map(([branchId, branchSessions]) => [
+      branchId,
+      [...branchSessions].sort((a, b) => {
         const aTime = new Date(a.last_updated).getTime();
         const bTime = new Date(b.last_updated).getTime();
         return bTime - aTime; // DESC (most recent first)
@@ -94,7 +94,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
     >
       <BoardCollapse
         items={boards.map((board: Board) => {
-          const boardWorktrees = worktreesByBoard[board.board_id] || [];
+          const boardBranches = branchesByBoard[board.board_id] || [];
           const activeComments = getActiveCommentCount(board.board_id);
 
           return {
@@ -103,7 +103,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
             badge: (
               <Space size={8}>
                 <Badge
-                  count={boardWorktrees.length}
+                  count={boardBranches.length}
                   style={{ backgroundColor: token.colorPrimaryBg }}
                   showZero
                 />
@@ -131,36 +131,35 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
               </Space>
             ),
             children:
-              boardWorktrees.length === 0 ? (
+              boardBranches.length === 0 ? (
                 <Text type="secondary">No branches on this board</Text>
               ) : (
                 <Collapse
                   defaultActiveKey={[]}
                   ghost
                   expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
-                  items={boardWorktrees
+                  items={boardBranches
                     .sort((a, b) => {
-                      // Sort worktrees by most recent session activity
+                      // Sort branches by most recent session activity
                       const aMaxActivity = Math.max(
-                        ...(sortedSessionsByWorktree.get(a.worktree_id) || []).map((s) =>
+                        ...(sortedSessionsByBranch.get(a.branch_id) || []).map((s) =>
                           new Date(s.last_updated).getTime()
                         ),
                         0
                       );
                       const bMaxActivity = Math.max(
-                        ...(sortedSessionsByWorktree.get(b.worktree_id) || []).map((s) =>
+                        ...(sortedSessionsByBranch.get(b.branch_id) || []).map((s) =>
                           new Date(s.last_updated).getTime()
                         ),
                         0
                       );
                       return bMaxActivity - aMaxActivity; // DESC (most recent first)
                     })
-                    .map((worktree) => {
-                      const worktreeSessions =
-                        sortedSessionsByWorktree.get(worktree.worktree_id) || [];
+                    .map((branch) => {
+                      const branchSessions = sortedSessionsByBranch.get(branch.branch_id) || [];
 
                       return {
-                        key: worktree.worktree_id,
+                        key: branch.branch_id,
                         label: (
                           <div
                             style={{
@@ -172,15 +171,15 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                           >
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                               <span>🌳</span>
-                              <Text strong>{worktree.name}</Text>
+                              <Text strong>{branch.name}</Text>
                             </div>
                             <Text type="secondary" style={{ fontSize: 12, paddingLeft: 28 }}>
-                              {worktreeSessions.length} sessions
+                              {branchSessions.length} sessions
                             </Text>
                           </div>
                         ),
                         children:
-                          worktreeSessions.length === 0 ? (
+                          branchSessions.length === 0 ? (
                             <Text
                               type="secondary"
                               style={{ padding: '8px 0 8px 28px', display: 'block' }}
@@ -189,7 +188,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                             </Text>
                           ) : (
                             <div>
-                              {worktreeSessions.map((session) => (
+                              {branchSessions.map((session) => (
                                 <div
                                   key={session.session_id}
                                   onClick={() => handleSessionClick(session.session_id)}

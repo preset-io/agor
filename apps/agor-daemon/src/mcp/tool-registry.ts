@@ -5,7 +5,7 @@
  * `tools/list` and discover the rest via `agor_search_tools`. All tools
  * remain registered and callable; only the listing is filtered.
  *
- * Tools are organized into domains (e.g. "sessions", "worktrees", "cards")
+ * Tools are organized into domains (e.g. "sessions", "branches", "cards")
  * and support progressive detail levels and annotation filtering.
  */
 
@@ -43,9 +43,8 @@ export interface SearchOptions {
 const DOMAIN_DESCRIPTIONS: Record<string, string> = {
   sessions: 'Agent conversations with genealogy (fork/spawn), task tracking, and message history',
   repos: 'Repository registration and management',
-  worktrees:
-    'Branches — isolated workspaces (backed by git worktrees) with their own git refs, board placement, and zone pinning. ' +
-    'Every `agor_worktrees_*` tool also has an `agor_branches_*` alias — both names work; the worktrees-prefixed names are deprecated.',
+  branches:
+    'Branches — isolated workspaces (backed by git worktrees or self-standing clones) with their own git refs, board placement, and zone pinning.',
   environment: 'Start/stop/health/logs/nuke for branch dev environments',
   boards: 'Spatial canvases with zones for organizing branches and cards',
   cards: 'Kanban-style cards and card type definitions on boards',

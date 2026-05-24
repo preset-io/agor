@@ -18,8 +18,8 @@ export interface BranchTabConfig {
   position?: { x: number; y: number };
   /**
    * Branch storage model. 'worktree' = legacy `git worktree add`. 'clone' =
-   * self-standing `git clone`. Default 'worktree' preserves existing flow.
-   * See docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.
+   * self-standing `git clone`. Default 'branch' preserves existing flow.
+   * See context/explorations/clone-redesign.md.
    */
   storage_mode?: 'worktree' | 'clone';
   /** Shallow-clone depth — only meaningful when storage_mode='clone'. */
@@ -58,7 +58,7 @@ export const BranchTab: React.FC<BranchTabProps> = ({
   // on every `repos.patched` WebSocket event (which gives `repoById` a new
   // Map reference), and `setFieldsValue({ sourceBranch })` silently
   // overwrites whatever the user typed back to the repo's default branch.
-  // The user notices only after submitting that the worktree got created
+  // The user notices only after submitting that the branch got created
   // off `main` instead of their chosen branch.
   const initialized = useRef(false);
   useEffect(() => {

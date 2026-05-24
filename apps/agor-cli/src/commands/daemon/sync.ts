@@ -2,36 +2,36 @@
  * `agor daemon sync` - Sync declared resources from config.yml into database and filesystem
  *
  * Reads the `resources:` section of config.yml and ensures all declared repos,
- * worktrees, and users exist in the database and on disk. Idempotent — running
+ * branches, and users exist in the database and on disk. Idempotent — running
  * twice with the same config produces no changes.
  */
 
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ParsedRepoConfig, ParsedUserConfig, ParsedWorktreeConfig } from '@agor/core/config';
+import type { ParsedBranchConfig, ParsedRepoConfig, ParsedUserConfig } from '@agor/core/config';
 import {
   buildSlugToRepoIdMap,
   daemonResourcesConfigSchema,
+  determineBranchAction,
   determineRepoAction,
   determineUserAction,
-  determineWorktreeAction,
+  getBranchPath,
   getReposDir,
-  getWorktreePath,
   loadConfig,
   loadConfigFromFile,
   resolvePassword,
   validateResourceCrossReferences,
 } from '@agor/core/config';
 import {
+  BranchRepository,
   createDatabase,
   getDatabaseUrl,
   hash,
   RepoRepository,
   UsersRepository,
-  WorktreeRepository,
 } from '@agor/core/db';
-import { autoAssignWorktreeUniqueId } from '@agor/core/environment/variable-resolver';
-import { cloneRepo, createWorktree, getWorktreesDir } from '@agor/core/git';
+import { autoAssignBranchUniqueId } from '@agor/core/environment/variable-resolver';
+import { cloneRepo, createBranch, getBranchesDir } from '@agor/core/git';
 import type { User, UUID } from '@agor-live/client';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
@@ -107,17 +107,17 @@ export default class DaemonSync extends Command {
     const db = createDatabase({ url: dbUrl });
 
     const repoRepo = new RepoRepository(db);
-    const worktreeRepo = new WorktreeRepository(db);
+    const branchRepo = new BranchRepository(db);
     const usersRepo = new UsersRepository(db);
 
     // 3. Sync repos
     const repoCounts = await this.syncRepos(resources.repos ?? [], repoRepo, dryRun);
 
-    // 4. Sync worktrees (after repos, since they depend on repo_ids)
-    const worktreeCounts = await this.syncWorktrees(
-      resources.worktrees ?? [],
+    // 4. Sync branches (after repos, since they depend on repo_ids)
+    const branchCounts = await this.syncBranches(
+      resources.branches ?? [],
       resources.repos ?? [],
-      worktreeRepo,
+      branchRepo,
       dryRun
     );
 
@@ -128,7 +128,7 @@ export default class DaemonSync extends Command {
     this.log('');
     this.log(chalk.bold('Sync complete:'));
     this.logCounts('Repos', repoCounts);
-    this.logCounts('Worktrees', worktreeCounts);
+    this.logCounts('Branches', branchCounts);
     this.logCounts('Users', userCounts);
   }
 
@@ -212,41 +212,39 @@ export default class DaemonSync extends Command {
   }
 
   // ---------------------------------------------------------------------------
-  // Worktree sync
+  // Branch sync
   // ---------------------------------------------------------------------------
 
-  private async syncWorktrees(
-    worktrees: ParsedWorktreeConfig[],
+  private async syncBranches(
+    branches: ParsedBranchConfig[],
     repos: Array<{ repo_id: string; slug: string }>,
-    worktreeRepo: WorktreeRepository,
+    branchRepo: BranchRepository,
     dryRun: boolean
   ): Promise<SyncCounts> {
     const counts: SyncCounts = { created: 0, updated: 0, unchanged: 0 };
     const slugToId = buildSlugToRepoIdMap(repos);
 
-    for (const wtCfg of worktrees) {
+    for (const wtCfg of branches) {
       const repoId = slugToId.get(wtCfg.repo);
       if (!repoId) {
-        this.log(chalk.red(`  skip worktree "${wtCfg.name}" — repo "${wtCfg.repo}" not found`));
+        this.log(chalk.red(`  skip branch "${wtCfg.name}" — repo "${wtCfg.repo}" not found`));
         continue;
       }
 
-      const existing = await worktreeRepo.findByRepoAndName(repoId as UUID, wtCfg.name);
-      const action = determineWorktreeAction(wtCfg, existing);
+      const existing = await branchRepo.findByRepoAndName(repoId as UUID, wtCfg.name);
+      const action = determineBranchAction(wtCfg, existing);
 
       if (action === 'create') {
-        this.log(
-          `  ${chalk.green('create')} worktree ${chalk.cyan(`${wtCfg.repo}/${wtCfg.name}`)}`
-        );
+        this.log(`  ${chalk.green('create')} branch ${chalk.cyan(`${wtCfg.repo}/${wtCfg.name}`)}`);
         if (!dryRun) {
           const repoPath = join(getReposDir(), wtCfg.repo);
-          const worktreePath = getWorktreePath(wtCfg.repo, wtCfg.name);
+          const branchPath = getBranchPath(wtCfg.repo, wtCfg.name);
 
-          if (!existsSync(worktreePath)) {
-            mkdirSync(join(getWorktreesDir(), wtCfg.repo), { recursive: true });
-            await createWorktree(
+          if (!existsSync(branchPath)) {
+            mkdirSync(join(getBranchesDir(), wtCfg.repo), { recursive: true });
+            await createBranch(
               repoPath,
-              worktreePath,
+              branchPath,
               wtCfg.ref,
               false,
               false,
@@ -256,17 +254,17 @@ export default class DaemonSync extends Command {
             );
           }
 
-          const usedIds = await worktreeRepo.getAllUsedUniqueIds();
-          const nextId = autoAssignWorktreeUniqueId(usedIds);
+          const usedIds = await branchRepo.getAllUsedUniqueIds();
+          const nextId = autoAssignBranchUniqueId(usedIds);
 
-          await worktreeRepo.create({
-            worktree_id: wtCfg.worktree_id as UUID,
+          await branchRepo.create({
+            branch_id: wtCfg.branch_id as UUID,
             repo_id: repoId as UUID,
             name: wtCfg.name,
             ref: wtCfg.ref,
             ref_type: wtCfg.ref_type ?? 'branch',
-            path: worktreePath,
-            worktree_unique_id: nextId,
+            path: branchPath,
+            branch_unique_id: nextId,
             others_can:
               (wtCfg.others_can as 'none' | 'view' | 'session' | 'prompt' | 'all') ?? 'session',
             mcp_server_ids: wtCfg.mcp_server_ids,
@@ -276,11 +274,9 @@ export default class DaemonSync extends Command {
         }
         counts.created++;
       } else if (action === 'update') {
-        this.log(
-          `  ${chalk.yellow('update')} worktree ${chalk.cyan(`${wtCfg.repo}/${wtCfg.name}`)}`
-        );
+        this.log(`  ${chalk.yellow('update')} branch ${chalk.cyan(`${wtCfg.repo}/${wtCfg.name}`)}`);
         if (!dryRun && existing) {
-          await worktreeRepo.update(existing.worktree_id, {
+          await branchRepo.update(existing.branch_id, {
             ref: wtCfg.ref,
             ref_type: wtCfg.ref_type ?? existing.ref_type,
             others_can:

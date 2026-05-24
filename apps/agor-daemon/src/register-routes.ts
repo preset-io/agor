@@ -8,6 +8,7 @@
 
 import { type AgorConfig, loadConfig } from '@agor/core/config';
 import {
+  BranchRepository,
   type Database,
   generateId,
   MCPServerRepository,
@@ -18,7 +19,6 @@ import {
   shortId,
   TaskRepository,
   UsersRepository,
-  WorktreeRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import {
@@ -34,6 +34,7 @@ import {
 import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
 import type {
   AuthenticatedParams,
+  BranchID,
   DaemonServicesConfig,
   HookContext,
   Message,
@@ -49,7 +50,6 @@ import type {
   TaskID,
   User,
   UUID,
-  WorktreeID,
 } from '@agor/core/types';
 import {
   AGENTIC_TOOL_CAPABILITIES,
@@ -66,11 +66,11 @@ import { rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
 import type {
   BoardsServiceImpl,
+  BranchesServiceImpl,
   MessagesServiceImpl,
   ReposServiceImpl,
   SessionsServiceImpl,
   TasksServiceImpl,
-  WorktreesServiceImpl,
 } from './declarations.js';
 import { killExecutorProcess } from './executor-tracking.js';
 import {
@@ -89,6 +89,12 @@ import {
   registerAuthenticatedRoute,
   requireMinimumRole,
 } from './utils/authorization.js';
+import {
+  checkSessionOwnerOrAdmin,
+  ensureBranchPermission,
+  PERMISSION_RANK,
+  resolveBranchPermission,
+} from './utils/branch-authorization.js';
 import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
 import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
@@ -98,12 +104,6 @@ import {
   enforceParsedTotalUploadSize,
   enforceTotalUploadSize,
 } from './utils/upload.js';
-import {
-  checkSessionOwnerOrAdmin,
-  ensureWorktreePermission,
-  PERMISSION_RANK,
-  resolveWorktreePermission,
-} from './utils/worktree-authorization.js';
 import { resolveWidget } from './widgets/submissions.js';
 
 /**
@@ -147,7 +147,7 @@ export interface RegisterRoutesContext {
   svcEnabled: (group: string) => boolean;
   svcTier: (group: string) => ServiceTier;
   jwtSecret: string;
-  worktreeRbacEnabled: boolean;
+  branchRbacEnabled: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   enforcePasswordChange: (context: HookContext) => Promise<HookContext>;
   superadminOpts: { allowSuperadmin: boolean };
@@ -171,7 +171,7 @@ export interface RegisterRoutesContext {
   sessionsService: SessionsServiceImpl;
   messagesService: MessagesServiceImpl;
   boardsService: BoardsServiceImpl | undefined;
-  worktreeRepository: WorktreeRepository;
+  branchRepository: BranchRepository;
   usersRepository: UsersRepository;
   sessionsRepository: SessionRepository;
   sessionMCPServersService: ReturnType<
@@ -194,7 +194,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     svcEnabled,
     svcTier,
     jwtSecret,
-    worktreeRbacEnabled,
+    branchRbacEnabled,
     requireAuth,
     enforcePasswordChange,
     superadminOpts,
@@ -207,7 +207,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     sessionsService,
     messagesService,
     boardsService,
-    worktreeRepository,
+    branchRepository,
     usersRepository: _usersRepository,
     sessionsRepository,
     sessionMCPServersService,
@@ -567,7 +567,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const _sessionsRepo = new SessionRepository(db);
   const _sessionMCPRepo = new SessionMCPServerRepository(db);
   const _mcpServerRepo = new MCPServerRepository(db);
-  const _worktreesRepo = new WorktreeRepository(db);
+  const _branchesRepo = new BranchRepository(db);
   const _reposRepo = new RepoRepository(db);
   const _tasksRepo = new TaskRepository(db);
 
@@ -798,11 +798,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // with the freshly-built claude argv — atomic in the
         // executor's tab-event loop. No timer, no surviving stale
         // tab, no auto-converse. Restart actually restarts.
-        const worktree = (await app.service('worktrees').get(session.worktree_id, params)) as {
+        const branch = (await app.service('branches').get(session.branch_id, params)) as {
           path?: string;
         };
-        const cwd = worktree?.path;
-        if (!cwd) throw new Error('Worktree has no path; cannot restart');
+        const cwd = branch?.path;
+        if (!cwd) throw new Error('Branch has no path; cannot restart');
         const { buildSpawnConfigForSession } = await import('./services/claude-cli-integration.js');
         const { buildClaudeCliSpawn } = await import('@agor/core/claude-cli');
         const spawnCfg = buildSpawnConfigForSession(session, cwd);
@@ -914,22 +914,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const { captureGitStateViaShell } = await import('./utils/git-shell-capture.js');
     let gitStateAtStart = 'unknown';
     let refAtStart = 'unknown';
-    if (session.worktree_id) {
+    if (session.branch_id) {
       try {
-        const worktree = await app.service('worktrees').get(session.worktree_id, params);
-        const gitState = await captureGitStateViaShell(worktree.path);
+        const branch = await app.service('branches').get(session.branch_id, params);
+        const gitState = await captureGitStateViaShell(branch.path);
         gitStateAtStart = gitState.sha;
         refAtStart = gitState.ref;
         if (gitStateAtStart === 'unknown') {
           console.warn(
-            `[Git State] captureGitStateViaShell returned 'unknown' for worktree ${worktree.path} (ref: ${refAtStart})`
+            `[Git State] captureGitStateViaShell returned 'unknown' for branch ${branch.path} (ref: ${refAtStart})`
           );
         }
       } catch (error) {
-        console.warn(
-          `[Git State] Failed to get git state for worktree ${session.worktree_id}:`,
-          error
-        );
+        console.warn(`[Git State] Failed to get git state for branch ${session.branch_id}:`, error);
       }
     }
 
@@ -1076,7 +1073,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // terminal:input to whichever pane is currently focused, so
           // without this step a prompt typed in the Agor textarea while
           // the user happens to be viewing a sibling tab (e.g. the
-          // worktree's `test-worktree` bash) would land in bash and
+          // branch's `test-branch` bash) would land in bash and
           // produce `bash: hello: command not found`. The 150ms delay
           // gives Zellij time to process the focus before the input
           // bytes arrive.
@@ -1459,7 +1456,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           );
         }
 
-        // Worktree RBAC — defense in depth. Without this, a member with
+        // Branch RBAC — defense in depth. Without this, a member with
         // 'view' permission could trigger execution; the eventual
         // `tasks.patch` inside spawnTaskExecutor would still 403 via the
         // `ensureCanPromptInSession` hook, but only after we'd done extra
@@ -1470,21 +1467,21 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const isInternalCall = !params.provider;
         const isServiceAccount =
           (params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount === true;
-        if (worktreeRbacEnabled && task.session_id && !isInternalCall && !isServiceAccount) {
+        if (branchRbacEnabled && task.session_id && !isInternalCall && !isServiceAccount) {
           const session = await sessionsService.get(task.session_id, params);
-          if (!session.worktree_id) {
-            // Sessions without worktrees are out of RBAC scope; fall through.
+          if (!session.branch_id) {
+            // Sessions without branches are out of RBAC scope; fall through.
           } else {
             const userId = params.user?.user_id as UUID | undefined;
             if (!userId) {
               throw new Forbidden('Authentication required to run tasks');
             }
-            const wt = await worktreeRepository.findById(session.worktree_id);
+            const wt = await branchRepository.findById(session.branch_id);
             if (!wt) {
-              throw new NotFound(`Worktree ${session.worktree_id} not found`);
+              throw new NotFound(`Branch ${session.branch_id} not found`);
             }
-            const isOwner = await worktreeRepository.isOwner(wt.worktree_id, userId);
-            const effectiveLevel = resolveWorktreePermission(
+            const isOwner = await branchRepository.isOwner(wt.branch_id, userId);
+            const effectiveLevel = resolveBranchPermission(
               wt,
               userId,
               isOwner,
@@ -1496,7 +1493,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               (effectiveLevel === 'session' && session.created_by === userId);
             if (!canRun) {
               throw new Forbidden(
-                `You have '${effectiveLevel}' permission on this worktree, which does not ` +
+                `You have '${effectiveLevel}' permission on this branch, which does not ` +
                   `allow running tasks. Need 'prompt' or 'all' (or 'session' for own sessions).`
               );
             }
@@ -1612,27 +1609,27 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Daemon is the source of truth for the zone's trigger template / agent /
   // label — the UI only sends the zone id. The shared
   // `fireAlwaysNewZoneTrigger` helper (also used by the MCP
-  // `agor_worktrees_set_zone(triggerTemplate: true)` always_new branch)
+  // `agor_branches_set_zone(triggerTemplate: true)` always_new branch)
   // does render → validate → resolve defaults → create session → attach MCPs
   // → prompt in one round-trip.
   // ============================================================================
 
   registerAuthenticatedRoute(
     app,
-    '/worktrees/:id/fire-zone-trigger',
+    '/branches/:id/fire-zone-trigger',
     {
       async create(data: { zoneId?: string }, params: RouteParams) {
-        const worktreeId = params.route?.id;
-        if (!worktreeId) throw new BadRequest('Worktree ID required');
+        const branchId = params.route?.id;
+        if (!branchId) throw new BadRequest('Branch ID required');
         if (typeof data?.zoneId !== 'string' || !data.zoneId.trim()) {
           throw new BadRequest('zoneId (string) is required');
         }
 
-        const worktree = await app.service('worktrees').get(worktreeId, params);
-        if (!worktree.board_id) {
-          throw new BadRequest('Worktree is not on a board; cannot resolve zone');
+        const branch = await app.service('branches').get(branchId, params);
+        if (!branch.board_id) {
+          throw new BadRequest('Branch is not on a board; cannot resolve zone');
         }
-        const board = await app.service('boards').get(worktree.board_id, params);
+        const board = await app.service('boards').get(branch.board_id, params);
 
         // Zones live on `board.objects` keyed by zone id; type === 'zone'.
         const zoneObj = (board as { objects?: Record<string, unknown> }).objects?.[data.zoneId] as
@@ -1648,7 +1645,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             }
           | undefined;
         if (!zoneObj || zoneObj.type !== 'zone') {
-          throw new BadRequest(`Zone ${data.zoneId} not found on board ${worktree.board_id}`);
+          throw new BadRequest(`Zone ${data.zoneId} not found on board ${branch.board_id}`);
         }
         if (zoneObj.trigger?.behavior !== 'always_new') {
           // This endpoint is the always_new server-side action. show_picker
@@ -1668,7 +1665,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           return await fireAlwaysNewZoneTrigger({
             app,
             params,
-            worktree,
+            branch,
             board,
             zone: zoneObj,
             user,
@@ -1692,8 +1689,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // ============================================================================
 
   const sessionRepo = new SessionRepository(db);
-  const worktreeRepo = new WorktreeRepository(db);
-  const uploadMiddleware = createUploadMiddleware(sessionRepo, worktreeRepo);
+  const branchRepo = new BranchRepository(db);
+  const uploadMiddleware = createUploadMiddleware(sessionRepo, branchRepo);
   const DEBUG_UPLOAD = process.env.NODE_ENV !== 'production';
 
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
@@ -1716,7 +1713,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         console.log(
           `📎 [Upload Handler] Processing for session ${sessionId ? shortId(sessionId) : 'unknown'}`
         );
-        console.log(`   Destination: ${destination || 'worktree'}`);
+        console.log(`   Destination: ${destination || 'branch'}`);
         console.log(`   Notify agent: ${notifyAgent === 'true' || notifyAgent === true}`);
         console.log(`   Files received: ${files?.length || 0}`);
       }
@@ -1738,23 +1735,23 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         return res.status(404).json({ error: 'Session not found' });
       }
 
-      // Worktree RBAC: mirror ensureCanPromptInSession semantics.
+      // Branch RBAC: mirror ensureCanPromptInSession semantics.
       // - 'prompt'/'all' → upload to any session
       // - 'session'      → upload only to own sessions
       // - 'view'/'none'  → denied
-      // Fail-closed: if RBAC is enabled but worktree can't be resolved, deny.
+      // Fail-closed: if RBAC is enabled but branch can't be resolved, deny.
       // When RBAC is disabled, any authenticated member can upload.
-      if (worktreeRbacEnabled) {
+      if (branchRbacEnabled) {
         const userId = params.user?.user_id as UUID;
-        if (!session.worktree_id) {
+        if (!session.branch_id) {
           return res.status(403).json({ error: 'Not authorized to upload to this session' });
         }
-        const wt = await worktreeRepo.findById(session.worktree_id);
+        const wt = await branchRepo.findById(session.branch_id);
         if (!wt) {
-          return res.status(404).json({ error: 'Worktree not found' });
+          return res.status(404).json({ error: 'Branch not found' });
         }
-        const isOwner = await worktreeRepo.isOwner(wt.worktree_id, userId);
-        const effectiveLevel = resolveWorktreePermission(
+        const isOwner = await branchRepo.isOwner(wt.branch_id, userId);
+        const effectiveLevel = resolveBranchPermission(
           wt,
           userId,
           isOwner,
@@ -1768,7 +1765,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         if (!canUpload) {
           console.error(
-            `❌ [Upload Handler] User ${shortId(userId)} has '${effectiveLevel}' permission, cannot upload to worktree ${shortId(wt.worktree_id)}`
+            `❌ [Upload Handler] User ${shortId(userId)} has '${effectiveLevel}' permission, cannot upload to branch ${shortId(wt.branch_id)}`
           );
           return res.status(403).json({ error: 'Not authorized to upload to this session' });
         }
@@ -1779,15 +1776,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         return res.status(400).json({ error: 'No files uploaded' });
       }
 
-      let worktree: Awaited<ReturnType<typeof worktreeRepo.findById>> | undefined;
-      if (session.worktree_id) {
-        worktree = await worktreeRepo.findById(session.worktree_id);
+      let branch: Awaited<ReturnType<typeof branchRepo.findById>> | undefined;
+      if (session.branch_id) {
+        branch = await branchRepo.findById(session.branch_id);
       }
 
       const uploadedFiles = files.map((f) => {
         let relativePath = f.path;
-        if (worktree && f.path.startsWith(worktree.path)) {
-          relativePath = f.path.substring(worktree.path.length + 1);
+        if (branch && f.path.startsWith(branch.path)) {
+          relativePath = f.path.substring(branch.path.length + 1);
         }
         return {
           filename: f.filename,
@@ -2302,8 +2299,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const widgetResolverDeps = {
     // biome-ignore lint/suspicious/noExplicitAny: Feathers Application shape
     app: app as any,
-    isWorktreeOwner: async (worktreeId: string, userId: UUID) =>
-      worktreeRepository.isOwner(worktreeId as import('@agor/core/types').WorktreeID, userId),
+    isBranchOwner: async (branchId: string, userId: UUID) =>
+      branchRepository.isOwner(branchId as import('@agor/core/types').BranchID, userId),
   };
 
   registerAuthenticatedRoute(
@@ -2444,7 +2441,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   registerAuthenticatedRoute(
     app,
-    '/repos/:id/worktrees',
+    '/repos/:id/branches',
     {
       async create(
         data: {
@@ -2457,7 +2454,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           issue_url?: string;
           pull_request_url?: string;
           boardId?: string;
-          // Branch storage model — see docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.
+          // Branch storage model — see context/explorations/clone-redesign.md.
           storage_mode?: 'worktree' | 'clone';
           clone_depth?: number;
         },
@@ -2465,7 +2462,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       ) {
         const id = params.route?.id;
         if (!id) throw new Error('Repo ID required');
-        return reposService.createWorktree(
+        return reposService.createBranch(
           id,
           { ...data, refType: data.refType ?? 'branch' },
           params
@@ -2473,25 +2470,25 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       },
     },
     {
-      create: { role: ROLES.MEMBER, action: 'create worktrees' },
+      create: { role: ROLES.MEMBER, action: 'create branches' },
     },
     requireAuth
   );
 
   registerAuthenticatedRoute(
     app,
-    '/repos/:id/worktrees/:name',
+    '/repos/:id/branches/:name',
     {
       async remove(_id: unknown, params: RouteParams & { route?: { name?: string } }) {
         const id = params.route?.id;
         const name = params.route?.name;
         if (!id) throw new Error('Repo ID required');
-        if (!name) throw new Error('Worktree name required');
-        return reposService.removeWorktree(id, name, params);
+        if (!name) throw new Error('Branch name required');
+        return reposService.removeBranch(id, name, params);
       },
     },
     {
-      remove: { role: ROLES.MEMBER, action: 'remove worktrees' },
+      remove: { role: ROLES.MEMBER, action: 'remove branches' },
     },
     requireAuth
   );
@@ -2500,10 +2497,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app,
     '/repos/:id/import-agor-yml',
     {
-      async create(data: { worktree_id: string }, params: RouteParams) {
+      async create(data: { branch_id: string }, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Repo ID required');
-        if (!data?.worktree_id) throw new Error('worktree_id is required');
+        if (!data?.branch_id) throw new Error('branch_id is required');
         return reposService.importFromAgorYml(id, data, params);
       },
     },
@@ -2517,16 +2514,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app,
     '/repos/:id/export-agor-yml',
     {
-      async create(data: { worktree_id: string }, params: RouteParams) {
+      async create(data: { branch_id: string }, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Repo ID required');
-        if (!data?.worktree_id) throw new Error('worktree_id is required');
+        if (!data?.branch_id) throw new Error('branch_id is required');
         return reposService.exportToAgorYml(id, data, params);
       },
     },
     {
       // Admin-only, matching Import and repo.environment edit. Export writes a
-      // file to the worktree working tree, so even though the content is
+      // file to the branch working tree, so even though the content is
       // derivable, the side effect warrants the same permission bar as import.
       create: { role: ROLES.ADMIN, action: 'export .agor.yml' },
     },
@@ -2632,22 +2629,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     );
 
   // ============================================================================
-  // Worktree environment management routes
+  // Branch environment management routes
   // ============================================================================
 
-  const worktreesService = app.service('worktrees') as unknown as WorktreesServiceImpl;
+  const branchesService = app.service('branches') as unknown as BranchesServiceImpl;
 
   registerAuthenticatedRoute(
     app,
-    '/worktrees/:id/start',
+    '/branches/:id/start',
     {
       async create(_data: unknown, params: RouteParams) {
         const id = params.route?.id;
-        if (!id) throw new Error('Worktree ID required');
-        return worktreesService.startEnvironment(
-          id as import('@agor/core/types').WorktreeID,
-          params
-        );
+        if (!id) throw new Error('Branch ID required');
+        return branchesService.startEnvironment(id as import('@agor/core/types').BranchID, params);
       },
     },
     {
@@ -2656,80 +2650,74 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // it accepts the lowest authenticated role (viewer). The service gate
       // is the single source of truth for whether the user can actually
       // trigger the command.
-      create: { role: ROLES.VIEWER, action: 'start worktree environments' },
+      create: { role: ROLES.VIEWER, action: 'start branch environments' },
     },
     requireAuth
   );
 
   registerAuthenticatedRoute(
     app,
-    '/worktrees/:id/stop',
+    '/branches/:id/stop',
     {
       async create(_data: unknown, params: RouteParams) {
         const id = params.route?.id;
-        if (!id) throw new Error('Worktree ID required');
-        return worktreesService.stopEnvironment(
-          id as import('@agor/core/types').WorktreeID,
+        if (!id) throw new Error('Branch ID required');
+        return branchesService.stopEnvironment(id as import('@agor/core/types').BranchID, params);
+      },
+    },
+    {
+      // Service-layer enforcement via managed_envs_minimum_role
+      create: { role: ROLES.VIEWER, action: 'stop branch environments' },
+    },
+    requireAuth
+  );
+
+  registerAuthenticatedRoute(
+    app,
+    '/branches/:id/restart',
+    {
+      async create(_data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Branch ID required');
+        return branchesService.restartEnvironment(
+          id as import('@agor/core/types').BranchID,
           params
         );
       },
     },
     {
       // Service-layer enforcement via managed_envs_minimum_role
-      create: { role: ROLES.VIEWER, action: 'stop worktree environments' },
+      create: { role: ROLES.VIEWER, action: 'restart branch environments' },
     },
     requireAuth
   );
 
   registerAuthenticatedRoute(
     app,
-    '/worktrees/:id/restart',
+    '/branches/:id/nuke',
     {
       async create(_data: unknown, params: RouteParams) {
         const id = params.route?.id;
-        if (!id) throw new Error('Worktree ID required');
-        return worktreesService.restartEnvironment(
-          id as import('@agor/core/types').WorktreeID,
-          params
-        );
+        if (!id) throw new Error('Branch ID required');
+        return branchesService.nukeEnvironment(id as import('@agor/core/types').BranchID, params);
       },
     },
     {
       // Service-layer enforcement via managed_envs_minimum_role
-      create: { role: ROLES.VIEWER, action: 'restart worktree environments' },
+      create: { role: ROLES.VIEWER, action: 'nuke branch environments' },
     },
     requireAuth
   );
 
   registerAuthenticatedRoute(
     app,
-    '/worktrees/:id/nuke',
-    {
-      async create(_data: unknown, params: RouteParams) {
-        const id = params.route?.id;
-        if (!id) throw new Error('Worktree ID required');
-        return worktreesService.nukeEnvironment(
-          id as import('@agor/core/types').WorktreeID,
-          params
-        );
-      },
-    },
-    {
-      // Service-layer enforcement via managed_envs_minimum_role
-      create: { role: ROLES.VIEWER, action: 'nuke worktree environments' },
-    },
-    requireAuth
-  );
-
-  registerAuthenticatedRoute(
-    app,
-    '/worktrees/:id/render-environment',
+    '/branches/:id/render-environment',
     {
       async create(data: unknown, params: RouteParams) {
         const id = params.route?.id;
-        if (!id) throw new Error('Worktree ID required');
-        return worktreesService.renderEnvironment(
-          id as import('@agor/core/types').WorktreeID,
+        if (!id) throw new Error('Branch ID required');
+        return branchesService.renderEnvironment(
+          id as import('@agor/core/types').BranchID,
           data as { variant?: string } | undefined,
           params
         );
@@ -2738,80 +2726,78 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     {
       // Baseline trigger gate via managed_envs_minimum_role; variant changes
       // are additionally admin-gated inside the service method.
-      create: { role: ROLES.VIEWER, action: 'render worktree environment' },
+      create: { role: ROLES.VIEWER, action: 'render branch environment' },
     },
     requireAuth
   );
 
   registerAuthenticatedRoute(
     app,
-    '/worktrees/:id/health',
+    '/branches/:id/health',
     {
       async find(_data: unknown, params: RouteParams) {
         const id = params.route?.id;
-        if (!id) throw new Error('Worktree ID required');
-        return worktreesService.checkHealth(id as import('@agor/core/types').WorktreeID, params);
+        if (!id) throw new Error('Branch ID required');
+        return branchesService.checkHealth(id as import('@agor/core/types').BranchID, params);
       },
       // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
     } as any,
     {
-      find: { role: ROLES.MEMBER, action: 'check worktree health' },
+      find: { role: ROLES.MEMBER, action: 'check branch health' },
     },
     requireAuth
   );
 
-  // Archive/delete worktree
-  app.use('/worktrees/:id/archive-or-delete', {
+  // Archive/delete branch
+  app.use('/branches/:id/archive-or-delete', {
     async create(data: unknown, params: RouteParams) {
       const id = params.route?.id;
-      if (!id) throw new Error('Worktree ID required');
+      if (!id) throw new Error('Branch ID required');
       const options = data as {
         metadataAction: 'archive' | 'delete';
         filesystemAction: 'preserved' | 'cleaned' | 'deleted';
       };
-      return worktreesService.archiveOrDelete(
-        id as import('@agor/core/types').WorktreeID,
+      return branchesService.archiveOrDelete(
+        id as import('@agor/core/types').BranchID,
         options,
         params
       );
     },
   });
 
-  app.service('/worktrees/:id/archive-or-delete').hooks({
+  app.service('/branches/:id/archive-or-delete').hooks({
     before: {
       create: [
         requireAuth,
-        requireMinimumRole(ROLES.MEMBER, 'archive or delete worktrees'),
+        requireMinimumRole(ROLES.MEMBER, 'archive or delete branches'),
         async (context: HookContext) => {
           const id = context.params.route?.id;
-          if (!id) throw new Error('Worktree ID required');
+          if (!id) throw new Error('Branch ID required');
 
-          const worktree = await worktreeRepository.findById(id);
-          if (!worktree) {
-            throw new Forbidden(`Worktree not found: ${id}`);
+          const branch = await branchRepository.findById(id);
+          if (!branch) {
+            throw new Forbidden(`Branch not found: ${id}`);
           }
 
           const userId = context.params.user?.user_id as
             | import('@agor/core/types').UUID
             | undefined;
-          const isOwner = userId
-            ? await worktreeRepository.isOwner(worktree.worktree_id, userId)
-            : false;
+          const isOwner = userId ? await branchRepository.isOwner(branch.branch_id, userId) : false;
 
-          context.params.worktree = worktree;
-          context.params.isWorktreeOwner = isOwner;
+          context.params.branch = branch;
+          context.params.isBranchOwner = isOwner;
 
           return context;
         },
-        worktreeRbacEnabled
-          ? ensureWorktreePermission('all', 'archive or delete worktrees', superadminOpts)
+        branchRbacEnabled
+          ? ensureBranchPermission('all', 'archive or delete branches', superadminOpts)
           : (context: HookContext) => {
-              const isOwner = context.params.isWorktreeOwner;
+              const isOwner = context.params.isBranchOwner;
               const userRole = context.params.user?.role;
 
               if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
                 throw new Forbidden(
-                  'You must be the worktree owner or a global admin to archive/delete worktrees'
+                  'You must be the branch owner or a global admin to archive/delete branches'
                 );
               }
               return context;
@@ -2820,55 +2806,49 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
   });
 
-  // Unarchive worktree
-  app.use('/worktrees/:id/unarchive', {
+  // Unarchive branch
+  app.use('/branches/:id/unarchive', {
     async create(data: unknown, params: RouteParams) {
       const id = params.route?.id;
-      if (!id) throw new Error('Worktree ID required');
+      if (!id) throw new Error('Branch ID required');
       const options = data as { boardId?: import('@agor/core/types').BoardID };
-      return worktreesService.unarchive(
-        id as import('@agor/core/types').WorktreeID,
-        options,
-        params
-      );
+      return branchesService.unarchive(id as import('@agor/core/types').BranchID, options, params);
     },
   });
 
-  app.service('/worktrees/:id/unarchive').hooks({
+  app.service('/branches/:id/unarchive').hooks({
     before: {
       create: [
         requireAuth,
-        requireMinimumRole(ROLES.MEMBER, 'unarchive worktrees'),
+        requireMinimumRole(ROLES.MEMBER, 'unarchive branches'),
         async (context: HookContext) => {
           const id = context.params.route?.id;
-          if (!id) throw new Error('Worktree ID required');
+          if (!id) throw new Error('Branch ID required');
 
-          const worktree = await worktreeRepository.findById(id);
-          if (!worktree) {
-            throw new Forbidden(`Worktree not found: ${id}`);
+          const branch = await branchRepository.findById(id);
+          if (!branch) {
+            throw new Forbidden(`Branch not found: ${id}`);
           }
 
           const userId = context.params.user?.user_id as
             | import('@agor/core/types').UUID
             | undefined;
-          const isOwner = userId
-            ? await worktreeRepository.isOwner(worktree.worktree_id, userId)
-            : false;
+          const isOwner = userId ? await branchRepository.isOwner(branch.branch_id, userId) : false;
 
-          context.params.worktree = worktree;
-          context.params.isWorktreeOwner = isOwner;
+          context.params.branch = branch;
+          context.params.isBranchOwner = isOwner;
 
           return context;
         },
-        worktreeRbacEnabled
-          ? ensureWorktreePermission('all', 'unarchive worktrees', superadminOpts)
+        branchRbacEnabled
+          ? ensureBranchPermission('all', 'unarchive branches', superadminOpts)
           : (context: HookContext) => {
-              const isOwner = context.params.isWorktreeOwner;
+              const isOwner = context.params.isBranchOwner;
               const userRole = context.params.user?.role;
 
               if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
                 throw new Forbidden(
-                  'You must be the worktree owner or a global admin to unarchive worktrees'
+                  'You must be the branch owner or a global admin to unarchive branches'
                 );
               }
               return context;
@@ -2878,15 +2858,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   // ============================================================================
-  // Execute-schedule-now: manually trigger a scheduled run for a worktree
+  // Execute-schedule-now: manually trigger a scheduled run for a branch
   // ============================================================================
   // Reuses the scheduler's spawn code path so scheduled and manual triggers
   // produce indistinguishable sessions (beyond a triggered_manually marker).
-  // Requires worktree-level 'all' permission (same tier as editing the schedule).
-  app.use('/worktrees/:id/execute-schedule-now', {
+  // Requires branch-level 'all' permission (same tier as editing the schedule).
+  app.use('/branches/:id/execute-schedule-now', {
     async create(_data: unknown, params: RouteParams) {
       const id = params.route?.id;
-      if (!id) throw new BadRequest('Worktree ID required');
+      if (!id) throw new BadRequest('Branch ID required');
 
       const scheduler = app.get('scheduler') as SchedulerService | undefined;
       if (!scheduler) {
@@ -2902,12 +2882,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
       try {
         const session = await scheduler.executeScheduleNow({
-          worktreeId: id as WorktreeID,
+          branchId: id as BranchID,
           triggeredBy: triggeredBy as UUID,
         });
         return {
           session_id: session.session_id,
-          worktree_id: session.worktree_id,
+          branch_id: session.branch_id,
           scheduled_run_at: session.scheduled_run_at,
           triggered_manually: true,
         };
@@ -2923,37 +2903,35 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
   });
 
-  app.service('/worktrees/:id/execute-schedule-now').hooks({
+  app.service('/branches/:id/execute-schedule-now').hooks({
     before: {
       create: [
         requireAuth,
         requireMinimumRole(ROLES.MEMBER, 'execute scheduled runs'),
         async (context: HookContext) => {
           const id = context.params.route?.id;
-          if (!id) throw new BadRequest('Worktree ID required');
+          if (!id) throw new BadRequest('Branch ID required');
 
-          const worktree = await worktreeRepository.findById(id);
-          if (!worktree) {
-            throw new NotFound(`Worktree not found: ${id}`);
+          const branch = await branchRepository.findById(id);
+          if (!branch) {
+            throw new NotFound(`Branch not found: ${id}`);
           }
 
           const userId = context.params.user?.user_id as UUID | undefined;
-          const isOwner = userId
-            ? await worktreeRepository.isOwner(worktree.worktree_id, userId)
-            : false;
+          const isOwner = userId ? await branchRepository.isOwner(branch.branch_id, userId) : false;
 
-          context.params.worktree = worktree;
-          context.params.isWorktreeOwner = isOwner;
+          context.params.branch = branch;
+          context.params.isBranchOwner = isOwner;
           return context;
         },
-        worktreeRbacEnabled
-          ? ensureWorktreePermission('all', 'execute scheduled runs', superadminOpts)
+        branchRbacEnabled
+          ? ensureBranchPermission('all', 'execute scheduled runs', superadminOpts)
           : (context: HookContext) => {
-              const isOwner = context.params.isWorktreeOwner;
+              const isOwner = context.params.isBranchOwner;
               const userRole = context.params.user?.role;
               if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
                 throw new Forbidden(
-                  'You must be the worktree owner or a global admin to execute scheduled runs'
+                  'You must be the branch owner or a global admin to execute scheduled runs'
                 );
               }
               return context;
@@ -2962,25 +2940,25 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
   });
 
-  // Worktree logs
+  // Branch logs
   registerAuthenticatedRoute(
     app,
-    '/worktrees/logs',
+    '/branches/logs',
     {
       async find(params: Params) {
-        const id = params?.query?.worktree_id;
+        const id = params?.query?.branch_id;
 
         if (!id) {
-          throw new Error('worktree_id query parameter required');
+          throw new Error('branch_id query parameter required');
         }
 
-        return worktreesService.getLogs(id as import('@agor/core/types').WorktreeID, params);
+        return branchesService.getLogs(id as import('@agor/core/types').BranchID, params);
       },
       // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
     } as any,
     {
       // Service-layer enforcement via managed_envs_minimum_role
-      find: { role: ROLES.VIEWER, action: 'view worktree logs' },
+      find: { role: ROLES.VIEWER, action: 'view branch logs' },
     },
     requireAuth
   );
@@ -3101,13 +3079,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   //   PATCH  /sessions/:id/env-selections           — replace all: { envVarNames: [] }
   //
   // RBAC: only the session's creator or a global admin/superadmin may mutate.
-  // Worktree `all` permission does NOT grant access — selections expose the
+  // Branch `all` permission does NOT grant access — selections expose the
   // creator's private credentials to the executor process.
   // ============================================================================
 
   // Route-side RBAC wrapper: loads the session, then delegates to the shared
   // `checkSessionOwnerOrAdmin` helper used by the Feathers hook. Keeps the
-  // policy in a single place (see `utils/worktree-authorization.ts`) and
+  // policy in a single place (see `utils/branch-authorization.ts`) and
   // respects the daemon's configured `allowSuperadmin` via `superadminOpts`.
   const requireSessionOwnerOrAdmin = async (
     sessionId: string,
@@ -3162,7 +3140,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async find(_data: unknown, params: RouteParams): Promise<string[]> {
         const id = params.route?.id;
         if (!id) throw new BadRequest('Session ID required');
-        // Read permission: session creator OR admin (no worktree tier).
+        // Read permission: session creator OR admin (no branch tier).
         await requireSessionOwnerOrAdmin(id, params);
         const rows = await sessionEnvSelectionsService.list(id as SessionID, params);
         return rows.map((r) => r.env_var_name);
@@ -3284,7 +3262,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // Minimum role required to trigger managed environment commands
           // (start / stop / nuke / logs). UI uses this to disable + tooltip
           // the trigger buttons for users below the threshold. The server-side
-          // gate in services/worktrees.ts is the source of truth.
+          // gate in services/branches.ts is the source of truth.
           // Value: 'none' | 'viewer' | 'member' | 'admin' | 'superadmin'.
           // Defaults to 'member' when unset.
           managedEnvsMinimumRole: config.execution?.managed_envs_minimum_role ?? 'member',
@@ -3329,7 +3307,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // AGOR_SET_UNIX_MODE) are written into ~/.agor/config.yaml by the
           // entrypoint before boot, so `config.execution` reflects them.
           execution: {
-            worktreeRbac: config.execution?.worktree_rbac === true,
+            branchRbac: config.execution?.branch_rbac === true,
             unixUserMode: config.execution?.unix_user_mode ?? 'simple',
           },
           // Resolved security posture — admins can confirm in Settings → About
@@ -3477,7 +3455,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   const SERVICE_GROUP_PATHS: Partial<Record<ServiceGroupName, string[]>> = {
     core: ['sessions', 'tasks', 'messages'],
-    worktrees: ['worktrees'],
+    branches: ['branches'],
     repos: ['repos'],
     users: ['users'],
     boards: ['boards', 'board-objects', 'board-comments'],

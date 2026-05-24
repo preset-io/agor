@@ -1,29 +1,29 @@
 /**
  * RBAC find() scoping tests.
  *
- * Covers the helpers that scope find() queries on worktree-scoped and
+ * Covers the helpers that scope find() queries on branch-scoped and
  * session-scoped resources to only the rows a caller can access.
  *
  * These helpers are the server-side backstop for per-resource RBAC: without
- * them, authenticated members could list rows from worktrees/sessions that
+ * them, authenticated members could list rows from branches/sessions that
  * their RBAC get/patch/remove hooks otherwise correctly guard.
  */
 
-import type { SessionRepository, WorktreeRepository } from '@agor/core/db';
-import type { HookContext, Session, Worktree } from '@agor/core/types';
+import type { BranchRepository, SessionRepository } from '@agor/core/db';
+import type { Branch, HookContext, Session } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  scopeFindToAccessibleBranches,
   scopeFindToAccessibleSessions,
-  scopeFindToAccessibleWorktrees,
-} from './worktree-authorization';
+} from './branch-authorization';
 
 const USER_ID = 'user-aaaa-0001' as import('@agor/core/types').UUID;
 
-function makeWorktree(id: string, others_can: Worktree['others_can'] = 'view'): Worktree {
+function makeBranch(id: string, others_can: Branch['others_can'] = 'view'): Branch {
   return {
-    worktree_id: id as Worktree['worktree_id'],
-    repo_id: 'repo-aaaa-0001' as Worktree['repo_id'],
+    branch_id: id as Branch['branch_id'],
+    repo_id: 'repo-aaaa-0001' as Branch['repo_id'],
     name: `wt-${id}`,
     branch: 'main',
     path: `/tmp/${id}`,
@@ -31,13 +31,13 @@ function makeWorktree(id: string, others_can: Worktree['others_can'] = 'view'): 
     archived: false,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-  } as Worktree;
+  } as Branch;
 }
 
-function makeSession(id: string, worktreeId: string): Session {
+function makeSession(id: string, branchId: string): Session {
   return {
     session_id: id,
-    worktree_id: worktreeId,
+    branch_id: branchId,
     created_by: USER_ID,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -61,9 +61,9 @@ function makeContext(overrides: {
   } as any;
 }
 
-function fakeWorktreeRepo(accessible: Worktree[]): WorktreeRepository {
+function fakeBranchRepo(accessible: Branch[]): BranchRepository {
   return {
-    findAccessibleWorktrees: vi.fn(async () => accessible),
+    findAccessibleBranches: vi.fn(async () => accessible),
   } as any;
 }
 
@@ -73,31 +73,31 @@ function fakeSessionRepo(accessible: Session[]): SessionRepository {
   } as any;
 }
 
-describe('scopeFindToAccessibleWorktrees', () => {
+describe('scopeFindToAccessibleBranches', () => {
   it('passes through internal calls (no provider)', async () => {
-    const repo = fakeWorktreeRepo([]);
-    const hook = scopeFindToAccessibleWorktrees(repo);
+    const repo = fakeBranchRepo([]);
+    const hook = scopeFindToAccessibleBranches(repo);
     const ctx = makeContext({ provider: undefined, user: undefined });
     const out = await hook(ctx);
     expect(out.result).toBeUndefined();
-    expect(repo.findAccessibleWorktrees).not.toHaveBeenCalled();
+    expect(repo.findAccessibleBranches).not.toHaveBeenCalled();
   });
 
   it('passes through service accounts', async () => {
-    const repo = fakeWorktreeRepo([]);
-    const hook = scopeFindToAccessibleWorktrees(repo);
+    const repo = fakeBranchRepo([]);
+    const hook = scopeFindToAccessibleBranches(repo);
     const ctx = makeContext({
       provider: 'rest',
       user: { _isServiceAccount: true },
     });
     const out = await hook(ctx);
     expect(out.result).toBeUndefined();
-    expect(repo.findAccessibleWorktrees).not.toHaveBeenCalled();
+    expect(repo.findAccessibleBranches).not.toHaveBeenCalled();
   });
 
   it('returns empty result for unauthenticated requests', async () => {
-    const repo = fakeWorktreeRepo([]);
-    const hook = scopeFindToAccessibleWorktrees(repo);
+    const repo = fakeBranchRepo([]);
+    const hook = scopeFindToAccessibleBranches(repo);
     const ctx = makeContext({ provider: 'rest', user: undefined });
     const out = await hook(ctx);
     expect((out.result as any).data).toEqual([]);
@@ -105,79 +105,79 @@ describe('scopeFindToAccessibleWorktrees', () => {
   });
 
   it('bypasses scoping for superadmins', async () => {
-    const repo = fakeWorktreeRepo([]);
-    const hook = scopeFindToAccessibleWorktrees(repo);
+    const repo = fakeBranchRepo([]);
+    const hook = scopeFindToAccessibleBranches(repo);
     const ctx = makeContext({
       provider: 'rest',
       user: { user_id: USER_ID, role: ROLES.SUPERADMIN },
     });
     const out = await hook(ctx);
     expect(out.result).toBeUndefined();
-    expect((out.params.query as any).worktree_id).toBeUndefined();
+    expect((out.params.query as any).branch_id).toBeUndefined();
   });
 
   it('honors allow_superadmin=false', async () => {
-    const repo = fakeWorktreeRepo([makeWorktree('wt1')]);
-    const hook = scopeFindToAccessibleWorktrees(repo, { allowSuperadmin: false });
+    const repo = fakeBranchRepo([makeBranch('wt1')]);
+    const hook = scopeFindToAccessibleBranches(repo, { allowSuperadmin: false });
     const ctx = makeContext({
       provider: 'rest',
       user: { user_id: USER_ID, role: ROLES.SUPERADMIN },
     });
     await hook(ctx);
-    expect((ctx.params.query as any).worktree_id).toEqual({ $in: ['wt1'] });
+    expect((ctx.params.query as any).branch_id).toEqual({ $in: ['wt1'] });
   });
 
-  it('injects worktree_id $in when no explicit filter', async () => {
-    const repo = fakeWorktreeRepo([makeWorktree('wt1'), makeWorktree('wt2')]);
-    const hook = scopeFindToAccessibleWorktrees(repo);
+  it('injects branch_id $in when no explicit filter', async () => {
+    const repo = fakeBranchRepo([makeBranch('wt1'), makeBranch('wt2')]);
+    const hook = scopeFindToAccessibleBranches(repo);
     const ctx = makeContext({
       provider: 'rest',
       user: { user_id: USER_ID, role: ROLES.MEMBER },
     });
     await hook(ctx);
     const q = ctx.params.query as any;
-    expect(q.worktree_id.$in.sort()).toEqual(['wt1', 'wt2']);
+    expect(q.branch_id.$in.sort()).toEqual(['wt1', 'wt2']);
   });
 
-  it('preserves explicit worktree_id within accessible set', async () => {
-    const repo = fakeWorktreeRepo([makeWorktree('wt1'), makeWorktree('wt2')]);
-    const hook = scopeFindToAccessibleWorktrees(repo);
+  it('preserves explicit branch_id within accessible set', async () => {
+    const repo = fakeBranchRepo([makeBranch('wt1'), makeBranch('wt2')]);
+    const hook = scopeFindToAccessibleBranches(repo);
     const ctx = makeContext({
       provider: 'rest',
       user: { user_id: USER_ID, role: ROLES.MEMBER },
-      query: { worktree_id: 'wt1' },
+      query: { branch_id: 'wt1' },
     });
     await hook(ctx);
-    expect((ctx.params.query as any).worktree_id).toBe('wt1');
+    expect((ctx.params.query as any).branch_id).toBe('wt1');
   });
 
-  it('short-circuits when explicit worktree_id is outside accessible set', async () => {
-    const repo = fakeWorktreeRepo([makeWorktree('wt1')]);
-    const hook = scopeFindToAccessibleWorktrees(repo);
+  it('short-circuits when explicit branch_id is outside accessible set', async () => {
+    const repo = fakeBranchRepo([makeBranch('wt1')]);
+    const hook = scopeFindToAccessibleBranches(repo);
     const ctx = makeContext({
       provider: 'rest',
       user: { user_id: USER_ID, role: ROLES.MEMBER },
-      query: { worktree_id: 'wt999' },
+      query: { branch_id: 'wt999' },
     });
     const out = await hook(ctx);
     expect((out.result as any).data).toEqual([]);
   });
 
   it('intersects $in arrays with accessible set', async () => {
-    const repo = fakeWorktreeRepo([makeWorktree('wt1'), makeWorktree('wt2')]);
-    const hook = scopeFindToAccessibleWorktrees(repo);
+    const repo = fakeBranchRepo([makeBranch('wt1'), makeBranch('wt2')]);
+    const hook = scopeFindToAccessibleBranches(repo);
     const ctx = makeContext({
       provider: 'rest',
       user: { user_id: USER_ID, role: ROLES.MEMBER },
-      query: { worktree_id: { $in: ['wt1', 'wt999'] } },
+      query: { branch_id: { $in: ['wt1', 'wt999'] } },
     });
     await hook(ctx);
-    expect((ctx.params.query as any).worktree_id).toEqual({ $in: ['wt1'] });
+    expect((ctx.params.query as any).branch_id).toEqual({ $in: ['wt1'] });
   });
 
-  it('returns empty when user has zero accessible worktrees', async () => {
-    const repo = fakeWorktreeRepo([]);
-    const hook = scopeFindToAccessibleWorktrees(repo);
+  it('returns empty when user has zero accessible branches', async () => {
+    const repo = fakeBranchRepo([]);
+    const hook = scopeFindToAccessibleBranches(repo);
     const ctx = makeContext({
       provider: 'rest',
       user: { user_id: USER_ID, role: ROLES.MEMBER },
@@ -187,8 +187,8 @@ describe('scopeFindToAccessibleWorktrees', () => {
   });
 
   it('does not apply on non-find methods', async () => {
-    const repo = fakeWorktreeRepo([makeWorktree('wt1')]);
-    const hook = scopeFindToAccessibleWorktrees(repo);
+    const repo = fakeBranchRepo([makeBranch('wt1')]);
+    const hook = scopeFindToAccessibleBranches(repo);
     const ctx = makeContext({
       method: 'get',
       provider: 'rest',
@@ -196,8 +196,8 @@ describe('scopeFindToAccessibleWorktrees', () => {
     });
     const out = await hook(ctx);
     expect(out.result).toBeUndefined();
-    expect((ctx.params.query as any).worktree_id).toBeUndefined();
-    expect(repo.findAccessibleWorktrees).not.toHaveBeenCalled();
+    expect((ctx.params.query as any).branch_id).toBeUndefined();
+    expect(repo.findAccessibleBranches).not.toHaveBeenCalled();
   });
 });
 

@@ -66,31 +66,31 @@ export interface AuthenticatedParams extends Params {
 /**
  * Extended params with RBAC cache properties
  *
- * Used by worktree-authorization hooks to cache loaded entities and permissions
+ * Used by branch-authorization hooks to cache loaded entities and permissions
  * to avoid redundant database queries within a hook chain.
  *
  * @example
  * ```ts
- * // In loadWorktree hook
- * function loadWorktree(worktreeRepo: WorktreeRepository) {
+ * // In loadBranch hook
+ * function loadBranch(branchRepo: BranchRepository) {
  *   return async (context: HookContext) => {
- *     const worktree = await worktreeRepo.findById(worktreeId);
- *     const isOwner = await worktreeRepo.isOwner(worktree.worktree_id, userId);
+ *     const branch = await branchRepo.findById(branchId);
+ *     const isOwner = await branchRepo.isOwner(branch.branch_id, userId);
  *
  *     // Cache for downstream hooks (type-safe!)
  *     const rbacParams = context.params as RBACParams;
- *     rbacParams.worktree = worktree;
- *     rbacParams.isWorktreeOwner = isOwner;
+ *     rbacParams.branch = branch;
+ *     rbacParams.isBranchOwner = isOwner;
  *   };
  * }
  * ```
  */
 export interface RBACParams extends AuthenticatedParams {
-  /** Cached worktree from loadWorktree/loadSessionWorktree hooks */
-  worktree?: import('./worktree').Worktree;
+  /** Cached branch from loadBranch/loadSessionBranch hooks */
+  branch?: import('./branch').Branch;
   /** Cached ownership status for current user */
-  isWorktreeOwner?: boolean;
-  /** Cached session from loadSession/loadSessionWorktree hooks */
+  isBranchOwner?: boolean;
+  /** Cached session from loadSession/loadSessionBranch hooks */
   session?: import('./session').Session;
   /** Cached session ID from resolveSessionContext hook */
   sessionId?: string;

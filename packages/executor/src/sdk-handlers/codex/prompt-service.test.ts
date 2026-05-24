@@ -100,7 +100,7 @@ const mockSessionsRepo = {
 const mockSessionMCPServerRepo = {
   listServers: vi.fn().mockResolvedValue([]),
 } as any;
-const mockWorktreesRepo = {
+const mockBranchesRepo = {
   findById: vi.fn(),
 } as any;
 const mockDb = {} as any;
@@ -122,7 +122,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined, // reposRepo
       'test-api-key',
       mockDb
@@ -136,7 +136,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined, // reposRepo
       'test-api-key',
       mockDb
@@ -160,7 +160,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined, // reposRepo
       'initial-key',
       mockDb
@@ -187,7 +187,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined, // reposRepo
       undefined,
       mockDb
@@ -223,7 +223,7 @@ describe('CodexPromptService - OPENAI_BASE_URL handling', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       apiKey,
       mockDb
@@ -283,7 +283,7 @@ describe('CodexPromptService - forked sessions', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockDb
@@ -301,7 +301,7 @@ describe('CodexPromptService - forked sessions', () => {
 
     const childSession = {
       session_id: 'child-session',
-      worktree_id: 'worktree-1',
+      branch_id: 'branch-1',
       created_at: new Date().toISOString(),
       sdk_session_id: null,
       genealogy: { forked_from_session_id: 'parent-session' },
@@ -311,7 +311,7 @@ describe('CodexPromptService - forked sessions', () => {
     };
     const parentSession = {
       session_id: 'parent-session',
-      worktree_id: 'worktree-1',
+      branch_id: 'branch-1',
       created_at: new Date().toISOString(),
       sdk_session_id: 'parent-thread-id',
       permission_config: { codex: {} },
@@ -325,8 +325,8 @@ describe('CodexPromptService - forked sessions', () => {
       return null;
     });
     mockSessionsRepo.update.mockResolvedValue(undefined);
-    mockWorktreesRepo.findById.mockResolvedValue({
-      worktree_id: 'worktree-1',
+    mockBranchesRepo.findById.mockResolvedValue({
+      branch_id: 'branch-1',
       path: process.cwd(),
     });
     appServerMocks.forkCodexThreadViaAppServer.mockResolvedValue('forked-thread-id');
@@ -362,7 +362,7 @@ describe('CodexPromptService - Todo normalization', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockDb
@@ -411,7 +411,7 @@ describe('CodexPromptService - Todo normalization', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockDb
@@ -434,7 +434,7 @@ describe('CodexPromptService - Todo normalization', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockDb
@@ -453,15 +453,15 @@ describe('CodexPromptService - Todo normalization', () => {
 
     mockSessionsRepo.findById.mockResolvedValue({
       session_id: 'session-1',
-      worktree_id: 'worktree-1',
+      branch_id: 'branch-1',
       created_at: new Date().toISOString(),
       sdk_session_id: null,
       permission_config: { codex: {} },
       model_config: {},
       mcp_token: 'test-token',
     });
-    mockWorktreesRepo.findById.mockResolvedValue({
-      worktree_id: 'worktree-1',
+    mockBranchesRepo.findById.mockResolvedValue({
+      branch_id: 'branch-1',
       path: process.cwd(),
     });
 
@@ -511,7 +511,7 @@ describe('CodexPromptService - tool payload mapping', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockDb
@@ -529,15 +529,15 @@ describe('CodexPromptService - tool payload mapping', () => {
 
     mockSessionsRepo.findById.mockResolvedValue({
       session_id: 'session-ctx',
-      worktree_id: 'worktree-1',
+      branch_id: 'branch-1',
       created_at: new Date().toISOString(),
       sdk_session_id: null,
       permission_config: { codex: {} },
       model_config: {},
       mcp_token: 'test-token',
     });
-    mockWorktreesRepo.findById.mockResolvedValue({
-      worktree_id: 'worktree-1',
+    mockBranchesRepo.findById.mockResolvedValue({
+      branch_id: 'branch-1',
       path: process.cwd(),
     });
 
@@ -587,7 +587,7 @@ describe('CodexPromptService - tool payload mapping', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockDb
@@ -599,7 +599,7 @@ describe('CodexPromptService - tool payload mapping', () => {
         type: 'mcp_tool_call',
         server: 'agor',
         tool: 'agor_execute_tool',
-        arguments: { tool_name: 'agor_worktrees_list' },
+        arguments: { tool_name: 'agor_branches_list' },
         result: {
           content: [{ type: 'text', text: 'ok' }],
           structured_content: { success: true },
@@ -612,7 +612,7 @@ describe('CodexPromptService - tool payload mapping', () => {
     expect(toolUse).toEqual({
       id: 'mcp-1',
       name: 'agor.agor_execute_tool',
-      input: { tool_name: 'agor_worktrees_list' },
+      input: { tool_name: 'agor_branches_list' },
       output: [{ type: 'text', text: 'ok' }],
       status: 'completed',
     });
@@ -623,7 +623,7 @@ describe('CodexPromptService - tool payload mapping', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockDb
@@ -658,7 +658,7 @@ describe('CodexPromptService - tool payload mapping', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockDb
@@ -694,7 +694,7 @@ describe('CodexPromptService - tool payload mapping', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockDb
@@ -722,7 +722,7 @@ describe('CodexPromptService - tool payload mapping', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockDb
@@ -740,15 +740,15 @@ describe('CodexPromptService - tool payload mapping', () => {
 
     mockSessionsRepo.findById.mockResolvedValue({
       session_id: 'session-1',
-      worktree_id: 'worktree-1',
+      branch_id: 'branch-1',
       created_at: new Date().toISOString(),
       sdk_session_id: null,
       permission_config: { codex: {} },
       model_config: {},
       mcp_token: 'test-token',
     });
-    mockWorktreesRepo.findById.mockResolvedValue({
-      worktree_id: 'worktree-1',
+    mockBranchesRepo.findById.mockResolvedValue({
+      branch_id: 'branch-1',
       path: process.cwd(),
     });
 
@@ -791,7 +791,7 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockMcpServerRepo

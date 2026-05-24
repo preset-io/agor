@@ -1,22 +1,22 @@
 /**
  * Regression test for #1140 — `repo clone fails when user is not sudoer` —
- * and its sister bug #1143 — same failure mode in `git.worktree.remove`.
+ * and its sister bug #1143 — same failure mode in `git.branch.remove`.
  *
- * In the open-access default (`worktree_rbac: false`, `unix_user_mode:
+ * In the open-access default (`branch_rbac: false`, `unix_user_mode:
  * simple`) no supplemental Unix groups are ever created, so wrapping git
  * operations in `sudo -u` is pure overhead. Worse: it breaks for users
  * who never configured passwordless sudoers, with the daemon failing to
- * clone repos (or remove worktrees) against `user not in sudoers`.
+ * clone repos (or remove branches) against `user not in sudoers`.
  *
  * The gate must live INSIDE the resolver — not at the call site — so every
- * caller is covered uniformly. #1141 fixed clone + worktree.add + (later)
- * worktree.remove by sprinkling `rbacEnabled ? ... : undefined` at each
+ * caller is covered uniformly. #1141 fixed clone + branch.add + (later)
+ * branch.remove by sprinkling `rbacEnabled ? ... : undefined` at each
  * caller; #1143 hoists the gate into `resolveGitImpersonationFor*` so the
  * next caller added can't repeat the mistake.
  */
 
 import type { Database } from '@agor/core/db';
-import type { UserID, Worktree, WorktreeID } from '@agor/core/types';
+import type { Branch, BranchID, UserID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockIsUnixGroupRefreshNeeded = vi.fn(() => false);
@@ -32,16 +32,16 @@ vi.mock('@agor/core/config', async () => {
 });
 
 import {
+  resolveGitImpersonationForBranch,
   resolveGitImpersonationForUser,
-  resolveGitImpersonationForWorktree,
 } from './git-impersonation';
 
 const fakeDb = {} as Database;
 const fakeUserId = 'user-123' as UserID;
-const fakeWorktree = {
-  worktree_id: 'wt-1' as WorktreeID,
+const fakeBranch = {
+  branch_id: 'wt-1' as BranchID,
   created_by: fakeUserId,
-} as Worktree;
+} as Branch;
 
 beforeEach(() => {
   mockIsUnixGroupRefreshNeeded.mockReset();
@@ -88,21 +88,21 @@ describe('resolveGitImpersonationForUser', () => {
   });
 });
 
-describe('resolveGitImpersonationForWorktree', () => {
-  // The worktree-remove path (WorktreesService.remove → git.worktree.remove
+describe('resolveGitImpersonationForBranch', () => {
+  // The branch-remove path (BranchesService.remove → git.branch.remove
   // executor spawn) calls this resolver. Pre-#1143 the call site had its
-  // own `isWorktreeRbacEnabled() ? ... : undefined` gate; this test pins
+  // own `isBranchRbacEnabled() ? ... : undefined` gate; this test pins
   // the contract that the resolver itself returns undefined in simple mode
   // so the caller no longer needs to duplicate the check.
-  it('returns undefined in open-access default — #1140 (clone) + #1143 (worktree.remove)', async () => {
+  it('returns undefined in open-access default — #1140 (clone) + #1143 (branch.remove)', async () => {
     mockIsUnixGroupRefreshNeeded.mockReturnValue(false);
-    const result = await resolveGitImpersonationForWorktree(fakeDb, fakeWorktree);
+    const result = await resolveGitImpersonationForBranch(fakeDb, fakeBranch);
     expect(result).toBeUndefined();
   });
 
-  it('delegates to resolveGitImpersonationForUser using worktree.created_by', async () => {
+  it('delegates to resolveGitImpersonationForUser using branch.created_by', async () => {
     mockIsUnixGroupRefreshNeeded.mockReturnValue(true);
-    const result = await resolveGitImpersonationForWorktree(fakeDb, fakeWorktree);
+    const result = await resolveGitImpersonationForBranch(fakeDb, fakeBranch);
     expect(result).toBe('agorpg');
   });
 });

@@ -1,17 +1,17 @@
-import type { MCPServer, Repo, Session, User, Worktree } from '@agor-live/client';
+import type { Branch, MCPServer, Repo, Session, User } from '@agor-live/client';
 import type React from 'react';
 import { createContext, useContext, useMemo } from 'react';
 
 /**
  * App data is split into granular contexts so that high-frequency mutations
- * (sessions / worktrees) don't force re-renders of consumers that only
+ * (sessions / branches) don't force re-renders of consumers that only
  * care about slow-moving entity data, and slow-moving entity updates don't
  * invalidate unrelated entity consumers.
  *
  * Before the split, a single `session:patched` event would mutate
  * `sessionById`, change the merged `appDataValue` reference, and cascade
  * a re-render through every `useAppData()` consumer — including
- * SessionPanel, which doesn't read sessions/worktrees from context at all.
+ * SessionPanel, which doesn't read sessions/branches from context at all.
  * With the split, SessionPanel subscribes only to the specific entity
  * contexts it needs and is insulated from streaming-driven session churn.
  *
@@ -19,7 +19,7 @@ import { createContext, useContext, useMemo } from 'react';
  * - **AppUserDataContext**: users (registration / profile edits).
  * - **AppMcpDataContext**: MCP servers + per-user OAuth status.
  * - **AppLiveDataContext**: high-frequency, socket-driven changes
- *   (sessions, worktrees).
+ *   (sessions, branches).
  *
  * Other live slices (boards/board-objects/comments, session-MCP links,
  * cards, ...) are still threaded through props from the outer App.
@@ -50,10 +50,10 @@ export interface AppEntityDataContextValue
     AppMcpDataContextValue {}
 
 export interface AppLiveDataContextValue {
-  // Sessions and worktrees — patched on every status flip / activity tick
+  // Sessions and branches — patched on every status flip / activity tick
   sessionById: Map<string, Session>;
-  worktreeById: Map<string, Worktree>;
-  sessionsByWorktree: Map<string, Session[]>; // Indexed for quick filtering
+  branchById: Map<string, Branch>;
+  sessionsByBranch: Map<string, Session[]>; // Indexed for quick filtering
 }
 
 const AppRepoDataContext = createContext<AppRepoDataContextValue | undefined>(undefined);
@@ -133,7 +133,7 @@ export const AppEntityDataProvider: React.FC<AppEntityDataProviderProps> = ({
 
 /**
  * Repo data (rarely changes). Subscribing to this hook does NOT trigger
- * re-renders when users, MCP servers, sessions, worktrees, or boards mutate.
+ * re-renders when users, MCP servers, sessions, branches, or boards mutate.
  */
 export const useAppRepoData = (): AppRepoDataContextValue => {
   const context = useContext(AppRepoDataContext);
@@ -145,7 +145,7 @@ export const useAppRepoData = (): AppRepoDataContextValue => {
 
 /**
  * User data (registration / profile edits). Subscribing to this hook does NOT
- * trigger re-renders when repos, MCP servers, sessions, worktrees, or boards mutate.
+ * trigger re-renders when repos, MCP servers, sessions, branches, or boards mutate.
  */
 export const useAppUserData = (): AppUserDataContextValue => {
   const context = useContext(AppUserDataContext);
@@ -157,7 +157,7 @@ export const useAppUserData = (): AppUserDataContextValue => {
 
 /**
  * MCP server data + per-user OAuth status. Subscribing to this hook does NOT
- * trigger re-renders when users, repos, sessions, worktrees, or boards mutate.
+ * trigger re-renders when users, repos, sessions, branches, or boards mutate.
  */
 export const useAppMcpData = (): AppMcpDataContextValue => {
   const context = useContext(AppMcpDataContext);
@@ -168,7 +168,7 @@ export const useAppMcpData = (): AppMcpDataContextValue => {
 };
 
 /**
- * High-frequency live data (sessions, worktrees, boards). Subscribing to
+ * High-frequency live data (sessions, branches, boards). Subscribing to
  * this hook re-renders on every socket-driven mutation in those slices —
  * use only when you actually need to read live state.
  */

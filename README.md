@@ -4,10 +4,10 @@
 
 **Team command center for all things agentic.**
 
-Agor is a shared canvas where coding agents (Claude Code, Codex, Gemini) and long-lived assistants run side-by-side on isolated git worktrees — the anchor entity where sessions, dev environments, prompts, and PRs converge. Your whole team rallies around the same live work in real time, and the agents themselves drive Agor over MCP.
+Agor is a shared canvas where coding agents (Claude Code, Codex, Gemini) and long-lived assistants run side-by-side on isolated git branches — the anchor entity where sessions, dev environments, prompts, and PRs converge. Your whole team rallies around the same live work in real time, and the agents themselves drive Agor over MCP.
 
 - **Team workspace for AI agents** — multiplayer is the core differentiator. Live cursors, facepile, scoped comments, shared sessions and dev envs.
-- **Worktrees as the anchor** — one entity per piece of work, where conversations + dev env + PR + prompts all converge.
+- **Branches as the anchor** — one entity per piece of work, where conversations + dev env + PR + prompts all converge.
 - **Multi-agent, multi-runtime** — Claude Code, Codex, Gemini, OpenCode, Copilot, interchangeable per session.
 - **Shared, long-lived assistants** — persistent agents with identity, memory, and skills that you publish for the whole team.
 - **Self-hosted** — your repos, your DB, your isolation posture.
@@ -23,7 +23,7 @@ Agor is a shared canvas where coding agents (Claude Code, Codex, Gemini) and lon
     <tr>
       <td width="50%">
         <img src="https://github.com/preset-io/agor/releases/download/v0.3.15/Area.gif" alt="Spatial 2D Canvas"/>
-        <p align="center"><em style="opacity: 0.5;">Spatial canvas with worktrees and zones</em></p>
+        <p align="center"><em style="opacity: 0.5;">Spatial canvas with branches and zones</em></p>
       </td>
       <td width="50%">
         <img src="https://github.com/preset-io/agor/releases/download/v0.3.15/Convo.gif" alt="AI Conversation in Action"/>
@@ -33,7 +33,7 @@ Agor is a shared canvas where coding agents (Claude Code, Codex, Gemini) and lon
     <tr>
       <td width="50%">
         <img src="https://github.com/preset-io/agor/releases/download/v0.3.15/Settings.gif" alt="Settings and Configuration"/>
-        <p align="center"><em style="opacity: 0.5;">MCP servers and worktree management</em></p>
+        <p align="center"><em style="opacity: 0.5;">MCP servers and branch management</em></p>
       </td>
       <td width="50%">
         <img src="https://github.com/preset-io/agor/releases/download/v0.3.15/Social.gif" alt="Real-time Multiplayer"/>
@@ -75,9 +75,9 @@ For Docker, source builds, Postgres, and team setups, see [Extended Installation
 
 Agor is built on three foundational concepts:
 
-- **[Worktrees](https://agor.live/guide/worktrees)** — the unit of work. A git worktree pinned to a board, with its own branch, isolated environment, and conversations.
+- **[Branches](https://agor.live/guide/branches)** — the unit of work. A git branch pinned to a board, with its own branch, isolated environment, and conversations.
 - **[Sessions & Trees](https://agor.live/guide/sessions)** — agent conversations with genealogy. Fork to explore alternatives, spawn subsessions for focused subtasks.
-- **[Boards & Zones](https://agor.live/guide/boards)** — a Figma-style 2D canvas of worktrees. Drop a worktree into a zone to trigger a templated prompt.
+- **[Boards & Zones](https://agor.live/guide/boards)** — a Figma-style 2D canvas of branches. Drop a branch into a zone to trigger a templated prompt.
 
 Everything else builds on these. **[Read the Features Overview →](https://agor.live/guide/features-overview)**
 
@@ -89,7 +89,7 @@ Everything else builds on these. **[Read the Features Overview →](https://agor
 - **[Agor MCP Server](https://agor.live/guide/internal-mcp)** — anything a user can do in Agor, an agent can do too. Sessions are auto-issued an MCP token.
 - **[Rich Chat UX](https://agor.live/guide/rich-chat-ux)** — per-prompt token + dollar accounting, model/effort selectors, structured tool blocks, completion chimes.
 - **[Multiplayer & Social](https://agor.live/guide/multiplayer-social)** — live cursors, facepiles, spatial comments, shared multiplayer terminal.
-- **[Environments](https://agor.live/guide/environment-configuration)** — one-click dev servers per worktree with auto-managed unique ports.
+- **[Environments](https://agor.live/guide/environment-configuration)** — one-click dev servers per branch with auto-managed unique ports.
 - **[Scheduler](https://agor.live/guide/scheduler)** — cron-style triggers for templated prompts. Powers assistant heartbeats and automated audits.
 - **[Cards](https://agor.live/guide/cards)** (Beta) — generic workflow entities for non-code workflows.
 - **[Artifacts](https://agor.live/guide/artifacts)** — live, interactive applications rendered on the board via Sandpack.
@@ -101,7 +101,7 @@ Everything else builds on these. **[Read the Features Overview →](https://agor
 
 <div align="center">
   <img src="https://github.com/preset-io/agor/releases/download/v0.7.9/hero.png" alt="Agor Board" style="width: 100%; border-radius: 8px; margin-bottom: 24px;" />
-  <p style="opacity: 0.5;"><em>Multiplayer spatial canvas with zones, worktrees, and real-time collaboration</em></p>
+  <p style="opacity: 0.5;"><em>Multiplayer spatial canvas with zones, branches, and real-time collaboration</em></p>
 </div>
 
 <div align="center">
@@ -113,7 +113,7 @@ Everything else builds on these. **[Read the Features Overview →](https://agor
       </td>
       <td width="50%">
         <img src="https://github.com/preset-io/agor/releases/download/v0.3.15/settings_modal.png" alt="Settings Modal"/>
-        <p align="center"><em style="opacity: 0.5;">MCP server and worktree management</em></p>
+        <p align="center"><em style="opacity: 0.5;">MCP server and branch management</em></p>
       </td>
     </tr>
     <tr>
@@ -129,7 +129,7 @@ Everything else builds on these. **[Read the Features Overview →](https://agor
     <tr>
       <td width="50%">
         <img src="https://github.com/preset-io/agor/releases/download/v0.3.15/env_configuration.png" alt="Environment Configuration"/>
-        <p align="center"><em style="opacity: 0.5;">Worktree environment setup</em></p>
+        <p align="center"><em style="opacity: 0.5;">Branch environment setup</em></p>
       </td>
       <td width="50%">
         <img src="https://github.com/preset-io/agor/releases/download/v0.3.15/create_session_modal.png" alt="Create Session Modal"/>
@@ -139,7 +139,7 @@ Everything else builds on these. **[Read the Features Overview →](https://agor
     <tr>
       <td width="50%">
         <img src="https://github.com/preset-io/agor/releases/download/v0.3.15/baked_in_terminal.png" alt="Built-in Terminal"/>
-        <p align="center"><em style="opacity: 0.5;">Built-in terminal with worktree context</em></p>
+        <p align="center"><em style="opacity: 0.5;">Built-in terminal with branch context</em></p>
       </td>
       <td width="50%">
         <img src="https://github.com/preset-io/agor/releases/download/v0.3.15/onboarding.png" alt="Onboarding Experience"/>
@@ -165,14 +165,14 @@ graph TB
     subgraph "Agor Daemon"
         Feathers["FeathersJS Server"]
         MCP["MCP HTTP Endpoint<br/>/mcp?sessionToken=..."]
-        Services["Services<br/>Sessions, Tasks, Messages<br/>Boards, Worktrees, Repos"]
+        Services["Services<br/>Sessions, Tasks, Messages<br/>Boards, Branches, Repos"]
         AgentSDKs["Agent SDKs<br/>Claude, Codex, Gemini"]
         ORM["Drizzle ORM"]
     end
 
     subgraph Storage
         DB[("LibSQL Database<br/>~/.agor/agor.db")]
-        Git["Git Worktrees<br/>~/.agor/worktrees/"]
+        Git["Git Branches<br/>~/.agor/worktrees/"]
         Config["Config<br/>~/.agor/config.yaml"]
     end
 
@@ -209,7 +209,7 @@ cd agor
 docker compose up
 ```
 
-The repo's `.agor.yml` defines variants (sqlite / postgres / full / docs) so you can spin up the exact dev setup you need. The dev guide also covers running Agor *inside* Agor for dogfooding, plus custom builds via `packages/agor-live/build.sh`.
+The repo's `.agor.yml` defines variants (sqlite / postgres / full / docs) so you can spin up the exact dev setup you need. The dev guide also covers running Agor _inside_ Agor for dogfooding, plus custom builds via `packages/agor-live/build.sh`.
 
 ---
 
@@ -220,7 +220,7 @@ The repo's `.agor.yml` defines variants (sqlite / postgres / full / docs) so you
 Highlights:
 
 - **Match CLI-Native Features** — SDKs are evolving rapidly and exposing more functionality. Push integrations deeper to match all key features available in the underlying CLIs
-- **Bring Your Own IDE** — Connect VSCode, Cursor, or any IDE directly to Agor-managed worktrees via SSH/Remote
+- **Bring Your Own IDE** — Connect VSCode, Cursor, or any IDE directly to Agor-managed branches via SSH/Remote
 - **Unix User Integration** — Enable true multi-tenancy with per-user Unix isolation for secure collaboration. [Read the guide →](https://github.com/preset-io/agor/blob/main/apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx)
 
 ---

@@ -29,14 +29,14 @@ export async function executeCodexTask(params: {
   // Execute using base helper with Codex-specific factory
   await executeToolTask({
     ...params,
-    apiKeyEnvVar: TOOL_API_KEY_NAMES['codex']!,
+    apiKeyEnvVar: TOOL_API_KEY_NAMES.codex!,
     toolName: 'codex',
     createTool: (repos, apiKey, useNativeAuth) =>
       new CodexTool(
         repos.messages,
         repos.sessions,
         repos.sessionMCP,
-        repos.worktrees,
+        repos.branches,
         repos.repos,
         apiKey,
         repos.messagesService,

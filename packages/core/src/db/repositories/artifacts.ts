@@ -12,9 +12,9 @@ import type {
   ArtifactBuildStatus,
   ArtifactID,
   BoardID,
+  BranchID,
   SandpackTemplate,
   UUID,
-  WorktreeID,
 } from '@agor/core/types';
 import { and, eq, like, or } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
@@ -48,7 +48,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
     const url = baseUrl && row.board_id ? getArtifactUrl(artifactId, baseUrl) : null;
     return {
       artifact_id: artifactId as UUID,
-      worktree_id: (row.worktree_id as WorktreeID) ?? null,
+      branch_id: (row.branch_id as BranchID) ?? null,
       board_id: row.board_id as BoardID,
       name: row.name,
       description: row.description ?? undefined,
@@ -92,7 +92,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
 
       const insertData: ArtifactInsert = {
         artifact_id: artifactId,
-        worktree_id: data.worktree_id ?? null,
+        branch_id: data.branch_id ?? null,
         board_id: data.board_id ?? '',
         name: data.name ?? 'Untitled Artifact',
         description: data.description ?? null,
@@ -192,17 +192,17 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
     }
   }
 
-  async findByWorktreeId(worktreeId: WorktreeID): Promise<Artifact[]> {
+  async findByBranchId(branchId: BranchID): Promise<Artifact[]> {
     try {
       const rows = await select(this.db)
         .from(artifacts)
-        .where(eq(artifacts.worktree_id, worktreeId))
+        .where(eq(artifacts.branch_id, branchId))
         .all();
       const baseUrl = await getBaseUrl();
       return rows.map((row: ArtifactRow) => this.rowToArtifact(row, baseUrl));
     } catch (error) {
       throw new RepositoryError(
-        `Failed to find artifacts by worktree: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to find artifacts by branch: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
@@ -283,11 +283,11 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       if (updates.archived_at !== undefined) {
         setData.archived_at = updates.archived_at ? new Date(updates.archived_at) : null;
       }
-      // worktree_id: passing null clears the FK; passing undefined leaves it
-      // alone. Required so a republish from a worktree path backfills the FK
+      // branch_id: passing null clears the FK; passing undefined leaves it
+      // alone. Required so a republish from a branch path backfills the FK
       // for artifacts that were created before the column was populated.
-      if (updates.worktree_id !== undefined) {
-        setData.worktree_id = updates.worktree_id ?? null;
+      if (updates.branch_id !== undefined) {
+        setData.branch_id = updates.branch_id ?? null;
       }
 
       await update(this.db, artifacts).set(setData).where(eq(artifacts.artifact_id, fullId)).run();

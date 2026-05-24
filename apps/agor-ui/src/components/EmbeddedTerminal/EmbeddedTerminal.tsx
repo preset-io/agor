@@ -9,7 +9,7 @@
  * developer-affordance split view).
  *
  * Architecture:
- *   - Calls `terminals.create({ worktreeId })` to ensure the user's Zellij
+ *   - Calls `terminals.create({ branchId })` to ensure the user's Zellij
  *     executor exists (idempotent — returns existing connection if running).
  *   - Joins the `user/<id>/terminal` channel and renders the live PTY stream.
  *   - If `focusTabName` is provided, emits a `terminal:tab` { action: 'focus' }
@@ -36,9 +36,9 @@ import '@xterm/xterm/css/xterm.css';
 export interface EmbeddedTerminalProps {
   client: AgorClient | null;
   userId?: string | null;
-  /** Worktree to associate with — passed to the terminals.create call so the
+  /** Branch to associate with — passed to the terminals.create call so the
    *  Zellij session gets the right cwd / env. */
-  worktreeId?: string;
+  branchId?: string;
   /** When provided, the embedded view emits a Zellij `focus` on this tab name
    *  once connected. Use the CLI session's `cli-<short>` tab name. */
   focusTabName?: string;
@@ -78,7 +78,7 @@ export interface EmbeddedTerminalProps {
 export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
   client,
   userId,
-  worktreeId,
+  branchId,
   focusTabName,
   ensureCliSessionId,
   height = 480,
@@ -220,7 +220,7 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
         const result = (await client.service('terminals').create({
           rows: terminal.rows,
           cols: terminal.cols,
-          worktreeId,
+          branchId,
           focusTabName,
           ensureCliSessionId,
         })) as {
@@ -284,13 +284,13 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
       setConnected(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, userId, worktreeId, focusTabName, ensureCliSessionId]);
+  }, [client, userId, branchId, focusTabName, ensureCliSessionId]);
 
   /**
    * Refocus tab when the embedded view becomes visible. Two cases:
    *
    *   - User toggles Agor → CLI: we want Zellij to land on `focusTabName`,
-   *     not whatever tab they were last on (which could be `test-worktree`
+   *     not whatever tab they were last on (which could be `test-branch`
    *     or a sibling session's tab).
    *   - User used Ctrl+t inside the xterm to switch tabs and now we want
    *     them back on the right one when they switch views.
@@ -308,7 +308,7 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
         await client.service('terminals').create({
           rows: terminalRef.current?.rows ?? 30,
           cols: terminalRef.current?.cols ?? 140,
-          worktreeId,
+          branchId,
           focusTabName,
           ensureCliSessionId,
         });
@@ -321,7 +321,7 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [visible, client, userId, worktreeId, focusTabName, ensureCliSessionId]);
+  }, [visible, client, userId, branchId, focusTabName, ensureCliSessionId]);
 
   return (
     <div

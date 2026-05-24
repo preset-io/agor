@@ -80,7 +80,7 @@ const config: DocsThemeConfig = {
     const pageTitle = frontMatter.title ?? title ?? 'agor';
     const description =
       frontMatter.description ||
-      'Team command center for all things agentic. A shared canvas for coding agents and long-lived assistants — Claude Code, Codex, Gemini — anchored on git worktrees, with real-time multiplayer and an MCP surface agents drive themselves.';
+      'Team command center for all things agentic. A shared canvas for coding agents and long-lived assistants — Claude Code, Codex, Gemini — anchored on git branches, with real-time multiplayer and an MCP surface agents drive themselves.';
     const fullTitle =
       pageTitle === 'agor'
         ? 'agor – Team command center for all things agentic'
@@ -120,7 +120,7 @@ const config: DocsThemeConfig = {
         <meta name="description" content={description} />
         <meta
           name="keywords"
-          content="team command center, agentic, AI agents, agent orchestration, multiplayer, spatial canvas, Claude Code, Codex, Gemini, git worktrees, MCP, persistent assistants, AI workflow, developer tools"
+          content="team command center, agentic, AI agents, agent orchestration, multiplayer, spatial canvas, Claude Code, Codex, Gemini, git branches, MCP, persistent assistants, AI workflow, developer tools"
         />
         <meta name="author" content="Maxime Beauchemin" />
 
@@ -179,7 +179,7 @@ const config: DocsThemeConfig = {
                     '@type': 'SoftwareApplication',
                     name: 'agor',
                     description:
-                      'Team command center for all things agentic. A shared canvas for coding agents and long-lived assistants — Claude Code, Codex, Gemini — anchored on git worktrees, with real-time multiplayer and an MCP surface agents drive themselves.',
+                      'Team command center for all things agentic. A shared canvas for coding agents and long-lived assistants — Claude Code, Codex, Gemini — anchored on git branches, with real-time multiplayer and an MCP surface agents drive themselves.',
                     applicationCategory: 'DeveloperApplication',
                     operatingSystem: 'macOS, Linux, Windows',
                     offers: {

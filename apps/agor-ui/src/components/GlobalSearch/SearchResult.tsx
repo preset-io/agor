@@ -2,8 +2,9 @@ import { getAssistantConfig } from '@agor-live/client';
 import { Typography, theme } from 'antd';
 import type React from 'react';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
-import { formatRelativeTime } from '../../utils/time';
-import { type SearchResultItem, TYPE_CHIP_ICONS } from './types';
+import { formatRelativeTimeSafe } from '../../utils/time';
+import { highlightTokens } from './highlight';
+import type { SearchResultItem } from './types';
 
 const { Text } = Typography;
 
@@ -14,6 +15,9 @@ interface SearchResultProps {
   onHover?: () => void;
   /** Stable DOM id so the input's aria-activedescendant can point at the row. */
   rowId?: string;
+  /** Query tokens to highlight inside the visible title/secondary fields.
+   * Empty array (recents view, or a no-token query) disables highlighting. */
+  tokens?: string[];
 }
 
 /**
@@ -29,9 +33,18 @@ export const SearchResult: React.FC<SearchResultProps> = ({
   onClick,
   onHover,
   rowId,
+  tokens = [],
 }) => {
   const { token } = theme.useToken();
   const { title, tag, secondary, time, icon } = renderResult(result);
+  // Token highlighting style: warning-bg accent so matches stand out without
+  // looking like links or status pills. Inherits text color from parent so
+  // the secondary (muted) line still highlights legibly.
+  const markStyle: React.CSSProperties = {
+    backgroundColor: token.colorWarningBg,
+    color: 'inherit',
+    padding: 0,
+  };
 
   return (
     <button
@@ -55,7 +68,11 @@ export const SearchResult: React.FC<SearchResultProps> = ({
         borderRadius: token.borderRadiusSM,
       }}
     >
-      <span style={{ fontSize: 18, lineHeight: '20px', flexShrink: 0 }}>{icon}</span>
+      {/* Icon column is opt-in: rendered only when the entity itself has an
+          emoji/icon (assistant `config.emoji`, board `item.icon`). For other
+          types the section header above already conveys the kind, so we drop
+          the per-row glyph to keep visual noise down. */}
+      {icon && <span style={{ fontSize: 18, lineHeight: '20px', flexShrink: 0 }}>{icon}</span>}
       <div style={{ flex: 1, minWidth: 0 }}>
         {/* Title row: title takes remaining width and ellipsizes; tag + time
             stay on one line via whiteSpace:nowrap + flex-shrink:0. Plain flex
@@ -80,7 +97,7 @@ export const SearchResult: React.FC<SearchResultProps> = ({
               whiteSpace: 'nowrap',
             }}
           >
-            {title}
+            {highlightTokens(title, tokens, markStyle)}
           </Text>
           {tag && (
             <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap', flexShrink: 0 }}>
@@ -104,7 +121,7 @@ export const SearchResult: React.FC<SearchResultProps> = ({
               whiteSpace: 'nowrap',
             }}
           >
-            {secondary}
+            {highlightTokens(secondary, tokens, markStyle)}
           </Text>
         )}
       </div>
@@ -117,70 +134,57 @@ function renderResult(result: SearchResultItem): {
   tag?: string;
   secondary?: string;
   time?: string;
-  icon: string;
+  /** Only set when the entity itself has an emoji/icon (assistant config,
+   * board icon). Generic per-type emojis dropped — section headers carry
+   * the entity-kind affordance instead. */
+  icon?: string;
 } {
   switch (result.type) {
     case 'session': {
       const title = getSessionDisplayTitle(result.item, { includeAgentFallback: true });
       return {
-        icon: TYPE_CHIP_ICONS.session,
         title,
         tag: result.item.agentic_tool,
-        secondary: result.parentWorktree ? `in ${result.parentWorktree.name}` : undefined,
-        time: safeRelativeTime(result.item.last_updated),
+        secondary: result.parentBranch ? `in ${result.parentBranch.name}` : undefined,
+        time: formatRelativeTimeSafe(result.item.last_updated),
       };
     }
-    case 'worktree': {
+    case 'branch': {
       return {
-        icon: TYPE_CHIP_ICONS.worktree,
         title: result.item.name,
         tag: result.item.ref,
-        time: safeRelativeTime(result.item.updated_at),
+        time: formatRelativeTimeSafe(result.item.updated_at),
       };
     }
     case 'assistant': {
       const config = getAssistantConfig(result.item);
       return {
-        icon: config?.emoji || TYPE_CHIP_ICONS.assistant,
+        icon: config?.emoji,
         title: config?.displayName ?? result.item.name,
-        time: safeRelativeTime(result.item.updated_at),
+        time: formatRelativeTimeSafe(result.item.updated_at),
       };
     }
     case 'artifact': {
       return {
-        icon: TYPE_CHIP_ICONS.artifact,
         title: result.item.name,
         tag: result.item.template,
-        secondary: result.parentWorktree ? `in ${result.parentWorktree.name}` : undefined,
-        time: safeRelativeTime(result.item.updated_at),
+        secondary: result.parentBranch ? `in ${result.parentBranch.name}` : undefined,
+        time: formatRelativeTimeSafe(result.item.updated_at),
       };
     }
     case 'board': {
       return {
-        icon: result.item.icon || TYPE_CHIP_ICONS.board,
+        icon: result.item.icon,
         title: result.item.name,
-        time: safeRelativeTime(result.item.last_updated),
+        time: formatRelativeTimeSafe(result.item.last_updated),
       };
     }
     case 'mcp': {
       return {
-        icon: TYPE_CHIP_ICONS.mcp,
         title: result.item.display_name || result.item.name,
         tag: result.item.transport,
         secondary: result.item.description,
       };
     }
   }
-}
-
-/**
- * Optional- and invalid-tolerant wrapper around formatRelativeTime — undefined
- * in, undefined out. Without the invalid-date guard, a bad timestamp would
- * render as "NaNy ago" via the shared formatter.
- */
-function safeRelativeTime(ts: string | Date | undefined | null): string | undefined {
-  if (!ts) return undefined;
-  const date = typeof ts === 'string' ? new Date(ts) : ts;
-  if (Number.isNaN(date.getTime())) return undefined;
-  return formatRelativeTime(date);
 }

@@ -1,8 +1,8 @@
 import type { BoardPosition, ZoneBoardObject } from '../types/board.js';
 
-/** Standard worktree card dimensions used for zone placement calculations */
-export const WORKTREE_CARD_WIDTH = 500;
-export const WORKTREE_CARD_HEIGHT = 200;
+/** Standard branch card dimensions used for zone placement calculations */
+export const BRANCH_CARD_WIDTH = 500;
+export const BRANCH_CARD_HEIGHT = 200;
 const ZONE_DESIRED_PADDING = 80;
 
 /** @deprecated Use BoardPosition from types/board instead */
@@ -121,15 +121,15 @@ export const CARD_HEIGHT = 150;
  * Returns a position relative to the zone origin (not absolute canvas coordinates).
  * Uses adaptive padding and jitter to prevent entities from stacking on top of each other.
  *
- * Defaults to worktree card dimensions. Pass entityWidth/entityHeight/desiredPadding
+ * Defaults to branch card dimensions. Pass entityWidth/entityHeight/desiredPadding
  * to use for other entity types (e.g. cards).
  */
 export function computeZoneRelativePosition(
   zone: Pick<ZoneBoardObject, 'width' | 'height'>,
   options?: { entityWidth?: number; entityHeight?: number; desiredPadding?: number }
 ): BoardPosition {
-  const entityWidth = options?.entityWidth ?? WORKTREE_CARD_WIDTH;
-  const entityHeight = options?.entityHeight ?? WORKTREE_CARD_HEIGHT;
+  const entityWidth = options?.entityWidth ?? BRANCH_CARD_WIDTH;
+  const entityHeight = options?.entityHeight ?? BRANCH_CARD_HEIGHT;
   const desiredPadding = options?.desiredPadding ?? ZONE_DESIRED_PADDING;
 
   const maxPaddingX = Math.max(0, (zone.width - entityWidth) / 2);

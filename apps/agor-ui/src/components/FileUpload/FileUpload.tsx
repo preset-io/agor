@@ -9,7 +9,7 @@ import { ACCESS_TOKEN_KEY } from '../../utils/tokenRefresh';
 const { TextArea } = Input;
 const { Text } = Typography;
 
-export type UploadDestination = 'worktree' | 'temp' | 'global';
+export type UploadDestination = 'branch' | 'temp' | 'global';
 
 export interface UploadedFile {
   filename: string;
@@ -39,7 +39,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 }) => {
   const { showSuccess, showWarning, showError } = useThemedMessage();
   const [fileList, setFileList] = useState<UploadFile[]>([]);
-  const [destination, setDestination] = useState<UploadDestination>('worktree');
+  const [destination, setDestination] = useState<UploadDestination>('branch');
   const [notifyAgent, setNotifyAgent] = useState(true);
   const [agentMessage, setAgentMessage] = useState('Please review this file: {filepath}');
   const [uploading, setUploading] = useState(false);
@@ -196,7 +196,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
             style={{ marginTop: 8, display: 'block' }}
           >
             <Space orientation="vertical">
-              <Radio value="worktree">
+              <Radio value="branch">
                 <Space orientation="vertical" size={0}>
                   <Text>Branch (.agor/uploads/)</Text>
                   <Text type="secondary" style={{ fontSize: '12px' }}>

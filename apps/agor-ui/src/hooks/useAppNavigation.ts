@@ -17,22 +17,15 @@
  * `setCurrentBoardId` directly — the imperative setters bypass the URL
  * and break back-button intent.
  *
- * Identity stability: live data maps (`sessionById`, `worktreeById`)
+ * Identity stability: live data maps (`sessionById`, `branchById`)
  * flip reference on every socket event. The returned functions read
  * them via refs so their identities stay stable — important because
- * they're held by memoized children (WorktreeCard, SessionCanvas) and
+ * they're held by memoized children (BranchCard, SessionCanvas) and
  * a flipping identity would defeat the memoization, cascading
  * re-renders on every stream patch.
  */
-import type {
-  Artifact,
-  ArtifactID,
-  Session,
-  SessionID,
-  Worktree,
-  WorktreeID,
-} from '@agor-live/client';
-import { artifactPath, sessionPath, worktreePath } from '@agor-live/client';
+import type { Artifact, ArtifactID, Branch, BranchID, Session, SessionID } from '@agor-live/client';
+import { artifactPath, branchPath, sessionPath } from '@agor-live/client';
 import { useCallback, useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useRecenterMap } from '../contexts/CanvasNavigationContext';
@@ -42,18 +35,18 @@ interface UseAppNavigationOptions {
   /** Boards aren't exposed via AppDataContext yet — App.tsx passes its
    *  local `boardById` so URL building can prefer slugs. */
   boardById: Map<string, { board_id: string; slug?: string }>;
-  /** Sessions, worktrees, and artifacts are passed in (rather than read
+  /** Sessions, branches, and artifacts are passed in (rather than read
    *  from `useAppLiveData`) because this hook is called from App's own
    *  body, which renders the AppLiveDataProvider — so the provider
    *  isn't yet mounted when the hook runs. Matches `useUrlState`'s
    *  arg-passing pattern.
    *
    *  Each map is optional: callers only pass what their methods need
-   *  (e.g. a Settings table that only uses `goToWorktree` can omit
+   *  (e.g. a Settings table that only uses `goToBranch` can omit
    *  `sessionById` and `artifactById`). The unused maps fall back to
    *  empty Maps; the corresponding goToX no-ops on lookup miss. */
   sessionById?: Map<string, Session>;
-  worktreeById?: Map<string, Worktree>;
+  branchById?: Map<string, Branch>;
   artifactById?: Map<string, Artifact>;
 }
 
@@ -68,9 +61,9 @@ export interface AppNavigation {
   /** Navigate to a session's conversation view. Pushes `/s/<short>/`.
    *  Same-URL clicks (already on this session) just recenter the camera. */
   goToSession: (sessionId: string, opts?: NavigationOpts) => void;
-  /** Navigate to a worktree. Pushes `/w/<short>/` — useUrlState
-   *  resolves the worktree, switches boards if needed, and recenters. */
-  goToWorktree: (worktreeId: string, opts?: NavigationOpts) => void;
+  /** Navigate to a branch. Pushes `/w/<short>/` — useUrlState
+   *  resolves the branch, switches boards if needed, and recenters. */
+  goToBranch: (branchId: string, opts?: NavigationOpts) => void;
   /** Navigate to an artifact. Pushes `/a/<short>/`. */
   goToArtifact: (artifactId: string, opts?: NavigationOpts) => void;
   /** Navigate to a board (no session). Pushes `/b/<slug-or-short>/`. */
@@ -88,7 +81,7 @@ const EMPTY_MAP = new Map<string, never>();
 export function useAppNavigation({
   boardById,
   sessionById,
-  worktreeById,
+  branchById,
   artifactById,
 }: UseAppNavigationOptions): AppNavigation {
   const navigate = useNavigate();
@@ -106,8 +99,8 @@ export function useAppNavigation({
   // method just no-ops on lookup miss, same as if the id wasn't found.
   const sessionByIdRef = useRef(sessionById ?? (EMPTY_MAP as Map<string, Session>));
   sessionByIdRef.current = sessionById ?? (EMPTY_MAP as Map<string, Session>);
-  const worktreeByIdRef = useRef(worktreeById ?? (EMPTY_MAP as Map<string, Worktree>));
-  worktreeByIdRef.current = worktreeById ?? (EMPTY_MAP as Map<string, Worktree>);
+  const branchByIdRef = useRef(branchById ?? (EMPTY_MAP as Map<string, Branch>));
+  branchByIdRef.current = branchById ?? (EMPTY_MAP as Map<string, Branch>);
   const artifactByIdRef = useRef(artifactById ?? (EMPTY_MAP as Map<string, Artifact>));
   artifactByIdRef.current = artifactById ?? (EMPTY_MAP as Map<string, Artifact>);
   const boardByIdRef = useRef(boardById);
@@ -139,27 +132,27 @@ export function useAppNavigation({
       if (!session) return;
       // pushPath returns false when the target equals current path — no
       // history transition fires, so the URL→state recenter effect
-      // won't run. Fall back to a direct recenter via the worktree.
+      // won't run. Fall back to a direct recenter via the branch.
       if (!pushPath(sessionPath(sessionId as SessionID), opts)) {
-        const worktree = worktreeByIdRef.current.get(session.worktree_id);
-        if (worktree?.board_id) {
-          recenterMap(worktree.worktree_id, { boardId: worktree.board_id });
+        const branch = branchByIdRef.current.get(session.branch_id);
+        if (branch?.board_id) {
+          recenterMap(branch.branch_id, { boardId: branch.board_id });
         }
       }
     },
     [pushPath, recenterMap]
   );
 
-  const goToWorktree = useCallback(
-    (worktreeId: string, opts?: NavigationOpts) => {
-      const worktree = worktreeByIdRef.current.get(worktreeId);
-      if (!worktree?.board_id) return;
+  const goToBranch = useCallback(
+    (branchId: string, opts?: NavigationOpts) => {
+      const branch = branchByIdRef.current.get(branchId);
+      if (!branch?.board_id) return;
       // Push first; let useUrlState's URL→state effect fire the
       // recenter. Only fall back to a direct recenter when the URL
       // didn't actually change (no history transition, so the effect
       // won't re-run) — avoids the prior double-recenter animation.
-      if (!pushPath(worktreePath(worktreeId as WorktreeID), opts)) {
-        recenterMap(worktreeId, { boardId: worktree.board_id });
+      if (!pushPath(branchPath(branchId as BranchID), opts)) {
+        recenterMap(branchId, { boardId: branch.board_id });
       }
     },
     [pushPath, recenterMap]
@@ -169,7 +162,7 @@ export function useAppNavigation({
     (artifactId: string, opts?: NavigationOpts) => {
       const artifact = artifactByIdRef.current.get(artifactId);
       if (!artifact?.board_id) return;
-      // Parallel to goToWorktree. The canvas's recenter impl handles
+      // Parallel to goToBranch. The canvas's recenter impl handles
       // the artifact-id-vs-board-object-id mismatch via a
       // data.artifactId fallback scan, so callers stay logical-id-only.
       if (!pushPath(artifactPath(artifactId as ArtifactID), opts)) {
@@ -180,7 +173,7 @@ export function useAppNavigation({
   );
 
   return useMemo(
-    () => ({ goToSession, goToWorktree, goToArtifact, goToBoard }),
-    [goToSession, goToWorktree, goToArtifact, goToBoard]
+    () => ({ goToSession, goToBranch, goToArtifact, goToBoard }),
+    [goToSession, goToBranch, goToArtifact, goToBoard]
   );
 }

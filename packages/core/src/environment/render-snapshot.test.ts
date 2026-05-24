@@ -1,14 +1,14 @@
 /**
- * Tests for renderWorktreeSnapshot (env command variants).
+ * Tests for renderBranchSnapshot (env command variants).
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { registerHandlebarsHelpers } from '../templates/handlebars-helpers';
-import type { RepoEnvironment } from '../types/worktree';
-import { renderWorktreeSnapshot } from './render-snapshot';
+import type { RepoEnvironment } from '../types/branch';
+import { renderBranchSnapshot } from './render-snapshot';
 
-const worktree = {
-  worktree_unique_id: 7,
+const branch = {
+  branch_unique_id: 7,
   name: 'feat-auth',
   path: '/tmp/feat-auth',
   custom_context: { app_name: 'custom-app' },
@@ -19,9 +19,9 @@ beforeAll(() => {
   registerHandlebarsHelpers();
 });
 
-describe('renderWorktreeSnapshot', () => {
+describe('renderBranchSnapshot', () => {
   it('returns null when repo has no environment config', () => {
-    const snapshot = renderWorktreeSnapshot({ slug: 'r' }, worktree);
+    const snapshot = renderBranchSnapshot({ slug: 'r' }, branch);
     expect(snapshot).toBeNull();
   });
 
@@ -31,7 +31,7 @@ describe('renderWorktreeSnapshot', () => {
       default: 'dev',
       variants: {
         dev: {
-          start: 'pnpm dev --port={{add 3000 worktree.unique_id}}',
+          start: 'pnpm dev --port={{add 3000 branch.unique_id}}',
           stop: 'pkill -f pnpm',
         },
         e2e: {
@@ -41,7 +41,7 @@ describe('renderWorktreeSnapshot', () => {
       },
     };
 
-    const snapshot = renderWorktreeSnapshot({ slug: 'r', environment: env }, worktree);
+    const snapshot = renderBranchSnapshot({ slug: 'r', environment: env }, branch);
     expect(snapshot).toEqual({
       variant: 'dev',
       start: 'pnpm dev --port=3007',
@@ -58,12 +58,12 @@ describe('renderWorktreeSnapshot', () => {
         e2e: {
           start: 'pnpm e2e',
           stop: 'pnpm e2e:stop',
-          health: 'http://localhost:{{add 4000 worktree.unique_id}}/health',
+          health: 'http://localhost:{{add 4000 branch.unique_id}}/health',
         },
       },
     };
 
-    const snapshot = renderWorktreeSnapshot({ slug: 'r', environment: env }, worktree, 'e2e');
+    const snapshot = renderBranchSnapshot({ slug: 'r', environment: env }, branch, 'e2e');
     expect(snapshot).toEqual({
       variant: 'e2e',
       start: 'pnpm e2e',
@@ -78,9 +78,9 @@ describe('renderWorktreeSnapshot', () => {
       default: 'dev',
       variants: { dev: { start: 'x', stop: 'y' } },
     };
-    expect(() =>
-      renderWorktreeSnapshot({ slug: 'r', environment: env }, worktree, 'ghost')
-    ).toThrow(/Unknown environment variant/);
+    expect(() => renderBranchSnapshot({ slug: 'r', environment: env }, branch, 'ghost')).toThrow(
+      /Unknown environment variant/
+    );
   });
 
   it('resolves single-level extends before templating', () => {
@@ -97,12 +97,12 @@ describe('renderWorktreeSnapshot', () => {
         dev: {
           extends: 'base',
           // Only override health; start/stop/logs inherited.
-          health: 'http://localhost:{{add 3000 worktree.unique_id}}/dev-health',
+          health: 'http://localhost:{{add 3000 branch.unique_id}}/dev-health',
         },
       },
     };
 
-    const snapshot = renderWorktreeSnapshot({ slug: 'r', environment: env }, worktree, 'dev');
+    const snapshot = renderBranchSnapshot({ slug: 'r', environment: env }, branch, 'dev');
     expect(snapshot).toEqual({
       variant: 'dev',
       start: 'pnpm dev',
@@ -118,7 +118,7 @@ describe('renderWorktreeSnapshot', () => {
       default: 'dev',
       variants: {
         dev: {
-          start: 'echo {{deployment.region}} {{worktree.name}}',
+          start: 'echo {{deployment.region}} {{branch.name}}',
           stop: 'stop',
         },
       },
@@ -127,11 +127,11 @@ describe('renderWorktreeSnapshot', () => {
       },
     };
 
-    const snapshot = renderWorktreeSnapshot({ slug: 'r', environment: env }, worktree);
+    const snapshot = renderBranchSnapshot({ slug: 'r', environment: env }, branch);
     expect(snapshot?.start).toBe('echo us-west-2 feat-auth');
   });
 
-  it('template_overrides do NOT clobber worktree custom.* context', () => {
+  it('template_overrides do NOT clobber branch custom.* context', () => {
     const env: RepoEnvironment = {
       version: 2,
       default: 'dev',
@@ -141,13 +141,13 @@ describe('renderWorktreeSnapshot', () => {
           stop: 'stop',
         },
       },
-      // An override tries to shadow `custom.app_name` — worktree custom must win.
+      // An override tries to shadow `custom.app_name` — branch custom must win.
       template_overrides: {
         custom: { app_name: 'overridden' },
       },
     };
 
-    const snapshot = renderWorktreeSnapshot({ slug: 'r', environment: env }, worktree);
+    const snapshot = renderBranchSnapshot({ slug: 'r', environment: env }, branch);
     expect(snapshot?.start).toBe('echo custom-app');
   });
 
@@ -166,7 +166,7 @@ describe('renderWorktreeSnapshot', () => {
       },
     };
 
-    const snapshot = renderWorktreeSnapshot({ slug: 'myrepo', environment: env }, worktree);
+    const snapshot = renderBranchSnapshot({ slug: 'myrepo', environment: env }, branch);
     expect(snapshot?.start).toBe('echo myrepo eu-central-1');
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { RepoSlug, WorktreeName } from '../types';
+import type { BranchName, RepoSlug } from '../types';
 import {
   extractSlugFromUrl,
   formatRepoReference,
@@ -51,12 +51,12 @@ describe('parseRepoReference', () => {
       });
     });
 
-    it('should parse Windows path with forward slashes as worktree ref', () => {
+    it('should parse Windows path with forward slashes as branch ref', () => {
       const result = parseRepoReference('C:/Users/max/code/agor');
       expect(result).toEqual({
-        type: 'managed-worktree',
+        type: 'managed-branch',
         slug: 'C',
-        worktree: '/Users/max/code/agor',
+        branch: '/Users/max/code/agor',
       });
     });
 
@@ -119,58 +119,58 @@ describe('parseRepoReference', () => {
     });
   });
 
-  describe('managed worktree references', () => {
-    it('should parse slug with worktree', () => {
+  describe('managed branch references', () => {
+    it('should parse slug with branch', () => {
       const result = parseRepoReference('anthropics/agor:main');
       expect(result).toEqual({
-        type: 'managed-worktree',
+        type: 'managed-branch',
         slug: 'anthropics/agor',
-        worktree: 'main',
+        branch: 'main',
       });
     });
 
     it('should parse slug with feature branch', () => {
       const result = parseRepoReference('anthropics/agor:feat-auth');
       expect(result).toEqual({
-        type: 'managed-worktree',
+        type: 'managed-branch',
         slug: 'anthropics/agor',
-        worktree: 'feat-auth',
+        branch: 'feat-auth',
       });
     });
 
-    it('should parse with slash in worktree name', () => {
+    it('should parse with slash in branch name', () => {
       const result = parseRepoReference('anthropics/agor:feature/auth');
       expect(result).toEqual({
-        type: 'managed-worktree',
+        type: 'managed-branch',
         slug: 'anthropics/agor',
-        worktree: 'feature/auth',
+        branch: 'feature/auth',
       });
     });
 
-    it('should parse with underscores in worktree', () => {
+    it('should parse with underscores in branch', () => {
       const result = parseRepoReference('my-org/repo:my_branch_name');
       expect(result).toEqual({
-        type: 'managed-worktree',
+        type: 'managed-branch',
         slug: 'my-org/repo',
-        worktree: 'my_branch_name',
+        branch: 'my_branch_name',
       });
     });
 
     it('should split on first colon only', () => {
       const result = parseRepoReference('org/repo:branch');
       expect(result).toEqual({
-        type: 'managed-worktree',
+        type: 'managed-branch',
         slug: 'org/repo',
-        worktree: 'branch',
+        branch: 'branch',
       });
     });
 
-    it('should handle numeric worktree names', () => {
+    it('should handle numeric branch names', () => {
       const result = parseRepoReference('org/repo:123');
       expect(result).toEqual({
-        type: 'managed-worktree',
+        type: 'managed-branch',
         slug: 'org/repo',
-        worktree: '123',
+        branch: '123',
       });
     });
   });
@@ -181,21 +181,21 @@ describe('parseRepoReference', () => {
       expect(result.type).toBe('managed');
     });
 
-    it('should handle empty worktree name', () => {
+    it('should handle empty branch name', () => {
       const result = parseRepoReference('org/repo:');
       expect(result).toEqual({
-        type: 'managed-worktree',
+        type: 'managed-branch',
         slug: 'org/repo',
-        worktree: '',
+        branch: '',
       });
     });
 
     it('should handle single segment with colon', () => {
       const result = parseRepoReference('single:part');
       expect(result).toEqual({
-        type: 'managed-worktree',
+        type: 'managed-branch',
         slug: 'single',
-        worktree: 'part',
+        branch: 'part',
       });
     });
   });
@@ -544,45 +544,45 @@ describe('isValidGitUrl', () => {
 });
 
 describe('formatRepoReference', () => {
-  it('should format slug without worktree', () => {
+  it('should format slug without branch', () => {
     const result = formatRepoReference('anthropics/agor' as RepoSlug);
     expect(result).toBe('anthropics/agor');
   });
 
-  it('should format slug with worktree', () => {
-    const result = formatRepoReference('anthropics/agor' as RepoSlug, 'main' as WorktreeName);
+  it('should format slug with branch', () => {
+    const result = formatRepoReference('anthropics/agor' as RepoSlug, 'main' as BranchName);
     expect(result).toBe('anthropics/agor:main');
   });
 
   it('should format with feature branch', () => {
-    const result = formatRepoReference('my-org/repo' as RepoSlug, 'feat-auth' as WorktreeName);
+    const result = formatRepoReference('my-org/repo' as RepoSlug, 'feat-auth' as BranchName);
     expect(result).toBe('my-org/repo:feat-auth');
   });
 
-  it('should format with slash in worktree', () => {
-    const result = formatRepoReference('org/repo' as RepoSlug, 'feature/auth' as WorktreeName);
+  it('should format with slash in branch', () => {
+    const result = formatRepoReference('org/repo' as RepoSlug, 'feature/auth' as BranchName);
     expect(result).toBe('org/repo:feature/auth');
   });
 
-  it('should handle undefined worktree', () => {
+  it('should handle undefined branch', () => {
     const result = formatRepoReference('org/repo' as RepoSlug, undefined);
     expect(result).toBe('org/repo');
   });
 
-  it('should handle empty string worktree as no worktree', () => {
-    const result = formatRepoReference('org/repo' as RepoSlug, '' as WorktreeName);
+  it('should handle empty string branch as no branch', () => {
+    const result = formatRepoReference('org/repo' as RepoSlug, '' as BranchName);
     expect(result).toBe('org/repo');
   });
 
-  it('should format with numeric worktree', () => {
-    const result = formatRepoReference('org/repo' as RepoSlug, '123' as WorktreeName);
+  it('should format with numeric branch', () => {
+    const result = formatRepoReference('org/repo' as RepoSlug, '123' as BranchName);
     expect(result).toBe('org/repo:123');
   });
 
-  it('should format with complex worktree name', () => {
+  it('should format with complex branch name', () => {
     const result = formatRepoReference(
       'org/repo' as RepoSlug,
-      'feature/user-auth_v2.0' as WorktreeName
+      'feature/user-auth_v2.0' as BranchName
     );
     expect(result).toBe('org/repo:feature/user-auth_v2.0');
   });
@@ -594,7 +594,7 @@ describe('resolveRepoReference', () => {
       const result = await resolveRepoReference('/Users/max/code/agor');
       expect(result).toEqual({
         cwd: '/Users/max/code/agor',
-        managed_worktree: false,
+        managed_branch: false,
       });
     });
 
@@ -602,7 +602,7 @@ describe('resolveRepoReference', () => {
       const result = await resolveRepoReference('C:\\Users\\max\\code\\agor');
       expect(result).toEqual({
         cwd: 'C:\\Users\\max\\code\\agor',
-        managed_worktree: false,
+        managed_branch: false,
       });
     });
 
@@ -610,7 +610,7 @@ describe('resolveRepoReference', () => {
       const result = await resolveRepoReference('/');
       expect(result).toEqual({
         cwd: '/',
-        managed_worktree: false,
+        managed_branch: false,
       });
     });
 
@@ -618,8 +618,8 @@ describe('resolveRepoReference', () => {
       const result = await resolveRepoReference('/var/www/project');
       expect(result.repo_id).toBeUndefined();
       expect(result.repo_slug).toBeUndefined();
-      expect(result.worktree_name).toBeUndefined();
-      expect(result.managed_worktree).toBe(false);
+      expect(result.branch_name).toBeUndefined();
+      expect(result.managed_branch).toBe(false);
     });
   });
 
@@ -630,7 +630,7 @@ describe('resolveRepoReference', () => {
       );
     });
 
-    it('should throw for managed worktree', async () => {
+    it('should throw for managed branch', async () => {
       await expect(resolveRepoReference('anthropics/agor:main')).rejects.toThrow(
         'Repository lookup not implemented in this context'
       );
@@ -645,13 +645,13 @@ describe('resolveRepoReference', () => {
       }
     });
 
-    it('should include parsed data in error for managed worktree', async () => {
+    it('should include parsed data in error for managed branch', async () => {
       try {
         await resolveRepoReference('org/repo:branch');
       } catch (err) {
-        expect((err as Error).message).toContain('"type":"managed-worktree"');
+        expect((err as Error).message).toContain('"type":"managed-branch"');
         expect((err as Error).message).toContain('"slug":"org/repo"');
-        expect((err as Error).message).toContain('"worktree":"branch"');
+        expect((err as Error).message).toContain('"branch":"branch"');
       }
     });
   });
@@ -665,10 +665,10 @@ describe('integration scenarios', () => {
     expect(formatted).toBe(slug);
   });
 
-  it('should parse and format worktree consistently', () => {
+  it('should parse and format branch consistently', () => {
     const ref = 'anthropics/agor:main';
     const parsed = parseRepoReference(ref);
-    const formatted = formatRepoReference(parsed.slug!, parsed.worktree);
+    const formatted = formatRepoReference(parsed.slug!, parsed.branch);
     expect(formatted).toBe(ref);
   });
 
@@ -689,14 +689,14 @@ describe('integration scenarios', () => {
   it('should handle full workflow: URL to reference string', () => {
     const url = 'https://github.com/my-org/my-repo.git';
     const slug = extractSlugFromUrl(url);
-    const worktree = 'feat-auth' as WorktreeName;
-    const ref = formatRepoReference(slug, worktree);
+    const branch = 'feat-auth' as BranchName;
+    const ref = formatRepoReference(slug, branch);
     expect(ref).toBe('my-org/my-repo:feat-auth');
 
     const parsed = parseRepoReference(ref);
-    expect(parsed.type).toBe('managed-worktree');
+    expect(parsed.type).toBe('managed-branch');
     expect(parsed.slug).toBe('my-org/my-repo');
-    expect(parsed.worktree).toBe('feat-auth');
+    expect(parsed.branch).toBe('feat-auth');
   });
 
   it('should validate slug after URL extraction', () => {

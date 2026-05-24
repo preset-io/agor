@@ -1,4 +1,4 @@
-import type { AgorClient, Board, BoardComment, User, Worktree } from '@agor-live/client';
+import type { AgorClient, Board, BoardComment, Branch, User } from '@agor-live/client';
 import { Alert } from 'antd';
 import { useParams } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
@@ -9,7 +9,7 @@ interface MobileCommentsPageProps {
   client: AgorClient | null;
   boardById: Map<string, Board>;
   commentById: Map<string, BoardComment>;
-  worktreeById: Map<string, Worktree>;
+  branchById: Map<string, Branch>;
   userById: Map<string, User>;
   currentUser?: User | null;
   onMenuClick?: () => void;
@@ -24,7 +24,7 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
   client,
   boardById,
   commentById,
-  worktreeById,
+  branchById,
   userById,
   currentUser,
   onMenuClick,
@@ -71,7 +71,7 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
           userById={userById}
           currentUserId={currentUser?.user_id || 'unknown'}
           boardObjects={board?.objects}
-          worktreeById={worktreeById}
+          branchById={branchById}
           onSendComment={(content) => onSendComment(boardId, content)}
           onReplyComment={onReplyComment}
           onResolveComment={onResolveComment}

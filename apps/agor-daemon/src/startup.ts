@@ -434,7 +434,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
       unixUserMode: config.execution?.unix_user_mode ?? 'simple',
     });
     schedulerService.start();
-    // Expose on app so route handlers (e.g. /worktrees/:id/execute-schedule-now)
+    // Expose on app so route handlers (e.g. /branches/:id/execute-schedule-now)
     // can reuse the scheduler's spawn code path.
     app.set('scheduler', schedulerService);
     console.log(`🔄 Scheduler started (tick interval: 30s)`);

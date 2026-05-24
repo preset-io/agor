@@ -132,7 +132,7 @@ describe('BoardCommentsRepository.create', () => {
     expect(created.session_id).toBeUndefined();
     expect(created.task_id).toBeUndefined();
     expect(created.message_id).toBeUndefined();
-    expect(created.worktree_id).toBeUndefined();
+    expect(created.branch_id).toBeUndefined();
   });
 
   dbTest('should store spatial position data', async ({ db }) => {

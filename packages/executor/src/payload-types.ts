@@ -204,7 +204,7 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
      * User-supplied default branch for the repo record. When provided, this
      * overrides the auto-detected `origin/HEAD`. Used by the UI's "Add
      * Repository" form so the operator can pin a non-default base branch
-     * for new worktrees (e.g. a long-lived feature branch).
+     * for new branches (e.g. a long-lived feature branch).
      */
     default_branch: z.string().optional(),
 
@@ -232,20 +232,20 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
 export type GitClonePayload = z.infer<typeof GitClonePayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
-// Git Worktree Add Payload
+// Git Branch Add Payload
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Git worktree add payload - create worktree filesystem
+ * Git branch add payload - create branch filesystem
  *
  * The daemon creates the DB record BEFORE calling this (with filesystem_status: 'creating').
  * The executor:
- * 1. Creates the git worktree at worktreePath
+ * 1. Creates the git branch at branchPath
  * 2. Sets up Unix group/ACLs (if initUnixGroup is true)
- * 3. Patches the worktree record to filesystem_status: 'ready' (or 'failed')
+ * 3. Patches the branch record to filesystem_status: 'ready' (or 'failed')
  */
 /**
- * Cross-field invariants for the `git.worktree.add` params:
+ * Cross-field invariants for the `git.branch.add` params:
  *  - clone-mode requires a `remoteUrl` (the executor has no other way to
  *    learn where to clone from, since `repoPath` points at the daemon-owned
  *    base clone that clone-mode intentionally bypasses).
@@ -278,16 +278,16 @@ const enforceClonePayloadInvariants = (
   }
 };
 
-export const GitWorktreeAddPayloadSchema = BasePayloadSchema.extend({
-  command: z.literal('git.worktree.add'),
+export const GitBranchAddPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('git.branch.add'),
 
   /** JWT for Feathers authentication */
   sessionToken: z.string(),
 
   params: z
     .object({
-      /** Worktree ID (UUID) - DB record already exists with filesystem_status: 'creating' */
-      worktreeId: z.string().uuid(),
+      /** Branch ID (UUID) - DB record already exists with filesystem_status: 'creating' */
+      branchId: z.string().uuid(),
 
       /** Repo ID (UUID) */
       repoId: z.string().uuid(),
@@ -295,11 +295,11 @@ export const GitWorktreeAddPayloadSchema = BasePayloadSchema.extend({
       /** Path to the repository */
       repoPath: z.string(),
 
-      /** Name for the worktree */
-      worktreeName: z.string(),
+      /** Name for the branch */
+      branchName: z.string(),
 
-      /** Path where worktree will be created */
-      worktreePath: z.string(),
+      /** Path where branch will be created */
+      branchPath: z.string(),
 
       /** Branch to checkout or create */
       branch: z.string().optional(),
@@ -316,7 +316,7 @@ export const GitWorktreeAddPayloadSchema = BasePayloadSchema.extend({
       /** Type of ref (branch or tag) */
       refType: z.enum(['branch', 'tag']).optional(),
 
-      /** Initialize Unix group for worktree isolation (default: false, requires RBAC enabled) */
+      /** Initialize Unix group for branch isolation (default: false, requires RBAC enabled) */
       initUnixGroup: z.boolean().optional().default(false),
 
       /** Access level for non-owners ('none' | 'read' | 'write') */
@@ -329,7 +329,7 @@ export const GitWorktreeAddPayloadSchema = BasePayloadSchema.extend({
        * Branch storage model. Default 'worktree' (native `git worktree add`,
        * legacy behaviour). 'clone' routes through `createBranchAsClone` for a
        * self-standing `git clone` — closes cross-branch leak vectors at the
-       * `.git/config` layer. Forwarded from the worktrees DB record.
+       * `.git/config` layer. Forwarded from the branches DB record.
        */
       storageMode: z.enum(['worktree', 'clone']).optional(),
 
@@ -360,32 +360,32 @@ export const GitWorktreeAddPayloadSchema = BasePayloadSchema.extend({
     .superRefine(enforceClonePayloadInvariants),
 });
 
-export type GitWorktreeAddPayload = z.infer<typeof GitWorktreeAddPayloadSchema>;
+export type GitBranchAddPayload = z.infer<typeof GitBranchAddPayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
-// Git Worktree Remove Payload
+// Git Branch Remove Payload
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Git worktree remove payload - remove worktree and cleanup Unix resources
+ * Git branch remove payload - remove branch and cleanup Unix resources
  *
  * When deleteDbRecord is true (default), the executor will:
- * 1. Remove the git worktree from filesystem
- * 2. Delete the worktree record from database via Feathers
+ * 1. Remove the git branch from filesystem
+ * 2. Delete the branch record from database via Feathers
  * 3. Clean up Unix group/ACLs (if RBAC enabled)
  */
-export const GitWorktreeRemovePayloadSchema = BasePayloadSchema.extend({
-  command: z.literal('git.worktree.remove'),
+export const GitBranchRemovePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('git.branch.remove'),
 
   /** JWT for Feathers authentication */
   sessionToken: z.string(),
 
   params: z.object({
-    /** Worktree ID (UUID) - required for DB record deletion */
-    worktreeId: z.string().uuid(),
+    /** Branch ID (UUID) - required for DB record deletion */
+    branchId: z.string().uuid(),
 
-    /** Path to the worktree to remove */
-    worktreePath: z.string(),
+    /** Path to the branch to remove */
+    branchPath: z.string(),
 
     /** Force removal even if dirty */
     force: z.boolean().optional(),
@@ -393,14 +393,14 @@ export const GitWorktreeRemovePayloadSchema = BasePayloadSchema.extend({
     /** Delete DB record after removal (default: true) */
     deleteDbRecord: z.boolean().optional().default(true),
 
-    /** Branch name to delete after worktree removal */
+    /** Branch name to delete after branch removal */
     branch: z.string().optional(),
 
-    /** Whether to delete the branch after worktree removal (default: false) */
+    /** Whether to delete the branch after branch removal (default: false) */
     deleteBranch: z.boolean().optional().default(false),
 
     /**
-     * Storage mode of the worktree being removed. Forwarded from the DB
+     * Storage mode of the branch being removed. Forwarded from the DB
      * record by the daemon. When 'clone', the executor skips the
      * `git worktree remove --force` call (clones aren't registered with the
      * base repo) and just removes the directory. Defaults to 'worktree' for
@@ -410,14 +410,14 @@ export const GitWorktreeRemovePayloadSchema = BasePayloadSchema.extend({
   }),
 });
 
-export type GitWorktreeRemovePayload = z.infer<typeof GitWorktreeRemovePayloadSchema>;
+export type GitBranchRemovePayload = z.infer<typeof GitBranchRemovePayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
-// Git Worktree Clean Payload
+// Git Branch Clean Payload
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Git worktree clean payload - remove untracked files and build artifacts
+ * Git branch clean payload - remove untracked files and build artifacts
  *
  * Runs `git clean -fdx` which removes:
  * - Untracked files and directories
@@ -428,31 +428,31 @@ export type GitWorktreeRemovePayload = z.infer<typeof GitWorktreeRemovePayloadSc
  * - Tracked files
  * - Git state (commits, branches)
  */
-export const GitWorktreeCleanPayloadSchema = BasePayloadSchema.extend({
-  command: z.literal('git.worktree.clean'),
+export const GitBranchCleanPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('git.branch.clean'),
 
   /** JWT for Feathers authentication */
   sessionToken: z.string(),
 
   params: z.object({
-    /** Path to the worktree to clean */
-    worktreePath: z.string(),
+    /** Path to the branch to clean */
+    branchPath: z.string(),
   }),
 });
 
-export type GitWorktreeCleanPayload = z.infer<typeof GitWorktreeCleanPayloadSchema>;
+export type GitBranchCleanPayload = z.infer<typeof GitBranchCleanPayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
 // Unix Sync Payloads - High-Level Sync Operations
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Unix sync-worktree payload - Sync all Unix state for a worktree
+ * Unix sync-branch payload - Sync all Unix state for a branch
  *
  * This is a high-level "sync" operation that handles everything:
- * - Ensure worktree Unix group exists
+ * - Ensure branch Unix group exists
  * - Set correct permissions based on others_fs_access
- * - Add all current owners to the worktree group
+ * - Add all current owners to the branch group
  * - Add owners to repo group (for .git/ access)
  * - Fix .git/worktrees/<name>/ permissions
  * - Create symlinks in user home directories
@@ -460,25 +460,25 @@ export type GitWorktreeCleanPayload = z.infer<typeof GitWorktreeCleanPayloadSche
  * Idempotent: Safe to call multiple times. Executor figures out the delta.
  * Fire-and-forget: Daemon calls this and returns immediately.
  */
-export const UnixSyncWorktreePayloadSchema = BasePayloadSchema.extend({
-  command: z.literal('unix.sync-worktree'),
+export const UnixSyncBranchPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('unix.sync-branch'),
 
   /** JWT for Feathers authentication */
   sessionToken: z.string(),
 
   params: z.object({
-    /** Worktree ID to sync */
-    worktreeId: z.string().uuid(),
+    /** Branch ID to sync */
+    branchId: z.string().uuid(),
 
     /** Daemon Unix user (added to all groups for daemon access) */
     daemonUser: z.string().optional(),
 
-    /** If true, delete the group instead of syncing (for worktree removal) */
+    /** If true, delete the group instead of syncing (for branch removal) */
     delete: z.boolean().optional(),
   }),
 });
 
-export type UnixSyncWorktreePayload = z.infer<typeof UnixSyncWorktreePayloadSchema>;
+export type UnixSyncBranchPayload = z.infer<typeof UnixSyncBranchPayloadSchema>;
 
 /**
  * Unix sync-repo payload - Sync all Unix state for a repo
@@ -486,7 +486,7 @@ export type UnixSyncWorktreePayload = z.infer<typeof UnixSyncWorktreePayloadSche
  * This handles:
  * - Ensure repo Unix group exists
  * - Set correct permissions on .git/ directory
- * - Add all worktree owners to repo group
+ * - Add all branch owners to repo group
  *
  * Idempotent: Safe to call multiple times.
  */
@@ -518,7 +518,7 @@ export type UnixSyncRepoPayload = z.infer<typeof UnixSyncRepoPayloadSchema>;
  * - Add to agor_users group
  * - Sync password (if provided)
  * - Setup home directory (~/.config/zellij, etc.)
- * - Sync symlinks for all owned worktrees
+ * - Sync symlinks for all owned branches
  */
 export const UnixSyncUserPayloadSchema = BasePayloadSchema.extend({
   command: z.literal('unix.sync-user'),
@@ -572,7 +572,7 @@ export const ZellijAttachPayloadSchema = BasePayloadSchema.extend({
     /** Initial working directory */
     cwd: z.string(),
 
-    /** Initial tab name (worktree name) */
+    /** Initial tab name (branch name) */
     tabName: z.string().optional(),
 
     /** Terminal dimensions */
@@ -601,7 +601,7 @@ export const ZellijTabPayloadSchema = BasePayloadSchema.extend({
     /** Action: create new tab, focus existing, or close-by-name */
     action: z.enum(['create', 'focus', 'close']),
 
-    /** Tab name (worktree name) */
+    /** Tab name (branch name) */
     tabName: z.string(),
 
     /** Working directory (for 'create' action) */
@@ -656,10 +656,10 @@ export type ZellijTabPayload = z.infer<typeof ZellijTabPayloadSchema>;
 export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   PromptPayloadSchema,
   GitClonePayloadSchema,
-  GitWorktreeAddPayloadSchema,
-  GitWorktreeRemovePayloadSchema,
-  GitWorktreeCleanPayloadSchema,
-  UnixSyncWorktreePayloadSchema,
+  GitBranchAddPayloadSchema,
+  GitBranchRemovePayloadSchema,
+  GitBranchCleanPayloadSchema,
+  UnixSyncBranchPayloadSchema,
   UnixSyncRepoPayloadSchema,
   UnixSyncUserPayloadSchema,
   ZellijAttachPayloadSchema,
@@ -712,10 +712,10 @@ export function getSupportedCommands(): string[] {
   return [
     'prompt',
     'git.clone',
-    'git.worktree.add',
-    'git.worktree.remove',
-    'git.worktree.clean',
-    'unix.sync-worktree',
+    'git.branch.add',
+    'git.branch.remove',
+    'git.branch.clean',
+    'unix.sync-branch',
     'unix.sync-repo',
     'unix.sync-user',
     'zellij.attach',
@@ -738,39 +738,37 @@ export function isGitClonePayload(payload: ExecutorPayload): payload is GitClone
 }
 
 /**
- * Type guard for GitWorktreeAddPayload
+ * Type guard for GitBranchAddPayload
  */
-export function isGitWorktreeAddPayload(
-  payload: ExecutorPayload
-): payload is GitWorktreeAddPayload {
-  return payload.command === 'git.worktree.add';
+export function isGitBranchAddPayload(payload: ExecutorPayload): payload is GitBranchAddPayload {
+  return payload.command === 'git.branch.add';
 }
 
 /**
- * Type guard for GitWorktreeRemovePayload
+ * Type guard for GitBranchRemovePayload
  */
-export function isGitWorktreeRemovePayload(
+export function isGitBranchRemovePayload(
   payload: ExecutorPayload
-): payload is GitWorktreeRemovePayload {
-  return payload.command === 'git.worktree.remove';
+): payload is GitBranchRemovePayload {
+  return payload.command === 'git.branch.remove';
 }
 
 /**
- * Type guard for GitWorktreeCleanPayload
+ * Type guard for GitBranchCleanPayload
  */
-export function isGitWorktreeCleanPayload(
+export function isGitBranchCleanPayload(
   payload: ExecutorPayload
-): payload is GitWorktreeCleanPayload {
-  return payload.command === 'git.worktree.clean';
+): payload is GitBranchCleanPayload {
+  return payload.command === 'git.branch.clean';
 }
 
 /**
- * Type guard for UnixSyncWorktreePayload
+ * Type guard for UnixSyncBranchPayload
  */
-export function isUnixSyncWorktreePayload(
+export function isUnixSyncBranchPayload(
   payload: ExecutorPayload
-): payload is UnixSyncWorktreePayload {
-  return payload.command === 'unix.sync-worktree';
+): payload is UnixSyncBranchPayload {
+  return payload.command === 'unix.sync-branch';
 }
 
 /**

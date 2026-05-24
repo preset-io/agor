@@ -5,7 +5,7 @@
  * This makes them trivially unit-testable.
  *
  * Function signatures use structural types (not branded) so they accept both
- * canonical types (Repo, Worktree, User) and Zod-parsed plain objects.
+ * canonical types (Repo, Branch, User) and Zod-parsed plain objects.
  */
 
 // ---------------------------------------------------------------------------
@@ -13,7 +13,7 @@
 // ---------------------------------------------------------------------------
 
 export type RepoAction = 'create' | 'update' | 'unchanged';
-export type WorktreeAction = 'create' | 'update' | 'unchanged';
+export type BranchAction = 'create' | 'update' | 'unchanged';
 export type UserAction = 'create' | 'update' | 'unchanged';
 
 // ---------------------------------------------------------------------------
@@ -34,13 +34,13 @@ export function determineRepoAction(
 }
 
 // ---------------------------------------------------------------------------
-// Worktree sync decisions
+// Branch sync decisions
 // ---------------------------------------------------------------------------
 
-export function determineWorktreeAction(
+export function determineBranchAction(
   config: { ref: string; others_can?: string; mcp_server_ids?: string[] },
   existing: { ref: string; others_can?: string; mcp_server_ids?: string[] } | null
-): WorktreeAction {
+): BranchAction {
   if (!existing) return 'create';
 
   const needsUpdate =

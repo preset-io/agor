@@ -5,8 +5,8 @@
  *   render template → validate non-empty → resolve session defaults →
  *   create session → attach MCP servers → send prompt.
  *
- * Both `POST /worktrees/:id/fire-zone-trigger` (UI path) and
- * `agor_worktrees_set_zone(triggerTemplate: true)` always_new branch (MCP
+ * Both `POST /branches/:id/fire-zone-trigger` (UI path) and
+ * `agor_branches_set_zone(triggerTemplate: true)` always_new branch (MCP
  * path) call this helper so they stay in lockstep — same render context,
  * same session-defaults resolution, same MCP-attach behaviour.
  */
@@ -14,14 +14,14 @@
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import { buildZoneTriggerContext } from '@agor/core/templates/zone-trigger-context';
-import type { AgenticToolName, Session, Task, User, Worktree } from '@agor/core/types';
+import type { AgenticToolName, Branch, Session, Task, User } from '@agor/core/types';
 
 export interface FireAlwaysNewZoneTriggerInput {
   // biome-ignore lint/suspicious/noExplicitAny: Feathers app type varies across callers
   app: any;
   // biome-ignore lint/suspicious/noExplicitAny: Feathers params shape varies across callers
   params: any;
-  worktree: Worktree;
+  branch: Branch;
   board: { name?: string; description?: string; custom_context?: Record<string, unknown> };
   zone: {
     label?: string;
@@ -42,7 +42,7 @@ const VALID_AGENTS: AgenticToolName[] = ['claude-code', 'codex', 'gemini', 'open
 
 /**
  * Run the full always_new zone-trigger flow against an already-fetched
- * worktree/board/zone/user tuple. Returns the new session + its first task.
+ * branch/board/zone/user tuple. Returns the new session + its first task.
  *
  * Throws if the trigger is missing/invalid, the rendered prompt is empty,
  * or downstream services reject. MCP server attach failures are best-effort
@@ -51,7 +51,7 @@ const VALID_AGENTS: AgenticToolName[] = ['claude-code', 'codex', 'gemini', 'open
 export async function fireAlwaysNewZoneTrigger(
   input: FireAlwaysNewZoneTriggerInput
 ): Promise<FireAlwaysNewZoneTriggerResult> {
-  const { app, params, worktree, board, zone, user, userId } = input;
+  const { app, params, branch, board, zone, user, userId } = input;
 
   const trigger = zone.trigger;
   if (!trigger?.template || !trigger.template.trim()) {
@@ -67,7 +67,7 @@ export async function fireAlwaysNewZoneTrigger(
     trigger.agent && VALID_AGENTS.includes(trigger.agent) ? trigger.agent : 'claude-code';
 
   const templateContext = buildZoneTriggerContext({
-    worktree,
+    branch,
     board,
     zone: { label: zone.label, status: zone.status },
   });
@@ -82,15 +82,15 @@ export async function fireAlwaysNewZoneTrigger(
     permission_config: permissionConfig,
     model_config: modelConfig,
     mcp_server_ids: inheritedMcpIds,
-  } = resolveSessionDefaults({ agenticTool, user, worktree });
+  } = resolveSessionDefaults({ agenticTool, user, branch });
 
   const { getGitState, getCurrentBranch } = await import('@agor/core/git');
-  const currentSha = await getGitState(worktree.path);
-  const currentRef = await getCurrentBranch(worktree.path);
+  const currentSha = await getGitState(branch.path);
+  const currentRef = await getCurrentBranch(branch.path);
 
   const newSession: Session = await app.service('sessions').create(
     {
-      worktree_id: worktree.worktree_id,
+      branch_id: branch.branch_id,
       agentic_tool: agenticTool,
       status: 'idle',
       description: `Session from zone "${zone.label ?? ''}"`,

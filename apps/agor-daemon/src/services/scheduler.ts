@@ -1,7 +1,7 @@
 /**
  * Scheduler Service
  *
- * Manages cron-based scheduling for worktrees. Evaluates enabled schedules, spawns sessions, and enforces retention policies.
+ * Manages cron-based scheduling for branches. Evaluates enabled schedules, spawns sessions, and enforces retention policies.
  *
  * **Architecture:**
  * - Runs on a configurable tick interval (default 30s)
@@ -19,26 +19,30 @@
  * - Checks for existing session with same scheduled_run_at before spawning
  *
  * **Template Rendering:**
- * - Uses Handlebars to render prompt templates with worktree/board context
- * - Available context: {{ worktree.* }}, {{ board.* }}, {{ schedule.* }}
+ * - Uses Handlebars to render prompt templates with branch + schedule context.
+ *   Branch fields are also exposed under `{{ worktree.* }}` as a v0.19
+ *   backwards-compat alias.
+ * - Available context: `{{ branch.* }}`, `{{ worktree.* }}` (alias),
+ *   `{{ schedule.* }}`. Board context is a TODO (requires fetching the board
+ *   row at tick time) — see `renderSchedulePrompt`.
  */
 
 import type { Database } from '@agor/core/db';
 import {
+  BranchRepository,
   SessionMCPServerRepository,
   SessionRepository,
   UsersRepository,
-  WorktreeRepository,
 } from '@agor/core/db';
 import type {
+  Branch,
+  BranchID,
   MCPServerID,
   PermissionMode,
   Session,
   SessionID,
   User,
   UUID,
-  Worktree,
-  WorktreeID,
 } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
@@ -48,7 +52,7 @@ import type { Application } from '../declarations';
 
 /**
  * Session statuses that indicate a session is actively consuming resources.
- * Used for the schedule concurrency guard: if any session in a worktree is
+ * Used for the schedule concurrency guard: if any session in a branch is
  * in one of these states, the schedule is considered "busy".
  */
 const ACTIVE_SESSION_STATUSES: ReadonlySet<SessionStatus> = new Set([
@@ -59,22 +63,64 @@ const ACTIVE_SESSION_STATUSES: ReadonlySet<SessionStatus> = new Set([
 ]);
 
 /**
+ * Render a Handlebars schedule-prompt template against a branch's metadata.
+ *
+ * Exposed as a module-level helper (not just a private method) so the
+ * backwards-compat alias contract — `{{worktree.*}}` mirrors `{{branch.*}}`
+ * for pre-v0.20 schedule prompts — can be exercised in isolation by the
+ * scheduler tests. Falls back to the raw template on render error so a bad
+ * user template never crashes the scheduler tick.
+ */
+export function renderSchedulePrompt(template: string, branch: Branch): string {
+  try {
+    const compiledTemplate = Handlebars.compile(template);
+
+    // Build context for template rendering. Expose the entity under both
+    // `branch` (canonical) and `worktree` (legacy alias) so v0.19 schedule
+    // prompts using {{worktree.name}} etc. continue to render unchanged.
+    // See packages/core/src/templates/handlebars-helpers.ts for the same
+    // alias pattern in the env-template context.
+    const branchEntity = {
+      name: branch.name,
+      ref: branch.ref,
+      path: branch.path,
+      issue_url: branch.issue_url,
+      pull_request_url: branch.pull_request_url,
+      notes: branch.notes,
+      custom_context: branch.custom_context,
+    };
+    const context = {
+      branch: branchEntity,
+      worktree: branchEntity,
+      // TODO: Add board context if needed (requires fetching board data)
+      schedule: branch.schedule,
+    };
+
+    return compiledTemplate(context);
+  } catch (error) {
+    console.error(`❌ Failed to render prompt template:`, error);
+    // Fallback to raw template if rendering fails
+    return template;
+  }
+}
+
+/**
  * Error thrown when execute-now is blocked because a session is already running
- * in the worktree and allow_concurrent_runs is not enabled. Routes can catch
+ * in the branch and allow_concurrent_runs is not enabled. Routes can catch
  * this and surface it as a 409 Conflict.
  */
 export class ScheduleBusyError extends Error {
   public readonly code = 'schedule_busy';
-  constructor(worktreeName: string) {
+  constructor(branchName: string) {
     super(
-      `A session is already running in worktree "${worktreeName}" and allow_concurrent_runs is disabled.`
+      `A session is already running in branch "${branchName}" and allow_concurrent_runs is disabled.`
     );
     this.name = 'ScheduleBusyError';
   }
 }
 
 /**
- * Error thrown when execute-now is called on a worktree whose schedule is not
+ * Error thrown when execute-now is called on a branch whose schedule is not
  * fully configured (disabled, missing cron, or missing prompt template).
  */
 export class ScheduleNotReadyError extends Error {
@@ -102,7 +148,7 @@ export class SchedulerService {
   private config: Required<SchedulerConfig>;
   private intervalHandle?: NodeJS.Timeout;
   private isRunning = false;
-  private worktreeRepo: WorktreeRepository;
+  private branchRepo: BranchRepository;
   private sessionRepo: SessionRepository;
   private userRepo: UsersRepository;
   private sessionMCPRepo: SessionMCPServerRepository;
@@ -115,7 +161,7 @@ export class SchedulerService {
       debug: config.debug ?? false,
       unixUserMode: config.unixUserMode ?? 'simple',
     };
-    this.worktreeRepo = new WorktreeRepository(db);
+    this.branchRepo = new BranchRepository(db);
     this.sessionRepo = new SessionRepository(db);
     this.userRepo = new UsersRepository(db);
     this.sessionMCPRepo = new SessionMCPServerRepository(db);
@@ -180,21 +226,18 @@ export class SchedulerService {
 
     try {
       // 1. Fetch enabled schedules
-      const enabledWorktrees = await this.getEnabledSchedules();
+      const enabledBranches = await this.getEnabledSchedules();
 
       if (this.config.debug) {
-        console.log(`🔄 Scheduler tick: Found ${enabledWorktrees.length} enabled schedules`);
+        console.log(`🔄 Scheduler tick: Found ${enabledBranches.length} enabled schedules`);
       }
 
       // 2. Process each schedule
-      for (const worktree of enabledWorktrees) {
+      for (const branch of enabledBranches) {
         try {
-          await this.processSchedule(worktree, now);
+          await this.processSchedule(branch, now);
         } catch (error) {
-          console.error(
-            `❌ Failed to process schedule for worktree ${worktree.worktree_id}:`,
-            error
-          );
+          console.error(`❌ Failed to process schedule for branch ${branch.branch_id}:`, error);
           // Continue processing other schedules
         }
       }
@@ -205,16 +248,16 @@ export class SchedulerService {
   }
 
   /**
-   * Fetch all worktrees with enabled schedules
+   * Fetch all branches with enabled schedules
    *
    * Uses repository directly (bypasses FeathersJS service layer and auth hooks)
    */
-  private async getEnabledSchedules(): Promise<Worktree[]> {
-    // Fetch non-archived worktrees using repository (no auth checks, we're in the same process)
-    const allWorktrees = await this.worktreeRepo.findAll({ includeArchived: false });
+  private async getEnabledSchedules(): Promise<Branch[]> {
+    // Fetch non-archived branches using repository (no auth checks, we're in the same process)
+    const allBranches = await this.branchRepo.findAll({ includeArchived: false });
 
     // Filter to only enabled schedules
-    const enabledSchedules = allWorktrees.filter((wt) => wt.schedule_enabled === true);
+    const enabledSchedules = allBranches.filter((wt) => wt.schedule_enabled === true);
 
     return enabledSchedules;
   }
@@ -229,13 +272,13 @@ export class SchedulerService {
    * 2. If prev is within grace period and no session exists, spawn it
    * 3. Otherwise, check if we're close to the next scheduled time
    */
-  private async processSchedule(worktree: Worktree, now: number): Promise<void> {
-    if (!worktree.schedule_cron) {
+  private async processSchedule(branch: Branch, now: number): Promise<void> {
+    if (!branch.schedule_cron) {
       return;
     }
 
     // Get the most recent scheduled time from cron (the run that should have happened)
-    const prevRunAt = getPrevRunTime(worktree.schedule_cron, new Date(now));
+    const prevRunAt = getPrevRunTime(branch.schedule_cron, new Date(now));
     const timeSincePrev = now - prevRunAt;
 
     // Check if the previous run is within grace period
@@ -251,7 +294,7 @@ export class SchedulerService {
       isDue = true;
     } else {
       // Previous run is too old, check next run
-      const nextRunAt = getNextRunTime(worktree.schedule_cron, new Date(now));
+      const nextRunAt = getNextRunTime(branch.schedule_cron, new Date(now));
       const timeSinceNext = now - nextRunAt;
       scheduledRunAt = nextRunAt;
       isDue = timeSinceNext >= 0 && timeSinceNext < this.config.gracePeriod;
@@ -259,53 +302,53 @@ export class SchedulerService {
 
     if (!isDue) {
       if (this.config.debug) {
-        const nextRunAt = getNextRunTime(worktree.schedule_cron, new Date(now));
+        const nextRunAt = getNextRunTime(branch.schedule_cron, new Date(now));
         const timeUntilNext = nextRunAt - now;
         console.log(
-          `   ⏱️  ${worktree.name}: Not due yet (next run in ${Math.round(timeUntilNext / 1000)}s)`
+          `   ⏱️  ${branch.name}: Not due yet (next run in ${Math.round(timeUntilNext / 1000)}s)`
         );
       }
       return;
     }
 
     // Schedule is due - spawn session
-    console.log(`   ✅ ${worktree.name}: Schedule is due, spawning session...`);
+    console.log(`   ✅ ${branch.name}: Schedule is due, spawning session...`);
 
-    await this.spawnScheduledSession(worktree, scheduledRunAt, now, { source: 'cron' });
+    await this.spawnScheduledSession(branch, scheduledRunAt, now, { source: 'cron' });
   }
 
   /**
-   * Public: trigger a scheduled run on-demand for a worktree.
+   * Public: trigger a scheduled run on-demand for a branch.
    *
-   * Used by the `POST /worktrees/:id/execute-schedule-now` route. Reuses the
+   * Used by the `POST /branches/:id/execute-schedule-now` route. Reuses the
    * exact same spawn path as the cron tick (via spawnScheduledSession) so
    * scheduled and manual runs are indistinguishable downstream, except for a
    * `triggered_manually: true` marker in custom_context and a different title.
    *
    * @throws ScheduleNotReadyError when the schedule is disabled or incomplete.
    * @throws ScheduleBusyError when allow_concurrent_runs is false and the
-   *   worktree already has an active session.
+   *   branch already has an active session.
    */
-  async executeScheduleNow(opts: { worktreeId: WorktreeID; triggeredBy: UUID }): Promise<Session> {
-    const { worktreeId, triggeredBy } = opts;
-    const worktree = await this.worktreeRepo.findById(worktreeId);
-    if (!worktree) {
-      throw new ScheduleNotReadyError('schedule_incomplete', `Worktree not found: ${worktreeId}`);
+  async executeScheduleNow(opts: { branchId: BranchID; triggeredBy: UUID }): Promise<Session> {
+    const { branchId, triggeredBy } = opts;
+    const branch = await this.branchRepo.findById(branchId);
+    if (!branch) {
+      throw new ScheduleNotReadyError('schedule_incomplete', `Branch not found: ${branchId}`);
     }
 
-    if (!worktree.schedule_enabled) {
+    if (!branch.schedule_enabled) {
       throw new ScheduleNotReadyError(
         'schedule_disabled',
-        'Schedule is disabled for this worktree. Enable it before running manually.'
+        'Schedule is disabled for this branch. Enable it before running manually.'
       );
     }
-    if (!worktree.schedule_cron) {
+    if (!branch.schedule_cron) {
       throw new ScheduleNotReadyError(
         'schedule_incomplete',
         'Schedule has no cron expression configured.'
       );
     }
-    if (!worktree.schedule?.prompt_template) {
+    if (!branch.schedule?.prompt_template) {
       throw new ScheduleNotReadyError(
         'schedule_incomplete',
         'Schedule has no prompt template configured.'
@@ -318,10 +361,10 @@ export class SchedulerService {
     const scheduledRunAt = roundToMinute(new Date(now)).getTime();
 
     console.log(
-      `   🖐️  ${worktree.name}: manual execute-now triggered by ${triggeredBy.substring(0, 8)}`
+      `   🖐️  ${branch.name}: manual execute-now triggered by ${triggeredBy.substring(0, 8)}`
     );
 
-    const session = await this.spawnScheduledSession(worktree, scheduledRunAt, now, {
+    const session = await this.spawnScheduledSession(branch, scheduledRunAt, now, {
       source: 'manual',
       triggeredBy,
     });
@@ -329,7 +372,7 @@ export class SchedulerService {
     // reserved for silent cron-path concurrency skips). Defensive check:
     if (!session) {
       throw new Error(
-        `Unexpected null result from spawnScheduledSession for manual run on worktree ${worktreeId}`
+        `Unexpected null result from spawnScheduledSession for manual run on branch ${branchId}`
       );
     }
     return session;
@@ -347,19 +390,19 @@ export class SchedulerService {
    * @throws Error if creator not found or unix_username missing in strict mode
    */
   private async resolveCreatorUnixUsername(
-    worktree: Worktree
+    branch: Branch
   ): Promise<{ creator: User; unixUsername: string | null }> {
-    const creator = await this.userRepo.findById(worktree.created_by);
+    const creator = await this.userRepo.findById(branch.created_by);
 
     if (!creator) {
-      console.error(`      ❌ Cannot spawn scheduled session: Worktree creator not found`, {
-        worktree_id: worktree.worktree_id,
-        worktree_name: worktree.name,
-        created_by: worktree.created_by,
+      console.error(`      ❌ Cannot spawn scheduled session: Branch creator not found`, {
+        branch_id: branch.branch_id,
+        branch_name: branch.name,
+        created_by: branch.created_by,
         unix_user_mode: this.config.unixUserMode,
       });
       throw new Error(
-        `Worktree creator ${worktree.created_by} not found. Cannot spawn scheduled session.`
+        `Branch creator ${branch.created_by} not found. Cannot spawn scheduled session.`
       );
     }
 
@@ -370,15 +413,15 @@ export class SchedulerService {
       console.error(
         `      ❌ Cannot spawn scheduled session: Creator has no unix_username (strict mode)`,
         {
-          worktree_id: worktree.worktree_id,
-          worktree_name: worktree.name,
-          created_by: worktree.created_by,
+          branch_id: branch.branch_id,
+          branch_name: branch.name,
+          created_by: branch.created_by,
           creator_email: creator.email,
           unix_user_mode: this.config.unixUserMode,
         }
       );
       throw new Error(
-        `Worktree creator ${creator.email} has no unix_username set. Cannot spawn scheduled session in strict Unix user mode.`
+        `Branch creator ${creator.email} has no unix_username set. Cannot spawn scheduled session in strict Unix user mode.`
       );
     }
 
@@ -386,7 +429,7 @@ export class SchedulerService {
   }
 
   /**
-   * Spawn a scheduled session for a worktree.
+   * Spawn a scheduled session for a branch.
    *
    * Shared path for both cron-driven and manual (execute-now) runs. Callers
    * set `options.source` to distinguish:
@@ -403,10 +446,10 @@ export class SchedulerService {
    * 4. Look up creator's unix_username for execution context
    * 5. Create session with schedule metadata (+ triggered_manually marker)
    * 6. Attach MCP servers and trigger prompt
-   * 7. Update worktree schedule metadata (last_triggered_at, next_run_at)
+   * 7. Update branch schedule metadata (last_triggered_at, next_run_at)
    * 8. Enforce retention policy
    *
-   * @param worktree - The worktree to spawn a session for
+   * @param branch - The branch to spawn a session for
    * @param scheduledRunAt - The scheduled run timestamp (may be recomputed from cron)
    * @param now - Current timestamp
    * @param options.source - 'cron' for tick-driven runs, 'manual' for execute-now
@@ -417,32 +460,32 @@ export class SchedulerService {
    *   blocked by concurrency.
    */
   private async spawnScheduledSession(
-    worktree: Worktree,
+    branch: Branch,
     scheduledRunAt: number,
     now: number,
     options: { source: 'cron' | 'manual'; triggeredBy?: UUID } = { source: 'cron' }
   ): Promise<Session | null> {
-    if (!worktree.schedule || !worktree.schedule_cron) {
-      console.error(`❌ Worktree ${worktree.worktree_id} missing schedule config`);
+    if (!branch.schedule || !branch.schedule_cron) {
+      console.error(`❌ Branch ${branch.branch_id} missing schedule config`);
       throw new ScheduleNotReadyError(
         'schedule_incomplete',
-        `Worktree ${worktree.worktree_id} missing schedule config`
+        `Branch ${branch.branch_id} missing schedule config`
       );
     }
 
-    const schedule = worktree.schedule;
+    const schedule = branch.schedule;
     const { source, triggeredBy } = options;
     const manual = source === 'manual';
 
     // 1. Check deduplication using repository
     // Use repository to check for existing sessions (bypasses auth)
     const allSessions = await this.sessionRepo.findAll();
-    const worktreeSessions = allSessions.filter((s) => s.worktree_id === worktree.worktree_id);
-    const existingSession = worktreeSessions.find((s) => s.scheduled_run_at === scheduledRunAt);
+    const branchSessions = allSessions.filter((s) => s.branch_id === branch.branch_id);
+    const existingSession = branchSessions.find((s) => s.scheduled_run_at === scheduledRunAt);
 
     if (existingSession) {
       // Still update next_run_at to prevent repeated checks
-      await this.updateScheduleMetadata(worktree, scheduledRunAt, now);
+      await this.updateScheduleMetadata(branch, scheduledRunAt, now);
       return existingSession;
     }
 
@@ -450,45 +493,45 @@ export class SchedulerService {
     // Default is to block concurrent runs; opt-in via schedule.allow_concurrent_runs.
     const allowConcurrent = schedule.allow_concurrent_runs === true;
     if (!allowConcurrent) {
-      const active = worktreeSessions.some((s) => ACTIVE_SESSION_STATUSES.has(s.status));
+      const active = branchSessions.some((s) => ACTIVE_SESSION_STATUSES.has(s.status));
       if (active) {
         if (manual) {
           // Manual trigger: surface as an error the API can convert to 409.
           console.log(
-            `   ⛔ ${worktree.name}: manual run blocked — active session present (allow_concurrent_runs=false)`
+            `   ⛔ ${branch.name}: manual run blocked — active session present (allow_concurrent_runs=false)`
           );
-          throw new ScheduleBusyError(worktree.name);
+          throw new ScheduleBusyError(branch.name);
         }
         // Cron tick: silent skip. Advance metadata so we don't re-evaluate
         // the same scheduled_run_at every tick.
         console.log(
-          `   ⏭️  ${worktree.name}: scheduled run skipped — active session present (allow_concurrent_runs=false)`
+          `   ⏭️  ${branch.name}: scheduled run skipped — active session present (allow_concurrent_runs=false)`
         );
-        await this.updateScheduleMetadata(worktree, scheduledRunAt, now);
+        await this.updateScheduleMetadata(branch, scheduledRunAt, now);
         return null;
       }
     }
 
     // 2. Render prompt template
-    const renderedPrompt = this.renderPrompt(schedule.prompt_template, worktree);
+    const renderedPrompt = this.renderPrompt(schedule.prompt_template, branch);
 
-    // 3. Get current run index (count of all scheduled sessions for this worktree)
-    const scheduledSessions = worktreeSessions.filter((s) => s.scheduled_from_worktree === true);
+    // 3. Get current run index (count of all scheduled sessions for this branch)
+    const scheduledSessions = branchSessions.filter((s) => s.scheduled_from_branch === true);
     const runIndex = scheduledSessions.length + 1;
 
     try {
       // 4. Look up creator's unix_username for session execution context
-      const { creator, unixUsername } = await this.resolveCreatorUnixUsername(worktree);
+      const { creator, unixUsername } = await this.resolveCreatorUnixUsername(branch);
 
       // 5. Create session with schedule metadata
       const session: Partial<Session> = {
-        worktree_id: worktree.worktree_id,
+        branch_id: branch.branch_id,
         agentic_tool: schedule.agentic_tool,
         status: SessionStatus.IDLE,
-        created_by: worktree.created_by,
+        created_by: branch.created_by,
         unix_username: unixUsername, // Set unix_username for strict mode execution
         scheduled_run_at: scheduledRunAt,
-        scheduled_from_worktree: true,
+        scheduled_from_branch: true,
         title: manual
           ? `[Manual run - ${new Date(scheduledRunAt).toISOString()}]`
           : `[Scheduled run - ${new Date(scheduledRunAt).toISOString()}]`,
@@ -511,7 +554,7 @@ export class SchedulerService {
             triggered_manually: manual,
             triggered_by: manual ? triggeredBy : undefined,
             schedule_config_snapshot: {
-              cron: worktree.schedule_cron,
+              cron: branch.schedule_cron,
               timezone: schedule.timezone,
               retention: schedule.retention,
               allow_concurrent_runs: schedule.allow_concurrent_runs === true,
@@ -525,18 +568,18 @@ export class SchedulerService {
       const sessionsService = this.app.service('sessions');
       const createdSession = await sessionsService.create(session);
       console.log(
-        `      ✅ Spawned ${manual ? 'manual' : 'scheduled'} session for ${worktree.name} (run #${runIndex})` +
+        `      ✅ Spawned ${manual ? 'manual' : 'scheduled'} session for ${branch.name} (run #${runIndex})` +
           (manual && triggeredBy ? ` triggered_by=${triggeredBy.substring(0, 8)}` : '')
       );
 
       // 6. Attach MCP servers BEFORE triggering prompt (so agent has tools from the start)
-      // Precedence: schedule config (if defined) > worktree defaults
-      // An explicit empty array in schedule means "no MCPs" — does NOT fall through to worktree.
+      // Precedence: schedule config (if defined) > branch defaults
+      // An explicit empty array in schedule means "no MCPs" — does NOT fall through to branch.
       const effectiveMcpIds =
         schedule.mcp_server_ids !== undefined
           ? schedule.mcp_server_ids
-          : worktree.mcp_server_ids && worktree.mcp_server_ids.length > 0
-            ? worktree.mcp_server_ids
+          : branch.mcp_server_ids && branch.mcp_server_ids.length > 0
+            ? branch.mcp_server_ids
             : [];
 
       if (effectiveMcpIds.length > 0) {
@@ -580,50 +623,29 @@ export class SchedulerService {
       );
 
       // 7. Update schedule metadata
-      await this.updateScheduleMetadata(worktree, scheduledRunAt, now);
+      await this.updateScheduleMetadata(branch, scheduledRunAt, now);
 
       // 8. Enforce retention policy
-      await this.enforceRetentionPolicy(worktree);
+      await this.enforceRetentionPolicy(branch);
 
       return createdSession;
     } catch (error) {
-      console.error(`      ❌ Failed to spawn session for ${worktree.name}:`, error);
+      console.error(`      ❌ Failed to spawn session for ${branch.name}:`, error);
       throw error;
     }
   }
 
   /**
-   * Render Handlebars prompt template with worktree/board context
+   * Render Handlebars prompt template with branch + schedule context.
+   * Delegates to {@link renderSchedulePrompt}; board context is not yet
+   * wired through (see renderSchedulePrompt's inline TODO).
    */
-  private renderPrompt(template: string, worktree: Worktree): string {
-    try {
-      const compiledTemplate = Handlebars.compile(template);
-
-      // Build context for template rendering
-      const context = {
-        worktree: {
-          name: worktree.name,
-          ref: worktree.ref,
-          path: worktree.path,
-          issue_url: worktree.issue_url,
-          pull_request_url: worktree.pull_request_url,
-          notes: worktree.notes,
-          custom_context: worktree.custom_context,
-        },
-        // TODO: Add board context if needed (requires fetching board data)
-        schedule: worktree.schedule,
-      };
-
-      return compiledTemplate(context);
-    } catch (error) {
-      console.error(`❌ Failed to render prompt template:`, error);
-      // Fallback to raw template if rendering fails
-      return template;
-    }
+  private renderPrompt(template: string, branch: Branch): string {
+    return renderSchedulePrompt(template, branch);
   }
 
   /**
-   * Update worktree schedule metadata after spawning session
+   * Update branch schedule metadata after spawning session
    *
    * - last_triggered_at = scheduledRunAt (not current time!)
    * - next_run_at = next occurrence from cron expression
@@ -631,20 +653,20 @@ export class SchedulerService {
    * Uses repository directly (bypasses auth)
    */
   private async updateScheduleMetadata(
-    worktree: Worktree,
+    branch: Branch,
     scheduledRunAt: number,
     now: number
   ): Promise<void> {
-    if (!worktree.schedule_cron) {
+    if (!branch.schedule_cron) {
       return;
     }
 
     try {
       // Compute next run time from cron expression
-      const nextRunAt = getNextRunTime(worktree.schedule_cron, new Date(now));
+      const nextRunAt = getNextRunTime(branch.schedule_cron, new Date(now));
 
-      // Update worktree using repository (bypasses auth)
-      await this.worktreeRepo.update(worktree.worktree_id, {
+      // Update branch using repository (bypasses auth)
+      await this.branchRepo.update(branch.branch_id, {
         schedule_last_triggered_at: scheduledRunAt, // Use scheduled time, not execution time
         schedule_next_run_at: nextRunAt,
       });
@@ -662,19 +684,19 @@ export class SchedulerService {
    *
    * Uses repository directly (bypasses auth)
    */
-  private async enforceRetentionPolicy(worktree: Worktree): Promise<void> {
-    if (!worktree.schedule || worktree.schedule.retention === 0) {
+  private async enforceRetentionPolicy(branch: Branch): Promise<void> {
+    if (!branch.schedule || branch.schedule.retention === 0) {
       // retention = 0 means keep forever
       return;
     }
 
-    const retention = worktree.schedule.retention;
+    const retention = branch.schedule.retention;
 
     try {
-      // Fetch all scheduled sessions for this worktree using repository
+      // Fetch all scheduled sessions for this branch using repository
       const allSessions = await this.sessionRepo.findAll();
-      const worktreeSessions = allSessions.filter((s) => s.worktree_id === worktree.worktree_id);
-      const scheduledSessions = worktreeSessions.filter((s) => s.scheduled_from_worktree === true);
+      const branchSessions = allSessions.filter((s) => s.branch_id === branch.branch_id);
+      const scheduledSessions = branchSessions.filter((s) => s.scheduled_from_branch === true);
 
       // Sort by scheduled_run_at DESC (newest first)
       scheduledSessions.sort((a, b) => {

@@ -1,10 +1,10 @@
 # Dev compose for the Agor docs site.
 #
 # Used by the `docs` variant in .agor.yml. Compose project name is
-# namespaced per-worktree so multiple worktrees can run side by side.
+# namespaced per-branch so multiple branches can run side by side.
 #
 # Override the host port by exporting PORT before `docker compose up`
-# (the .agor.yml variant does this via {{add 7000 worktree.unique_id}}).
+# (the .agor.yml variant does this via {{add 7000 branch.unique_id}}).
 
 services:
   docs:
@@ -12,7 +12,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "${PORT:-3001}:3001"
+      - '${PORT:-3001}:3001'
     volumes:
       # Bind-mount source for hot reload.
       - .:/app

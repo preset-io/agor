@@ -1,10 +1,10 @@
 /**
  * Git Utils for Agor
  *
- * Provides Git operations for repo management and worktree isolation.
+ * Provides Git operations for repo management and branch isolation.
  * Supports SSH keys, user environment variables (GITHUB_TOKEN), and system credential helpers.
  *
- * When worktree RBAC is enabled, git operations run via `sudo su -` to ensure
+ * When branch RBAC is enabled, git operations run via `sudo su -` to ensure
  * fresh Unix group memberships (groups are cached at login time).
  */
 
@@ -12,7 +12,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { simpleGit } from 'simple-git';
-import { getReposDir, getWorktreesDir } from '../config/config-manager';
+import { getBranchesDir, getReposDir } from '../config/config-manager';
 import type { RepoCloneErrorCategory } from '../types/repo';
 import { escapeShellArg } from '../unix/run-as-user';
 
@@ -55,7 +55,7 @@ export async function validateGitRef(ref: unknown): Promise<void> {
   //
   // Use `check-ref-format refs/heads/<name>` (not `--branch`). `--branch`
   // mode resolves `@{-N}` against the current repository, which means it
-  // fails outside a git worktree — breaking callers like the seed script
+  // fails outside a git branch — breaking callers like the seed script
   // that validate refs before a repo exists. The non-`--branch` form is
   // pure syntactic validation and needs no git context.
   //
@@ -74,7 +74,7 @@ export async function validateGitRef(ref: unknown): Promise<void> {
 /**
  * Get git binary path. Memoized — every git op routes through `createGit`,
  * so a per-call filesystem walk over 3 candidate paths × ~19 callsites adds
- * up on hot paths like worktree refreshes. Resolved once at first use.
+ * up on hot paths like branch refreshes. Resolved once at first use.
  */
 let cachedGitBinary: string | undefined;
 function getGitBinary(): string {
@@ -114,20 +114,25 @@ export function isLikelyGitToken(token: string): boolean {
  * a future regression in validation, or a sourceBranch path) is still forced
  * into positional-argument semantics.
  *
+ * Named for the underlying `git worktree add` CLI primitive rather than the
+ * Agor "branch" entity it materialises — the carve-out keeps `worktree` in
+ * names that wrap the git CLI directly, so a reader of this module isn't
+ * misled into thinking "branch" here means a git branch.
+ *
  * Exported so tests can assert the argv shape without spawning a real git.
  */
 export function buildWorktreeAddArgs(params: {
-  worktreePath: string;
+  branchPath: string;
   ref: string;
   createBranch: boolean;
   sourceBranch?: string;
   refType?: 'branch' | 'tag';
   fetchSucceeded: boolean;
 }): string[] {
-  const { worktreePath, ref, createBranch, sourceBranch, refType, fetchSucceeded } = params;
+  const { branchPath, ref, createBranch, sourceBranch, refType, fetchSucceeded } = params;
 
   const optionArgs: string[] = [];
-  const positionalArgs: string[] = [worktreePath];
+  const positionalArgs: string[] = [branchPath];
 
   if (createBranch) {
     optionArgs.push('-b', ref);
@@ -368,7 +373,7 @@ export function redactGitEnv(env: Record<string, string | undefined>): Record<st
  *
  * **env isolation**: `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_TERMINAL_PROMPT=0` are
  * only set when `env` is provided (or an auth token is found in it). Callers
- * that omit `env` (e.g. `createGit(worktreePath)`) intentionally inherit the
+ * that omit `env` (e.g. `createGit(branchPath)`) intentionally inherit the
  * daemon process environment so they can read `/etc/gitconfig`, `safe.directory`,
  * and other admin-policy config. They still get the `unsafe.*` scanner opt-ins.
  *
@@ -404,7 +409,7 @@ export function createGit(
   // Build git env vars. Always set the isolation knobs when we are passing a
   // user env (i.e. doing per-user git work) — otherwise leave the daemon
   // user's environment untouched so commands that don't need credentials
-  // (e.g. listWorktrees) keep working as before.
+  // (e.g. listGitWorktrees) keep working as before.
   let spawnEnv: Record<string, string> | undefined;
   if (env || authConfigEntries.length > 0) {
     spawnEnv = {
@@ -470,9 +475,9 @@ export function createGitForRemote(
 
 /**
  * Register `path` as a git `safe.directory` in the daemon user's global
- * gitconfig. Multi-user setups (worktrees owned by one uid, accessed by
+ * gitconfig. Multi-user setups (branches owned by one uid, accessed by
  * another) trip "dubious ownership" otherwise. Non-fatal: logs a warning
- * and returns on failure, since the worktree itself is already on disk.
+ * and returns on failure, since the branch itself is already on disk.
  *
  * IMPORTANT: never pass user env here. `createGit(_, env)` activates the
  * impersonation isolation block (`GIT_CONFIG_GLOBAL=/dev/null`), and
@@ -525,7 +530,7 @@ export interface CloneResult {
 }
 
 // Re-export path helpers from config-manager for backward compatibility
-export { getReposDir, getWorktreePath, getWorktreesDir } from '../config/config-manager';
+export { getBranchesDir, getBranchPath, getReposDir } from '../config/config-manager';
 
 /**
  * Extract repo name from Git URL
@@ -834,7 +839,12 @@ export async function ensureGitRemoteUrl(
   return { changed: true, previousUrl: currentUrls.join('\n') };
 }
 
-export interface WorktreeInfo {
+/**
+ * Parsed entry from `git worktree list --porcelain` output. Describes a
+ * git-worktree primitive — not the Agor Branch entity (which carries env
+ * config, board placement, owners, etc. on top of this).
+ */
+export interface GitWorktreeInfo {
   name: string;
   path: string;
   ref: string;
@@ -843,11 +853,11 @@ export interface WorktreeInfo {
 }
 
 /**
- * Create a git worktree
+ * Create a git branch
  */
-export async function createWorktree(
+export async function createBranch(
   repoPath: string,
-  worktreePath: string,
+  branchPath: string,
   ref: string,
   createBranch: boolean = false,
   pullLatest: boolean = true,
@@ -855,9 +865,9 @@ export async function createWorktree(
   env?: Record<string, string>,
   refType?: 'branch' | 'tag'
 ): Promise<void> {
-  console.log('🔍 createWorktree called with:', {
+  console.log('🔍 createBranch called with:', {
     repoPath,
-    worktreePath,
+    branchPath,
     ref,
     createBranch,
     pullLatest,
@@ -872,13 +882,13 @@ export async function createWorktree(
   // Refuse to clobber an existing directory. Matches createBranchAsClone's
   // guard, so worktree-mode and clone-mode surface the same user-facing
   // error when the path is already taken (typically by an archived or
-  // partially-cleaned worktree). Used to live in the daemon as a
+  // partially-cleaned branch). Used to live in the daemon as a
   // synchronous preflight; moved here so the executor / core layer is the
   // single source of truth for filesystem facts.
-  if (existsSync(worktreePath)) {
+  if (existsSync(branchPath)) {
     throw new Error(
-      `Target directory '${worktreePath}' already exists on disk. ` +
-        `This usually means an archived or partially-cleaned worktree still occupies this path. ` +
+      `Target directory '${branchPath}' already exists on disk. ` +
+        `This usually means an archived or partially-cleaned branch still occupies this path. ` +
         `Please choose a different name or clean up the existing directory.`
     );
   }
@@ -947,7 +957,7 @@ export async function createWorktree(
   }
 
   const worktreeAddArgs = buildWorktreeAddArgs({
-    worktreePath,
+    branchPath,
     ref,
     createBranch,
     sourceBranch,
@@ -964,52 +974,52 @@ export async function createWorktree(
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
 
-    // Handle stale branch from previously deleted worktree
+    // Handle stale branch from previously deleted branch
     if (createBranch && errorMessage.includes('already exists')) {
       console.warn(
-        `⚠️  Branch '${ref}' already exists. Checking if it's orphaned (stale from a deleted worktree)...`
+        `⚠️  Branch '${ref}' already exists. Checking if it's orphaned (stale from a deleted branch)...`
       );
 
-      // Check if the branch is in use by another worktree
-      const worktrees = await listWorktrees(repoPath);
+      // Check if the branch is in use by another git worktree
+      const worktrees = await listGitWorktrees(repoPath);
       const branchInUse = worktrees.some((wt) => wt.ref === ref);
 
       if (branchInUse) {
         throw new Error(
-          `A branch named '${ref}' already exists and is in use by another worktree. ` +
+          `A branch named '${ref}' already exists and is in use by another branch. ` +
             `Please choose a different name.`
         );
       }
 
       // Branch exists but is orphaned — delete it and retry.
       // `git branch -D` doesn't support `--`; ref was validated above.
-      console.log(`🧹 Deleting orphaned branch '${ref}' and retrying worktree creation...`);
+      console.log(`🧹 Deleting orphaned branch '${ref}' and retrying branch creation...`);
       await git.raw(['branch', '-D', ref]);
 
-      // Retry the worktree creation
+      // Retry the branch creation
       await git.raw(worktreeAddArgs);
-      console.log(`✅ Successfully created worktree after cleaning up stale branch '${ref}'`);
+      console.log(`✅ Successfully created branch after cleaning up stale branch '${ref}'`);
     } else {
       throw error;
     }
   }
 
-  // Register the worktree as a safe.directory in the daemon user's
-  // ~/.gitconfig — multi-user setups (worktrees owned by one uid, accessed
-  // by another) trip "dubious ownership" otherwise. Non-fatal; the worktree
+  // Register the branch as a safe.directory in the daemon user's
+  // ~/.gitconfig — multi-user setups (branches owned by one uid, accessed
+  // by another) trip "dubious ownership" otherwise. Non-fatal; the branch
   // itself is already on disk.
-  await addSafeDirectoryBestEffort(worktreePath);
+  await addSafeDirectoryBestEffort(branchPath);
 }
 
 /**
  * Options for {@link createBranchAsClone} — the self-standing-clone
- * counterpart to {@link createWorktree}.
+ * counterpart to {@link createBranch}.
  *
  * Branch storage mode = 'clone' produces a working directory whose `.git/`
  * is a real directory (not a `gitdir:` pointer file), with its own
  * `.git/config`, refs, and credentials surface. Closes the cross-branch
  * leak vectors that the Layer A defenses exist to mitigate. See
- * `docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md` §1.
+ * `context/explorations/clone-redesign.md` §1.
  */
 export interface CreateBranchAsCloneOptions {
   /** Remote URL to clone from (https://, ssh://, git@host:path, file://, or local path). */
@@ -1074,7 +1084,7 @@ export interface CreateBranchAsCloneOptions {
 
 /**
  * Result of {@link createBranchAsClone}. Shape mirrors what the executor
- * handler wants out of {@link createWorktree} so the call sites can stay
+ * handler wants out of {@link createBranch} so the call sites can stay
  * uniform across storage modes.
  */
 export interface CreateBranchAsCloneResult {
@@ -1089,7 +1099,7 @@ export interface CreateBranchAsCloneResult {
 
 /**
  * Create a self-standing clone of a remote at `targetPath` and check out a
- * branch. Sibling to {@link createWorktree}; chosen at worktree-create time
+ * branch. Sibling to {@link createBranch}; chosen at branch-create time
  * by the `storage_mode = 'clone'` opt-in.
  *
  * Two flows:
@@ -1100,7 +1110,7 @@ export interface CreateBranchAsCloneResult {
  *    main" flow that the create-time UI emits; the new branch doesn't
  *    exist on the remote yet, so we can't `git clone --branch <new>`.
  *
- * Unlike {@link createWorktree}, this issues a real `git clone` and does
+ * Unlike {@link createBranch}, this issues a real `git clone` and does
  * not touch the per-repo base clone at `~/.agor/repos/<slug>/`. The
  * resulting working directory has its own `.git/` directory — `.git/config`,
  * remotes, credentials, hooks, and refs are all branch-local.
@@ -1200,9 +1210,9 @@ export async function createBranchAsClone(
 }
 
 /**
- * Result of a worktree restoration attempt
+ * Result of a branch restoration attempt
  */
-export interface RestoreWorktreeResult {
+export interface RestoreBranchResult {
   success: boolean;
   /** Which strategy was used: 'checkout' (existing branch) or 'create' (new branch from base) */
   strategy: 'checkout' | 'create';
@@ -1211,36 +1221,36 @@ export interface RestoreWorktreeResult {
 }
 
 /**
- * Restore a worktree directory by checking out the branch or creating it from a base ref.
+ * Restore a branch directory by checking out the branch or creating it from a base ref.
  *
  * Shared logic used by both:
- * - `sync-unix` CLI command (restore action for failed worktrees)
- * - `unarchive()` daemon method (via executor's git.worktree.add command)
+ * - `sync-unix` CLI command (restore action for failed branches)
+ * - `unarchive()` daemon method (via executor's git.branch.add command)
  *
  * Strategy:
  * 1. Fetch from remote to ensure we have latest refs
  * 2. Check if the branch exists on the remote via `ls-remote`
- * 3. If YES: `createWorktree(repoPath, path, ref, false)` — checkout existing branch
- * 4. If NO: `createWorktree(repoPath, path, ref, true, true, baseRef)` — create new branch from base
+ * 3. If YES: `createBranch(repoPath, path, ref, false)` — checkout existing branch
+ * 4. If NO: `createBranch(repoPath, path, ref, true, true, baseRef)` — create new branch from base
  *
  * This is safe because we only create a new branch when `ls-remote` confirms it
  * doesn't exist on the remote, avoiding the orphan cleanup force-delete risk
- * in `createWorktree()`.
+ * in `createBranch()`.
  *
  * @param repoPath - Absolute path to the base repository
- * @param worktreePath - Absolute path where the worktree should be created
+ * @param branchPath - Absolute path where the branch should be created
  * @param ref - Branch name to restore
  * @param baseRef - Fallback base branch (e.g., 'main') if ref doesn't exist on remote
  * @param env - Optional environment variables for git operations (GITHUB_TOKEN, etc.)
  */
-export async function restoreWorktreeFilesystem(
+export async function restoreBranchFilesystem(
   repoPath: string,
-  worktreePath: string,
+  branchPath: string,
   ref: string,
   baseRef: string,
   env?: Record<string, string>
-): Promise<RestoreWorktreeResult> {
-  // Validate refs early — this function both passes them to createWorktree
+): Promise<RestoreBranchResult> {
+  // Validate refs early — this function both passes them to createBranch
   // (which re-validates) and to ls-remote (which does not).
   await validateGitRef(ref);
   await validateGitRef(baseRef);
@@ -1252,10 +1262,10 @@ export async function restoreWorktreeFilesystem(
   // Step 1: Fetch from remote
   try {
     await git.fetch(['origin']);
-    console.log(`[restoreWorktree] Fetched latest from origin`);
+    console.log(`[restoreBranch] Fetched latest from origin`);
   } catch (error) {
     console.warn(
-      `[restoreWorktree] Failed to fetch from origin (will use local refs):`,
+      `[restoreBranch] Failed to fetch from origin (will use local refs):`,
       error instanceof Error ? error.message : String(error)
     );
   }
@@ -1276,22 +1286,22 @@ export async function restoreWorktreeFilesystem(
     }
   }
 
-  // Step 3/4: Create worktree with appropriate strategy
+  // Step 3/4: Create branch with appropriate strategy
   try {
     if (branchExistsOnRemote) {
       // Branch exists on remote — checkout it directly
-      console.log(`[restoreWorktree] Branch '${ref}' found on remote, checking out`);
-      await createWorktree(repoPath, worktreePath, ref, false, true, undefined, env);
+      console.log(`[restoreBranch] Branch '${ref}' found on remote, checking out`);
+      await createBranch(repoPath, branchPath, ref, false, true, undefined, env);
       return { success: true, strategy: 'checkout' };
     }
 
     // Branch doesn't exist on remote — create new branch from base ref
-    console.log(`[restoreWorktree] Branch '${ref}' not on remote, creating from base '${baseRef}'`);
-    await createWorktree(repoPath, worktreePath, ref, true, true, baseRef, env);
+    console.log(`[restoreBranch] Branch '${ref}' not on remote, creating from base '${baseRef}'`);
+    await createBranch(repoPath, branchPath, ref, true, true, baseRef, env);
     return { success: true, strategy: 'create' };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    console.error(`[restoreWorktree] Failed to restore worktree: ${msg}`);
+    console.error(`[restoreBranch] Failed to restore branch: ${msg}`);
     return {
       success: false,
       strategy: branchExistsOnRemote ? 'checkout' : 'create',
@@ -1301,18 +1311,27 @@ export async function restoreWorktreeFilesystem(
 }
 
 /**
- * List all worktrees for a repository
+ * List git-worktree entries registered with a repository (parsed
+ * `git worktree list --porcelain` output).
+ *
+ * Wraps the git-CLI primitive, so the name reflects what git sees ("worktrees"
+ * with a real `.git/worktrees/<name>/` entry in the base repo). Agor "branches"
+ * in clone storage mode are not git worktrees of the base repo and won't appear
+ * here — that's intentional; callers wanting the canonical list of Agor
+ * branches should use `BranchRepository`.
  */
-export async function listWorktrees(repoPath: string): Promise<WorktreeInfo[]> {
+export async function listGitWorktrees(repoPath: string): Promise<GitWorktreeInfo[]> {
   const { git } = createGit(repoPath);
   const output = await git.raw(['worktree', 'list', '--porcelain']);
 
-  const worktrees: WorktreeInfo[] = [];
+  const worktrees: GitWorktreeInfo[] = [];
   const lines = output.split('\n');
 
-  let current: Partial<WorktreeInfo> = {};
+  let current: Partial<GitWorktreeInfo> = {};
 
   for (const line of lines) {
+    // Prefixes are git porcelain field names ('worktree' for path, 'branch'
+    // for ref) — not our domain names, do not rename.
     if (line.startsWith('worktree ')) {
       current.path = line.substring(9);
       current.name = basename(current.path);
@@ -1325,7 +1344,7 @@ export async function listWorktrees(repoPath: string): Promise<WorktreeInfo[]> {
       current.detached = true;
     } else if (line === '') {
       if (current.path && current.sha) {
-        worktrees.push(current as WorktreeInfo);
+        worktrees.push(current as GitWorktreeInfo);
       }
       current = {};
     }
@@ -1333,22 +1352,26 @@ export async function listWorktrees(repoPath: string): Promise<WorktreeInfo[]> {
 
   // Handle last entry
   if (current.path && current.sha) {
-    worktrees.push(current as WorktreeInfo);
+    worktrees.push(current as GitWorktreeInfo);
   }
 
   return worktrees;
 }
 
 /**
- * Remove a git worktree
+ * Remove a git-worktree entry from the base repo (`git worktree remove --force`).
+ *
+ * Wraps the git CLI directly — the name reflects the primitive, not the
+ * Agor "Branch" entity. Branches in clone storage mode aren't registered as
+ * git worktrees of the base repo and shouldn't go through this path.
  */
-export async function removeWorktree(repoPath: string, worktreeName: string): Promise<void> {
+export async function removeGitWorktree(repoPath: string, branchName: string): Promise<void> {
   const { git } = createGit(repoPath);
-  await git.raw(['worktree', 'remove', '--force', worktreeName]);
+  await git.raw(['worktree', 'remove', '--force', branchName]);
 }
 
 /**
- * Clean a git worktree (remove untracked files and build artifacts)
+ * Clean a git branch (remove untracked files and build artifacts)
  *
  * Runs git clean -fdx which removes:
  * - Untracked files and directories (-f -d)
@@ -1359,19 +1382,19 @@ export async function removeWorktree(repoPath: string, worktreeName: string): Pr
  * - Tracked files
  * - Git state (commits, branches)
  *
- * In multi-user worktrees, files may be owned by different users (e.g., build artifacts
+ * In multi-user branches, files may be owned by different users (e.g., build artifacts
  * created by different user sessions). This function attempts to fix ownership before
  * cleaning to ensure all files can be removed.
  *
- * @param worktreePath - Absolute path to the worktree directory
+ * @param branchPath - Absolute path to the branch directory
  * @param fixOwnership - Whether to attempt ownership fix via sudo (default: true)
  * @returns Disk space freed in bytes (approximate based on removed file count)
  */
-export async function cleanWorktree(
-  worktreePath: string,
+export async function cleanBranch(
+  branchPath: string,
   fixOwnership: boolean = true
 ): Promise<{ filesRemoved: number }> {
-  const { git } = createGit(worktreePath);
+  const { git } = createGit(branchPath);
 
   // Run git clean -fdx (force, directories, ignored files)
   // -n flag for dry run to count files
@@ -1381,32 +1404,32 @@ export async function cleanWorktree(
   // CleanSummary has a files array with removed files
   const filesRemoved = Array.isArray(dryRunResult.files) ? dryRunResult.files.length : 0;
 
-  // In multi-user worktrees, fix ownership before cleaning
+  // In multi-user branches, fix ownership before cleaning
   if (fixOwnership) {
     try {
       const { execSync } = await import('node:child_process');
       const { existsSync } = await import('node:fs');
       const os = await import('node:os');
 
-      // Verify worktree path exists
-      if (!existsSync(worktreePath)) {
-        throw new Error(`Worktree path does not exist: ${worktreePath}`);
+      // Verify branch path exists
+      if (!existsSync(branchPath)) {
+        throw new Error(`Branch path does not exist: ${branchPath}`);
       }
 
       // Get current user (who will own the files after chown)
       // When running in executor via sudo -u, this returns the impersonated user (e.g., agorpg)
       const currentUser = os.userInfo().username;
 
-      // Attempt to chown the worktree to current user
+      // Attempt to chown the branch to current user
       // This allows git clean to remove files owned by other users
       //
       // IMPORTANT: This requires sudoers configuration:
       // agor ALL=(ALL) NOPASSWD: /usr/bin/chown * /home/*/.agor/*
       //
       // The executor is already running as the daemon user (via sudo -u agorpg),
-      // so this is effectively: sudo -n chown -R agorpg: /path/to/worktree
+      // so this is effectively: sudo -n chown -R agorpg: /path/to/branch
       try {
-        const escapedPath = worktreePath.replace(/'/g, "'\\''");
+        const escapedPath = branchPath.replace(/'/g, "'\\''");
         execSync(`sudo -n chown -R ${currentUser}: '${escapedPath}'`, {
           stdio: 'pipe',
           encoding: 'utf-8',
@@ -1453,9 +1476,12 @@ export async function cleanWorktree(
 }
 
 /**
- * Prune stale worktree metadata
+ * Prune stale git-worktree metadata (`git worktree prune`).
+ *
+ * Wraps the git CLI directly — used after manual filesystem removal to
+ * tell git to drop the stale `.git/worktrees/<name>/` administrative entry.
  */
-export async function pruneWorktrees(repoPath: string): Promise<void> {
+export async function pruneGitWorktrees(repoPath: string): Promise<void> {
   const { git } = createGit(repoPath);
   await git.raw(['worktree', 'prune']);
 }
@@ -1587,45 +1613,45 @@ export async function deleteRepoDirectory(repoPath: string): Promise<void> {
 }
 
 /**
- * Delete a worktree directory from filesystem
+ * Delete a branch directory from filesystem
  *
- * Removes the worktree directory and all its contents from the worktrees directory.
+ * Removes the branch directory and all its contents from the branches directory.
  *
- * @param worktreePath - Absolute path to the worktree directory
- * @throws Error if the path is not inside the configured worktrees directory (safety check)
+ * @param branchPath - Absolute path to the branch directory
+ * @throws Error if the path is not inside the configured branches directory (safety check)
  */
-export async function deleteWorktreeDirectory(worktreePath: string): Promise<void> {
+export async function deleteBranchDirectory(branchPath: string): Promise<void> {
   const { rm } = await import('node:fs/promises');
   const { realpathSync, existsSync } = await import('node:fs');
   const { resolve, relative } = await import('node:path');
 
-  // Safety check: ensure we're only deleting from configured worktrees directory
-  const worktreesDir = getWorktreesDir();
+  // Safety check: ensure we're only deleting from configured branches directory
+  const branchesDir = getBranchesDir();
 
   // Use realpathSync to follow symlinks and canonicalize paths.
-  // If the worktree directory was already removed (e.g. by `git worktree remove`),
+  // If the branch directory was already removed (e.g. by `git worktree remove`),
   // fall back to resolve() — the safety check still works since the base dir exists.
-  const resolvedWorktreesDir = realpathSync(worktreesDir);
-  const resolvedWorktreePath = existsSync(worktreePath)
-    ? realpathSync(worktreePath)
-    : resolve(realpathSync(resolve(worktreePath, '..')), resolve(worktreePath).split('/').pop()!);
+  const resolvedBranchesDir = realpathSync(branchesDir);
+  const resolvedBranchPath = existsSync(branchPath)
+    ? realpathSync(branchPath)
+    : resolve(realpathSync(resolve(branchPath, '..')), resolve(branchPath).split('/').pop()!);
 
-  // Get relative path from worktreesDir to worktreePath
-  const relativePath = relative(resolvedWorktreesDir, resolvedWorktreePath);
+  // Get relative path from branchesDir to branchPath
+  const relativePath = relative(resolvedBranchesDir, resolvedBranchPath);
 
   // Check if relative path goes outside (starts with '..' or is absolute)
   if (relativePath.startsWith('..') || resolve(relativePath) === relativePath) {
     throw new Error(
-      `Safety check failed: Worktree path must be inside ${worktreesDir}. Got: ${worktreePath}`
+      `Safety check failed: Branch path must be inside ${branchesDir}. Got: ${branchPath}`
     );
   }
 
-  // Additional safety: don't allow deleting the worktrees directory itself
-  if (resolvedWorktreePath === resolvedWorktreesDir || relativePath === '') {
-    throw new Error('Cannot delete the worktrees directory itself');
+  // Additional safety: don't allow deleting the branches directory itself
+  if (resolvedBranchPath === resolvedBranchesDir || relativePath === '') {
+    throw new Error('Cannot delete the branches directory itself');
   }
 
-  await rm(resolvedWorktreePath, { recursive: true, force: true });
+  await rm(resolvedBranchPath, { recursive: true, force: true });
 }
 
 /**

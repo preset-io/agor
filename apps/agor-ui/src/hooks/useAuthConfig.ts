@@ -43,7 +43,7 @@ interface FeaturesConfig {
    * (start/stop/nuke/logs). Value: 'none' | 'viewer' | 'member' | 'admin' |
    * 'superadmin'. UI uses this to disable trigger buttons with a tooltip for
    * users below the threshold. Server-side enforcement in
-   * services/worktrees.ts is the source of truth. Defaults to 'member'.
+   * services/branches.ts is the source of truth. Defaults to 'member'.
    */
   managedEnvsMinimumRole?: 'none' | 'viewer' | 'member' | 'admin' | 'superadmin';
   /**

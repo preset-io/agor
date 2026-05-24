@@ -1,6 +1,6 @@
 import type { AgenticToolName } from './agentic-tool';
 import type { CardID } from './card';
-import type { ArtifactID, BoardID, WorktreeID } from './id';
+import type { ArtifactID, BoardID, BranchID } from './id';
 
 /**
  * Canvas position (x/y coordinates in board space)
@@ -15,12 +15,12 @@ export type BoardObjectType = 'text' | 'zone' | 'markdown' | 'app' | 'artifact';
 /**
  * Entity type discriminator for board objects
  */
-export type BoardEntityType = 'worktree' | 'card';
+export type BoardEntityType = 'branch' | 'card';
 
 /**
- * Positioned entity on a board (worktree or card)
+ * Positioned entity on a board (branch or card)
  *
- * Polymorphic placement: exactly one of worktree_id or card_id is set.
+ * Polymorphic placement: exactly one of branch_id or card_id is set.
  * The entity_type field indicates which one.
  */
 export interface BoardEntityObject {
@@ -30,8 +30,8 @@ export interface BoardEntityObject {
   /** Board this entity belongs to */
   board_id: BoardID;
 
-  /** Worktree reference (set when entity_type === 'worktree') */
-  worktree_id?: WorktreeID;
+  /** Branch reference (set when entity_type === 'branch') */
+  branch_id?: BranchID;
 
   /** Card reference (set when entity_type === 'card') */
   card_id?: CardID;
@@ -65,14 +65,14 @@ export interface TextBoardObject {
 }
 
 /**
- * Zone trigger behavior modes for worktree drops
+ * Zone trigger behavior modes for branch drops
  */
 export type ZoneTriggerBehavior = 'always_new' | 'show_picker';
 
 /**
- * Zone trigger configuration for worktree drops
+ * Zone trigger configuration for branch drops
  *
- * When a worktree is dropped on a zone with a trigger:
+ * When a branch is dropped on a zone with a trigger:
  * - 'always_new': Automatically create new root session and apply trigger
  * - 'show_picker': Open modal to select existing session or create new one
  */
@@ -289,7 +289,7 @@ export interface Board {
 /**
  * Portable board export format (shell only)
  *
- * Contains board metadata and annotations, but no worktrees or sessions.
+ * Contains board metadata and annotations, but no branches or sessions.
  * Can be serialized to YAML/JSON for sharing or archival.
  */
 export interface BoardExportBlob {

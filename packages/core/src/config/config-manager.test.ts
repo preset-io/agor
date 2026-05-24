@@ -12,14 +12,14 @@ import {
   ensureBranchStorageModeAllowed,
   expandHomePath,
   getAgorHome,
+  getBranchesDir,
+  getBranchPath,
   getConfigPath,
   getConfigValue,
   getDaemonUrl,
   getDataHome,
   getDefaultConfig,
   getReposDir,
-  getWorktreePath,
-  getWorktreesDir,
   initConfig,
   loadConfig,
   loadConfigSync,
@@ -972,7 +972,7 @@ describe('getReposDir', () => {
   });
 });
 
-describe('getWorktreesDir', () => {
+describe('getBranchesDir', () => {
   let tempDir: string;
   let originalEnv: NodeJS.ProcessEnv;
 
@@ -989,12 +989,12 @@ describe('getWorktreesDir', () => {
     process.env = originalEnv;
   });
 
-  it('should return worktrees path under data home', () => {
-    const worktreesDir = getWorktreesDir();
-    expect(worktreesDir).toBe(path.join(tempDir, '.agor', 'worktrees'));
+  it('should return branches path under data home', () => {
+    const branchesDir = getBranchesDir();
+    expect(branchesDir).toBe(path.join(tempDir, '.agor', 'worktrees'));
   });
 
-  it('should use custom data_home for worktrees path', async () => {
+  it('should use custom data_home for branches path', async () => {
     const config: AgorConfig = {
       paths: { data_home: '/custom/data' },
     };
@@ -1002,19 +1002,19 @@ describe('getWorktreesDir', () => {
     await fs.mkdir(agorDir, { recursive: true });
     await fs.writeFile(path.join(agorDir, 'config.yaml'), yaml.dump(config), 'utf-8');
 
-    const worktreesDir = getWorktreesDir();
-    expect(worktreesDir).toBe('/custom/data/worktrees');
+    const branchesDir = getBranchesDir();
+    expect(branchesDir).toBe('/custom/data/worktrees');
   });
 
-  it('should use AGOR_DATA_HOME env var for worktrees path', () => {
+  it('should use AGOR_DATA_HOME env var for branches path', () => {
     process.env.AGOR_DATA_HOME = '/env/data';
 
-    const worktreesDir = getWorktreesDir();
-    expect(worktreesDir).toBe('/env/data/worktrees');
+    const branchesDir = getBranchesDir();
+    expect(branchesDir).toBe('/env/data/worktrees');
   });
 });
 
-describe('getWorktreePath', () => {
+describe('getBranchPath', () => {
   let tempDir: string;
   let originalEnv: NodeJS.ProcessEnv;
 
@@ -1031,14 +1031,12 @@ describe('getWorktreePath', () => {
     process.env = originalEnv;
   });
 
-  it('should construct worktree path from repo slug and name', () => {
-    const worktreePath = getWorktreePath('org/repo', 'feature-branch');
-    expect(worktreePath).toBe(
-      path.join(tempDir, '.agor', 'worktrees', 'org/repo', 'feature-branch')
-    );
+  it('should construct branch path from repo slug and name', () => {
+    const branchPath = getBranchPath('org/repo', 'feature-branch');
+    expect(branchPath).toBe(path.join(tempDir, '.agor', 'worktrees', 'org/repo', 'feature-branch'));
   });
 
-  it('should use custom data_home for worktree path', async () => {
+  it('should use custom data_home for branch path', async () => {
     const config: AgorConfig = {
       paths: { data_home: '/custom/data' },
     };
@@ -1046,15 +1044,15 @@ describe('getWorktreePath', () => {
     await fs.mkdir(agorDir, { recursive: true });
     await fs.writeFile(path.join(agorDir, 'config.yaml'), yaml.dump(config), 'utf-8');
 
-    const worktreePath = getWorktreePath('org/repo', 'feature-branch');
-    expect(worktreePath).toBe('/custom/data/worktrees/org/repo/feature-branch');
+    const branchPath = getBranchPath('org/repo', 'feature-branch');
+    expect(branchPath).toBe('/custom/data/worktrees/org/repo/feature-branch');
   });
 
-  it('should use AGOR_DATA_HOME env var for worktree path', () => {
+  it('should use AGOR_DATA_HOME env var for branch path', () => {
     process.env.AGOR_DATA_HOME = '/env/data';
 
-    const worktreePath = getWorktreePath('org/repo', 'feature-branch');
-    expect(worktreePath).toBe('/env/data/worktrees/org/repo/feature-branch');
+    const branchPath = getBranchPath('org/repo', 'feature-branch');
+    expect(branchPath).toBe('/env/data/worktrees/org/repo/feature-branch');
   });
 });
 
@@ -1080,10 +1078,31 @@ describe('resolveBranchStorageConfig + ensureBranchStorageModeAllowed', () => {
     __resetConfigCacheForTests();
   }
 
-  it('defaults to worktree-only when execution.branch_storage is not configured', () => {
-    // No config file present.
+  it('defaults to both modes allowed with worktree as default when execution.branch_storage is not configured', () => {
+    // No config file present. v0.20+ default exposes both modes in the UI /
+    // MCP create tool while keeping `default_mode='worktree'` so callers that
+    // don't pick a mode keep landing on the legacy path.
     const resolved = resolveBranchStorageConfig();
-    expect(resolved).toEqual({ defaultMode: 'worktree', allowedModes: ['worktree'] });
+    expect(resolved).toEqual({
+      defaultMode: 'worktree',
+      allowedModes: ['worktree', 'clone'],
+    });
+  });
+
+  it('lets operators disable clone mode by pinning allowed_modes to ["worktree"]', async () => {
+    // Security-gradient deployments opt out of clone-mode entirely.
+    await writeConfig({
+      daemon: { port: 3030 },
+      execution: {
+        branch_storage: {
+          allowed_modes: ['worktree'],
+        },
+      },
+    });
+
+    const resolved = resolveBranchStorageConfig();
+    expect(resolved.allowedModes).toEqual(['worktree']);
+    expect(() => ensureBranchStorageModeAllowed('clone')).toThrow(/not enabled/);
   });
 
   it('honours operator-configured allowed_modes + default_mode', async () => {
@@ -1121,8 +1140,16 @@ describe('resolveBranchStorageConfig + ensureBranchStorageModeAllowed', () => {
     expect(resolved.allowedModes).toEqual(['worktree']);
   });
 
-  it('ensureBranchStorageModeAllowed throws a clear message for disallowed modes', () => {
-    // Default config: only worktree allowed.
+  it('ensureBranchStorageModeAllowed throws a clear message for disallowed modes', async () => {
+    // Pin allowed_modes to worktree-only to exercise the disallowed-clone path.
+    await writeConfig({
+      daemon: { port: 3030 },
+      execution: {
+        branch_storage: {
+          allowed_modes: ['worktree'],
+        },
+      },
+    });
     expect(() => ensureBranchStorageModeAllowed('worktree')).not.toThrow();
     expect(() => ensureBranchStorageModeAllowed('clone')).toThrow(/not enabled/);
     expect(() => ensureBranchStorageModeAllowed('clone')).toThrow(
@@ -1130,17 +1157,9 @@ describe('resolveBranchStorageConfig + ensureBranchStorageModeAllowed', () => {
     );
   });
 
-  it('ensureBranchStorageModeAllowed passes once the operator opts in', async () => {
-    await writeConfig({
-      daemon: { port: 3030 },
-      execution: {
-        branch_storage: {
-          default_mode: 'worktree',
-          allowed_modes: ['worktree', 'clone'],
-        },
-      },
-    });
-
+  it('ensureBranchStorageModeAllowed accepts both modes under the default config', () => {
+    // v0.20+ default allows both — operators have to opt out to forbid clone.
+    expect(() => ensureBranchStorageModeAllowed('worktree')).not.toThrow();
     expect(() => ensureBranchStorageModeAllowed('clone')).not.toThrow();
   });
 });

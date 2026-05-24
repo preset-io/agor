@@ -76,7 +76,7 @@ All filesystem operations are **strictly scoped** to Agor-managed paths:
 3. **API Key Rotation** - Regularly rotate API keys, especially when users leave
 4. **Monitor Audit Logs** - Check `/var/log/auth.log` for suspicious sudo activity
 5. **Resource Limits** - Use ulimits, cgroups, or quotas to prevent resource exhaustion
-6. **Regular Audits** - Review branch ownership quarterly with `agor worktree owners audit`
+6. **Regular Audits** - Review branch ownership quarterly with `agor branch owners audit`
 
 ---
 
@@ -108,7 +108,7 @@ Configure persistent storage for branches and repositories:
 # ~/.agor/config.yaml
 storage:
   repos_dir: /var/lib/agor/repos
-  worktrees_dir: /var/lib/agor/worktrees
+  branches_dir: /var/lib/agor/branches
 ```
 
 ### 3. Sudoers Configuration
@@ -157,7 +157,7 @@ agor ALL=(ALL) NOPASSWD: /usr/sbin/chpasswd
 **Group Management (Branch Isolation):**
 
 ```bash
-# Create Unix groups per worktree (agor_wt_<id>)
+# Create Unix groups per branch (agor_wt_<id>)
 agor ALL=(ALL) NOPASSWD: /usr/sbin/groupadd *
 agor ALL=(ALL) NOPASSWD: /usr/sbin/groupdel *
 agor ALL=(ALL) NOPASSWD: /usr/sbin/gpasswd *
@@ -166,7 +166,7 @@ agor ALL=(ALL) NOPASSWD: /usr/sbin/gpasswd *
 **Filesystem Operations (SCOPED TO AGOR PATHS ONLY):**
 
 ```bash
-# User home directories - worktree symlinks and config
+# User home directories - branch symlinks and config
 agor ALL=(ALL) NOPASSWD: /usr/bin/chown * /home/*/agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/chown * /home/*/.agor/*
 agor ALL=(ALL) NOPASSWD: /usr/bin/chmod * /home/*/agor/*
@@ -222,12 +222,12 @@ Configure Agor's execution mode via config:
 # ~/.agor/config.yaml
 execution:
   # Enable RBAC system (default: false)
-  worktree_rbac: true
+  branch_rbac: true
 
   # Unix user mode (default: simple)
   # Options:
   #   - simple: No isolation, all runs as daemon user
-  #   - insulated: Worktree groups + single executor user
+  #   - insulated: Branch groups + single executor user
   #   - strict: Full per-user isolation, enforced impersonation
   unix_user_mode: insulated # or strict
 
@@ -265,7 +265,7 @@ Default behavior (flag unset or `true`):
 - Any authenticated user with role `member` or higher can open a terminal.
 - Branch-level permissions still apply — opening a terminal tab against a
   branch requires at least `session` permission on that branch (when
-  `worktree_rbac` is on).
+  `branch_rbac` is on).
 
 When set to `false`:
 
@@ -318,7 +318,7 @@ Agor combines app-level RBAC with OS-level enforcement:
 
 ### User Management
 
-When RBAC is enabled (`worktree_rbac: true`):
+When RBAC is enabled (`branch_rbac: true`):
 
 1. Each Agor user gets a Unix account (auto-created or pre-provisioned)
 2. Format: `agor_<short-id>` (e.g., `agor_03b62447`) or custom username
@@ -342,7 +342,7 @@ Each branch gets OS-level protection:
 **Example:**
 
 ```bash
-# Worktree created
+# Branch created
 $ ls -la /var/agor/worktrees/wt-abc123/
 drwxrwx--- alice agor_wt_abc123 my-project/
 
@@ -367,7 +367,7 @@ Agor defines three permission levels per branch:
 
 **Permission Grant Levels:**
 
-- **Branch Owners** - Explicitly granted via `worktree_owners` table
+- **Branch Owners** - Explicitly granted via `branch_owners` table
 - **Non-Owners** - Default level set by `others_can` field on branch
 
 ### Session Execution Context
@@ -379,13 +379,13 @@ Agor defines three permission levels per branch:
 {
   session_id: "abc123",
   created_by: alice_user_id,  // IMMUTABLE
-  worktree_id: "wt-xyz789"
+  branch_id: "wt-xyz789"
 }
 
 // When Bob prompts Alice's session:
 // - Task creator: Bob (for attribution)
 // - Execution user: Alice (session.created_by)
-// - Working directory: Alice's worktree
+// - Working directory: Alice's branch
 // - Credentials used: Alice's ~/.ssh, ~/.config/gh
 ```
 
@@ -413,7 +413,7 @@ Verify group membership:
 
 ```bash
 id username
-ls -la /path/to/worktree
+ls -la /path/to/branch
 ```
 
 ### Session Fails to Start
@@ -430,5 +430,5 @@ getent group agor_users
 
 - [Architecture](/guide/architecture) — System design overview
 - [Multiplayer & Social](/guide/multiplayer-social) — Shared terminals, cursors, comments
-- [Branches](/guide/worktrees) and [Sessions & Trees](/guide/sessions) — Core primitives
+- [Branches](/guide/branches) and [Sessions & Trees](/guide/sessions) — Core primitives
 - [Security](/security) — Trust boundaries and deployment modes

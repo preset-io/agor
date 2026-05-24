@@ -1,26 +1,26 @@
 /**
  * Git Impersonation Utilities
  *
- * Git operations (clone, worktree add/remove/clean) always run as the daemon
+ * Git operations (clone, branch add/remove/clean) always run as the daemon
  * user. We may wrap them in `sudo -u` to force a fresh group membership read
  * via `initgroups()` so the daemon can see `agor_wt_*` groups added at
  * runtime — but only when supplemental groups actually exist.
  *
- * In the open-access default (`worktree_rbac: false`, `unix_user_mode:
+ * In the open-access default (`branch_rbac: false`, `unix_user_mode:
  * simple`) no supplemental groups are ever created, so wrapping in sudo is
  * pure overhead AND breaks for users who never configured passwordless
  * sudoers (#1140). Return undefined in that case so callers spawn directly.
  *
  * The gate lives HERE on purpose: every caller that resolves impersonation
  * needs the same check, and dropping it at a call site is exactly how the
- * sister bug (#1143, `git.worktree.remove`) regressed after #1141 added
+ * sister bug (#1143, `git.branch.remove`) regressed after #1141 added
  * inline `rbacEnabled ? ... : undefined` boilerplate at only two of three
  * caller paths. Callers can spawn directly with the result; no extra gating
  * required.
  */
 
 import type { Database } from '@agor/core/db';
-import type { UserID, Worktree } from '@agor/core/types';
+import type { Branch, UserID } from '@agor/core/types';
 
 /**
  * Resolve the configured daemon user for `sudo -u` group-refresh wrapping,
@@ -78,13 +78,13 @@ export async function resolveGitImpersonationForUser(
 }
 
 /**
- * Resolve Unix user for git operations on a worktree.
+ * Resolve Unix user for git operations on a branch.
  *
  * @see resolveGitImpersonationForUser
  */
-export async function resolveGitImpersonationForWorktree(
+export async function resolveGitImpersonationForBranch(
   db: Database,
-  worktree: Worktree
+  branch: Branch
 ): Promise<string | undefined> {
-  return resolveGitImpersonationForUser(db, worktree.created_by);
+  return resolveGitImpersonationForUser(db, branch.created_by);
 }

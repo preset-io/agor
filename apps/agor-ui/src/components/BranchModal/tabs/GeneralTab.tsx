@@ -1,12 +1,4 @@
-import type {
-  AgorClient,
-  Board,
-  MCPServer,
-  Repo,
-  Session,
-  User,
-  Worktree,
-} from '@agor-live/client';
+import type { AgorClient, Board, Branch, MCPServer, Repo, Session, User } from '@agor-live/client';
 import { hasMinimumRole, isAssistant, ROLES } from '@agor-live/client';
 import { DeleteOutlined, FolderOutlined, LinkOutlined } from '@ant-design/icons';
 import { Button, Descriptions, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
@@ -19,8 +11,8 @@ import { OwnersSection } from '../components/OwnersSection';
 
 const { TextArea } = Input;
 
-export type WorktreeUpdate = Omit<
-  Partial<Worktree>,
+export type BranchUpdate = Omit<
+  Partial<Branch>,
   'issue_url' | 'pull_request_url' | 'notes' | 'board_id'
 > & {
   board_id?: string | null | undefined;
@@ -30,16 +22,16 @@ export type WorktreeUpdate = Omit<
 };
 
 interface GeneralTabProps {
-  worktree: Worktree;
+  branch: Branch;
   repo: Repo;
-  sessions: Session[]; // Used to count sessions for this worktree
+  sessions: Session[]; // Used to count sessions for this branch
   boards?: Board[];
   mcpServers?: MCPServer[];
   client?: AgorClient | null;
   currentUser?: User | null;
-  onUpdate?: (worktreeId: string, updates: WorktreeUpdate) => void;
+  onUpdate?: (branchId: string, updates: BranchUpdate) => void;
   onArchiveOrDelete?: (
-    worktreeId: string,
+    branchId: string,
     options: {
       metadataAction: 'archive' | 'delete';
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
@@ -49,7 +41,7 @@ interface GeneralTabProps {
 }
 
 export const GeneralTab: React.FC<GeneralTabProps> = ({
-  worktree,
+  branch,
   repo,
   sessions,
   boards = [],
@@ -64,11 +56,11 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
 
   // Track if this is the initial mount to prevent overwriting user input
   const [isInitialized, setIsInitialized] = useState(false);
-  const [boardId, setBoardId] = useState(worktree.board_id || undefined);
-  const [issueUrl, setIssueUrl] = useState(worktree.issue_url || '');
-  const [prUrl, setPrUrl] = useState(worktree.pull_request_url || '');
-  const [notes, setNotes] = useState(worktree.notes || '');
-  const [mcpServerIds, setMcpServerIds] = useState<string[]>(worktree.mcp_server_ids || []);
+  const [boardId, setBoardId] = useState(branch.board_id || undefined);
+  const [issueUrl, setIssueUrl] = useState(branch.issue_url || '');
+  const [prUrl, setPrUrl] = useState(branch.pull_request_url || '');
+  const [notes, setNotes] = useState(branch.notes || '');
+  const [mcpServerIds, setMcpServerIds] = useState<string[]>(branch.mcp_server_ids || []);
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const [owners, setOwners] = useState<User[]>([]);
   const [loadingOwners, setLoadingOwners] = useState(true);
@@ -76,23 +68,23 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   // Only sync local state on first mount, not on every prop change (to prevent overwriting user input)
   useEffect(() => {
     if (!isInitialized) {
-      setBoardId(worktree.board_id || undefined);
-      setIssueUrl(worktree.issue_url || '');
-      setPrUrl(worktree.pull_request_url || '');
-      setNotes(worktree.notes || '');
-      setMcpServerIds(worktree.mcp_server_ids || []);
+      setBoardId(branch.board_id || undefined);
+      setIssueUrl(branch.issue_url || '');
+      setPrUrl(branch.pull_request_url || '');
+      setNotes(branch.notes || '');
+      setMcpServerIds(branch.mcp_server_ids || []);
       setIsInitialized(true);
     }
   }, [
     isInitialized,
-    worktree.board_id,
-    worktree.issue_url,
-    worktree.pull_request_url,
-    worktree.notes,
-    worktree.mcp_server_ids,
+    branch.board_id,
+    branch.issue_url,
+    branch.pull_request_url,
+    branch.notes,
+    branch.mcp_server_ids,
   ]);
 
-  // Load worktree owners to check edit permissions
+  // Load branch owners to check edit permissions
   const [rbacActive, setRbacActive] = useState(true);
   useEffect(() => {
     if (!client) {
@@ -103,8 +95,8 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
     const loadOwners = async () => {
       try {
         setLoadingOwners(true);
-        const ownersResponse = await client.service('worktrees/:id/owners').find({
-          route: { id: worktree.worktree_id },
+        const ownersResponse = await client.service('branches/:id/owners').find({
+          route: { id: branch.branch_id },
         });
         setOwners(ownersResponse as User[]);
         setRbacActive(true);
@@ -118,9 +110,9 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
     };
 
     loadOwners();
-  }, [client, worktree.worktree_id]);
+  }, [client, branch.branch_id]);
 
-  // Check if current user can edit this worktree
+  // Check if current user can edit this branch
   // When RBAC is disabled, all authenticated members can edit
   // When RBAC is enabled, owners and admins can edit
   const currentUserId = currentUser?.user_id;
@@ -131,47 +123,47 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
 
   const mcpChanged =
     JSON.stringify([...mcpServerIds].sort()) !==
-    JSON.stringify([...(worktree.mcp_server_ids || [])].sort());
+    JSON.stringify([...(branch.mcp_server_ids || [])].sort());
 
   // For assistants, notes is edited as "Description" in the Assistant tab — exclude from General tab
-  const isAssistantWorktree = isAssistant(worktree);
-  const notesChanged = !isAssistantWorktree && notes !== (worktree.notes || '');
+  const isAssistantBranch = isAssistant(branch);
+  const notesChanged = !isAssistantBranch && notes !== (branch.notes || '');
 
   const hasChanges =
-    boardId !== worktree.board_id ||
-    issueUrl !== (worktree.issue_url || '') ||
-    prUrl !== (worktree.pull_request_url || '') ||
+    boardId !== branch.board_id ||
+    issueUrl !== (branch.issue_url || '') ||
+    prUrl !== (branch.pull_request_url || '') ||
     notesChanged ||
     mcpChanged;
 
   const handleSave = () => {
-    const updates: WorktreeUpdate = {
+    const updates: BranchUpdate = {
       board_id: boardId || undefined,
       issue_url: (issueUrl.trim() === '' ? null : issueUrl) as string | null | undefined,
       pull_request_url: (prUrl.trim() === '' ? null : prUrl) as string | null | undefined,
-      ...(!isAssistantWorktree
+      ...(!isAssistantBranch
         ? { notes: (notes.trim() === '' ? null : notes) as string | null | undefined }
         : {}),
       ...(mcpChanged ? { mcp_server_ids: mcpServerIds } : {}),
     };
-    onUpdate?.(worktree.worktree_id, updates);
+    onUpdate?.(branch.branch_id, updates);
     showSuccess('Branch updated');
     onClose?.();
   };
 
   const handleCancel = () => {
-    setBoardId(worktree.board_id || undefined);
-    setIssueUrl(worktree.issue_url || '');
-    setPrUrl(worktree.pull_request_url || '');
-    setNotes(worktree.notes || '');
-    setMcpServerIds(worktree.mcp_server_ids || []);
+    setBoardId(branch.board_id || undefined);
+    setIssueUrl(branch.issue_url || '');
+    setPrUrl(branch.pull_request_url || '');
+    setNotes(branch.notes || '');
+    setMcpServerIds(branch.mcp_server_ids || []);
   };
 
   const handleArchiveOrDelete = (options: {
     metadataAction: 'archive' | 'delete';
     filesystemAction: 'preserved' | 'cleaned' | 'deleted';
   }) => {
-    onArchiveOrDelete?.(worktree.worktree_id, options);
+    onArchiveOrDelete?.(branch.branch_id, options);
   };
 
   return (
@@ -180,8 +172,8 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
         {/* Basic Information */}
         <Descriptions column={1} bordered size="small">
           <Descriptions.Item label="Name">
-            <Typography.Text strong>{worktree.name}</Typography.Text>
-            {worktree.new_branch && (
+            <Typography.Text strong>{branch.name}</Typography.Text>
+            {branch.new_branch && (
               <Tag color="green" style={{ marginLeft: 8, fontSize: 11 }}>
                 New Branch
               </Tag>
@@ -194,24 +186,24 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
             </Space>
           </Descriptions.Item>
           <Descriptions.Item label="Branch">
-            <Typography.Text code>{worktree.ref}</Typography.Text>
+            <Typography.Text code>{branch.ref}</Typography.Text>
           </Descriptions.Item>
-          {worktree.base_ref && (
-            <Descriptions.Item label={worktree.ref_type === 'tag' ? 'Base Tag' : 'Base Branch'}>
+          {branch.base_ref && (
+            <Descriptions.Item label={branch.ref_type === 'tag' ? 'Base Tag' : 'Base Branch'}>
               <Typography.Text code>
-                {worktree.base_ref}
-                {worktree.base_sha && ` (${worktree.base_sha.substring(0, 7)})`}
+                {branch.base_ref}
+                {branch.base_sha && ` (${branch.base_sha.substring(0, 7)})`}
               </Typography.Text>
             </Descriptions.Item>
           )}
-          {worktree.tracking_branch && (
+          {branch.tracking_branch && (
             <Descriptions.Item label="Tracking">
-              <Typography.Text code>{worktree.tracking_branch}</Typography.Text>
+              <Typography.Text code>{branch.tracking_branch}</Typography.Text>
             </Descriptions.Item>
           )}
-          {worktree.last_commit_sha && (
+          {branch.last_commit_sha && (
             <Descriptions.Item label="Current SHA">
-              <Typography.Text code>{worktree.last_commit_sha.substring(0, 7)}</Typography.Text>
+              <Typography.Text code>{branch.last_commit_sha.substring(0, 7)}</Typography.Text>
             </Descriptions.Item>
           )}
           <Descriptions.Item label="Path">
@@ -219,11 +211,11 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
               code
               style={{ fontSize: 11 }}
               copyable={{
-                text: worktree.path,
+                text: branch.path,
                 tooltips: ['Copy path', 'Copied!'],
               }}
             >
-              {worktree.path}
+              {branch.path}
             </Typography.Text>
           </Descriptions.Item>
         </Descriptions>
@@ -271,7 +263,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
             </Form.Item>
 
             {/* Hide Notes for assistants — edited as "Description" in the Assistant tab */}
-            {!isAssistant(worktree) && (
+            {!isAssistant(branch) && (
               <Form.Item
                 label={
                   <Space size={4}>
@@ -322,15 +314,15 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
         </div>
 
         {/* Owners & Permissions */}
-        <OwnersSection worktree={worktree} client={client} currentUser={currentUser} />
+        <OwnersSection branch={branch} client={client} currentUser={currentUser} />
 
         {/* Timestamps */}
         <Descriptions column={2} bordered size="small">
           <Descriptions.Item label="Created">
-            {new Date(worktree.created_at).toLocaleString()}
+            {new Date(branch.created_at).toLocaleString()}
           </Descriptions.Item>
           <Descriptions.Item label="Last Used">
-            {worktree.last_used ? new Date(worktree.last_used).toLocaleString() : 'Never'}
+            {branch.last_used ? new Date(branch.last_used).toLocaleString() : 'Never'}
           </Descriptions.Item>
         </Descriptions>
 
@@ -354,9 +346,9 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
         </Space>
         <ArchiveDeleteBranchModal
           open={archiveDeleteModalOpen}
-          worktree={worktree}
+          branch={branch}
           sessionCount={sessions.length}
-          environmentRunning={worktree.environment_instance?.status === 'running'}
+          environmentRunning={branch.environment_instance?.status === 'running'}
           onConfirm={(options) => {
             handleArchiveOrDelete(options);
             setArchiveDeleteModalOpen(false);

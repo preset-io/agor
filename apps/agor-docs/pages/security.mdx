@@ -23,7 +23,7 @@ This page covers the **four deployment modes** Agor supports, what each enforces
 
 Agor has four canonical modes. Choose based on **who shares the daemon** and **how much you trust them**.
 
-| Mode | `worktree_rbac` | `unix_user_mode` | Who's it for? |
+| Mode | `branch_rbac` | `unix_user_mode` | Who's it for? |
 |---|---|---|---|
 | **Dev / Solo** | `false` | `simple` | Personal machine, trusted team of one |
 | **Local Team** | `true` | `simple` | Small team, RBAC for organization, no Unix isolation |
@@ -33,7 +33,7 @@ Agor has four canonical modes. Choose based on **who shares the daemon** and **h
 ```yaml
 # ~/.agor/config.yaml
 execution:
-  worktree_rbac: false        # default: false
+  branch_rbac: false        # default: false
   unix_user_mode: simple       # simple | insulated | strict
   executor_unix_user: agor_executor   # required for insulated
 ```
@@ -46,7 +46,7 @@ The full setup guide for **Insulated** and **Strict** is in **[Full Multiplayer 
 
 ```yaml
 execution:
-  worktree_rbac: false
+  branch_rbac: false
   unix_user_mode: simple
 ```
 
@@ -74,7 +74,7 @@ execution:
 
 ```yaml
 execution:
-  worktree_rbac: true
+  branch_rbac: true
   unix_user_mode: simple
 ```
 
@@ -98,7 +98,7 @@ App-layer permission checks for branch ownership and access tiers. No OS-level i
 
 ```yaml
 execution:
-  worktree_rbac: true
+  branch_rbac: true
   unix_user_mode: insulated
   executor_unix_user: agor_executor
 ```
@@ -123,7 +123,7 @@ Adds per-branch Unix groups (`agor_wt_*`) and a dedicated executor user. Filesys
 
 ```yaml
 execution:
-  worktree_rbac: true
+  branch_rbac: true
   unix_user_mode: strict
 ```
 
@@ -144,7 +144,7 @@ Each Agor user must have a `unix_username`. Sessions execute as that user. Per-u
 
 ## Branch Permission Tiers (RBAC)
 
-When `worktree_rbac: true` is set, every branch has owners plus an `others_can` tier that controls what non-owners may do:
+When `branch_rbac: true` is set, every branch has owners plus an `others_can` tier that controls what non-owners may do:
 
 | Tier | What others can do |
 |---|---|

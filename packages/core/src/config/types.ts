@@ -2,9 +2,9 @@
  * Agor Configuration Types
  */
 
+import type { BranchPermissionLevel } from '../types/branch';
 import type { DaemonResourcesConfig } from '../types/config-resources';
 import type { UserRole } from '../types/user';
-import type { WorktreePermissionLevel } from '../types/worktree';
 
 /**
  * Minimum role allowed to trigger managed environment commands
@@ -112,7 +112,7 @@ export interface AgorDaemonSettings {
   mcpToolSearch?: boolean;
 
   /** Unix user the daemon runs as. Used to ensure daemon has access to all Unix groups.
-   * Required when Unix isolation is enabled (worktree_rbac or unix_user_mode).
+   * Required when Unix isolation is enabled (branch_rbac or unix_user_mode).
    * In dev mode without isolation, falls back to current process user. */
   unix_user?: string;
 
@@ -238,7 +238,7 @@ export interface AgorDatabaseSettings {
  * OS identities.
  *
  * - `simple` — all processes run as the daemon user (no OS isolation)
- * - `insulated` — executors run as a dedicated user with per-worktree groups
+ * - `insulated` — executors run as a dedicated user with per-branch groups
  * - `strict` — sessions run as the session creator's own Unix user
  */
 export type UnixUserMode = 'simple' | 'insulated' | 'strict';
@@ -250,11 +250,11 @@ export interface AgorExecutionSettings {
   /** Unix user to run executors as (default: undefined = run as daemon user). When set, uses sudo impersonation. */
   executor_unix_user?: string;
 
-  /** Unix user mode: simple (no isolation), insulated (worktree groups), strict (enforce process impersonation) */
+  /** Unix user mode: simple (no isolation), insulated (branch groups), strict (enforce process impersonation) */
   unix_user_mode?: UnixUserMode;
 
-  /** Enable worktree RBAC and ownership system (default: false). When enabled, enforces permission checks and Unix group isolation. */
-  worktree_rbac?: boolean;
+  /** Enable branch RBAC and ownership system (default: false). When enabled, enforces permission checks and Unix group isolation. */
+  branch_rbac?: boolean;
 
   /**
    * Allow authenticated members (and above) to open the web terminal (default: true).
@@ -270,12 +270,12 @@ export interface AgorExecutionSettings {
    * account) or `insulated` (shared executor user, no daemon access). The
    * daemon emits a startup warning when this flag is enabled in `simple` mode.
    *
-   * Worktree-level permissions still apply: opening a terminal against a
-   * worktree requires at least `session` permission on that worktree.
+   * Branch-level permissions still apply: opening a terminal against a
+   * branch requires at least `session` permission on that branch.
    */
   allow_web_terminal?: boolean;
 
-  /** Allow superadmin role (default: false). When true, superadmin role gets worktree RBAC bypass. Opt-in for self-hosted deployments. */
+  /** Allow superadmin role (default: false). When true, superadmin role gets branch RBAC bypass. Opt-in for self-hosted deployments. */
   allow_superadmin?: boolean;
 
   /**
@@ -352,7 +352,7 @@ export interface AgorExecutionSettings {
    * - {unix_user_uid} - Target Unix UID (for runAsUser)
    * - {unix_user_gid} - Target Unix GID (for fsGroup)
    * - {session_id} - Session ID (if available)
-   * - {worktree_id} - Worktree ID (if available)
+   * - {branch_id} - Branch ID (if available)
    *
    * The template command receives JSON payload via stdin and should pipe it
    * to `agor-executor --stdin`.
@@ -406,7 +406,7 @@ export interface AgorExecutionSettings {
 
   /**
    * Minimum role required to *trigger* managed environment commands
-   * (start/stop/nuke/logs) for a worktree.
+   * (start/stop/nuke/logs) for a branch.
    *
    * - `'none'` — disables triggers for everyone (kill switch; authoring is still allowed)
    * - `'viewer'` — any authenticated user
@@ -421,25 +421,36 @@ export interface AgorExecutionSettings {
    * `requireAdminForEnvConfig`. This flag is orthogonal and controls who can
    * *trigger* those admin-authored commands.
    *
-   * Worktree-level RBAC (`others_can` on each worktree) still applies on top
-   * of this flag when `worktree_rbac: true`.
+   * Branch-level RBAC (`others_can` on each branch) still applies on top
+   * of this flag when `branch_rbac: true`.
    */
   managed_envs_minimum_role?: ManagedEnvsMinimumRole;
 
   /**
    * Branch storage configuration — operator gate for which storage modes a
-   * worktree can be created with. The API/UI/MCP `storage_mode` field is
+   * branch can be created with. The API/UI/MCP `storage_mode` field is
    * always exposed (stable shape), but requests for a mode not listed in
    * `allowed_modes` are rejected at the daemon service boundary with a
    * clear "enable it in config" error.
    *
-   * See docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.
+   * v0.20+ default already allows both `worktree` and `clone` with
+   * `default_mode: worktree`, so this block is only needed when an
+   * operator wants to deviate. See `context/explorations/clone-redesign.md`
+   * for the storage-model design.
    *
-   * @example Operator opt-in to clone mode
+   * @example Disable clone mode entirely (security-gradient deployment)
    * ```yaml
    * execution:
    *   branch_storage:
-   *     default_mode: worktree
+   *     allowed_modes:
+   *       - worktree
+   * ```
+   *
+   * @example Make clone the default backing for new branches
+   * ```yaml
+   * execution:
+   *   branch_storage:
+   *     default_mode: clone
    *     allowed_modes:
    *       - worktree
    *       - clone
@@ -449,7 +460,7 @@ export interface AgorExecutionSettings {
 }
 
 /**
- * Storage model for a worktree's filesystem.
+ * Storage model for a branch's filesystem.
  *
  * - `'worktree'` — native `git worktree add` (shared base `.git/config`,
  *   legacy default).
@@ -459,10 +470,11 @@ export interface AgorExecutionSettings {
 export type BranchStorageMode = 'worktree' | 'clone';
 
 /**
- * Operator gate for which storage modes can be selected at worktree-create
- * time. Defaults preserve legacy behaviour: only `'worktree'` is enabled
- * and `default_mode` is `'worktree'`. Adding `'clone'` to `allowed_modes`
- * opts the instance in to the self-standing-clone path.
+ * Operator gate for which storage modes can be selected at branch-create
+ * time. Defaults (v0.20+) enable both modes so users can pick per branch;
+ * `default_mode` stays on `'worktree'` for backwards compatibility. Pin
+ * `allowed_modes: ['worktree']` to disable clone mode entirely (e.g. for
+ * security gradient reasons).
  */
 export interface AgorBranchStorageSettings {
   /**
@@ -473,8 +485,8 @@ export interface AgorBranchStorageSettings {
 
   /**
    * Storage modes the operator has enabled for this instance. Requests for
-   * a mode not in this list are rejected. Default: `['worktree']` — clone
-   * mode is opt-in until promoted in a later cycle.
+   * a mode not in this list are rejected. Default: `['worktree', 'clone']`
+   * — both modes selectable from the UI / MCP tool out of the box.
    */
   allowed_modes?: BranchStorageMode[];
 }
@@ -656,16 +668,16 @@ export interface AgorSecuritySettings {
  * Path configuration settings
  *
  * Allows separation of daemon operating files from git data files.
- * This enables different storage backends (e.g., local SSD for daemon, EFS for worktrees).
+ * This enables different storage backends (e.g., local SSD for daemon, EFS for branches).
  *
  * @see context/explorations/executor-expansion.md
  */
 export interface AgorPathSettings {
   /**
-   * Git data directory (repos, worktrees)
+   * Git data directory (repos, branches)
    *
-   * When set, repos and worktrees are stored here instead of under agor_home.
-   * Useful for k8s deployments where worktrees need to be on shared storage (EFS).
+   * When set, repos and branches are stored here instead of under agor_home.
+   * Useful for k8s deployments where branches need to be on shared storage (EFS).
    *
    * Default: same as agor_home (~/.agor)
    *
@@ -730,17 +742,17 @@ export interface AgorOnboardingSettings {
 }
 
 /**
- * Worktree-level defaults.
+ * Branch-level defaults.
  *
- * Top-level `worktrees:` section (not under `execution:`) because these
- * settings shape *how worktrees are created*, not how sessions execute.
- * Ignored when `execution.worktree_rbac: false` (open-access mode has no
- * per-worktree ACL to default).
+ * Top-level `branches:` section (not under `execution:`) because these
+ * settings shape *how branches are created*, not how sessions execute.
+ * Ignored when `execution.branch_rbac: false` (open-access mode has no
+ * per-branch ACL to default).
  */
-export interface AgorWorktreesSettings {
+export interface AgorBranchesSettings {
   /**
-   * Default value for a new worktree's `others_can` when the caller doesn't
-   * specify one. Controls what non-owners can do on the worktree.
+   * Default value for a new branch's `others_can` when the caller doesn't
+   * specify one. Controls what non-owners can do on the branch.
    *
    * - `'none'`  — private to owners
    * - `'view'`  — read-only access
@@ -750,15 +762,15 @@ export interface AgorWorktreesSettings {
    *
    * Default: `'session'` (matches current repository-layer default).
    */
-  others_can_default?: WorktreePermissionLevel;
+  others_can_default?: BranchPermissionLevel;
 
   /**
-   * Default filesystem access tier for non-owners on new worktrees.
+   * Default filesystem access tier for non-owners on new branches.
    * Only meaningful in `unix_user_mode: insulated` or `strict`.
    *
    * - `'none'`  — no filesystem access
-   * - `'read'`  (default) — read-only via worktree group
-   * - `'write'` — full write access via worktree group
+   * - `'read'`  (default) — read-only via branch group
+   * - `'write'` — full write access via branch group
    */
   others_fs_access_default?: 'none' | 'read' | 'write';
 }
@@ -827,10 +839,10 @@ export interface AgorConfig {
   /** Security headers & CORS (CSP extras/override, CORS mode/origins, etc.) */
   security?: AgorSecuritySettings;
 
-  /** Worktree-level defaults (others_can_default, others_fs_access_default) */
-  worktrees?: AgorWorktreesSettings;
+  /** Branch-level defaults (others_can_default, others_fs_access_default) */
+  branches?: AgorBranchesSettings;
 
-  /** Path configuration (data_home for repos/worktrees separation) */
+  /** Path configuration (data_home for repos/branches separation) */
   paths?: AgorPathSettings;
 
   /** Tool credentials (API keys, tokens) */
@@ -862,7 +874,7 @@ export interface AgorConfig {
    * ```yaml
    * services:
    *   core: on
-   *   worktrees: on
+   *   branches: on
    *   repos: readonly
    *   users: internal
    *   boards: off
@@ -884,7 +896,7 @@ export type ConfigKey =
   | `opencode.${keyof AgorOpenCodeSettings}`
   | `execution.${keyof AgorExecutionSettings}`
   | `security.${keyof AgorSecuritySettings}`
-  | `worktrees.${keyof AgorWorktreesSettings}`
+  | `branches.${keyof AgorBranchesSettings}`
   | `paths.${keyof AgorPathSettings}`
   | `credentials.${keyof AgorCredentials}`
   | `onboarding.${keyof AgorOnboardingSettings}`

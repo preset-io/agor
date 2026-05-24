@@ -14,13 +14,13 @@
 
 import { generateId, shortId } from '@agor/core/db';
 import type {
+  BranchRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
   SessionMCPServerRepository,
   SessionRepository,
   UsersRepository,
-  WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
@@ -71,7 +71,7 @@ export class CopilotTool implements ITool {
     messagesRepo?: MessagesRepository,
     sessionsRepo?: SessionRepository,
     sessionMCPServerRepo?: SessionMCPServerRepository,
-    worktreesRepo?: WorktreeRepository,
+    branchesRepo?: BranchRepository,
     reposRepo?: RepoRepository,
     apiKey?: string,
     messagesService?: MessagesService,
@@ -92,7 +92,7 @@ export class CopilotTool implements ITool {
         messagesRepo,
         sessionsRepo,
         sessionMCPServerRepo,
-        worktreesRepo,
+        branchesRepo,
         reposRepo,
         apiKey,
         mcpServerRepo,

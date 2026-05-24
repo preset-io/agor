@@ -24,13 +24,13 @@ type Part = GenAI.Part;
 import { shortId } from '@agor/core/db';
 import { getDaemonUrl } from '../../config.js';
 import type {
+  BranchRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
   SessionMCPServerRepository,
   SessionRepository,
   UsersRepository,
-  WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
@@ -95,7 +95,7 @@ export class GeminiPromptService {
     _messagesRepo: MessagesRepository,
     private sessionsRepo: SessionRepository,
     apiKey?: string,
-    private worktreesRepo?: WorktreeRepository,
+    private branchesRepo?: BranchRepository,
     private reposRepo?: RepoRepository,
     private mcpServerRepo?: MCPServerRepository,
     private sessionMCPRepo?: SessionMCPServerRepository,
@@ -594,30 +594,30 @@ export class GeminiPromptService {
     }
 
     // Session was already fetched above for API key resolution
-    // Determine working directory from worktree (worktree-centric architecture)
+    // Determine working directory from branch (branch-centric architecture)
     let workingDirectory = process.cwd();
-    if (session.worktree_id && this.worktreesRepo) {
+    if (session.branch_id && this.branchesRepo) {
       try {
-        const worktree = await this.worktreesRepo.findById(session.worktree_id);
-        if (worktree) {
-          workingDirectory = worktree.path;
-          console.log(`✅ Using worktree path as cwd: ${workingDirectory}`);
+        const branch = await this.branchesRepo.findById(session.branch_id);
+        if (branch) {
+          workingDirectory = branch.path;
+          console.log(`✅ Using branch path as cwd: ${workingDirectory}`);
         } else {
           console.warn(
-            `⚠️  Session ${sessionId} references non-existent worktree ${session.worktree_id}, using process.cwd(): ${workingDirectory}`
+            `⚠️  Session ${sessionId} references non-existent branch ${session.branch_id}, using process.cwd(): ${workingDirectory}`
           );
         }
       } catch (error) {
-        console.error(`❌ Failed to fetch worktree ${session.worktree_id}:`, error);
+        console.error(`❌ Failed to fetch branch ${session.branch_id}:`, error);
         console.warn(`   Falling back to process.cwd(): ${workingDirectory}`);
       }
-    } else if (!this.worktreesRepo) {
+    } else if (!this.branchesRepo) {
       console.warn(
-        `⚠️  GeminiPromptService initialized without worktreesRepo, using process.cwd(): ${workingDirectory}`
+        `⚠️  GeminiPromptService initialized without branchesRepo, using process.cwd(): ${workingDirectory}`
       );
     } else {
       console.warn(
-        `⚠️  Session ${sessionId} has no worktree_id, using process.cwd(): ${workingDirectory}`
+        `⚠️  Session ${sessionId} has no branch_id, using process.cwd(): ${workingDirectory}`
       );
     }
 
@@ -637,7 +637,7 @@ export class GeminiPromptService {
     // User's project GEMINI.md files are still loaded hierarchically.
     const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
       sessions: this.sessionsRepo,
-      worktrees: this.worktreesRepo,
+      branches: this.branchesRepo,
       repos: this.reposRepo,
       users: this.usersRepo,
     });
@@ -711,7 +711,7 @@ export class GeminiPromptService {
               server.command,
               server.args || [],
               server.env || {},
-              workingDirectory // Use worktree path as cwd
+              workingDirectory // Use branch path as cwd
             );
           } else if (server.transport === 'http') {
             // HTTP transport: use httpUrl parameter

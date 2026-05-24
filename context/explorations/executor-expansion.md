@@ -34,7 +34,7 @@
 **Expand the executor from an "SDK wrapper" to a unified isolation pivot point** for all operations that:
 
 1. Need Unix user impersonation
-2. Touch the git-related filesystem (repos, worktrees, groups/permissions)
+2. Touch the git-related filesystem (repos, branches, groups/permissions)
 3. May run remotely (k8s pods, containers)
 4. Manage terminal sessions (Zellij)
 
@@ -50,10 +50,10 @@
 
 ### What This Enables
 
-- **Daemon never touches data/ filesystem** - all git/worktree operations through executor
+- **Daemon never touches data/ filesystem** - all git/branch operations through executor
 - **Remote execution** - k8s pods can run executor commands
 - **Clean impersonation** - sudo happens in one place (executor entry)
-- **Shared storage** - worktrees on EFS, daemon config on local SSD
+- **Shared storage** - branches on EFS, daemon config on local SSD
 
 ---
 
@@ -91,7 +91,7 @@
 | ---------------- | ----------------------- | -------------------------------- |
 | Zellij terminals | `services/terminals.ts` | PTY spawn via `buildSpawnArgs()` |
 | Git clone        | `@agor/core/git`        | sudo wrapper script              |
-| Git worktree     | `@agor/core/git`        | sudo wrapper script              |
+| Git branch       | `@agor/core/git`        | sudo wrapper script              |
 | Unix groups      | `@agor/core/unix`       | `SudoCliExecutor`                |
 | ACL management   | `@agor/core/unix`       | `SudoCliExecutor`                |
 
@@ -136,7 +136,7 @@
 │  Commands:                                                           │
 │  - prompt     → Execute agent SDK (Claude/Gemini/Codex)             │
 │  - git.clone  → Clone repository                                    │
-│  - git.worktree.add/remove → Manage worktrees                       │
+│  - git.branch.add/remove → Manage branches                       │
 │  - unix.group.* → Create/manage Unix groups                         │
 │  - unix.acl.* → Set filesystem ACLs                                 │
 │  - zellij.attach → Attach to Zellij session                         │
@@ -151,7 +151,7 @@
 │  │   └── github.com/                                                │
 │  │       └── preset-io/                                             │
 │  │           └── agor.git                                           │
-│  ├── worktrees/       # Git worktrees                               │
+│  ├── branches/       # Git branches                               │
 │  │   └── preset-io/                                                 │
 │  │       └── agor/                                                  │
 │  │           ├── main/                                              │
@@ -180,7 +180,7 @@
 │  Daemon                                                          │
 │                                                                  │
 │  - Validates request, resolves user context                     │
-│  - Creates DB records (repo, worktree, task)                    │
+│  - Creates DB records (repo, branch, task)                    │
 │  - Constructs ExecutorPayload                                   │
 │  - Spawns executor (local or via template)                      │
 │  - Receives results, updates DB, broadcasts WebSocket           │
@@ -210,13 +210,13 @@
 - `config.yaml` (daemon config)
 - `agor.db` (database)
 - `repos/` (git repositories)
-- `worktrees/` (git worktrees)
+- `branches/` (git branches)
 - `logs/` (daemon logs)
 
 **Problem:** Can't separate daemon from data storage. In k8s:
 
 - Daemon runs in a pod with local SSD for config/db
-- Worktrees should be on shared storage (EFS) for executor pods to access
+- Branches should be on shared storage (EFS) for executor pods to access
 
 ### New Structure
 
@@ -236,7 +236,7 @@ AGOR_HOME/
 
 # AGOR_DATA_HOME (git data directory)
 # Default: $AGOR_HOME (backward compatible)
-# Contains: repos, worktrees, zellij state
+# Contains: repos, branches, zellij state
 # Storage: can be EFS/NFS (shared with k8s pods)
 
 AGOR_DATA_HOME/
@@ -244,10 +244,10 @@ AGOR_DATA_HOME/
 │   └── {provider}/
 │       └── {org}/
 │           └── {repo}.git
-├── worktrees/           # Git worktrees
+├── branches/           # Git branches
 │   └── {org}/
 │       └── {repo}/
-│           └── {worktree-name}/
+│           └── {branch-name}/
 └── zellij/              # Zellij session state
     └── sessions/
         └── {session-name}/
@@ -264,14 +264,14 @@ paths:
   # Default: ~/.agor/
   agor_home: ~/.agor/
 
-  # Where git repos and worktrees are stored
+  # Where git repos and branches are stored
   # Default: same as agor_home (backward compatible)
   # Can be set to shared storage for k8s deployments
   data_home: /data/agor/
 
   # Explicit overrides (rarely needed)
   repos_dir: /data/agor/repos/ # Default: $AGOR_DATA_HOME/repos/
-  worktrees_dir: /data/agor/worktrees/ # Default: $AGOR_DATA_HOME/worktrees/
+  branches_dir: /data/agor/worktrees/ # Default: $AGOR_DATA_HOME/branches/
   zellij_dir: /data/agor/zellij/ # Default: $AGOR_DATA_HOME/zellij/
 ```
 
@@ -337,8 +337,8 @@ agor-executor --session-token xxx --prompt "hello" --tool claude-code
 export type ExecutorPayload =
   | PromptPayload
   | GitClonePayload
-  | GitWorktreeAddPayload
-  | GitWorktreeRemovePayload
+  | GitBranchAddPayload
+  | GitBranchRemovePayload
   | ZellijAttachPayload;
 
 /**
@@ -402,20 +402,20 @@ interface GitClonePayload extends BasePayload {
 }
 
 /**
- * Git worktree add payload
+ * Git branch add payload
  */
-interface GitWorktreeAddPayload extends BasePayload {
-  command: 'git.worktree.add';
+interface GitBranchAddPayload extends BasePayload {
+  command: 'git.branch.add';
 
   params: {
     /** Path to the repository */
     repoPath: string;
 
-    /** Name for the worktree */
-    worktreeName: string;
+    /** Name for the branch */
+    branchName: string;
 
-    /** Path where worktree will be created */
-    worktreePath: string;
+    /** Path where branch will be created */
+    branchPath: string;
 
     /** Branch to checkout or create */
     branch?: string;
@@ -429,14 +429,14 @@ interface GitWorktreeAddPayload extends BasePayload {
 }
 
 /**
- * Git worktree remove payload
+ * Git branch remove payload
  */
-interface GitWorktreeRemovePayload extends BasePayload {
-  command: 'git.worktree.remove';
+interface GitBranchRemovePayload extends BasePayload {
+  command: 'git.branch.remove';
 
   params: {
-    /** Path to the worktree to remove */
-    worktreePath: string;
+    /** Path to the branch to remove */
+    branchPath: string;
 
     /** Force removal even if dirty */
     force?: boolean;
@@ -456,7 +456,7 @@ interface ZellijAttachPayload extends BasePayload {
     /** Working directory */
     cwd: string;
 
-    /** Tab name (worktree name) */
+    /** Tab name (branch name) */
     tabName?: string;
 
     /** Create session if doesn't exist */
@@ -600,38 +600,38 @@ async function readStdin(): Promise<string> {
 **Impersonation:** Runs as daemon's Unix user (needs group access)
 **Needs sudo:** Yes, for group ownership setup (handled internally)
 
-### Command: `git.worktree.add`
+### Command: `git.branch.add`
 
-**Purpose:** Create a git worktree with full Unix setup
+**Purpose:** Create a git branch with full Unix setup
 
 **Lifecycle:**
 
 1. Daemon validates request, generates session token
-2. Daemon spawns executor with git.worktree.add payload
+2. Daemon spawns executor with git.branch.add payload
 3. Executor connects to daemon, authenticates
-4. Executor creates worktree group (internal Unix op)
+4. Executor creates branch group (internal Unix op)
 5. Executor runs `git worktree add`
 6. Executor sets ACLs and group ownership (internal Unix op)
-7. Executor creates Worktree record via `worktrees.create()`
-8. Feathers hooks broadcast 'worktrees created' event
+7. Executor creates Branch record via `branches.create()`
+8. Feathers hooks broadcast 'branches created' event
 9. Executor exits
 
 **Impersonation:** Runs as daemon's Unix user
 **Needs sudo:** Yes, for group creation and ACLs (handled internally)
 
-### Command: `git.worktree.remove`
+### Command: `git.branch.remove`
 
-**Purpose:** Remove a git worktree and cleanup Unix resources
+**Purpose:** Remove a git branch and cleanup Unix resources
 
 **Lifecycle:**
 
 1. Daemon validates request, generates session token
-2. Daemon spawns executor with git.worktree.remove payload
+2. Daemon spawns executor with git.branch.remove payload
 3. Executor connects to daemon, authenticates
 4. Executor runs `git worktree remove`
-5. Executor removes worktree group (internal Unix op)
-6. Executor removes Worktree record via `worktrees.remove()`
-7. Feathers hooks broadcast 'worktrees removed' event
+5. Executor removes branch group (internal Unix op)
+6. Executor removes Branch record via `branches.remove()`
+7. Feathers hooks broadcast 'branches removed' event
 8. Executor exits
 
 ### Command: `zellij.attach`
@@ -659,7 +659,7 @@ async function readStdin(): Promise<string> {
 
 **Rationale:**
 
-- Unix ops are always in service of git (repo groups, worktree ACLs)
+- Unix ops are always in service of git (repo groups, branch ACLs)
 - Bundling them reduces round-trips and ensures atomic transactions
 - Executor handles sudo internally via impersonation
 - Simplifies the command surface area
@@ -787,7 +787,7 @@ async function spawnWithTemplate(
 
 - `AGOR_DATA_HOME` mounted as PVC (EFS, NFS, etc.)
 - All executor pods mount same PVC
-- Worktrees accessible from any pod
+- Branches accessible from any pod
 
 **Network:**
 
@@ -892,15 +892,15 @@ async function runAsUser(asUser: string, payload: ExecutorPayload): Promise<any>
 
 ### Which Commands Need Impersonation
 
-| Command               | Impersonation    | Reason                       |
-| --------------------- | ---------------- | ---------------------------- |
-| `prompt`              | User's Unix user | Agent runs in user's context |
-| `git.clone`           | Daemon user      | Repo owned by daemon         |
-| `git.worktree.add`    | Daemon user      | Sets up group permissions    |
-| `git.worktree.remove` | Daemon user      | Removes group                |
-| `unix.group.*`        | Root (sudo)      | Group management             |
-| `unix.acl.*`          | Root (sudo)      | ACL management               |
-| `zellij.attach`       | User's Unix user | Terminal in user's context   |
+| Command             | Impersonation    | Reason                       |
+| ------------------- | ---------------- | ---------------------------- |
+| `prompt`            | User's Unix user | Agent runs in user's context |
+| `git.clone`         | Daemon user      | Repo owned by daemon         |
+| `git.branch.add`    | Daemon user      | Sets up group permissions    |
+| `git.branch.remove` | Daemon user      | Removes group                |
+| `unix.group.*`      | Root (sudo)      | Group management             |
+| `unix.acl.*`        | Root (sudo)      | ACL management               |
+| `zellij.attach`     | User's Unix user | Terminal in user's context   |
 
 ### Sudo Configuration
 
@@ -1024,23 +1024,23 @@ Note: `serialize_on_disconnect` is not a real Zellij option - serialization happ
 
 ### Phase 3: Git Operations in Executor (2 weeks)
 
-**Goal:** Move git clone/worktree to executor with full transaction
+**Goal:** Move git clone/branch to executor with full transaction
 
 - [ ] Add `git.clone` command handler
   - [ ] Feathers auth, credential resolution
   - [ ] Git clone via simple-git
   - [ ] Unix group/ACL setup (internal)
   - [ ] `repos.create()` via Feathers
-- [ ] Add `git.worktree.add` command handler
+- [ ] Add `git.branch.add` command handler
   - [ ] Group creation, ACL setup
-  - [ ] Git worktree add
-  - [ ] `worktrees.create()` via Feathers
-- [ ] Add `git.worktree.remove` command handler
-  - [ ] Git worktree remove
+  - [ ] Git branch add
+  - [ ] `branches.create()` via Feathers
+- [ ] Add `git.branch.remove` command handler
+  - [ ] Git branch remove
   - [ ] Group/ACL cleanup
-  - [ ] `worktrees.remove()` via Feathers
+  - [ ] `branches.remove()` via Feathers
 - [ ] Update ReposService - spawn executor instead of direct git
-- [ ] Update WorktreesService - spawn executor instead of direct git
+- [ ] Update BranchesService - spawn executor instead of direct git
 - [ ] Tests
 
 ### Phase 4: Impersonation Consolidation (1 week)
@@ -1118,7 +1118,7 @@ paths:
   # Default: ~/.agor/
   agor_home: ~/.agor/
 
-  # Git data directory (repos, worktrees)
+  # Git data directory (repos, branches)
   # Default: same as agor_home
   data_home: /data/agor/
 
@@ -1138,8 +1138,8 @@ execution:
   # string = template with variables
   executor_command_template: null
 
-  # Enable worktree RBAC (Unix group isolation)
-  worktree_rbac: false
+  # Enable branch RBAC (Unix group isolation)
+  branch_rbac: false
 
 # Daemon configuration
 daemon:
@@ -1189,7 +1189,7 @@ AGOR_DAEMON_HOST=0.0.0.0
 │  - No database access                                          │
 │  - No API keys in memory (requests just-in-time)              │
 │  - Runs as unprivileged user (impersonated)                   │
-│  - CWD restricted to worktree                                  │
+│  - CWD restricted to branch                                  │
 └───────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -1202,10 +1202,10 @@ AGOR_DAEMON_HOST=0.0.0.0
 │  - Terminal commands                                           │
 │                                                                │
 │  Blast radius if compromised:                                  │
-│  - Can modify files in worktree                               │
+│  - Can modify files in branch                               │
 │  - Can make API calls (via requested keys)                    │
 │  - CANNOT access database                                      │
-│  - CANNOT access other users' worktrees                       │
+│  - CANNOT access other users' branches                       │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -1216,7 +1216,7 @@ AGOR_DAEMON_HOST=0.0.0.0
 | Database exfiltration | Executor has no DB connection           |
 | API key theft         | Keys requested just-in-time, not stored |
 | Cross-user access     | Unix user separation, ACLs              |
-| Filesystem traversal  | Worktree-scoped execution               |
+| Filesystem traversal  | Branch-scoped execution                 |
 | Session hijacking     | Opaque session tokens, short expiry     |
 | Remote code execution | Executor runs in isolation              |
 
@@ -1283,12 +1283,12 @@ Zellij serializes: tab layout, pane arrangement, scroll buffer (limited by `scro
 
 **Same pattern for all commands:**
 
-| Command          | Executor does         | Via Feathers                                   |
-| ---------------- | --------------------- | ---------------------------------------------- |
-| `prompt`         | SDK execution         | messages.create, tasks.patch, streaming events |
-| `git.clone`      | Clone + Unix setup    | repos.create()                                 |
-| `git.worktree.*` | Worktree + Unix setup | worktrees.create/remove()                      |
-| `zellij.attach`  | PTY attachment        | (events for terminal state)                    |
+| Command         | Executor does       | Via Feathers                                   |
+| --------------- | ------------------- | ---------------------------------------------- |
+| `prompt`        | SDK execution       | messages.create, tasks.patch, streaming events |
+| `git.clone`     | Clone + Unix setup  | repos.create()                                 |
+| `git.branch.*`  | Branch + Unix setup | branches.create/remove()                       |
+| `zellij.attach` | PTY attachment      | (events for terminal state)                    |
 
 **Unix operations are internal to git operations** - not separate commands:
 
@@ -1466,8 +1466,8 @@ The `executor_command_template` config controls **how** executor is spawned, not
 
 - `prompt` - agent SDK execution
 - `git.clone` - clone + Unix setup + DB record
-- `git.worktree.add` - worktree + Unix setup + DB record
-- `git.worktree.remove` - remove + Unix cleanup + DB record
+- `git.branch.add` - branch + Unix setup + DB record
+- `git.branch.remove` - remove + Unix cleanup + DB record
 - `zellij.attach` - terminal session
 
 ---
@@ -1477,7 +1477,7 @@ The `executor_command_template` config controls **how** executor is spawned, not
 - [[executor-isolation]] - Original isolation design (predecessor)
 - [[executor-feathers-architecture]] - Current Feathers/WebSocket design
 - [[unix-user-integration]] - Unix user management
-- [[worktrees]] - Worktree-centric architecture
+- [[branches]] - Branch-centric architecture
 - [[rbac-and-unix-isolation]] - RBAC and group isolation
 
 ---

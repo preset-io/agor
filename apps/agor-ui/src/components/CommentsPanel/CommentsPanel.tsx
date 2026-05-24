@@ -2,10 +2,10 @@ import type {
   AgorClient,
   BoardComment,
   BoardObject,
+  Branch,
   CommentReaction,
   ReactionSummary,
   User,
-  Worktree,
 } from '@agor-live/client';
 import { groupReactions, isThreadRoot } from '@agor-live/client';
 import {
@@ -49,7 +49,7 @@ export interface CommentsPanelProps {
   userById: Map<string, User>;
   currentUserId: string;
   boardObjects?: Record<string, BoardObject>; // For zone names
-  worktreeById?: Map<string, Worktree>; // For worktree names
+  branchById?: Map<string, Branch>; // For branch names
   loading?: boolean;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
@@ -540,7 +540,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   userById,
   currentUserId,
   boardObjects = {},
-  worktreeById,
+  branchById,
   loading = false,
   collapsed = false,
   onToggleCollapse,
@@ -631,12 +631,12 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   }, [threadRoots, filter]);
 
-  // Group filtered threads by scope (zone, worktree, or board-level)
+  // Group filtered threads by scope (zone, branch, or board-level)
   const groupedThreads = useMemo(() => {
     const groups: Record<
       string,
       {
-        type: 'zone' | 'worktree' | 'board';
+        type: 'zone' | 'branch' | 'board';
         label: string;
         color?: string;
         threads: BoardComment[];
@@ -646,10 +646,10 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
     for (const thread of filteredThreads) {
       let groupKey = 'board';
       let groupLabel = 'Board';
-      let groupType: 'zone' | 'worktree' | 'board' = 'board';
+      let groupType: 'zone' | 'branch' | 'board' = 'board';
       let groupColor: string | undefined;
 
-      // Check if comment has relative positioning (pinned to zone/worktree)
+      // Check if comment has relative positioning (pinned to zone/branch)
       if (thread.position?.relative) {
         const { parent_id, parent_type } = thread.position.relative;
 
@@ -660,18 +660,18 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
           groupLabel = zone && 'label' in zone ? zone.label : 'Zone';
           groupColor = zone && 'color' in zone ? zone.color : undefined;
           groupType = 'zone';
-        } else if (parent_type === 'worktree') {
-          groupKey = `worktree-${parent_id}`;
-          const worktree = worktreeById?.get(parent_id);
-          groupLabel = worktree ? worktree.name : 'Unknown Branch';
-          groupType = 'worktree';
+        } else if (parent_type === 'branch') {
+          groupKey = `branch-${parent_id}`;
+          const branch = branchById?.get(parent_id);
+          groupLabel = branch ? branch.name : 'Unknown Branch';
+          groupType = 'branch';
         }
-      } else if (thread.worktree_id) {
-        // Check for FK-based worktree attachment
-        groupKey = `worktree-${thread.worktree_id}`;
-        const worktree = worktreeById?.get(thread.worktree_id);
-        groupLabel = worktree ? worktree.name : 'Unknown Branch';
-        groupType = 'worktree';
+      } else if (thread.branch_id) {
+        // Check for FK-based branch attachment
+        groupKey = `branch-${thread.branch_id}`;
+        const branch = branchById?.get(thread.branch_id);
+        groupLabel = branch ? branch.name : 'Unknown Branch';
+        groupType = 'branch';
       }
 
       if (!groups[groupKey]) {
@@ -687,15 +687,15 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
     }
 
     return groups;
-  }, [filteredThreads, boardObjects, worktreeById]);
+  }, [filteredThreads, boardObjects, branchById]);
 
-  // Sort groups by scope hierarchy: Board → Zones → Worktrees (larger to smaller)
+  // Sort groups by scope hierarchy: Board → Zones → Branches (larger to smaller)
   const sortedGroupEntries = useMemo(() => {
     const entries = Object.entries(groupedThreads);
 
     return entries.sort(([, a], [, b]) => {
-      // Type priority: board (0) < zone (1) < worktree (2)
-      const typeOrder = { board: 0, zone: 1, worktree: 2 };
+      // Type priority: board (0) < zone (1) < branch (2)
+      const typeOrder = { board: 0, zone: 1, branch: 2 };
       const aOrder = typeOrder[a.type];
       const bOrder = typeOrder[b.type];
 
@@ -847,7 +847,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
                       }}
                     />
                   )}
-                  {group.type === 'worktree' && (
+                  {group.type === 'branch' && (
                     <BranchesOutlined style={{ fontSize: 14, color: token.colorPrimary }} />
                   )}
                   <Text strong>{group.label}</Text>

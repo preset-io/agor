@@ -56,10 +56,10 @@ describe('EntityNotFoundError', () => {
 
   it('should handle different entity types', () => {
     const taskError = new EntityNotFoundError('Task', '12345');
-    const worktreeError = new EntityNotFoundError('Worktree', '67890');
+    const branchError = new EntityNotFoundError('Branch', '67890');
 
     expect(taskError.message).toBe("Task with ID '12345' not found");
-    expect(worktreeError.message).toBe("Worktree with ID '67890' not found");
+    expect(branchError.message).toBe("Branch with ID '67890' not found");
   });
 
   it('should preserve entity metadata', () => {
@@ -100,7 +100,7 @@ describe('AmbiguousIdError', () => {
 
   it('should show all matches when <=3', () => {
     const matches = ['id-1', 'id-2', 'id-3'];
-    const error = new AmbiguousIdError('Worktree', 'pre', matches);
+    const error = new AmbiguousIdError('Branch', 'pre', matches);
 
     expect(error.message).toContain('(3 matches');
     expect(error.message).toContain('id-1, id-2, id-3');

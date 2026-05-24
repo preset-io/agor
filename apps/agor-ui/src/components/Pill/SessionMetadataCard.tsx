@@ -5,7 +5,7 @@
  * Compact, read-only design focused on quick context ("what is this session?")
  */
 
-import type { Repo, Session, User, Worktree } from '@agor-live/client';
+import type { Branch, Repo, Session, User } from '@agor-live/client';
 import { FolderOutlined } from '@ant-design/icons';
 import { Space, Typography, theme } from 'antd';
 import type React from 'react';
@@ -20,7 +20,7 @@ const { Text } = Typography;
 
 export interface SessionMetadataCardProps {
   session: Session;
-  worktree?: Worktree;
+  branch?: Branch;
   repo?: Repo;
   userById?: Map<string, User>;
   currentUserId?: string;
@@ -29,7 +29,7 @@ export interface SessionMetadataCardProps {
 
 export const SessionMetadataCard: React.FC<SessionMetadataCardProps> = ({
   session,
-  worktree,
+  branch,
   repo,
   userById = new Map(),
   currentUserId,
@@ -99,14 +99,14 @@ export const SessionMetadataCard: React.FC<SessionMetadataCardProps> = ({
         </div>
       )}
 
-      {/* Worktree context (if available) */}
-      {worktree && repo && (
+      {/* Branch context (if available) */}
+      {branch && repo && (
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontWeight: 600, fontSize: '0.85em', marginBottom: 8 }}>Branch</div>
           <Space size={4} wrap>
             <RepoPill repoName={repo.slug} />
-            <Tag icon={<FolderOutlined />} color={PILL_COLORS.worktree}>
-              <span style={{ fontFamily: token.fontFamilyCode }}>{worktree.name}</span>
+            <Tag icon={<FolderOutlined />} color={PILL_COLORS.branch}>
+              <span style={{ fontFamily: token.fontFamilyCode }}>{branch.name}</span>
             </Tag>
           </Space>
         </div>

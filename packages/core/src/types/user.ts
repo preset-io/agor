@@ -4,8 +4,8 @@ import type { EffortLevel, PermissionMode } from './session';
 
 /**
  * User role types
- * - superadmin: Full system access including worktree RBAC bypass (requires allow_superadmin=true in config)
- * - admin: Can manage most resources (MCP servers, config, users), no worktree RBAC bypass
+ * - superadmin: Full system access including branch RBAC bypass (requires allow_superadmin=true in config)
+ * - admin: Can manage most resources (MCP servers, config, users), no branch RBAC bypass
  * - member: Standard user access, can create and manage own sessions
  * - viewer: Read-only access
  *
@@ -41,7 +41,7 @@ export const ROLE_OPTIONS: readonly RoleOption[] = [
   {
     value: ROLES.SUPERADMIN,
     label: 'Superadmin',
-    description: 'Full system access + worktree RBAC bypass',
+    description: 'Full system access + branch RBAC bypass',
   },
   {
     value: ROLES.ADMIN,
@@ -355,8 +355,8 @@ export interface OnboardingState {
   path?: 'assistant' | 'own-repo' | 'persisted-agent';
   /** The repo ID associated with this onboarding (framework repo or user's repo) */
   repoId?: string;
-  /** The worktree ID created during onboarding */
-  worktreeId?: string;
+  /** The branch ID created during onboarding */
+  branchId?: string;
   /** The board ID created for this user */
   boardId?: string;
 }

@@ -26,7 +26,7 @@ interface PullContext {
   db: Database;
   sessionId: string;
   sdkSessionId: string;
-  worktreePath: string;
+  branchPath: string;
   tool: AgenticToolName;
   /** Override for the executor user's home directory (insulated/strict modes) */
   executorHomeDir?: string;
@@ -35,10 +35,10 @@ interface PullContext {
 interface PushContext {
   db: Database;
   sessionId: string;
-  worktreeId: string;
+  branchId: string;
   taskId: string;
   sdkSessionId: string;
-  worktreePath: string;
+  branchPath: string;
   tool: AgenticToolName;
   lastKnownMd5?: string;
   /** Override for the executor user's home directory (insulated/strict modes) */
@@ -65,7 +65,7 @@ export async function pullIfNeeded(ctx: PullContext): Promise<void> {
   // undefined and the helpers fall back to os.homedir().
   const filePath = getSessionFilePath(
     ctx.tool,
-    ctx.worktreePath,
+    ctx.branchPath,
     ctx.sdkSessionId,
     ctx.executorHomeDir
   );
@@ -153,12 +153,7 @@ async function doPush(ctx: PushContext): Promise<void> {
     }
     filePath = found;
   } else {
-    filePath = getSessionFilePath(
-      ctx.tool,
-      ctx.worktreePath,
-      ctx.sdkSessionId,
-      ctx.executorHomeDir
-    );
+    filePath = getSessionFilePath(ctx.tool, ctx.branchPath, ctx.sdkSessionId, ctx.executorHomeDir);
   }
 
   // Compute current hash
@@ -181,7 +176,7 @@ async function doPush(ctx: PushContext): Promise<void> {
   // Insert processing row (fast — no payload yet)
   const row = await repo.insertProcessing({
     sessionId: ctx.sessionId,
-    worktreeId: ctx.worktreeId,
+    branchId: ctx.branchId,
     taskId: ctx.taskId,
     turnIndex,
     md5: currentMd5,

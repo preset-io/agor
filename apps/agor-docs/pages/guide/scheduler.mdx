@@ -27,7 +27,7 @@ _The scheduler dovetails with [Assistants](/guide/assistants) — a daily cron f
 
 - **Branch-scoped configuration.** Each branch can store a single schedule (toggleable at any time). All metadata lives with the branch so it survives session churn.
 - **Cron-driven cadence.** The daemon tracks `schedule_cron`, `schedule_next_run_at`, and `schedule_last_triggered_at` for efficient ticking. Cron parsing and humanization use `cron-parser` and `cronstrue`.
-- **Fresh session per run.** When a run fires, Agor creates a new session titled `Scheduled: <worktree>`, stamps `scheduled_run_at` with the planned timestamp, and records run details in `session.custom_context.scheduled_run`.
+- **Fresh session per run.** When a run fires, Agor creates a new session titled `Scheduled: <branch>`, stamps `scheduled_run_at` with the planned timestamp, and records run details in `session.custom_context.scheduled_run`.
 - **Self-aware execution.** The session launches with the branch + board context, inherits the agent/tool settings you chose, and (with MCP enabled) can take all the actions a user could.
 - **Smart reliability.** Runs are deduplicated (two-minute grace window), there’s no backfill flood after downtime (only the most recent missed slot fires), and an optional retention policy keeps history trimmed.
 
@@ -59,14 +59,14 @@ Prompt templates render with a full, typed context:
 
 ```handlebars
 Check
-{{worktree.pull_request_url}}
+{{branch.pull_request_url}}
 for new reviews since
-{{schedule.scheduled_time}}. If it merged, stop the Docker environment and archive the worktree.
+{{schedule.scheduled_time}}. If it merged, stop the Docker environment and archive the branch.
 ```
 
 Available fields:
 
-- `worktree.*` – `name`, `ref`, `issue_url`, `pull_request_url`, `notes`, `custom_context`.
+- `branch.*` – `name`, `ref`, `issue_url`, `pull_request_url`, `notes`, `custom_context`.
 - `board.*` – `name`, `description`, `custom_context` (when the branch is on a board).
 - `schedule.*` – `cron`, `scheduled_time`, `retention`, and any advanced configuration snapshot.
 
@@ -97,7 +97,7 @@ Because MCP is just JSON-RPC, you can bring any service into the loop—Agor’s
 - **Log visibly.** Have agents append notes to the branch or board so humans can see what happened.
 - **Permit headless automation.** If you expect the agent to operate unattended, set permission mode to `auto` (or a custom mode that doesn’t prompt) before saving the schedule.
 - **Attach the right MCP servers.** Make sure Slack, GitHub, HubSpot, etc. are registered and selected so scheduled agents have the tools they need.
-- **Keep prompts contextual.** Leverage `worktree.custom_context` and board data instead of hard-coded values.
+- **Keep prompts contextual.** Leverage `branch.custom_context` and board data instead of hard-coded values.
 - **Pilot before scaling.** Run the first few executions manually to confirm output before letting it run unattended.
 
 ## Troubleshooting
@@ -110,7 +110,7 @@ Because MCP is just JSON-RPC, you can bring any service into the loop—Agor’s
 ## Related Reading
 
 - [Assistants](/guide/assistants) — Long-lived agents whose **heartbeats** are powered by the scheduler. If you want a persistent AI companion, start there.
-- [Branches](/guide/worktrees) — The container a schedule attaches to.
+- [Branches](/guide/branches) — The container a schedule attaches to.
 - [Agor MCP Server](/guide/internal-mcp) — What scheduled agents can reach out to (boards, sessions, users, etc.).
 - [Architecture: Scheduler service](/guide/architecture#scheduler-service) — Deeper dive into the daemon's background workers.
 - [SDK Comparison](/guide/sdk-comparison) — Choose the right agent for scheduled tasks.

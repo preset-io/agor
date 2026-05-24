@@ -56,7 +56,7 @@ export async function executeCopilotTask(params: {
           repos.messages,
           repos.sessions,
           repos.sessionMCP,
-          repos.worktrees,
+          repos.branches,
           repos.repos,
           apiKey,
           repos.messagesService,

@@ -7,10 +7,10 @@ description: Sessions are AI conversations that branch — fork to explore alter
 
 **A session is an AI conversation.** Unlike a CLI where conversations scroll up and disappear, Agor sessions can **branch** — fork siblings, spawn children, or ask side questions — building a genealogy tree you can navigate, resume, and reason about.
 
-Every session lives inside exactly one [branch](/guide/worktrees). Multiple sessions on the same branch share a filesystem but have independent conversations.
+Every session lives inside exactly one [branch](/guide/branches). Multiple sessions on the same branch share a filesystem but have independent conversations.
 
 ```
-Worktree: "auth-feature"
+Branch: "auth-feature"
 └─ Session: "Build authentication system" (Claude)
    ├─ Fork: "Write tests for auth"               (Claude)
    ├─ Fork: "Build user profile that uses auth"  (Claude)
@@ -222,7 +222,7 @@ _Session Settings modal — model, effort, permissions, MCP, env vars, callbacks
 
 ## Related
 
-- [Branches](/guide/worktrees) — The container for sessions
+- [Branches](/guide/branches) — The container for sessions
 - [Agor MCP Server](/guide/internal-mcp) — How agents introspect and spawn each other programmatically
 - [Rich Chat UX](/guide/rich-chat-ux) — Token accounting, context window viz, tool blocks, queueing
 - [In-Conversation Widgets](/guide/in-conversation-widgets) — Agent-rendered inline forms (env vars today, more soon) that capture input without it ever entering the model's context

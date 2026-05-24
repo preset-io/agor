@@ -2,8 +2,8 @@
  * OnboardingWizard - Multi-step wizard for new user onboarding
  *
  * Two paths:
- * - Assistant: Clone assistant framework repo -> create board -> create worktree -> API keys -> launch
- * - Own Repo: Add user repo -> create board -> create worktree -> API keys -> launch
+ * - Assistant: Clone assistant framework repo -> create board -> create branch -> API keys -> launch
+ * - Own Repo: Add user repo -> create board -> create branch -> API keys -> launch
  *
  * Replaces GettingStartedPopover entirely.
  */
@@ -13,13 +13,13 @@ import type {
   AssistantConfig,
   AuthCheckResult,
   Board,
+  Branch,
   CreateLocalRepoRequest,
   CreateRepoRequest,
   Repo,
   UpdateUserInput,
   User,
   UserPreferences,
-  Worktree,
 } from '@agor-live/client';
 import {
   extractSlugFromUrl,
@@ -78,18 +78,18 @@ const CLONE_TIMEOUT_MS = 120_000;
 // and self-deletes after. BOOT.md (every-session ritual) just redirects to
 // BOOTSTRAP.md on first run anyway — pointing there saves one indirection
 // and surfaces the first-run-specific tone-setting.
-const ASSISTANT_BOOT_PROMPT = `Fresh Agor worktree, first session. Start with BOOTSTRAP.md.`;
+const ASSISTANT_BOOT_PROMPT = `Fresh Agor branch, first session. Start with BOOTSTRAP.md.`;
 
 // ─── Types ──────────────────────────────────────────────
 
 type WizardPath = 'assistant' | 'own-repo';
 
-type WizardStep = 'welcome' | 'add-repo' | 'clone' | 'board' | 'worktree' | 'api-keys' | 'launch';
+type WizardStep = 'welcome' | 'add-repo' | 'clone' | 'board' | 'branch' | 'api-keys' | 'launch';
 
 export interface OnboardingWizardProps {
   open: boolean;
   onComplete: (result: {
-    worktreeId: string;
+    branchId: string;
     sessionId: string;
     boardId: string;
     path: WizardPath;
@@ -97,7 +97,7 @@ export interface OnboardingWizardProps {
 
   // Data
   repoById: Map<string, Repo>;
-  worktreeById: Map<string, Worktree>;
+  branchById: Map<string, Branch>;
   boardById: Map<string, Board>;
   user?: User | null;
   // biome-ignore lint/suspicious/noExplicitAny: AgorClient type varies
@@ -106,7 +106,7 @@ export interface OnboardingWizardProps {
   // Actions
   onCreateRepo: (data: CreateRepoRequest) => Promise<void>;
   onCreateLocalRepo: (data: CreateLocalRepoRequest) => void | Promise<void>;
-  onCreateWorktree: (
+  onCreateBranch: (
     repoId: string,
     data: {
       name: string;
@@ -118,10 +118,10 @@ export interface OnboardingWizardProps {
       boardId?: string;
       position?: { x: number; y: number };
     }
-  ) => Promise<Worktree | null>;
+  ) => Promise<Branch | null>;
   onCreateSession: (config: NewSessionConfig, boardId: string) => Promise<string | null>;
   onUpdateUser: (userId: string, updates: UpdateUserInput) => Promise<void>;
-  onUpdateWorktree?: (worktreeId: string, updates: Partial<Worktree>) => Promise<void>;
+  onUpdateBranch?: (branchId: string, updates: Partial<Branch>) => Promise<void>;
   onCheckAuth?: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
 
   // Config from health endpoint
@@ -147,10 +147,10 @@ function getUsernameSlug(user?: User | null): string {
 
 function getStepsForPath(path: WizardPath | null): WizardStep[] {
   if (path === 'assistant') {
-    return ['welcome', 'api-keys', 'clone', 'board', 'worktree', 'launch'];
+    return ['welcome', 'api-keys', 'clone', 'board', 'branch', 'launch'];
   }
   if (path === 'own-repo') {
-    return ['welcome', 'api-keys', 'add-repo', 'clone', 'board', 'worktree', 'launch'];
+    return ['welcome', 'api-keys', 'add-repo', 'clone', 'board', 'branch', 'launch'];
   }
   return ['welcome'];
 }
@@ -213,7 +213,7 @@ function findReadyFrameworkRepo(repoById: Map<string, Repo>): [string, Repo] | u
 
 /**
  * Find a repo in the wizard's in-memory map that matches the user's input.
- * Used by both the clone-complete auto-advance effect and the board/worktree
+ * Used by both the clone-complete auto-advance effect and the board/branch
  * safety-net effect — centralised here so the match criteria cannot drift
  * between the two.
  *
@@ -257,16 +257,16 @@ export function OnboardingWizard({
   open,
   onComplete,
   repoById,
-  worktreeById,
+  branchById,
   boardById,
   user,
   client,
   onCreateRepo,
   onCreateLocalRepo,
-  onCreateWorktree,
+  onCreateBranch,
   onCreateSession,
   onUpdateUser,
-  onUpdateWorktree,
+  onUpdateBranch,
   onCheckAuth,
   assistantPending,
   frameworkRepoUrl,
@@ -317,7 +317,7 @@ export function OnboardingWizard({
   // Created resource IDs
   const [createdRepoId, setCreatedRepoId] = useState<string | null>(null);
   const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
-  const [createdWorktreeId, setCreatedWorktreeId] = useState<string | null>(null);
+  const [createdBranchId, setCreatedBranchId] = useState<string | null>(null);
 
   // Timeout ref for clone
   const cloneTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -420,9 +420,9 @@ export function OnboardingWizard({
     // AND (b) the current user is its creator. Anything that fails this
     // check is treated as if the preference were unset; the fallback chain
     // then routes the user to the right step (typically api-keys).
-    const validWorktreeId =
-      onboarding.worktreeId && worktreeById.get(onboarding.worktreeId)?.created_by === user.user_id
-        ? onboarding.worktreeId
+    const validBranchId =
+      onboarding.branchId && branchById.get(onboarding.branchId)?.created_by === user.user_id
+        ? onboarding.branchId
         : undefined;
     const validBoardId =
       mainBoardId && boardById.get(mainBoardId)?.created_by === user.user_id
@@ -438,14 +438,14 @@ export function OnboardingWizard({
       onboarding.repoId && repoById.has(onboarding.repoId) ? onboarding.repoId : undefined;
 
     if (
-      onboarding.worktreeId !== validWorktreeId ||
+      onboarding.branchId !== validBranchId ||
       mainBoardId !== validBoardId ||
       onboarding.repoId !== validRepoId
     ) {
       console.warn('[OnboardingWizard] Dropping resume references not owned by current user', {
         user_id: user.user_id,
-        claimed: { worktreeId: onboarding.worktreeId, mainBoardId, repoId: onboarding.repoId },
-        valid: { worktreeId: validWorktreeId, boardId: validBoardId, repoId: validRepoId },
+        claimed: { branchId: onboarding.branchId, mainBoardId, repoId: onboarding.repoId },
+        valid: { branchId: validBranchId, boardId: validBoardId, repoId: validRepoId },
       });
     }
 
@@ -459,23 +459,23 @@ export function OnboardingWizard({
       setCreatedBoardId(validBoardId);
     }
 
-    // Restore repoId so the worktree step doesn't fail "Missing repo or board"
+    // Restore repoId so the branch step doesn't fail "Missing repo or board"
     // on resume.
     if (validRepoId) {
       setCreatedRepoId(validRepoId);
     }
 
-    if (validWorktreeId) {
-      setCreatedWorktreeId(validWorktreeId);
+    if (validBranchId) {
+      setCreatedBranchId(validBranchId);
     }
 
     // Figure out which step to resume from
-    if (validWorktreeId) {
-      // Worktree exists AND is owned by current user — go to launch
+    if (validBranchId) {
+      // Branch exists AND is owned by current user — go to launch
       setCurrentStep('launch');
     } else if (validBoardId) {
-      // Board exists AND is owned by current user — go to worktree creation
-      setCurrentStep('worktree');
+      // Board exists AND is owned by current user — go to branch creation
+      setCurrentStep('branch');
     } else if (validRepoId) {
       // Repo is registered (already restored above) — go straight to board
       setCurrentStep('board');
@@ -490,7 +490,7 @@ export function OnboardingWizard({
     path,
     repoById,
     boardById,
-    worktreeById, // own-repo with nothing created — restart from api-keys
+    branchById, // own-repo with nothing created — restart from api-keys
     setCurrentStep,
   ]);
 
@@ -549,9 +549,9 @@ export function OnboardingWizard({
     }
   }, [currentStep, loading, path, repoById, repoUrl, repoSlug, localRepoPath, setCurrentStep]);
 
-  // ─── Safety net: ensure createdRepoId is set when reaching board/worktree ──
+  // ─── Safety net: ensure createdRepoId is set when reaching board/branch ──
   useEffect(() => {
-    if (createdRepoId || (currentStep !== 'board' && currentStep !== 'worktree')) return;
+    if (createdRepoId || (currentStep !== 'board' && currentStep !== 'branch')) return;
     const matchId = findMatchingRepoId(repoById, {
       remoteUrl: repoUrl,
       slug: repoSlug,
@@ -571,11 +571,11 @@ export function OnboardingWizard({
     }
   }, [currentStep, createdRepoId, repoById, repoUrl, repoSlug, localRepoPath, path]);
 
-  // No auto-advance for board or worktree creation: handleCreateBoard and
-  // handleCreateWorktree own their success/failure transitions explicitly
+  // No auto-advance for board or branch creation: handleCreateBoard and
+  // handleCreateBranch own their success/failure transitions explicitly
   // because both are synchronous from the wizard's perspective (the daemon
   // returns the created row from the create call). Prior effects watching
-  // boardById / worktreeById raced the handlers — see git history.
+  // boardById / branchById raced the handlers — see git history.
 
   // ─── Watch repoById for clone failure (state-driven, race-free) ──
   // Events can arrive while the listener closure still has `loading=false`
@@ -702,7 +702,7 @@ export function OnboardingWizard({
   // createdRepoId-persist effect below) reference it — moving this further
   // down re-introduces a TDZ ReferenceError on mount.
   const saveOnboardingProgress = useCallback(
-    (updates: { path?: WizardPath; repoId?: string; boardId?: string; worktreeId?: string }) => {
+    (updates: { path?: WizardPath; repoId?: string; boardId?: string; branchId?: string }) => {
       if (!user) return;
       const current = user.preferences?.onboarding || {};
       const prefs: Record<string, unknown> = {
@@ -718,8 +718,8 @@ export function OnboardingWizard({
   );
 
   // Persist createdRepoId so a refresh / reset-then-resume of the wizard
-  // lands back on the worktree step with the repo still wired up. Without
-  // this, handleCreateWorktree throws "Missing repo or board" on resume
+  // lands back on the branch step with the repo still wired up. Without
+  // this, handleCreateBranch throws "Missing repo or board" on resume
   // because repoId is only kept in local state.
   useEffect(() => {
     if (!createdRepoId) return;
@@ -744,7 +744,7 @@ export function OnboardingWizard({
       // every subsequent user picking the assistant path would silently
       // bypass the api-keys + clone steps and land on board creation. That
       // matches the reported bug: brand-new user picks "Assistant", wizard
-      // skips past LLM auth and clone, lands at board / worktree creation.
+      // skips past LLM auth and clone, lands at board / branch creation.
       //
       // The assistant clone step is now reached via the api-keys path like
       // every other tool; handleStartClone deduplicates against the shared
@@ -860,7 +860,7 @@ export function OnboardingWizard({
     if (existingBoardId && user && boardById.get(existingBoardId)?.created_by === user.user_id) {
       setCreatedBoardId(existingBoardId);
       setLoading(false);
-      setCurrentStep('worktree');
+      setCurrentStep('branch');
       return;
     }
 
@@ -879,7 +879,7 @@ export function OnboardingWizard({
         // Persist board ID immediately so restarts don't re-create it
         saveOnboardingProgress({ boardId: board.board_id });
         setLoading(false);
-        setCurrentStep('worktree');
+        setCurrentStep('branch');
       }
     } catch (err) {
       setLoading(false);
@@ -887,7 +887,7 @@ export function OnboardingWizard({
     }
   }, [client, user, boardById, saveOnboardingProgress, setCurrentStep]);
 
-  const handleCreateWorktree = useCallback(async () => {
+  const handleCreateBranch = useCallback(async () => {
     if (!createdRepoId || !createdBoardId) {
       setError('Missing repo or board. Please go back and try again.');
       return;
@@ -896,7 +896,7 @@ export function OnboardingWizard({
     setError(null);
     setLoading(true);
 
-    // Worktree name and ref are unified into a single input — they're almost
+    // Branch name and ref are unified into a single input — they're almost
     // always the same for first-time users, and the underlying form elsewhere
     // exposes the same shortcut.
     const sanitized = sanitizeBranchName(branchName);
@@ -905,7 +905,7 @@ export function OnboardingWizard({
     const sourceBranch = repoById.get(createdRepoId)?.default_branch || 'main';
 
     try {
-      const worktree = await onCreateWorktree(createdRepoId, {
+      const branch = await onCreateBranch(createdRepoId, {
         name: sanitized,
         ref: sanitized,
         createBranch: true,
@@ -914,21 +914,21 @@ export function OnboardingWizard({
         boardId: createdBoardId,
       });
 
-      if (worktree) {
-        setCreatedWorktreeId(worktree.worktree_id);
-        // Persist worktree ID so restarts don't re-create it
-        saveOnboardingProgress({ worktreeId: worktree.worktree_id });
+      if (branch) {
+        setCreatedBranchId(branch.branch_id);
+        // Persist branch ID so restarts don't re-create it
+        saveOnboardingProgress({ branchId: branch.branch_id });
 
-        // Tag assistant worktrees
-        if (path === 'assistant' && onUpdateWorktree) {
+        // Tag assistant branches
+        if (path === 'assistant' && onUpdateBranch) {
           const assistantConfig: AssistantConfig = {
             kind: 'assistant',
             displayName: 'My Assistant',
             frameworkRepo: FRAMEWORK_REPO_SLUG,
             createdViaOnboarding: true,
           };
-          await onUpdateWorktree(worktree.worktree_id, {
-            custom_context: { ...worktree.custom_context, assistant: assistantConfig },
+          await onUpdateBranch(branch.branch_id, {
+            custom_context: { ...branch.custom_context, assistant: assistantConfig },
           });
         }
 
@@ -948,8 +948,8 @@ export function OnboardingWizard({
     path,
     branchName,
     repoById,
-    onCreateWorktree,
-    onUpdateWorktree,
+    onCreateBranch,
+    onUpdateBranch,
     saveOnboardingProgress,
     setCurrentStep,
   ]);
@@ -998,7 +998,7 @@ export function OnboardingWizard({
   }, [onCheckAuth, selectedAgent, apiKey]);
 
   const handleLaunch = useCallback(async () => {
-    if (!createdWorktreeId || !createdBoardId || !path) {
+    if (!createdBranchId || !createdBoardId || !path) {
       setError('Missing branch or board.');
       return;
     }
@@ -1009,7 +1009,7 @@ export function OnboardingWizard({
     try {
       const sessionId = await onCreateSession(
         {
-          worktree_id: createdWorktreeId,
+          branch_id: createdBranchId,
           agent: selectedAgent,
           ...(path === 'assistant' && { initialPrompt: ASSISTANT_BOOT_PROMPT }),
         },
@@ -1018,7 +1018,7 @@ export function OnboardingWizard({
 
       if (sessionId) {
         setLoading(false);
-        onComplete({ worktreeId: createdWorktreeId, sessionId, boardId: createdBoardId, path });
+        onComplete({ branchId: createdBranchId, sessionId, boardId: createdBoardId, path });
       } else {
         setLoading(false);
         setError('Failed to create session. Please try again.');
@@ -1027,13 +1027,13 @@ export function OnboardingWizard({
       setLoading(false);
       setError(`Failed to launch session: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [createdWorktreeId, createdBoardId, selectedAgent, path, onCreateSession, onComplete]);
+  }, [createdBranchId, createdBoardId, selectedAgent, path, onCreateSession, onComplete]);
 
   const handleSkip = useCallback(() => {
     if (!user) return;
     // onComplete sets onboarding_completed; updating it here too would double-PATCH.
     onComplete({
-      worktreeId: '',
+      branchId: '',
       sessionId: '',
       boardId: '',
       path: 'assistant',
@@ -1050,7 +1050,7 @@ export function OnboardingWizard({
 
   // Dev-only: reset the wizard back to the welcome screen so the flows can be
   // re-tested without DB surgery. Clears persisted onboarding state but leaves
-  // any repos / boards / worktrees the user already created intact — those
+  // any repos / boards / branches the user already created intact — those
   // are easy to clean up manually if needed.
   const handleReset = useCallback(async () => {
     if (cloneTimeoutRef.current) {
@@ -1077,7 +1077,7 @@ export function OnboardingWizard({
     setOverrideDetectedAuth(false);
     setCreatedRepoId(null);
     setCreatedBoardId(null);
-    setCreatedWorktreeId(null);
+    setCreatedBranchId(null);
     setCloneElapsedSeconds(0);
     resumedRef.current = false;
     branchNameInitRef.current = false;
@@ -1347,7 +1347,7 @@ export function OnboardingWizard({
             icon={<CheckCircleOutlined style={{ color: token.colorSuccess }} />}
             title="Board Created"
           />
-          <Button type="primary" onClick={() => setCurrentStep('worktree')}>
+          <Button type="primary" onClick={() => setCurrentStep('branch')}>
             Continue
           </Button>
         </>
@@ -1364,7 +1364,7 @@ export function OnboardingWizard({
     </div>
   );
 
-  const renderWorktree = () => {
+  const renderBranch = () => {
     const sourceBranch =
       (createdRepoId ? repoById.get(createdRepoId)?.default_branch : null) || 'main';
     return (
@@ -1399,7 +1399,7 @@ export function OnboardingWizard({
 
         <Button
           type="primary"
-          onClick={handleCreateWorktree}
+          onClick={handleCreateBranch}
           loading={loading}
           disabled={!branchName.trim()}
         >
@@ -1644,8 +1644,8 @@ export function OnboardingWizard({
         return renderClone();
       case 'board':
         return renderBoard();
-      case 'worktree':
-        return renderWorktree();
+      case 'branch':
+        return renderBranch();
       case 'api-keys':
         return renderApiKeys();
       case 'launch':
@@ -1675,7 +1675,7 @@ export function OnboardingWizard({
       'add-repo': 'Repo',
       clone: path === 'own-repo' ? 'Repo' : 'Clone',
       board: 'Board',
-      worktree: 'Branch',
+      branch: 'Branch',
       'api-keys': 'Keys',
       launch: 'Launch',
     };
@@ -1685,7 +1685,7 @@ export function OnboardingWizard({
       'add-repo': <FolderOpenOutlined />,
       clone: <CloudDownloadOutlined />,
       board: <ExperimentOutlined />,
-      worktree: <FolderOpenOutlined />,
+      branch: <FolderOpenOutlined />,
       'api-keys': <KeyOutlined />,
       launch: <RocketOutlined />,
     };

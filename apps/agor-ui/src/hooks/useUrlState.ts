@@ -3,10 +3,10 @@
  *
  * Bidirectional sync between URL and React state for board/session
  * selection, plus URL→state recenter side effects for entity deep
- * links (worktrees, artifacts).
+ * links (branches, artifacts).
  *
  * URL shape — flat entity URLs. Boards are addressable in their own
- * right; sub-entities (session/worktree/artifact) are keyed by their
+ * right; sub-entities (session/branch/artifact) are keyed by their
  * short ID with no board prefix. The app resolves the entity, looks
  * up its current board, and switches if needed. This keeps shared
  * links stable across board moves.
@@ -14,7 +14,7 @@
  *   /                              — root (redirects to first board)
  *   /b/<boardSlugOrShort>/         — board view
  *   /s/<sessionShort>/             — session conversation
- *   /w/<worktreeShort>/            — worktree (board switch + recenter)
+ *   /w/<branchShort>/            — branch (board switch + recenter)
  *   /a/<artifactShort>/            — artifact (board switch + recenter)
  *
  * Path shapes are defined in `@agor/core/utils/url` and consumed both
@@ -31,8 +31,8 @@ import { useRecenterMap } from '../contexts/CanvasNavigationContext';
 import {
   resolveArtifactFromShortIdPure,
   resolveBoardFromUrlPure,
+  resolveBranchFromShortIdPure,
   resolveSessionFromShortIdPure,
-  resolveWorktreeFromShortIdPure,
 } from '../utils/urlResolution';
 
 export interface UseUrlStateOptions {
@@ -43,11 +43,11 @@ export interface UseUrlStateOptions {
   /** Map of board ID to board object (for slug lookup) */
   boardById: Map<string, { board_id: string; slug?: string }>;
   /** Map of session ID to session object — used to resolve session
-   *  share URLs and to chain through to the session's worktree/board. */
-  sessionById: Map<string, { session_id: string; worktree_id?: string }>;
-  /** Map of worktree ID to worktree — used to resolve worktree share
-   *  URLs (and to look up `worktree.board_id` for session URLs). */
-  worktreeById: Map<string, { worktree_id: string; board_id?: string | null }>;
+   *  share URLs and to chain through to the session's branch/board. */
+  sessionById: Map<string, { session_id: string; branch_id?: string }>;
+  /** Map of branch ID to branch — used to resolve branch share
+   *  URLs (and to look up `branch.board_id` for session URLs). */
+  branchById: Map<string, { branch_id: string; board_id?: string | null }>;
   /** Map of artifact ID to artifact — used to resolve artifact share
    *  URLs and look up `artifact.board_id`. */
   artifactById: Map<string, { artifact_id: string; board_id?: string | null }>;
@@ -86,7 +86,7 @@ export function useUrlState(options: UseUrlStateOptions) {
     currentSessionId,
     boardById,
     sessionById,
-    worktreeById,
+    branchById,
     artifactById,
     onBoardChange,
     onSessionChange,
@@ -97,7 +97,7 @@ export function useUrlState(options: UseUrlStateOptions) {
   const params = useParams<{
     boardParam?: string;
     sessionShortId?: string;
-    worktreeShortId?: string;
+    branchShortId?: string;
     artifactShortId?: string;
   }>();
   const recenterMap = useRecenterMap();
@@ -109,12 +109,12 @@ export function useUrlState(options: UseUrlStateOptions) {
   const currentSessionIdRef = useRef(currentSessionId);
   const lastUrlBoardParamRef = useRef<string | null>(null);
   const lastUrlSessionShortIdRef = useRef<string | null>(null);
-  const lastUrlWorktreeShortIdRef = useRef<string | null>(null);
+  const lastUrlBranchShortIdRef = useRef<string | null>(null);
   const lastUrlArtifactShortIdRef = useRef<string | null>(null);
   const urlParamsResolvedRef = useRef({
     board: false,
     session: false,
-    worktree: false,
+    branch: false,
     artifact: false,
   });
   // Pending deferred-recenter timer. Cleared before scheduling a new
@@ -138,11 +138,11 @@ export function useUrlState(options: UseUrlStateOptions) {
     };
   }, []);
 
-  // Parse URL params (only one of session/worktree/artifact is non-null
+  // Parse URL params (only one of session/branch/artifact is non-null
   // for any given URL — they're mutually exclusive paths)
   const urlBoardParam = params.boardParam || null;
   const urlSessionShortId = params.sessionShortId || null;
-  const urlWorktreeShortId = params.worktreeShortId || null;
+  const urlBranchShortId = params.branchShortId || null;
   const urlArtifactShortId = params.artifactShortId || null;
 
   // Settings modal overlays the board route — don't fight it
@@ -172,7 +172,7 @@ export function useUrlState(options: UseUrlStateOptions) {
     // URL→state effect has already fired the recenter, so leaving the
     // URL alone is safe.
     if (currentSessionId === null) {
-      const focusPrefixes = [ENTITY_PATH_SEGMENTS.worktree, ENTITY_PATH_SEGMENTS.artifact];
+      const focusPrefixes = [ENTITY_PATH_SEGMENTS.branch, ENTITY_PATH_SEGMENTS.artifact];
       if (focusPrefixes.some((seg) => location.pathname.startsWith(`/${seg}/`))) {
         return;
       }
@@ -189,7 +189,7 @@ export function useUrlState(options: UseUrlStateOptions) {
   }, [currentBoardId, currentSessionId, buildUrl, location.pathname, location.search, navigate]);
 
   const warnAmbiguous = useCallback(
-    (kind: 'board' | 'session' | 'worktree' | 'artifact', param: string, n: number) => {
+    (kind: 'board' | 'session' | 'branch' | 'artifact', param: string, n: number) => {
       if (import.meta.env.DEV) {
         const capitalized = kind.charAt(0).toUpperCase() + kind.slice(1);
         // eslint-disable-next-line no-console
@@ -214,12 +214,10 @@ export function useUrlState(options: UseUrlStateOptions) {
     [sessionById, warnAmbiguous]
   );
 
-  const resolveWorktreeFromShortId = useCallback(
+  const resolveBranchFromShortId = useCallback(
     (shortId: string) =>
-      resolveWorktreeFromShortIdPure(shortId, worktreeById, (p, n) =>
-        warnAmbiguous('worktree', p, n)
-      ),
-    [worktreeById, warnAmbiguous]
+      resolveBranchFromShortIdPure(shortId, branchById, (p, n) => warnAmbiguous('branch', p, n)),
+    [branchById, warnAmbiguous]
   );
 
   const resolveArtifactFromShortId = useCallback(
@@ -235,19 +233,19 @@ export function useUrlState(options: UseUrlStateOptions) {
     const urlParamsChanged =
       urlBoardParam !== lastUrlBoardParamRef.current ||
       urlSessionShortId !== lastUrlSessionShortIdRef.current ||
-      urlWorktreeShortId !== lastUrlWorktreeShortIdRef.current ||
+      urlBranchShortId !== lastUrlBranchShortIdRef.current ||
       urlArtifactShortId !== lastUrlArtifactShortIdRef.current;
 
     if (urlParamsChanged) {
       urlParamsResolvedRef.current = {
         board: false,
         session: false,
-        worktree: false,
+        branch: false,
         artifact: false,
       };
       lastUrlBoardParamRef.current = urlBoardParam;
       lastUrlSessionShortIdRef.current = urlSessionShortId;
-      lastUrlWorktreeShortIdRef.current = urlWorktreeShortId;
+      lastUrlBranchShortIdRef.current = urlBranchShortId;
       lastUrlArtifactShortIdRef.current = urlArtifactShortId;
       // Cancel any pending deferred recenter from the previous URL —
       // not just when scheduling a new one. Otherwise `/w/old → /b/board/`
@@ -262,12 +260,12 @@ export function useUrlState(options: UseUrlStateOptions) {
     const fullyResolved =
       urlParamsResolvedRef.current.board &&
       urlParamsResolvedRef.current.session &&
-      urlParamsResolvedRef.current.worktree &&
+      urlParamsResolvedRef.current.branch &&
       urlParamsResolvedRef.current.artifact;
     if (!urlParamsChanged && fullyResolved) return;
 
     // No URL params at all → fall back to state→URL
-    if (!urlBoardParam && !urlSessionShortId && !urlWorktreeShortId && !urlArtifactShortId) {
+    if (!urlBoardParam && !urlSessionShortId && !urlBranchShortId && !urlArtifactShortId) {
       if (currentBoardIdRef.current && boardById.size > 0 && !isSettingsRoute) {
         updateUrlFromState();
       }
@@ -276,12 +274,12 @@ export function useUrlState(options: UseUrlStateOptions) {
 
     // Wait for required data to load before resolving
     if (urlBoardParam && boardById.size === 0) return;
-    if (urlSessionShortId && (sessionById.size === 0 || worktreeById.size === 0)) return;
-    if (urlWorktreeShortId && worktreeById.size === 0) return;
+    if (urlSessionShortId && (sessionById.size === 0 || branchById.size === 0)) return;
+    if (urlBranchShortId && branchById.size === 0) return;
     if (urlArtifactShortId && artifactById.size === 0) return;
 
     // Resolve each URL form into a (board, session, recenterTarget) triple.
-    // Only one of session/worktree/artifact is set per URL.
+    // Only one of session/branch/artifact is set per URL.
     let resolvedBoardId: string | null = null;
     let resolvedSessionId: string | null = null;
     let recenterTargetId: string | null = null;
@@ -295,30 +293,30 @@ export function useUrlState(options: UseUrlStateOptions) {
       resolvedSessionId = resolveSessionFromShortId(urlSessionShortId);
       if (resolvedSessionId) {
         urlParamsResolvedRef.current.session = true;
-        // Chain session → worktree → board to drive board switch + recenter
+        // Chain session → branch → board to drive board switch + recenter
         const session = sessionById.get(resolvedSessionId);
-        const wt = session?.worktree_id ? worktreeById.get(session.worktree_id) : undefined;
+        const wt = session?.branch_id ? branchById.get(session.branch_id) : undefined;
         if (wt?.board_id) {
           resolvedBoardId = wt.board_id;
-          recenterTargetId = wt.worktree_id;
+          recenterTargetId = wt.branch_id;
         }
       }
     } else {
       urlParamsResolvedRef.current.session = true; // no session param → trivially "resolved"
     }
 
-    if (urlWorktreeShortId) {
-      const worktreeId = resolveWorktreeFromShortId(urlWorktreeShortId);
-      if (worktreeId) {
-        urlParamsResolvedRef.current.worktree = true;
-        const wt = worktreeById.get(worktreeId);
+    if (urlBranchShortId) {
+      const branchId = resolveBranchFromShortId(urlBranchShortId);
+      if (branchId) {
+        urlParamsResolvedRef.current.branch = true;
+        const wt = branchById.get(branchId);
         if (wt?.board_id) {
           resolvedBoardId = wt.board_id;
-          recenterTargetId = worktreeId;
+          recenterTargetId = branchId;
         }
       }
     } else {
-      urlParamsResolvedRef.current.worktree = true;
+      urlParamsResolvedRef.current.branch = true;
     }
 
     if (urlArtifactShortId) {
@@ -336,7 +334,7 @@ export function useUrlState(options: UseUrlStateOptions) {
     }
 
     const boardChanged = resolvedBoardId && resolvedBoardId !== currentBoardIdRef.current;
-    // Session URLs imply opening the panel; non-session URLs (board, worktree,
+    // Session URLs imply opening the panel; non-session URLs (board, branch,
     // artifact) imply closing it.
     const targetSessionId = urlSessionShortId ? resolvedSessionId : null;
     const sessionChanged = targetSessionId !== currentSessionIdRef.current;
@@ -371,15 +369,15 @@ export function useUrlState(options: UseUrlStateOptions) {
   }, [
     urlBoardParam,
     urlSessionShortId,
-    urlWorktreeShortId,
+    urlBranchShortId,
     urlArtifactShortId,
     boardById.size,
     sessionById,
-    worktreeById,
+    branchById,
     artifactById,
     resolveBoardFromUrl,
     resolveSessionFromShortId,
-    resolveWorktreeFromShortId,
+    resolveBranchFromShortId,
     resolveArtifactFromShortId,
     onBoardChange,
     onSessionChange,
@@ -397,7 +395,7 @@ export function useUrlState(options: UseUrlStateOptions) {
     // Don't overwrite URL while we're still trying to resolve incoming URL params
     if (urlBoardParam && !urlParamsResolvedRef.current.board) return;
     if (urlSessionShortId && !urlParamsResolvedRef.current.session) return;
-    if (urlWorktreeShortId && !urlParamsResolvedRef.current.worktree) return;
+    if (urlBranchShortId && !urlParamsResolvedRef.current.branch) return;
     if (urlArtifactShortId && !urlParamsResolvedRef.current.artifact) return;
 
     updateUrlFromState();
@@ -405,7 +403,7 @@ export function useUrlState(options: UseUrlStateOptions) {
     boardById.size,
     urlBoardParam,
     urlSessionShortId,
-    urlWorktreeShortId,
+    urlBranchShortId,
     urlArtifactShortId,
     updateUrlFromState,
     isSettingsRoute,

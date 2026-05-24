@@ -1,12 +1,12 @@
 /**
- * Add a session's worktree to a board
+ * Add a session's branch to a board
  *
- * Note: Sessions are now organized through worktrees. This command adds
- * the session's worktree to the board, which will display all sessions
- * associated with that worktree.
+ * Note: Sessions are now organized through branches. This command adds
+ * the session's branch to the board, which will display all sessions
+ * associated with that branch.
  */
 
-import type { Board, BoardEntityObject, Session, Worktree } from '@agor-live/client';
+import type { Board, BoardEntityObject, Branch, Session } from '@agor-live/client';
 import { PAGINATION, shortId } from '@agor-live/client';
 import { Args } from '@oclif/core';
 import chalk from 'chalk';
@@ -14,7 +14,7 @@ import { BaseCommand } from '../../base-command';
 
 export default class BoardAddSession extends BaseCommand {
   static override description =
-    "Add a session's worktree to a board (sessions are organized through worktrees)";
+    "Add a session's branch to a board (sessions are organized through branches)";
 
   static override examples = [
     '<%= config.bin %> <%= command.id %> default 0199b86c',
@@ -68,24 +68,24 @@ export default class BoardAddSession extends BaseCommand {
         this.error(`Session not found: ${args.sessionId}`);
       }
 
-      // Get worktree for this session
-      if (!session.worktree_id) {
+      // Get branch for this session
+      if (!session.branch_id) {
         await this.cleanupClient(client);
-        this.error('Session has no worktree associated');
+        this.error('Session has no branch associated');
       }
 
-      const worktrees = await client
-        .service('worktrees')
+      const branches = await client
+        .service('branches')
         .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } });
 
-      const worktree = worktrees.find((w: Worktree) => w.worktree_id === session.worktree_id);
+      const branch = branches.find((w: Branch) => w.branch_id === session.branch_id);
 
-      if (!worktree) {
+      if (!branch) {
         await this.cleanupClient(client);
-        this.error('Worktree not found for session');
+        this.error('Branch not found for session');
       }
 
-      // Check if worktree is already on the board
+      // Check if branch is already on the board
       const boardObjects = await client.service('board-objects').findAll({
         query: {
           board_id: board.board_id,
@@ -94,25 +94,25 @@ export default class BoardAddSession extends BaseCommand {
       const typedBoardObjects = boardObjects as BoardEntityObject[];
 
       const existingObject = typedBoardObjects.find(
-        (bo: BoardEntityObject) => bo.worktree_id === worktree.worktree_id
+        (bo: BoardEntityObject) => bo.branch_id === branch.branch_id
       );
 
       if (existingObject) {
-        this.log(chalk.yellow(`⚠ Worktree "${worktree.name}" already on board "${board.name}"`));
+        this.log(chalk.yellow(`⚠ Branch "${branch.name}" already on board "${board.name}"`));
         await this.cleanupClient(client);
         return;
       }
 
-      // Add worktree to board via board_objects
+      // Add branch to board via board_objects
       await client.service('board-objects').create({
         board_id: board.board_id,
-        worktree_id: worktree.worktree_id,
+        branch_id: branch.branch_id,
         position: { x: 100, y: 100 },
       });
 
       this.log(
         chalk.green(
-          `✓ Added worktree "${worktree.name}" (containing session ${shortId(session.session_id)}) to board "${board.name}"`
+          `✓ Added branch "${branch.name}" (containing session ${shortId(session.session_id)}) to board "${board.name}"`
         )
       );
     } catch (error) {

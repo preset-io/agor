@@ -1,4 +1,4 @@
-import type { AgorClient, Session, SpawnConfig, Task, Worktree } from '@agor-live/client';
+import type { AgorClient, Branch, Session, SpawnConfig, Task } from '@agor-live/client';
 import { getAssistantConfig, isAssistant, shortId } from '@agor-live/client';
 import {
   CodeOutlined,
@@ -26,7 +26,7 @@ import { IssuePill, PullRequestPill } from '../Pill';
 export interface SessionPanelContentProps {
   client: AgorClient | null;
   session: Session;
-  worktree?: Worktree | null;
+  branch?: Branch | null;
   currentUserId?: string;
   sessionMcpServerIds?: string[];
   scrollToBottom: (() => void) | null;
@@ -52,7 +52,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
   ({
     client,
     session,
-    worktree = null,
+    branch = null,
     currentUserId,
     sessionMcpServerIds = [],
     scrollToBottom,
@@ -73,7 +73,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     const { showSuccess, showError } = useThemedMessage();
 
     // Subscribe only to the entity families this panel needs. This keeps the
-    // panel insulated from session/worktree/board patches and avoids unrelated
+    // panel insulated from session/branch/board patches and avoids unrelated
     // entity churn (e.g. repo edits invalidating user/MCP consumers).
     const { userById } = useAppUserData();
     const { repoById } = useAppRepoData();
@@ -81,7 +81,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
 
     // Get actions from context
     const {
-      onOpenWorktree,
+      onOpenBranch,
       onStartEnvironment,
       onStopEnvironment,
       onNukeEnvironment,
@@ -89,8 +89,8 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
       onPermissionDecision,
     } = useAppActions();
 
-    // Get repo from worktree
-    const repo = worktree ? repoById.get(worktree.repo_id) || null : null;
+    // Get repo from branch
+    const repo = branch ? repoById.get(branch.repo_id) || null : null;
 
     // Stable callback for ConversationView's onScrollRef to prevent breaking React.memo
     const handleScrollRef = React.useCallback(
@@ -114,14 +114,14 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
           }}
         >
           {/* Pills section (only shown if there's content) */}
-          {(worktree || sessionMcpServerIds.length > 0) && (
+          {(branch || sessionMcpServerIds.length > 0) && (
             <Space size={8} wrap style={{ flex: 1 }}>
-              {/* Unified Worktree Pill */}
-              {worktree && repo && (
+              {/* Unified Branch Pill */}
+              {branch && repo && (
                 <BranchHeaderPill
                   repo={repo}
-                  worktree={worktree}
-                  onOpenWorktree={onOpenWorktree}
+                  branch={branch}
+                  onOpenBranch={onOpenBranch}
                   onStartEnvironment={onStartEnvironment}
                   onStopEnvironment={onStopEnvironment}
                   onNukeEnvironment={onNukeEnvironment}
@@ -129,8 +129,8 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                 />
               )}
               {/* Issue and PR Pills */}
-              {worktree?.issue_url && <IssuePill issueUrl={worktree.issue_url} />}
-              {worktree?.pull_request_url && <PullRequestPill prUrl={worktree.pull_request_url} />}
+              {branch?.issue_url && <IssuePill issueUrl={branch.issue_url} />}
+              {branch?.pull_request_url && <PullRequestPill prUrl={branch.pull_request_url} />}
               {/* MCP Servers */}
               {sessionMcpServerIds
                 .map((serverId) => mcpServerById.get(serverId))
@@ -146,7 +146,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             </Space>
           )}
           {/* Spacer if no pills */}
-          {!(worktree || sessionMcpServerIds.length > 0) && <div style={{ flex: 1 }} />}
+          {!(branch || sessionMcpServerIds.length > 0) && <div style={{ flex: 1 }} />}
           {/* Scroll Navigation Buttons - always visible */}
           <Space size={4}>
             <Tooltip title="Scroll to top of conversation">
@@ -255,7 +255,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             <EmbeddedTerminal
               client={client}
               userId={currentUserId}
-              worktreeId={session.worktree_id}
+              branchId={session.branch_id}
               focusTabName={`cli-${shortId(session.session_id)}`}
               // Server-side ensure-create — if the cli tab doesn't yet
               // exist (cold-start race where `onCliSessionCreated`'s
@@ -301,8 +301,8 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             currentUserId={currentUserId}
             onScrollRef={handleScrollRef}
             onPermissionDecision={onPermissionDecision}
-            worktreeName={worktree?.name}
-            scheduledFromWorktree={session.scheduled_from_worktree}
+            branchName={branch?.name}
+            scheduledFromBranch={session.scheduled_from_branch}
             scheduledRunAt={session.scheduled_run_at}
             // Keep ConversationView fully active even when the CLI session
             // is showing the terminal tab — otherwise the JSONL watcher's
@@ -313,7 +313,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             isActive={isOpen}
             genealogy={session.genealogy}
             assistantEmoji={
-              worktree && isAssistant(worktree) ? getAssistantConfig(worktree)?.emoji : undefined
+              branch && isAssistant(branch) ? getAssistantConfig(branch)?.emoji : undefined
             }
           />
         </div>

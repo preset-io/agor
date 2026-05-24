@@ -7,11 +7,12 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
  * `intercept(original, name, config, handler)`, which decides what to do:
  *
  * - silently skip the registration (`readOnlyProxy` does this for mutating
- *   tools when the worktrees domain is in read-only tier);
+ *   tools when the branches domain is in read-only tier);
  * - transform `config` / `handler` before forwarding (e.g. add a
  *   `[Deprecated alias]` prefix to the description, log on invocation);
- * - register the tool under multiple names (e.g. `withBranchAliases`
- *   mirrors every `agor_worktrees_*` registration as `agor_branches_*`).
+ * - register the tool under multiple names (e.g. mirroring every
+ *   registration as a sibling under a different prefix — `readOnlyProxy`
+ *   is the only such interceptor today).
  *
  * The proxy uses `Object.create(server)` so it passes `instanceof McpServer`
  * and shares every other method, then overrides only `registerTool`.

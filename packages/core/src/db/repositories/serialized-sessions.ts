@@ -21,7 +21,7 @@ export type SerializedSessionStatus = 'processing' | 'done';
 export interface SerializedSession {
   id: string;
   session_id: string;
-  worktree_id: string;
+  branch_id: string;
   task_id: string | null;
   turn_index: number;
   created_at: number;
@@ -34,7 +34,7 @@ function rowToSerializedSession(row: SerializedSessionRow): SerializedSession {
   return {
     id: row.id,
     session_id: row.session_id,
-    worktree_id: row.worktree_id,
+    branch_id: row.branch_id,
     task_id: row.task_id,
     turn_index: row.turn_index,
     created_at: new Date(row.created_at).getTime(),
@@ -97,7 +97,7 @@ export class SerializedSessionRepository {
   async insertProcessing(params: {
     id?: string;
     sessionId: string;
-    worktreeId: string;
+    branchId: string;
     taskId?: string;
     turnIndex: number;
     md5: string;
@@ -109,7 +109,7 @@ export class SerializedSessionRepository {
       const insertData: SerializedSessionInsert = {
         id,
         session_id: params.sessionId,
-        worktree_id: params.worktreeId,
+        branch_id: params.branchId,
         task_id: params.taskId ?? null,
         turn_index: params.turnIndex,
         created_at: new Date(now),
@@ -123,7 +123,7 @@ export class SerializedSessionRepository {
       return {
         id,
         session_id: params.sessionId,
-        worktree_id: params.worktreeId,
+        branch_id: params.branchId,
         task_id: params.taskId ?? null,
         turn_index: params.turnIndex,
         created_at: now,

@@ -412,41 +412,41 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       await expect(app.service('/repos/local').create({}, { provider: 'rest' })).rejects.toThrow();
     });
 
-    it('POST /repos/:id/worktrees rejects unauthenticated requests', async () => {
-      const reposWorktreesService = {
+    it('POST /repos/:id/branches rejects unauthenticated requests', async () => {
+      const reposBranchesService = {
         async create() {
-          return { id: 'worktree-1' };
+          return { id: 'branch-1' };
         },
       };
 
-      app.use('/repos/:id/worktrees', reposWorktreesService);
-      app.service('/repos/:id/worktrees').hooks({
+      app.use('/repos/:id/branches', reposBranchesService);
+      app.service('/repos/:id/branches').hooks({
         before: {
           create: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.MEMBER, 'create')],
         },
       });
 
       await expect(
-        app.service('/repos/:id/worktrees').create({}, { provider: 'rest' })
+        app.service('/repos/:id/branches').create({}, { provider: 'rest' })
       ).rejects.toThrow();
     });
 
-    it('DELETE /repos/:id/worktrees/:name rejects unauthenticated requests', async () => {
-      const reposWorktreesDeleteService = {
+    it('DELETE /repos/:id/branches/:name rejects unauthenticated requests', async () => {
+      const reposBranchesDeleteService = {
         async remove() {
           return { deleted: true };
         },
       };
 
-      app.use('/repos/:id/worktrees/:name', reposWorktreesDeleteService);
-      app.service('/repos/:id/worktrees/:name').hooks({
+      app.use('/repos/:id/branches/:name', reposBranchesDeleteService);
+      app.service('/repos/:id/branches/:name').hooks({
         before: {
           remove: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.MEMBER, 'remove')],
         },
       });
 
       await expect(
-        app.service('/repos/:id/worktrees/:name').remove('id', { provider: 'rest' })
+        app.service('/repos/:id/branches/:name').remove('id', { provider: 'rest' })
       ).rejects.toThrow();
     });
   });
@@ -491,16 +491,16 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
     });
   });
 
-  describe('Worktree Endpoints - Authentication Required', () => {
-    it('POST /worktrees/:id/start rejects non-admin users', async () => {
-      const worktreesStartService = {
+  describe('Branch Endpoints - Authentication Required', () => {
+    it('POST /branches/:id/start rejects non-admin users', async () => {
+      const branchesStartService = {
         async create() {
           return { started: true };
         },
       };
 
-      app.use('/worktrees/:id/start', worktreesStartService);
-      app.service('/worktrees/:id/start').hooks({
+      app.use('/branches/:id/start', branchesStartService);
+      app.service('/branches/:id/start').hooks({
         before: {
           create: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.ADMIN, 'start')],
         },
@@ -508,12 +508,12 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
 
       // Reject unauthenticated
       await expect(
-        app.service('/worktrees/:id/start').create({}, { provider: 'rest' })
+        app.service('/branches/:id/start').create({}, { provider: 'rest' })
       ).rejects.toThrow();
 
       // Reject non-admin (member role)
       await expect(
-        app.service('/worktrees/:id/start').create({}, {
+        app.service('/branches/:id/start').create({}, {
           user: { user_id: 'user-1', email: 'test@example.com', role: ROLES.MEMBER },
           authenticated: true,
           provider: 'rest',
@@ -521,59 +521,59 @@ describe('JWT Authentication Integration - Protected Endpoints', () => {
       ).rejects.toThrow();
     });
 
-    it('POST /worktrees/:id/stop rejects non-admin users', async () => {
-      const worktreesStopService = {
+    it('POST /branches/:id/stop rejects non-admin users', async () => {
+      const branchesStopService = {
         async create() {
           return { stopped: true };
         },
       };
 
-      app.use('/worktrees/:id/stop', worktreesStopService);
-      app.service('/worktrees/:id/stop').hooks({
+      app.use('/branches/:id/stop', branchesStopService);
+      app.service('/branches/:id/stop').hooks({
         before: {
           create: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.ADMIN, 'stop')],
         },
       });
 
       await expect(
-        app.service('/worktrees/:id/stop').create({}, { provider: 'rest' })
+        app.service('/branches/:id/stop').create({}, { provider: 'rest' })
       ).rejects.toThrow();
     });
 
-    it('GET /worktrees/:id/health rejects unauthenticated requests', async () => {
-      const worktreesHealthService = {
+    it('GET /branches/:id/health rejects unauthenticated requests', async () => {
+      const branchesHealthService = {
         async find() {
           return { healthy: true };
         },
       };
 
-      app.use('/worktrees/:id/health', worktreesHealthService);
-      app.service('/worktrees/:id/health').hooks({
+      app.use('/branches/:id/health', branchesHealthService);
+      app.service('/branches/:id/health').hooks({
         before: {
           find: [populateRouteParams, requireAuth, requireMinimumRole(ROLES.MEMBER, 'check')],
         },
       });
 
       await expect(
-        app.service('/worktrees/:id/health').find({ provider: 'rest' })
+        app.service('/branches/:id/health').find({ provider: 'rest' })
       ).rejects.toThrow();
     });
 
-    it('GET /worktrees/logs rejects unauthenticated requests', async () => {
-      const worktreesLogsService = {
+    it('GET /branches/logs rejects unauthenticated requests', async () => {
+      const branchesLogsService = {
         async find() {
           return [];
         },
       };
 
-      app.use('/worktrees/logs', worktreesLogsService);
-      app.service('/worktrees/logs').hooks({
+      app.use('/branches/logs', branchesLogsService);
+      app.service('/branches/logs').hooks({
         before: {
           find: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'view logs')],
         },
       });
 
-      await expect(app.service('/worktrees/logs').find({ provider: 'rest' })).rejects.toThrow();
+      await expect(app.service('/branches/logs').find({ provider: 'rest' })).rejects.toThrow();
     });
   });
 

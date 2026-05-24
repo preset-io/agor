@@ -1,9 +1,9 @@
 /**
- * Shared environment status column helpers for worktree tables.
+ * Shared environment status column helpers for branch tables.
  * Used by both BranchesTable and AssistantsTable to avoid duplication.
  */
 
-import type { Repo, Worktree } from '@agor-live/client';
+import type { Branch, Repo } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -18,10 +18,10 @@ import type { GlobalToken } from 'antd';
 import { Badge, Button, Space, Tooltip } from 'antd';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 
-/** Render environment status icon for a worktree */
-export function renderEnvStatusIcon(worktree: Worktree, token: GlobalToken) {
-  const status = worktree.environment_instance?.status;
-  const healthStatus = worktree.environment_instance?.last_health_check?.status;
+/** Render environment status icon for a branch */
+export function renderEnvStatusIcon(branch: Branch, token: GlobalToken) {
+  const status = branch.environment_instance?.status;
+  const healthStatus = branch.environment_instance?.last_health_check?.status;
 
   if (!status || status === 'stopped') {
     return (
@@ -42,7 +42,7 @@ export function renderEnvStatusIcon(worktree: Worktree, token: GlobalToken) {
   if (status === 'error') {
     return (
       <Tooltip
-        title={`Error: ${worktree.environment_instance?.last_health_check?.message || 'Unknown'}`}
+        title={`Error: ${branch.environment_instance?.last_health_check?.message || 'Unknown'}`}
       >
         <CloseCircleOutlined style={{ color: token.colorError }} />
       </Tooltip>
@@ -60,7 +60,7 @@ export function renderEnvStatusIcon(worktree: Worktree, token: GlobalToken) {
     if (healthStatus === 'unhealthy') {
       return (
         <Tooltip
-          title={`Running (unhealthy): ${worktree.environment_instance?.last_health_check?.message || ''}`}
+          title={`Running (unhealthy): ${branch.environment_instance?.last_health_check?.message || ''}`}
         >
           <WarningOutlined style={{ color: token.colorWarning }} />
         </Tooltip>
@@ -78,31 +78,31 @@ export function renderEnvStatusIcon(worktree: Worktree, token: GlobalToken) {
 
 /** Render the full Env cell (status icon + start/stop/open buttons) */
 export function renderEnvCell(
-  worktree: Worktree,
+  branch: Branch,
   repo: Repo | undefined,
   token: GlobalToken,
   callbacks: {
-    onStartEnvironment?: (worktreeId: string) => void;
-    onStopEnvironment?: (worktreeId: string) => void;
+    onStartEnvironment?: (branchId: string) => void;
+    onStopEnvironment?: (branchId: string) => void;
   }
 ) {
-  const status = worktree.environment_instance?.status;
-  const healthStatus = worktree.environment_instance?.last_health_check?.status;
+  const status = branch.environment_instance?.status;
+  const healthStatus = branch.environment_instance?.last_health_check?.status;
   const effectiveEnv = repo ? getEffectiveEnv(repo) : undefined;
   const hasEnvConfig = !!effectiveEnv?.hasConfig;
 
   const isRunningOrHealthy =
     status === 'running' || status === 'starting' || healthStatus === 'healthy';
 
-  // The "open health URL" button uses the worktree's own `health_check_url`
-  // (rendered at worktree creation, then user-editable via the worktree
+  // The "open health URL" button uses the branch's own `health_check_url`
+  // (rendered at branch creation, then user-editable via the branch
   // modal) rather than re-rendering the repo template at click time. This
   // honours user edits and avoids a daemon round-trip.
-  const healthUrl = worktree.health_check_url;
+  const healthUrl = branch.health_check_url;
 
   return (
     <Space size={4}>
-      {renderEnvStatusIcon(worktree, token)}
+      {renderEnvStatusIcon(branch, token)}
       {hasEnvConfig && repo && (
         <>
           <Button
@@ -112,7 +112,7 @@ export function renderEnvCell(
             disabled={isRunningOrHealthy}
             onClick={(e) => {
               e.stopPropagation();
-              callbacks.onStartEnvironment?.(worktree.worktree_id);
+              callbacks.onStartEnvironment?.(branch.branch_id);
             }}
             style={{ padding: '0 4px' }}
           />
@@ -122,7 +122,7 @@ export function renderEnvCell(
             icon={<PoweroffOutlined />}
             onClick={(e) => {
               e.stopPropagation();
-              callbacks.onStopEnvironment?.(worktree.worktree_id);
+              callbacks.onStopEnvironment?.(branch.branch_id);
             }}
             style={{ padding: '0 4px' }}
           />

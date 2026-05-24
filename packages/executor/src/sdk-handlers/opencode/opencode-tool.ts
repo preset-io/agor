@@ -10,7 +10,7 @@
  * - ✅ Get session metadata and messages
  * - ✅ Real-time streaming support via SSE
  * - ✅ Agor MCP tools (via client.mcp.add())
- * - ✅ Worktree directory isolation (via x-opencode-directory header)
+ * - ✅ Branch directory isolation (via x-opencode-directory header)
  * - ⏳ Session import (future: when OpenCode provides export API)
  */
 
@@ -50,8 +50,8 @@ interface SessionContext {
   opencodeSessionId: string;
   model?: string;
   provider?: string;
-  /** Worktree directory path for project-scoped operations */
-  worktreePath?: string;
+  /** Branch directory path for project-scoped operations */
+  branchPath?: string;
   /** MCP token for Agor MCP server injection */
   mcpToken?: string;
 }
@@ -62,7 +62,7 @@ export class OpenCodeTool implements ITool {
 
   /** Default client (no directory override) */
   private client: ReturnType<typeof createOpencodeClient> | null = null;
-  /** Directory-scoped clients keyed by worktree path */
+  /** Directory-scoped clients keyed by branch path */
   private directoryClients: Map<string, ReturnType<typeof createOpencodeClient>> = new Map();
   private config: OpenCodeConfig;
   private messagesService?: MessagesService;
@@ -108,14 +108,14 @@ export class OpenCodeTool implements ITool {
   }
 
   /**
-   * Set session context (OpenCode session ID, model, provider, worktree path, and MCP token) for an Agor session
+   * Set session context (OpenCode session ID, model, provider, branch path, and MCP token) for an Agor session
    * Must be called before executeTask
    *
    * @param agorSessionId - Agor session ID
    * @param opencodeSessionId - OpenCode session ID
    * @param model - Model identifier (e.g., 'gpt-4o', 'claude-sonnet-4-6')
    * @param provider - Provider ID (e.g., 'openai', 'opencode'). If omitted, uses legacy mapping.
-   * @param worktreePath - Worktree directory path for project-scoped operations
+   * @param branchPath - Branch directory path for project-scoped operations
    * @param mcpToken - MCP token for Agor MCP server injection
    */
   setSessionContext(
@@ -123,14 +123,14 @@ export class OpenCodeTool implements ITool {
     opencodeSessionId: string,
     model?: string,
     provider?: string,
-    worktreePath?: string,
+    branchPath?: string,
     mcpToken?: string
   ): void {
     this.sessionContexts.set(agorSessionId, {
       opencodeSessionId,
       model,
       provider,
-      worktreePath,
+      branchPath,
       mcpToken,
     });
   }
@@ -194,7 +194,7 @@ export class OpenCodeTool implements ITool {
     sessionId: string,
     client: ReturnType<typeof createOpencodeClient>,
     mcpToken?: string,
-    worktreePath?: string
+    branchPath?: string
   ): Promise<void> {
     if (mcpToken) {
       // Use session-specific MCP name to avoid conflicts with stale entries
@@ -215,7 +215,7 @@ export class OpenCodeTool implements ITool {
               headers: { Authorization: `Bearer ${mcpToken}` },
             },
           },
-          query: worktreePath ? { directory: worktreePath } : undefined,
+          query: branchPath ? { directory: branchPath } : undefined,
         });
         console.log(
           `[OpenCodeTool] Injected Agor MCP as "${mcpName}" for session ${shortId}`,
@@ -254,7 +254,7 @@ export class OpenCodeTool implements ITool {
                     enabled: true,
                   },
                 },
-                query: worktreePath ? { directory: worktreePath } : undefined,
+                query: branchPath ? { directory: branchPath } : undefined,
               });
             } else if (server.transport === 'http' || server.transport === 'sse') {
               const headers: Record<string, string> = {};
@@ -271,7 +271,7 @@ export class OpenCodeTool implements ITool {
                     headers: Object.keys(headers).length > 0 ? headers : undefined,
                   },
                 },
-                query: worktreePath ? { directory: worktreePath } : undefined,
+                query: branchPath ? { directory: branchPath } : undefined,
               });
             }
             console.log(`[OpenCodeTool] Injected MCP server: ${sanitizedName}`);
@@ -395,7 +395,7 @@ export class OpenCodeTool implements ITool {
    * Create a new OpenCode session
    */
   async createSession?(config: CreateSessionConfig): Promise<SessionHandle> {
-    // Use directory-scoped client if workingDirectory is provided (worktree path)
+    // Use directory-scoped client if workingDirectory is provided (branch path)
     const client = this.getClientForDirectory(config.workingDirectory);
 
     try {
@@ -406,7 +406,7 @@ export class OpenCodeTool implements ITool {
           title: String(config.title || 'Agor Session'),
         },
         // Explicitly pass directory as query param (in addition to SDK header)
-        // to ensure the session is created in the correct worktree directory
+        // to ensure the session is created in the correct branch directory
         query: config.workingDirectory ? { directory: config.workingDirectory } : undefined,
       });
 
@@ -458,7 +458,7 @@ export class OpenCodeTool implements ITool {
         promptLength: prompt.length,
         model: context?.model,
         provider: context?.provider,
-        worktreePath: context?.worktreePath,
+        branchPath: context?.branchPath,
         streaming: !!streamingCallbacks,
       });
 
@@ -477,11 +477,11 @@ export class OpenCodeTool implements ITool {
       }
 
       // Get the directory-scoped client
-      const worktreePath = context.worktreePath;
-      const client = this.getClientForDirectory(worktreePath);
+      const branchPath = context.branchPath;
+      const client = this.getClientForDirectory(branchPath);
 
       // Inject MCP servers (uses session-specific name to avoid stale entry conflicts)
-      await this.ensureMcpServers(sessionId, client, context.mcpToken, worktreePath);
+      await this.ensureMcpServers(sessionId, client, context.mcpToken, branchPath);
 
       // Prepare prompt options
       const promptOptions: {
@@ -496,8 +496,8 @@ export class OpenCodeTool implements ITool {
         body: {
           parts: [{ type: 'text', text: prompt }],
         },
-        // Explicitly pass directory as query param to ensure correct worktree scoping
-        query: worktreePath ? { directory: worktreePath } : undefined,
+        // Explicitly pass directory as query param to ensure correct branch scoping
+        query: branchPath ? { directory: branchPath } : undefined,
       };
 
       // Include model if provided
@@ -536,8 +536,8 @@ export class OpenCodeTool implements ITool {
       // Events are emitted in real-time as prompt executes
       console.log('[OpenCodeTool] Subscribing to event stream...');
       const eventStream = await client.event.subscribe({
-        // Pass directory to scope event stream to correct worktree
-        query: worktreePath ? { directory: worktreePath } : undefined,
+        // Pass directory to scope event stream to correct branch
+        query: branchPath ? { directory: branchPath } : undefined,
       });
       console.log('[OpenCodeTool] Event stream ready, sending prompt...');
 
@@ -595,7 +595,7 @@ export class OpenCodeTool implements ITool {
                     permissionID: permId,
                   },
                   body: { response: 'always' },
-                  query: worktreePath ? { directory: worktreePath } : undefined,
+                  query: branchPath ? { directory: branchPath } : undefined,
                 });
                 console.log(`[OpenCodeTool] Permission auto-granted (always): id=${permId}`);
               } catch (permErr) {

@@ -551,11 +551,11 @@ describe('createClient', () => {
       });
     });
 
-    // Regression: PR #1088 added users.getGitEnvironment + repos/worktrees.initializeUnixGroup
+    // Regression: PR #1088 added users.getGitEnvironment + repos/branches.initializeUnixGroup
     // server-side via `app.use(path, service, { methods })`, but the Feathers Socket.io
     // client only wires standard CRUD at construction time. Without an explicit
     // service.methods(...) call on the client, calling these threw
-    // "client.service(...).<method> is not a function" — observed during prod worktree
+    // "client.service(...).<method> is not a function" — observed during prod branch
     // creation. These assertions guard the client-side mirror of the daemon's methods list.
     it('registers users.getGitEnvironment custom method on client', () => {
       const client = createClient();
@@ -573,12 +573,12 @@ describe('createClient', () => {
       expect(reposService.methods).toHaveBeenCalledWith('initializeUnixGroup');
     });
 
-    it('registers worktrees.initializeUnixGroup custom method on client', () => {
+    it('registers branches.initializeUnixGroup custom method on client', () => {
       const client = createClient();
-      const worktreesService = client.service('worktrees') as unknown as {
+      const branchesService = client.service('branches') as unknown as {
         methods: MockedFunction<(...names: string[]) => unknown>;
       };
-      expect(worktreesService.methods).toHaveBeenCalledWith('initializeUnixGroup');
+      expect(branchesService.methods).toHaveBeenCalledWith('initializeUnixGroup');
     });
 
     it('does not register custom methods on services without any', () => {
@@ -695,13 +695,13 @@ describe('type-level API ergonomics', () => {
     type SessionIdUpdateInput = UpdatePayload<Session>['session_id'];
 
     const createPayload: SessionCreateInput = {
-      worktree_id: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+      branch_id: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
     };
-    const patchPayload: SessionPatchInput = { worktree_id: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' };
+    const patchPayload: SessionPatchInput = { branch_id: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' };
     const updateId: SessionIdUpdateInput = '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f';
 
-    expect(createPayload.worktree_id).toBeDefined();
-    expect(patchPayload.worktree_id).toBeDefined();
+    expect(createPayload.branch_id).toBeDefined();
+    expect(patchPayload.branch_id).toBeDefined();
     expect(typeof updateId).toBe('string');
   });
 

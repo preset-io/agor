@@ -1,13 +1,13 @@
 /**
  * Owners Section Component
  *
- * Displays and manages worktree owners and permission settings.
+ * Displays and manages branch owners and permission settings.
  * Integrates with RBAC system for owner management and permission levels.
  *
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import type { AgorClient, User, Worktree, WorktreePermissionLevel } from '@agor-live/client';
+import type { AgorClient, Branch, BranchPermissionLevel, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES, shortId } from '@agor-live/client';
 import { UserOutlined, WarningOutlined } from '@ant-design/icons';
 import { Alert, Button, Form, Select, Space, Switch, Typography } from 'antd';
@@ -16,12 +16,12 @@ import { useThemedMessage } from '../../../utils/message';
 import { Tag } from '../../Tag';
 
 interface OwnersSectionProps {
-  worktree: Worktree;
+  branch: Branch;
   client: AgorClient | null;
   currentUser?: User | null;
 }
 
-export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, currentUser }) => {
+export const OwnersSection: React.FC<OwnersSectionProps> = ({ branch, client, currentUser }) => {
   const { showSuccess, showError } = useThemedMessage();
   const [owners, setOwners] = useState<User[]>([]);
   const [allUsers, setAllUsers] = useState<User[]>([]);
@@ -29,24 +29,24 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
   const [rbacEnabled, setRbacEnabled] = useState(true); // Assume enabled until proven otherwise
   const [selectedOwnerIds, setSelectedOwnerIds] = useState<string[]>([]);
   const [selectKey, setSelectKey] = useState(0); // Force re-render key
-  const [othersCanValue, setOthersCanValue] = useState<WorktreePermissionLevel>(
-    worktree.others_can || 'session'
+  const [othersCanValue, setOthersCanValue] = useState<BranchPermissionLevel>(
+    branch.others_can || 'session'
   );
   const [othersFsAccessValue, setOthersFsAccessValue] = useState<'none' | 'read' | 'write'>(
-    worktree.others_fs_access || 'read'
+    branch.others_fs_access || 'read'
   );
   const [allowSessionSharing, setAllowSessionSharing] = useState<boolean>(
-    Boolean(worktree.dangerously_allow_session_sharing)
+    Boolean(branch.dangerously_allow_session_sharing)
   );
 
   // Check if current user can edit owners
-  // Owners can edit, AND admins have super powers (can edit any worktree)
+  // Owners can edit, AND admins have super powers (can edit any branch)
   const currentUserId = currentUser?.user_id;
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   const isOwner = owners.some((o) => o.user_id === currentUserId);
 
   // Admins can always edit, regardless of loading state
-  // After loading completes, worktree owners can also edit
+  // After loading completes, branch owners can also edit
   const canEdit = isAdmin || (!loading && isOwner);
 
   // Load owners and all users
@@ -59,8 +59,8 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
         setLoading(true);
 
         // Load owners - if service doesn't exist (404), RBAC is disabled
-        const ownersResponse = await client.service('worktrees/:id/owners').find({
-          route: { id: worktree.worktree_id },
+        const ownersResponse = await client.service('branches/:id/owners').find({
+          route: { id: branch.branch_id },
         });
         const ownersData = ownersResponse as User[];
         setOwners(ownersData);
@@ -85,7 +85,7 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
     };
 
     loadData();
-  }, [client, worktree.worktree_id]);
+  }, [client, branch.branch_id]);
 
   const handleOwnersChange = (newOwnerIds: string[]) => {
     // Prevent removing all owners
@@ -106,9 +106,9 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
     // Reset to original values
     const currentOwnerIds = owners.map((o) => o.user_id as string);
     setSelectedOwnerIds(currentOwnerIds);
-    setOthersCanValue(worktree.others_can || 'session');
-    setOthersFsAccessValue(worktree.others_fs_access || 'read');
-    setAllowSessionSharing(Boolean(worktree.dangerously_allow_session_sharing));
+    setOthersCanValue(branch.others_can || 'session');
+    setOthersFsAccessValue(branch.others_fs_access || 'read');
+    setAllowSessionSharing(Boolean(branch.dangerously_allow_session_sharing));
     setSelectKey((prev) => prev + 1); // Force Select to remount
   };
 
@@ -125,27 +125,27 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
       // Add new owners
       for (const userId of added) {
         await client
-          .service('worktrees/:id/owners')
-          .create({ user_id: userId }, { route: { id: worktree.worktree_id } });
+          .service('branches/:id/owners')
+          .create({ user_id: userId }, { route: { id: branch.branch_id } });
       }
 
       // Remove old owners
       for (const userId of removed) {
-        await client.service('worktrees/:id/owners').remove(userId, {
-          route: { id: worktree.worktree_id },
+        await client.service('branches/:id/owners').remove(userId, {
+          route: { id: branch.branch_id },
         });
       }
 
       // Update permissions
-      await client.service('worktrees').patch(worktree.worktree_id, {
+      await client.service('branches').patch(branch.branch_id, {
         others_can: othersCanValue,
         others_fs_access: othersFsAccessValue,
         dangerously_allow_session_sharing: allowSessionSharing,
       });
 
       // Reload owners to get fresh data
-      const response = await client.service('worktrees/:id/owners').find({
-        route: { id: worktree.worktree_id },
+      const response = await client.service('branches/:id/owners').find({
+        route: { id: branch.branch_id },
       });
       const ownersData = response as User[];
       setOwners(ownersData);
@@ -155,10 +155,7 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
       if (added.length > 0 || removed.length > 0) {
         changes.push('owners');
       }
-      if (
-        othersCanValue !== worktree.others_can ||
-        othersFsAccessValue !== worktree.others_fs_access
-      ) {
+      if (othersCanValue !== branch.others_can || othersFsAccessValue !== branch.others_fs_access) {
         changes.push('permissions');
       }
 
@@ -178,12 +175,12 @@ export const OwnersSection: React.FC<OwnersSectionProps> = ({ worktree, client, 
     selectedOwnerIds.length !== currentOwnerIds.length ||
     selectedOwnerIds.some((id) => !currentOwnerIds.includes(id));
   const permissionsChanged =
-    othersCanValue !== worktree.others_can ||
-    othersFsAccessValue !== worktree.others_fs_access ||
-    allowSessionSharing !== Boolean(worktree.dangerously_allow_session_sharing);
+    othersCanValue !== branch.others_can ||
+    othersFsAccessValue !== branch.others_fs_access ||
+    allowSessionSharing !== Boolean(branch.dangerously_allow_session_sharing);
   const hasUnsavedChanges = ownersChanged || permissionsChanged;
 
-  const permissionLevelDescriptions: Record<WorktreePermissionLevel, string> = {
+  const permissionLevelDescriptions: Record<BranchPermissionLevel, string> = {
     none: 'No access (branch is completely private to owners)',
     view: 'Can view branches, sessions, tasks, and messages',
     session: 'Can create new sessions (running as own identity) and prompt own sessions',

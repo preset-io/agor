@@ -40,6 +40,20 @@ export function formatRelativeTime(timestamp: string | Date): string {
 }
 
 /**
+ * Optional- and invalid-tolerant wrapper around `formatRelativeTime`. Returns
+ * `undefined` when the input is missing or an unparseable date — guards
+ * against the bare formatter rendering invalid dates as `NaNy ago`.
+ */
+export function formatRelativeTimeSafe(
+  timestamp: string | Date | undefined | null
+): string | undefined {
+  if (!timestamp) return undefined;
+  const date = typeof timestamp === 'string' ? new Date(timestamp) : timestamp;
+  if (Number.isNaN(date.getTime())) return undefined;
+  return formatRelativeTime(date);
+}
+
+/**
  * Format a timestamp as absolute time in ISO-ish format (local timezone)
  * Format: "2025-01-12 15:45:30"
  */

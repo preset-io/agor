@@ -246,6 +246,13 @@
       "when": 1779840000000,
       "tag": "0035_add_worktree_storage_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1780100000000,
+      "tag": "0036_rename_worktree_to_branch",
+      "breakpoints": true
     }
   ]
 }

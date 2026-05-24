@@ -10,7 +10,7 @@
  * values.
  *
  * RBAC: editable only by the session's creator or a global admin/superadmin
- * (see `ensureSessionOwnerOrAdmin`). Worktree-tier `all` grantees are NOT
+ * (see `ensureSessionOwnerOrAdmin`). Branch-tier `all` grantees are NOT
  * granted access — session env selections expose the creator's private
  * credentials.
  */

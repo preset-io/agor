@@ -2,18 +2,18 @@
  * Board Objects Service
  *
  * Provides REST + WebSocket API for managing positioned entities on boards.
- * Supports both session cards and worktree cards (Phase 1: Hybrid support).
+ * Supports both session cards and branch cards (Phase 1: Hybrid support).
  */
 
 import { BoardObjectRepository, type Database } from '@agor/core/db';
-import type { BoardEntityObject, BoardID, QueryParams, WorktreeID } from '@agor/core/types';
+import type { BoardEntityObject, BoardID, BranchID, QueryParams } from '@agor/core/types';
 
 /**
  * Board object service params
  */
 export type BoardObjectParams = QueryParams<{
   board_id?: BoardID;
-  worktree_id?: WorktreeID;
+  branch_id?: BranchID;
 }>;
 
 /**
@@ -28,15 +28,15 @@ export class BoardObjectsService {
   }
 
   /**
-   * Create board object (add worktree to board)
+   * Create board object (add branch to board)
    */
   async create(
     data: Partial<BoardEntityObject>,
     params?: BoardObjectParams
   ): Promise<BoardEntityObject> {
-    // Validate: worktree_id is provided
-    if (!data.worktree_id) {
-      throw new Error('worktree_id is required');
+    // Validate: branch_id is provided
+    if (!data.branch_id) {
+      throw new Error('branch_id is required');
     }
 
     // Validate: position is provided
@@ -52,7 +52,7 @@ export class BoardObjectsService {
     // Use repository to create
     const boardObject = await this.boardObjectRepo.create({
       board_id: data.board_id,
-      worktree_id: data.worktree_id,
+      branch_id: data.branch_id,
       position: data.position,
       zone_id: data.zone_id,
     });
@@ -201,13 +201,13 @@ export class BoardObjectsService {
   }
 
   /**
-   * Custom method: Find by worktree ID
+   * Custom method: Find by branch ID
    */
-  async findByWorktreeId(
-    worktreeId: WorktreeID,
+  async findByBranchId(
+    branchId: BranchID,
     _params?: BoardObjectParams
   ): Promise<BoardEntityObject | null> {
-    return this.boardObjectRepo.findByWorktreeId(worktreeId);
+    return this.boardObjectRepo.findByBranchId(branchId);
   }
 }
 

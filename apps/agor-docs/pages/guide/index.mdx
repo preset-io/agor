@@ -1,6 +1,6 @@
 ---
 title: agor Documentation
-description: Team command center for all things agentic. A shared canvas for coding agents and long-lived assistants, anchored on git worktrees, with real-time multiplayer and an MCP surface agents drive themselves.
+description: Team command center for all things agentic. A shared canvas for coding agents and long-lived assistants, anchored on git branches, with real-time multiplayer and an MCP surface agents drive themselves.
 ---
 
 <div style={{ textAlign: 'center', marginTop: '2rem', marginBottom: '2rem' }}>
@@ -15,7 +15,7 @@ description: Team command center for all things agentic. A shared canvas for cod
 
 **Team command center for all things agentic.**
 
-Agor is a shared canvas where coding agents (Claude Code, Codex, Gemini) and long-lived assistants run side-by-side on isolated git worktrees — the anchor entity where sessions, dev environments, prompts, and PRs converge. Your whole team rallies around the same live work in real time, and the agents themselves drive Agor over MCP.
+Agor is a shared canvas where coding agents (Claude Code, Codex, Gemini) and long-lived assistants run side-by-side on isolated git branches — the anchor entity where sessions, dev environments, prompts, and PRs converge. Your whole team rallies around the same live work in real time, and the agents themselves drive Agor over MCP.
 
 import { GifGallery } from '../../components';
 
@@ -86,7 +86,7 @@ _Multiplayer spatial canvas with custom-styled zones, session trees, and branch 
   <div>
     <img
       src="/screenshots/zone-trigger.png"
-      alt="Agor zone trigger modal showing a templated prompt with mustache placeholders ({{ worktree.name }}, {{ worktree.pull_request_url }}) and Prompt/Fork/Spawn action choices"
+      alt="Agor zone trigger modal showing a templated prompt with mustache placeholders ({{ branch.name }}, {{ branch.pull_request_url }}) and Prompt/Fork/Spawn action choices"
       style={{ width: '100%', borderRadius: '8px' }}
     />
     <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>

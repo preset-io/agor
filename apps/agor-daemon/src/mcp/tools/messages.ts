@@ -1,4 +1,4 @@
-import { isWorktreeRbacEnabled } from '@agor/core/config';
+import { isBranchRbacEnabled } from '@agor/core/config';
 import {
   and,
   asc,
@@ -14,7 +14,7 @@ import {
 import type { ContentBlock } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { isSuperAdmin } from '../../utils/worktree-authorization.js';
+import { isSuperAdmin } from '../../utils/branch-authorization.js';
 import { resolveSessionId, resolveTaskId } from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
@@ -116,11 +116,11 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
         if (searchCondition) conditions.push(searchCondition);
       }
 
-      // RBAC enforcement: when worktree_rbac is enabled, restrict this search
+      // RBAC enforcement: when branch_rbac is enabled, restrict this search
       // to sessions the caller can access. Superadmins bypass. When RBAC is
       // disabled (default / open-access mode), skip this filter entirely to
       // preserve backward-compatible behavior.
-      if (isWorktreeRbacEnabled()) {
+      if (isBranchRbacEnabled()) {
         const userRole = ctx.authenticatedUser?.role as string | undefined;
         if (!isSuperAdmin(userRole)) {
           const sessionRepo = new SessionRepository(ctx.db);

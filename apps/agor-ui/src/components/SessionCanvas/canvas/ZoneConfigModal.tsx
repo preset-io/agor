@@ -175,13 +175,13 @@ export const ZoneConfigModal = ({
               </p>
               <ul style={{ marginLeft: 16, marginBottom: 8 }}>
                 <li>
-                  <code>{'{{ worktree.issue_url }}'}</code> - GitHub issue URL
+                  <code>{'{{ branch.issue_url }}'}</code> - GitHub issue URL
                 </li>
                 <li>
-                  <code>{'{{ worktree.pull_request_url }}'}</code> - Pull request URL
+                  <code>{'{{ branch.pull_request_url }}'}</code> - Pull request URL
                 </li>
                 <li>
-                  <code>{'{{ worktree.notes }}'}</code> - Branch notes
+                  <code>{'{{ branch.notes }}'}</code> - Branch notes
                 </li>
                 <li>
                   <code>{'{{ session.description }}'}</code> - Session description
@@ -203,7 +203,7 @@ export const ZoneConfigModal = ({
                 Example:{' '}
                 <code>
                   {
-                    'Review {{ worktree.issue_url }} for {{ board.context.team }} sprint {{ board.context.sprint }}'
+                    'Review {{ branch.issue_url }} for {{ board.context.team }} sprint {{ board.context.sprint }}'
                   }
                 </code>
               </p>

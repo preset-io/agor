@@ -5,7 +5,7 @@
  * new `repoById` Map reference, which re-fired the form-init `useEffect`
  * and `setFieldsValue({ sourceBranch })` silently overwrote whatever the
  * user typed back to the repo's `default_branch`. The user only noticed
- * after submitting that the worktree was created off `main` instead of
+ * after submitting that the branch was created off `main` instead of
  * their chosen branch.
  *
  * The fix gates initialization with a `useRef` so it runs exactly once per

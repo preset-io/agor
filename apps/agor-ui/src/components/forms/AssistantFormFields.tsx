@@ -23,7 +23,7 @@ export interface AssistantFormFieldsProps {
  * and the SettingsModal AssistantsTable create modal.
  *
  * Renders: Display Name, Icon, Board, board advice Alert, Advanced collapse
- * (Framework Repository, Worktree Name, Source Branch).
+ * (Framework Repository, Branch Name, Source Branch).
  * Does NOT render a <Form> wrapper — the parent owns the form instance.
  */
 export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({

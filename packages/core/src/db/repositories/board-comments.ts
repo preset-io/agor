@@ -2,7 +2,7 @@
  * Board Comments Repository
  *
  * Type-safe CRUD operations for board comments with short ID support.
- * Supports flexible attachments (board, session, task, message, worktree, spatial).
+ * Supports flexible attachments (board, session, task, message, branch, spatial).
  */
 
 import type { BoardComment, CommentID, UUID } from '@agor/core/types';
@@ -60,7 +60,7 @@ export class BoardCommentsRepository
       session_id: row.session_id ? (row.session_id as UUID) : undefined,
       task_id: row.task_id ? (row.task_id as UUID) : undefined,
       message_id: row.message_id ? (row.message_id as UUID) : undefined,
-      worktree_id: row.worktree_id ? (row.worktree_id as UUID) : undefined,
+      branch_id: row.branch_id ? (row.branch_id as UUID) : undefined,
       parent_comment_id: row.parent_comment_id ? (row.parent_comment_id as CommentID) : undefined,
       resolved: Boolean(row.resolved),
       edited: Boolean(row.edited),
@@ -95,7 +95,7 @@ export class BoardCommentsRepository
       session_id: comment.session_id ?? null,
       task_id: comment.task_id ?? null,
       message_id: comment.message_id ?? null,
-      worktree_id: comment.worktree_id ?? null,
+      branch_id: comment.branch_id ?? null,
       parent_comment_id: comment.parent_comment_id ?? null,
       resolved: comment.resolved ?? false,
       edited: comment.edited ?? false,
@@ -180,7 +180,7 @@ export class BoardCommentsRepository
     session_id?: string;
     task_id?: string;
     message_id?: string;
-    worktree_id?: string;
+    branch_id?: string;
     resolved?: boolean;
     created_by?: string;
   }): Promise<BoardComment[]> {
@@ -213,11 +213,11 @@ export class BoardCommentsRepository
           conditions.push(eq(boardComments.message_id, filters.message_id));
         }
       }
-      if (filters?.worktree_id !== undefined) {
-        if (filters.worktree_id === null) {
-          conditions.push(isNull(boardComments.worktree_id));
+      if (filters?.branch_id !== undefined) {
+        if (filters.branch_id === null) {
+          conditions.push(isNull(boardComments.branch_id));
         } else {
-          conditions.push(eq(boardComments.worktree_id, filters.worktree_id));
+          conditions.push(eq(boardComments.branch_id, filters.branch_id));
         }
       }
       if (filters?.resolved !== undefined) {
@@ -275,7 +275,7 @@ export class BoardCommentsRepository
           session_id: insertData.session_id,
           task_id: insertData.task_id,
           message_id: insertData.message_id,
-          worktree_id: insertData.worktree_id,
+          branch_id: insertData.branch_id,
           parent_comment_id: insertData.parent_comment_id,
           resolved: insertData.resolved,
           edited: insertData.edited,
@@ -478,7 +478,7 @@ export class BoardCommentsRepository
         session_id: undefined,
         task_id: undefined,
         message_id: undefined,
-        worktree_id: undefined,
+        branch_id: undefined,
         position: undefined,
       };
 

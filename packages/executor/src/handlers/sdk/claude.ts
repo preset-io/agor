@@ -62,7 +62,7 @@ export async function executeClaudeCodeTask(params: {
           repos.tasksService,
           repos.tasksStreamingService,
           repos.sessionsService,
-          repos.worktrees,
+          repos.branches,
           repos.repos,
           true, // mcpEnabled
           useNativeAuth, // Flag for Claude CLI OAuth (`claude login`)

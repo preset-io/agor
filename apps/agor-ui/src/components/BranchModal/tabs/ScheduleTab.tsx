@@ -1,4 +1,4 @@
-import type { AgenticToolName, MCPServer, Worktree } from '@agor-live/client';
+import type { AgenticToolName, Branch, MCPServer } from '@agor-live/client';
 import { getDefaultPermissionMode } from '@agor-live/client';
 import {
   ClockCircleOutlined,
@@ -31,14 +31,14 @@ const { TextArea } = Input;
 const { Text, Paragraph } = Typography;
 
 interface ScheduleTabProps {
-  worktree: Worktree;
+  branch: Branch;
   mcpServerById?: Map<string, MCPServer>;
-  onUpdate?: (worktreeId: string, updates: Partial<Worktree>) => void;
-  onExecuteScheduleNow?: (worktreeId: string) => Promise<void>;
+  onUpdate?: (branchId: string, updates: Partial<Branch>) => void;
+  onExecuteScheduleNow?: (branchId: string) => Promise<void>;
 }
 
 export const ScheduleTab: React.FC<ScheduleTabProps> = ({
-  worktree,
+  branch,
   mcpServerById = new Map(),
   onUpdate,
   onExecuteScheduleNow,
@@ -46,17 +46,17 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   const [form] = Form.useForm();
   const { showError } = useThemedMessage();
   const [isInitialized, setIsInitialized] = useState(false);
-  const [scheduleEnabled, setScheduleEnabled] = useState(worktree.schedule_enabled || false);
-  const [cronExpression, setCronExpression] = useState(worktree.schedule_cron || '0 0 * * *');
+  const [scheduleEnabled, setScheduleEnabled] = useState(branch.schedule_enabled || false);
+  const [cronExpression, setCronExpression] = useState(branch.schedule_cron || '0 0 * * *');
   const [agenticTool, setAgenticTool] = useState<string>(
-    worktree.schedule?.agentic_tool || 'claude-code'
+    branch.schedule?.agentic_tool || 'claude-code'
   );
-  const [retention, setRetention] = useState<number>(worktree.schedule?.retention || 5);
+  const [retention, setRetention] = useState<number>(branch.schedule?.retention || 5);
   const [allowConcurrentRuns, setAllowConcurrentRuns] = useState<boolean>(
-    worktree.schedule?.allow_concurrent_runs === true
+    branch.schedule?.allow_concurrent_runs === true
   );
   const [promptTemplate, setPromptTemplate] = useState<string>(
-    worktree.schedule?.prompt_template || ''
+    branch.schedule?.prompt_template || ''
   );
   const [humanReadable, setHumanReadable] = useState<string>('');
   const [isExecutingNow, setIsExecutingNow] = useState(false);
@@ -65,11 +65,11 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   useEffect(() => {
     if (!isInitialized) {
       // Read from schedule object if it exists, otherwise use defaults
-      const scheduleConfig = worktree.schedule;
+      const scheduleConfig = branch.schedule;
       const tool = (scheduleConfig?.agentic_tool || 'claude-code') as AgenticToolName;
 
-      setScheduleEnabled(worktree.schedule_enabled || false);
-      setCronExpression(worktree.schedule_cron || '0 0 * * *');
+      setScheduleEnabled(branch.schedule_enabled || false);
+      setCronExpression(branch.schedule_cron || '0 0 * * *');
       setAgenticTool(tool);
       setRetention(scheduleConfig?.retention || 5);
       setAllowConcurrentRuns(scheduleConfig?.allow_concurrent_runs === true);
@@ -87,7 +87,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
 
       setIsInitialized(true);
     }
-  }, [isInitialized, worktree.schedule_enabled, worktree.schedule_cron, worktree.schedule, form]);
+  }, [isInitialized, branch.schedule_enabled, branch.schedule_cron, branch.schedule, form]);
 
   // Reset permission mode when the user picks a different agent tool.
   // NOTE: This must NOT run on mount or remount — doing so would clobber the
@@ -127,11 +127,11 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
         permission_mode: formValues.permissionMode,
         model_config: formValues.modelConfig,
         mcp_server_ids: formValues.mcpServerIds || [],
-        created_at: worktree.schedule?.created_at || Date.now(),
-        created_by: worktree.schedule?.created_by || worktree.created_by,
+        created_at: branch.schedule?.created_at || Date.now(),
+        created_by: branch.schedule?.created_by || branch.created_by,
       };
 
-      await onUpdate(worktree.worktree_id, {
+      await onUpdate(branch.branch_id, {
         schedule_enabled: scheduleEnabled,
         schedule_cron: cronExpression,
         schedule: scheduleConfig,
@@ -147,18 +147,18 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   const formValues = form.getFieldsValue(true);
 
   const hasChanges =
-    scheduleEnabled !== (worktree.schedule_enabled || false) ||
-    cronExpression !== (worktree.schedule_cron || '0 0 * * *') ||
-    agenticTool !== (worktree.schedule?.agentic_tool || 'claude-code') ||
-    retention !== (worktree.schedule?.retention || 5) ||
-    allowConcurrentRuns !== (worktree.schedule?.allow_concurrent_runs === true) ||
-    promptTemplate !== (worktree.schedule?.prompt_template || '') ||
+    scheduleEnabled !== (branch.schedule_enabled || false) ||
+    cronExpression !== (branch.schedule_cron || '0 0 * * *') ||
+    agenticTool !== (branch.schedule?.agentic_tool || 'claude-code') ||
+    retention !== (branch.schedule?.retention || 5) ||
+    allowConcurrentRuns !== (branch.schedule?.allow_concurrent_runs === true) ||
+    promptTemplate !== (branch.schedule?.prompt_template || '') ||
     formValues.permissionMode !==
-      (worktree.schedule?.permission_mode ||
+      (branch.schedule?.permission_mode ||
         getDefaultPermissionMode(agenticTool as AgenticToolName)) ||
-    JSON.stringify(formValues.modelConfig) !== JSON.stringify(worktree.schedule?.model_config) ||
+    JSON.stringify(formValues.modelConfig) !== JSON.stringify(branch.schedule?.model_config) ||
     JSON.stringify(formValues.mcpServerIds) !==
-      JSON.stringify(worktree.schedule?.mcp_server_ids || []);
+      JSON.stringify(branch.schedule?.mcp_server_ids || []);
 
   return (
     <Form form={form} layout="vertical" component={false}>
@@ -293,8 +293,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
                 style={{ fontFamily: 'monospace', fontSize: '13px' }}
               />
               <Paragraph type="secondary" style={{ fontSize: '11px', margin: 0 }}>
-                Example: "Review branch <code>{'{{worktree.name}}'}</code> and provide status
-                update."
+                Example: "Review branch <code>{'{{branch.name}}'}</code> and provide status update."
               </Paragraph>
             </Space>
           </Card>
@@ -359,7 +358,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
                 onClick={async () => {
                   setIsExecutingNow(true);
                   try {
-                    await onExecuteScheduleNow(worktree.worktree_id);
+                    await onExecuteScheduleNow(branch.branch_id);
                   } finally {
                     setIsExecutingNow(false);
                   }

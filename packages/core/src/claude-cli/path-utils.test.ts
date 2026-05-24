@@ -18,7 +18,7 @@ describe('slugForCwd', () => {
     expect(slugForCwd('/home/agor/.agor/repos/agor')).toBe('-home-agor--agor-repos-agor');
   });
 
-  it('matches the live analysis-worktree sample', () => {
+  it('matches the live analysis-branch sample', () => {
     expect(
       slugForCwd(
         '/var/lib/agor/home/agorpg/.agor/worktrees/preset-io/agor/analyze-claude-code-cli-integration'

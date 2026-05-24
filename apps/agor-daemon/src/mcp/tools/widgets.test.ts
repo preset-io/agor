@@ -103,7 +103,7 @@ function makeApp(opts: {
     sessions: {
       get: async (...args: unknown[]) => {
         calls.push({ service: 'sessions', method: 'get', args });
-        return { session_id: 'sess-1', worktree_id: 'wt-1', created_by: opts.sessionCreator };
+        return { session_id: 'sess-1', branch_id: 'wt-1', created_by: opts.sessionCreator };
       },
     },
     users: {

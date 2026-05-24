@@ -28,13 +28,13 @@ import type {
 } from '@agor/core/types';
 import { ROLES, SessionStatus } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
-import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import {
   determineSpawnIdentity,
   isSuperAdmin,
   loadUnixUsernameForUser,
   resolveChildUnixUsername,
-} from '../utils/worktree-authorization.js';
+} from '../utils/branch-authorization.js';
+import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 
 /**
  * Session runtime configuration that should be inherited across forks, spawns, and btw.
@@ -184,7 +184,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
    * for the rules.
    *
    * Defaults the child to the MCP-authenticated caller; only inherits the
-   * parent's identity when the worktree explicitly opts in via the
+   * parent's identity when the branch explicitly opts in via the
    * `dangerously_allow_session_sharing` flag (and the caller is not an admin
    * acting on someone else's session).
    *
@@ -229,19 +229,17 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       throw new Forbidden('Cannot spawn/fork session without an authenticated caller identity.');
     }
 
-    // Look up the parent's worktree to read the opt-in flag.
-    let worktree: { worktree_id: string; dangerously_allow_session_sharing?: boolean } | undefined;
+    // Look up the parent's branch to read the opt-in flag.
+    let branch: { branch_id: string; dangerously_allow_session_sharing?: boolean } | undefined;
     try {
-      const wt = await this.app
-        .service('worktrees')
-        .get(parent.worktree_id, { provider: undefined });
-      worktree = wt as typeof worktree;
+      const wt = await this.app.service('branches').get(parent.branch_id, { provider: undefined });
+      branch = wt as typeof branch;
     } catch {
-      // If we can't load the worktree, default to the safe (caller-as-owner) path.
-      worktree = undefined;
+      // If we can't load the branch, default to the safe (caller-as-owner) path.
+      branch = undefined;
     }
 
-    const result = determineSpawnIdentity(parent, caller, worktree);
+    const result = determineSpawnIdentity(parent, caller, branch);
     const createdBy = result.created_by as Session['created_by'];
 
     // Legacy sharing → inherit parent's unix_username (identity borrowing by design).
@@ -287,7 +285,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
 
     // Default: attribute the child to the MCP-authenticated caller, not the
     // parent owner. Legacy parent-inheriting "identity borrowing" is preserved
-    // only when the worktree opts in via dangerously_allow_session_sharing.
+    // only when the branch opts in via dangerously_allow_session_sharing.
     const { created_by, unix_username } = await this.resolveChildIdentity(parent, params);
 
     const forkedSession = await this.create(
@@ -296,7 +294,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         status: SessionStatus.IDLE,
         title: data.prompt.substring(0, 100), // First 100 chars as title
         description: data.prompt,
-        worktree_id: parent.worktree_id,
+        branch_id: parent.branch_id,
         created_by, // See resolveChildIdentity — defaults to caller, not parent owner
         unix_username, // Stamped by resolveChildIdentity — this.create() bypasses
         // the setSessionUnixUsername hook so we must set it explicitly here.
@@ -467,7 +465,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         status: SessionStatus.IDLE,
         title: data.title || data.prompt.substring(0, 100), // Use provided title or first 100 chars
         description: finalPrompt, // Use final prompt with extra instructions if provided
-        worktree_id: parent.worktree_id,
+        branch_id: parent.branch_id,
         created_by, // See resolveChildIdentity — defaults to caller, not parent owner
         unix_username, // Stamped by resolveChildIdentity — this.create() bypasses
         // the setSessionUnixUsername hook so we must set it explicitly here.

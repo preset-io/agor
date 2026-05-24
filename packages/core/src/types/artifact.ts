@@ -14,7 +14,7 @@
  */
 
 import type { SandpackTemplate } from './board';
-import type { ArtifactID, BoardID, UserID, UUID, WorktreeID } from './id';
+import type { ArtifactID, BoardID, BranchID, UserID, UUID } from './id';
 
 /**
  * Build status for artifacts
@@ -125,13 +125,13 @@ export interface AgorRuntimeConfig {
  * Artifact - Live web application rendered via Sandpack on the board canvas
  *
  * Artifacts are board-scoped, DB-backed objects. The `files` column holds the
- * serialized source code. `worktree_id` and `path` are provenance only.
+ * serialized source code. `branch_id` and `path` are provenance only.
  */
 export interface Artifact {
   artifact_id: ArtifactID;
 
-  /** Worktree provenance (nullable — survives worktree deletion via SET NULL) */
-  worktree_id: WorktreeID | null;
+  /** Branch provenance (nullable — survives branch deletion via SET NULL) */
+  branch_id: BranchID | null;
 
   /** Board this artifact is displayed on */
   board_id: BoardID;

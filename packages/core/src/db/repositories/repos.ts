@@ -420,19 +420,19 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
   }
 
   /**
-   * @deprecated Worktrees are now first-class entities in their own table.
-   * Use WorktreeRepository instead.
+   * @deprecated Branches are now first-class entities in their own table.
+   * Use BranchRepository instead.
    */
-  async addWorktree(): Promise<never> {
-    throw new Error('addWorktree is deprecated. Use WorktreeRepository.create() instead.');
+  async addBranch(): Promise<never> {
+    throw new Error('addBranch is deprecated. Use BranchRepository.create() instead.');
   }
 
   /**
-   * @deprecated Worktrees are now first-class entities in their own table.
-   * Use WorktreeRepository instead.
+   * @deprecated Branches are now first-class entities in their own table.
+   * Use BranchRepository instead.
    */
-  async removeWorktree(): Promise<never> {
-    throw new Error('removeWorktree is deprecated. Use WorktreeRepository.delete() instead.');
+  async removeBranch(): Promise<never> {
+    throw new Error('removeBranch is deprecated. Use BranchRepository.delete() instead.');
   }
 
   /**

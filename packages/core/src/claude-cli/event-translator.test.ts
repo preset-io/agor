@@ -151,7 +151,7 @@ describe('JsonlEventTranslator — fixture replay', () => {
   // (CI / clean checkouts) — kept here so it can run locally during
   // development of the watcher / translator.
   const fixturePath =
-    '/home/max/.claude/projects/-var-lib-agor-home-agorpg--agor-worktrees-preset-io-agor-analyze-claude-code-cli-integration/d72a04ab-2f8b-4917-a2ed-fd3d797dab9b.jsonl';
+    '/home/max/.claude/projects/-var-lib-agor-home-agorpg--agor-branches-preset-io-agor-analyze-claude-code-cli-integration/d72a04ab-2f8b-4917-a2ed-fd3d797dab9b.jsonl';
 
   const present = fs.existsSync(fixturePath);
 

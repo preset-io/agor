@@ -103,7 +103,7 @@ export const sessionQuerySchema = createQuerySchema(
     status: Type.Optional(CommonSchemas.sessionStatus),
     agentic_tool: Type.Optional(CommonSchemas.agenticTool),
     board_id: Type.Optional(CommonSchemas.uuid),
-    worktree_id: Type.Optional(CommonSchemas.uuid),
+    branch_id: Type.Optional(CommonSchemas.uuid),
     parent_session_id: Type.Optional(CommonSchemas.uuid),
     forked_from_session_id: Type.Optional(CommonSchemas.uuid),
     created_by: Type.Optional(CommonSchemas.uuid),
@@ -140,11 +140,11 @@ export const taskQuerySchema = createQuerySchema(
 );
 
 /**
- * Worktree query schema
+ * Branch query schema
  */
-export const worktreeQuerySchema = createQuerySchema(
+export const branchQuerySchema = createQuerySchema(
   Type.Object({
-    worktree_id: Type.Optional(CommonSchemas.uuid),
+    branch_id: Type.Optional(CommonSchemas.uuid),
     repo_id: Type.Optional(CommonSchemas.uuid),
     board_id: Type.Optional(CommonSchemas.uuid),
     name: Type.Optional(Type.String({ maxLength: 255 })),
@@ -195,7 +195,7 @@ export const userQuerySchema = createQuerySchema(
 export const boardObjectQuerySchema = createQuerySchema(
   Type.Object({
     board_id: Type.Optional(CommonSchemas.uuid),
-    worktree_id: Type.Optional(CommonSchemas.uuid),
+    branch_id: Type.Optional(CommonSchemas.uuid),
     created_at: Type.Optional(CommonSchemas.timestamp),
   })
 );
@@ -248,7 +248,7 @@ export const mcpServerQuerySchema = createQuerySchema(
  */
 export const sessionQueryValidator = getValidator(sessionQuerySchema, queryValidator);
 export const taskQueryValidator = getValidator(taskQuerySchema, queryValidator);
-export const worktreeQueryValidator = getValidator(worktreeQuerySchema, queryValidator);
+export const branchQueryValidator = getValidator(branchQuerySchema, queryValidator);
 export const boardQueryValidator = getValidator(boardQuerySchema, queryValidator);
 export const userQueryValidator = getValidator(userQuerySchema, queryValidator);
 export const boardObjectQueryValidator = getValidator(boardObjectQuerySchema, queryValidator);

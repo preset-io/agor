@@ -6,7 +6,7 @@
  */
 
 import type { AgenticToolName, CodexApprovalPolicy, CodexSandboxMode } from './agentic-tool';
-import type { SessionID, UserID, UUID, WorktreeID } from './id';
+import type { BranchID, SessionID, UserID, UUID } from './id';
 import type { PermissionMode } from './session';
 import type { DefaultModelConfig } from './user';
 
@@ -82,15 +82,15 @@ export interface GatewayAgenticConfig {
  * Gateway Channel - A registered messaging platform integration
  *
  * Users create channels to connect messaging platforms (Slack, Discord, etc.)
- * to Agor. Each channel targets a specific worktree and routes messages
- * to/from sessions within that worktree.
+ * to Agor. Each channel targets a specific branch and routes messages
+ * to/from sessions within that branch.
  */
 export interface GatewayChannel {
   id: GatewayChannelID;
   created_by: string;
   name: string;
   channel_type: ChannelType;
-  target_worktree_id: WorktreeID;
+  target_branch_id: BranchID;
   agor_user_id: UserID;
   channel_key: string; // UUID — the auth secret for inbound webhooks
   config: Record<string, unknown>; // Platform credentials (encrypted at rest)
@@ -112,7 +112,7 @@ export interface ThreadSessionMap {
   channel_id: GatewayChannelID;
   thread_id: string; // Platform-specific (e.g., "C123456-1707340800.123456")
   session_id: SessionID;
-  worktree_id: WorktreeID;
+  branch_id: BranchID;
   created_at: string;
   last_message_at: string;
   status: ThreadStatus;

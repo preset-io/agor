@@ -17,7 +17,7 @@ import type {
   Session,
   Task,
 } from '@agor/core/types';
-import { WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
+import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
 import { relations, sql } from 'drizzle-orm';
 import {
   bigint,
@@ -94,24 +94,24 @@ export const sessions = pgTable(
     parent_session_id: varchar('parent_session_id', { length: 36 }),
     forked_from_session_id: varchar('forked_from_session_id', { length: 36 }),
 
-    // Worktree reference (REQUIRED: all sessions must have a worktree)
-    worktree_id: varchar('worktree_id', { length: 36 })
+    // Branch reference (REQUIRED: all sessions must have a branch)
+    branch_id: varchar('branch_id', { length: 36 })
       .notNull()
-      .references(() => worktrees.worktree_id, {
-        onDelete: 'cascade', // Cascade delete sessions when worktree is deleted
+      .references(() => branches.branch_id, {
+        onDelete: 'cascade', // Cascade delete sessions when branch is deleted
       }),
 
     // Scheduler tracking (materialized for deduplication and retention cleanup)
     scheduled_run_at: bigint('scheduled_run_at', { mode: 'number' }), // Unix timestamp (ms) - authoritative run ID - bigint to support dates beyond 2038
-    scheduled_from_worktree: t.bool('scheduled_from_worktree').notNull().default(false),
+    scheduled_from_branch: t.bool('scheduled_from_branch').notNull().default(false),
 
     // UI state (materialized for efficient highlighting queries)
     ready_for_prompt: t.bool('ready_for_prompt').notNull().default(false),
 
-    // Archive state (cascaded from worktree archive)
+    // Archive state (cascaded from branch archive)
     archived: t.bool('archived').notNull().default(false),
     archived_reason: text('archived_reason', {
-      enum: ['worktree_archived', 'manual', 'btw_completed'],
+      enum: ['branch_archived', 'manual', 'btw_completed'],
     }),
 
     // JSON blob for everything else (cross-DB via json() type)
@@ -212,14 +212,12 @@ export const sessions = pgTable(
     statusIdx: index('sessions_status_idx').on(table.status),
     agenticToolIdx: index('sessions_agentic_tool_idx').on(table.agentic_tool),
     boardIdx: index('sessions_board_idx').on(table.board_id),
-    worktreeIdx: index('sessions_worktree_idx').on(table.worktree_id),
+    branchIdx: index('sessions_branch_idx').on(table.branch_id),
     createdIdx: index('sessions_created_idx').on(table.created_at),
     parentIdx: index('sessions_parent_idx').on(table.parent_session_id),
     forkedIdx: index('sessions_forked_idx').on(table.forked_from_session_id),
     // Scheduler indexes (note: partial indexes defined in migration, not here)
-    scheduledFromWorktreeIdx: index('sessions_scheduled_flag_idx').on(
-      table.scheduled_from_worktree
-    ),
+    scheduledFromBranchIdx: index('sessions_scheduled_flag_idx').on(table.scheduled_from_branch),
   })
 );
 
@@ -320,9 +318,9 @@ export const serializedSessions = pgTable(
     session_id: varchar('session_id', { length: 36 })
       .notNull()
       .references(() => sessions.session_id, { onDelete: 'cascade' }),
-    worktree_id: varchar('worktree_id', { length: 36 })
+    branch_id: varchar('branch_id', { length: 36 })
       .notNull()
-      .references(() => worktrees.worktree_id, { onDelete: 'cascade' }),
+      .references(() => branches.branch_id, { onDelete: 'cascade' }),
     task_id: varchar('task_id', { length: 36 }).references(() => tasks.task_id, {
       onDelete: 'set null',
     }),
@@ -337,7 +335,7 @@ export const serializedSessions = pgTable(
       table.session_id,
       table.turn_index
     ),
-    worktreeIdx: index('serialized_sessions_worktree_idx').on(table.worktree_id),
+    branchIdx: index('serialized_sessions_branch_idx').on(table.branch_id),
   })
 );
 
@@ -469,7 +467,7 @@ export const repos = pgTable(
       .default('remote'),
 
     // Unix group for repo-level git access (agor_rp_<short-id>)
-    // Users who have access to ANY worktree in this repo get added to this group.
+    // Users who have access to ANY branch in this repo get added to this group.
     // Applied to repo Unix-group-managed paths:
     // - repo root (non-recursive) for traversal into .git/worktrees/<name>
     // - .git (recursive) for shared git objects/refs and git operations
@@ -492,7 +490,7 @@ export const repos = pgTable(
         };
         // v2 environment config — source of truth. Named variants + optional
         // deployment-local template_overrides. See RepoEnvironment in
-        // packages/core/src/types/worktree.ts.
+        // packages/core/src/types/branch.ts.
         environment?: {
           version: 2;
           default: string;
@@ -536,17 +534,17 @@ export const repos = pgTable(
 );
 
 /**
- * Worktrees table - Git worktrees for isolated development contexts
+ * Branches table - Git branches for isolated development contexts
  *
  * First-class entities for managing work contexts across sessions.
- * Each worktree is an isolated git working directory with its own branch,
+ * Each branch is an isolated git working directory with its own branch,
  * environment configuration, and persistent work state.
  */
-export const worktrees = pgTable(
-  'worktrees',
+export const branches = pgTable(
+  'branches',
   {
     // Primary identity
-    worktree_id: varchar('worktree_id', { length: 36 }).primaryKey(),
+    branch_id: varchar('branch_id', { length: 36 }).primaryKey(),
     repo_id: varchar('repo_id', { length: 36 })
       .notNull()
       .references(() => repos.repo_id, { onDelete: 'cascade' }),
@@ -560,7 +558,7 @@ export const worktrees = pgTable(
     name: text('name').notNull(), // "feat-auth", "main"
     ref: text('ref').notNull(), // Current branch/tag/commit
     ref_type: text('ref_type', { enum: ['branch', 'tag'] }), // Type of ref (branch or tag)
-    worktree_unique_id: integer('worktree_unique_id').notNull(), // Auto-assigned sequential ID for templates
+    branch_unique_id: integer('branch_unique_id').notNull(), // Auto-assigned sequential ID for templates
 
     // Environment configuration (static, initialized from templates, then user-editable)
     start_command: text('start_command'), // Start command (initialized from repo's up_command template)
@@ -570,12 +568,12 @@ export const worktrees = pgTable(
     app_url: text('app_url'), // Application URL (initialized from repo's app_url_template)
     logs_command: text('logs_command'), // Logs command (initialized from repo's logs_command template)
     // Name of the environment variant currently rendered into the command fields above.
-    // References a key under repo.environment.variants. Null for pre-v2 worktrees.
+    // References a key under repo.environment.variants. Null for pre-v2 branches.
     environment_variant: text('environment_variant'),
 
-    // Board relationship (nullable - worktrees can exist without boards)
+    // Board relationship (nullable - branches can exist without boards)
     board_id: varchar('board_id', { length: 36 }).references(() => boards.board_id, {
-      onDelete: 'set null', // If board is deleted, worktree remains but loses board association
+      onDelete: 'set null', // If board is deleted, branch remains but loses board association
     }),
 
     // Scheduler config (materialized for efficient queries)
@@ -585,7 +583,7 @@ export const worktrees = pgTable(
     schedule_next_run_at: bigint('schedule_next_run_at', { mode: 'number' }), // Unix timestamp (ms) - bigint to support dates beyond 2038
 
     // UI state (materialized for efficient highlighting queries)
-    needs_attention: t.bool('needs_attention').notNull().default(true), // Default true for new worktrees
+    needs_attention: t.bool('needs_attention').notNull().default(true), // Default true for new branches
 
     // Archive state (for soft deletes)
     archived: t.bool('archived').notNull().default(false),
@@ -597,7 +595,7 @@ export const worktrees = pgTable(
 
     // RBAC: App-layer permissions (rbac.md)
     others_can: text('others_can', {
-      enum: [...WORKTREE_PERMISSION_LEVELS],
+      enum: [...BRANCH_PERMISSION_LEVELS],
     }).default('view'),
 
     // RBAC: OS-layer permissions (unix-user-modes.md)
@@ -608,7 +606,7 @@ export const worktrees = pgTable(
       .$type<'none' | 'read' | 'write'>()
       .default('read'),
 
-    // Branch storage model — see docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.
+    // Branch storage model — see context/explorations/clone-redesign.md.
     // 'worktree' = native `git worktree add` (shared base .git/config — legacy default).
     // 'clone'    = self-standing `git clone` (own .git/ — closes cross-branch leak vectors).
     //
@@ -628,11 +626,11 @@ export const worktrees = pgTable(
       .json<unknown>('data')
       .$type<{
         // File system
-        path: string; // Absolute path to worktree directory
+        path: string; // Absolute path to branch directory
 
         // Git state (current)
         base_ref?: string; // Branch this diverged from (e.g., "main")
-        base_sha?: string; // SHA at worktree creation
+        base_sha?: string; // SHA at branch creation
         last_commit_sha?: string; // Latest commit
         tracking_branch?: string; // Remote tracking branch
         new_branch: boolean; // Created by Agor?
@@ -668,13 +666,13 @@ export const worktrees = pgTable(
         // Custom context for templates (accessible as {{custom.*}})
         custom_context?: Record<string, unknown>;
 
-        // Default MCP servers for new sessions in this worktree
+        // Default MCP servers for new sessions in this branch
         mcp_server_ids?: string[];
 
         // DANGEROUS: opt-in to legacy session-spawn identity borrowing.
         // When true, agor_sessions_spawn / agor_sessions_prompt(mode:"fork"|"subsession")
         // attribute the new child session to the parent owner instead of the
-        // MCP-authenticated caller. See packages/core/src/types/worktree.ts.
+        // MCP-authenticated caller. See packages/core/src/types/branch.ts.
         dangerously_allow_session_sharing?: boolean;
 
         // Schedule configuration (full config in JSON blob)
@@ -703,17 +701,17 @@ export const worktrees = pgTable(
       .notNull(),
   },
   (table) => ({
-    repoIdx: index('worktrees_repo_idx').on(table.repo_id),
-    nameIdx: index('worktrees_name_idx').on(table.name),
-    refIdx: index('worktrees_ref_idx').on(table.ref),
-    boardIdx: index('worktrees_board_idx').on(table.board_id),
-    createdIdx: index('worktrees_created_idx').on(table.created_at),
-    updatedIdx: index('worktrees_updated_idx').on(table.updated_at),
+    repoIdx: index('branches_repo_idx').on(table.repo_id),
+    nameIdx: index('branches_name_idx').on(table.name),
+    refIdx: index('branches_ref_idx').on(table.ref),
+    boardIdx: index('branches_board_idx').on(table.board_id),
+    createdIdx: index('branches_created_idx').on(table.created_at),
+    updatedIdx: index('branches_updated_idx').on(table.updated_at),
     // Composite unique constraint (repo + name)
-    uniqueRepoName: index('worktrees_repo_name_unique').on(table.repo_id, table.name),
+    uniqueRepoName: index('branches_repo_name_unique').on(table.repo_id, table.name),
     // Scheduler indexes (note: partial indexes with WHERE clauses defined in migration)
-    scheduleEnabledIdx: index('worktrees_schedule_enabled_idx').on(table.schedule_enabled),
-    boardScheduleIdx: index('worktrees_board_schedule_idx').on(
+    scheduleEnabledIdx: index('branches_schedule_enabled_idx').on(table.schedule_enabled),
+    boardScheduleIdx: index('branches_board_schedule_idx').on(
       table.board_id,
       table.schedule_enabled
     ),
@@ -721,24 +719,24 @@ export const worktrees = pgTable(
 );
 
 /**
- * Worktree Owners - RBAC junction table
+ * Branch Owners - RBAC junction table
  *
- * Many-to-many relationship between users and worktrees.
+ * Many-to-many relationship between users and branches.
  * Owners have implicit 'all' permission regardless of others_can setting.
  */
-export const worktreeOwners = pgTable(
-  'worktree_owners',
+export const branchOwners = pgTable(
+  'branch_owners',
   {
-    worktree_id: varchar('worktree_id', { length: 36 })
+    branch_id: varchar('branch_id', { length: 36 })
       .notNull()
-      .references(() => worktrees.worktree_id, { onDelete: 'cascade' }),
+      .references(() => branches.branch_id, { onDelete: 'cascade' }),
     user_id: varchar('user_id', { length: 36 })
       .notNull()
       .references(() => users.user_id, { onDelete: 'cascade' }),
     created_at: t.timestamp('created_at').defaultNow(),
   },
   (table) => ({
-    pk: primaryKey({ columns: [table.worktree_id, table.user_id] }),
+    pk: primaryKey({ columns: [table.branch_id, table.user_id] }),
   })
 );
 
@@ -1067,7 +1065,7 @@ export const cardTypes = pgTable(
  * Cards table - Generic entities on boards
  *
  * Cards are visual work items managed by agents via MCP tools.
- * They live on boards alongside worktrees and can be placed in zones.
+ * They live on boards alongside branches and can be placed in zones.
  */
 export const cards = pgTable(
   'cards',
@@ -1112,7 +1110,7 @@ export const artifacts = pgTable(
   'artifacts',
   {
     artifact_id: varchar('artifact_id', { length: 36 }).primaryKey(),
-    worktree_id: varchar('worktree_id', { length: 36 }).references(() => worktrees.worktree_id, {
+    branch_id: varchar('branch_id', { length: 36 }).references(() => branches.branch_id, {
       onDelete: 'set null',
     }),
     board_id: varchar('board_id', { length: 36 })
@@ -1140,7 +1138,7 @@ export const artifacts = pgTable(
     archived_at: t.timestamp('archived_at'),
   },
   (table) => ({
-    worktreeIdx: index('artifacts_worktree_idx').on(table.worktree_id),
+    branchIdx: index('artifacts_branch_idx').on(table.branch_id),
     boardIdx: index('artifacts_board_idx').on(table.board_id),
     archivedIdx: index('artifacts_archived_idx').on(table.archived),
     publicIdx: index('artifacts_public_idx').on(table.public),
@@ -1176,9 +1174,9 @@ export type ArtifactTrustGrantRow = typeof artifactTrustGrants.$inferSelect;
 export type ArtifactTrustGrantInsert = typeof artifactTrustGrants.$inferInsert;
 
 /**
- * Board Objects table - Positioned entities (worktrees and cards) on boards
+ * Board Objects table - Positioned entities (branches and cards) on boards
  *
- * Polymorphic placement: exactly one of worktree_id or card_id must be set.
+ * Polymorphic placement: exactly one of branch_id or card_id must be set.
  * Enforced in application layer.
  */
 export const boardObjects = pgTable(
@@ -1192,7 +1190,7 @@ export const boardObjects = pgTable(
     created_at: t.timestamp('created_at').notNull(),
 
     // Polymorphic entity reference (exactly one must be set)
-    worktree_id: varchar('worktree_id', { length: 36 }).references(() => worktrees.worktree_id, {
+    branch_id: varchar('branch_id', { length: 36 }).references(() => branches.branch_id, {
       onDelete: 'cascade',
     }),
     card_id: varchar('card_id', { length: 36 }).references(() => cards.card_id, {
@@ -1210,7 +1208,7 @@ export const boardObjects = pgTable(
   },
   (table) => ({
     boardIdx: index('board_objects_board_idx').on(table.board_id),
-    worktreeIdx: index('board_objects_worktree_idx').on(table.worktree_id),
+    branchIdx: index('board_objects_branch_idx').on(table.branch_id),
     cardIdx: index('board_objects_card_idx').on(table.card_id),
   })
 );
@@ -1288,7 +1286,7 @@ export const userMcpOauthTokens = pgTable(
  *
  * Flexible attachment strategy:
  * - Board-level: General conversations (no attachment foreign keys)
- * - Object-level: Attached to sessions, tasks, messages, or worktrees
+ * - Object-level: Attached to sessions, tasks, messages, or branches
  * - Spatial: Positioned on canvas (absolute or relative to objects)
  *
  * Supports threading, mentions, and resolve/unresolve workflows.
@@ -1309,7 +1307,7 @@ export const boardComments = pgTable(
 
     // FLEXIBLE ATTACHMENTS (all optional)
     // Phase 1: board-level only (all NULL)
-    // Phase 2: object attachments (session, task, message, worktree)
+    // Phase 2: object attachments (session, task, message, branch)
     // Phase 3: spatial positioning
     session_id: varchar('session_id', { length: 36 }).references(() => sessions.session_id, {
       onDelete: 'set null',
@@ -1320,7 +1318,7 @@ export const boardComments = pgTable(
     message_id: varchar('message_id', { length: 36 }).references(() => messages.message_id, {
       onDelete: 'set null',
     }),
-    worktree_id: varchar('worktree_id', { length: 36 }).references(() => worktrees.worktree_id, {
+    branch_id: varchar('branch_id', { length: 36 }).references(() => branches.branch_id, {
       onDelete: 'cascade',
     }),
 
@@ -1352,10 +1350,10 @@ export const boardComments = pgTable(
         position?: {
           // Absolute board coordinates (React Flow coordinates)
           absolute?: { x: number; y: number };
-          // OR relative to session/zone/worktree (follows parent when it moves)
+          // OR relative to session/zone/branch (follows parent when it moves)
           relative?: {
-            parent_id: string; // Can be session_id, zone object ID, or worktree_id
-            parent_type: 'session' | 'zone' | 'worktree';
+            parent_id: string; // Can be session_id, zone object ID, or branch_id
+            parent_type: 'session' | 'zone' | 'branch';
             offset_x: number;
             offset_y: number;
           };
@@ -1370,7 +1368,7 @@ export const boardComments = pgTable(
     sessionIdx: index('board_comments_session_idx').on(table.session_id),
     taskIdx: index('board_comments_task_idx').on(table.task_id),
     messageIdx: index('board_comments_message_idx').on(table.message_id),
-    worktreeIdx: index('board_comments_worktree_idx').on(table.worktree_id),
+    branchIdx: index('board_comments_branch_idx').on(table.branch_id),
     createdByIdx: index('board_comments_created_by_idx').on(table.created_by),
     parentIdx: index('board_comments_parent_idx').on(table.parent_comment_id),
     createdIdx: index('board_comments_created_idx').on(table.created_at),
@@ -1382,8 +1380,8 @@ export const boardComments = pgTable(
  * Gateway Channels table - Registered messaging platform integrations
  *
  * Users create channels to connect messaging platforms (Slack, Discord, etc.)
- * to Agor. Each channel targets a specific worktree and routes messages
- * to/from sessions within that worktree.
+ * to Agor. Each channel targets a specific branch and routes messages
+ * to/from sessions within that branch.
  */
 export const gatewayChannels = pgTable(
   'gateway_channels',
@@ -1401,9 +1399,9 @@ export const gatewayChannels = pgTable(
     channel_type: text('channel_type', {
       enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github'],
     }).notNull(),
-    target_worktree_id: varchar('target_worktree_id', { length: 36 })
+    target_branch_id: varchar('target_branch_id', { length: 36 })
       .notNull()
-      .references(() => worktrees.worktree_id, { onDelete: 'cascade' }),
+      .references(() => branches.branch_id, { onDelete: 'cascade' }),
     agor_user_id: varchar('agor_user_id', { length: 36 }).notNull(),
     channel_key: text('channel_key').notNull().unique(),
     enabled: t.bool('enabled').notNull().default(true),
@@ -1443,9 +1441,9 @@ export const threadSessionMap = pgTable(
     session_id: varchar('session_id', { length: 36 })
       .notNull()
       .references(() => sessions.session_id, { onDelete: 'cascade' }),
-    worktree_id: varchar('worktree_id', { length: 36 })
+    branch_id: varchar('branch_id', { length: 36 })
       .notNull()
-      .references(() => worktrees.worktree_id),
+      .references(() => branches.branch_id),
 
     // Materialized for queries
     status: text('status', {
@@ -1501,8 +1499,8 @@ export type BoardRow = typeof boards.$inferSelect;
 export type BoardInsert = typeof boards.$inferInsert;
 export type RepoRow = typeof repos.$inferSelect;
 export type RepoInsert = typeof repos.$inferInsert;
-export type WorktreeRow = typeof worktrees.$inferSelect;
-export type WorktreeInsert = typeof worktrees.$inferInsert;
+export type BranchRow = typeof branches.$inferSelect;
+export type BranchInsert = typeof branches.$inferInsert;
 export type UserRow = typeof users.$inferSelect;
 export type UserInsert = typeof users.$inferInsert;
 export type MCPServerRow = typeof mcpServers.$inferSelect;
@@ -1531,16 +1529,16 @@ export type SerializedSessionInsert = typeof serializedSessions.$inferInsert;
 /**
  * Drizzle Relations for Relational Queries
  *
- * These enable automatic JOINs using db.query.sessions.findFirst({ with: { worktree: true } })
+ * These enable automatic JOINs using db.query.sessions.findFirst({ with: { branch: true } })
  */
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({
-  worktree: one(worktrees, {
-    fields: [sessions.worktree_id],
-    references: [worktrees.worktree_id],
+  branch: one(branches, {
+    fields: [sessions.branch_id],
+    references: [branches.branch_id],
   }),
 }));
 
-export const worktreesRelations = relations(worktrees, ({ many }) => ({
+export const branchesRelations = relations(branches, ({ many }) => ({
   sessions: many(sessions),
 }));

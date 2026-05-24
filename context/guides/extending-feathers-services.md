@@ -374,7 +374,7 @@ Does your method operate on the service's primary resource?
 │         └─ NO: Use Service Method (Pattern 1)
 └─ NO: Does it span multiple resources or need complex routing?
        └─ YES: Use Custom Route (Pattern 2)
-              Example: POST /repos/:id/worktrees
+              Example: POST /repos/:id/branches
 ```
 
 ---
