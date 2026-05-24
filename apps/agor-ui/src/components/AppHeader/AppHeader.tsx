@@ -318,16 +318,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           connecting={connecting}
           onRetry={onRetryConnection}
         />
-        <GlobalSearch
-          currentUserId={currentUserId}
-          sessionById={sessionById}
-          branchById={branchById}
-          artifactById={artifactById}
-          boardById={boardById}
-          mcpServerById={mcpServerById}
-          onSettingsClick={onSettingsClick}
-        />
-        <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
         {activeUsers.length > 0 && (
           <>
             <Facepile
@@ -343,6 +333,16 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
           </>
         )}
+        <GlobalSearch
+          currentUserId={currentUserId}
+          sessionById={sessionById}
+          branchById={branchById}
+          artifactById={artifactById}
+          boardById={boardById}
+          mcpServerById={mcpServerById}
+          onSettingsClick={onSettingsClick}
+        />
+        <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
         {eventStreamEnabled && (
           <Tooltip title="Live Event Stream" placement="bottom">
             <Button
