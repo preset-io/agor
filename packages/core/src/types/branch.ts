@@ -400,7 +400,7 @@ export interface Branch {
   others_fs_access?: 'none' | 'read' | 'write';
 
   // ===== Branch Storage Mode =====
-  // See docs/internal/branch-vs-branch-migration-analysis-2026-05-20.md.
+  // See docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.
 
   /**
    * How this branch's filesystem is materialised.
@@ -414,7 +414,7 @@ export interface Branch {
    *   the cross-branch credential/config leak vectors (Layer A defenses are
    *   then belt-and-braces, not load-bearing).
    *
-   * Selected at create time. Existing rows default to 'branch'.
+   * Selected at create time. Existing rows default to 'worktree'.
    */
   storage_mode?: 'worktree' | 'clone';
 

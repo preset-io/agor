@@ -353,7 +353,7 @@ export const GitBranchAddPayloadSchema = BasePayloadSchema.extend({
        * forwards it; the executor checks the path on its own filesystem
        * before adding `--reference` to the clone command. Path missing
        * (different mount, base not seeded yet) → silent fallback to a
-       * full clone. Ignored when storageMode='branch'.
+       * full clone. Ignored when storageMode='worktree'.
        */
       referencePath: z.string().optional(),
     })

@@ -59,6 +59,48 @@ const ACTIVE_SESSION_STATUSES: ReadonlySet<SessionStatus> = new Set([
 ]);
 
 /**
+ * Render a Handlebars schedule-prompt template against a branch's metadata.
+ *
+ * Exposed as a module-level helper (not just a private method) so the
+ * backwards-compat alias contract — `{{worktree.*}}` mirrors `{{branch.*}}`
+ * for pre-v0.20 schedule prompts — can be exercised in isolation by the
+ * scheduler tests. Falls back to the raw template on render error so a bad
+ * user template never crashes the scheduler tick.
+ */
+export function renderSchedulePrompt(template: string, branch: Branch): string {
+  try {
+    const compiledTemplate = Handlebars.compile(template);
+
+    // Build context for template rendering. Expose the entity under both
+    // `branch` (canonical) and `worktree` (legacy alias) so v0.19 schedule
+    // prompts using {{worktree.name}} etc. continue to render unchanged.
+    // See packages/core/src/templates/handlebars-helpers.ts for the same
+    // alias pattern in the env-template context.
+    const branchEntity = {
+      name: branch.name,
+      ref: branch.ref,
+      path: branch.path,
+      issue_url: branch.issue_url,
+      pull_request_url: branch.pull_request_url,
+      notes: branch.notes,
+      custom_context: branch.custom_context,
+    };
+    const context = {
+      branch: branchEntity,
+      worktree: branchEntity,
+      // TODO: Add board context if needed (requires fetching board data)
+      schedule: branch.schedule,
+    };
+
+    return compiledTemplate(context);
+  } catch (error) {
+    console.error(`❌ Failed to render prompt template:`, error);
+    // Fallback to raw template if rendering fails
+    return template;
+  }
+}
+
+/**
  * Error thrown when execute-now is blocked because a session is already running
  * in the branch and allow_concurrent_runs is not enabled. Routes can catch
  * this and surface it as a 409 Conflict.
@@ -593,30 +635,7 @@ export class SchedulerService {
    * Render Handlebars prompt template with branch/board context
    */
   private renderPrompt(template: string, branch: Branch): string {
-    try {
-      const compiledTemplate = Handlebars.compile(template);
-
-      // Build context for template rendering
-      const context = {
-        branch: {
-          name: branch.name,
-          ref: branch.ref,
-          path: branch.path,
-          issue_url: branch.issue_url,
-          pull_request_url: branch.pull_request_url,
-          notes: branch.notes,
-          custom_context: branch.custom_context,
-        },
-        // TODO: Add board context if needed (requires fetching board data)
-        schedule: branch.schedule,
-      };
-
-      return compiledTemplate(context);
-    } catch (error) {
-      console.error(`❌ Failed to render prompt template:`, error);
-      // Fallback to raw template if rendering fails
-      return template;
-    }
+    return renderSchedulePrompt(template, branch);
   }
 
   /**

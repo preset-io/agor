@@ -814,20 +814,6 @@ export const ConceptPill: React.FC<ConceptPillProps> = ({ name, style }) => (
   </Tag>
 );
 
-interface ManagedBranchPillProps extends BasePillProps {
-  managed?: boolean;
-}
-
-export const ManagedBranchPill: React.FC<ManagedBranchPillProps> = ({ managed = true, style }) => {
-  const { token } = theme.useToken();
-
-  return (
-    <Tag color={PILL_COLORS.branch} style={style}>
-      <span style={{ fontFamily: token.fontFamilyCode }}>{managed ? 'Managed' : 'Branch'}</span>
-    </Tag>
-  );
-};
-
 interface DirtyStatePillProps extends BasePillProps {}
 
 export const DirtyStatePill: React.FC<DirtyStatePillProps> = ({ style }) => {

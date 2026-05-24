@@ -114,9 +114,14 @@ export function isLikelyGitToken(token: string): boolean {
  * a future regression in validation, or a sourceBranch path) is still forced
  * into positional-argument semantics.
  *
+ * Named for the underlying `git worktree add` CLI primitive rather than the
+ * Agor "branch" entity it materialises — the carve-out keeps `worktree` in
+ * names that wrap the git CLI directly, so a reader of this module isn't
+ * misled into thinking "branch" here means a git branch.
+ *
  * Exported so tests can assert the argv shape without spawning a real git.
  */
-export function buildBranchAddArgs(params: {
+export function buildWorktreeAddArgs(params: {
   branchPath: string;
   ref: string;
   createBranch: boolean;
@@ -404,7 +409,7 @@ export function createGit(
   // Build git env vars. Always set the isolation knobs when we are passing a
   // user env (i.e. doing per-user git work) — otherwise leave the daemon
   // user's environment untouched so commands that don't need credentials
-  // (e.g. listBranches) keep working as before.
+  // (e.g. listGitWorktrees) keep working as before.
   let spawnEnv: Record<string, string> | undefined;
   if (env || authConfigEntries.length > 0) {
     spawnEnv = {
@@ -834,7 +839,12 @@ export async function ensureGitRemoteUrl(
   return { changed: true, previousUrl: currentUrls.join('\n') };
 }
 
-export interface BranchInfo {
+/**
+ * Parsed entry from `git worktree list --porcelain` output. Describes a
+ * git-worktree primitive — not the Agor Branch entity (which carries env
+ * config, board placement, owners, etc. on top of this).
+ */
+export interface GitWorktreeInfo {
   name: string;
   path: string;
   ref: string;
@@ -946,7 +956,7 @@ export async function createBranch(
     }
   }
 
-  const branchAddArgs = buildBranchAddArgs({
+  const worktreeAddArgs = buildWorktreeAddArgs({
     branchPath,
     ref,
     createBranch,
@@ -960,7 +970,7 @@ export async function createBranch(
   }
 
   try {
-    await git.raw(branchAddArgs);
+    await git.raw(worktreeAddArgs);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
 
@@ -970,9 +980,9 @@ export async function createBranch(
         `⚠️  Branch '${ref}' already exists. Checking if it's orphaned (stale from a deleted branch)...`
       );
 
-      // Check if the branch is in use by another branch
-      const branches = await listBranches(repoPath);
-      const branchInUse = branches.some((wt) => wt.ref === ref);
+      // Check if the branch is in use by another git worktree
+      const worktrees = await listGitWorktrees(repoPath);
+      const branchInUse = worktrees.some((wt) => wt.ref === ref);
 
       if (branchInUse) {
         throw new Error(
@@ -987,7 +997,7 @@ export async function createBranch(
       await git.raw(['branch', '-D', ref]);
 
       // Retry the branch creation
-      await git.raw(branchAddArgs);
+      await git.raw(worktreeAddArgs);
       console.log(`✅ Successfully created branch after cleaning up stale branch '${ref}'`);
     } else {
       throw error;
@@ -1009,7 +1019,7 @@ export async function createBranch(
  * is a real directory (not a `gitdir:` pointer file), with its own
  * `.git/config`, refs, and credentials surface. Closes the cross-branch
  * leak vectors that the Layer A defenses exist to mitigate. See
- * `docs/internal/branch-vs-branch-migration-analysis-2026-05-20.md` §1.
+ * `docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md` §1.
  */
 export interface CreateBranchAsCloneOptions {
   /** Remote URL to clone from (https://, ssh://, git@host:path, file://, or local path). */
@@ -1301,16 +1311,23 @@ export async function restoreBranchFilesystem(
 }
 
 /**
- * List all branches for a repository
+ * List git-worktree entries registered with a repository (parsed
+ * `git worktree list --porcelain` output).
+ *
+ * Wraps the git-CLI primitive, so the name reflects what git sees ("worktrees"
+ * with a real `.git/worktrees/<name>/` entry in the base repo). Agor "branches"
+ * in clone storage mode are not git worktrees of the base repo and won't appear
+ * here — that's intentional; callers wanting the canonical list of Agor
+ * branches should use `BranchRepository`.
  */
-export async function listBranches(repoPath: string): Promise<BranchInfo[]> {
+export async function listGitWorktrees(repoPath: string): Promise<GitWorktreeInfo[]> {
   const { git } = createGit(repoPath);
   const output = await git.raw(['worktree', 'list', '--porcelain']);
 
-  const branches: BranchInfo[] = [];
+  const worktrees: GitWorktreeInfo[] = [];
   const lines = output.split('\n');
 
-  let current: Partial<BranchInfo> = {};
+  let current: Partial<GitWorktreeInfo> = {};
 
   for (const line of lines) {
     // Prefixes are git porcelain field names ('worktree' for path, 'branch'
@@ -1327,7 +1344,7 @@ export async function listBranches(repoPath: string): Promise<BranchInfo[]> {
       current.detached = true;
     } else if (line === '') {
       if (current.path && current.sha) {
-        branches.push(current as BranchInfo);
+        worktrees.push(current as GitWorktreeInfo);
       }
       current = {};
     }
@@ -1335,16 +1352,20 @@ export async function listBranches(repoPath: string): Promise<BranchInfo[]> {
 
   // Handle last entry
   if (current.path && current.sha) {
-    branches.push(current as BranchInfo);
+    worktrees.push(current as GitWorktreeInfo);
   }
 
-  return branches;
+  return worktrees;
 }
 
 /**
- * Remove a git branch
+ * Remove a git-worktree entry from the base repo (`git worktree remove --force`).
+ *
+ * Wraps the git CLI directly — the name reflects the primitive, not the
+ * Agor "Branch" entity. Branches in clone storage mode aren't registered as
+ * git worktrees of the base repo and shouldn't go through this path.
  */
-export async function removeBranch(repoPath: string, branchName: string): Promise<void> {
+export async function removeGitWorktree(repoPath: string, branchName: string): Promise<void> {
   const { git } = createGit(repoPath);
   await git.raw(['worktree', 'remove', '--force', branchName]);
 }
@@ -1455,9 +1476,12 @@ export async function cleanBranch(
 }
 
 /**
- * Prune stale branch metadata
+ * Prune stale git-worktree metadata (`git worktree prune`).
+ *
+ * Wraps the git CLI directly — used after manual filesystem removal to
+ * tell git to drop the stale `.git/worktrees/<name>/` administrative entry.
  */
-export async function pruneBranches(repoPath: string): Promise<void> {
+export async function pruneGitWorktrees(repoPath: string): Promise<void> {
   const { git } = createGit(repoPath);
   await git.raw(['worktree', 'prune']);
 }

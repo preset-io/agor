@@ -102,7 +102,7 @@ This server uses progressive tool discovery. Only 2 tools are listed directly â€
 Domains:
 - sessions: Agent conversations with genealogy (fork/spawn), task tracking, and message history
 - repos: Repository registration and management
-- branches: Branches with isolated git refs, board placement, zone pinning, and assistant discovery. Every \`agor_branches_*\` tool also has an \`agor_branches_*\` alias; the branches-prefixed names are deprecated.
+- branches: Branches with isolated git refs, board placement, zone pinning, and assistant discovery.
 - environment: Start/stop/health/logs for branch dev environments
 - boards: Spatial canvases with zones for organizing branches and cards
 - cards: Kanban-style cards and card type definitions on boards

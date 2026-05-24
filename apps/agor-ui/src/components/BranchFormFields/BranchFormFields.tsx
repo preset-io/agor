@@ -193,23 +193,23 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
       <Form.Item
         name={`${fieldPrefix}storage_mode`}
         label="Storage"
-        initialValue="branch"
+        initialValue="worktree"
         tooltip={
           'How the branch is materialised on disk. ' +
-          '"Branch" uses git\'s native shared-base model (legacy default). ' +
-          '"Branch" gives this branch its own .git/ directory via a real ' +
+          '"Worktree" uses git\'s native shared-base model (legacy default). ' +
+          '"Clone" gives this branch its own .git/ directory via a real ' +
           'git clone — credentials and config are isolated from sibling branches. ' +
           'See docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.'
         }
       >
         <Radio.Group onChange={() => onFormChange?.()}>
-          <Radio value="branch">Branch (default)</Radio>
-          <Radio value="clone">Branch</Radio>
+          <Radio value="worktree">Worktree (default)</Radio>
+          <Radio value="clone">Clone</Radio>
         </Radio.Group>
       </Form.Item>
 
       {/*
-        Depth input: only visible when "Branch" is selected. Pre-fills with
+        Depth input: only visible when "Clone" is selected. Pre-fills with
         DEFAULT_CLONE_DEPTH on render so the common shallow case is one click
         away; clearing the field means "full clone" (no --depth flag). Uses
         `shouldUpdate` so the parent form only re-renders this branch when

@@ -16,7 +16,7 @@ import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  buildBranchAddArgs,
+  buildWorktreeAddArgs,
   createBranch,
   deleteBranch,
   isLikelyGitToken,
@@ -116,10 +116,10 @@ describe('createBranch — argv hardening', () => {
   });
 });
 
-describe('buildBranchAddArgs — argv shape', () => {
+describe('buildWorktreeAddArgs — argv shape', () => {
   it('always inserts `--` before positional arguments', () => {
     // createBranch=false, no sourceBranch
-    const basic = buildBranchAddArgs({
+    const basic = buildWorktreeAddArgs({
       branchPath: '/tmp/wt',
       ref: 'main',
       createBranch: false,
@@ -134,7 +134,7 @@ describe('buildBranchAddArgs — argv shape', () => {
 
   it('keeps `-b <ref>` before `--` and positional path after it', () => {
     // createBranch=true — `-b` is an option flag, must be BEFORE `--`.
-    const withBranch = buildBranchAddArgs({
+    const withBranch = buildWorktreeAddArgs({
       branchPath: '/tmp/wt',
       ref: 'feat/new',
       createBranch: true,
@@ -153,7 +153,7 @@ describe('buildBranchAddArgs — argv shape', () => {
   });
 
   it('uses local ref (no origin/ prefix) when fetch failed', () => {
-    const args = buildBranchAddArgs({
+    const args = buildWorktreeAddArgs({
       branchPath: '/tmp/wt',
       ref: 'feat/new',
       createBranch: true,
@@ -165,7 +165,7 @@ describe('buildBranchAddArgs — argv shape', () => {
   });
 
   it('uses tag name verbatim when refType is tag', () => {
-    const args = buildBranchAddArgs({
+    const args = buildWorktreeAddArgs({
       branchPath: '/tmp/wt',
       ref: 'feat/from-tag',
       createBranch: true,

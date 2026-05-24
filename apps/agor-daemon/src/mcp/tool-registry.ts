@@ -44,8 +44,7 @@ const DOMAIN_DESCRIPTIONS: Record<string, string> = {
   sessions: 'Agent conversations with genealogy (fork/spawn), task tracking, and message history',
   repos: 'Repository registration and management',
   branches:
-    'Branches — isolated workspaces (backed by git branches) with their own git refs, board placement, and zone pinning. ' +
-    'Every `agor_branches_*` tool also has an `agor_branches_*` alias — both names work; the branches-prefixed names are deprecated.',
+    'Branches — isolated workspaces (backed by git worktrees or self-standing clones) with their own git refs, board placement, and zone pinning.',
   environment: 'Start/stop/health/logs/nuke for branch dev environments',
   boards: 'Spatial canvases with zones for organizing branches and cards',
   cards: 'Kanban-style cards and card type definitions on boards',

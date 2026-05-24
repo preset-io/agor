@@ -29,9 +29,9 @@ import {
   isClean,
   isGitRepo,
   isValidGitRepo,
-  listBranches,
-  pruneBranches,
-  removeBranch,
+  listGitWorktrees,
+  pruneGitWorktrees,
+  removeGitWorktree,
 } from './index';
 
 /**
@@ -769,7 +769,7 @@ describe('createBranch', () => {
   });
 });
 
-describe('listBranches', () => {
+describe('listGitWorktrees', () => {
   let tempDir: string;
   let repoDir: string;
 
@@ -784,7 +784,7 @@ describe('listBranches', () => {
 
   it('should list main branch', async () => {
     await createTestRepo(repoDir);
-    const branches = await listBranches(repoDir);
+    const branches = await listGitWorktrees(repoDir);
 
     expect(branches.length).toBeGreaterThan(0);
     // Use realpath to resolve symlinks (macOS /var -> /private/var)
@@ -804,7 +804,7 @@ describe('listBranches', () => {
     await createBranch(repoDir, branch1, 'branch1', true, false);
     await createBranch(repoDir, branch2, 'branch2', true, false);
 
-    const branches = await listBranches(repoDir);
+    const branches = await listGitWorktrees(repoDir);
 
     expect(branches.length).toBeGreaterThanOrEqual(3); // main + 2 branches
 
@@ -825,7 +825,7 @@ describe('listBranches', () => {
 
     await createBranch(repoDir, branchDir, 'test-branch', true, false);
 
-    const branches = await listBranches(repoDir);
+    const branches = await listGitWorktrees(repoDir);
     const realBranchDir = await fs.realpath(branchDir);
     const testBranch = branches.find((w) => w.path === realBranchDir);
 
@@ -847,7 +847,7 @@ describe('listBranches', () => {
     if (sha) {
       await createBranch(repoDir, branchDir, sha, false, false);
 
-      const branches = await listBranches(repoDir);
+      const branches = await listGitWorktrees(repoDir);
       const realBranchDir = await fs.realpath(branchDir);
       const detachedBranch = branches.find((w) => w.path === realBranchDir);
 
@@ -858,7 +858,7 @@ describe('listBranches', () => {
   });
 });
 
-describe('removeBranch', () => {
+describe('removeGitWorktree', () => {
   let tempDir: string;
   let repoDir: string;
 
@@ -878,21 +878,21 @@ describe('removeBranch', () => {
     await createBranch(repoDir, branchDir, 'test-branch', true, false);
 
     // Verify branch exists
-    let branches = await listBranches(repoDir);
+    let branches = await listGitWorktrees(repoDir);
     const initialCount = branches.length;
     expect(initialCount).toBeGreaterThan(1);
 
     // Remove branch
-    await removeBranch(repoDir, branchDir);
+    await removeGitWorktree(repoDir, branchDir);
 
     // Verify branch removed
-    branches = await listBranches(repoDir);
+    branches = await listGitWorktrees(repoDir);
     expect(branches.length).toBe(initialCount - 1);
     expect(branches.find((w) => w.path === branchDir)).toBeUndefined();
   });
 });
 
-describe('pruneBranches', () => {
+describe('pruneGitWorktrees', () => {
   let tempDir: string;
   let repoDir: string;
 
@@ -922,7 +922,7 @@ describe('pruneBranches', () => {
     // Note: may fail if temp dir is cleaned up during async operation,
     // but that's acceptable for this test
     try {
-      await pruneBranches(repoDir);
+      await pruneGitWorktrees(repoDir);
     } catch {
       // Ignore errors from async git operations that race with cleanup
     }
@@ -930,7 +930,7 @@ describe('pruneBranches', () => {
     // Verify prune doesn't throw when called again
     expect(async () => {
       try {
-        await pruneBranches(repoDir);
+        await pruneGitWorktrees(repoDir);
       } catch {
         // Expected if directory is being cleaned up
       }

@@ -51,6 +51,31 @@ describe('buildZoneTriggerContext', () => {
     expect(ctx.zone).toEqual({ label: 'In Review', status: 'active' });
   });
 
+  it('exposes `worktree` as a v0.19 backwards-compat alias of `branch`', () => {
+    // Legacy zone-trigger templates authored before the Worktree → Branch
+    // rename reference `{{worktree.name}}` / `{{worktree.context.foo}}`. The
+    // alias must render identical output to `{{branch.*}}` so those templates
+    // keep working unchanged.
+    const ctx = buildZoneTriggerContext({
+      branch: {
+        name: 'feat-auth',
+        ref: 'feat-auth',
+        issue_url: 'https://github.com/org/repo/issues/42',
+        notes: 'wip',
+        custom_context: { issue: 'PROJ-42' },
+      },
+    });
+    expect(ctx.worktree).toBe(ctx.branch);
+    expect(ctx.worktree).toMatchObject({
+      name: 'feat-auth',
+      ref: 'feat-auth',
+      issue_url: 'https://github.com/org/repo/issues/42',
+      notes: 'wip',
+      context: { issue: 'PROJ-42' },
+      custom_context: { issue: 'PROJ-42' },
+    });
+  });
+
   it('defaults all fields to safe empties when inputs are absent', () => {
     const ctx = buildZoneTriggerContext({});
     expect(ctx.branch).toEqual({

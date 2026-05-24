@@ -8,7 +8,6 @@ import {
   ForkPill,
   GitShaPill,
   GitStatePill,
-  ManagedBranchPill,
   MessageCountPill,
   ReportPill,
   SessionIdPill,
@@ -102,8 +101,6 @@ export const AllPills: Story = {
           <ReportPill reportId="0199b852-1234-5678-9abc-def012345678" />
           <ConceptPill name="authentication" />
           <ConceptPill name="database-schema" />
-          <ManagedBranchPill managed={true} />
-          <ManagedBranchPill managed={false} />
         </Space>
       </div>
     </Space>
@@ -214,7 +211,6 @@ export const Features: Story = {
       <ReportPill />
       <ReportPill reportId="0199b852-1234-5678-9abc-def012345678" />
       <ConceptPill name="authentication" />
-      <ManagedBranchPill managed={true} />
       <DirtyStatePill />
     </Space>
   ),

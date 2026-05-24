@@ -39,6 +39,28 @@ ALTER INDEX "artifacts_worktree_idx" RENAME TO "artifacts_branch_idx";--> statem
 ALTER INDEX "board_objects_worktree_idx" RENAME TO "board_objects_branch_idx";--> statement-breakpoint
 ALTER INDEX "board_comments_worktree_idx" RENAME TO "board_comments_branch_idx";--> statement-breakpoint
 
+-- ===== Constraint renames (Postgres) =====
+-- ALTER TABLE … RENAME TO doesn't rename PK/FK constraint names; without this
+-- pass, fresh installs would generate Drizzle-naming-convention constraint
+-- names ("branches_pkey", "branches_repo_id_repos_repo_id_fk", …) while
+-- migrated installs would keep the old worktree-prefixed names — silent
+-- schema drift that breaks future drizzle-kit diffs. Bring them in line.
+ALTER TABLE "branches" RENAME CONSTRAINT "worktrees_pkey" TO "branches_pkey";--> statement-breakpoint
+ALTER TABLE "branches" RENAME CONSTRAINT "worktrees_repo_id_repos_repo_id_fk" TO "branches_repo_id_repos_repo_id_fk";--> statement-breakpoint
+ALTER TABLE "branches" RENAME CONSTRAINT "worktrees_board_id_boards_board_id_fk" TO "branches_board_id_boards_board_id_fk";--> statement-breakpoint
+
+ALTER TABLE "branch_owners" RENAME CONSTRAINT "worktree_owners_worktree_id_user_id_pk" TO "branch_owners_branch_id_user_id_pk";--> statement-breakpoint
+ALTER TABLE "branch_owners" RENAME CONSTRAINT "worktree_owners_worktree_id_worktrees_worktree_id_fk" TO "branch_owners_branch_id_branches_branch_id_fk";--> statement-breakpoint
+ALTER TABLE "branch_owners" RENAME CONSTRAINT "worktree_owners_user_id_users_user_id_fk" TO "branch_owners_user_id_users_user_id_fk";--> statement-breakpoint
+
+ALTER TABLE "sessions" RENAME CONSTRAINT "sessions_worktree_id_worktrees_worktree_id_fk" TO "sessions_branch_id_branches_branch_id_fk";--> statement-breakpoint
+ALTER TABLE "serialized_sessions" RENAME CONSTRAINT "serialized_sessions_worktree_id_worktrees_worktree_id_fk" TO "serialized_sessions_branch_id_branches_branch_id_fk";--> statement-breakpoint
+ALTER TABLE "artifacts" RENAME CONSTRAINT "artifacts_worktree_id_worktrees_worktree_id_fk" TO "artifacts_branch_id_branches_branch_id_fk";--> statement-breakpoint
+ALTER TABLE "board_objects" RENAME CONSTRAINT "board_objects_worktree_id_worktrees_worktree_id_fk" TO "board_objects_branch_id_branches_branch_id_fk";--> statement-breakpoint
+ALTER TABLE "board_comments" RENAME CONSTRAINT "board_comments_worktree_id_worktrees_worktree_id_fk" TO "board_comments_branch_id_branches_branch_id_fk";--> statement-breakpoint
+ALTER TABLE "gateway_channels" RENAME CONSTRAINT "gateway_channels_target_worktree_id_worktrees_worktree_id_fk" TO "gateway_channels_target_branch_id_branches_branch_id_fk";--> statement-breakpoint
+ALTER TABLE "thread_session_map" RENAME CONSTRAINT "thread_session_map_worktree_id_worktrees_worktree_id_fk" TO "thread_session_map_branch_id_branches_branch_id_fk";--> statement-breakpoint
+
 -- ===== Data migration: enum-literal values =====
 UPDATE "sessions"
   SET "archived_reason" = 'branch_archived'

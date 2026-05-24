@@ -9,7 +9,6 @@ export {
   GitShaPill,
   GitStatePill,
   IssuePill,
-  ManagedBranchPill,
   MessageCountPill,
   ModelPill,
   PILL_COLORS,

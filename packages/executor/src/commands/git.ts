@@ -30,7 +30,7 @@ import {
   deleteBranch,
   deleteBranchDirectory,
   getReposDir,
-  removeBranch,
+  removeGitWorktree,
   restoreBranchFilesystem,
 } from '@agor/core/git';
 import type {
@@ -829,18 +829,18 @@ export async function handleGitBranchRemove(
         );
       }
     } else if (existsSync(gitPath)) {
-      // Branch mode: .git is a file (`gitdir: …`) pointing back at the
+      // Worktree mode: .git is a file (`gitdir: …`) pointing back at the
       // base repo's `.git/worktrees/<name>`. Read it to find the base repo
       // and deregister cleanly.
       //
       // Defensive: if .git is somehow a directory here despite storage_mode
-      // being 'branch' (mislabeled DB row from a manual conversion), fall
+      // being 'worktree' (mislabeled DB row from a manual conversion), fall
       // back to the clone-mode removal path rather than misreading a dir as
       // a `gitdir:` file. See design doc §2 operational caveats.
       const gitStat = await stat(gitPath);
       if (gitStat.isDirectory()) {
         console.warn(
-          `[git.branch.remove] DB says storage_mode='branch' but ${gitPath} is a directory — treating as clone-mode removal`
+          `[git.branch.remove] DB says storage_mode='worktree' but ${gitPath} is a directory — treating as clone-mode removal`
         );
         await deleteBranchDirectory(branchPath);
         filesystemRemoved = true;
@@ -866,9 +866,10 @@ export async function handleGitBranchRemove(
 
         console.log(`[git.branch.remove] Repo path: ${repoPath}, Branch name: ${branchName}`);
 
-        // Remove the branch using git (deregisters from .git/worktrees/)
-        await removeBranch(repoPath, branchName);
-        console.log(`[git.branch.remove] Git branch deregistered`);
+        // Deregister the git worktree (removes the `.git/worktrees/<name>/`
+        // entry from the base repo). Wraps `git worktree remove --force`.
+        await removeGitWorktree(repoPath, branchName);
+        console.log(`[git.branch.remove] Git worktree deregistered`);
 
         // git worktree remove --force may leave residual files on disk.
         // Fully delete the directory to reclaim all disk space.
