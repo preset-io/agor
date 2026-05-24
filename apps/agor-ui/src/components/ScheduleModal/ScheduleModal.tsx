@@ -1,22 +1,46 @@
 /**
  * Schedule create / edit modal.
  *
- * Per §6b of docs/internal/schedules-first-class-design-2026-05-24.md the
- * field order is: name + description → prompt textarea (prominent) → cron
- * + timezone → compact agent picker → advanced (enabled / retention /
- * concurrency).
+ * Mirrors the structure of `NewSessionModal` for visual + ergonomic
+ * consistency:
  *
- * Uses `react-js-cron` for the visual cron picker and `cronstrue` (via
- * the shared `humanizeCron` helper) for the live "Every hour" preview.
+ * - Primary fields top: name, description, prompt, cron + timezone, agent,
+ *   MCP servers.
+ * - Ghost `<Collapse>` with two panels for the secondary zone:
+ *     1. "Agentic Tool Configuration" — same `AgenticToolConfigForm`
+ *        component the session modal uses, in `compact` mode + with
+ *        `hideMcpServers` (the MCP field is promoted to the primary
+ *        zone above).
+ *     2. "Schedule Settings" — retention + concurrency (schedule-specific).
+ *
+ * Reuses the same building blocks as `NewSessionModal`:
+ * - `AgentSelectionGrid` (with `variant="select"` here vs `cards` there —
+ *   schedules don't need to merchandise the agent choice).
+ * - `SessionMcpServersField` as a top-level form field.
+ * - `AgenticToolConfigForm` with `hideMcpServers + compact`.
+ * - `getFormValuesFromConfig` / `buildConfigFromFormValues` to translate
+ *   between form values and the schedule's `agentic_tool_config` jsonb.
+ *
+ * Field order for the primary zone follows §6b of the design doc: name +
+ * description → prompt → cron + timezone → agent → MCP.
  */
 
-import type { AgenticToolName, AgorClient, BranchID, MCPServer, Schedule } from '@agor-live/client';
+import type {
+  AgenticToolName,
+  AgorClient,
+  BranchID,
+  DefaultAgenticToolConfig,
+  EffortLevel,
+  MCPServer,
+  Schedule,
+  ScheduleAgenticToolConfig,
+} from '@agor-live/client';
 import { humanizeCron } from '@agor-live/client';
+import { DownOutlined } from '@ant-design/icons';
 import {
   Alert,
   Button,
   Collapse,
-  Divider,
   Form,
   Input,
   InputNumber,
@@ -31,15 +55,20 @@ import { useEffect, useMemo, useState } from 'react';
 import { Cron } from 'react-js-cron';
 import 'react-js-cron/dist/styles.css';
 import { useThemedMessage } from '../../utils/message';
-import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
+import {
+  AgenticToolConfigForm,
+  buildConfigFromFormValues,
+  getFormValuesFromConfig,
+} from '../AgenticToolConfigForm';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
+import { SessionMcpServersField } from '../MCPServerSelect';
+import type { ModelConfig } from '../ModelSelector';
 
 const { TextArea } = Input;
 const { Text, Paragraph } = Typography;
 
-// A reasonable curated subset for the IANA dropdown; we also accept
-// free-text via Select's showSearch fallback so power users aren't
-// limited.
+// Curated IANA timezone list; the Select stays `showSearch` so a power
+// user can type any other zone name (e.g. `Asia/Bangkok`).
 const COMMON_TIMEZONES = [
   'America/Los_Angeles',
   'America/Denver',
@@ -73,7 +102,7 @@ export interface ScheduleModalProps {
   branchName: string;
   /** Existing schedule when editing; null/undefined when creating. */
   schedule?: Schedule | null;
-  /** MCP server catalog for the AgenticToolConfigForm. */
+  /** MCP server catalog. */
   mcpServerById: Map<string, MCPServer>;
   /** Feathers client. */
   client: AgorClient | null;
@@ -82,6 +111,85 @@ export interface ScheduleModalProps {
 }
 
 const DEFAULT_CRON = '0 * * * *';
+
+/**
+ * Map the schedule's snake_case `agentic_tool_config` blob into the
+ * camelCase shape the shared `AgenticToolConfigForm` (and its helpers)
+ * expect.
+ */
+function scheduleConfigToDefaultConfig(
+  cfg?: ScheduleAgenticToolConfig
+): DefaultAgenticToolConfig | undefined {
+  if (!cfg) return undefined;
+  return {
+    modelConfig: cfg.model_config
+      ? // Bridge: ScheduleAgenticToolConfig.model_config is { mode, model? }
+        // while DefaultAgenticToolConfig.modelConfig is the richer ModelConfig
+        // shape (effort, provider, etc.). The fields we care about for the
+        // form align; we cast through unknown so TS lets us bridge the
+        // structurally-compatible-but-nominally-different types.
+        (cfg.model_config as unknown as DefaultAgenticToolConfig['modelConfig'])
+      : undefined,
+    permissionMode: cfg.permission_mode as DefaultAgenticToolConfig['permissionMode'],
+    mcpServerIds: cfg.mcp_server_ids,
+    // Codex fields don't exist in ScheduleAgenticToolConfig today; they'd
+    // need to be promoted if we ever want codex sandbox/approval/network
+    // toggles on a schedule. Compact mode hides them anyway.
+  };
+}
+
+/**
+ * Inverse: pack form values back into the snake_case shape stored on
+ * the schedule, preserving any fields we don't surface (e.g. context_files).
+ */
+function buildScheduleConfig(
+  tool: AgenticToolName,
+  formValues: {
+    modelConfig?: ModelConfig;
+    effort?: EffortLevel;
+    permissionMode?: string;
+    mcpServerIds?: string[];
+    codexSandboxMode?: string;
+    codexApprovalPolicy?: string;
+    codexNetworkAccess?: boolean;
+  },
+  previous?: ScheduleAgenticToolConfig
+): ScheduleAgenticToolConfig {
+  const builtDefault = buildConfigFromFormValues(tool, formValues);
+  return {
+    ...previous,
+    agentic_tool: tool,
+    permission_mode: builtDefault.permissionMode as ScheduleAgenticToolConfig['permission_mode'],
+    model_config: builtDefault.modelConfig as ScheduleAgenticToolConfig['model_config'],
+    mcp_server_ids: builtDefault.mcpServerIds,
+    // context_files is not edited in this modal; preserve from `previous` if present.
+    context_files: previous?.context_files,
+  };
+}
+
+interface ScheduleFormValues {
+  name?: string;
+  description?: string;
+  prompt?: string;
+  cron_expression?: string;
+  timezone_mode?: 'local' | 'utc';
+  timezone?: string;
+  agenticTool?: AgenticToolName;
+  // AgenticToolConfigForm field names (camelCase) — read by buildScheduleConfig.
+  // Field types mirror `AgenticFormValues` in agenticConfigHelpers.ts; the
+  // helpers themselves narrow to PermissionMode etc. on persistence.
+  modelConfig?: ModelConfig;
+  effort?: EffortLevel;
+  permissionMode?: string;
+  mcpServerIds?: string[];
+  codexSandboxMode?: string;
+  codexApprovalPolicy?: string;
+  codexNetworkAccess?: boolean;
+  // Schedule-settings panel
+  enabled?: boolean;
+  retention?: number;
+  allow_concurrent_runs?: boolean;
+}
 
 export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   open,
@@ -95,90 +203,116 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
 }) => {
   const isEditing = Boolean(schedule?.schedule_id);
   const { showError, showSuccess } = useThemedMessage();
-  const [form] = Form.useForm();
+  const [form] = Form.useForm<ScheduleFormValues>();
 
-  const [name, setName] = useState(schedule?.name ?? '');
-  const [description, setDescription] = useState(schedule?.description ?? '');
-  const [prompt, setPrompt] = useState(schedule?.prompt ?? '');
-  const [cron, setCron] = useState(schedule?.cron_expression ?? DEFAULT_CRON);
-  const [timezoneMode, setTimezoneMode] = useState<'local' | 'utc'>(
-    schedule?.timezone_mode ?? 'local'
-  );
-  const [timezone, setTimezone] = useState<string>(schedule?.timezone ?? detectBrowserTz());
+  // Agent picker is controlled via local state because it drives which
+  // fields AgenticToolConfigForm shows (e.g., effort for Claude only).
+  // The selected value is mirrored into the form as `agenticTool` so save
+  // can read it consistently with the rest of the form.
   const [agentTool, setAgentTool] = useState<AgenticToolName>(
     (schedule?.agentic_tool_config?.agentic_tool as AgenticToolName) ?? 'claude-code'
-  );
-  const [enabled, setEnabled] = useState<boolean>(schedule?.enabled ?? true);
-  const [retention, setRetention] = useState<number>(schedule?.retention ?? 5);
-  const [allowConcurrentRuns, setAllowConcurrentRuns] = useState<boolean>(
-    schedule?.allow_concurrent_runs ?? false
   );
   const [showCronPicker, setShowCronPicker] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Reset state when the schedule prop changes (edit -> different edit, or
-  // edit -> create after the modal stays mounted across open/close cycles).
+  // Initialize form when modal opens or the schedule prop changes.
   useEffect(() => {
     if (!open) return;
-    setName(schedule?.name ?? '');
-    setDescription(schedule?.description ?? '');
-    setPrompt(schedule?.prompt ?? '');
-    setCron(schedule?.cron_expression ?? DEFAULT_CRON);
-    setTimezoneMode(schedule?.timezone_mode ?? 'local');
-    setTimezone(schedule?.timezone ?? detectBrowserTz());
-    setAgentTool((schedule?.agentic_tool_config?.agentic_tool as AgenticToolName) ?? 'claude-code');
-    setEnabled(schedule?.enabled ?? true);
-    setRetention(schedule?.retention ?? 5);
-    setAllowConcurrentRuns(schedule?.allow_concurrent_runs ?? false);
+    const tool = (schedule?.agentic_tool_config?.agentic_tool as AgenticToolName) ?? 'claude-code';
+    const configValues = getFormValuesFromConfig(
+      tool,
+      scheduleConfigToDefaultConfig(schedule?.agentic_tool_config)
+    );
+    setAgentTool(tool);
+    setShowCronPicker(false);
     form.resetFields();
+    form.setFieldsValue({
+      name: schedule?.name ?? '',
+      description: schedule?.description ?? '',
+      prompt: schedule?.prompt ?? '',
+      cron_expression: schedule?.cron_expression ?? DEFAULT_CRON,
+      timezone_mode: schedule?.timezone_mode ?? 'local',
+      timezone: schedule?.timezone ?? detectBrowserTz(),
+      agenticTool: tool,
+      enabled: schedule?.enabled ?? true,
+      retention: schedule?.retention ?? 5,
+      allow_concurrent_runs: schedule?.allow_concurrent_runs ?? false,
+      ...configValues,
+    });
   }, [open, schedule, form]);
+
+  // When the agent changes, reseed the AgenticToolConfigForm fields with
+  // sensible defaults for the new tool. Mirrors NewSessionModal's behavior.
+  useEffect(() => {
+    if (!open) return;
+    const defaults = getFormValuesFromConfig(agentTool);
+    form.setFieldsValue({
+      ...defaults,
+      agenticTool: agentTool,
+      ...(agentTool !== 'codex' && {
+        codexSandboxMode: undefined,
+        codexApprovalPolicy: undefined,
+        codexNetworkAccess: undefined,
+      }),
+    });
+  }, [agentTool, open, form]);
+
+  const cronValue = Form.useWatch('cron_expression', form) ?? DEFAULT_CRON;
+  const timezoneModeValue = Form.useWatch('timezone_mode', form) ?? 'local';
 
   const humanizedCron = useMemo(() => {
     try {
-      return humanizeCron(cron);
+      return humanizeCron(cronValue);
     } catch {
       return null;
     }
-  }, [cron]);
+  }, [cronValue]);
 
   const handleSave = async (runAfter = false) => {
     if (!client) {
       showError('Not connected to daemon');
       return;
     }
-    if (!name.trim()) {
-      showError('Name is required');
+    let values: ScheduleFormValues;
+    try {
+      values = await form.validateFields();
+    } catch {
       return;
     }
-    if (!prompt.trim()) {
-      showError('Prompt is required');
-      return;
-    }
-    if (timezoneMode === 'local' && !timezone) {
+    if (values.timezone_mode === 'local' && !values.timezone) {
       showError("Timezone is required when mode is 'local'");
       return;
     }
+    // `getFieldsValue(true)` includes fields rendered inside collapsed
+    // panels (which validateFields can skip).
+    const all = { ...form.getFieldsValue(true), ...values } as ScheduleFormValues;
 
     setSaving(true);
     try {
       const payload: Partial<Schedule> = {
         branch_id: branchId,
-        name: name.trim(),
-        description: description.trim() || undefined,
-        prompt: prompt.trim(),
-        cron_expression: cron,
-        timezone_mode: timezoneMode,
-        timezone: timezoneMode === 'local' ? timezone : undefined,
-        // AgenticToolConfigForm uses a separate Form instance and we don't
-        // thread its values into our state; advanced fields default to the
-        // current schedule's config when editing. (Power-user flow.)
-        agentic_tool_config: {
-          ...(schedule?.agentic_tool_config ?? {}),
-          agentic_tool: agentTool,
-        },
-        enabled,
-        retention,
-        allow_concurrent_runs: allowConcurrentRuns,
+        name: (all.name ?? '').trim(),
+        description: all.description?.trim() || undefined,
+        prompt: (all.prompt ?? '').trim(),
+        cron_expression: all.cron_expression ?? DEFAULT_CRON,
+        timezone_mode: all.timezone_mode ?? 'local',
+        timezone: all.timezone_mode === 'local' ? all.timezone : undefined,
+        agentic_tool_config: buildScheduleConfig(
+          agentTool,
+          {
+            modelConfig: all.modelConfig,
+            effort: all.effort,
+            permissionMode: all.permissionMode,
+            mcpServerIds: all.mcpServerIds,
+            codexSandboxMode: all.codexSandboxMode,
+            codexApprovalPolicy: all.codexApprovalPolicy,
+            codexNetworkAccess: all.codexNetworkAccess,
+          },
+          schedule?.agentic_tool_config
+        ),
+        enabled: all.enabled ?? true,
+        retention: all.retention ?? 5,
+        allow_concurrent_runs: all.allow_concurrent_runs ?? false,
       };
 
       let saved: Schedule;
@@ -232,71 +366,90 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
         </Button>,
       ]}
     >
-      <Form form={form} layout="vertical">
-        <Form.Item label="Name" required>
-          <Input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Hourly heartbeat"
-          />
+      <Form form={form} layout="vertical" preserve={false} style={{ marginTop: 16 }}>
+        <Form.Item name="enabled" label="Enabled" valuePropName="checked">
+          <Switch />
         </Form.Item>
 
-        <Form.Item label="Description">
-          <Input
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Optional"
-          />
+        <Form.Item
+          name="name"
+          label="Name"
+          rules={[{ required: true, message: 'Name is required' }]}
+        >
+          <Input placeholder="Hourly heartbeat" />
         </Form.Item>
 
-        <Divider>Prompt</Divider>
-        <Form.Item label="Prompt template" required>
+        <Form.Item name="description" label="Description (optional)">
+          <Input placeholder="What this schedule does" />
+        </Form.Item>
+
+        <Form.Item
+          name="prompt"
+          label="Prompt template"
+          rules={[{ required: true, message: 'Prompt is required' }]}
+          help={
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              Handlebars: <code>{'{{branch.*}}'}</code> <code>{'{{board.*}}'}</code>{' '}
+              <code>{'{{schedule.*}}'}</code>
+            </Text>
+          }
+        >
           <TextArea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
             placeholder="Review the current state of {{branch.name}} and post a status update."
             rows={6}
           />
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            Handlebars: <code>{'{{branch.*}}'}</code> <code>{'{{board.*}}'}</code>{' '}
-            <code>{'{{schedule.*}}'}</code>
-          </Text>
         </Form.Item>
 
-        <Divider>When</Divider>
-        <Form.Item label="Cron expression" required>
+        <Form.Item
+          name="cron_expression"
+          label="Cron expression"
+          rules={[{ required: true, message: 'Cron is required' }]}
+          extra={
+            <>
+              {humanizedCron && (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  ⓘ {humanizedCron}
+                </Text>
+              )}
+              {showCronPicker && (
+                <div style={{ marginTop: 12 }}>
+                  <Cron
+                    value={cronValue}
+                    setValue={(v: string) => form.setFieldValue('cron_expression', v)}
+                    clearButton={false}
+                  />
+                </div>
+              )}
+            </>
+          }
+        >
           <Space.Compact style={{ width: '100%' }}>
-            <Input value={cron} onChange={(e) => setCron(e.target.value)} placeholder="0 * * * *" />
+            <Input
+              value={cronValue}
+              onChange={(e) => form.setFieldValue('cron_expression', e.target.value)}
+              placeholder="0 * * * *"
+            />
             <Button onClick={() => setShowCronPicker((s) => !s)}>
               {showCronPicker ? 'Hide picker' : 'Edit visually'}
             </Button>
           </Space.Compact>
-          {humanizedCron && (
-            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
-              ⓘ {humanizedCron}
-            </Text>
-          )}
-          {showCronPicker && (
-            <div style={{ marginTop: 12 }}>
-              <Cron value={cron} setValue={(v: string) => setCron(v)} clearButton={false} />
-            </div>
-          )}
         </Form.Item>
 
-        <Form.Item label="Timezone">
-          <Radio.Group
-            value={timezoneMode}
-            onChange={(e) => setTimezoneMode(e.target.value as 'local' | 'utc')}
-          >
+        <Form.Item name="timezone_mode" label="Timezone mode">
+          <Radio.Group>
             <Radio value="local">Local time</Radio>
             <Radio value="utc">UTC</Radio>
           </Radio.Group>
-          {timezoneMode === 'local' && (
+        </Form.Item>
+
+        {timezoneModeValue === 'local' && (
+          <Form.Item
+            name="timezone"
+            label="Timezone"
+            rules={[{ required: true, message: 'Timezone is required in local mode' }]}
+          >
             <Select
               showSearch
-              style={{ display: 'block', marginTop: 8, width: 320 }}
-              value={timezone}
-              onChange={setTimezone}
               options={COMMON_TIMEZONES.map((tz) => ({ value: tz, label: tz }))}
               dropdownRender={(menu) => (
                 <>
@@ -307,54 +460,59 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
                 </>
               )}
             />
-          )}
-        </Form.Item>
+          </Form.Item>
+        )}
 
-        <Divider>Agent</Divider>
-        <Form.Item>
+        <Form.Item label="Agent">
           <AgentSelectionGrid
             agents={AVAILABLE_AGENTS}
             selectedAgentId={agentTool}
             onSelect={(id) => setAgentTool(id as AgenticToolName)}
-            columns={3}
+            variant="select"
           />
         </Form.Item>
+
+        {/* MCP Servers — promoted to the primary zone (mirrors NewSessionModal:252). */}
+        <SessionMcpServersField mcpServerById={mcpServerById} />
+
         <Collapse
           ghost
+          destroyOnHidden={false}
+          expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
           items={[
             {
-              key: 'advanced-agent',
-              label: 'Advanced agent settings (permission, model, MCPs)',
+              key: 'agentic-tool-config',
+              label: <Typography.Text strong>Agentic Tool Configuration</Typography.Text>,
               children: (
                 <AgenticToolConfigForm
                   agenticTool={agentTool}
                   mcpServerById={mcpServerById}
+                  hideMcpServers
                   compact
                   client={client}
                 />
               ),
             },
+            {
+              key: 'schedule-settings',
+              label: <Typography.Text strong>Schedule Settings</Typography.Text>,
+              children: (
+                <>
+                  <Form.Item name="retention" label="Retention (sessions to keep; 0 = keep all)">
+                    <InputNumber min={0} />
+                  </Form.Item>
+                  <Form.Item name="allow_concurrent_runs" label="Concurrency">
+                    <Radio.Group>
+                      <Radio value={false}>Block (default)</Radio>
+                      <Radio value={true}>Allow concurrent runs</Radio>
+                    </Radio.Group>
+                  </Form.Item>
+                </>
+              ),
+            },
           ]}
+          style={{ marginTop: 16 }}
         />
-
-        <Divider>Advanced</Divider>
-        <Space direction="vertical" style={{ width: '100%' }}>
-          <Form.Item label="Enabled" style={{ marginBottom: 0 }}>
-            <Switch checked={enabled} onChange={setEnabled} />
-          </Form.Item>
-          <Form.Item label="Retention (sessions to keep; 0 = keep all)" style={{ marginBottom: 0 }}>
-            <InputNumber min={0} value={retention} onChange={(v) => setRetention(v ?? 5)} />
-          </Form.Item>
-          <Form.Item label="Concurrency" style={{ marginBottom: 0 }}>
-            <Radio.Group
-              value={allowConcurrentRuns ? 'allow' : 'block'}
-              onChange={(e) => setAllowConcurrentRuns(e.target.value === 'allow')}
-            >
-              <Radio value="block">Block (default)</Radio>
-              <Radio value="allow">Allow concurrent runs</Radio>
-            </Radio.Group>
-          </Form.Item>
-        </Space>
 
         {!isEditing && (
           <Alert
