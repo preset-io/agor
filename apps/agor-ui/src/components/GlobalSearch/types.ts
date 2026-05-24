@@ -63,14 +63,19 @@ export type SearchResultItem =
   | { type: 'board'; item: Board }
   | { type: 'mcp'; item: MCPServer };
 
-export interface ResultsByType {
-  session: SearchResultItem[];
-  branch: SearchResultItem[];
-  assistant: SearchResultItem[];
-  artifact: SearchResultItem[];
-  board: SearchResultItem[];
-  mcp: SearchResultItem[];
-}
+/** Narrowed result variant for a given entity type — keeps the union's
+ * type discrimination intact when buckets are typed per section. */
+export type SearchResultFor<T extends SearchEntityType> = Extract<SearchResultItem, { type: T }>;
+
+/** Record keyed by every entity type. Used to share shape between
+ * `ResultsByType` (rows) and `SearchCounts` (numbers). */
+export type EntityRecord<T> = Record<SearchEntityType, T>;
+
+/** Sectioned result buckets. Each bucket only contains rows of its own
+ * entity type (TS-enforced via the mapped `SearchResultFor` extraction). */
+export type ResultsByType = {
+  [K in SearchEntityType]: SearchResultFor<K>[];
+};
 
 export const EMPTY_RESULTS: ResultsByType = {
   session: [],
@@ -83,11 +88,11 @@ export const EMPTY_RESULTS: ResultsByType = {
 
 /**
  * Per-entity-type total match counts — used by the chip row to render badges
- * like "Worktree (12)". Independent of `activeTypeChip` so an inactive chip
+ * like "Branch (12)". Independent of `activeTypeChip` so an inactive chip
  * still surfaces "how many would I find if I clicked this." Pre-cap; the
  * `results` arrays are slice-limited per section while counts are not.
  */
-export type SearchCounts = Record<SearchEntityType, number>;
+export type SearchCounts = EntityRecord<number>;
 
 export const EMPTY_COUNTS: SearchCounts = {
   session: 0,
@@ -98,11 +103,31 @@ export const EMPTY_COUNTS: SearchCounts = {
   mcp: 0,
 };
 
+/**
+ * Live entity maps streamed by `useAgorData` (WebSocket-synced). Bundled into
+ * one interface so the navbar component, the search hook, and the recents
+ * hook can all consume the same shape via composition.
+ */
+export interface GlobalSearchEntityMaps {
+  sessionById: Map<string, Session>;
+  branchById: Map<string, Branch>;
+  artifactById: Map<string, Artifact>;
+  boardById: Map<string, Board>;
+  mcpServerById: Map<string, MCPServer>;
+}
+
 /** Per-section cap in the dropdown — matches §3.4 of the design doc. */
 export const SECTION_LIMIT = 5;
 
 /** Cap when a single type chip is active and the section expands. */
 export const SECTION_LIMIT_EXPANDED = 15;
+
+/**
+ * Cap per recents section. Smaller than `SECTION_LIMIT` because recents is
+ * the at-rest empty-query view — six sections × 3 rows is already a
+ * comfortable column of suggestions before the user has typed anything.
+ */
+export const RECENTS_SECTION_LIMIT = 3;
 
 /** Minimum query length before live results fire; below this we show recents. */
 export const MIN_QUERY_LENGTH = 2;

@@ -2,7 +2,7 @@ import { getAssistantConfig } from '@agor-live/client';
 import { Typography, theme } from 'antd';
 import type React from 'react';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
-import { formatRelativeTime } from '../../utils/time';
+import { formatRelativeTimeSafe } from '../../utils/time';
 import { highlightTokens } from './highlight';
 import type { SearchResultItem } from './types';
 
@@ -146,14 +146,14 @@ function renderResult(result: SearchResultItem): {
         title,
         tag: result.item.agentic_tool,
         secondary: result.parentBranch ? `in ${result.parentBranch.name}` : undefined,
-        time: safeRelativeTime(result.item.last_updated),
+        time: formatRelativeTimeSafe(result.item.last_updated),
       };
     }
     case 'branch': {
       return {
         title: result.item.name,
         tag: result.item.ref,
-        time: safeRelativeTime(result.item.updated_at),
+        time: formatRelativeTimeSafe(result.item.updated_at),
       };
     }
     case 'assistant': {
@@ -161,7 +161,7 @@ function renderResult(result: SearchResultItem): {
       return {
         icon: config?.emoji,
         title: config?.displayName ?? result.item.name,
-        time: safeRelativeTime(result.item.updated_at),
+        time: formatRelativeTimeSafe(result.item.updated_at),
       };
     }
     case 'artifact': {
@@ -169,14 +169,14 @@ function renderResult(result: SearchResultItem): {
         title: result.item.name,
         tag: result.item.template,
         secondary: result.parentBranch ? `in ${result.parentBranch.name}` : undefined,
-        time: safeRelativeTime(result.item.updated_at),
+        time: formatRelativeTimeSafe(result.item.updated_at),
       };
     }
     case 'board': {
       return {
         icon: result.item.icon,
         title: result.item.name,
-        time: safeRelativeTime(result.item.last_updated),
+        time: formatRelativeTimeSafe(result.item.last_updated),
       };
     }
     case 'mcp': {
@@ -187,16 +187,4 @@ function renderResult(result: SearchResultItem): {
       };
     }
   }
-}
-
-/**
- * Optional- and invalid-tolerant wrapper around formatRelativeTime — undefined
- * in, undefined out. Without the invalid-date guard, a bad timestamp would
- * render as "NaNy ago" via the shared formatter.
- */
-function safeRelativeTime(ts: string | Date | undefined | null): string | undefined {
-  if (!ts) return undefined;
-  const date = typeof ts === 'string' ? new Date(ts) : ts;
-  if (Number.isNaN(date.getTime())) return undefined;
-  return formatRelativeTime(date);
 }

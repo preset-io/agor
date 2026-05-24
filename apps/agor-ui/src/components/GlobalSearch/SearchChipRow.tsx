@@ -1,6 +1,7 @@
 import { Segmented, Switch, Tag, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { type ChipFilter, type SearchCounts, TYPE_CHIP_LABELS, TYPE_CHIP_ORDER } from './types';
+import { sumCounts } from './utils';
 
 interface SearchChipRowProps {
   activeChip: ChipFilter;
@@ -28,14 +29,7 @@ export const SearchChipRow: React.FC<SearchChipRowProps> = ({
 }) => {
   const { token } = theme.useToken();
 
-  const totalCount = counts
-    ? counts.session +
-      counts.branch +
-      counts.assistant +
-      counts.artifact +
-      counts.board +
-      counts.mcp
-    : 0;
+  const totalCount = counts ? sumCounts(counts) : 0;
   const showCounts = !!counts && totalCount > 0;
 
   return (

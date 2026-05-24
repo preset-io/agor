@@ -18,6 +18,7 @@ import {
   type SearchEntityType,
   type SearchResultItem,
 } from './types';
+import { sectionOffsets } from './utils';
 
 const { Text } = Typography;
 
@@ -71,8 +72,19 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
     [showRecents, query]
   );
 
+  // Precompute per-section flat-index offsets so the keyboard cursor index
+  // resolves to the right row across sections — single pass instead of
+  // re-scanning the section order for each row.
+  const offsets = useMemo(() => sectionOffsets(sectioned), [sectioned]);
+
   return (
+    // The listbox role is anchored here, not on the outer popover: the popover
+    // also contains the chip row, switch, close button, and BETA tag — none
+    // are list options. The Input's `aria-controls` points at this id so the
+    // combobox contract is intact.
     <div
+      role="listbox"
+      id={GLOBAL_SEARCH_LISTBOX_ID}
       // Fills the remaining space inside the popover's flex column. The
       // popover caps total height at 85vh; the chip row above is fixed
       // height, so this scroll area grows to use whatever's left.
@@ -91,13 +103,7 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
         SECTION_ORDER.map((type) => {
           const items = sectioned[type];
           if (items.length === 0) return null;
-
-          // Compute global index offset so the keyboard cursor lines up.
-          let offset = 0;
-          for (const t of SECTION_ORDER) {
-            if (t === type) break;
-            offset += sectioned[t].length;
-          }
+          const offset = offsets.get(type) ?? 0;
 
           // Recents reuse the live-search section labels (e.g. "Sessions") so
           // the visual contract stays identical between empty-query and

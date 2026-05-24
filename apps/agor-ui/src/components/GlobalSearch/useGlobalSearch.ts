@@ -1,4 +1,3 @@
-import type { Artifact, Board, Branch, MCPServer, Session } from '@agor-live/client';
 import {
   isAssistant,
   matchSearchTokens,
@@ -7,8 +6,10 @@ import {
 } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  type ChipFilter,
   EMPTY_COUNTS,
   EMPTY_RESULTS,
+  type GlobalSearchEntityMaps,
   MIN_QUERY_LENGTH,
   type ResultsByType,
   SEARCH_DEBOUNCE_MS,
@@ -17,18 +18,13 @@ import {
   type SearchCounts,
   type SearchResultItem,
 } from './types';
-import { byTimestamp } from './utils';
+import { byTimestamp, hasAnyEntries } from './utils';
 
-interface UseGlobalSearchInput {
+interface UseGlobalSearchInput extends GlobalSearchEntityMaps {
   query: string;
   ownedByMe: boolean;
-  activeTypeChip: 'all' | 'session' | 'branch' | 'assistant' | 'artifact' | 'board' | 'mcp';
+  activeTypeChip: ChipFilter;
   currentUserId?: string;
-  sessionById: Map<string, Session>;
-  branchById: Map<string, Branch>;
-  artifactById: Map<string, Artifact>;
-  boardById: Map<string, Board>;
-  mcpServerById: Map<string, MCPServer>;
 }
 
 /**
@@ -176,13 +172,7 @@ export function useGlobalSearch({
     mcpServerById,
   ]);
 
-  const hasAnyResults =
-    results.session.length > 0 ||
-    results.branch.length > 0 ||
-    results.assistant.length > 0 ||
-    results.artifact.length > 0 ||
-    results.board.length > 0 ||
-    results.mcp.length > 0;
+  const hasAnyResults = hasAnyEntries(results);
 
   return { results, counts, hasAnyResults, debouncedQuery, flush };
 }

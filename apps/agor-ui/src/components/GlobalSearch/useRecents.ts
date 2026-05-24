@@ -1,24 +1,16 @@
-import type { Artifact, Board, Branch, MCPServer, Session } from '@agor-live/client';
 import { isAssistant } from '@agor-live/client';
 import { useMemo } from 'react';
-import { EMPTY_RESULTS, type ResultsByType } from './types';
-import { tsValue } from './utils';
+import {
+  EMPTY_RESULTS,
+  type GlobalSearchEntityMaps,
+  RECENTS_SECTION_LIMIT,
+  type ResultsByType,
+} from './types';
+import { byTimestamp } from './utils';
 
-interface UseRecentsInput {
+type UseRecentsInput = GlobalSearchEntityMaps & {
   currentUserId?: string;
-  sessionById: Map<string, Session>;
-  branchById: Map<string, Branch>;
-  artifactById: Map<string, Artifact>;
-  boardById: Map<string, Board>;
-  mcpServerById: Map<string, MCPServer>;
-}
-
-/**
- * Cap per recents section. Smaller than `SECTION_LIMIT` (5) because recents is
- * the at-rest empty-query view — six sections × 3 rows is already a 100+px
- * column of suggestions before the user has typed anything.
- */
-const RECENTS_SECTION_LIMIT = 3;
+};
 
 /**
  * Backend-free recents — "stuff I created, most-recently-updated first," now
@@ -45,7 +37,7 @@ export function useRecents({
 
     const sessions = Array.from(sessionById.values())
       .filter((s) => s.created_by === currentUserId)
-      .sort((a, b) => tsValue(b.last_updated) - tsValue(a.last_updated))
+      .sort(byTimestamp((s) => s.last_updated))
       .slice(0, RECENTS_SECTION_LIMIT);
 
     // Pre-sort all the user's branches once, then bucket into branch vs.
@@ -53,26 +45,26 @@ export function useRecents({
     // separate passes through the map.
     const myBranches = Array.from(branchById.values())
       .filter((b) => b.created_by === currentUserId)
-      .sort((a, b) => tsValue(b.updated_at) - tsValue(a.updated_at));
+      .sort(byTimestamp((b) => b.updated_at));
     const branches = myBranches.filter((b) => !isAssistant(b)).slice(0, RECENTS_SECTION_LIMIT);
     const assistants = myBranches.filter((b) => isAssistant(b)).slice(0, RECENTS_SECTION_LIMIT);
 
     const artifacts = Array.from(artifactById.values())
       .filter((a) => !a.archived)
       .filter((a) => a.created_by === currentUserId)
-      .sort((a, b) => tsValue(b.updated_at) - tsValue(a.updated_at))
+      .sort(byTimestamp((a) => a.updated_at))
       .slice(0, RECENTS_SECTION_LIMIT);
 
     const boards = Array.from(boardById.values())
       .filter((b) => !b.archived)
       .filter((b) => b.created_by === currentUserId)
-      .sort((a, b) => tsValue(b.last_updated) - tsValue(a.last_updated))
+      .sort(byTimestamp((b) => b.last_updated))
       .slice(0, RECENTS_SECTION_LIMIT);
 
     // MCP uses owner_user_id (not created_by) and a Date timestamp.
     const mcpServers = Array.from(mcpServerById.values())
       .filter((m) => m.owner_user_id === currentUserId)
-      .sort((a, b) => tsValue(b.updated_at) - tsValue(a.updated_at))
+      .sort(byTimestamp((m) => m.updated_at))
       .slice(0, RECENTS_SECTION_LIMIT);
 
     return {

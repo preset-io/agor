@@ -1,4 +1,3 @@
-import type { Artifact, Board, Branch, MCPServer, Session } from '@agor-live/client';
 import { CloseOutlined } from '@ant-design/icons';
 import { Button, Input, type InputRef, theme } from 'antd';
 import type React from 'react';
@@ -6,21 +5,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { GLOBAL_SEARCH_LISTBOX_ID, GlobalSearchDropdown, rowDomId } from './GlobalSearchDropdown';
 import { SearchChipRow } from './SearchChipRow';
-import { type ChipFilter, MIN_QUERY_LENGTH, SECTION_ORDER, type SearchResultItem } from './types';
+import {
+  type ChipFilter,
+  type GlobalSearchEntityMaps,
+  MIN_QUERY_LENGTH,
+  type SearchResultItem,
+} from './types';
 import { useGlobalSearch } from './useGlobalSearch';
 import { useRecents } from './useRecents';
+import { flattenResults, hasAnyEntries } from './utils';
 
 const INPUT_WIDTH = 260;
 
-interface GlobalSearchProps {
+interface GlobalSearchProps extends GlobalSearchEntityMaps {
   currentUserId?: string;
-  /** Live entity maps from useAgorData / contexts — passed in by AppHeader. */
-  sessionById: Map<string, Session>;
-  branchById: Map<string, Branch>;
-  artifactById: Map<string, Artifact>;
-  boardById: Map<string, Board>;
-  mcpServerById: Map<string, MCPServer>;
-
   /**
    * Open the Settings modal — used as a coarse landing for entity types
    * that don't live on the canvas (MCP servers today). Stays as a callback
@@ -82,13 +80,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
     boardById,
     mcpServerById,
   });
-  const hasAnyRecents =
-    recents.session.length > 0 ||
-    recents.branch.length > 0 ||
-    recents.assistant.length > 0 ||
-    recents.artifact.length > 0 ||
-    recents.board.length > 0 ||
-    recents.mcp.length > 0;
+  const hasAnyRecents = hasAnyEntries(recents);
 
   // Recents/results predicate is derived from the **raw** query so deleting
   // a long query back to <MIN_QUERY_LENGTH feels immediate — without this,
@@ -99,10 +91,10 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
 
   // Flatten current dropdown rows for keyboard nav. Recents and live results
   // share the same sectioned shape, so the flattening is identical.
-  const visibleRows = useMemo<SearchResultItem[]>(() => {
-    const source = showRecents ? recents : results;
-    return SECTION_ORDER.flatMap((t) => source[t]);
-  }, [showRecents, recents, results]);
+  const visibleRows = useMemo<SearchResultItem[]>(
+    () => flattenResults(showRecents ? recents : results),
+    [showRecents, recents, results]
+  );
 
   // Keep selection inside the row list when results change.
   useEffect(() => {
@@ -243,8 +235,10 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
       />
       {open && (
         <div
-          role="listbox"
-          id={GLOBAL_SEARCH_LISTBOX_ID}
+          // Plain popover wrapper. `role="listbox"` lives on the inner result-rows
+          // container in `GlobalSearchDropdown` — this outer div also holds the
+          // chip row, close button, and BETA tag, which aren't list options.
+          //
           // Anchored to the right edge of the input (input lives in the
           // right cluster of the navbar) so the popover grows leftward
           // and doesn't overflow the viewport.
