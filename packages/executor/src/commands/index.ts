@@ -9,10 +9,14 @@
 
 import type { ExecutorPayload, ExecutorResult, PromptPayload } from '../payload-types.js';
 import {
+  handleBranchFilesList,
+  handleBranchInspect,
   handleGitBranchAdd,
   handleGitBranchClean,
   handleGitBranchRemove,
   handleGitClone,
+  handleGitRepoDelete,
+  handleGitRepoRealignOrigin,
 } from './git.js';
 import { handleUnixSyncBranch, handleUnixSyncRepo, handleUnixSyncUser } from './unix.js';
 import { handleZellijAttach, handleZellijTab } from './zellij.js';
@@ -149,6 +153,10 @@ registerCommand('git.clone', handleGitClone);
 registerCommand('git.branch.add', handleGitBranchAdd);
 registerCommand('git.branch.remove', handleGitBranchRemove);
 registerCommand('git.branch.clean', handleGitBranchClean);
+registerCommand('branch.files.list', handleBranchFilesList);
+registerCommand('branch.inspect', handleBranchInspect);
+registerCommand('git.repo.realign-origin', handleGitRepoRealignOrigin);
+registerCommand('git.repo.delete', handleGitRepoDelete);
 registerCommand('unix.sync-repo', handleUnixSyncRepo);
 registerCommand('unix.sync-branch', handleUnixSyncBranch);
 registerCommand('unix.sync-user', handleUnixSyncUser);

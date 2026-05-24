@@ -2,13 +2,14 @@
  * Files Service
  *
  * Provides file and folder autocomplete search for session branches.
- * Uses git ls-files to search tracked files and extracts folders from file paths.
- * Results are filtered by substring match (case-insensitive).
+ * Delegates git ls-files to the executor so the daemon does not run git in a
+ * managed branch checkout.
  */
 
-import { BranchRepository, type Database, SessionRepository } from '@agor/core/db';
-import { createGit } from '@agor/core/git';
-import type { SessionID } from '@agor/core/types';
+import { BranchRepository, type Database, SessionRepository, UsersRepository } from '@agor/core/db';
+import type { Application } from '@agor/core/feathers';
+import type { AuthenticatedParams, SessionID, UserID } from '@agor/core/types';
+import { generateSessionToken, getDaemonUrl, runExecutorCommand } from '../utils/spawn-executor.js';
 
 // Constants for file search
 const MAX_FILE_RESULTS = 10;
@@ -24,16 +25,40 @@ interface FileResult {
   type: 'file' | 'folder';
 }
 
+function isFileResultArray(value: unknown): value is FileResult[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        item &&
+        typeof item === 'object' &&
+        typeof (item as FileResult).path === 'string' &&
+        ((item as FileResult).type === 'file' || (item as FileResult).type === 'folder')
+    )
+  );
+}
+
+function extractResults(data: unknown): FileResult[] {
+  if (!data || typeof data !== 'object') return [];
+  const results = (data as { results?: unknown }).results;
+  return isFileResultArray(results) ? results : [];
+}
+
 /**
  * Files service for autocomplete search
  */
 export class FilesService {
   private sessionRepo: SessionRepository;
   private branchRepo: BranchRepository;
+  private usersRepo: UsersRepository;
 
-  constructor(db: Database) {
+  constructor(
+    db: Database,
+    private app: Application
+  ) {
     this.sessionRepo = new SessionRepository(db);
     this.branchRepo = new BranchRepository(db);
+    this.usersRepo = new UsersRepository(db);
   }
 
   /**
@@ -45,7 +70,9 @@ export class FilesService {
    *
    * Returns array of file and folder results (folders first), max 10 items total
    */
-  async find(params: { query: FileSearchQuery }): Promise<FileResult[]> {
+  async find(
+    params: { query: FileSearchQuery } & Partial<AuthenticatedParams>
+  ): Promise<FileResult[]> {
     const { sessionId, search } = params.query;
 
     // Empty search returns no results
@@ -60,63 +87,46 @@ export class FilesService {
         return [];
       }
 
-      // Fetch branch to get path
+      // Fetch branch to validate it still exists before crossing the executor boundary.
       const branch = await this.branchRepo.findById(session.branch_id);
       if (!branch || !branch.path) {
         return [];
       }
 
-      // Run git ls-files. Use the shared factory so the unsafe-ops scanner
-      // is opt-in here too — otherwise a daemon env that happens to carry
-      // `GIT_SSH_COMMAND` (or similar) trips the scanner before the command
-      // ever reaches git.
-      const { git } = createGit(branch.path);
-      let result: string;
+      const sessionToken = generateSessionToken(
+        this.app as unknown as { settings: { authentication?: { secret?: string } } }
+      );
 
-      try {
-        result = await git.raw(['ls-files', '-z']);
-      } catch (error) {
-        // Handle "dubious ownership" error on Linux by adding to safe.directory
-        if (error instanceof Error && error.message.includes('dubious ownership')) {
-          console.log(`Adding ${branch.path} to git safe.directory`);
-          await git.addConfig('safe.directory', branch.path, true, 'global');
-          // Retry the ls-files command
-          result = await git.raw(['ls-files', '-z']);
-        } else {
-          throw error;
+      const currentUserId = params.user?.user_id as UserID | undefined;
+      const currentUser = currentUserId ? await this.usersRepo.findById(currentUserId) : null;
+
+      const result = await runExecutorCommand(
+        {
+          command: 'branch.files.list',
+          sessionToken,
+          daemonUrl: getDaemonUrl(),
+          params: {
+            branchId: branch.branch_id,
+            search,
+            limit: MAX_FILE_RESULTS,
+          },
+        },
+        {
+          logPrefix: `[FilesService ${sessionId}]`,
+          // In strict mode, autocomplete should run as the current user when
+          // available rather than as the session creator.
+          asUser: currentUser?.unix_username ?? undefined,
         }
+      );
+
+      if (!result.success) {
+        console.warn(
+          `Executor file search failed for session ${sessionId}: ${result.error?.message ?? 'unknown error'}`
+        );
+        return [];
       }
 
-      // Parse null-separated file list
-      const allFiles = result.split('\0').filter((f) => f.length > 0);
-
-      // Extract unique folders from file paths
-      const foldersSet = new Set<string>();
-      allFiles.forEach((filePath) => {
-        const parts = filePath.split('/');
-        // Build up folder paths (e.g., "src", "src/components", etc.)
-        for (let i = 1; i < parts.length; i++) {
-          foldersSet.add(parts.slice(0, i).join('/'));
-        }
-      });
-
-      // Filter files and folders by search query
-      const searchLower = search.toLowerCase();
-
-      const matchingFiles = allFiles
-        .filter((f) => f.toLowerCase().includes(searchLower))
-        .map((path) => ({ path, type: 'file' as const }));
-
-      // Add trailing slash first, then filter so searches like "context/" work
-      const matchingFolders = Array.from(foldersSet)
-        .map((path) => `${path}/`)
-        .filter((f) => f.toLowerCase().includes(searchLower))
-        .map((path) => ({ path, type: 'folder' as const }));
-
-      // Combine and sort: folders first, then files
-      const combined = [...matchingFolders, ...matchingFiles].slice(0, MAX_FILE_RESULTS);
-
-      return combined;
+      return extractResults(result.data);
     } catch (error) {
       // Log error but return empty array (don't block UX)
       console.error(`Error searching files for session ${sessionId}:`, error);
@@ -128,6 +138,6 @@ export class FilesService {
 /**
  * Service factory function
  */
-export function createFilesService(db: Database): FilesService {
-  return new FilesService(db);
+export function createFilesService(db: Database, app: Application): FilesService {
+  return new FilesService(db, app);
 }

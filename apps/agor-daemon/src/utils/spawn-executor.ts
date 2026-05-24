@@ -92,6 +92,22 @@ export interface SpawnExecutorOptions {
   preparedEnvFilePath?: string;
 }
 
+export interface ExecutorCommandResult {
+  success: boolean;
+  data?: unknown;
+  error?: {
+    code: string;
+    message: string;
+    details?: unknown;
+  };
+}
+
+export interface RunExecutorCommandOptions
+  extends Omit<SpawnExecutorOptions, 'onExit' | 'onSpawn'> {
+  /** Optional timeout for short-lived command execution. */
+  timeoutMs?: number;
+}
+
 /**
  * Substitute template variables in the executor command template.
  *
@@ -392,6 +408,318 @@ function spawnExecutorWithTemplate(
 
   executorProcess.stdin?.write(JSON.stringify(payload));
   executorProcess.stdin?.end();
+}
+
+function parseExecutorResultFromStdout(stdout: string): ExecutorCommandResult | null {
+  const lines = stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (!line.startsWith('{') || !line.endsWith('}')) continue;
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      if (parsed && typeof parsed === 'object' && 'success' in parsed) {
+        return parsed as ExecutorCommandResult;
+      }
+    } catch {
+      // Not the executor result line; keep scanning.
+    }
+  }
+
+  return null;
+}
+
+function logChunkedOutput(prefix: string, stream: 'stdout' | 'stderr', chunk: Buffer): void {
+  const text = chunk.toString();
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    if (stream === 'stdout') {
+      console.log(`${prefix} ${line}`);
+    } else {
+      console.error(`${prefix} ${line}`);
+    }
+  }
+}
+
+/**
+ * Run a short-lived executor command and wait for its JSON result.
+ *
+ * Use this for daemon call sites that need an immediate answer (for example
+ * autocomplete and git-state probes). Long-running commands and lifecycle
+ * tasks should keep using spawnExecutorFireAndForget().
+ */
+export async function runExecutorCommand(
+  payload: Record<string, unknown>,
+  options: RunExecutorCommandOptions = {}
+): Promise<ExecutorCommandResult> {
+  const { templateVariables, logPrefix = '[Executor]', timeoutMs = 60_000 } = options;
+
+  const executorCommandTemplate =
+    options.executorCommandTemplate !== undefined
+      ? options.executorCommandTemplate || undefined
+      : configuredExecutorDefaults.executorCommandTemplate;
+  const asUser =
+    options.asUser !== undefined ? options.asUser || undefined : configuredExecutorDefaults.asUser;
+
+  const payloadWithConfig = withResolvedConfig(payload);
+
+  if (executorCommandTemplate) {
+    return runExecutorCommandWithTemplate(payloadWithConfig, {
+      ...options,
+      timeoutMs,
+      asUser,
+      executorCommandTemplate,
+      templateVariables: {
+        command: payloadWithConfig.command as string,
+        task_id: generateTaskId(),
+        unix_user: asUser,
+        ...templateVariables,
+      },
+      logPrefix,
+    });
+  }
+
+  return runExecutorCommandLocal(payloadWithConfig, { ...options, timeoutMs, asUser, logPrefix });
+}
+
+function runExecutorCommandLocal(
+  payload: Record<string, unknown>,
+  options: RunExecutorCommandOptions
+): Promise<ExecutorCommandResult> {
+  const executorPath = findExecutorPath();
+  const executorDir = path.dirname(path.dirname(executorPath));
+
+  const {
+    cwd = executorDir,
+    env = process.env as Record<string, string>,
+    logPrefix = '[Executor]',
+    asUser: rawAsUser,
+    preparedEnv,
+    preparedEnvFilePath,
+    timeoutMs = 60_000,
+  } = options;
+  const asUser = rawAsUser || undefined;
+
+  if (cwd && !existsSync(cwd)) {
+    return Promise.resolve({
+      success: false,
+      error: {
+        code: 'EXECUTOR_CWD_MISSING',
+        message: `Refusing to spawn: cwd does not exist on disk: ${cwd}`,
+      },
+    });
+  }
+
+  const daemonUrl = getDaemonUrl();
+  const envWithDaemonUrl: Record<string, string> = preparedEnv
+    ? { DAEMON_URL: daemonUrl, ...preparedEnv }
+    : asUser
+      ? Object.fromEntries(
+          Object.entries({
+            DAEMON_URL: daemonUrl,
+            PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
+            NODE_ENV: env.NODE_ENV,
+            ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
+            ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
+            ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
+            CLAUDE_CODE_OAUTH_TOKEN: env.CLAUDE_CODE_OAUTH_TOKEN,
+            OPENAI_API_KEY: env.OPENAI_API_KEY,
+            OPENAI_BASE_URL: env.OPENAI_BASE_URL,
+            GEMINI_API_KEY: env.GEMINI_API_KEY,
+            GOOGLE_API_KEY: env.GOOGLE_API_KEY,
+            GIT_CONFIG_PARAMETERS: env.GIT_CONFIG_PARAMETERS,
+          }).filter(([_, v]) => v !== undefined)
+        )
+      : { ...env, DAEMON_URL: daemonUrl };
+
+  const prepared = asUser
+    ? preparedEnvFilePath
+      ? {
+          inlineEnv: Object.fromEntries(
+            Object.entries(envWithDaemonUrl).filter(([k]) => !isSecretEnvKey(k))
+          ),
+          envFilePath: preparedEnvFilePath,
+        }
+      : prepareImpersonationEnv({ asUser, env: envWithDaemonUrl })
+    : { inlineEnv: undefined, envFilePath: undefined };
+
+  const { cmd, args } = buildSpawnArgs('node', [executorPath, '--stdin'], {
+    asUser,
+    env: asUser ? prepared.inlineEnv : undefined,
+    envFilePath: prepared.envFilePath,
+  });
+
+  console.log(`${logPrefix} Running executor command: ${payload.command ?? '?'}`);
+
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+
+    const child = spawn(cmd, args, {
+      cwd,
+      env: asUser ? undefined : { ...envWithDaemonUrl },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: false,
+    });
+
+    attachEnvFileCleanup(child, { envFilePath: prepared.envFilePath, asUser });
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGTERM');
+      resolve({
+        success: false,
+        error: {
+          code: 'EXECUTOR_TIMEOUT',
+          message: `Executor command timed out after ${timeoutMs}ms`,
+          details: { command: payload.command },
+        },
+      });
+    }, timeoutMs);
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+      logChunkedOutput(logPrefix, 'stdout', chunk);
+    });
+
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+      logChunkedOutput(logPrefix, 'stderr', chunk);
+    });
+
+    child.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({
+        success: false,
+        error: {
+          code: 'EXECUTOR_SPAWN_ERROR',
+          message: error.message,
+          details: { command: payload.command },
+        },
+      });
+    });
+
+    child.on('exit', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+
+      const result = parseExecutorResultFromStdout(stdout);
+      if (result) {
+        resolve(result);
+        return;
+      }
+
+      resolve({
+        success: false,
+        error: {
+          code: 'EXECUTOR_RESULT_MISSING',
+          message: `Executor exited with code ${code} but did not emit a JSON result`,
+          details: { command: payload.command, exitCode: code, stdout, stderr },
+        },
+      });
+    });
+
+    child.stdin?.write(JSON.stringify(payload));
+    child.stdin?.end();
+  });
+}
+
+function runExecutorCommandWithTemplate(
+  payload: Record<string, unknown>,
+  options: RunExecutorCommandOptions & {
+    executorCommandTemplate: string;
+    templateVariables: ExecutorTemplateVariables;
+  }
+): Promise<ExecutorCommandResult> {
+  const {
+    executorCommandTemplate,
+    templateVariables,
+    logPrefix = '[Executor]',
+    timeoutMs = 60_000,
+  } = options;
+  const command = substituteTemplateVariables(executorCommandTemplate, templateVariables);
+
+  console.log(`${logPrefix} Running templated executor command: ${payload.command ?? '?'}`);
+
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+
+    const child = spawn('sh', ['-c', command], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGTERM');
+      resolve({
+        success: false,
+        error: {
+          code: 'EXECUTOR_TIMEOUT',
+          message: `Executor command timed out after ${timeoutMs}ms`,
+          details: { command: payload.command, taskId: templateVariables.task_id },
+        },
+      });
+    }, timeoutMs);
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+      logChunkedOutput(logPrefix, 'stdout', chunk);
+    });
+
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+      logChunkedOutput(logPrefix, 'stderr', chunk);
+    });
+
+    child.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({
+        success: false,
+        error: {
+          code: 'EXECUTOR_SPAWN_ERROR',
+          message: error.message,
+          details: { command: payload.command, taskId: templateVariables.task_id },
+        },
+      });
+    });
+
+    child.on('exit', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+
+      const result = parseExecutorResultFromStdout(stdout);
+      if (result) {
+        resolve(result);
+        return;
+      }
+
+      resolve({
+        success: false,
+        error: {
+          code: 'EXECUTOR_RESULT_MISSING',
+          message: `Executor exited with code ${code} but did not emit a JSON result`,
+          details: { command: payload.command, exitCode: code, stdout, stderr },
+        },
+      });
+    });
+
+    child.stdin?.write(JSON.stringify(payload));
+    child.stdin?.end();
+  });
 }
 
 export function getDaemonUrl(): string {

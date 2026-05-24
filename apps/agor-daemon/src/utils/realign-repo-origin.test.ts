@@ -1,7 +1,3 @@
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import type { Application } from '@agor/core/feathers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -9,6 +5,13 @@ import {
   ensureRepoOriginAlignedForRepo,
   shouldRealignAfterRepoPatch,
 } from './realign-repo-origin';
+import { spawnExecutorFireAndForget } from './spawn-executor.js';
+
+vi.mock('./spawn-executor.js', () => ({
+  generateSessionToken: vi.fn(() => 'service-token'),
+  getDaemonUrl: vi.fn(() => 'http://localhost:3030'),
+  spawnExecutorFireAndForget: vi.fn(),
+}));
 
 type RepoStub = {
   repo_id: string;
@@ -24,27 +27,19 @@ function makeApp(repo: RepoStub | undefined, opts: { getThrows?: boolean } = {})
     return repo;
   });
   return {
+    settings: { authentication: { secret: 'test-secret' } },
     service: vi.fn(() => ({ get })),
   } as unknown as Application;
 }
 
-function withInitedRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
-  const repoPath = mkdtempSync(join(tmpdir(), 'agor-realign-it-'));
-  const init = spawnSync('git', ['init', '-q', repoPath], { stdio: 'pipe' });
-  if (init.status !== 0) {
-    rmSync(repoPath, { recursive: true, force: true });
-    throw new Error(`git init failed: ${init.stderr?.toString()}`);
-  }
-  return fn(repoPath).finally(() => {
-    rmSync(repoPath, { recursive: true, force: true });
-  });
-}
+const spawnMock = vi.mocked(spawnExecutorFireAndForget);
 
 describe('ensureRepoOriginAligned', () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    spawnMock.mockClear();
   });
   afterEach(() => {
     warnSpy.mockRestore();
@@ -53,81 +48,49 @@ describe('ensureRepoOriginAligned', () => {
   it('returns silently when the repos service throws (fire-and-forget contract)', async () => {
     const app = makeApp(undefined, { getThrows: true });
     await expect(ensureRepoOriginAlignedById(app, 'missing-id' as never)).resolves.toBeUndefined();
+    expect(spawnMock).not.toHaveBeenCalled();
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it('no-ops on local repos (no canonical URL to align against)', async () => {
-    await withInitedRepo(async (repoPath) => {
-      const app = makeApp({
-        repo_id: 'r1',
-        slug: 'owner/local',
-        repo_type: 'local',
-        local_path: repoPath,
-      });
-      await ensureRepoOriginAlignedById(app, 'r1' as never);
-      expect(warnSpy).not.toHaveBeenCalled();
+    const app = makeApp({
+      repo_id: 'r1',
+      slug: 'owner/local',
+      repo_type: 'local',
+      local_path: '/tmp/local',
     });
+    await ensureRepoOriginAlignedById(app, 'r1' as never);
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it('no-ops on remote repos missing remote_url (defensive)', async () => {
-    await withInitedRepo(async (repoPath) => {
-      const app = makeApp({
-        repo_id: 'r2',
-        slug: 'owner/no-url',
-        repo_type: 'remote',
-        local_path: repoPath,
-      });
-      await ensureRepoOriginAlignedById(app, 'r2' as never);
-      expect(warnSpy).not.toHaveBeenCalled();
+    const app = makeApp({
+      repo_id: 'r2',
+      slug: 'owner/no-url',
+      repo_type: 'remote',
+      local_path: '/tmp/no-url',
     });
+    await ensureRepoOriginAlignedById(app, 'r2' as never);
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it('no-ops when on-disk origin already matches the canonical URL (happy path)', async () => {
-    await withInitedRepo(async (repoPath) => {
-      const url = 'https://github.com/owner/repo.git';
-      spawnSync('git', ['-C', repoPath, 'remote', 'add', 'origin', url], { stdio: 'pipe' });
-      const app = makeApp({
-        repo_id: 'r3',
-        slug: 'owner/repo',
-        repo_type: 'remote',
-        remote_url: url,
-        local_path: repoPath,
-      });
-      await ensureRepoOriginAlignedById(app, 'r3' as never);
-      expect(warnSpy).not.toHaveBeenCalled();
+  it('spawns git.repo.realign-origin for remote repos with a canonical URL', async () => {
+    const app = makeApp({
+      repo_id: '550e8400-e29b-41d4-a716-446655440000',
+      slug: 'owner/repo',
+      repo_type: 'remote',
+      remote_url: 'https://github.com/owner/repo.git',
+      local_path: '/tmp/repo',
     });
-  });
 
-  it('realigns on drift and emits a [SECURITY] log line that omits the previous URL', async () => {
-    await withInitedRepo(async (repoPath) => {
-      const taintedUrl =
-        'https://x-access-token:ghp_AAAAAAAAAAAAAAAAAAAAAAAAAA@github.com/owner/repo.git';
-      const canonicalUrl = 'https://github.com/owner/repo.git';
-      spawnSync('git', ['-C', repoPath, 'remote', 'add', 'origin', taintedUrl], { stdio: 'pipe' });
+    await ensureRepoOriginAlignedById(app, '550e8400-e29b-41d4-a716-446655440000' as never);
 
-      const app = makeApp({
-        repo_id: 'r4',
-        slug: 'owner/repo',
-        repo_type: 'remote',
-        remote_url: canonicalUrl,
-        local_path: repoPath,
-      });
-      await ensureRepoOriginAlignedById(app, 'r4' as never);
-
-      const current = spawnSync('git', ['-C', repoPath, 'config', '--get', 'remote.origin.url'], {
-        stdio: 'pipe',
-      });
-      expect(current.stdout.toString().trim()).toBe(canonicalUrl);
-
-      expect(warnSpy).toHaveBeenCalledOnce();
-      const logged = String(warnSpy.mock.calls[0]?.[0] ?? '');
-      expect(logged).toMatch(/\[SECURITY\]/);
-      expect(logged).toContain('r4');
-      expect(logged).toContain('owner/repo');
-      expect(logged).toContain(canonicalUrl);
-      // The tainted previous value MUST NOT be in the log.
-      expect(logged).not.toContain('ghp_AAAAAAAAAAAAAAAAAAAAAAAAAA');
-      expect(logged).not.toContain('x-access-token');
+    expect(spawnMock).toHaveBeenCalledOnce();
+    expect(spawnMock.mock.calls[0]?.[0]).toMatchObject({
+      command: 'git.repo.realign-origin',
+      sessionToken: 'service-token',
+      daemonUrl: 'http://localhost:3030',
+      params: { repoId: '550e8400-e29b-41d4-a716-446655440000' },
     });
   });
 
@@ -161,18 +124,16 @@ describe('ensureRepoOriginAligned', () => {
   });
 
   it('ensureRepoOriginAlignedForRepo skips the DB fetch (caller already has the row)', async () => {
-    await withInitedRepo(async (repoPath) => {
-      const url = 'https://github.com/owner/repo.git';
-      spawnSync('git', ['-C', repoPath, 'remote', 'add', 'origin', url], { stdio: 'pipe' });
+    const app = makeApp(undefined);
+    await ensureRepoOriginAlignedForRepo(app, {
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'owner/repo',
+      repo_type: 'remote',
+      remote_url: 'https://github.com/owner/repo.git',
+      local_path: '/tmp/repo',
+    } as never);
 
-      await ensureRepoOriginAlignedForRepo({
-        repo_id: 'r5',
-        slug: 'owner/repo',
-        repo_type: 'remote',
-        remote_url: url,
-        local_path: repoPath,
-      } as never);
-      expect(warnSpy).not.toHaveBeenCalled();
-    });
+    expect(app.service).not.toHaveBeenCalled();
+    expect(spawnMock).toHaveBeenCalledOnce();
   });
 });

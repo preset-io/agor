@@ -297,6 +297,18 @@
       "types": "./dist/gateway/index.d.ts",
       "import": "./dist/gateway/index.js",
       "require": "./dist/gateway/index.cjs"
+    },
+    "./git/pure": {
+      "source": "./src/git/pure.ts",
+      "types": "./dist/git/pure.d.ts",
+      "import": "./dist/git/pure.js",
+      "require": "./dist/git/pure.cjs"
+    },
+    "./git/exec": {
+      "source": "./src/git/exec.ts",
+      "types": "./dist/git/exec.d.ts",
+      "import": "./dist/git/exec.js",
+      "require": "./dist/git/exec.cjs"
     }
   },
   "scripts": {

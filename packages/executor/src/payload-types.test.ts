@@ -567,11 +567,15 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('git.branch.add');
     expect(commands).toContain('git.branch.remove');
     expect(commands).toContain('git.branch.clean');
+    expect(commands).toContain('branch.files.list');
+    expect(commands).toContain('branch.inspect');
+    expect(commands).toContain('git.repo.realign-origin');
+    expect(commands).toContain('git.repo.delete');
     expect(commands).toContain('unix.sync-branch');
     expect(commands).toContain('unix.sync-repo');
     expect(commands).toContain('unix.sync-user');
     expect(commands).toContain('zellij.attach');
     expect(commands).toContain('zellij.tab');
-    expect(commands.length).toBe(10);
+    expect(commands.length).toBe(14);
   });
 });

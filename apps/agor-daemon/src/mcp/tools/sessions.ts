@@ -24,6 +24,7 @@ import { z } from 'zod';
 import type { SessionsServiceImpl } from '../../declarations.js';
 import type { SessionParams } from '../../services/sessions.js';
 import { ensureCanPromptTargetSession } from '../../utils/branch-authorization.js';
+import { inspectBranchViaExecutor } from '../../utils/branch-inspect.js';
 import {
   resolveBoardId,
   resolveBranchId,
@@ -780,10 +781,11 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       // Get branch to extract repo context
       const branch = await ctx.app.service('branches').get(args.branchId, ctx.baseServiceParams);
 
-      // Get current git state
-      const { getGitState, getCurrentBranch } = await import('@agor/core/git');
-      const currentSha = await getGitState(branch.path);
-      const currentRef = await getCurrentBranch(branch.path);
+      // Get current git state via executor so the daemon does not run git in the branch checkout.
+      const { currentSha, currentRef } = await inspectBranchViaExecutor(ctx.app, branch.branch_id, {
+        asUser: user.unix_username,
+        logPrefix: `[mcp.sessions.create ${branch.name}]`,
+      });
 
       // Resolve permission_config / model_config / inherited mcp_server_ids
       // from the explicit MCP args (highest priority) > user defaults > system

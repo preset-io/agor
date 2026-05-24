@@ -391,7 +391,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   if (svcEnabled('file_browser')) {
     app.use('/context', createContextService(branchRepository));
     app.use('/file', createFileService(branchRepository));
-    app.use('/files', createFilesService(db));
+    app.use('/files', createFilesService(db, app));
   }
 
   // Server-side Handlebars renderer. UI calls POST /templates so the browser

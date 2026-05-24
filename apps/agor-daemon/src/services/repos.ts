@@ -51,6 +51,7 @@ import { resolveGitImpersonationForUser } from '../utils/git-impersonation.js';
 import {
   generateSessionToken,
   getDaemonUrl,
+  runExecutorCommand,
   spawnExecutorFireAndForget,
 } from '../utils/spawn-executor.js';
 
@@ -1057,54 +1058,51 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       `🗑️  Repo deletion: Found ${branches.length} branch(s) for repo ${repo.slug} (${repo.repo_id})`
     );
 
-    // If cleanup is requested and this is a remote repo, delete filesystem directories FIRST
+    // If cleanup is requested and this is a remote repo, delete filesystem directories FIRST.
+    // Delegate to the executor so the daemon never rm -rfs managed repo/branch dirs itself.
     if (cleanup && repo.repo_type === 'remote') {
-      const { deleteRepoDirectory, deleteBranchDirectory } = await import('@agor/core/git');
+      const sessionToken = generateSessionToken(
+        this.app as unknown as { settings: { authentication?: { secret?: string } } }
+      );
 
-      // Track successfully deleted paths for honest error reporting
-      const deletedPaths: string[] = [];
-
-      // FAIL FAST: Stop on first filesystem deletion failure
-      // Delete branch directories from filesystem
-      for (const branch of branches) {
-        try {
-          await deleteBranchDirectory(branch.path);
-          deletedPaths.push(branch.path);
-          console.log(`🗑️  Deleted branch directory: ${branch.path}`);
-        } catch (error) {
-          const errorMsg = error instanceof Error ? error.message : String(error);
-          console.error(`❌ Failed to delete branch directory ${branch.path}:`, errorMsg);
-
-          // Be honest about partial deletion
-          if (deletedPaths.length > 0) {
-            throw new Error(
-              `Partial deletion occurred: Successfully deleted ${deletedPaths.length} path(s): ${deletedPaths.join(', ')}. ` +
-                `Failed at ${branch.path}: ${errorMsg}. ` +
-                `Database NOT modified. Manual cleanup required for deleted paths.`
-            );
-          } else {
-            throw new Error(
-              `Cannot delete repository: Failed to delete branch at ${branch.path}: ${errorMsg}. ` +
-                `No files were deleted. Please fix this issue and retry.`
-            );
-          }
+      const cleanupResult = await runExecutorCommand(
+        {
+          command: 'git.repo.delete',
+          sessionToken,
+          daemonUrl: getDaemonUrl(),
+          params: {
+            repoId: repo.repo_id,
+            repoPath: repo.local_path,
+            branchPaths: branches.map((branch) => branch.path),
+          },
+        },
+        {
+          logPrefix: `[repo.delete ${repo.slug}]`,
+          timeoutMs: 5 * 60_000,
         }
-      }
+      );
 
-      // Delete repository directory from filesystem
-      try {
-        await deleteRepoDirectory(repo.local_path);
-        deletedPaths.push(repo.local_path);
-        console.log(`🗑️  Deleted repository directory: ${repo.local_path}`);
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
-        console.error(`❌ Failed to delete repository directory ${repo.local_path}:`, errorMsg);
+      if (!cleanupResult.success) {
+        const errorMsg = cleanupResult.error?.message ?? 'unknown executor error';
+        const deletedPaths =
+          cleanupResult.error?.details && typeof cleanupResult.error.details === 'object'
+            ? ((cleanupResult.error.details as { deletedPaths?: unknown }).deletedPaths ?? [])
+            : [];
+        const deletedPathList = Array.isArray(deletedPaths)
+          ? deletedPaths.filter((value): value is string => typeof value === 'string')
+          : [];
 
-        // Be honest about partial deletion (branches were deleted, repo failed)
+        if (deletedPathList.length > 0) {
+          throw new Error(
+            `Partial deletion occurred: Successfully deleted ${deletedPathList.length} path(s): ${deletedPathList.join(', ')}. ` +
+              `Failed while deleting repository ${repo.slug}: ${errorMsg}. ` +
+              `Database NOT modified. Manual cleanup required for deleted paths.`
+          );
+        }
+
         throw new Error(
-          `Partial deletion occurred: Successfully deleted ${deletedPaths.length} path(s): ${deletedPaths.join(', ')}. ` +
-            `Failed to delete repository directory at ${repo.local_path}: ${errorMsg}. ` +
-            `Database NOT modified. Manual cleanup required for deleted paths.`
+          `Cannot delete repository: executor failed to delete managed directories for ${repo.slug}: ${errorMsg}. ` +
+            `No files were deleted. Please fix this issue and retry.`
         );
       }
 

@@ -444,6 +444,103 @@ export const GitBranchCleanPayloadSchema = BasePayloadSchema.extend({
 export type GitBranchCleanPayload = z.infer<typeof GitBranchCleanPayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
+// Branch Files List Payload
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Branch files list payload - list tracked files/folders for autocomplete.
+ */
+export const BranchFilesListPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.files.list'),
+
+  /** JWT for Feathers authentication */
+  sessionToken: z.string(),
+
+  params: z.object({
+    /** Branch ID whose checkout should be inspected */
+    branchId: z.string().uuid(),
+
+    /** Case-insensitive substring query */
+    search: z.string(),
+
+    /** Max combined file/folder results */
+    limit: z.number().int().positive().max(100).optional().default(10),
+  }),
+});
+
+export type BranchFilesListPayload = z.infer<typeof BranchFilesListPayloadSchema>;
+
+// ═══════════════════════════════════════════════════════════
+// Branch Inspect Payload
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Branch inspect payload - read current git ref/SHA from a branch checkout.
+ */
+export const BranchInspectPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.inspect'),
+
+  /** JWT for Feathers authentication */
+  sessionToken: z.string(),
+
+  params: z.object({
+    /** Branch ID whose checkout should be inspected */
+    branchId: z.string().uuid(),
+  }),
+});
+
+export type BranchInspectPayload = z.infer<typeof BranchInspectPayloadSchema>;
+
+// ═══════════════════════════════════════════════════════════
+// Git Repo Realign Origin Payload
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Git repo origin realign payload - ensure remote.origin.url matches DB.
+ */
+export const GitRepoRealignOriginPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('git.repo.realign-origin'),
+
+  /** JWT for Feathers authentication */
+  sessionToken: z.string(),
+
+  params: z.object({
+    /** Repo ID to inspect and realign */
+    repoId: z.string().uuid(),
+  }),
+});
+
+export type GitRepoRealignOriginPayload = z.infer<typeof GitRepoRealignOriginPayloadSchema>;
+
+// ═══════════════════════════════════════════════════════════
+// Git Repo Delete Payload
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Git repo delete payload - remove managed repo + branch directories.
+ * The daemon deletes DB rows only after this command succeeds.
+ */
+export const GitRepoDeletePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('git.repo.delete'),
+
+  /** JWT for Feathers authentication */
+  sessionToken: z.string(),
+
+  params: z.object({
+    /** Repo being deleted (for logs / result metadata) */
+    repoId: z.string().uuid(),
+
+    /** Path to the managed repo directory */
+    repoPath: z.string(),
+
+    /** Managed branch directories to remove before the repo directory */
+    branchPaths: z.array(z.string()),
+  }),
+});
+
+export type GitRepoDeletePayload = z.infer<typeof GitRepoDeletePayloadSchema>;
+
+// ═══════════════════════════════════════════════════════════
 // Unix Sync Payloads - High-Level Sync Operations
 // ═══════════════════════════════════════════════════════════
 
@@ -660,6 +757,10 @@ export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   GitBranchAddPayloadSchema,
   GitBranchRemovePayloadSchema,
   GitBranchCleanPayloadSchema,
+  BranchFilesListPayloadSchema,
+  BranchInspectPayloadSchema,
+  GitRepoRealignOriginPayloadSchema,
+  GitRepoDeletePayloadSchema,
   UnixSyncBranchPayloadSchema,
   UnixSyncRepoPayloadSchema,
   UnixSyncUserPayloadSchema,
@@ -716,6 +817,10 @@ export function getSupportedCommands(): string[] {
     'git.branch.add',
     'git.branch.remove',
     'git.branch.clean',
+    'branch.files.list',
+    'branch.inspect',
+    'git.repo.realign-origin',
+    'git.repo.delete',
     'unix.sync-branch',
     'unix.sync-repo',
     'unix.sync-user',

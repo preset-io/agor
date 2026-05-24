@@ -15,6 +15,7 @@ import { resolveSessionDefaults } from '@agor/core/sessions';
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import { buildZoneTriggerContext } from '@agor/core/templates/zone-trigger-context';
 import type { AgenticToolName, Branch, Session, Task, User } from '@agor/core/types';
+import { inspectBranchViaExecutor } from '../utils/branch-inspect.js';
 
 export interface FireAlwaysNewZoneTriggerInput {
   // biome-ignore lint/suspicious/noExplicitAny: Feathers app type varies across callers
@@ -84,9 +85,10 @@ export async function fireAlwaysNewZoneTrigger(
     mcp_server_ids: inheritedMcpIds,
   } = resolveSessionDefaults({ agenticTool, user, branch });
 
-  const { getGitState, getCurrentBranch } = await import('@agor/core/git');
-  const currentSha = await getGitState(branch.path);
-  const currentRef = await getCurrentBranch(branch.path);
+  const { currentSha, currentRef } = await inspectBranchViaExecutor(app, branch.branch_id, {
+    asUser: user.unix_username,
+    logPrefix: `[zone-trigger ${branch.name}]`,
+  });
 
   const newSession: Session = await app.service('sessions').create(
     {

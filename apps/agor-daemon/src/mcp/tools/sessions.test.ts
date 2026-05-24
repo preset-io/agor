@@ -168,9 +168,8 @@ describe('agor_sessions_create', () => {
   };
 
   beforeEach(() => {
-    vi.doMock('@agor/core/git', () => ({
-      getGitState: async () => 'sha-abc',
-      getCurrentBranch: async () => 'main',
+    vi.doMock('../../utils/branch-inspect.js', () => ({
+      inspectBranchViaExecutor: async () => ({ currentSha: 'sha-abc', currentRef: 'main' }),
     }));
     vi.doMock('@agor/core/types', async () => {
       const actual = await vi.importActual<Record<string, unknown>>('@agor/core/types');
@@ -366,9 +365,8 @@ describe('agor_sessions_create', () => {
 
 describe('agor_sessions_spawn', () => {
   beforeEach(() => {
-    vi.doMock('@agor/core/git', () => ({
-      getGitState: async () => 'sha-abc',
-      getCurrentBranch: async () => 'main',
+    vi.doMock('../../utils/branch-inspect.js', () => ({
+      inspectBranchViaExecutor: async () => ({ currentSha: 'sha-abc', currentRef: 'main' }),
     }));
   });
 
@@ -453,9 +451,8 @@ describe('agor_sessions_spawn', () => {
 
 describe('agor_sessions_prompt (subsession mode)', () => {
   beforeEach(() => {
-    vi.doMock('@agor/core/git', () => ({
-      getGitState: async () => 'sha-abc',
-      getCurrentBranch: async () => 'main',
+    vi.doMock('../../utils/branch-inspect.js', () => ({
+      inspectBranchViaExecutor: async () => ({ currentSha: 'sha-abc', currentRef: 'main' }),
     }));
   });
 
