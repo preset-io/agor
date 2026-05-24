@@ -43,6 +43,7 @@ import type { Database } from '@agor/core/db';
 import {
   advisoryLockKeyForUuid,
   BranchRepository,
+  isPostgresDatabase,
   ScheduleRepository,
   SessionMCPServerRepository,
   SessionRepository,
@@ -335,25 +336,35 @@ export class SchedulerService {
       return;
     }
 
-    // Per-schedule advisory lock — Postgres only; SQLite is a no-op.
-    // Other daemons running the same tick race for the same key; whoever
-    // loses just skips this schedule.
-    const lockKey = advisoryLockKeyForUuid(schedule.schedule_id);
-
-    await this.db.transaction(async (tx) => {
-      const acquired = await tryAdvisoryXactLock(txAsDb(tx), this.db, lockKey);
-      if (!acquired) {
-        if (this.config.debug) {
-          console.log(
-            `   🔒 ${schedule.name}: advisory lock not acquired — another daemon owns this tick`
-          );
+    // Per-schedule advisory lock — Postgres only.
+    //
+    // The lock has to be acquired inside a transaction so that
+    // pg_try_advisory_xact_lock releases at commit/rollback. On SQLite
+    // there is no cross-process scheduler — and wrapping spawn in a
+    // transaction actively breaks it: spawnScheduledSession calls
+    // sessionsService.create(), which writes through a separate
+    // connection and deadlocks against the outer transaction's write
+    // lock (SQLITE_BUSY). So on SQLite we skip the wrapper entirely
+    // and call spawn directly.
+    if (isPostgresDatabase(this.db)) {
+      const lockKey = advisoryLockKeyForUuid(schedule.schedule_id);
+      await this.db.transaction(async (tx) => {
+        const acquired = await tryAdvisoryXactLock(txAsDb(tx), this.db, lockKey);
+        if (!acquired) {
+          if (this.config.debug) {
+            console.log(
+              `   🔒 ${schedule.name}: advisory lock not acquired — another daemon owns this tick`
+            );
+          }
+          return;
         }
-        return;
-      }
-
+        console.log(`   ✅ ${schedule.name}: Schedule is due, spawning session...`);
+        await this.spawnScheduledSession(schedule, scheduledRunAt, now, { source: 'cron' });
+      });
+    } else {
       console.log(`   ✅ ${schedule.name}: Schedule is due, spawning session...`);
       await this.spawnScheduledSession(schedule, scheduledRunAt, now, { source: 'cron' });
-    });
+    }
   }
 
   /**
