@@ -12,6 +12,7 @@ import {
   ensureCanPromptInSession,
   hasBranchPermission,
   isSuperAdmin,
+  paginateClientSide,
   resolveBranchPermission,
 } from './branch-authorization';
 
@@ -278,6 +279,120 @@ describe('ensureCanPromptInSession', () => {
       // Remove provider to simulate internal call
       ctx.params.provider = undefined;
       expect(() => hook(ctx)).not.toThrow();
+    });
+  });
+});
+
+describe('paginateClientSide', () => {
+  type Row = { id: string; branch_id?: string; schedule_id?: string; n?: number };
+  const rows: Row[] = [
+    { id: 'a', branch_id: 'br1', schedule_id: 'sch1', n: 3 },
+    { id: 'b', branch_id: 'br1', schedule_id: 'sch2', n: 1 },
+    { id: 'c', branch_id: 'br2', schedule_id: 'sch1', n: 2 },
+    { id: 'd', branch_id: 'br2', schedule_id: 'sch2', n: 4 },
+    { id: 'e', branch_id: 'br2', schedule_id: 'sch1', n: 5 },
+  ];
+
+  describe('generic equality filter (the H2 fix)', () => {
+    it('filters by a single non-$ field — the runs-panel case', () => {
+      // Before this PR, scopeSessionQuery silently ignored the
+      // schedule_id filter and returned all accessible sessions.
+      const result = paginateClientSide(rows, { schedule_id: 'sch1' });
+      expect(result.total).toBe(3);
+      expect(result.data.map((r) => r.id)).toEqual(['a', 'c', 'e']);
+    });
+
+    it('AND-combines multiple field filters', () => {
+      const result = paginateClientSide(rows, { branch_id: 'br2', schedule_id: 'sch1' });
+      expect(result.total).toBe(2);
+      expect(result.data.map((r) => r.id)).toEqual(['c', 'e']);
+    });
+
+    it('skips $-prefixed query operators (pagination/sort handled separately)', () => {
+      const result = paginateClientSide(rows, { $limit: 2, $skip: 1 });
+      // No equality filters applied; pagination should slice 5 → 2.
+      expect(result.total).toBe(5);
+      expect(result.data).toHaveLength(2);
+    });
+
+    it('honors `skipFilterKeys` (caller already pushed those into SQL)', () => {
+      const result = paginateClientSide(rows, { branch_id: 'br1' }, new Set(['branch_id']));
+      // branch_id is in skipFilterKeys → not re-applied client-side.
+      expect(result.total).toBe(5);
+    });
+
+    it('returns no matches when filter has no hits', () => {
+      const result = paginateClientSide(rows, { schedule_id: 'nope' });
+      expect(result.total).toBe(0);
+      expect(result.data).toEqual([]);
+    });
+  });
+
+  describe('$sort', () => {
+    it('sorts ascending by default', () => {
+      const result = paginateClientSide(rows, { $sort: { n: 1 } });
+      expect(result.data.map((r) => r.n)).toEqual([1, 2, 3, 4, 5]);
+    });
+
+    it('sorts descending when order is -1', () => {
+      const result = paginateClientSide(rows, { $sort: { n: -1 } });
+      expect(result.data.map((r) => r.n)).toEqual([5, 4, 3, 2, 1]);
+    });
+
+    it('places null/undefined values last regardless of order', () => {
+      const withNulls: Row[] = [{ id: 'x' }, { id: 'y', n: 1 }, { id: 'z' }];
+      const asc = paginateClientSide(withNulls, { $sort: { n: 1 } });
+      expect(asc.data.map((r) => r.id)).toEqual(['y', 'x', 'z']);
+      const desc = paginateClientSide(withNulls, { $sort: { n: -1 } });
+      expect(desc.data[0].id).toBe('y');
+    });
+  });
+
+  describe('pagination', () => {
+    it('applies $limit', () => {
+      const result = paginateClientSide(rows, { $limit: 2 });
+      expect(result.limit).toBe(2);
+      expect(result.data).toHaveLength(2);
+      expect(result.total).toBe(5); // total reflects pre-pagination filtered count
+    });
+
+    it('applies $skip', () => {
+      const result = paginateClientSide(rows, { $skip: 3 });
+      expect(result.skip).toBe(3);
+      expect(result.data).toHaveLength(2);
+    });
+
+    it('defaults limit to filtered length when omitted', () => {
+      const result = paginateClientSide(rows, {});
+      expect(result.limit).toBe(5);
+      expect(result.data).toHaveLength(5);
+    });
+  });
+
+  describe('combined filter + sort + paginate', () => {
+    it('filters, then sorts, then paginates', () => {
+      const result = paginateClientSide(rows, {
+        branch_id: 'br2',
+        $sort: { n: -1 },
+        $limit: 2,
+      });
+      // br2 rows: c(n=2), d(n=4), e(n=5); sorted desc → [5,4,2]; limit 2 → [5,4]
+      expect(result.total).toBe(3);
+      expect(result.data.map((r) => r.n)).toEqual([5, 4]);
+    });
+  });
+
+  describe('edge cases', () => {
+    it('handles undefined query', () => {
+      const result = paginateClientSide(rows, undefined);
+      expect(result.total).toBe(5);
+      expect(result.data).toEqual(rows);
+    });
+
+    it('handles empty rows', () => {
+      const result = paginateClientSide([] as Row[], { branch_id: 'br1' });
+      expect(result.total).toBe(0);
+      expect(result.data).toEqual([]);
     });
   });
 });

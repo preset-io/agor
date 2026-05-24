@@ -339,7 +339,7 @@ export function scopeBranchQuery(
  * @param skipFilterKeys      — keys to skip in the generic filter pass
  *                              (already applied SQL-side or special-case)
  */
-function paginateClientSide<T>(
+export function paginateClientSide<T>(
   rows: T[],
   query: Record<string, unknown> | undefined,
   skipFilterKeys: ReadonlySet<string> = new Set()
