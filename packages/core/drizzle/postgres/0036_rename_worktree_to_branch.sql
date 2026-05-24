@@ -45,21 +45,49 @@ ALTER INDEX "board_comments_worktree_idx" RENAME TO "board_comments_branch_idx";
 -- names ("branches_pkey", "branches_repo_id_repos_repo_id_fk", …) while
 -- migrated installs would keep the old worktree-prefixed names — silent
 -- schema drift that breaks future drizzle-kit diffs. Bring them in line.
-ALTER TABLE "branches" RENAME CONSTRAINT "worktrees_pkey" TO "branches_pkey";--> statement-breakpoint
-ALTER TABLE "branches" RENAME CONSTRAINT "worktrees_repo_id_repos_repo_id_fk" TO "branches_repo_id_repos_repo_id_fk";--> statement-breakpoint
-ALTER TABLE "branches" RENAME CONSTRAINT "worktrees_board_id_boards_board_id_fk" TO "branches_board_id_boards_board_id_fk";--> statement-breakpoint
-
-ALTER TABLE "branch_owners" RENAME CONSTRAINT "worktree_owners_worktree_id_user_id_pk" TO "branch_owners_branch_id_user_id_pk";--> statement-breakpoint
-ALTER TABLE "branch_owners" RENAME CONSTRAINT "worktree_owners_worktree_id_worktrees_worktree_id_fk" TO "branch_owners_branch_id_branches_branch_id_fk";--> statement-breakpoint
-ALTER TABLE "branch_owners" RENAME CONSTRAINT "worktree_owners_user_id_users_user_id_fk" TO "branch_owners_user_id_users_user_id_fk";--> statement-breakpoint
-
-ALTER TABLE "sessions" RENAME CONSTRAINT "sessions_worktree_id_worktrees_worktree_id_fk" TO "sessions_branch_id_branches_branch_id_fk";--> statement-breakpoint
-ALTER TABLE "serialized_sessions" RENAME CONSTRAINT "serialized_sessions_worktree_id_worktrees_worktree_id_fk" TO "serialized_sessions_branch_id_branches_branch_id_fk";--> statement-breakpoint
-ALTER TABLE "artifacts" RENAME CONSTRAINT "artifacts_worktree_id_worktrees_worktree_id_fk" TO "artifacts_branch_id_branches_branch_id_fk";--> statement-breakpoint
-ALTER TABLE "board_objects" RENAME CONSTRAINT "board_objects_worktree_id_worktrees_worktree_id_fk" TO "board_objects_branch_id_branches_branch_id_fk";--> statement-breakpoint
-ALTER TABLE "board_comments" RENAME CONSTRAINT "board_comments_worktree_id_worktrees_worktree_id_fk" TO "board_comments_branch_id_branches_branch_id_fk";--> statement-breakpoint
-ALTER TABLE "gateway_channels" RENAME CONSTRAINT "gateway_channels_target_worktree_id_worktrees_worktree_id_fk" TO "gateway_channels_target_branch_id_branches_branch_id_fk";--> statement-breakpoint
-ALTER TABLE "thread_session_map" RENAME CONSTRAINT "thread_session_map_worktree_id_worktrees_worktree_id_fk" TO "thread_session_map_branch_id_branches_branch_id_fk";--> statement-breakpoint
+-- All renames are guarded: instances where the FK was never created (schema
+-- drift between environments) skip gracefully rather than aborting.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'worktrees_pkey' AND conrelid = 'branches'::regclass) THEN
+    ALTER TABLE "branches" RENAME CONSTRAINT "worktrees_pkey" TO "branches_pkey";
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'worktrees_repo_id_repos_repo_id_fk' AND conrelid = 'branches'::regclass) THEN
+    ALTER TABLE "branches" RENAME CONSTRAINT "worktrees_repo_id_repos_repo_id_fk" TO "branches_repo_id_repos_repo_id_fk";
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'worktrees_board_id_boards_board_id_fk' AND conrelid = 'branches'::regclass) THEN
+    ALTER TABLE "branches" RENAME CONSTRAINT "worktrees_board_id_boards_board_id_fk" TO "branches_board_id_boards_board_id_fk";
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'worktree_owners_worktree_id_user_id_pk' AND conrelid = 'branch_owners'::regclass) THEN
+    ALTER TABLE "branch_owners" RENAME CONSTRAINT "worktree_owners_worktree_id_user_id_pk" TO "branch_owners_branch_id_user_id_pk";
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'worktree_owners_worktree_id_worktrees_worktree_id_fk' AND conrelid = 'branch_owners'::regclass) THEN
+    ALTER TABLE "branch_owners" RENAME CONSTRAINT "worktree_owners_worktree_id_worktrees_worktree_id_fk" TO "branch_owners_branch_id_branches_branch_id_fk";
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'worktree_owners_user_id_users_user_id_fk' AND conrelid = 'branch_owners'::regclass) THEN
+    ALTER TABLE "branch_owners" RENAME CONSTRAINT "worktree_owners_user_id_users_user_id_fk" TO "branch_owners_user_id_users_user_id_fk";
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sessions_worktree_id_worktrees_worktree_id_fk' AND conrelid = 'sessions'::regclass) THEN
+    ALTER TABLE "sessions" RENAME CONSTRAINT "sessions_worktree_id_worktrees_worktree_id_fk" TO "sessions_branch_id_branches_branch_id_fk";
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'serialized_sessions_worktree_id_worktrees_worktree_id_fk' AND conrelid = 'serialized_sessions'::regclass) THEN
+    ALTER TABLE "serialized_sessions" RENAME CONSTRAINT "serialized_sessions_worktree_id_worktrees_worktree_id_fk" TO "serialized_sessions_branch_id_branches_branch_id_fk";
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'artifacts_worktree_id_worktrees_worktree_id_fk' AND conrelid = 'artifacts'::regclass) THEN
+    ALTER TABLE "artifacts" RENAME CONSTRAINT "artifacts_worktree_id_worktrees_worktree_id_fk" TO "artifacts_branch_id_branches_branch_id_fk";
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'board_objects_worktree_id_worktrees_worktree_id_fk' AND conrelid = 'board_objects'::regclass) THEN
+    ALTER TABLE "board_objects" RENAME CONSTRAINT "board_objects_worktree_id_worktrees_worktree_id_fk" TO "board_objects_branch_id_branches_branch_id_fk";
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'board_comments_worktree_id_worktrees_worktree_id_fk' AND conrelid = 'board_comments'::regclass) THEN
+    ALTER TABLE "board_comments" RENAME CONSTRAINT "board_comments_worktree_id_worktrees_worktree_id_fk" TO "board_comments_branch_id_branches_branch_id_fk";
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'gateway_channels_target_worktree_id_worktrees_worktree_id_fk' AND conrelid = 'gateway_channels'::regclass) THEN
+    ALTER TABLE "gateway_channels" RENAME CONSTRAINT "gateway_channels_target_worktree_id_worktrees_worktree_id_fk" TO "gateway_channels_target_branch_id_branches_branch_id_fk";
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'thread_session_map_worktree_id_worktrees_worktree_id_fk' AND conrelid = 'thread_session_map'::regclass) THEN
+    ALTER TABLE "thread_session_map" RENAME CONSTRAINT "thread_session_map_worktree_id_worktrees_worktree_id_fk" TO "thread_session_map_branch_id_branches_branch_id_fk";
+  END IF;
+END $$;--> statement-breakpoint
 
 -- ===== Data migration: enum-literal values =====
 UPDATE "sessions"
