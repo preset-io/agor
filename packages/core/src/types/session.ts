@@ -562,12 +562,19 @@ export interface ScheduledRunMetadata {
   triggered_by?: string;
 
   /**
-   * Snapshot of schedule config at execution time
+   * Snapshot of schedule config at execution time.
    *
-   * Preserves configuration even if schedule is later modified or deleted.
-   * Useful for debugging and understanding past runs.
+   * Preserves configuration even if the schedule is later modified or
+   * deleted. Useful for debugging and understanding past runs.
+   *
+   * `schedule_id` was added when schedules became first-class — it lets
+   * "open the schedule" links resolve even after the live schedule has
+   * been deleted (the FK on `sessions.schedule_id` is SET NULL on
+   * delete, but the snapshot still carries the ID for forensics).
    */
   schedule_config_snapshot?: {
+    /** Optional first-class schedule ID; nullable for pre-#1253 rows. */
+    schedule_id?: string;
     /** Cron expression that triggered this run */
     cron: string;
     /** Timezone for cron evaluation */

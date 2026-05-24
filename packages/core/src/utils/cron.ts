@@ -2,7 +2,13 @@
  * Cron utility functions for scheduler
  *
  * Provides validation, humanization, and next/prev run calculation.
- * All times handled in UTC.
+ *
+ * Timezone: callers pass a `tz` (IANA name, e.g. 'America/Los_Angeles' or
+ * 'UTC'). Defaults to 'UTC' so legacy callers stay UTC-only. The
+ * first-class schedules path passes the schedule's timezone when
+ * `timezone_mode === 'local'`. cron-parser handles DST shifts when
+ * given a real IANA name; a `0 9 * * *` schedule in `America/Los_Angeles`
+ * fires at 9am PT regardless of whether that's UTC-7 or UTC-8.
  */
 
 import { CronExpressionParser } from 'cron-parser';
@@ -14,11 +20,11 @@ import cronstrue from 'cronstrue';
  * @param cronExpression - Cron string to validate (e.g., "0 9 * * 1-5")
  * @returns true if valid, false otherwise
  */
-export function isValidCron(cronExpression: string): boolean {
+export function isValidCron(cronExpression: string, tz = 'UTC'): boolean {
   try {
     CronExpressionParser.parse(cronExpression, {
       currentDate: new Date(),
-      tz: 'UTC',
+      tz,
     });
     return true;
   } catch (_error) {
@@ -32,11 +38,11 @@ export function isValidCron(cronExpression: string): boolean {
  * @param cronExpression - Cron string to validate
  * @throws Error with validation message if invalid
  */
-export function validateCron(cronExpression: string): void {
+export function validateCron(cronExpression: string, tz = 'UTC'): void {
   try {
     CronExpressionParser.parse(cronExpression, {
       currentDate: new Date(),
-      tz: 'UTC',
+      tz,
     });
   } catch (error) {
     if (error instanceof Error) {
@@ -79,10 +85,14 @@ export function humanizeCron(cronExpression: string): string {
  * @example
  * getNextRunTime("0 9 * * 1-5") // Returns next weekday 9am in ms
  */
-export function getNextRunTime(cronExpression: string, fromDate: Date = new Date()): number {
+export function getNextRunTime(
+  cronExpression: string,
+  fromDate: Date = new Date(),
+  tz = 'UTC'
+): number {
   const interval = CronExpressionParser.parse(cronExpression, {
     currentDate: fromDate,
-    tz: 'UTC',
+    tz,
   });
 
   const nextDate = interval.next().toDate();
@@ -99,10 +109,14 @@ export function getNextRunTime(cronExpression: string, fromDate: Date = new Date
  * @example
  * getPrevRunTime("0 9 * * 1-5") // Returns previous weekday 9am in ms
  */
-export function getPrevRunTime(cronExpression: string, fromDate: Date = new Date()): number {
+export function getPrevRunTime(
+  cronExpression: string,
+  fromDate: Date = new Date(),
+  tz = 'UTC'
+): number {
   const interval = CronExpressionParser.parse(cronExpression, {
     currentDate: fromDate,
-    tz: 'UTC',
+    tz,
   });
 
   const prevDate = interval.prev().toDate();
@@ -123,11 +137,12 @@ export function getPrevRunTime(cronExpression: string, fromDate: Date = new Date
 export function getNextRuns(
   cronExpression: string,
   count: number,
-  fromDate: Date = new Date()
+  fromDate: Date = new Date(),
+  tz = 'UTC'
 ): number[] {
   const interval = CronExpressionParser.parse(cronExpression, {
     currentDate: fromDate,
-    tz: 'UTC',
+    tz,
   });
 
   const runs: number[] = [];
@@ -151,11 +166,11 @@ export interface CronValidationResult {
   humanized?: string;
 }
 
-export function validateCronWithResult(cronExpression: string): CronValidationResult {
+export function validateCronWithResult(cronExpression: string, tz = 'UTC'): CronValidationResult {
   try {
     CronExpressionParser.parse(cronExpression, {
       currentDate: new Date(),
-      tz: 'UTC',
+      tz,
     });
 
     return {
@@ -201,6 +216,24 @@ export const CRON_PRESETS = {
     label: 'Monthly (1st at midnight)',
   },
 } as const;
+
+/**
+ * Resolve the IANA tz string a schedule should be evaluated against.
+ *
+ * - `mode='utc'` (or missing tz on `mode='local'`) → `'UTC'`.
+ * - `mode='local'` with a tz → returned as-is (e.g. 'America/Los_Angeles').
+ *
+ * Returns 'UTC' on any unexpected input so the scheduler never throws
+ * inside cron-parser at evaluation time.
+ */
+export function resolveScheduleTz(
+  mode: 'local' | 'utc' | string | undefined,
+  tz?: string | null
+): string {
+  if (mode === 'utc') return 'UTC';
+  if (mode === 'local' && tz) return tz;
+  return 'UTC';
+}
 
 /**
  * Round a date to the nearest minute (for scheduled_run_at consistency)

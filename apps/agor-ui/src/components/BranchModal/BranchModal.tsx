@@ -174,15 +174,8 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     },
     {
       key: 'schedule',
-      label: 'Schedule',
-      children: (
-        <ScheduleTab
-          branch={branch}
-          mcpServerById={mcpServerById}
-          onUpdate={onUpdateBranch}
-          onExecuteScheduleNow={onExecuteScheduleNow}
-        />
-      ),
+      label: 'Schedules',
+      children: <ScheduleTab branch={branch} />,
     },
   ];
 

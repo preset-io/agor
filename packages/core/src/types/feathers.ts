@@ -94,6 +94,11 @@ export interface RBACParams extends AuthenticatedParams {
   session?: import('./session').Session;
   /** Cached session ID from resolveSessionContext hook */
   sessionId?: string;
+  /**
+   * Cached schedule from loadScheduleAndBranch hooks (used by the
+   * `/schedules` service and `/schedules/:id/run-now` route).
+   */
+  schedule?: import('./schedule').Schedule;
 }
 
 // ============================================================================

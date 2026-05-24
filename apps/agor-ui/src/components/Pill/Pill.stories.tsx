@@ -284,7 +284,6 @@ export const EventStream: Story = {
                   created_at: new Date().toISOString(),
                   updated_at: new Date().toISOString(),
                   created_by: 'user-123',
-                  schedule_enabled: false,
                   needs_attention: false,
                   archived: false,
                 }}
@@ -366,7 +365,6 @@ export const SessionMetadata: Story = {
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
             created_by: 'user-123',
-            schedule_enabled: false,
             needs_attention: false,
             archived: false,
           }}

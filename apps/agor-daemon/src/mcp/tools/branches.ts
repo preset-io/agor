@@ -969,6 +969,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         : (result as { data: Branch[] }).data;
       const assistants = branches.filter((w) => isAssistant(w));
 
+      // Per-branch schedule fields are now in the first-class `schedules`
+      // table; consumers should call `agor_schedules_list({branchId})`
+      // for that. This tool keeps the assistant-discovery shape lean and
+      // omits the (now-multiplexed) schedule summary.
       const shaped = assistants.map((w) => {
         const config = getAssistantConfig(w);
         return {
@@ -979,13 +983,6 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           description: w.notes || null,
           board_id: w.board_id || null,
           repo_id: w.repo_id,
-          schedule: {
-            enabled: w.schedule_enabled,
-            cron: w.schedule_cron || null,
-            next_run_at: w.schedule_next_run_at || null,
-            last_triggered_at: w.schedule_last_triggered_at || null,
-            agent: w.schedule?.agentic_tool || null,
-          },
           last_used: w.last_used,
         };
       });

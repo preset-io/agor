@@ -26,7 +26,6 @@ import type {
 } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { getGidFromGroupName, spawnEnvironmentCommand } from '@agor/core/unix';
-import { getNextRunTime, validateCron } from '@agor/core/utils/cron';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService } from '../adapters/drizzle';
@@ -273,7 +272,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }
 
   /**
-   * Override patch to handle board_objects when board_id changes and schedule validation
+   * Override patch to handle board_objects when board_id changes.
+   *
+   * Schedule config lives on the `schedules` table now (see
+   * docs/internal/schedules-first-class-design-2026-05-24.md); patches
+   * to schedule fields go through the `schedules` service, not here.
    */
   async patch(
     id: BranchID,
@@ -285,41 +288,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const oldBoardId = currentBranch.board_id;
     const boardIdProvided = Object.hasOwn(data, 'board_id');
     const newBoardId = data.board_id;
-
-    // ===== SCHEDULER VALIDATION =====
-
-    // Validate cron expression if schedule_cron is being updated
-    if (data.schedule_cron !== undefined && data.schedule_cron !== null) {
-      try {
-        validateCron(data.schedule_cron);
-      } catch (error) {
-        throw new Error(
-          `Invalid cron expression: ${error instanceof Error ? error.message : String(error)}`
-        );
-      }
-
-      // Compute next_run_at if cron is valid
-      try {
-        const nextRunAt = getNextRunTime(data.schedule_cron);
-        data.schedule_next_run_at = nextRunAt;
-      } catch (error) {
-        console.error('Failed to compute next_run_at:', error);
-        // Don't fail the patch if next_run_at computation fails
-        // Scheduler will handle it on next tick
-      }
-    }
-
-    // If schedule_enabled is being set to true, ensure schedule config exists
-    if (data.schedule_enabled === true && !currentBranch.schedule && !data.schedule) {
-      throw new Error(
-        'Cannot enable schedule without schedule configuration. Please provide schedule config in data.schedule.'
-      );
-    }
-
-    // If schedule_enabled is being set to false, clear next_run_at
-    if (data.schedule_enabled === false) {
-      data.schedule_next_run_at = undefined;
-    }
 
     // Call parent patch
     const updatedBranch = (await super.patch(id, data, params)) as Branch;

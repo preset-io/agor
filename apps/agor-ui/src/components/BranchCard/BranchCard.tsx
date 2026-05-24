@@ -28,7 +28,6 @@ import {
   RobotOutlined,
   SettingOutlined,
   SubnodeOutlined,
-  ThunderboltOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import {
@@ -220,7 +219,6 @@ const BranchCardComponent = ({
 
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
-  const [isExecutingScheduleNow, setIsExecutingScheduleNow] = useState(false);
 
   // Tree expansion state - track which nodes are expanded
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
@@ -893,35 +891,13 @@ const BranchCardComponent = ({
               />
             )}
             {/*
-              Execute-now button: only shown when the branch has an active,
-              fully-configured schedule. Permission enforcement is server-side
-              (requires branch 'all' tier); a click by an unauthorized user
-              will produce a Forbidden toast from the API call.
+              The per-branch execute-now button was tied to the old
+              one-schedule-per-branch model. Branches can now hold
+              multiple schedules; the run-now affordance moves into
+              the schedules list rendered inside the Schedules tab.
+              Removing this here in checkpoint 3; the Schedules UI
+              lands in checkpoint 5.
             */}
-            {onExecuteScheduleNow &&
-              branch.schedule_enabled &&
-              branch.schedule_cron &&
-              branch.schedule?.prompt_template && (
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<ThunderboltOutlined />}
-                  loading={isExecutingScheduleNow}
-                  disabled={isExecutingScheduleNow || connectionDisabled}
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    setIsExecutingScheduleNow(true);
-                    try {
-                      await onExecuteScheduleNow(branch.branch_id);
-                    } catch {
-                      // error toast shown by handler; swallow here
-                    } finally {
-                      setIsExecutingScheduleNow(false);
-                    }
-                  }}
-                  title="Run scheduled session now"
-                />
-              )}
             {onOpenSettings && (
               <Button
                 type="text"

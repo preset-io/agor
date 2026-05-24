@@ -14,6 +14,7 @@ import {
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
+  ScheduleRepository,
   SessionMCPServerRepository,
   SessionRepository,
   shortId,
@@ -34,7 +35,6 @@ import {
 import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
 import type {
   AuthenticatedParams,
-  BranchID,
   DaemonServicesConfig,
   HookContext,
   Message,
@@ -42,6 +42,7 @@ import type {
   Paginated,
   Params,
   PermissionRequestContent,
+  ScheduleID,
   ServiceGroupName,
   ServiceTier,
   SessionID,
@@ -2858,15 +2859,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   // ============================================================================
-  // Execute-schedule-now: manually trigger a scheduled run for a branch
+  // Run-now (canonical): manually trigger a scheduled run for a schedule.
   // ============================================================================
   // Reuses the scheduler's spawn code path so scheduled and manual triggers
   // produce indistinguishable sessions (beyond a triggered_manually marker).
-  // Requires branch-level 'all' permission (same tier as editing the schedule).
-  app.use('/branches/:id/execute-schedule-now', {
+  // Requires branch-level 'all' permission on the schedule's parent branch
+  // (same tier as editing the schedule); see §4.4 of the design doc.
+  const scheduleRepository = new ScheduleRepository(db);
+
+  app.use('/schedules/:id/run-now', {
     async create(_data: unknown, params: RouteParams) {
       const id = params.route?.id;
-      if (!id) throw new BadRequest('Branch ID required');
+      if (!id) throw new BadRequest('Schedule ID required');
 
       const scheduler = app.get('scheduler') as SchedulerService | undefined;
       if (!scheduler) {
@@ -2875,18 +2879,124 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
       const triggeredBy = params.user?.user_id;
       if (!triggeredBy) {
-        // Should already be caught by requireAuth, but guard anyway so the
-        // scheduler isn't passed an undefined userId.
         throw new NotAuthenticated('Authentication required to trigger schedule.');
       }
 
       try {
         const session = await scheduler.executeScheduleNow({
-          branchId: id as BranchID,
+          scheduleId: id as ScheduleID,
           triggeredBy: triggeredBy as UUID,
         });
         return {
           session_id: session.session_id,
+          schedule_id: session.schedule_id,
+          branch_id: session.branch_id,
+          scheduled_run_at: session.scheduled_run_at,
+          triggered_manually: true,
+        };
+      } catch (err) {
+        if (err instanceof ScheduleBusyError) {
+          throw new Conflict(err.message, { code: err.code });
+        }
+        if (err instanceof ScheduleNotReadyError) {
+          throw new BadRequest(err.message, { code: err.code });
+        }
+        throw err;
+      }
+    },
+  });
+
+  app.service('/schedules/:id/run-now').hooks({
+    before: {
+      create: [
+        requireAuth,
+        requireMinimumRole(ROLES.MEMBER, 'run schedule'),
+        async (context: HookContext) => {
+          const id = context.params.route?.id;
+          if (!id) throw new BadRequest('Schedule ID required');
+
+          const schedule = await scheduleRepository.findById(id);
+          if (!schedule) {
+            throw new NotFound(`Schedule not found: ${id}`);
+          }
+          const branch = await branchRepository.findById(schedule.branch_id);
+          if (!branch) {
+            throw new NotFound(`Branch not found for schedule: ${schedule.schedule_id}`);
+          }
+
+          const userId = context.params.user?.user_id as UUID | undefined;
+          const isOwner = userId ? await branchRepository.isOwner(branch.branch_id, userId) : false;
+
+          context.params.schedule = schedule;
+          context.params.branch = branch;
+          context.params.isBranchOwner = isOwner;
+          return context;
+        },
+        branchRbacEnabled
+          ? ensureBranchPermission('all', 'run schedule', superadminOpts)
+          : (context: HookContext) => {
+              const isOwner = context.params.isBranchOwner;
+              const userRole = context.params.user?.role;
+              if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
+                throw new Forbidden(
+                  'You must be the branch owner or a global admin to run schedules'
+                );
+              }
+              return context;
+            },
+      ],
+    },
+  });
+
+  // ============================================================================
+  // Back-compat shim: POST /branches/:id/execute-schedule-now
+  // ============================================================================
+  // Pre-#1253 callers fired a single per-branch schedule via this route.
+  // Now that a branch can have N schedules, the unambiguous case is "exactly
+  // one schedule on this branch" — we forward to that schedule's run-now.
+  // Zero or multiple → 400 with a pointer to /schedules/:id/run-now.
+  app.use('/branches/:id/execute-schedule-now', {
+    async create(_data: unknown, params: RouteParams) {
+      const branchId = params.route?.id;
+      if (!branchId) throw new BadRequest('Branch ID required');
+
+      const scheduler = app.get('scheduler') as SchedulerService | undefined;
+      if (!scheduler) {
+        throw new NotFound('Scheduler service is not enabled on this instance.');
+      }
+
+      const triggeredBy = params.user?.user_id;
+      if (!triggeredBy) {
+        throw new NotAuthenticated('Authentication required to trigger schedule.');
+      }
+
+      const branch = await branchRepository.findById(branchId);
+      if (!branch) throw new NotFound(`Branch not found: ${branchId}`);
+
+      const branchSchedules = await scheduleRepository.findByBranchId(branch.branch_id);
+      if (branchSchedules.length === 0) {
+        throw new BadRequest(
+          `Branch "${branch.name}" has no schedules. Create one and call POST /schedules/:id/run-now instead.`,
+          { code: 'no_schedules' }
+        );
+      }
+      if (branchSchedules.length > 1) {
+        throw new BadRequest(
+          `Branch "${branch.name}" has ${branchSchedules.length} schedules. ` +
+            `This route is back-compat only for the single-schedule case. ` +
+            `Pick one and call POST /schedules/:id/run-now.`,
+          { code: 'ambiguous_schedule' }
+        );
+      }
+
+      try {
+        const session = await scheduler.executeScheduleNow({
+          scheduleId: branchSchedules[0].schedule_id,
+          triggeredBy: triggeredBy as UUID,
+        });
+        return {
+          session_id: session.session_id,
+          schedule_id: session.schedule_id,
           branch_id: session.branch_id,
           scheduled_run_at: session.scheduled_run_at,
           triggered_manually: true,
