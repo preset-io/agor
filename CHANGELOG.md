@@ -33,6 +33,19 @@ The reader's first pass is the headline only; sub-bullets are for the curious. K
 
 _No user-visible changes yet._
 
+## 0.20.0 (TBD)
+
+### Breaking
+
+- **Rename `Worktree` → `Branch` across the codebase** — TypeScript types, REST routes, Feathers services, MCP tools, DB columns and tables, and identifier names are all renamed. No backwards-compat shims; the minor bump is the signal. ([#TBD](https://github.com/preset-io/agor/pull/TBD))
+  - **REST routes**: `/worktrees/...` → `/branches/...` (e.g. `/worktrees/:id/start` → `/branches/:id/start`). Any external script hitting the daemon's REST surface needs to update its URLs.
+  - **MCP tools**: the legacy `agor_worktrees_*` alias surface is removed — use `agor_branches_*`. Agents referencing the old names will see "tool not found" until they update.
+  - **TypeScript / `@agor-live/client`**: `Worktree`, `WorktreeID`, `WorktreesService`, `Worktree*` types and their interfaces are renamed to `Branch`, `BranchID`, `BranchesService`, etc.
+  - **CLI**: `agor worktree <subcmd>` → `agor branch <subcmd>`. Admin subcommands (`agor admin create-worktree-group`, ...) → `agor admin create-branch-group`, etc. `AGOR_WORKTREE_NAME` / `AGOR_WORKTREE_ID` env vars set by `agor branch cd` → `AGOR_BRANCH_NAME` / `AGOR_BRANCH_ID`.
+  - **Database schema**: `worktrees` table → `branches`, `worktree_owners` → `branch_owners`, every `worktree_id` / `worktree_unique_id` / `target_worktree_id` column → `branch_id` / `branch_unique_id` / `target_branch_id`. Single drizzle migration (`0045_rename_worktree_to_branch` / `0036_rename_worktree_to_branch`) runs O(1) ALTER RENAME statements; daemons restart cleanly. Enum-literal `archived_reason='worktree_archived'` flips to `'branch_archived'`.
+  - **Env-template variables**: canonical name is `{{branch.*}}` (e.g. `{{branch.unique_id}}`, `{{branch.name}}`). The legacy `{{worktree.*}}` shape stays exposed as a backwards-compat alias on the Handlebars context object, so existing `.agor.yml` configs continue to render without edits.
+- **Surviving `worktree` references**: the term is preserved only where it refers to the actual git-worktree primitive (the `storage_mode: 'worktree' | 'clone'` enum literal, `git worktree add/list/remove` shell invocations, the `~/.agor/worktrees/<repo>/<name>` on-disk path, and prose explaining "a branch can be backed by either a native git worktree or an isolated clone"). The on-disk worktree directory keeps its name to avoid a filesystem migration on existing installs.
+
 ## 0.19.1 (2026-05-21)
 
 ### Features
