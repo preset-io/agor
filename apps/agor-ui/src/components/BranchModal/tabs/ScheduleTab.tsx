@@ -14,7 +14,7 @@ import {
   PlusOutlined,
   UnorderedListOutlined,
 } from '@ant-design/icons';
-import { Button, Dropdown, Empty, Spin, Switch, Table, Tag, Typography } from 'antd';
+import { Button, Empty, Popconfirm, Space, Spin, Switch, Table, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
 import { ScheduleModal } from '../../ScheduleModal';
@@ -198,48 +198,45 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
       render: (s: Schedule) => formatTimestamp(s.next_run_at),
     },
     {
-      title: '',
+      title: 'Actions',
       key: 'actions',
-      width: 60,
+      width: 160,
       render: (s: Schedule) => (
-        <Dropdown
-          trigger={['click']}
-          menu={{
-            items: [
-              {
-                key: 'edit',
-                icon: <EditOutlined />,
-                label: 'Edit',
-                onClick: () => handleEdit(s),
-              },
-              {
-                key: 'run',
-                icon: <PlayCircleOutlined />,
-                label: runningId === s.schedule_id ? 'Running…' : 'Run now',
-                disabled: runningId === s.schedule_id,
-                onClick: () => handleRunNow(s),
-              },
-              {
-                key: 'runs',
-                icon: <UnorderedListOutlined />,
-                label: 'View runs',
-                onClick: () => setRunsPanelSchedule(s),
-              },
-              { type: 'divider' as const },
-              {
-                key: 'delete',
-                icon: <DeleteOutlined />,
-                label: 'Delete',
-                danger: true,
-                onClick: () => handleDelete(s),
-              },
-            ],
-          }}
-        >
-          <Button type="text" size="small">
-            ⋯
-          </Button>
-        </Dropdown>
+        <Space size="small">
+          <Button
+            type="text"
+            size="small"
+            icon={<PlayCircleOutlined />}
+            loading={runningId === s.schedule_id}
+            disabled={runningId === s.schedule_id}
+            onClick={() => handleRunNow(s)}
+            title="Run now"
+          />
+          <Button
+            type="text"
+            size="small"
+            icon={<UnorderedListOutlined />}
+            onClick={() => setRunsPanelSchedule(s)}
+            title="View runs"
+          />
+          <Button
+            type="text"
+            size="small"
+            icon={<EditOutlined />}
+            onClick={() => handleEdit(s)}
+            title="Edit"
+          />
+          <Popconfirm
+            title="Delete schedule?"
+            description={`Are you sure you want to delete "${s.name}"?`}
+            onConfirm={() => handleDelete(s)}
+            okText="Delete"
+            cancelText="Cancel"
+            okButtonProps={{ danger: true }}
+          >
+            <Button type="text" size="small" icon={<DeleteOutlined />} danger title="Delete" />
+          </Popconfirm>
+        </Space>
       ),
     },
   ];
