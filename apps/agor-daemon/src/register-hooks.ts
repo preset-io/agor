@@ -12,6 +12,7 @@ import {
   BoardRepository,
   type BranchRepository,
   type Database,
+  ScheduleRepository,
   type SessionRepository,
   shortId,
   UserMCPOAuthTokenRepository,
@@ -61,12 +62,14 @@ import {
 import {
   ensureBranchPermission,
   ensureCanCreateSession,
+  ensureCanModifySchedule,
   ensureCanPromptInSession,
   ensureCanPromptTargetSession,
   ensureCanView,
   ensureSessionImmutability,
   loadBranch,
   loadBranchFromSession,
+  loadScheduleAndBranch,
   loadSession,
   loadSessionBranch,
   PERMISSION_RANK,
@@ -75,6 +78,7 @@ import {
   scopeFindToAccessibleBoards,
   scopeFindToAccessibleBranches,
   scopeFindToAccessibleSessions,
+  scopeScheduleQuery,
   scopeSessionQuery,
   setSessionUnixUsername,
   validateSessionUnixUsername,
@@ -2055,6 +2059,96 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       },
     });
   }
+
+  // ============================================================================
+  // Schedules hooks
+  // ============================================================================
+  // Schedules inherit RBAC from the parent branch (same model as
+  // sessions). See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
+
+  const scheduleRepository = new ScheduleRepository(db);
+
+  // Inline cron / IANA / Handlebars-template validator.
+  // Runs on both create and patch — the latter must re-validate when
+  // cron / timezone_mode / timezone / prompt are touched.
+  const validateScheduleConfig = async (context: HookContext) => {
+    const data = context.data as Partial<import('@agor/core/types').Schedule> | undefined;
+    if (!data) return context;
+
+    // Use the dialect-agnostic cron helper. We pass the schedule's
+    // effective tz so DST-sensitive crons get validated against the
+    // right timezone (cron-parser rejects e.g. tz='not_a_zone').
+    if (data.cron_expression !== undefined) {
+      const { isValidCron } = await import('@agor/core/utils/cron');
+      const tz = data.timezone_mode === 'local' && data.timezone ? data.timezone : 'UTC';
+      if (!isValidCron(data.cron_expression, tz)) {
+        throw new BadRequest(`Invalid cron expression: '${data.cron_expression}'`);
+      }
+    }
+
+    if (data.timezone_mode === 'local' && !data.timezone) {
+      throw new BadRequest("timezone_mode='local' requires a non-empty IANA timezone.");
+    }
+    if (data.timezone) {
+      // Cheap IANA validation via Intl.DateTimeFormat — throws RangeError
+      // on unknown zones. No external dep required.
+      try {
+        new Intl.DateTimeFormat('en-US', { timeZone: data.timezone });
+      } catch {
+        throw new BadRequest(`Unknown IANA timezone: '${data.timezone}'`);
+      }
+    }
+
+    if (data.prompt !== undefined && data.prompt.trim() === '') {
+      throw new BadRequest('Schedule prompt cannot be empty.');
+    }
+
+    return context;
+  };
+
+  app.service('schedules').hooks({
+    before: {
+      all: [requireAuth],
+      find: [
+        ...(branchRbacEnabled ? [scopeScheduleQuery(scheduleRepository, superadminOpts)] : []),
+      ],
+      get: [
+        ...(branchRbacEnabled
+          ? [
+              loadScheduleAndBranch(scheduleRepository, branchRepository),
+              ensureCanView(superadminOpts),
+            ]
+          : []),
+      ],
+      create: [
+        requireMinimumRole(ROLES.MEMBER, 'create schedules'),
+        ...(branchRbacEnabled
+          ? [loadBranch(branchRepository, 'branch_id'), ensureCanCreateSession(superadminOpts)]
+          : []),
+        injectCreatedBy(),
+        validateScheduleConfig,
+      ],
+      patch: [
+        requireMinimumRole(ROLES.MEMBER, 'update schedules'),
+        ...(branchRbacEnabled
+          ? [
+              loadScheduleAndBranch(scheduleRepository, branchRepository),
+              ensureCanModifySchedule(superadminOpts),
+            ]
+          : []),
+        validateScheduleConfig,
+      ],
+      remove: [
+        requireMinimumRole(ROLES.MEMBER, 'delete schedules'),
+        ...(branchRbacEnabled
+          ? [
+              loadScheduleAndBranch(scheduleRepository, branchRepository),
+              ensureBranchPermission('all', 'delete schedule', superadminOpts),
+            ]
+          : []),
+      ],
+    },
+  });
 
   // ============================================================================
   // Tasks hooks

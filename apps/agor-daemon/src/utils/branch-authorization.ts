@@ -9,9 +9,14 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import type { BoardRepository, BranchRepository, SessionRepository } from '@agor/core/db';
+import type {
+  BoardRepository,
+  BranchRepository,
+  ScheduleRepository,
+  SessionRepository,
+} from '@agor/core/db';
 import { shortId } from '@agor/core/db';
-import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import type { Branch, BranchPermissionLevel, HookContext, Session, UUID } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, ROLES } from '@agor/core/types';
 
@@ -1557,4 +1562,151 @@ export function determineSpawnIdentity(
     throw new Forbidden('Cannot spawn/fork session without an authenticated caller identity.');
   }
   return { created_by: callerId, usedLegacySharing: false };
+}
+
+// ============================================================================
+// Schedule-tier RBAC helpers
+// ============================================================================
+// Schedules inherit their RBAC from the parent branch (same model as
+// sessions). See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
+
+/**
+ * Scope schedules.find() to schedules whose parent branch the user can view.
+ *
+ * Sibling of `scopeSessionQuery` — uses an indexed SQL JOIN rather than
+ * an N+1 fan-out.
+ *
+ * @param scheduleRepo - ScheduleRepository instance
+ * @returns Feathers hook
+ */
+export function scopeScheduleQuery(
+  scheduleRepo: ScheduleRepository,
+  options?: { allowSuperadmin?: boolean }
+) {
+  return async (context: HookContext) => {
+    if (!context.params.provider) return context;
+    if (context.params.user?._isServiceAccount) return context;
+    if (context.method !== 'find') return context;
+
+    const userId = context.params.user?.user_id as UUID | undefined;
+    if (!userId) {
+      context.result = { total: 0, limit: 0, skip: 0, data: [] };
+      return context;
+    }
+
+    const userRole = context.params.user?.role as string | undefined;
+    const allowSuperadmin = options?.allowSuperadmin ?? true;
+
+    // Lift query filters that the repository understands.
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers query is loosely-typed
+    const q = (context.params.query ?? {}) as any;
+    const filter = {
+      branch_id: q.branch_id,
+      enabled:
+        q.enabled === true || q.enabled === 'true'
+          ? true
+          : q.enabled === false || q.enabled === 'false'
+            ? false
+            : undefined,
+      created_by: q.created_by,
+    };
+
+    const allSchedules = isSuperAdmin(userRole, allowSuperadmin)
+      ? await scheduleRepo.findAll(filter)
+      : await scheduleRepo.findAccessibleSchedules(userId, filter);
+
+    const limit = q.$limit ?? allSchedules.length;
+    const skip = q.$skip ?? 0;
+    const paginated = allSchedules.slice(skip, skip + limit);
+
+    context.result = {
+      total: allSchedules.length,
+      limit,
+      skip,
+      data: paginated,
+    };
+
+    return context;
+  };
+}
+
+/**
+ * Load a schedule by ID from context.id, then load its parent branch,
+ * and cache both (plus ownership) on `context.params`.
+ *
+ * Mirrors `loadSessionBranch` — the canonical pattern for
+ * "look up the nested resource, then load its branch for RBAC".
+ *
+ * Must run BEFORE `ensureBranchPermission`.
+ *
+ * @param scheduleRepo - ScheduleRepository instance
+ * @param branchRepo - BranchRepository instance
+ */
+export function loadScheduleAndBranch(
+  scheduleRepo: ScheduleRepository,
+  branchRepo: BranchRepository
+) {
+  return async (context: HookContext) => {
+    if (!context.params.provider) return context;
+    if (context.params.user?._isServiceAccount) return context;
+
+    const id = context.id ?? context.params.route?.id;
+    if (!id) throw new Error('Schedule ID required');
+
+    const schedule = await scheduleRepo.findById(id as string);
+    if (!schedule) throw new NotFound(`Schedule not found: ${id}`);
+
+    const branch = await branchRepo.findById(schedule.branch_id);
+    if (!branch) {
+      // Cascaded delete means this should never happen; treat as a
+      // bug-class error rather than a not-found.
+      throw new NotFound(`Branch not found for schedule: ${schedule.schedule_id}`);
+    }
+
+    const userId = context.params.user?.user_id as UUID | undefined;
+    const isOwner = userId ? await branchRepo.isOwner(branch.branch_id, userId) : false;
+
+    context.params.schedule = schedule;
+    context.params.branch = branch;
+    context.params.isBranchOwner = isOwner;
+    return context;
+  };
+}
+
+/**
+ * Enforce the modify-schedule tier: `session` for the schedule's
+ * creator, `all` for everyone else. Mirrors the
+ * sessions.patch rule (see register-hooks.ts:1765-1791).
+ *
+ * Must run AFTER `loadScheduleAndBranch`.
+ */
+export function ensureCanModifySchedule(options?: { allowSuperadmin?: boolean }) {
+  return (context: HookContext) => {
+    if (!context.params.provider) return context;
+    if (context.params.user?._isServiceAccount) return context;
+    if (!context.params.user) throw new NotAuthenticated('Authentication required');
+
+    const branch = context.params.branch;
+    const schedule = context.params.schedule;
+    const isOwner = context.params.isBranchOwner ?? false;
+    if (!branch || !schedule) {
+      throw new Error('loadScheduleAndBranch hook must run before ensureCanModifySchedule');
+    }
+
+    const userId = context.params.user.user_id as UUID;
+    const userRole = context.params.user.role as string | undefined;
+    const allowSuperadmin = options?.allowSuperadmin ?? true;
+
+    // "Own" = the schedule's creator gets the session-tier bar
+    // (i.e. branch.others_can >= session); everyone else needs 'all'.
+    const requiredTier: BranchPermissionLevel = schedule.created_by === userId ? 'session' : 'all';
+
+    if (!hasBranchPermission(branch, userId, isOwner, requiredTier, userRole, allowSuperadmin)) {
+      throw new Forbidden(
+        `You need '${requiredTier}' permission on branch ${shortId(branch.branch_id)} to modify schedule ${shortId(schedule.schedule_id)}.`
+      );
+    }
+
+    return context;
+  };
 }

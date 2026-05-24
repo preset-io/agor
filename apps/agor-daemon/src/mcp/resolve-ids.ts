@@ -19,6 +19,7 @@ import type {
   BranchID,
   IdInput,
   RepoID,
+  ScheduleID,
   SessionID,
   TaskID,
   UserID,
@@ -68,4 +69,9 @@ export async function resolveMcpServerId(ctx: McpContext, id: IdInput): Promise<
 export async function resolveArtifactId(ctx: McpContext, id: IdInput): Promise<ArtifactID> {
   const entity = await ctx.app.service('artifacts').get(id, ctx.baseServiceParams);
   return entity.artifact_id;
+}
+
+export async function resolveScheduleId(ctx: McpContext, id: IdInput): Promise<ScheduleID> {
+  const entity = await ctx.app.service('schedules').get(id, ctx.baseServiceParams);
+  return entity.schedule_id;
 }

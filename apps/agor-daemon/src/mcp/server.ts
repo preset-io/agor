@@ -39,6 +39,7 @@ import { registerMcpServerTools } from './tools/mcp-servers.js';
 import { registerMessageTools } from './tools/messages.js';
 import { registerProxyTools } from './tools/proxies.js';
 import { registerRepoTools } from './tools/repos.js';
+import { registerScheduleTools } from './tools/schedules.js';
 import { registerSearchTools } from './tools/search.js';
 import { registerSessionTools } from './tools/sessions.js';
 import { registerTaskTools } from './tools/tasks.js';
@@ -109,6 +110,7 @@ Domains:
 - users: User accounts, profiles, preferences, and administration
 - analytics: Usage and cost tracking leaderboard
 - mcp-servers: External MCP server configuration and OAuth management
+- schedules: First-class CRUD for branch schedules — cron-based prompts that spawn sessions
 - widgets: In-conversation interactive widgets (forms/buttons rendered inline; values never enter your context)
 
 Common workflows:
@@ -275,6 +277,11 @@ function buildRegistry(servicesConfig?: DaemonServicesConfig): ToolRegistry {
     registerMcpServerTools(tempServer, dummyCtx);
   }
 
+  if (isDomainEnabled('schedules', servicesConfig)) {
+    registry.setCurrentDomain('schedules');
+    registerScheduleTools(tempServer, dummyCtx);
+  }
+
   // Search/execute tools always registered (meta-tools)
   registry.setCurrentDomain('discovery');
   registerSearchTools(tempServer, registry);
@@ -403,6 +410,7 @@ function createMcpServer(
   domainRegister('users', registerUserTools);
   domainRegister('analytics', registerAnalyticsTools);
   domainRegister('mcp-servers', registerMcpServerTools);
+  domainRegister('schedules', registerScheduleTools);
 
   if (toolSearchEnabled) {
     const { registry, toolsList } = getRegistry(servicesConfig);

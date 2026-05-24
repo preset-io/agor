@@ -72,6 +72,7 @@ import { createMCPServersService } from './services/mcp-servers.js';
 import { createMessagesService } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
 import { createReposService } from './services/repos.js';
+import { createSchedulesService } from './services/schedules.js';
 import { createSessionEnvSelectionsService } from './services/session-env-selections.js';
 import { createSessionMCPServersService } from './services/session-mcp-servers.js';
 import { createSessionsService } from './services/sessions.js';
@@ -318,6 +319,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use('/repos', createReposService(db, app), {
     methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'initializeUnixGroup'],
   });
+
+  // First-class schedules. RBAC hooks wired in register-hooks.ts.
+  // See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
+  app.use('/schedules', createSchedulesService(db));
 
   // ============================================================================
   // MCP Servers (conditionally registered)
