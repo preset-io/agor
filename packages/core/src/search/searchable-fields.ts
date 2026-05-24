@@ -48,7 +48,12 @@ export const SEARCHABLE_FIELDS = {
 /**
  * AND-of-ORs substring match per design doc §3.3 — every token must appear in
  * at least one of the supplied field values (case-insensitive). `null` and
- * `undefined` field values are skipped. Use directly with a registry entry:
+ * `undefined` field values are skipped, as are empty/whitespace-only tokens.
+ *
+ * Tokens are lowercased internally, so callers don't have to pre-normalize.
+ * The default UI client already runs them through `tokenizeSearchQuery()`
+ * (which lowercases too), but external callers — e.g. a future server-side
+ * fan-out — can pass arbitrary case without surprises.
  *
  *     matchSearchTokens(tokens, SEARCHABLE_FIELDS.session(session))
  */
@@ -56,12 +61,13 @@ export function matchSearchTokens(
   tokens: string[],
   fields: Array<string | undefined | null>
 ): boolean {
-  if (tokens.length === 0) return false;
+  const normalized = tokens.map((t) => t.toLowerCase()).filter(Boolean);
+  if (normalized.length === 0) return false;
   const haystack = fields
     .filter((f): f is string => Boolean(f))
     .join(' \n ')
     .toLowerCase();
-  return tokens.every((t) => haystack.includes(t));
+  return normalized.every((t) => haystack.includes(t));
 }
 
 /**
