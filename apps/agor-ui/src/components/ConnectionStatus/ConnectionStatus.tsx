@@ -237,10 +237,7 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   // sitting and waiting, they can force a retry attempt right now.
   if (connecting) {
     return (
-      <Tooltip
-        title="Reconnecting to daemon… Click to retry immediately."
-        placement="bottom"
-      >
+      <Tooltip title="Reconnecting to daemon… Click to retry immediately." placement="bottom">
         <Tag
           icon={<LoadingOutlined spin />}
           color="warning"
