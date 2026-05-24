@@ -1,6 +1,6 @@
 import type { Artifact, Board, Branch, MCPServer, Session } from '@agor-live/client';
-import { SearchOutlined } from '@ant-design/icons';
-import { Input, type InputRef, theme } from 'antd';
+import { CloseOutlined, SearchOutlined } from '@ant-design/icons';
+import { Button, Input, type InputRef, theme } from 'antd';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
@@ -171,6 +171,12 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
     [navigation, onSettingsClick]
   );
 
+  const handleClose = useCallback(() => {
+    setOpen(false);
+    setQuery('');
+    inputRef.current?.blur();
+  }, []);
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape') {
       e.preventDefault();
@@ -265,6 +271,30 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
             zIndex: 1000,
           }}
         >
+          {/*
+           * Close affordance. Esc still works (combobox keyboard contract);
+           * this is for users reaching for the mouse. Absolute-positioned so
+           * it doesn't reflow the chip row, sized to match the BETA tag's
+           * visual weight on the second chip row.
+           */}
+          <Button
+            type="text"
+            size="small"
+            icon={<CloseOutlined />}
+            onClick={handleClose}
+            aria-label="Close search"
+            style={{
+              position: 'absolute',
+              top: 4,
+              right: 4,
+              width: 24,
+              height: 24,
+              minWidth: 24,
+              padding: 0,
+              color: token.colorTextTertiary,
+              zIndex: 1,
+            }}
+          />
           <SearchChipRow
             activeChip={activeChip}
             onChipChange={(chip) => {
