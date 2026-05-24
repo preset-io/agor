@@ -25,20 +25,12 @@
  * description → prompt → cron + timezone → agent → MCP.
  */
 
-import type {
-  AgenticToolName,
-  AgorClient,
-  BranchID,
-  DefaultAgenticToolConfig,
-  EffortLevel,
-  MCPServer,
-  Schedule,
-  ScheduleAgenticToolConfig,
-} from '@agor-live/client';
+import type { AgenticToolName, AgorClient, BranchID, MCPServer, Schedule } from '@agor-live/client';
 import { humanizeCron } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import {
   Alert,
+  AutoComplete,
   Button,
   Collapse,
   Form,
@@ -46,7 +38,6 @@ import {
   InputNumber,
   Modal,
   Radio,
-  Select,
   Space,
   Switch,
   Typography,
@@ -56,19 +47,20 @@ import { Cron } from 'react-js-cron';
 import 'react-js-cron/dist/styles.css';
 import { useThemedMessage } from '../../utils/message';
 import {
+  type AgenticFormValues,
   AgenticToolConfigForm,
-  buildConfigFromFormValues,
+  buildScheduleConfigFromFormValues,
   getFormValuesFromConfig,
+  scheduleConfigToDefaultConfig,
 } from '../AgenticToolConfigForm';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { SessionMcpServersField } from '../MCPServerSelect';
-import type { ModelConfig } from '../ModelSelector';
 
 const { TextArea } = Input;
-const { Text, Paragraph } = Typography;
+const { Text } = Typography;
 
-// Curated IANA timezone list; the Select stays `showSearch` so a power
-// user can type any other zone name (e.g. `Asia/Bangkok`).
+// Curated IANA timezone list shown in the timezone AutoComplete; users
+// can also type any other IANA zone (validated server-side).
 const COMMON_TIMEZONES = [
   'America/Los_Angeles',
   'America/Denver',
@@ -112,62 +104,11 @@ export interface ScheduleModalProps {
 
 const DEFAULT_CRON = '0 * * * *';
 
-/**
- * Map the schedule's snake_case `agentic_tool_config` blob into the
- * camelCase shape the shared `AgenticToolConfigForm` (and its helpers)
- * expect.
- */
-function scheduleConfigToDefaultConfig(
-  cfg?: ScheduleAgenticToolConfig
-): DefaultAgenticToolConfig | undefined {
-  if (!cfg) return undefined;
-  return {
-    modelConfig: cfg.model_config
-      ? // Bridge: ScheduleAgenticToolConfig.model_config is { mode, model? }
-        // while DefaultAgenticToolConfig.modelConfig is the richer ModelConfig
-        // shape (effort, provider, etc.). The fields we care about for the
-        // form align; we cast through unknown so TS lets us bridge the
-        // structurally-compatible-but-nominally-different types.
-        (cfg.model_config as unknown as DefaultAgenticToolConfig['modelConfig'])
-      : undefined,
-    permissionMode: cfg.permission_mode as DefaultAgenticToolConfig['permissionMode'],
-    mcpServerIds: cfg.mcp_server_ids,
-    // Codex fields don't exist in ScheduleAgenticToolConfig today; they'd
-    // need to be promoted if we ever want codex sandbox/approval/network
-    // toggles on a schedule. Compact mode hides them anyway.
-  };
-}
-
-/**
- * Inverse: pack form values back into the snake_case shape stored on
- * the schedule, preserving any fields we don't surface (e.g. context_files).
- */
-function buildScheduleConfig(
-  tool: AgenticToolName,
-  formValues: {
-    modelConfig?: ModelConfig;
-    effort?: EffortLevel;
-    permissionMode?: string;
-    mcpServerIds?: string[];
-    codexSandboxMode?: string;
-    codexApprovalPolicy?: string;
-    codexNetworkAccess?: boolean;
-  },
-  previous?: ScheduleAgenticToolConfig
-): ScheduleAgenticToolConfig {
-  const builtDefault = buildConfigFromFormValues(tool, formValues);
-  return {
-    ...previous,
-    agentic_tool: tool,
-    permission_mode: builtDefault.permissionMode as ScheduleAgenticToolConfig['permission_mode'],
-    model_config: builtDefault.modelConfig as ScheduleAgenticToolConfig['model_config'],
-    mcp_server_ids: builtDefault.mcpServerIds,
-    // context_files is not edited in this modal; preserve from `previous` if present.
-    context_files: previous?.context_files,
-  };
-}
-
-interface ScheduleFormValues {
+// ScheduleModal carries schedule-specific fields (cron/tz/retention/etc.)
+// plus the shared `AgenticFormValues` shape that AgenticToolConfigForm and
+// its helpers read/write. Spreading the shared interface keeps the field
+// names in lockstep with NewSessionModal and the agenticConfigHelpers.
+interface ScheduleFormValues extends AgenticFormValues {
   name?: string;
   description?: string;
   prompt?: string;
@@ -175,17 +116,6 @@ interface ScheduleFormValues {
   timezone_mode?: 'local' | 'utc';
   timezone?: string;
   agenticTool?: AgenticToolName;
-  // AgenticToolConfigForm field names (camelCase) — read by buildScheduleConfig.
-  // Field types mirror `AgenticFormValues` in agenticConfigHelpers.ts; the
-  // helpers themselves narrow to PermissionMode etc. on persistence.
-  modelConfig?: ModelConfig;
-  effort?: EffortLevel;
-  permissionMode?: string;
-  mcpServerIds?: string[];
-  codexSandboxMode?: string;
-  codexApprovalPolicy?: string;
-  codexNetworkAccess?: boolean;
-  // Schedule-settings panel
   enabled?: boolean;
   retention?: number;
   allow_concurrent_runs?: boolean;
@@ -241,21 +171,24 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
     });
   }, [open, schedule, form]);
 
-  // When the agent changes, reseed the AgenticToolConfigForm fields with
-  // sensible defaults for the new tool. Mirrors NewSessionModal's behavior.
-  useEffect(() => {
-    if (!open) return;
-    const defaults = getFormValuesFromConfig(agentTool);
+  // Reseed AgenticToolConfigForm fields ONLY when the user actually
+  // changes the agent — not on mount/open. A useEffect keyed on
+  // `agentTool` would clobber the just-loaded saved values on every
+  // edit-open (the original ScheduleTab carried the same warning).
+  const handleAgentToolChange = (next: AgenticToolName) => {
+    if (next === agentTool) return;
+    setAgentTool(next);
+    const defaults = getFormValuesFromConfig(next);
     form.setFieldsValue({
       ...defaults,
-      agenticTool: agentTool,
-      ...(agentTool !== 'codex' && {
+      agenticTool: next,
+      ...(next !== 'codex' && {
         codexSandboxMode: undefined,
         codexApprovalPolicy: undefined,
         codexNetworkAccess: undefined,
       }),
     });
-  }, [agentTool, open, form]);
+  };
 
   const cronValue = Form.useWatch('cron_expression', form) ?? DEFAULT_CRON;
   const timezoneModeValue = Form.useWatch('timezone_mode', form) ?? 'local';
@@ -297,7 +230,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
         cron_expression: all.cron_expression ?? DEFAULT_CRON,
         timezone_mode: all.timezone_mode ?? 'local',
         timezone: all.timezone_mode === 'local' ? all.timezone : undefined,
-        agentic_tool_config: buildScheduleConfig(
+        agentic_tool_config: buildScheduleConfigFromFormValues(
           agentTool,
           {
             modelConfig: all.modelConfig,
@@ -371,8 +304,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
           rules={[{ required: true, message: 'Prompt is required' }]}
           help={
             <Text type="secondary" style={{ fontSize: 12 }}>
-              Handlebars: <code>{'{{branch.*}}'}</code> <code>{'{{board.*}}'}</code>{' '}
-              <code>{'{{schedule.*}}'}</code>
+              Handlebars: <code>{'{{branch.*}}'}</code> <code>{'{{schedule.*}}'}</code>
             </Text>
           }
         >
@@ -430,17 +362,16 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
             label="Timezone"
             rules={[{ required: true, message: 'Timezone is required in local mode' }]}
           >
-            <Select
-              showSearch
+            <AutoComplete
+              // AutoComplete lets the user pick from the curated list OR
+              // type any other IANA zone. The server-side validator
+              // (validateScheduleConfig) rejects unknown zones via
+              // Intl.DateTimeFormat, so free entry is safe here.
               options={COMMON_TIMEZONES.map((tz) => ({ value: tz, label: tz }))}
-              dropdownRender={(menu) => (
-                <>
-                  {menu}
-                  <Paragraph type="secondary" style={{ fontSize: 11, padding: 8, margin: 0 }}>
-                    Other IANA zones (e.g. <code>Asia/Bangkok</code>) can be typed.
-                  </Paragraph>
-                </>
-              )}
+              filterOption={(input, option) =>
+                (option?.value ?? '').toLowerCase().includes(input.toLowerCase())
+              }
+              placeholder="Type or pick an IANA zone (e.g. America/Los_Angeles, Asia/Bangkok)"
             />
           </Form.Item>
         )}
@@ -449,7 +380,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
           <AgentSelectionGrid
             agents={AVAILABLE_AGENTS}
             selectedAgentId={agentTool}
-            onSelect={(id) => setAgentTool(id as AgenticToolName)}
+            onSelect={(id) => handleAgentToolChange(id as AgenticToolName)}
             variant="select"
           />
         </Form.Item>

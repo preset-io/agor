@@ -93,6 +93,7 @@ import {
 import {
   checkSessionOwnerOrAdmin,
   ensureBranchPermission,
+  loadScheduleAndBranch,
   PERMISSION_RANK,
   resolveBranchPermission,
 } from './utils/branch-authorization.js';
@@ -2911,27 +2912,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       create: [
         requireAuth,
         requireMinimumRole(ROLES.MEMBER, 'run schedule'),
-        async (context: HookContext) => {
-          const id = context.params.route?.id;
-          if (!id) throw new BadRequest('Schedule ID required');
-
-          const schedule = await scheduleRepository.findById(id);
-          if (!schedule) {
-            throw new NotFound(`Schedule not found: ${id}`);
-          }
-          const branch = await branchRepository.findById(schedule.branch_id);
-          if (!branch) {
-            throw new NotFound(`Branch not found for schedule: ${schedule.schedule_id}`);
-          }
-
-          const userId = context.params.user?.user_id as UUID | undefined;
-          const isOwner = userId ? await branchRepository.isOwner(branch.branch_id, userId) : false;
-
-          context.params.schedule = schedule;
-          context.params.branch = branch;
-          context.params.isBranchOwner = isOwner;
-          return context;
-        },
+        // Reuse the canonical hook so caching semantics (params.schedule
+        // / params.branch / params.isBranchOwner) match every other
+        // schedule-touching path.
+        loadScheduleAndBranch(scheduleRepository, branchRepository),
         branchRbacEnabled
           ? ensureBranchPermission('all', 'run schedule', superadminOpts)
           : (context: HookContext) => {

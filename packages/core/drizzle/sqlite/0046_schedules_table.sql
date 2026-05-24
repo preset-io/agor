@@ -74,7 +74,21 @@ SELECT
 	json_object(
 		'agentic_tool',     json_extract(b.data, '$.schedule.agentic_tool'),
 		'permission_mode',  json_extract(b.data, '$.schedule.permission_mode'),
-		'model_config',     json_extract(b.data, '$.schedule.model_config'),
+		-- Legacy { mode: 'default'|'custom' } → canonical { mode: 'exact' }
+		-- per the new DefaultModelConfig shape used everywhere else
+		-- (sessions / user defaults / form helpers). mode='default' meant
+		-- "no override" → drop to NULL so the scheduler falls back to
+		-- agent defaults.
+		'model_config',
+			CASE
+				WHEN json_extract(b.data, '$.schedule.model_config.mode') = 'custom'
+				     AND json_extract(b.data, '$.schedule.model_config.model') IS NOT NULL
+				THEN json_object(
+					'mode', 'exact',
+					'model', json_extract(b.data, '$.schedule.model_config.model')
+				)
+				ELSE NULL
+			END,
 		'mcp_server_ids',   json_extract(b.data, '$.schedule.mcp_server_ids'),
 		'context_files',    json_extract(b.data, '$.schedule.context_files')
 	),

@@ -73,7 +73,20 @@ SELECT
 	jsonb_build_object(
 		'agentic_tool',    b.data->'schedule'->>'agentic_tool',
 		'permission_mode', b.data->'schedule'->>'permission_mode',
-		'model_config',    b.data->'schedule'->'model_config',
+		-- Legacy { mode: 'default'|'custom' } → canonical { mode: 'exact' }
+		-- per the new DefaultModelConfig shape. mode='default' meant
+		-- "no override" → drop to NULL so the scheduler falls back to
+		-- agent defaults.
+		'model_config',
+			CASE
+				WHEN b.data->'schedule'->'model_config'->>'mode' = 'custom'
+				     AND b.data->'schedule'->'model_config'->>'model' IS NOT NULL
+				THEN jsonb_build_object(
+					'mode', 'exact',
+					'model', b.data->'schedule'->'model_config'->>'model'
+				)
+				ELSE NULL
+			END,
 		'mcp_server_ids',  b.data->'schedule'->'mcp_server_ids',
 		'context_files',   b.data->'schedule'->'context_files'
 	),

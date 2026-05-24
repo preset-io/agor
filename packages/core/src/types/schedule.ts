@@ -1,6 +1,8 @@
 // src/types/schedule.ts
 import type { AgenticToolName } from './agentic-tool';
 import type { BranchID, SessionID, UUID } from './id';
+import type { PermissionMode } from './session';
+import type { DefaultModelConfig } from './user';
 
 /**
  * Schedule identifier
@@ -41,13 +43,18 @@ export interface ScheduleAgenticToolConfig {
   agentic_tool: AgenticToolName;
 
   /** Permission mode for spawned sessions (e.g., 'auto', 'ask', 'default'). */
-  permission_mode?: string;
+  permission_mode?: PermissionMode;
 
-  /** Model configuration for spawned sessions. */
-  model_config?: {
-    mode: 'default' | 'custom';
-    model?: string;
-  };
+  /**
+   * Model configuration for spawned sessions.
+   *
+   * Reuses the canonical {@link DefaultModelConfig} shape so the UI form
+   * helpers (`getFormValuesFromConfig` / `buildConfigFromFormValues`)
+   * round-trip cleanly between defaults, sessions, and schedules without
+   * dialect adapters. Omit entirely (or pass `{ model: undefined }`) to
+   * inherit the agent's defaults.
+   */
+  model_config?: DefaultModelConfig;
 
   /** MCP servers to attach to spawned sessions. Defaults to ['agor']. */
   mcp_server_ids?: string[];
@@ -123,7 +130,7 @@ export interface Schedule {
    * Rendered at fire time and persisted on the spawned session as
    * `custom_context.scheduled_run.rendered_prompt`.
    *
-   * Available variables: `{{branch.*}}`, `{{board.*}}`,
+   * Available variables: `{{branch.*}}`,
    * `{{schedule.cron}}`, `{{schedule.scheduled_time}}`, etc.
    */
   prompt: string;

@@ -577,14 +577,17 @@ export class SchedulerService {
         permission_config: cfg.permission_mode
           ? { mode: cfg.permission_mode as PermissionMode }
           : undefined,
-        model_config:
-          cfg.model_config?.mode === 'custom' && cfg.model_config.model
-            ? {
-                mode: 'exact',
-                model: cfg.model_config.model,
-                updated_at: new Date(now).toISOString(),
-              }
-            : undefined,
+        // DefaultModelConfig → Session.model_config. When the schedule
+        // has no `model` set we leave model_config undefined so the
+        // session inherits the agent's defaults.
+        model_config: cfg.model_config?.model
+          ? {
+              mode: cfg.model_config.mode ?? 'alias',
+              model: cfg.model_config.model,
+              effort: cfg.model_config.effort,
+              updated_at: new Date(now).toISOString(),
+            }
+          : undefined,
         custom_context: {
           scheduled_run: {
             rendered_prompt: renderedPrompt,

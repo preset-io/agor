@@ -7,7 +7,12 @@
 import type { Schedule } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { resolveBranchId, resolveScheduleId, resolveUserId } from '../resolve-ids.js';
+import {
+  resolveBoardId,
+  resolveBranchId,
+  resolveScheduleId,
+  resolveUserId,
+} from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
 
@@ -19,11 +24,14 @@ const agenticToolConfigSchema = z
     permission_mode: z.string().optional().describe("Permission mode (e.g., 'auto', 'ask')."),
     model_config: z
       .object({
-        mode: z.enum(['default', 'custom']),
+        mode: z.enum(['alias', 'exact']).optional(),
         model: z.string().optional(),
+        effort: z.enum(['low', 'medium', 'high', 'max']).optional(),
       })
       .optional()
-      .describe('Optional model override.'),
+      .describe(
+        'Optional model override (canonical DefaultModelConfig shape). Omit to inherit the agent default; set { model } to override; set { mode, model, effort } for full control.'
+      ),
     mcp_server_ids: z
       .array(z.string())
       .optional()
@@ -65,9 +73,10 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
       const result = await ctx.app.service('schedules').find({ query, ...ctx.baseServiceParams });
 
       // boardId filter is post-query (we'd need a JOIN to do it in SQL);
-      // keep it simple — schedule counts per board are small.
+      // keep it simple — schedule counts per board are small. Resolve
+      // short IDs first so a caller can pass either form.
       if (args.boardId) {
-        const boardId = args.boardId;
+        const boardId = await resolveBoardId(ctx, args.boardId);
         const allData: Schedule[] = Array.isArray(result) ? result : result.data;
         const branches = await Promise.all(
           allData.map((s) => ctx.app.service('branches').get(s.branch_id, ctx.baseServiceParams))
@@ -143,7 +152,10 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
         timezone_mode: args.timezone_mode,
         timezone: args.timezone,
         prompt: args.prompt,
-        agentic_tool_config: args.agentic_tool_config,
+        // The zod schema narrows permission_mode/model_config.mode to plain
+        // strings; the validator + service hooks coerce them to the
+        // canonical enums on save.
+        agentic_tool_config: args.agentic_tool_config as Schedule['agentic_tool_config'],
         enabled: args.enabled,
         allow_concurrent_runs: args.allow_concurrent_runs,
         retention: args.retention,
