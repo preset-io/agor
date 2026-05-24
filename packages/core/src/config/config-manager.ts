@@ -177,6 +177,17 @@ function validateConfig(config: AgorConfig): void {
         `To update: agor config set execution.unix_user_mode insulated`
     );
   }
+
+  // Warn on deprecated worktree_rbac key (renamed to branch_rbac in v0.20)
+  if (config.execution?.worktree_rbac !== undefined) {
+    console.warn(
+      `[config] 'execution.worktree_rbac' was renamed to 'execution.branch_rbac' in v0.20.\n` +
+        `Your config still uses the old key — it will be honoured this release but support\n` +
+        `will be removed in a future version.\n` +
+        `\n` +
+        `To migrate: agor config set execution.branch_rbac ${String(config.execution.worktree_rbac)}`
+    );
+  }
 }
 
 /**
@@ -759,7 +770,8 @@ export function requireDaemonUser(config: AgorConfig): string {
 export function isBranchRbacEnabled(): boolean {
   try {
     const config = loadConfigSync();
-    return config.execution?.branch_rbac === true;
+    // Also accept the pre-v0.20 key name as a backwards-compat alias.
+    return config.execution?.branch_rbac === true || config.execution?.worktree_rbac === true;
   } catch {
     return false;
   }

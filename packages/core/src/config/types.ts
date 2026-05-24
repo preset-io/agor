@@ -257,6 +257,13 @@ export interface AgorExecutionSettings {
   branch_rbac?: boolean;
 
   /**
+   * @deprecated Renamed to `branch_rbac` in v0.20. Treated as an alias for
+   * one release cycle — migrate your config: replace `worktree_rbac` with
+   * `branch_rbac` in ~/.agor/config.yaml.
+   */
+  worktree_rbac?: boolean;
+
+  /**
    * Allow authenticated members (and above) to open the web terminal (default: true).
    *
    * When true (default), any user with role `member` or higher can open a
