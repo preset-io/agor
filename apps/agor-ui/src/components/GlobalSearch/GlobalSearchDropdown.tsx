@@ -31,8 +31,12 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
 
   return (
     <div
+      // Fills the remaining space inside the popover's flex column. The
+      // popover caps total height at 85vh; the chip row above is fixed
+      // height, so this scroll area grows to use whatever's left.
       style={{
-        maxHeight: 480,
+        flex: 1,
+        minHeight: 0,
         overflowY: 'auto',
         padding: '2px 0',
       }}
