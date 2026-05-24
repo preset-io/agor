@@ -39,6 +39,7 @@ export function highlightTokens(
   // shape is stable per (text, tokens) tuple anyway).
   return parts.map((part, i) =>
     i % 2 === 1 ? (
+      // biome-ignore lint/suspicious/noArrayIndexKey: split() yields a positionally-stable array; ordinal is required because the same token text can repeat (e.g. "foo foo").
       <mark key={`m${i}:${part}`} style={markStyle}>
         {part}
       </mark>
