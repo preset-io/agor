@@ -96,6 +96,19 @@ FROM "schedules" s
 WHERE sessions.scheduled_from_branch = true
 	AND sessions.branch_id = s.branch_id;--> statement-breakpoint
 
+-- Backfill: point `schedules.last_run_session_id` at the session that
+-- corresponds to `schedules.last_run_at`. Pre-#1253 the scheduler
+-- already stored the minute-rounded scheduled_run_at on both sides, so
+-- the join is exact when a matching session survives retention. NULL
+-- when no match (acceptable — UI will simply not render a clickable
+-- link until the next run fires).
+UPDATE "schedules"
+SET last_run_session_id = s.session_id
+FROM "sessions" s
+WHERE s.schedule_id = schedules.schedule_id
+	AND s.scheduled_run_at = schedules.last_run_at
+	AND schedules.last_run_at IS NOT NULL;--> statement-breakpoint
+
 -- Remove the schedule key from branches.data jsonb.
 UPDATE "branches"
 SET data = data - 'schedule'

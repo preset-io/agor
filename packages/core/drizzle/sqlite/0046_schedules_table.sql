@@ -99,6 +99,21 @@ SET schedule_id = (
 WHERE sessions.scheduled_from_branch = 1
 	AND sessions.branch_id IN (SELECT branch_id FROM `schedules`);--> statement-breakpoint
 
+-- Backfill: point `schedules.last_run_session_id` at the session that
+-- corresponds to `schedules.last_run_at`. Pre-#1253 the scheduler
+-- already stored the minute-rounded scheduled_run_at on both sides, so
+-- the join is exact when a matching session survives retention. NULL
+-- when no match (acceptable — UI will simply not render a clickable
+-- link until the next run fires).
+UPDATE `schedules`
+SET last_run_session_id = (
+	SELECT s.session_id FROM `sessions` s
+	WHERE s.schedule_id = schedules.schedule_id
+		AND s.scheduled_run_at = schedules.last_run_at
+	LIMIT 1
+)
+WHERE schedules.last_run_at IS NOT NULL;--> statement-breakpoint
+
 -- Remove the schedule key from branches.data JSON (SQLite 3.38+ json_remove).
 UPDATE `branches`
 SET data = json_remove(data, '$.schedule')
