@@ -20,6 +20,7 @@ export * from './message';
 export * from './presence';
 export * from './repo';
 export * from './report';
+export * from './schedule';
 export type { ClaudeCodePermissionMode, CodexPermissionMode, PermissionMode } from './session';
 export * from './session';
 export * from './task';

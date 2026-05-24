@@ -97,10 +97,6 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       logs_command: row.logs_command ?? undefined,
       environment_variant: row.environment_variant ?? undefined,
       board_id: (row.board_id as BoardID | null) ?? undefined, // Top-level column
-      schedule_enabled: Boolean(row.schedule_enabled), // Convert SQLite integer (0/1) to boolean
-      schedule_cron: row.schedule_cron ?? undefined,
-      schedule_last_triggered_at: row.schedule_last_triggered_at ?? undefined,
-      schedule_next_run_at: row.schedule_next_run_at ?? undefined,
       needs_attention: Boolean(row.needs_attention), // Convert SQLite integer (0/1) to boolean
       archived: Boolean(row.archived), // Convert SQLite integer (0/1) to boolean
       archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
@@ -148,10 +144,6 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       environment_variant: branch.environment_variant ?? null,
       // Explicitly convert undefined to null for Drizzle (undefined values are ignored in set())
       board_id: branch.board_id === undefined ? null : branch.board_id || null,
-      schedule_enabled: branch.schedule_enabled ?? false,
-      schedule_cron: branch.schedule_cron ?? null,
-      schedule_last_triggered_at: branch.schedule_last_triggered_at ?? null,
-      schedule_next_run_at: branch.schedule_next_run_at ?? null,
       needs_attention: branch.needs_attention ?? true, // Default true for new branches
       archived: branch.archived ?? false, // Default false for new branches
       archived_at: branch.archived_at ? new Date(branch.archived_at) : null,
@@ -180,7 +172,6 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         custom_context: branch.custom_context,
         mcp_server_ids: branch.mcp_server_ids,
         dangerously_allow_session_sharing: branch.dangerously_allow_session_sharing,
-        schedule: branch.schedule,
       },
     };
   }

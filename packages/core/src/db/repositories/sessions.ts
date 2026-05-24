@@ -89,6 +89,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       permission_config: row.data.permission_config,
       scheduled_run_at: row.scheduled_run_at ?? undefined,
       scheduled_from_branch: row.scheduled_from_branch ?? false,
+      schedule_id: (row.schedule_id as UUID | null) ?? undefined,
       ready_for_prompt: row.ready_for_prompt ?? false,
       archived: Boolean(row.archived), // Convert SQLite integer (0/1) to boolean
       archived_reason: row.archived_reason ?? undefined,
@@ -126,6 +127,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       branch_id: session.branch_id,
       scheduled_run_at: session.scheduled_run_at ?? null,
       scheduled_from_branch: session.scheduled_from_branch ?? false,
+      schedule_id: session.schedule_id ?? null,
       ready_for_prompt: session.ready_for_prompt ?? false,
       archived: session.archived ?? false, // Default false for new sessions
       archived_reason: session.archived_reason ?? null,

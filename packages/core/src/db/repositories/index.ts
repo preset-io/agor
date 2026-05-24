@@ -15,6 +15,7 @@ export * from './gateway-channels';
 export * from './mcp-servers';
 export * from './messages';
 export * from './repos';
+export * from './schedules';
 export * from './serialized-sessions';
 export * from './session-env-selections';
 export * from './session-mcp-servers';

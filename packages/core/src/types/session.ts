@@ -17,6 +17,7 @@ import type {
 } from './agentic-tool';
 import type { ContextFilePath } from './context';
 import type { BoardID, BranchID, SessionID, TaskID } from './id';
+import type { ScheduleID } from './schedule';
 
 export const SessionStatus = {
   IDLE: 'idle',
@@ -368,6 +369,20 @@ export interface Session {
    * True = created by scheduler, False = created manually by user
    */
   scheduled_from_branch: boolean;
+
+  /**
+   * First-class schedule this session was spawned from (if any).
+   *
+   * Nullable: null for ad-hoc sessions and for back-compat rows that
+   * predate the `schedules` table. `ON DELETE SET NULL` so when a
+   * schedule is removed, its sessions become orphaned runs rather
+   * than cascading deletions.
+   *
+   * Use this as the canonical link to a run's schedule;
+   * `scheduled_from_branch` + `scheduled_run_at` are kept for dedup
+   * and UI back-compat.
+   */
+  schedule_id?: ScheduleID;
 
   /**
    * Whether this session is ready to receive a new prompt

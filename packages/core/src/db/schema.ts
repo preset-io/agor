@@ -27,6 +27,7 @@ export const boards = schema.boards;
 export const repos = schema.repos;
 export const branches = schema.branches;
 export const branchOwners = schema.branchOwners;
+export const schedules = schema.schedules;
 export const users = schema.users;
 export const mcpServers = schema.mcpServers;
 export const cardTypes = schema.cardTypes;
