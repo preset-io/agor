@@ -1,5 +1,10 @@
 import type { Artifact, Board, Branch, MCPServer, Session } from '@agor-live/client';
-import { getAssistantConfig, isAssistant } from '@agor-live/client';
+import {
+  isAssistant,
+  matchSearchTokens,
+  SEARCHABLE_FIELDS,
+  tokenizeSearchQuery,
+} from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   EMPTY_COUNTS,
@@ -70,7 +75,7 @@ export function useGlobalSearch({
       return { results: EMPTY_RESULTS, counts: EMPTY_COUNTS };
     }
 
-    const tokens = trimmed.toLowerCase().split(/\s+/).filter(Boolean);
+    const tokens = tokenizeSearchQuery(trimmed);
     if (tokens.length === 0) {
       return { results: EMPTY_RESULTS, counts: EMPTY_COUNTS };
     }
@@ -87,22 +92,15 @@ export function useGlobalSearch({
     // Sessions (timestamp field is `last_updated`, not `updated_at`)
     const sessions = Array.from(sessionById.values())
       .filter((s) => !ownedByMe || s.created_by === currentUserId)
-      .filter((s) => matchTokens(tokens, [s.title, s.description]))
+      .filter((s) => matchSearchTokens(tokens, SEARCHABLE_FIELDS.session(s)))
       .sort(byTimestamp((s) => s.last_updated));
 
-    // Branches + Assistants share the same table — split via the canonical
-    // isAssistant() helper from @agor-live/client. Assistants' user-visible
-    // displayName lives in custom_context.assistant and must be searchable too.
+    // Branches + Assistants share one registry entry: the field set covers
+    // both row variants (assistant displayName is included), and the type
+    // split below uses `isAssistant()` to bucket matched rows.
     const allBranches = Array.from(branchById.values())
       .filter((b) => !ownedByMe || b.created_by === currentUserId)
-      .filter((b) =>
-        matchTokens(tokens, [
-          b.name,
-          b.issue_url,
-          b.pull_request_url,
-          getAssistantConfig(b)?.displayName,
-        ])
-      )
+      .filter((b) => matchSearchTokens(tokens, SEARCHABLE_FIELDS.branch(b)))
       .sort(byTimestamp((b) => b.updated_at));
     const branches = allBranches.filter((b) => !isAssistant(b));
     const assistants = allBranches.filter((b) => isAssistant(b));
@@ -111,20 +109,20 @@ export function useGlobalSearch({
     const arts = Array.from(artifactById.values())
       .filter((a) => !a.archived)
       .filter((a) => !ownedByMe || a.created_by === currentUserId)
-      .filter((a) => matchTokens(tokens, [a.name, a.description]))
+      .filter((a) => matchSearchTokens(tokens, SEARCHABLE_FIELDS.artifact(a)))
       .sort(byTimestamp((a) => a.updated_at));
 
     // Boards (filter archived)
     const bs = Array.from(boardById.values())
       .filter((b) => !b.archived)
       .filter((b) => !ownedByMe || b.created_by === currentUserId)
-      .filter((b) => matchTokens(tokens, [b.name]))
+      .filter((b) => matchSearchTokens(tokens, SEARCHABLE_FIELDS.board(b)))
       .sort(byTimestamp((b) => b.last_updated));
 
     // MCP servers (uses owner_user_id instead of created_by; updated_at is a Date object)
     const servers = Array.from(mcpServerById.values())
       .filter((m) => !ownedByMe || m.owner_user_id === currentUserId)
-      .filter((m) => matchTokens(tokens, [m.name, m.display_name, m.description]))
+      .filter((m) => matchSearchTokens(tokens, SEARCHABLE_FIELDS.mcp(m)))
       .sort(byTimestamp((m) => m.updated_at));
 
     const counts: SearchCounts = {
@@ -187,13 +185,4 @@ export function useGlobalSearch({
     results.mcp.length > 0;
 
   return { results, counts, hasAnyResults, debouncedQuery, flush };
-}
-
-/** Every token must appear (case-insensitive substring) in at least one field. */
-function matchTokens(tokens: string[], fields: Array<string | undefined | null>): boolean {
-  const haystack = fields
-    .filter((f): f is string => Boolean(f))
-    .join(' \n ')
-    .toLowerCase();
-  return tokens.every((t) => haystack.includes(t));
 }
