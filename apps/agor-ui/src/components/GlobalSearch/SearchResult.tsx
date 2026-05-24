@@ -4,7 +4,7 @@ import type React from 'react';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
 import { highlightTokens } from './highlight';
-import { type SearchResultItem, TYPE_CHIP_ICONS } from './types';
+import type { SearchResultItem } from './types';
 
 const { Text } = Typography;
 
@@ -68,7 +68,11 @@ export const SearchResult: React.FC<SearchResultProps> = ({
         borderRadius: token.borderRadiusSM,
       }}
     >
-      <span style={{ fontSize: 18, lineHeight: '20px', flexShrink: 0 }}>{icon}</span>
+      {/* Icon column is opt-in: rendered only when the entity itself has an
+          emoji/icon (assistant `config.emoji`, board `item.icon`). For other
+          types the section header above already conveys the kind, so we drop
+          the per-row glyph to keep visual noise down. */}
+      {icon && <span style={{ fontSize: 18, lineHeight: '20px', flexShrink: 0 }}>{icon}</span>}
       <div style={{ flex: 1, minWidth: 0 }}>
         {/* Title row: title takes remaining width and ellipsizes; tag + time
             stay on one line via whiteSpace:nowrap + flex-shrink:0. Plain flex
@@ -130,13 +134,15 @@ function renderResult(result: SearchResultItem): {
   tag?: string;
   secondary?: string;
   time?: string;
-  icon: string;
+  /** Only set when the entity itself has an emoji/icon (assistant config,
+   * board icon). Generic per-type emojis dropped — section headers carry
+   * the entity-kind affordance instead. */
+  icon?: string;
 } {
   switch (result.type) {
     case 'session': {
       const title = getSessionDisplayTitle(result.item, { includeAgentFallback: true });
       return {
-        icon: TYPE_CHIP_ICONS.session,
         title,
         tag: result.item.agentic_tool,
         secondary: result.parentBranch ? `in ${result.parentBranch.name}` : undefined,
@@ -145,7 +151,6 @@ function renderResult(result: SearchResultItem): {
     }
     case 'branch': {
       return {
-        icon: TYPE_CHIP_ICONS.branch,
         title: result.item.name,
         tag: result.item.ref,
         time: safeRelativeTime(result.item.updated_at),
@@ -154,14 +159,13 @@ function renderResult(result: SearchResultItem): {
     case 'assistant': {
       const config = getAssistantConfig(result.item);
       return {
-        icon: config?.emoji || TYPE_CHIP_ICONS.assistant,
+        icon: config?.emoji,
         title: config?.displayName ?? result.item.name,
         time: safeRelativeTime(result.item.updated_at),
       };
     }
     case 'artifact': {
       return {
-        icon: TYPE_CHIP_ICONS.artifact,
         title: result.item.name,
         tag: result.item.template,
         secondary: result.parentBranch ? `in ${result.parentBranch.name}` : undefined,
@@ -170,14 +174,13 @@ function renderResult(result: SearchResultItem): {
     }
     case 'board': {
       return {
-        icon: result.item.icon || TYPE_CHIP_ICONS.board,
+        icon: result.item.icon,
         title: result.item.name,
         time: safeRelativeTime(result.item.last_updated),
       };
     }
     case 'mcp': {
       return {
-        icon: TYPE_CHIP_ICONS.mcp,
         title: result.item.display_name || result.item.name,
         tag: result.item.transport,
         secondary: result.item.description,

@@ -55,15 +55,6 @@ export const SECTION_LABELS: Record<SearchEntityType, string> = {
   mcp: 'MCP',
 };
 
-export const TYPE_CHIP_ICONS: Record<SearchEntityType, string> = {
-  session: '🤖',
-  branch: '📁',
-  assistant: '✨',
-  artifact: '🧩',
-  board: '🗺️',
-  mcp: '🔌',
-};
-
 export type SearchResultItem =
   | { type: 'session'; item: Session; parentBranch?: Branch }
   | { type: 'branch'; item: Branch }

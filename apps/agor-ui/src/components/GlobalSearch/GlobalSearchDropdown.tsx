@@ -1,11 +1,40 @@
 import { tokenizeSearchQuery } from '@agor-live/client';
+import {
+  ApiOutlined,
+  AppstoreOutlined,
+  BranchesOutlined,
+  ExperimentOutlined,
+  MessageOutlined,
+  RobotOutlined,
+} from '@ant-design/icons';
 import { Typography, theme } from 'antd';
 import type React from 'react';
 import { useMemo } from 'react';
 import { SearchResult } from './SearchResult';
-import { type ResultsByType, SECTION_LABELS, SECTION_ORDER, type SearchResultItem } from './types';
+import {
+  type ResultsByType,
+  SECTION_LABELS,
+  SECTION_ORDER,
+  type SearchEntityType,
+  type SearchResultItem,
+} from './types';
 
 const { Text } = Typography;
+
+/**
+ * AntD icon per entity type for the dropdown's section headers. Mirrors the
+ * Settings modal's tab icons (apps/agor-ui/src/components/SettingsModal/
+ * SettingsModal.tsx) so users see the same glyph in both surfaces. Sessions
+ * don't have a Settings tab — `MessageOutlined` is the conversational match.
+ */
+const SECTION_ICONS: Record<SearchEntityType, React.ReactNode> = {
+  session: <MessageOutlined />,
+  branch: <BranchesOutlined />,
+  assistant: <RobotOutlined />,
+  artifact: <ExperimentOutlined />,
+  board: <AppstoreOutlined />,
+  mcp: <ApiOutlined />,
+};
 
 interface GlobalSearchDropdownProps {
   /** Trimmed query (post-debounce). Empty string = render Recents view. */
@@ -75,7 +104,12 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
           // typed-query states. A single header rule above the column makes it
           // clear the whole list is "recent."
           return (
-            <SectionShell key={type} title={SECTION_LABELS[type]} token={token}>
+            <SectionShell
+              key={type}
+              title={SECTION_LABELS[type]}
+              icon={SECTION_ICONS[type]}
+              token={token}
+            >
               {items.map((result, i) => {
                 const flatIndex = offset + i;
                 return (
@@ -100,14 +134,20 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
 
 interface SectionShellProps {
   title: string;
+  /** AntD icon rendered to the left of the section label, matching the
+   * Settings modal's tab glyphs. */
+  icon?: React.ReactNode;
   token: ReturnType<typeof theme.useToken>['token'];
   children: React.ReactNode;
 }
 
-const SectionShell: React.FC<SectionShellProps> = ({ title, token, children }) => (
+const SectionShell: React.FC<SectionShellProps> = ({ title, icon, token, children }) => (
   <div style={{ padding: '2px 0' }}>
     <div
       style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
         padding: '2px 16px 1px',
         fontSize: 11,
         textTransform: 'uppercase',
@@ -115,6 +155,7 @@ const SectionShell: React.FC<SectionShellProps> = ({ title, token, children }) =
         color: token.colorTextTertiary,
       }}
     >
+      {icon}
       {title}
     </div>
     {children}
