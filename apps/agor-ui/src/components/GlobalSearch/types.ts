@@ -32,8 +32,7 @@ export const TYPE_CHIP_ORDER: ChipFilter[] = [
 /**
  * Chip labels intentionally use the singular ("Session" / "Branch") so the
  * Segmented control fits the 480px dropdown without wrapping. Section headers
- * in the dropdown body keep the plural ("Sessions · 5") since they sit on
- * their own line with a count beside them.
+ * in the dropdown body use the plural form (see `SECTION_LABELS`).
  */
 export const TYPE_CHIP_LABELS: Record<ChipFilter, string> = {
   all: 'All',
@@ -45,7 +44,8 @@ export const TYPE_CHIP_LABELS: Record<ChipFilter, string> = {
   mcp: 'MCP',
 };
 
-/** Plural section-header labels for the dropdown body (e.g. "Sessions · 5"). */
+/** Plural section-header labels for the dropdown body (e.g. "Sessions"). Per-
+ * section counts are surfaced as badges on the chip row, not inline here. */
 export const SECTION_LABELS: Record<SearchEntityType, string> = {
   session: 'Sessions',
   branch: 'Branches',

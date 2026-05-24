@@ -30,10 +30,11 @@ interface UseGlobalSearchInput extends GlobalSearchEntityMaps {
 /**
  * Global-search client-side filter over the in-memory entity maps from useAgorData.
  *
- * V1 scaffolding: title-only AND-of-tokens LIKE across each entity's searchable fields.
- * No backend round-trip; the maps are already streamed by WebSocket. When V2 lands
- * (message search, FTS), this hook gets replaced with a server-driven fan-out
- * keeping the same return shape.
+ * V1 scaffolding: AND-of-tokens substring match over each entity's
+ * `SEARCHABLE_FIELDS` set (the canonical registry in `@agor/core/search`).
+ * No backend round-trip; the maps are already streamed by WebSocket. When V2
+ * lands (message search, FTS), this hook gets replaced with a server-driven
+ * fan-out keeping the same return shape and reading the same registry.
  */
 export function useGlobalSearch({
   query,

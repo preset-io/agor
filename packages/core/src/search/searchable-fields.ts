@@ -61,7 +61,7 @@ export function matchSearchTokens(
   tokens: string[],
   fields: Array<string | undefined | null>
 ): boolean {
-  const normalized = tokens.map((t) => t.toLowerCase()).filter(Boolean);
+  const normalized = tokens.map((t) => t.trim().toLowerCase()).filter(Boolean);
   if (normalized.length === 0) return false;
   const haystack = fields
     .filter((f): f is string => Boolean(f))
