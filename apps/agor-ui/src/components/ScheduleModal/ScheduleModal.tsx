@@ -268,7 +268,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
     }
   }, [cronValue]);
 
-  const handleSave = async (runAfter = false) => {
+  const handleSave = async () => {
     if (!client) {
       showError('Not connected to daemon');
       return;
@@ -324,16 +324,6 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
 
       showSuccess(isEditing ? 'Schedule updated' : 'Schedule created');
       onSaved?.(saved);
-
-      if (runAfter) {
-        try {
-          await client.service(`schedules/${saved.schedule_id}/run-now`).create({});
-          showSuccess('Run triggered');
-        } catch (e: unknown) {
-          showError(e instanceof Error ? e.message : 'Failed to trigger run');
-        }
-      }
-
       onClose();
     } catch (e: unknown) {
       showError(e instanceof Error ? e.message : 'Failed to save schedule');
@@ -353,16 +343,8 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
         <Button key="cancel" onClick={onClose} disabled={saving}>
           Cancel
         </Button>,
-        <Button key="save" type="primary" loading={saving} onClick={() => handleSave(false)}>
+        <Button key="save" type="primary" loading={saving} onClick={handleSave}>
           {isEditing ? 'Save' : 'Create'}
-        </Button>,
-        <Button
-          key="save-and-run"
-          loading={saving}
-          onClick={() => handleSave(true)}
-          title="Save and trigger a run immediately"
-        >
-          {isEditing ? 'Save & run' : 'Create & run'}
         </Button>,
       ]}
     >
