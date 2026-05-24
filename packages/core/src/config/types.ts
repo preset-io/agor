@@ -433,7 +433,7 @@ export interface AgorExecutionSettings {
    * `allowed_modes` are rejected at the daemon service boundary with a
    * clear "enable it in config" error.
    *
-   * See docs/internal/branch-vs-branch-migration-analysis-2026-05-20.md.
+   * See docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.
    *
    * @example Operator opt-in to clone mode
    * ```yaml
@@ -460,9 +460,10 @@ export type BranchStorageMode = 'worktree' | 'clone';
 
 /**
  * Operator gate for which storage modes can be selected at branch-create
- * time. Defaults preserve legacy behaviour: only `'worktree'` is enabled
- * and `default_mode` is `'worktree'`. Adding `'clone'` to `allowed_modes`
- * opts the instance in to the self-standing-clone path.
+ * time. Defaults (v0.20+) enable both modes so users can pick per branch;
+ * `default_mode` stays on `'worktree'` for backwards compatibility. Pin
+ * `allowed_modes: ['worktree']` to disable clone mode entirely (e.g. for
+ * security gradient reasons).
  */
 export interface AgorBranchStorageSettings {
   /**
@@ -473,8 +474,8 @@ export interface AgorBranchStorageSettings {
 
   /**
    * Storage modes the operator has enabled for this instance. Requests for
-   * a mode not in this list are rejected. Default: `['worktree']` — clone
-   * mode is opt-in until promoted in a later cycle.
+   * a mode not in this list are rejected. Default: `['worktree', 'clone']`
+   * — both modes selectable from the UI / MCP tool out of the box.
    */
   allowed_modes?: BranchStorageMode[];
 }

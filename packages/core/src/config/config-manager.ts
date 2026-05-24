@@ -784,9 +784,13 @@ export function isUnixImpersonationEnabled(): boolean {
 /**
  * Resolve `execution.branch_storage` with defaults applied.
  *
- * Default posture preserves legacy behaviour: only the native branch
- * mode is enabled and selected by default. Operators opt in to clone mode
- * by adding `'clone'` to `allowed_modes` in `~/.agor/config.yaml`.
+ * Default posture (v0.20+): both storage modes are enabled out of the box so
+ * users can pick worktree or clone per branch from the create form / MCP
+ * tool. `default_mode` stays on `'worktree'` for backwards compatibility —
+ * existing automations that create branches without specifying a mode keep
+ * landing on the legacy `git worktree add` path. Operators who want to
+ * disable clone-mode entirely (e.g. for security gradient reasons) can pin
+ * `allowed_modes: ['worktree']` in `~/.agor/config.yaml`.
  *
  * `default_mode` always falls back into `allowed_modes` if the operator
  * configured an inconsistent shape (e.g. set `default_mode: clone` but
@@ -806,7 +810,7 @@ export function resolveBranchStorageConfig(): {
     raw = undefined;
   }
   const allowed: import('./types').BranchStorageMode[] =
-    raw?.allowed_modes && raw.allowed_modes.length > 0 ? raw.allowed_modes : ['worktree'];
+    raw?.allowed_modes && raw.allowed_modes.length > 0 ? raw.allowed_modes : ['worktree', 'clone'];
   const requestedDefault = raw?.default_mode ?? 'worktree';
   // Normalise: if the operator's default_mode isn't in allowed_modes, fall
   // back to the first allowed mode so we never hand out a default that the

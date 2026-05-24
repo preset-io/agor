@@ -1078,10 +1078,31 @@ describe('resolveBranchStorageConfig + ensureBranchStorageModeAllowed', () => {
     __resetConfigCacheForTests();
   }
 
-  it('defaults to worktree-only when execution.branch_storage is not configured', () => {
-    // No config file present.
+  it('defaults to both modes allowed with worktree as default when execution.branch_storage is not configured', () => {
+    // No config file present. v0.20+ default exposes both modes in the UI /
+    // MCP create tool while keeping `default_mode='worktree'` so callers that
+    // don't pick a mode keep landing on the legacy path.
     const resolved = resolveBranchStorageConfig();
-    expect(resolved).toEqual({ defaultMode: 'worktree', allowedModes: ['worktree'] });
+    expect(resolved).toEqual({
+      defaultMode: 'worktree',
+      allowedModes: ['worktree', 'clone'],
+    });
+  });
+
+  it('lets operators disable clone mode by pinning allowed_modes to ["worktree"]', async () => {
+    // Security-gradient deployments opt out of clone-mode entirely.
+    await writeConfig({
+      daemon: { port: 3030 },
+      execution: {
+        branch_storage: {
+          allowed_modes: ['worktree'],
+        },
+      },
+    });
+
+    const resolved = resolveBranchStorageConfig();
+    expect(resolved.allowedModes).toEqual(['worktree']);
+    expect(() => ensureBranchStorageModeAllowed('clone')).toThrow(/not enabled/);
   });
 
   it('honours operator-configured allowed_modes + default_mode', async () => {
@@ -1119,8 +1140,16 @@ describe('resolveBranchStorageConfig + ensureBranchStorageModeAllowed', () => {
     expect(resolved.allowedModes).toEqual(['worktree']);
   });
 
-  it('ensureBranchStorageModeAllowed throws a clear message for disallowed modes', () => {
-    // Default config: only worktree allowed.
+  it('ensureBranchStorageModeAllowed throws a clear message for disallowed modes', async () => {
+    // Pin allowed_modes to worktree-only to exercise the disallowed-clone path.
+    await writeConfig({
+      daemon: { port: 3030 },
+      execution: {
+        branch_storage: {
+          allowed_modes: ['worktree'],
+        },
+      },
+    });
     expect(() => ensureBranchStorageModeAllowed('worktree')).not.toThrow();
     expect(() => ensureBranchStorageModeAllowed('clone')).toThrow(/not enabled/);
     expect(() => ensureBranchStorageModeAllowed('clone')).toThrow(
@@ -1128,17 +1157,9 @@ describe('resolveBranchStorageConfig + ensureBranchStorageModeAllowed', () => {
     );
   });
 
-  it('ensureBranchStorageModeAllowed passes once the operator opts in', async () => {
-    await writeConfig({
-      daemon: { port: 3030 },
-      execution: {
-        branch_storage: {
-          default_mode: 'worktree',
-          allowed_modes: ['worktree', 'clone'],
-        },
-      },
-    });
-
+  it('ensureBranchStorageModeAllowed accepts both modes under the default config', () => {
+    // v0.20+ default allows both — operators have to opt out to forbid clone.
+    expect(() => ensureBranchStorageModeAllowed('worktree')).not.toThrow();
     expect(() => ensureBranchStorageModeAllowed('clone')).not.toThrow();
   });
 });
