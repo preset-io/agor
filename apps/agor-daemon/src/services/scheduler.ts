@@ -515,8 +515,9 @@ export class SchedulerService {
     }
 
     // 1. Dedup: indexed lookup via (schedule_id, scheduled_run_at).
-    const sessionsForSchedule = await this.sessionRepo.findAll();
-    const myRuns = sessionsForSchedule.filter((s) => s.schedule_id === schedule.schedule_id);
+    const allSessions = await this.sessionRepo.findAll();
+    const branchSessions = allSessions.filter((s) => s.branch_id === branch.branch_id);
+    const myRuns = branchSessions.filter((s) => s.schedule_id === schedule.schedule_id);
     const existingSession = myRuns.find((s) => s.scheduled_run_at === scheduledRunAt);
 
     if (existingSession) {
@@ -526,9 +527,12 @@ export class SchedulerService {
       return existingSession;
     }
 
-    // 2. Concurrency guard.
+    // 2. Concurrency guard — branch-wide (matches pre-#1253 behavior).
+    //    Any active session in the branch blocks scheduled runs, regardless
+    //    of which schedule it came from. Sibling schedules on the same
+    //    branch are sequential by default; opt out via allow_concurrent_runs.
     if (!schedule.allow_concurrent_runs) {
-      const active = myRuns.some((s) => ACTIVE_SESSION_STATUSES.has(s.status));
+      const active = branchSessions.some((s) => ACTIVE_SESSION_STATUSES.has(s.status));
       if (active) {
         if (manual) {
           console.log(

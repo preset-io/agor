@@ -308,67 +308,80 @@ export function scopeBranchQuery(
       });
     }
 
-    // Apply client-side filtering for non-special query params (repo_id, name, etc.)
-    let filtered = accessibleBranches;
-    for (const [key, value] of Object.entries(query)) {
-      if (key.startsWith('$') || key === 'archived') continue; // Skip operators and already-applied filters
-      // biome-ignore lint/suspicious/noExplicitAny: Dynamic property access for generic query filtering
-      filtered = filtered.filter((item: any) => item[key] === value);
-    }
-
-    // Apply sorting if specified (matches scopeSessionQuery behavior)
-    const sort = query.$sort;
-    if (sort) {
-      const sortField = Object.keys(sort)[0] as keyof Branch;
-      const sortOrder = sort[sortField] as 1 | -1;
-      filtered = [...filtered].sort((a, b) => {
-        const aVal = a[sortField];
-        const bVal = b[sortField];
-        if (aVal == null && bVal == null) return 0;
-        if (aVal == null) return 1;
-        if (bVal == null) return -1;
-        if (aVal < bVal) return sortOrder === -1 ? 1 : -1;
-        if (aVal > bVal) return sortOrder === -1 ? -1 : 1;
-        return 0;
-      });
-    }
-
-    // Apply pagination
-    const limit = query.$limit ?? filtered.length;
-    const skip = query.$skip ?? 0;
-    const paginated = filtered.slice(skip, skip + limit);
-
-    // Set result directly to bypass default query
-    // This prevents the N+1 problem from the old filterBranchesByPermission approach
-    context.result = {
-      total: filtered.length,
-      limit,
-      skip,
-      data: paginated,
-    };
-
+    // `archived` is already applied at the repo level; everything else
+    // (repo_id, name, etc.) goes through the generic client-side pass.
+    context.result = paginateClientSide(
+      accessibleBranches,
+      query as Record<string, unknown>,
+      new Set(['archived'])
+    );
     return context;
   };
 }
 
 /**
- * Helper to compare two session fields for sorting
+ * Shared filter / sort / paginate pass for `scope*Query` hooks.
  *
- * Handles string, number, and date comparisons with type safety.
+ * After the SQL-side access query returns the user's accessible rows,
+ * all three scope hooks (`scopeBranchQuery`, `scopeSessionQuery`,
+ * `scopeScheduleQuery`) need to:
+ *   1. Apply Feathers query filters that the SQL layer didn't already
+ *      handle (e.g. `schedule_id` on sessions).
+ *   2. Apply `$sort` with null-safe comparison.
+ *   3. Apply `$limit` / `$skip` pagination.
+ *
+ * Diverging implementations of this drift quickly (`scopeSessionQuery`
+ * previously dropped all non-`$` filters silently, which broke the
+ * schedules runs panel). Centralizing keeps the semantics aligned.
+ *
+ * @param rows                — the accessible rows from the repo
+ * @param query               — the Feathers query object
+ * @param skipFilterKeys      — keys to skip in the generic filter pass
+ *                              (already applied SQL-side or special-case)
  */
-function compareSessionFields(a: Session, b: Session, field: keyof Session, order: 1 | -1): number {
-  const aVal = a[field];
-  const bVal = b[field];
+function paginateClientSide<T>(
+  rows: T[],
+  query: Record<string, unknown> | undefined,
+  skipFilterKeys: ReadonlySet<string> = new Set()
+): { total: number; limit: number; skip: number; data: T[] } {
+  const q = query ?? {};
 
-  // Handle null/undefined
-  if (aVal == null && bVal == null) return 0;
-  if (aVal == null) return 1;
-  if (bVal == null) return -1;
+  // 1. Generic equality filter for non-`$`-prefixed keys.
+  let filtered = rows;
+  for (const [key, value] of Object.entries(q)) {
+    if (key.startsWith('$') || skipFilterKeys.has(key)) continue;
+    filtered = filtered.filter(
+      // biome-ignore lint/suspicious/noExplicitAny: dynamic property access for generic query filtering
+      (item: any) => item[key] === value
+    );
+  }
 
-  // Type-safe comparison
-  if (aVal < bVal) return order === -1 ? 1 : -1;
-  if (aVal > bVal) return order === -1 ? -1 : 1;
-  return 0;
+  // 2. $sort with null-safe comparison.
+  const sort = q.$sort as Record<string, 1 | -1> | undefined;
+  if (sort) {
+    const sortField = Object.keys(sort)[0] as keyof T;
+    const sortOrder = sort[sortField as string];
+    filtered = [...filtered].sort((a, b) => {
+      const aVal = a[sortField];
+      const bVal = b[sortField];
+      if (aVal == null && bVal == null) return 0;
+      if (aVal == null) return 1;
+      if (bVal == null) return -1;
+      if (aVal < bVal) return sortOrder === -1 ? 1 : -1;
+      if (aVal > bVal) return sortOrder === -1 ? -1 : 1;
+      return 0;
+    });
+  }
+
+  // 3. Pagination.
+  const limit = (q.$limit as number | undefined) ?? filtered.length;
+  const skip = (q.$skip as number | undefined) ?? 0;
+  return {
+    total: filtered.length,
+    limit,
+    skip,
+    data: filtered.slice(skip, skip + limit),
+  };
 }
 
 /**
@@ -423,30 +436,14 @@ export function scopeSessionQuery(
       ? await sessionRepo.findAll()
       : await sessionRepo.findAccessibleSessions(userId);
 
-    // Apply sorting if specified in query
-    let sortedSessions = accessibleSessions;
-    const sort = context.params.query?.$sort;
-    if (sort) {
-      const sortField = Object.keys(sort)[0] as keyof Session;
-      const sortOrder = sort[sortField] as 1 | -1;
-      sortedSessions = [...accessibleSessions].sort((a, b) =>
-        compareSessionFields(a, b, sortField, sortOrder)
-      );
-    }
-
-    // Apply pagination if specified
-    const limit = context.params.query?.$limit ?? sortedSessions.length;
-    const skip = context.params.query?.$skip ?? 0;
-    const paginatedSessions = sortedSessions.slice(skip, skip + limit);
-
-    // Set result directly to bypass default query
-    context.result = {
-      total: sortedSessions.length,
-      limit,
-      skip,
-      data: paginatedSessions,
-    };
-
+    // Apply remaining query filters (branch_id, schedule_id, status, etc.)
+    // client-side. Without this pass, `sessions.find({ schedule_id })`
+    // silently returns all accessible sessions — which is what the
+    // ScheduleRunsPanel was hitting before this fix.
+    context.result = paginateClientSide(
+      accessibleSessions,
+      context.params.query as Record<string, unknown> | undefined
+    );
     return context;
   };
 }
@@ -1597,7 +1594,9 @@ export function scopeScheduleQuery(
     const userRole = context.params.user?.role as string | undefined;
     const allowSuperadmin = options?.allowSuperadmin ?? true;
 
-    // Lift query filters that the repository understands.
+    // Lift query filters that the repository understands (pushed into
+    // the SQL JOIN for efficiency); the rest go through the generic
+    // client-side filter pass below.
     // biome-ignore lint/suspicious/noExplicitAny: Feathers query is loosely-typed
     const q = (context.params.query ?? {}) as any;
     const filter = {
@@ -1615,17 +1614,13 @@ export function scopeScheduleQuery(
       ? await scheduleRepo.findAll(filter)
       : await scheduleRepo.findAccessibleSchedules(userId, filter);
 
-    const limit = q.$limit ?? allSchedules.length;
-    const skip = q.$skip ?? 0;
-    const paginated = allSchedules.slice(skip, skip + limit);
-
-    context.result = {
-      total: allSchedules.length,
-      limit,
-      skip,
-      data: paginated,
-    };
-
+    // `branch_id` / `enabled` / `created_by` are already applied SQL-side;
+    // pass the rest of the query through the shared paginate+sort helper.
+    context.result = paginateClientSide(
+      allSchedules,
+      q as Record<string, unknown>,
+      new Set(['branch_id', 'enabled', 'created_by'])
+    );
     return context;
   };
 }

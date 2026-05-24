@@ -2106,6 +2106,54 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
+  // Recompute `next_run_at` whenever cron / timezone fields change (or on
+  // create). The scheduler tick reads this column for its hot-path query;
+  // leaving it stale after a cron change means the schedule fires on the
+  // OLD cadence until the old next_run_at passes. Keeping the invariant
+  // here (rather than waiting for the next tick to self-heal) makes the
+  // persisted state coherent on commit.
+  //
+  // The scheduler bypasses the service when it advances metadata after a
+  // run, so its `scheduleRepo.update({ next_run_at })` writes are not
+  // double-handled.
+  const recomputeNextRunAt = async (context: HookContext) => {
+    const data = context.data as Partial<import('@agor/core/types').Schedule> | undefined;
+    if (!data) return context;
+
+    const { getNextRunTime } = await import('@agor/core/utils/cron');
+
+    if (context.method === 'create') {
+      if (data.cron_expression && data.next_run_at == null) {
+        const tz = data.timezone_mode === 'local' && data.timezone ? data.timezone : 'UTC';
+        try {
+          data.next_run_at = getNextRunTime(data.cron_expression, new Date(), tz);
+        } catch {
+          // validateScheduleConfig already rejected invalid crons; ignore here.
+        }
+      }
+      return context;
+    }
+
+    // patch: only recompute if timing fields are in the incoming payload.
+    const touchesTiming =
+      data.cron_expression !== undefined ||
+      data.timezone_mode !== undefined ||
+      data.timezone !== undefined;
+    if (!touchesTiming) return context;
+
+    const current = context.params.schedule as import('@agor/core/types').Schedule | undefined;
+    if (!current) return context; // RBAC disabled — no cached schedule. Patch is bypassed.
+
+    const merged = { ...current, ...data };
+    const tz = merged.timezone_mode === 'local' && merged.timezone ? merged.timezone : 'UTC';
+    try {
+      data.next_run_at = getNextRunTime(merged.cron_expression, new Date(), tz);
+    } catch {
+      // validateScheduleConfig already rejected invalid crons; ignore here.
+    }
+    return context;
+  };
+
   app.service('schedules').hooks({
     before: {
       all: [requireAuth],
@@ -2127,6 +2175,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
         injectCreatedBy(),
         validateScheduleConfig,
+        recomputeNextRunAt,
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update schedules'),
@@ -2137,6 +2186,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ]
           : []),
         validateScheduleConfig,
+        recomputeNextRunAt,
       ],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete schedules'),

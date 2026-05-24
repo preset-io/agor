@@ -106,6 +106,7 @@ export const sessionQuerySchema = createQuerySchema(
     branch_id: Type.Optional(CommonSchemas.uuid),
     parent_session_id: Type.Optional(CommonSchemas.uuid),
     forked_from_session_id: Type.Optional(CommonSchemas.uuid),
+    schedule_id: Type.Optional(CommonSchemas.uuid),
     created_by: Type.Optional(CommonSchemas.uuid),
     archived: Type.Optional(CommonSchemas.boolean),
     created_at: Type.Optional(CommonSchemas.timestamp),
