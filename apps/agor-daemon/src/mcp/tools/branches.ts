@@ -1,110 +1,63 @@
-import { isWorktreeRbacEnabled } from '@agor/core/config';
-import { shortId, WorktreeRepository } from '@agor/core/db';
+import { isBranchRbacEnabled } from '@agor/core/config';
+import { BranchRepository, shortId } from '@agor/core/db';
 import type {
   BoardID,
+  Branch,
+  BranchID,
+  BranchPermissionLevel,
   Repo,
   UUID,
-  Worktree,
-  WorktreeID,
-  WorktreePermissionLevel,
   ZoneBoardObject,
 } from '@agor/core/types';
-import { getAssistantConfig, isAssistant, WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
+import { BRANCH_PERMISSION_LEVELS, getAssistantConfig, isAssistant } from '@agor/core/types';
 import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ReposServiceImpl, WorktreesServiceImpl } from '../../declarations.js';
-import type { WorktreeParams } from '../../services/worktrees.js';
-import { type ToolConfig, type ToolHandler, wrapRegisterTool } from '../register-tool-proxy.js';
+import type { BranchesServiceImpl, ReposServiceImpl } from '../../declarations.js';
+import type { BranchParams } from '../../services/branches.js';
 import {
   resolveBoardId,
+  resolveBranchId,
   resolveMcpServerId,
   resolveRepoId,
   resolveSessionId,
-  resolveWorktreeId,
 } from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 import { assertValidVariant } from './_environment-helpers.js';
 
-const WORKTREE_NAME_PATTERN = /^[a-z0-9-]+$/;
+const BRANCH_NAME_PATTERN = /^[a-z0-9-]+$/;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/i;
 
-/**
- * Mirror every `agor_worktrees_*` tool registration as a sibling
- * `agor_branches_*` registration. The new `agor_branches_*` name gets the
- * original config + handler; the legacy `agor_worktrees_*` name gets a
- * `[Deprecated alias of agor_branches_X]` description prefix and a
- * handler that emits a `⚠️  [mcp][deprecation]` warning before delegating.
- *
- * Implements §7 of
- * docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md:
- * both names work for 1–2 minor versions; legacy emits per-call warnings;
- * legacy is removed in a future release. The wrapper lives at the file
- * boundary so the 8 individual tool definitions below stay declarative.
- *
- * @internal Exported only so the focused alias-wrapper tests in
- *   `worktrees.test.ts` can exercise the (args, extra) forwarding contract
- *   without monkey-patching `registerWorktreeTools`. Not part of the
- *   public module API; outside callers should go through
- *   `registerWorktreeTools` like every other domain.
- */
-export function withBranchAliases(server: McpServer): McpServer {
-  return wrapRegisterTool(server, (register, name, config, handler) => {
-    if (!name.startsWith('agor_worktrees_')) {
-      return register(name, config, handler);
-    }
-    const branchName = name.replace('agor_worktrees_', 'agor_branches_');
-    // New name: clean handler + unchanged description.
-    register(branchName, config, handler);
-    // Legacy name: deprecation-prefixed description + per-call warning.
-    const deprecatedConfig: ToolConfig = {
-      ...config,
-      description:
-        `[Deprecated alias of ${branchName}] ${(config.description as string | undefined) ?? ''}`.trim(),
-    };
-    const deprecatedHandler: ToolHandler = (args, extra) => {
-      console.warn(
-        `⚠️  [mcp][deprecation] ${name} called; alias ${branchName} is available — ${name} will be removed in a future minor release`
-      );
-      return handler(args, extra);
-    };
-    return register(name, deprecatedConfig, deprecatedHandler);
-  });
-}
-
-export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): void {
-  // Tools registered through this server get an automatic `agor_branches_*`
-  // alias. See `withBranchAliases` for the rationale.
-  const server = withBranchAliases(rawServer);
-  // Tool 1: agor_worktrees_get
+export function registerBranchTools(server: McpServer, ctx: McpContext): void {
+  // Tool 1: agor_branches_get
   server.registerTool(
-    'agor_worktrees_get',
+    'agor_branches_get',
     {
       description:
         'Get detailed information about a branch, including path, git ref, and git state',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        worktreeId: z.string().describe('Branch ID (UUIDv7 or short ID)'),
+        branchId: z.string().describe('Branch ID (UUIDv7 or short ID)'),
       }),
     },
     async (args) => {
-      const worktreeParams: WorktreeParams = {
+      const branchParams: BranchParams = {
         ...ctx.baseServiceParams,
         _include_sessions: true,
         _last_message_truncation_length: 500,
       };
-      const worktree = await ctx.app
-        .service('worktrees')
-        .get(args.worktreeId, worktreeParams as Parameters<WorktreesServiceImpl['get']>[1]);
-      return textResult(worktree);
+      const branch = await ctx.app
+        .service('branches')
+        .get(args.branchId, branchParams as Parameters<BranchesServiceImpl['get']>[1]);
+      return textResult(branch);
     }
   );
 
-  // Tool 2: agor_worktrees_list
+  // Tool 2: agor_branches_list
   server.registerTool(
-    'agor_worktrees_list',
+    'agor_branches_list',
     {
       description: 'List all branches in a repository',
       annotations: { readOnlyHint: true },
@@ -134,26 +87,24 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
       } else if (!args.includeArchived) {
         query.archived = false;
       }
-      const worktrees = await ctx.app
-        .service('worktrees')
-        .find({ query, ...ctx.baseServiceParams });
-      return textResult(worktrees);
+      const branches = await ctx.app.service('branches').find({ query, ...ctx.baseServiceParams });
+      return textResult(branches);
     }
   );
 
-  // Tool 3: agor_worktrees_create
+  // Tool 3: agor_branches_create
   server.registerTool(
-    'agor_worktrees_create',
+    'agor_branches_create',
     {
       description:
         'Create a branch (an isolated workspace with its own git ref) for a repository, with required board placement. ' +
         'To fork from an existing git branch under a unique name, set sourceBranch to the base git branch ' +
-        'and worktreeName to your desired unique name (e.g., sourceBranch="issue-282", worktreeName="issue-282-review-1"). ' +
+        'and branchName to your desired unique name (e.g., sourceBranch="issue-282", branchName="issue-282-review-1"). ' +
         'Use zoneId to place the branch in a specific zone (pin only, no trigger). ' +
         'For zone trigger behavior (prompt templates), use agor_branches_set_zone after creation.',
       inputSchema: z.object({
         repoId: z.string().describe('Repository ID where the branch will be created'),
-        worktreeName: z
+        branchName: z
           .string()
           .describe(
             'Slug name for the branch directory (lowercase letters, numbers, hyphens). ' +
@@ -169,9 +120,9 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
           .string()
           .optional()
           .describe(
-            'Git ref name to create or checkout. Defaults to worktreeName when creating a new git branch. ' +
+            'Git ref name to create or checkout. Defaults to branchName when creating a new git branch. ' +
               'Set this to create a git branch with a different name than the branch directory. ' +
-              'Example: worktreeName="review-1", ref="issue-282-review-1" creates directory "review-1" on git branch "issue-282-review-1".'
+              'Example: branchName="review-1", ref="issue-282-review-1" creates directory "review-1" on git branch "issue-282-review-1".'
           ),
         refType: z
           .enum(['branch', 'tag'])
@@ -202,7 +153,7 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
           .boolean()
           .optional()
           .describe(
-            'If worktreeName conflicts with an existing branch, automatically append a numeric suffix ' +
+            'If branchName conflicts with an existing branch, automatically append a numeric suffix ' +
               '(e.g., "my-feature" → "my-feature-2", "my-feature-3"). Defaults to true. Set to false to get an error on conflict instead.'
           ),
         zoneId: z
@@ -220,7 +171,7 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
           .describe('Pull request URL to associate with the branch.'),
         // RBAC fields (optional, sensible defaults, safe to ignore for single-user setups)
         othersCan: z
-          .enum(WORKTREE_PERMISSION_LEVELS)
+          .enum(BRANCH_PERMISSION_LEVELS)
           .optional()
           .describe(
             'App-layer permission for non-owner users. ' +
@@ -280,14 +231,14 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
     },
     async (args) => {
       const repoId = await resolveRepoId(ctx, coerceString(args.repoId)!);
-      let worktreeName = coerceString(args.worktreeName)!;
-      const originalName = worktreeName;
+      let branchName = coerceString(args.branchName)!;
+      const originalName = branchName;
       const boardId = await resolveBoardId(ctx, coerceString(args.boardId)!);
       const zoneId = coerceString(args.zoneId);
       const autoSuffix = typeof args.autoSuffix === 'boolean' ? args.autoSuffix : true;
 
-      if (!WORKTREE_NAME_PATTERN.test(worktreeName)) {
-        throw new Error('worktreeName must use lowercase letters, numbers, or hyphens');
+      if (!BRANCH_NAME_PATTERN.test(branchName)) {
+        throw new Error('branchName must use lowercase letters, numbers, or hyphens');
       }
 
       const reposService = ctx.app.service('repos') as unknown as ReposServiceImpl;
@@ -305,16 +256,16 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
       // Auto-suffix: resolve name conflicts by appending -2, -3, etc.
       // Uses direct DB query to bypass Feathers pagination limits
       if (autoSuffix) {
-        const worktreeRepo = new WorktreeRepository(ctx.db);
-        const activeNames = await worktreeRepo.getActiveNamesByRepo(repoId as UUID);
+        const branchRepo = new BranchRepository(ctx.db);
+        const activeNames = await branchRepo.getActiveNamesByRepo(repoId as UUID);
         const existingNames = new Set(activeNames);
 
-        if (existingNames.has(worktreeName)) {
+        if (existingNames.has(branchName)) {
           let suffix = 2;
-          while (existingNames.has(`${worktreeName}-${suffix}`)) {
+          while (existingNames.has(`${branchName}-${suffix}`)) {
             suffix++;
           }
-          worktreeName = `${worktreeName}-${suffix}`;
+          branchName = `${branchName}-${suffix}`;
         }
       }
 
@@ -332,7 +283,7 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
       }
 
       if (createBranch) {
-        if (!ref) ref = worktreeName;
+        if (!ref) ref = branchName;
         if (!sourceBranch) sourceBranch = defaultBranch;
         if (pullLatest === undefined) pullLatest = true;
       } else {
@@ -344,23 +295,23 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
       const issueUrl = normalizeOptionalHttpUrl(args.issueUrl, 'issueUrl');
       const pullRequestUrl = normalizeOptionalHttpUrl(args.pullRequestUrl, 'pullRequestUrl');
 
-      // If auto-suffix changed the ref (branch name defaults to worktreeName), update it
-      if (createBranch && !coerceString(args.ref) && worktreeName !== originalName) {
-        ref = worktreeName;
+      // If auto-suffix changed the ref (branch name defaults to branchName), update it
+      if (createBranch && !coerceString(args.ref) && branchName !== originalName) {
+        ref = branchName;
       }
 
       // Positioning is handled automatically by the repos service —
       // agents don't need to think about x/y coordinates.
 
-      const othersCan = args.othersCan as WorktreePermissionLevel | undefined;
+      const othersCan = args.othersCan as BranchPermissionLevel | undefined;
       const othersFsAccess = args.othersFsAccess as 'none' | 'read' | 'write' | undefined;
       const storageMode = args.storage_mode as 'worktree' | 'clone' | undefined;
       const cloneDepth = typeof args.clone_depth === 'number' ? args.clone_depth : undefined;
 
-      const worktree = await reposService.createWorktree(
+      const branch = await reposService.createBranch(
         repoId,
         {
-          name: worktreeName,
+          name: branchName,
           ref,
           createBranch,
           refType,
@@ -379,20 +330,20 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
         ctx.baseServiceParams
       );
 
-      // Add additional owners (creator is already added by reposService.createWorktree)
+      // Add additional owners (creator is already added by reposService.createBranch)
       const ownerWarnings: string[] = [];
       if (args.ownerIds && args.ownerIds.length > 0) {
-        if (!isWorktreeRbacEnabled()) {
+        if (!isBranchRbacEnabled()) {
           ownerWarnings.push(
-            'ownerIds ignored: worktree RBAC is not enabled. Enable worktree_rbac in config to manage owners.'
+            'ownerIds ignored: branch RBAC is not enabled. Enable branch_rbac in config to manage owners.'
           );
         } else {
-          const worktreeOwnersService = ctx.app.service('worktrees/:id/owners');
+          const branchOwnersService = ctx.app.service('branches/:id/owners');
           for (const ownerId of args.ownerIds) {
             try {
-              await worktreeOwnersService.create(
+              await branchOwnersService.create(
                 { user_id: ownerId },
-                { ...ctx.baseServiceParams, route: { id: worktree.worktree_id } }
+                { ...ctx.baseServiceParams, route: { id: branch.branch_id } }
               );
             } catch (error) {
               ownerWarnings.push(
@@ -404,10 +355,10 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
       }
 
       // Build response with appropriate notes
-      const response: Record<string, unknown> = { ...worktree };
+      const response: Record<string, unknown> = { ...branch };
 
-      if (worktreeName !== originalName) {
-        response._note = `Name '${originalName}' was already taken. Created as '${worktreeName}' instead (autoSuffix applied).`;
+      if (branchName !== originalName) {
+        response._note = `Name '${originalName}' was already taken. Created as '${branchName}' instead (autoSuffix applied).`;
       }
 
       if (zoneId) {
@@ -425,15 +376,15 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
     }
   );
 
-  // Tool 4: agor_worktrees_update
+  // Tool 4: agor_branches_update
   server.registerTool(
-    'agor_worktrees_update',
+    'agor_branches_update',
     {
       description:
         'Update metadata for an existing branch (issue/PR URLs, notes, board placement, custom context, RBAC permissions, owners)',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
-        worktreeId: z
+        branchId: z
           .string()
           .optional()
           .describe(
@@ -479,7 +430,7 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
           ),
         // RBAC fields (optional, safe to ignore for single-user setups)
         othersCan: z
-          .enum(WORKTREE_PERMISSION_LEVELS)
+          .enum(BRANCH_PERMISSION_LEVELS)
           .optional()
           .describe(
             'App-layer permission for non-owner users. ' +
@@ -514,15 +465,15 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
       }),
     },
     async (args) => {
-      let resolvedWorktreeId: string;
-      if (coerceString(args.worktreeId)) {
-        resolvedWorktreeId = await resolveWorktreeId(ctx, coerceString(args.worktreeId)!);
+      let resolvedBranchId: string;
+      if (coerceString(args.branchId)) {
+        resolvedBranchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
       } else {
         const currentSession = await ctx.app.service('sessions').get(ctx.sessionId);
-        const sessionWorktreeId = currentSession.worktree_id;
-        if (!sessionWorktreeId)
-          throw new Error('worktreeId is required when current session is not bound to a branch');
-        resolvedWorktreeId = sessionWorktreeId;
+        const sessionBranchId = currentSession.branch_id;
+        if (!sessionBranchId)
+          throw new Error('branchId is required when current session is not bound to a branch');
+        resolvedBranchId = sessionBranchId;
       }
 
       let fieldsProvided = 0;
@@ -582,41 +533,41 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
 
       if (fieldsProvided === 0) throw new Error('provide at least one field to update');
 
-      // Patch worktree fields (skip if only owner changes)
-      let worktree: Worktree;
+      // Patch branch fields (skip if only owner changes)
+      let branch: Branch;
       if (Object.keys(updates).length > 0) {
-        worktree = (await ctx.app
-          .service('worktrees')
+        branch = (await ctx.app
+          .service('branches')
           .patch(
-            resolvedWorktreeId as string,
-            updates as unknown as Partial<Worktree>,
+            resolvedBranchId as string,
+            updates as unknown as Partial<Branch>,
             ctx.baseServiceParams
-          )) as Worktree;
+          )) as Branch;
       } else {
-        worktree = (await ctx.app
-          .service('worktrees')
-          .get(resolvedWorktreeId as string, ctx.baseServiceParams)) as Worktree;
+        branch = (await ctx.app
+          .service('branches')
+          .get(resolvedBranchId as string, ctx.baseServiceParams)) as Branch;
       }
 
       // Handle owner additions/removals via the owners service (includes unix sync hooks)
       const ownerErrors: string[] = [];
       if (hasOwnerChanges) {
-        if (!isWorktreeRbacEnabled()) {
+        if (!isBranchRbacEnabled()) {
           ownerErrors.push(
-            'Owner changes ignored: worktree RBAC is not enabled. Enable worktree_rbac in config to manage owners.'
+            'Owner changes ignored: branch RBAC is not enabled. Enable branch_rbac in config to manage owners.'
           );
         } else {
-          const worktreeOwnersService = ctx.app.service('worktrees/:id/owners');
-          // Use full UUID from resolved worktree (not the potentially-short input ID)
+          const branchOwnersService = ctx.app.service('branches/:id/owners');
+          // Use full UUID from resolved branch (not the potentially-short input ID)
           const routeParams = {
             ...ctx.baseServiceParams,
-            route: { id: worktree.worktree_id },
+            route: { id: branch.branch_id },
           };
 
           if (args.addOwnerIds) {
             for (const ownerId of args.addOwnerIds) {
               try {
-                await worktreeOwnersService.create({ user_id: ownerId }, routeParams);
+                await branchOwnersService.create({ user_id: ownerId }, routeParams);
               } catch (error) {
                 ownerErrors.push(
                   `Failed to add owner ${ownerId}: ${error instanceof Error ? error.message : String(error)}`
@@ -628,7 +579,7 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
           if (args.removeOwnerIds) {
             for (const ownerId of args.removeOwnerIds) {
               try {
-                await worktreeOwnersService.remove(ownerId, routeParams);
+                await branchOwnersService.remove(ownerId, routeParams);
               } catch (error) {
                 ownerErrors.push(
                   `Failed to remove owner ${ownerId}: ${error instanceof Error ? error.message : String(error)}`
@@ -640,21 +591,21 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
       }
 
       return textResult({
-        worktree,
+        branch,
         note: 'Branch metadata updated successfully.',
         ...(ownerErrors.length > 0 ? { ownerWarnings: ownerErrors } : {}),
       });
     }
   );
 
-  // Tool 5: agor_worktrees_set_zone
+  // Tool 5: agor_branches_set_zone
   server.registerTool(
-    'agor_worktrees_set_zone',
+    'agor_branches_set_zone',
     {
       description:
         "Pin a branch to a zone on a board and optionally trigger the zone's prompt template. Calculates zone center position automatically and creates board association. If the zone has an 'always_new' trigger, a new session is automatically created and the prompt template is executed (matching UI drag-drop behavior). For 'show_picker' zones, use triggerTemplate + targetSessionId to send to an existing session.",
       inputSchema: z.object({
-        worktreeId: z.string().describe('Branch ID to pin to the zone (UUIDv7 or short ID)'),
+        branchId: z.string().describe('Branch ID to pin to the zone (UUIDv7 or short ID)'),
         zoneId: z.string().describe('Zone ID to pin the branch to (e.g., "zone-1770152859108")'),
         targetSessionId: z
           .string()
@@ -671,38 +622,38 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
       }),
     },
     async (args) => {
-      const worktreeId = await resolveWorktreeId(ctx, coerceString(args.worktreeId)!);
+      const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
       const zoneId = coerceString(args.zoneId)!;
       const targetSessionId = coerceString(args.targetSessionId)
         ? await resolveSessionId(ctx, coerceString(args.targetSessionId)!)
         : undefined;
       const triggerTemplate = args.triggerTemplate === true;
 
-      console.log(`📍 MCP pinning worktree ${shortId(worktreeId)} to zone ${zoneId}`);
+      console.log(`📍 MCP pinning branch ${shortId(branchId)} to zone ${zoneId}`);
 
-      // Get worktree to find its board
-      const worktree = await ctx.app.service('worktrees').get(worktreeId, ctx.baseServiceParams);
+      // Get branch to find its board
+      const branch = await ctx.app.service('branches').get(branchId, ctx.baseServiceParams);
 
-      if (!worktree.board_id) {
+      if (!branch.board_id) {
         throw new Error('Branch must be on a board before it can be pinned to a zone');
       }
 
       // Get board to find zone definition
-      const board = await ctx.app.service('boards').get(worktree.board_id, ctx.baseServiceParams);
+      const board = await ctx.app.service('boards').get(branch.board_id, ctx.baseServiceParams);
 
       const zone = board.objects?.[zoneId];
       if (!zone || zone.type !== 'zone') {
-        throw new Error(`Zone ${zoneId} not found on board ${worktree.board_id}`);
+        throw new Error(`Zone ${zoneId} not found on board ${branch.board_id}`);
       }
 
       // Calculate position RELATIVE to zone (not absolute canvas coordinates)
       // The UI expects relative positions and adds zone.x/zone.y when rendering
       const { x: relativeX, y: relativeY } = computeZoneRelativePosition(zone as ZoneBoardObject);
 
-      // Find or create board object for this worktree
+      // Find or create board object for this branch
       const boardObjectsService = ctx.app.service('board-objects') as unknown as {
-        findByWorktreeId: (
-          worktreeId: WorktreeID,
+        findByBranchId: (
+          branchId: BranchID,
           params?: unknown
         ) => Promise<import('@agor/core/types').BoardEntityObject | null>;
         create: (
@@ -717,14 +668,14 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
       };
 
       let boardObject: import('@agor/core/types').BoardEntityObject | null =
-        await boardObjectsService.findByWorktreeId(worktreeId as WorktreeID, ctx.baseServiceParams);
+        await boardObjectsService.findByBranchId(branchId as BranchID, ctx.baseServiceParams);
 
       if (!boardObject) {
         // Create new board object
         boardObject = await boardObjectsService.create(
           {
-            board_id: worktree.board_id as BoardID,
-            worktree_id: worktreeId as WorktreeID,
+            board_id: branch.board_id as BoardID,
+            branch_id: branchId as BranchID,
             position: { x: relativeX, y: relativeY },
             zone_id: zoneId,
           },
@@ -742,7 +693,7 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
         );
       }
 
-      console.log(`✅ Worktree pinned to zone at relative position (${relativeX}, ${relativeY})`);
+      console.log(`✅ Branch pinned to zone at relative position (${relativeX}, ${relativeY})`);
 
       // Determine whether to fire zone trigger
       let promptResult:
@@ -783,7 +734,7 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
         }
 
         const templateContext = buildZoneTriggerContext({
-          worktree,
+          branch,
           board,
           zone: { label: zone.label, status: zone.status },
           session: targetSession
@@ -831,10 +782,10 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
         }
       } else if (isAlwaysNew) {
         // Case 2: always_new — delegate to the shared helper. Same code path
-        // the daemon's POST /worktrees/:id/fire-zone-trigger uses, so MCP-
+        // the daemon's POST /branches/:id/fire-zone-trigger uses, so MCP-
         // and UI-fired sessions stay in lockstep.
         console.log(
-          `🎯 Zone has always_new trigger, auto-creating session for worktree ${shortId(worktreeId)}`
+          `🎯 Zone has always_new trigger, auto-creating session for branch ${shortId(branchId)}`
         );
 
         try {
@@ -843,7 +794,7 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
           const { session: newSession, task } = await fireAlwaysNewZoneTrigger({
             app: ctx.app,
             params: ctx.baseServiceParams,
-            worktree,
+            branch,
             board,
             zone,
             user,
@@ -887,7 +838,7 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
 
       return textResult({
         success: true,
-        worktree_id: worktree.worktree_id,
+        branch_id: branch.branch_id,
         zone_id: zoneId,
         position: { x: relativeX, y: relativeY },
         board_object_id: boardObject.object_id,
@@ -896,15 +847,15 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
     }
   );
 
-  // Tool 6: agor_worktrees_archive
+  // Tool 6: agor_branches_archive
   server.registerTool(
-    'agor_worktrees_archive',
+    'agor_branches_archive',
     {
       description:
         'Archive a branch (soft delete). Stops the environment if running, optionally cleans or deletes the filesystem, archives the branch metadata and all its sessions, and removes it from the board. Use agor_branches_unarchive to restore.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
-        worktreeId: z.string().describe('Branch ID to archive (UUIDv7 or short ID)'),
+        branchId: z.string().describe('Branch ID to archive (UUIDv7 or short ID)'),
         filesystemAction: z
           .enum(['preserved', 'cleaned', 'deleted'])
           .optional()
@@ -914,61 +865,61 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
       }),
     },
     async (args) => {
-      const worktreeId = await resolveWorktreeId(ctx, coerceString(args.worktreeId)!);
+      const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
       const filesystemAction =
         (args.filesystemAction as 'preserved' | 'cleaned' | 'deleted') || 'cleaned';
-      const worktreesService = ctx.app.service('worktrees') as unknown as WorktreesServiceImpl;
-      const result = await worktreesService.archiveOrDelete(
-        worktreeId as WorktreeID,
+      const branchesService = ctx.app.service('branches') as unknown as BranchesServiceImpl;
+      const result = await branchesService.archiveOrDelete(
+        branchId as BranchID,
         { metadataAction: 'archive', filesystemAction },
         ctx.baseServiceParams
       );
       return textResult({
         success: true,
-        worktree: result,
+        branch: result,
         message: 'Branch archived successfully.',
       });
     }
   );
 
-  // Tool 7: agor_worktrees_unarchive
+  // Tool 7: agor_branches_unarchive
   server.registerTool(
-    'agor_worktrees_unarchive',
+    'agor_branches_unarchive',
     {
       description:
         'Restore a previously archived branch. Optionally place it back on a board. Also unarchives all sessions that were archived as part of the branch archival.',
       inputSchema: z.object({
-        worktreeId: z.string().describe('Branch ID to unarchive (UUIDv7 or short ID)'),
+        branchId: z.string().describe('Branch ID to unarchive (UUIDv7 or short ID)'),
         boardId: z.string().optional().describe('Board ID to restore the branch onto (optional)'),
       }),
     },
     async (args) => {
-      const worktreeId = await resolveWorktreeId(ctx, coerceString(args.worktreeId)!);
+      const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
       const boardIdStr = coerceString(args.boardId);
       const boardId = boardIdStr ? await resolveBoardId(ctx, boardIdStr) : undefined;
-      const worktreesService = ctx.app.service('worktrees') as unknown as WorktreesServiceImpl;
-      const result = await worktreesService.unarchive(
-        worktreeId as WorktreeID,
+      const branchesService = ctx.app.service('branches') as unknown as BranchesServiceImpl;
+      const result = await branchesService.unarchive(
+        branchId as BranchID,
         boardId ? { boardId: boardId as BoardID } : undefined,
         ctx.baseServiceParams
       );
       return textResult({
         success: true,
-        worktree: result,
+        branch: result,
         message: 'Branch unarchived successfully.',
       });
     }
   );
 
-  // Tool 8: agor_worktrees_delete
+  // Tool 8: agor_branches_delete
   server.registerTool(
-    'agor_worktrees_delete',
+    'agor_branches_delete',
     {
       description:
         'Permanently delete a branch and all its sessions, messages, and tasks. This action cannot be undone. Stops the environment if running and optionally removes files from disk.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
-        worktreeId: z.string().describe('Branch ID to delete (UUIDv7 or short ID)'),
+        branchId: z.string().describe('Branch ID to delete (UUIDv7 or short ID)'),
         filesystemAction: z
           .enum(['preserved', 'deleted'])
           .optional()
@@ -978,17 +929,17 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
       }),
     },
     async (args) => {
-      const worktreeId = await resolveWorktreeId(ctx, coerceString(args.worktreeId)!);
+      const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
       const filesystemAction = (args.filesystemAction as 'preserved' | 'deleted') || 'deleted';
-      const worktreesService = ctx.app.service('worktrees') as unknown as WorktreesServiceImpl;
-      await worktreesService.archiveOrDelete(
-        worktreeId as WorktreeID,
+      const branchesService = ctx.app.service('branches') as unknown as BranchesServiceImpl;
+      await branchesService.archiveOrDelete(
+        branchId as BranchID,
         { metadataAction: 'delete', filesystemAction },
         ctx.baseServiceParams
       );
       return textResult({
         success: true,
-        worktree_id: worktreeId,
+        branch_id: branchId,
         message: 'Branch permanently deleted.',
       });
     }
@@ -1003,25 +954,25 @@ export function registerWorktreeTools(rawServer: McpServer, ctx: McpContext): vo
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         repoId: z.string().optional().describe('Filter assistants by repository ID'),
-        limit: z.number().optional().describe('Maximum number of worktrees to scan (default: 200)'),
+        limit: z.number().optional().describe('Maximum number of branches to scan (default: 200)'),
       }),
     },
     async (args) => {
       const query: Record<string, unknown> = { archived: false, $limit: args.limit || 200 };
       if (args.repoId) query.repo_id = await resolveRepoId(ctx, args.repoId);
 
-      const result = await ctx.app.service('worktrees').find({ query, ...ctx.baseServiceParams });
+      const result = await ctx.app.service('branches').find({ query, ...ctx.baseServiceParams });
 
       // Filter to assistants only and shape the response
-      const worktrees: Worktree[] = Array.isArray(result)
+      const branches: Branch[] = Array.isArray(result)
         ? result
-        : (result as { data: Worktree[] }).data;
-      const assistants = worktrees.filter((w) => isAssistant(w));
+        : (result as { data: Branch[] }).data;
+      const assistants = branches.filter((w) => isAssistant(w));
 
       const shaped = assistants.map((w) => {
         const config = getAssistantConfig(w);
         return {
-          worktree_id: w.worktree_id,
+          branch_id: w.branch_id,
           name: w.name,
           display_name: config?.displayName ?? w.name,
           emoji: config?.emoji,

@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { RepoEnvironment, RepoEnvironmentConfigV1 } from '../types/worktree';
+import type { RepoEnvironment, RepoEnvironmentConfigV1 } from '../types/branch';
 import { parseAgorYml, resolveVariant, writeAgorYml } from './agor-yml';
 
 function withTmpFile<T>(fn: (filePath: string) => T): T {
@@ -28,8 +28,8 @@ describe('parseAgorYml — v1 legacy (flat) form', () => {
         `environment:
   start: "docker compose up -d"
   stop: "docker compose down"
-  health: "http://localhost:{{add 9000 worktree.unique_id}}/health"
-  app: "http://localhost:{{add 5000 worktree.unique_id}}"
+  health: "http://localhost:{{add 9000 branch.unique_id}}/health"
+  app: "http://localhost:{{add 5000 branch.unique_id}}"
   logs: "docker compose logs --tail=100"
   nuke: "docker compose down -v"`
       );
@@ -43,8 +43,8 @@ describe('parseAgorYml — v1 legacy (flat) form', () => {
             start: 'docker compose up -d',
             stop: 'docker compose down',
             nuke: 'docker compose down -v',
-            health: 'http://localhost:{{add 9000 worktree.unique_id}}/health',
-            app: 'http://localhost:{{add 5000 worktree.unique_id}}',
+            health: 'http://localhost:{{add 9000 branch.unique_id}}/health',
+            app: 'http://localhost:{{add 5000 branch.unique_id}}',
             logs: 'docker compose logs --tail=100',
           },
         },

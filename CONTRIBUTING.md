@@ -28,12 +28,12 @@ docker compose up
 
 ## Contribution Workflow
 
-### 1. Fork & Create a Worktree
+### 1. Fork & Create a Branch
 
 **In Agor (meta!):**
 
 ```bash
-# Create a worktree in Agor for your contribution
+# Create a branch in Agor for your contribution
 # Work on it using Agor sessions
 # Experience the workflow you're improving!
 ```
@@ -304,8 +304,8 @@ Place a `.agor.yml` file in your repository root with the following structure:
 environment:
   start: 'docker compose up -d'
   stop: 'docker compose down'
-  health: 'http://localhost:{{add 9000 worktree.unique_id}}/health'
-  app: 'http://localhost:{{add 5000 worktree.unique_id}}'
+  health: 'http://localhost:{{add 9000 branch.unique_id}}/health'
+  app: 'http://localhost:{{add 5000 branch.unique_id}}'
   logs: 'docker compose logs --tail=100'
 ```
 
@@ -324,12 +324,12 @@ environment:
 
 Use Handlebars syntax in your commands:
 
-- `{{worktree.unique_id}}` - Auto-assigned unique number (1, 2, 3, ...) for port allocation
-- `{{worktree.name}}` - Worktree name (e.g., "feat-auth", "main")
-- `{{worktree.path}}` - Absolute path to worktree directory
+- `{{branch.unique_id}}` - Auto-assigned unique number (1, 2, 3, ...) for port allocation
+- `{{branch.name}}` - Branch name (e.g., "feat-auth", "main")
+- `{{branch.path}}` - Absolute path to branch directory
 - `{{repo.slug}}` - Repository slug
 - `{{add a b}}` - Math helpers: `add`, `sub`, `mul`, `div`, `mod`
-- `{{custom.your_var}}` - Custom context variables (defined per worktree)
+- `{{custom.your_var}}` - Custom context variables (defined per branch)
 
 ### Examples
 
@@ -337,21 +337,21 @@ Use Handlebars syntax in your commands:
 
 ```yaml
 environment:
-  start: 'DAEMON_PORT={{add 3000 worktree.unique_id}} UI_PORT={{add 5000 worktree.unique_id}} docker compose -p {{worktree.name}} up -d'
-  stop: 'docker compose -p {{worktree.name}} down'
-  health: 'http://localhost:{{add 5000 worktree.unique_id}}/health'
-  app: 'http://localhost:{{add 5000 worktree.unique_id}}'
-  logs: 'docker compose -p {{worktree.name}} logs --tail=100'
+  start: 'DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000 branch.unique_id}} docker compose -p {{branch.name}} up -d'
+  stop: 'docker compose -p {{branch.name}} down'
+  health: 'http://localhost:{{add 5000 branch.unique_id}}/health'
+  app: 'http://localhost:{{add 5000 branch.unique_id}}'
+  logs: 'docker compose -p {{branch.name}} logs --tail=100'
 ```
 
 **Simple dev server:**
 
 ```yaml
 environment:
-  start: 'PORT={{add 5000 worktree.unique_id}} pnpm dev'
-  stop: "pkill -f 'vite.*{{add 5000 worktree.unique_id}}'"
-  health: 'http://localhost:{{add 5000 worktree.unique_id}}/api/health'
-  app: 'http://localhost:{{add 5000 worktree.unique_id}}'
+  start: 'PORT={{add 5000 branch.unique_id}} pnpm dev'
+  stop: "pkill -f 'vite.*{{add 5000 branch.unique_id}}'"
+  health: 'http://localhost:{{add 5000 branch.unique_id}}/api/health'
+  app: 'http://localhost:{{add 5000 branch.unique_id}}'
 ```
 
 ### Workflow
@@ -360,12 +360,12 @@ environment:
 
 1. Add `.agor.yml` to your repo root and commit it
 2. Clone the repo in Agor → configuration auto-loaded ✨
-3. All worktrees created from this repo inherit the configuration
+3. All branches created from this repo inherit the configuration
 
 **Manual Import:**
 
-1. Open any worktree from the repository
-2. Go to WorktreeModal → Environment tab
+1. Open any branch from the repository
+2. Go to BranchModal → Environment tab
 3. Click "Import" button (⬇️ icon)
 4. Configuration loaded from `.agor.yml`
 
@@ -379,7 +379,7 @@ environment:
 ### Benefits
 
 - **Share configuration** across team via version control
-- **Automatic port allocation** prevents conflicts between worktrees
+- **Automatic port allocation** prevents conflicts between branches
 - **Consistent setup** for all developers
 - **No manual configuration** when cloning repos
 
@@ -387,5 +387,5 @@ environment:
 
 - Start command should run in background (e.g., `docker compose up -d`, not `docker compose up`)
 - Health check URL should return 200 OK when environment is ready
-- Templates are rendered when worktree is created (not at runtime)
-- After creation, values are editable per-worktree in the UI
+- Templates are rendered when branch is created (not at runtime)
+- After creation, values are editable per-branch in the UI

@@ -7,20 +7,20 @@
  * resolving to `{ default: Component }` (double-wrapped) under bundler CJS
  * interop, so `<Ansi>` was rendered with an object as its element type.
  *
- * Empty-log worktrees never tripped the bug because `<Ansi>` is only mounted
+ * Empty-log branches never tripped the bug because `<Ansi>` is only mounted
  * when `logs.logs` is non-empty; the conditional was the only thing keeping
- * the modal alive on a fresh worktree.
+ * the modal alive on a fresh branch.
  */
 
-import type { AgorClient, Worktree } from '@agor-live/client';
+import type { AgorClient, Branch } from '@agor-live/client';
 import { render, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { Ansi } from '../AnsiText';
 import { EnvironmentLogsModal } from './EnvironmentLogsModal';
 
-const mockWorktree: Partial<Worktree> = {
-  worktree_id: 'wt-test' as Worktree['worktree_id'],
-  name: 'test-worktree',
+const mockBranch: Partial<Branch> = {
+  branch_id: 'wt-test' as Branch['branch_id'],
+  name: 'test-branch',
 };
 
 function makeClient(response: unknown): AgorClient {
@@ -47,12 +47,7 @@ describe('EnvironmentLogsModal', () => {
     });
 
     const { findByText } = render(
-      <EnvironmentLogsModal
-        open
-        onClose={() => {}}
-        worktree={mockWorktree as Worktree}
-        client={client}
-      />
+      <EnvironmentLogsModal open onClose={() => {}} branch={mockBranch as Branch} client={client} />
     );
 
     // The log body is rendered inside an antd Modal portal, so query against
@@ -74,12 +69,7 @@ describe('EnvironmentLogsModal', () => {
     });
 
     const { findByText } = render(
-      <EnvironmentLogsModal
-        open
-        onClose={() => {}}
-        worktree={mockWorktree as Worktree}
-        client={client}
-      />
+      <EnvironmentLogsModal open onClose={() => {}} branch={mockBranch as Branch} client={client} />
     );
 
     await waitFor(async () => {
@@ -95,12 +85,7 @@ describe('EnvironmentLogsModal', () => {
     });
 
     const { findByText } = render(
-      <EnvironmentLogsModal
-        open
-        onClose={() => {}}
-        worktree={mockWorktree as Worktree}
-        client={client}
-      />
+      <EnvironmentLogsModal open onClose={() => {}} branch={mockBranch as Branch} client={client} />
     );
 
     await waitFor(async () => {
@@ -117,12 +102,7 @@ describe('EnvironmentLogsModal', () => {
     });
 
     const { findByRole } = render(
-      <EnvironmentLogsModal
-        open
-        onClose={() => {}}
-        worktree={mockWorktree as Worktree}
-        client={client}
-      />
+      <EnvironmentLogsModal open onClose={() => {}} branch={mockBranch as Branch} client={client} />
     );
 
     // Assert the antd Alert is rendered with the message (regression on the

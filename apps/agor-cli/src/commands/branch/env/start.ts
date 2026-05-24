@@ -1,7 +1,7 @@
 /**
- * `agor worktree env start <worktree-id>` - Start worktree environment
+ * `agor branch env start <branch-id>` - Start branch environment
  *
- * Starts the development environment (docker-compose, dev server, etc.) for a worktree.
+ * Starts the development environment (docker-compose, dev server, etc.) for a branch.
  */
 
 import { shortId } from '@agor-live/client';
@@ -9,8 +9,8 @@ import { Args } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../../base-command';
 
-export default class WorktreeEnvStart extends BaseCommand {
-  static description = 'Start worktree environment';
+export default class BranchEnvStart extends BaseCommand {
+  static description = 'Start branch environment';
 
   static examples = [
     '<%= config.bin %> <%= command.id %> abc123',
@@ -18,32 +18,32 @@ export default class WorktreeEnvStart extends BaseCommand {
   ];
 
   static args = {
-    worktreeId: Args.string({
-      description: 'Worktree ID (full UUID or short ID)',
+    branchId: Args.string({
+      description: 'Branch ID (full UUID or short ID)',
       required: true,
     }),
   };
 
   async run(): Promise<void> {
-    const { args } = await this.parse(WorktreeEnvStart);
+    const { args } = await this.parse(BranchEnvStart);
 
     // Connect to daemon
     const client = await this.connectToDaemon();
 
     try {
-      const worktreesService = client.service('worktrees');
+      const branchesService = client.service('branches');
 
-      // Get worktree info
-      const worktree = await worktreesService.get(args.worktreeId);
+      // Get branch info
+      const branch = await branchesService.get(args.branchId);
 
       this.log('');
-      this.log(`Starting environment for ${chalk.cyan(worktree.name)}...`);
-      this.log(`  ID:   ${chalk.dim(shortId(worktree.worktree_id))}`);
-      this.log(`  Path: ${chalk.dim(worktree.path)}`);
+      this.log(`Starting environment for ${chalk.cyan(branch.name)}...`);
+      this.log(`  ID:   ${chalk.dim(shortId(branch.branch_id))}`);
+      this.log(`  Path: ${chalk.dim(branch.path)}`);
       this.log('');
 
       // Call custom startEnvironment method
-      const updated = await worktreesService.startEnvironment(worktree.worktree_id);
+      const updated = await branchesService.startEnvironment(branch.branch_id);
 
       this.log(`${chalk.green('✓')} Environment started`);
 
@@ -57,7 +57,7 @@ export default class WorktreeEnvStart extends BaseCommand {
 
       this.log('');
       this.log(
-        chalk.dim(`Check status with: ${chalk.cyan(`agor worktree env status ${args.worktreeId}`)}`)
+        chalk.dim(`Check status with: ${chalk.cyan(`agor branch env status ${args.branchId}`)}`)
       );
       this.log('');
 

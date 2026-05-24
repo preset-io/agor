@@ -89,7 +89,7 @@ describe('resolveServicesConfig', () => {
   });
 
   it('returns input as-is when no dependencies are violated', () => {
-    const config: DaemonServicesConfig = { core: 'on', users: 'on', worktrees: 'on' };
+    const config: DaemonServicesConfig = { core: 'on', users: 'on', branches: 'on' };
     expect(resolveServicesConfig(config)).toEqual(config);
   });
 
@@ -123,7 +123,7 @@ describe('resolveServicesConfig', () => {
     const config: DaemonServicesConfig = {
       core: 'on',
       users: 'internal',
-      worktrees: 'readonly',
+      branches: 'readonly',
       repos: 'internal',
       boards: 'off',
       cards: 'off',
@@ -132,7 +132,7 @@ describe('resolveServicesConfig', () => {
     };
     const result = resolveServicesConfig(config);
     expect(result.users).toBe('internal');
-    expect(result.worktrees).toBe('readonly');
+    expect(result.branches).toBe('readonly');
     expect(result.boards).toBe('off');
   });
 });

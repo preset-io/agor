@@ -4,7 +4,7 @@
  * Layout matches `docs/designs/env-command-variants.md` §4:
  *   - Top editor: repo-level `environment` (variants + default). Admin-only to edit.
  *   - Variant picker + Render button (members+ via `managed_envs_minimum_role`).
- *   - Bottom editor: rendered snapshot on the worktree (start, stop, ...).
+ *   - Bottom editor: rendered snapshot on the branch (start, stop, ...).
  *     Admin-only to edit; members see read-only.
  *
  * Read/edit exclusivity: only one editor is "active" at a time.
@@ -16,10 +16,10 @@
 
 import {
   type AgorClient,
+  type Branch,
   type Repo,
   type RepoEnvironment,
   validateRepoEnvironment,
-  type Worktree,
 } from '@agor-live/client';
 import * as yaml from '@agor-live/client/yaml';
 import {
@@ -56,19 +56,19 @@ import { EnvironmentLogsModal } from '../../EnvironmentLogsModal';
 const DOCS_URL = 'https://agor.live/guide/environment-configuration';
 
 interface EnvironmentTabProps {
-  worktree: Worktree;
+  branch: Branch;
   repo: Repo;
   client: AgorClient | null;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
-  onUpdateWorktree?: (worktreeId: string, updates: Partial<Worktree>) => void;
+  onUpdateBranch?: (branchId: string, updates: Partial<Branch>) => void;
 }
 
 /**
- * Shape of the bottom editor — rendered commands persisted on the worktree.
+ * Shape of the bottom editor — rendered commands persisted on the branch.
  * Keys match v2 variant field names; `health` maps to `health_check_url` and
  * `app` maps to `app_url` on the wire.
  */
-interface WorktreeRenderedSnapshot {
+interface BranchRenderedSnapshot {
   start?: string;
   stop?: string;
   nuke?: string;
@@ -77,7 +77,7 @@ interface WorktreeRenderedSnapshot {
   app?: string;
 }
 
-function snapshotFromWorktree(wt: Worktree): WorktreeRenderedSnapshot {
+function snapshotFromBranch(wt: Branch): BranchRenderedSnapshot {
   return {
     start: wt.start_command || undefined,
     stop: wt.stop_command || undefined,
@@ -97,11 +97,11 @@ function prettyYaml(value: unknown): string {
 }
 
 export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
-  worktree,
+  branch,
   repo,
   client,
   onUpdateRepo,
-  onUpdateWorktree,
+  onUpdateBranch,
 }) => {
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
@@ -128,10 +128,10 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   );
   const [repoYamlError, setRepoYamlError] = useState<string | null>(null);
 
-  // ----- Worktree snapshot editor state -----
+  // ----- Branch snapshot editor state -----
   const [isEditingSnapshot, setIsEditingSnapshot] = useState(false);
   const [snapshotYamlText, setSnapshotYamlText] = useState(() =>
-    prettyYaml(snapshotFromWorktree(worktree))
+    prettyYaml(snapshotFromBranch(branch))
   );
   const [snapshotYamlError, setSnapshotYamlError] = useState<string | null>(null);
 
@@ -140,48 +140,48 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     ? Object.keys(repo.environment.variants)
     : [];
   const initialVariant =
-    worktree.environment_variant ?? repo.environment?.default ?? availableVariants[0] ?? '';
+    branch.environment_variant ?? repo.environment?.default ?? availableVariants[0] ?? '';
   const [selectedVariant, setSelectedVariant] = useState(initialVariant);
   const [isRendering, setIsRendering] = useState(false);
 
   // ----- Runtime env state (start/stop/logs) -----
-  const [envStatus, setEnvStatus] = useState(worktree.environment_instance?.status || 'stopped');
+  const [envStatus, setEnvStatus] = useState(branch.environment_instance?.status || 'stopped');
   const [lastHealthCheck, setLastHealthCheck] = useState(
-    worktree.environment_instance?.last_health_check
+    branch.environment_instance?.last_health_check
   );
-  const [lastError, setLastError] = useState(worktree.environment_instance?.last_error);
+  const [lastError, setLastError] = useState(branch.environment_instance?.last_error);
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
   const [isNuking, setIsNuking] = useState(false);
   const [logsModalOpen, setLogsModalOpen] = useState(false);
 
-  // Re-sync local editor state when the worktree/repo props change (but not
+  // Re-sync local editor state when the branch/repo props change (but not
   // mid-edit — users shouldn't lose their in-flight text).
-  const prevWorktreeRef = useRef(worktree);
+  const prevBranchRef = useRef(branch);
   const prevRepoRef = useRef(repo);
 
   useEffect(() => {
-    setEnvStatus(worktree.environment_instance?.status || 'stopped');
-    setLastHealthCheck(worktree.environment_instance?.last_health_check);
-    setLastError(worktree.environment_instance?.last_error);
+    setEnvStatus(branch.environment_instance?.status || 'stopped');
+    setLastHealthCheck(branch.environment_instance?.last_health_check);
+    setLastError(branch.environment_instance?.last_error);
 
-    const worktreeChanged = prevWorktreeRef.current !== worktree;
-    prevWorktreeRef.current = worktree;
+    const branchChanged = prevBranchRef.current !== branch;
+    prevBranchRef.current = branch;
 
-    if (worktreeChanged && !isEditingSnapshot) {
-      setSnapshotYamlText(prettyYaml(snapshotFromWorktree(worktree)));
+    if (branchChanged && !isEditingSnapshot) {
+      setSnapshotYamlText(prettyYaml(snapshotFromBranch(branch)));
       setSnapshotYamlError(null);
     }
-    if (worktreeChanged) {
-      // Keep picker aligned with what's actually rendered on the worktree
+    if (branchChanged) {
+      // Keep picker aligned with what's actually rendered on the branch
       // (unless the user is mid-edit via the picker — that's fine, the picker
       // is just a client-side selection until Render is clicked).
-      if (worktree.environment_variant) {
-        setSelectedVariant(worktree.environment_variant);
+      if (branch.environment_variant) {
+        setSelectedVariant(branch.environment_variant);
       }
     }
-  }, [worktree, isEditingSnapshot]);
+  }, [branch, isEditingSnapshot]);
 
   useEffect(() => {
     const repoChanged = prevRepoRef.current !== repo;
@@ -195,24 +195,24 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   // WebSocket listener for real-time environment updates
   useEffect(() => {
     if (!client) return;
-    const handleWorktreeUpdate = (data: unknown) => {
-      const updated = data as Worktree;
-      if (updated.worktree_id === worktree.worktree_id) {
+    const handleBranchUpdate = (data: unknown) => {
+      const updated = data as Branch;
+      if (updated.branch_id === branch.branch_id) {
         setEnvStatus(updated.environment_instance?.status || 'stopped');
         setLastHealthCheck(updated.environment_instance?.last_health_check);
         setLastError(updated.environment_instance?.last_error);
       }
     };
-    client.service('worktrees').on('patched', handleWorktreeUpdate);
-    return () => client.service('worktrees').removeListener('patched', handleWorktreeUpdate);
-  }, [client, worktree.worktree_id]);
+    client.service('branches').on('patched', handleBranchUpdate);
+    return () => client.service('branches').removeListener('patched', handleBranchUpdate);
+  }, [client, branch.branch_id]);
 
   // ----- Runtime handlers (start/stop/restart/nuke) -----
   const handleStart = async () => {
     if (!client) return;
     setIsStarting(true);
     try {
-      await client.service(`worktrees/${worktree.worktree_id}/start`).create({});
+      await client.service(`branches/${branch.branch_id}/start`).create({});
       showSuccess('Environment started successfully');
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Failed to start environment');
@@ -224,7 +224,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     if (!client) return;
     setIsStopping(true);
     try {
-      await client.service(`worktrees/${worktree.worktree_id}/stop`).create({});
+      await client.service(`branches/${branch.branch_id}/stop`).create({});
       showSuccess('Environment stopped successfully');
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Failed to stop environment');
@@ -236,7 +236,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     if (!client) return;
     setIsRestarting(true);
     try {
-      await client.service(`worktrees/${worktree.worktree_id}/restart`).create({});
+      await client.service(`branches/${branch.branch_id}/restart`).create({});
       showSuccess('Environment restarted successfully');
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Failed to restart environment');
@@ -249,7 +249,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     confirmNuke(async () => {
       setIsNuking(true);
       try {
-        await client.service(`worktrees/${worktree.worktree_id}/nuke`).create({});
+        await client.service(`branches/${branch.branch_id}/nuke`).create({});
         showSuccess('Environment nuked successfully');
       } catch (error) {
         showError(error instanceof Error ? error.message : 'Failed to nuke environment');
@@ -260,7 +260,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   };
 
   // ----- Render (variant → snapshot) -----
-  const variantChanged = selectedVariant !== worktree.environment_variant;
+  const variantChanged = selectedVariant !== branch.environment_variant;
   const envIsActive = envStatus === 'running' || envStatus === 'starting';
   const renderDisabled =
     !canTriggerEnv ||
@@ -284,8 +284,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     setIsRendering(true);
     try {
       const updated = (await client
-        .service(`worktrees/${worktree.worktree_id}/render-environment`)
-        .create({ variant: selectedVariant })) as Worktree;
+        .service(`branches/${branch.branch_id}/render-environment`)
+        .create({ variant: selectedVariant })) as Branch;
       showSuccess(
         variantChanged
           ? `Rendered variant "${selectedVariant}" to branch`
@@ -293,7 +293,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       );
       // Let parent update, but also refresh local editor immediately so users
       // see the new snapshot without waiting for a WS push.
-      setSnapshotYamlText(prettyYaml(snapshotFromWorktree(updated)));
+      setSnapshotYamlText(prettyYaml(snapshotFromBranch(updated)));
       setSnapshotYamlError(null);
       if (updated.environment_variant) setSelectedVariant(updated.environment_variant);
     } catch (error) {
@@ -307,7 +307,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     if (renderDisabled) return;
     // If admin has unsaved manual snapshot edits, confirm before discarding them.
     const snapshotDirty =
-      isAdmin && snapshotYamlText.trim() !== prettyYaml(snapshotFromWorktree(worktree)).trim();
+      isAdmin && snapshotYamlText.trim() !== prettyYaml(snapshotFromBranch(branch)).trim();
     if (snapshotDirty) {
       confirm({
         title: 'Discard local snapshot edits?',
@@ -365,7 +365,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   };
 
   // ----- Snapshot editor save/cancel -----
-  const validateSnapshotYaml = (text: string): WorktreeRenderedSnapshot | null => {
+  const validateSnapshotYaml = (text: string): BranchRenderedSnapshot | null => {
     if (!text.trim()) {
       setSnapshotYamlError('Empty — provide at least `start` and `stop`');
       return null;
@@ -381,7 +381,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       setSnapshotYamlError('Expected a YAML mapping (object)');
       return null;
     }
-    const obj = parsed as WorktreeRenderedSnapshot;
+    const obj = parsed as BranchRenderedSnapshot;
     if (!obj.start || typeof obj.start !== 'string') {
       setSnapshotYamlError('`start` is required and must be a string');
       return null;
@@ -395,10 +395,10 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   };
 
   const handleSaveSnapshot = () => {
-    if (!onUpdateWorktree) return;
+    if (!onUpdateBranch) return;
     const parsed = validateSnapshotYaml(snapshotYamlText);
     if (!parsed) return;
-    onUpdateWorktree(worktree.worktree_id, {
+    onUpdateBranch(branch.branch_id, {
       start_command: parsed.start || undefined,
       stop_command: parsed.stop || undefined,
       nuke_command: parsed.nuke || undefined,
@@ -410,7 +410,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   };
 
   const handleCancelSnapshot = () => {
-    setSnapshotYamlText(prettyYaml(snapshotFromWorktree(worktree)));
+    setSnapshotYamlText(prettyYaml(snapshotFromBranch(branch)));
     setSnapshotYamlError(null);
     setIsEditingSnapshot(false);
   };
@@ -449,7 +449,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         try {
           const updated = (await client
             .service(`repos/${repo.repo_id}/import-agor-yml`)
-            .create({ worktree_id: worktree.worktree_id })) as Repo;
+            .create({ branch_id: branch.branch_id })) as Repo;
           if (updated.environment) {
             setRepoYamlText(prettyYaml(updated.environment));
           }
@@ -484,7 +484,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         try {
           await client
             .service(`repos/${repo.repo_id}/export-agor-yml`)
-            .create({ worktree_id: worktree.worktree_id });
+            .create({ branch_id: branch.branch_id });
           showSuccess('Environment configuration exported to .agor.yml');
         } catch (error) {
           showError(error instanceof Error ? error.message : 'Failed to export .agor.yml');
@@ -494,7 +494,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   };
 
   // ----- Derived UI state -----
-  const inferredState = getEnvironmentState(worktree.environment_instance);
+  const inferredState = getEnvironmentState(branch.environment_instance);
   const hasEnvironmentConfig = !!repo.environment;
   const noVariantsConfigured = !hasEnvironmentConfig;
 
@@ -631,7 +631,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
               >
                 Restart
               </Button>
-              {worktree.nuke_command && (
+              {branch.nuke_command && (
                 <Button
                   size="small"
                   icon={isNuking ? <LoadingOutlined /> : <FireOutlined />}
@@ -651,9 +651,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 size="small"
                 icon={<FileTextOutlined />}
                 onClick={() => setLogsModalOpen(true)}
-                disabled={!worktree.logs_command}
+                disabled={!branch.logs_command}
                 title={
-                  !worktree.logs_command
+                  !branch.logs_command
                     ? 'Configure a logs command in the variant to enable'
                     : undefined
                 }
@@ -873,16 +873,16 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
           </div>
         </Card>
 
-        {/* ====== Worktree snapshot editor ====== */}
+        {/* ====== Branch snapshot editor ====== */}
         <Card
           size="small"
           title={
             <Space>
               <PlayCircleOutlined />
-              <span>Branch environment: {worktree.name}</span>
-              {worktree.environment_variant && (
+              <span>Branch environment: {branch.name}</span>
+              {branch.environment_variant && (
                 <Tag color="blue" style={{ fontSize: 10 }}>
-                  rendered from: {worktree.environment_variant}
+                  rendered from: {branch.environment_variant}
                 </Tag>
               )}
             </Space>
@@ -952,7 +952,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       <EnvironmentLogsModal
         open={logsModalOpen}
         onClose={() => setLogsModalOpen(false)}
-        worktree={worktree}
+        branch={branch}
         client={client}
       />
     </div>

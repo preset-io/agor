@@ -34,6 +34,7 @@ export type {
   AgorClient,
   AgorService,
   BoardsService,
+  BranchesService,
   MessagesService,
   ReposCloneService,
   ReposLocalService,
@@ -41,7 +42,6 @@ export type {
   ServiceTypes,
   SessionsService,
   TasksService,
-  WorktreesService,
 } from '@agor/core/client';
 
 export type { PaginatedResult } from '@agor/core/types';

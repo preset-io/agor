@@ -2,7 +2,7 @@
  * Executor Spawning Utility
  *
  * Provides a single function to spawn the executor process for all commands.
- * Used by daemon services (repos, worktrees, terminals, tasks) to delegate
+ * Used by daemon services (repos, branches, terminals, tasks) to delegate
  * operations to the executor for proper Unix isolation.
  *
  * DESIGN PHILOSOPHY:
@@ -71,7 +71,7 @@ export interface ExecutorTemplateVariables {
   unix_user_uid?: number;
   unix_user_gid?: number;
   session_id?: string;
-  worktree_id?: string;
+  branch_id?: string;
 }
 
 export interface SpawnExecutorOptions {
@@ -115,7 +115,7 @@ export function substituteTemplateVariables(
     unix_user_uid: variables.unix_user_uid,
     unix_user_gid: variables.unix_user_gid,
     session_id: variables.session_id,
-    worktree_id: variables.worktree_id,
+    branch_id: variables.branch_id,
   };
 
   for (const [key, value] of Object.entries(substitutions)) {
@@ -291,14 +291,14 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   // operators end up debugging the wrong layer. The most common cause is
   // running with a persistent database while `$HOME` is on an ephemeral
   // volume (e.g. Kubernetes emptyDir): on pod redeploy the DB still
-  // references worktree/repo paths that no longer exist on disk. We
+  // references branch/repo paths that no longer exist on disk. We
   // surface that clearly here; recovery is left to the operator
-  // (restore the volume, or use the worktree/repo lifecycle commands to
+  // (restore the volume, or use the branch/repo lifecycle commands to
   // remove the orphan rows).
   if (cwd && !existsSync(cwd)) {
     console.error(
       `${logPrefix} Refusing to spawn: cwd does not exist on disk: ${cwd}. ` +
-        `This usually means the worktree or repo directory was deleted ` +
+        `This usually means the branch or repo directory was deleted ` +
         `out-of-band — for example a Kubernetes pod redeploy with an ` +
         `ephemeral $HOME but a persistent database. Verify that the volume ` +
         `backing $HOME persists across restarts. See issue #1109.`

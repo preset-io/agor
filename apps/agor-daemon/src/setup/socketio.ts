@@ -38,7 +38,7 @@ import type { CorsOrigin } from './cors.js';
  *
  * Service accounts (the executor) are identified via `user._isServiceAccount`,
  * which is the canonical marker set by ServiceJWTStrategy and consumed by
- * every other daemon authz path (worktree-authorization.ts, register-hooks.ts,
+ * every other daemon authz path (branch-authorization.ts, register-hooks.ts,
  * utils/authorization.ts). We extend FeathersJS's `User` type locally to
  * include it — see `AuthenticatedUser` in `@agor/core/types/feathers.ts`.
  *
@@ -434,7 +434,7 @@ export function createSocketIOConfig(
       //     - terminal:tab      requires service auth
       //                         (the daemon ALSO emits terminal:tab via
       //                          io.to(...) directly from terminals.ts after
-      //                          enforcing worktree RBAC at the HTTP layer;
+      //                          enforcing branch RBAC at the HTTP layer;
       //                          server-side emits never hit this handler.)
       //
       //   join / leave:
@@ -443,11 +443,11 @@ export function createSocketIOConfig(
       //       for service sockets). This stops a member from joining another
       //       user's terminal channel and harvesting their PTY output.
       //
-      //   Worktree RBAC for opening a terminal against a specific worktree
-      //   is enforced at the HTTP `terminals.create({ worktreeId })` entry
+      //   Branch RBAC for opening a terminal against a specific branch
+      //   is enforced at the HTTP `terminals.create({ branchId })` entry
       //   point (see services/terminals.ts ~L194). Browsers cannot bypass
       //   that gate from the WS side, because creating a Zellij tab in an
-      //   arbitrary worktree requires terminal:tab — and only service-token
+      //   arbitrary branch requires terminal:tab — and only service-token
       //   sockets are allowed to emit terminal:tab here.
       //
       //   `webTerminalEnabled === false` short-circuits ALL of the above —
@@ -604,10 +604,10 @@ export function createSocketIOConfig(
       });
 
       // Route terminal tab commands. The daemon emits this server-side via
-      // io.to() (terminals.ts) AFTER enforcing worktree RBAC on the HTTP
+      // io.to() (terminals.ts) AFTER enforcing branch RBAC on the HTTP
       // create() path. We must NOT let browsers emit it directly — doing so
-      // would let a user with 'view'-only on a worktree open a Zellij tab
-      // (and a shell) inside that worktree, bypassing the HTTP RBAC gate.
+      // would let a user with 'view'-only on a branch open a Zellij tab
+      // (and a shell) inside that branch, bypassing the HTTP RBAC gate.
       socket.on(
         'terminal:tab',
         (data: { userId: string; action: string; tabName: string; cwd?: string }) => {

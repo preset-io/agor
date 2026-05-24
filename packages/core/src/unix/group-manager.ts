@@ -1,8 +1,8 @@
 /**
- * Unix Group Management for Worktree and Repo Isolation
+ * Unix Group Management for Branch and Repo Isolation
  *
  * Provides utilities for managing:
- * - Worktree Unix groups (agor_wt_<short-id>) - for worktree directory access
+ * - Branch Unix groups (agor_wt_<short-id>) - for branch directory access
  * - Repo Unix groups (agor_rp_<short-id>) - for repo-root traversal and .git access
  *
  * These functions are designed to be called via `sudo agor admin` commands
@@ -12,31 +12,31 @@
  */
 
 import { toShortId } from '../lib/ids.js';
-import type { RepoID, UUID, WorktreeID } from '../types/index.js';
+import type { BranchID, RepoID, UUID } from '../types/index.js';
 import { UNIX_NAME_SHORT_ID_LENGTH } from './short-id-naming.js';
 
 /**
- * Generate Unix group name for a worktree
+ * Generate Unix group name for a branch
  *
  * Format: agor_wt_<short-id>
  * Example: agor_wt_03b62447
  *
- * @param worktreeId - Full worktree UUID
+ * @param branchId - Full branch UUID
  * @returns Unix group name (e.g., 'agor_wt_03b62447')
  */
-export function generateWorktreeGroupName(worktreeId: WorktreeID): string {
-  return `agor_wt_${toShortId(worktreeId as UUID, UNIX_NAME_SHORT_ID_LENGTH)}`;
+export function generateBranchGroupName(branchId: BranchID): string {
+  return `agor_wt_${toShortId(branchId as UUID, UNIX_NAME_SHORT_ID_LENGTH)}`;
 }
 
 /**
- * Parse worktree ID from Unix group name
+ * Parse branch ID from Unix group name
  *
  * Extracts the short ID from a group name like 'agor_wt_03b62447'
  *
  * @param groupName - Unix group name
- * @returns Short worktree ID (8 chars) or null if invalid format
+ * @returns Short branch ID (8 chars) or null if invalid format
  */
-export function parseWorktreeGroupName(groupName: string): string | null {
+export function parseBranchGroupName(groupName: string): string | null {
   const match = groupName.match(/^agor_wt_([0-9a-f]{8})$/);
   return match ? match[1] : null;
 }
@@ -45,9 +45,9 @@ export function parseWorktreeGroupName(groupName: string): string | null {
  * Validate Unix group name format
  *
  * @param groupName - Group name to validate
- * @returns true if valid worktree group name
+ * @returns true if valid branch group name
  */
-export function isValidWorktreeGroupName(groupName: string): boolean {
+export function isValidBranchGroupName(groupName: string): boolean {
   return /^agor_wt_[0-9a-f]{8}$/.test(groupName);
 }
 
@@ -278,7 +278,7 @@ export const UnixGroupCommands = {
    *
    * Grants a specific user rwX access to all existing files/dirs and sets
    * default ACLs so new files inherit the same access. This is used to
-   * ensure the daemon user can always access worktree files, even when
+   * ensure the daemon user can always access branch files, even when
    * the daemon process has stale supplementary groups (groups added after
    * process startup are not picked up by the running process).
    *
@@ -308,7 +308,7 @@ export const UnixGroupCommands = {
 } as const;
 
 /**
- * Permission modes for worktree directories
+ * Permission modes for branch directories
  *
  * These map to the 'others_fs_access' RBAC setting.
  *
@@ -321,7 +321,7 @@ export const UnixGroupCommands = {
  *
  * The setgid bit (2) ensures new files inherit the group.
  */
-export const WorktreePermissionModes = {
+export const BranchPermissionModes = {
   /** No access for non-owners (permission denied) */
   none: '2770', // drwxrws--- (owner + group full access, others nothing, setgid)
 
@@ -333,22 +333,20 @@ export const WorktreePermissionModes = {
 } as const;
 
 /**
- * Get permission mode for a worktree based on others_fs_access setting
+ * Get permission mode for a branch based on others_fs_access setting
  *
  * @param othersAccess - Access level ('none' | 'read' | 'write')
  * @returns Permission mode string (e.g., '2775')
  */
-export function getWorktreePermissionMode(
-  othersAccess: 'none' | 'read' | 'write' = 'read'
-): string {
-  return WorktreePermissionModes[othersAccess];
+export function getBranchPermissionMode(othersAccess: 'none' | 'read' | 'write' = 'read'): string {
+  return BranchPermissionModes[othersAccess];
 }
 
 /**
  * Permission mode for repo directories
  *
  * Applied to repo Unix-group-managed paths (repo root traversal and `.git`).
- * Users who have access to ANY worktree in the repo get added to the repo
+ * Users who have access to ANY branch in the repo get added to the repo
  * group to enable git operations (commit, push, etc).
  *
  * Mode: 2770 (drwxrws---)

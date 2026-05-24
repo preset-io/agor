@@ -1,4 +1,4 @@
-import type { BoardID, CommentID, MessageID, SessionID, TaskID, UserID, WorktreeID } from './id';
+import type { BoardID, BranchID, CommentID, MessageID, SessionID, TaskID, UserID } from './id';
 
 /**
  * Individual reaction on a comment
@@ -20,7 +20,7 @@ export type ReactionSummary = Record<string, string[]>;
  *
  * Flexible attachment strategy supporting:
  * - Board-level: General conversations (no attachments)
- * - Object-level: Attached to sessions, tasks, messages, or worktrees
+ * - Object-level: Attached to sessions, tasks, messages, or branches
  * - Spatial: Positioned on canvas (absolute or relative to objects)
  *
  * Threading model: Figma-style 2-layer (thread roots + replies)
@@ -56,8 +56,8 @@ export interface BoardComment {
   /** Optional: Attached to message */
   message_id?: MessageID;
 
-  /** Optional: Attached to worktree */
-  worktree_id?: WorktreeID;
+  /** Optional: Attached to branch */
+  branch_id?: BranchID;
 
   // ============================================================================
   // Threading & Metadata
@@ -87,12 +87,12 @@ export interface BoardComment {
   position?: {
     /** Absolute board coordinates (React Flow coordinates) */
     absolute?: { x: number; y: number };
-    /** OR relative to session/zone/worktree (follows parent when it moves) */
+    /** OR relative to session/zone/branch (follows parent when it moves) */
     relative?: {
-      /** Parent object ID - can be session_id, zone object ID, or worktree_id */
+      /** Parent object ID - can be session_id, zone object ID, or branch_id */
       parent_id: string;
       /** Type of parent for proper lookup */
-      parent_type: 'session' | 'zone' | 'worktree';
+      parent_type: 'session' | 'zone' | 'branch';
       /** Offset from parent's top-left corner */
       offset_x: number;
       offset_y: number;
@@ -122,8 +122,8 @@ export interface BoardComment {
  * 2. TASK - Attached to task
  * 3. SESSION_SPATIAL - Spatial pin on session (relative positioning)
  * 4. SESSION - Attached to session
- * 5. WORKTREE_SPATIAL - Spatial pin on worktree (relative positioning)
- * 6. WORKTREE - Attached to worktree
+ * 5. BRANCH_SPATIAL - Spatial pin on branch (relative positioning)
+ * 6. BRANCH - Attached to branch
  * 7. ZONE_SPATIAL - Spatial pin on zone (relative positioning)
  * 8. BOARD_SPATIAL - Spatial pin on board (absolute positioning)
  * 9. BOARD - General board conversation
@@ -133,8 +133,8 @@ export const CommentAttachmentType = {
   TASK: 'task',
   SESSION_SPATIAL: 'session-spatial',
   SESSION: 'session',
-  WORKTREE_SPATIAL: 'worktree-spatial',
-  WORKTREE: 'worktree',
+  BRANCH_SPATIAL: 'branch-spatial',
+  BRANCH: 'branch',
   ZONE_SPATIAL: 'zone-spatial',
   BOARD_SPATIAL: 'board-spatial',
   BOARD: 'board',
@@ -156,8 +156,8 @@ export function getCommentAttachmentType(comment: BoardComment): CommentAttachme
     if (comment.position.relative.parent_type === 'session') {
       return CommentAttachmentType.SESSION_SPATIAL;
     }
-    if (comment.position.relative.parent_type === 'worktree') {
-      return CommentAttachmentType.WORKTREE_SPATIAL;
+    if (comment.position.relative.parent_type === 'branch') {
+      return CommentAttachmentType.BRANCH_SPATIAL;
     }
     if (comment.position.relative.parent_type === 'zone') {
       return CommentAttachmentType.ZONE_SPATIAL;
@@ -166,7 +166,7 @@ export function getCommentAttachmentType(comment: BoardComment): CommentAttachme
 
   // FK-based attachments
   if (comment.session_id) return CommentAttachmentType.SESSION;
-  if (comment.worktree_id) return CommentAttachmentType.WORKTREE;
+  if (comment.branch_id) return CommentAttachmentType.BRANCH;
 
   // Absolute positioning or board-level
   if (comment.position?.absolute) return CommentAttachmentType.BOARD_SPATIAL;

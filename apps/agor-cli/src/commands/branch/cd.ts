@@ -1,11 +1,11 @@
 /**
- * `agor worktree cd <worktree-id>` - Navigate to a worktree
+ * `agor branch cd <branch-id>` - Navigate to a branch
  *
- * Opens a new shell in the specified worktree directory.
+ * Opens a new shell in the specified branch directory.
  * Type `exit` to return to your original shell.
  *
  * Use --print flag to output the path instead (for shell functions):
- *   wtcd() { cd "$(agor worktree cd --print "$1")"; }
+ *   wtcd() { cd "$(agor branch cd --print "$1")"; }
  */
 
 import { Args, Flags } from '@oclif/core';
@@ -13,8 +13,8 @@ import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
 import { spawnInteractiveShell } from '../../utils/shell';
 
-export default class WorktreeCd extends BaseCommand {
-  static description = 'Navigate to a worktree (opens a new shell)';
+export default class BranchCd extends BaseCommand {
+  static description = 'Navigate to a branch (opens a new shell)';
 
   static examples = [
     '<%= config.bin %> <%= command.id %> abc123',
@@ -24,12 +24,12 @@ export default class WorktreeCd extends BaseCommand {
     '<%= config.bin %> <%= command.id %> --print abc123',
     '',
     '# Shell function for cd without spawning:',
-    'wtcd() { cd "$(agor worktree cd --print "$1")"; }',
+    'wtcd() { cd "$(agor branch cd --print "$1")"; }',
   ];
 
   static args = {
-    worktreeId: Args.string({
-      description: 'Worktree ID (full UUID or short ID)',
+    branchId: Args.string({
+      description: 'Branch ID (full UUID or short ID)',
       required: true,
     }),
   };
@@ -42,20 +42,20 @@ export default class WorktreeCd extends BaseCommand {
   };
 
   async run(): Promise<void> {
-    const { args, flags } = await this.parse(WorktreeCd);
+    const { args, flags } = await this.parse(BranchCd);
 
     // Connect to daemon
     const client = await this.connectToDaemon();
 
     try {
-      const worktreesService = client.service('worktrees');
+      const branchesService = client.service('branches');
 
-      // Get worktree info
-      const worktree = await worktreesService.get(args.worktreeId);
+      // Get branch info
+      const branch = await branchesService.get(args.branchId);
 
       // If --print flag is set, just print the path
       if (flags.print) {
-        this.log(worktree.path);
+        this.log(branch.path);
         await this.cleanupClient(client);
         process.exit(0);
         return;
@@ -66,21 +66,21 @@ export default class WorktreeCd extends BaseCommand {
 
       // Display info message
       this.log('');
-      this.log(`${chalk.cyan('→')} Opening shell in worktree: ${chalk.bold(worktree.name)}`);
-      this.log(`${chalk.dim('  Path:')} ${worktree.path}`);
+      this.log(`${chalk.cyan('→')} Opening shell in branch: ${chalk.bold(branch.name)}`);
+      this.log(`${chalk.dim('  Path:')} ${branch.path}`);
       this.log(`${chalk.dim('  Type')} ${chalk.cyan('exit')} ${chalk.dim('to return')}`);
       this.log('');
 
-      // Spawn interactive shell in the worktree directory
+      // Spawn interactive shell in the branch directory
       spawnInteractiveShell({
-        cwd: worktree.path,
+        cwd: branch.path,
         env: {
-          AGOR_WORKTREE_ID: worktree.worktree_id,
-          AGOR_WORKTREE_NAME: worktree.name,
+          AGOR_BRANCH_ID: branch.branch_id,
+          AGOR_BRANCH_NAME: branch.name,
         },
         onExit: (code) => {
           this.log('');
-          this.log(`${chalk.dim('← Exited worktree shell')}`);
+          this.log(`${chalk.dim('← Exited branch shell')}`);
           process.exit(code || 0);
         },
         onError: (error) => {
@@ -89,9 +89,7 @@ export default class WorktreeCd extends BaseCommand {
       });
     } catch (error) {
       await this.cleanupClient(client);
-      this.error(
-        `Failed to get worktree: ${error instanceof Error ? error.message : String(error)}`
-      );
+      this.error(`Failed to get branch: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }

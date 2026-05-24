@@ -12,13 +12,13 @@
  * `createModalOpen=true` session.
  */
 
-import type { Board, Repo, Worktree } from '@agor-live/client';
+import type { Board, Branch, Repo } from '@agor-live/client';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 import { BranchesTable } from './BranchesTable';
 
-/** WorktreesTable uses useAppNavigation → useNavigate under the hood,
+/** BranchesTable uses useAppNavigation → useNavigate under the hood,
  *  so the test wraps in a Router. It no longer needs the AppLiveDataProvider
  *  (table reads navigation maps from its props, not from context). */
 function renderWithProviders(ui: React.ReactElement) {
@@ -43,16 +43,16 @@ describe('BranchesTable — source-branch preservation', { timeout: 10_000 }, ()
     const repo = makeRepo({ default_branch: 'main' });
     const repoById = new Map([[repo.repo_id, repo]]);
     const boardById = new Map<string, Board>();
-    const worktreeById = new Map<string, Worktree>();
-    const sessionsByWorktree = new Map<string, never[]>();
+    const branchById = new Map<string, Branch>();
+    const sessionsByBranch = new Map<string, never[]>();
 
     const { rerender } = renderWithProviders(
       <BranchesTable
         client={null}
-        worktreeById={worktreeById}
+        branchById={branchById}
         repoById={repoById}
         boardById={boardById}
-        sessionsByWorktree={sessionsByWorktree as Map<string, never[]>}
+        sessionsByBranch={sessionsByBranch as Map<string, never[]>}
       />
     );
 
@@ -73,10 +73,10 @@ describe('BranchesTable — source-branch preservation', { timeout: 10_000 }, ()
       <MemoryRouter>
         <BranchesTable
           client={null}
-          worktreeById={worktreeById}
+          branchById={branchById}
           repoById={new Map([[repo.repo_id, repo]])}
           boardById={new Map<string, Board>()}
-          sessionsByWorktree={sessionsByWorktree as Map<string, never[]>}
+          sessionsByBranch={sessionsByBranch as Map<string, never[]>}
         />
       </MemoryRouter>
     );

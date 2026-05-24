@@ -39,6 +39,6 @@
     "src/**/*.test.ts",
     "src/mocks/**",
     "src/components/SettingsModal/ContextTable.tsx",
-    "src/components/WorktreeModal/tabs/ConceptsTab.tsx"
+    "src/components/BranchModal/tabs/ConceptsTab.tsx"
   ]
 }

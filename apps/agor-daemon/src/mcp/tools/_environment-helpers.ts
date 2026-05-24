@@ -5,7 +5,7 @@ import type { Repo } from '@agor/core/types';
  *
  * Throws with a helpful error message that lists the available variant names
  * (so the caller doesn't have to guess from documentation). Used by both
- * `agor_environment_set` and `agor_worktrees_create` to keep the error
+ * `agor_environment_set` and `agor_branches_create` to keep the error
  * shape consistent across the variant-aware MCP tools.
  */
 export function assertValidVariant(repo: Repo, variant: string): void {

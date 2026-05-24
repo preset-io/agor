@@ -87,8 +87,8 @@ interface TaskBlockProps {
     allow: boolean,
     scope: PermissionScope
   ) => void;
-  worktreeName?: string;
-  scheduledFromWorktree?: boolean;
+  branchName?: string;
+  scheduledFromBranch?: boolean;
   scheduledRunAt?: number;
   streamingMessages?: Map<MessageID, StreamingMessageState>;
   taskMessages: Message[];
@@ -359,8 +359,8 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     onExpandChange,
     sessionId,
     onPermissionDecision,
-    worktreeName,
-    scheduledFromWorktree,
+    branchName,
+    scheduledFromBranch,
     scheduledRunAt,
     streamingMessages,
     taskMessages,
@@ -499,7 +499,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               }
               durationMs={task.duration_ms}
             />
-            {scheduledFromWorktree && scheduledRunAt && (
+            {scheduledFromBranch && scheduledRunAt && (
               <ScheduledRunPill scheduledRunAt={scheduledRunAt} />
             )}
             {task.created_by && (
@@ -540,7 +540,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 <GitStatePill
                   branch={task.git_state.ref_at_start}
                   sha={task.git_state.sha_at_start}
-                  worktreeName={worktreeName}
+                  branchName={branchName}
                   style={{ fontSize: 11 }}
                 />
                 {task.git_state.sha_at_end &&
@@ -552,7 +552,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                       </Typography.Text>
                       <GitStatePill
                         sha={task.git_state.sha_at_end}
-                        worktreeName={worktreeName}
+                        branchName={branchName}
                         showDirtyIndicator={true}
                         style={{ fontSize: 11 }}
                       />

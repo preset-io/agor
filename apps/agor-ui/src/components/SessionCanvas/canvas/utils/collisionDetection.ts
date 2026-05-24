@@ -1,7 +1,7 @@
 /**
  * Utilities for detecting node collisions on canvas
  *
- * Provides point-in-rect collision detection for zones and worktrees,
+ * Provides point-in-rect collision detection for zones and branches,
  * using measured DOM dimensions and absolute positions.
  */
 
@@ -12,26 +12,26 @@ import { getAbsoluteNodePosition } from './nodePositionUtils';
 import type { ReactFlowNode } from './reactFlowTypes';
 
 export interface CollisionResult {
-  worktreeNode?: Node;
+  branchNode?: Node;
   zoneNode?: Node;
 }
 
 /**
- * Find zones/worktrees that a point intersects with
+ * Find zones/branches that a point intersects with
  *
  * Uses manual point-in-rect collision detection because React Flow's
  * getIntersectingNodes() doesn't work well with dynamically sized nodes.
  *
- * Priority: worktree > zone (worktrees render on top of zones)
+ * Priority: branch > zone (branches render on top of zones)
  *
  * @param point - Canvas coordinates to test
  * @param allNodes - All nodes in the canvas
- * @returns Object with worktreeNode and/or zoneNode if intersecting
+ * @returns Object with branchNode and/or zoneNode if intersecting
  *
  * @example
  * const result = findIntersectingObjects({ x: 100, y: 200 }, nodes);
- * if (result.worktreeNode) {
- *   console.log('Dropped on worktree!');
+ * if (result.branchNode) {
+ *   console.log('Dropped on branch!');
  * } else if (result.zoneNode) {
  *   console.log('Dropped on zone!');
  * }
@@ -40,9 +40,9 @@ export function findIntersectingObjects(
   point: { x: number; y: number },
   allNodes: Node[]
 ): CollisionResult {
-  // Find all zones/worktrees that contain the point
+  // Find all zones/branches that contain the point
   const intersectingNodes = allNodes.filter((node) => {
-    if (node.type !== 'zone' && node.type !== 'worktreeNode') return false;
+    if (node.type !== 'zone' && node.type !== 'branchNode') return false;
 
     // Use measured dimensions (React Flow calculates from DOM)
     // Fall back to width/height props if not yet measured
@@ -68,9 +68,9 @@ export function findIntersectingObjects(
     );
   });
 
-  // Priority: worktree > zone (worktrees are rendered on top)
+  // Priority: branch > zone (branches are rendered on top)
   return {
-    worktreeNode: intersectingNodes.find((n) => n.type === 'worktreeNode'),
+    branchNode: intersectingNodes.find((n) => n.type === 'branchNode'),
     zoneNode: intersectingNodes.find((n) => n.type === 'zone'),
   };
 }

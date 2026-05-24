@@ -15,21 +15,21 @@ import { BranchTab } from './tabs/BranchTab';
 import type { RepoTabResult } from './tabs/RepoTab';
 import { RepoTab } from './tabs/RepoTab';
 
-type ActiveTab = 'worktree' | 'assistant' | 'board' | 'repository';
+type ActiveTab = 'branch' | 'assistant' | 'board' | 'repository';
 
 const INITIAL_VALIDITY: Record<ActiveTab, boolean> = {
-  worktree: false,
+  branch: false,
   assistant: false,
   board: false,
   repository: false,
 };
 
 const PURPOSE_TEXT: Record<ActiveTab, React.ReactNode> = {
-  worktree: (
+  branch: (
     <>
       A branch (built on{' '}
-      <a href="https://git-scm.com/docs/git-worktree" target="_blank" rel="noopener noreferrer">
-        git worktrees
+      <a href="https://git-scm.com/docs/git-branch" target="_blank" rel="noopener noreferrer">
+        git branches
       </a>
       ) is essentially a place in the filesystem representing an isolated development branch. This
       is where one or more coding sessions take place. In Agor, they're generally ephemeral and
@@ -45,7 +45,7 @@ const PURPOSE_TEXT: Record<ActiveTab, React.ReactNode> = {
 };
 
 const ACTION_LABELS: Record<ActiveTab, string> = {
-  worktree: 'Create Branch',
+  branch: 'Create Branch',
   assistant: 'Create Assistant',
   board: 'Create Board',
   repository: 'Add Repository',
@@ -59,7 +59,7 @@ export interface CreateDialogProps {
   currentBoardId?: string;
   defaultPosition?: { x: number; y: number };
   defaultTab?: ActiveTab;
-  onCreateWorktree: (config: BranchTabConfig) => void;
+  onCreateBranch: (config: BranchTabConfig) => void;
   onCreateBoard: (board: Partial<Board>) => void;
   onCreateRepo: (data: CreateRepoRequest) => void | Promise<void>;
   onCreateLocalRepo: (data: CreateLocalRepoRequest) => void | Promise<void>;
@@ -73,8 +73,8 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   boardById,
   currentBoardId,
   defaultPosition,
-  defaultTab = 'worktree',
-  onCreateWorktree,
+  defaultTab = 'branch',
+  onCreateBranch,
   onCreateBoard,
   onCreateRepo,
   onCreateLocalRepo,
@@ -89,7 +89,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Form submit refs — each tab exposes a submit function
-  const worktreeFormRef = useRef<(() => Promise<BranchTabConfig | null>) | null>(null);
+  const branchFormRef = useRef<(() => Promise<BranchTabConfig | null>) | null>(null);
   const boardFormRef = useRef<(() => Promise<Partial<Board> | null>) | null>(null);
   const repoFormRef = useRef<(() => Promise<RepoTabResult | null>) | null>(null);
   const assistantFormRef = useRef<(() => Promise<AssistantTabResult | null>) | null>(null);
@@ -106,10 +106,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
     setValidByTab((prev) => (prev[tab] === valid ? prev : { ...prev, [tab]: valid }));
   }, []);
 
-  const handleWorktreeValid = useCallback(
-    (v: boolean) => setTabValid('worktree', v),
-    [setTabValid]
-  );
+  const handleBranchValid = useCallback((v: boolean) => setTabValid('branch', v), [setTabValid]);
   const handleAssistantValid = useCallback(
     (v: boolean) => setTabValid('assistant', v),
     [setTabValid]
@@ -128,10 +125,10 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
     setIsSubmitting(true);
     try {
       switch (activeTab) {
-        case 'worktree': {
-          const config = await worktreeFormRef.current?.();
+        case 'branch': {
+          const config = await branchFormRef.current?.();
           if (config) {
-            onCreateWorktree(config);
+            onCreateBranch(config);
             onClose();
           }
           break;
@@ -179,7 +176,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
 
   const tabItems = [
     {
-      key: 'worktree',
+      key: 'branch',
       label: (
         <span>
           <BranchesOutlined style={{ marginRight: 8 }} />
@@ -191,15 +188,15 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
           <Alert
             type="info"
             showIcon
-            description={PURPOSE_TEXT.worktree}
+            description={PURPOSE_TEXT.branch}
             style={{ marginBottom: 16 }}
           />
           <BranchTab
             repoById={repoById}
             currentBoardId={currentBoardId}
             defaultPosition={defaultPosition}
-            onValidityChange={handleWorktreeValid}
-            formRef={worktreeFormRef}
+            onValidityChange={handleBranchValid}
+            formRef={branchFormRef}
           />
         </div>
       ),

@@ -126,13 +126,13 @@ function renderResult(result: SearchResultItem): {
         icon: TYPE_CHIP_ICONS.session,
         title,
         tag: result.item.agentic_tool,
-        secondary: result.parentWorktree ? `in ${result.parentWorktree.name}` : undefined,
+        secondary: result.parentBranch ? `in ${result.parentBranch.name}` : undefined,
         time: safeRelativeTime(result.item.last_updated),
       };
     }
-    case 'worktree': {
+    case 'branch': {
       return {
-        icon: TYPE_CHIP_ICONS.worktree,
+        icon: TYPE_CHIP_ICONS.branch,
         title: result.item.name,
         tag: result.item.ref,
         time: safeRelativeTime(result.item.updated_at),
@@ -151,7 +151,7 @@ function renderResult(result: SearchResultItem): {
         icon: TYPE_CHIP_ICONS.artifact,
         title: result.item.name,
         tag: result.item.template,
-        secondary: result.parentWorktree ? `in ${result.parentWorktree.name}` : undefined,
+        secondary: result.parentBranch ? `in ${result.parentBranch.name}` : undefined,
         time: safeRelativeTime(result.item.updated_at),
       };
     }

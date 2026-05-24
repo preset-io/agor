@@ -12,7 +12,7 @@
  *     transport, not just on HTTP.
  *   - Only service-token sockets (executor) may emit terminal:output /
  *     terminal:exit / terminal:tab — otherwise a member could spoof output
- *     into another user's terminal or open a Zellij tab in a worktree
+ *     into another user's terminal or open a Zellij tab in a branch
  *     they don't have RBAC on.
  *   - terminal:input must be rate-limited per-socket.
  *

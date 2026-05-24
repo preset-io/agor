@@ -7,10 +7,10 @@ echo "🚀 Starting Agor development environment..."
 # No pnpm install needed at runtime - this is the key to fast startups!
 echo "✅ Using pre-built dependencies from Docker image"
 
-# Mark /app as a safe git directory for non-worktree clones (where the
+# Mark /app as a safe git directory for non-branch clones (where the
 # bind-mounted source tree is owned by the host UID and trips git's
 # "dubious ownership" guard inside the container). Harmless in Agor's
-# worktree-managed setup, where /app/.git is a FILE pointing to a host-only
+# branch-managed setup, where /app/.git is a FILE pointing to a host-only
 # gitdir that can't be resolved from inside the container at all — those
 # setups feed AGOR_BUILD_SHA via env from .agor.yml's start command instead.
 git config --global --add safe.directory /app 2>/dev/null || true
@@ -157,15 +157,15 @@ fi
 if [ "$AGOR_SET_RBAC_FLAG" = "true" ] || [ -n "$AGOR_SET_UNIX_MODE" ]; then
   echo "🔐 Configuring RBAC settings..."
 
-  # Enable worktree RBAC if flag is set
+  # Enable branch RBAC if flag is set
   if [ "$AGOR_SET_RBAC_FLAG" = "true" ]; then
-    if ! grep -q "worktree_rbac" /home/agor/.agor/config.yaml 2>/dev/null; then
-      sed -i '/^execution:/a\  worktree_rbac: true' /home/agor/.agor/config.yaml
-      echo "✅ Worktree RBAC enabled"
+    if ! grep -q "branch_rbac" /home/agor/.agor/config.yaml 2>/dev/null; then
+      sed -i '/^execution:/a\  branch_rbac: true' /home/agor/.agor/config.yaml
+      echo "✅ Branch RBAC enabled"
     else
       # Update existing value to true
-      sed -i 's/worktree_rbac:.*/worktree_rbac: true/' /home/agor/.agor/config.yaml
-      echo "✅ Worktree RBAC updated to enabled"
+      sed -i 's/branch_rbac:.*/branch_rbac: true/' /home/agor/.agor/config.yaml
+      echo "✅ Branch RBAC updated to enabled"
     fi
   fi
 
@@ -235,7 +235,7 @@ fi
 
 # Create RBAC test users if enabled (PostgreSQL + RBAC mode)
 if [ "$CREATE_RBAC_TEST_USERS" = "true" ]; then
-  echo "👥 Creating RBAC test users and worktrees..."
+  echo "👥 Creating RBAC test users and branches..."
   pnpm tsx scripts/create-rbac-test-users.ts
 fi
 

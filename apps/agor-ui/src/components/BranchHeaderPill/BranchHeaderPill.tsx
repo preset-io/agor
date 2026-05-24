@@ -1,4 +1,4 @@
-import type { Repo, Worktree } from '@agor-live/client';
+import type { Branch, Repo } from '@agor-live/client';
 import {
   ApartmentOutlined,
   BranchesOutlined,
@@ -24,13 +24,13 @@ import { Tag } from '../Tag';
 
 interface BranchHeaderPillProps {
   repo: Repo;
-  worktree: Worktree;
+  branch: Branch;
   sessionCount?: number;
-  onOpenWorktree?: (worktreeId: string, tab?: BranchModalTab) => void;
-  onStartEnvironment?: (worktreeId: string) => void;
-  onStopEnvironment?: (worktreeId: string) => void;
-  onNukeEnvironment?: (worktreeId: string) => void;
-  onViewLogs?: (worktreeId: string) => void;
+  onOpenBranch?: (branchId: string, tab?: BranchModalTab) => void;
+  onStartEnvironment?: (branchId: string) => void;
+  onStopEnvironment?: (branchId: string) => void;
+  onNukeEnvironment?: (branchId: string) => void;
+  onViewLogs?: (branchId: string) => void;
   connectionDisabled?: boolean;
 }
 
@@ -45,9 +45,9 @@ const iconButtonStyle: React.CSSProperties = {
 
 export function BranchHeaderPill({
   repo,
-  worktree,
+  branch,
   sessionCount,
-  onOpenWorktree,
+  onOpenBranch,
   onStartEnvironment,
   onStopEnvironment,
   onNukeEnvironment,
@@ -58,9 +58,9 @@ export function BranchHeaderPill({
   const confirmNuke = useConfirmNukeEnvironment();
   const effectiveEnv = getEffectiveEnv(repo);
   const hasConfig = effectiveEnv.hasConfig;
-  const env = worktree.environment_instance;
+  const env = branch.environment_instance;
   const inferredState = getEnvironmentState(env);
-  const environmentUrl = worktree.app_url;
+  const environmentUrl = branch.app_url;
 
   const status = env?.status || 'stopped';
   const isRunning = status === 'running';
@@ -79,11 +79,11 @@ export function BranchHeaderPill({
 
   const openTab = (tab: BranchModalTab) => (e: React.MouseEvent) => {
     e.stopPropagation();
-    onOpenWorktree?.(worktree.worktree_id, tab);
+    onOpenBranch?.(branch.branch_id, tab);
   };
 
   const openModal = () => {
-    onOpenWorktree?.(worktree.worktree_id);
+    onOpenBranch?.(branch.branch_id);
   };
 
   // --- Environment status helpers ---
@@ -183,7 +183,7 @@ export function BranchHeaderPill({
               whiteSpace: 'nowrap',
             }}
           >
-            {worktree.name}
+            {branch.name}
           </span>
         </button>
       </Tooltip>
@@ -255,7 +255,7 @@ export function BranchHeaderPill({
                   icon={<PlayCircleOutlined />}
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (!startDisabled) onStartEnvironment(worktree.worktree_id);
+                    if (!startDisabled) onStartEnvironment(branch.branch_id);
                   }}
                   disabled={startDisabled}
                   style={iconButtonStyle}
@@ -283,7 +283,7 @@ export function BranchHeaderPill({
                   icon={<StopOutlined />}
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (!stopDisabled) onStopEnvironment(worktree.worktree_id);
+                    if (!stopDisabled) onStopEnvironment(branch.branch_id);
                   }}
                   disabled={stopDisabled}
                   style={iconButtonStyle}
@@ -301,7 +301,7 @@ export function BranchHeaderPill({
                   icon={<FileTextOutlined />}
                   onClick={(e) => {
                     e.stopPropagation();
-                    onViewLogs(worktree.worktree_id);
+                    onViewLogs(branch.branch_id);
                   }}
                   style={iconButtonStyle}
                 />
@@ -309,7 +309,7 @@ export function BranchHeaderPill({
             )}
 
             {/* Nuke button */}
-            {onNukeEnvironment && worktree.nuke_command && (
+            {onNukeEnvironment && branch.nuke_command && (
               <Tooltip title="Nuke environment (destructive)">
                 <Button
                   type="text"
@@ -319,7 +319,7 @@ export function BranchHeaderPill({
                   icon={<FireOutlined />}
                   onClick={(e) => {
                     e.stopPropagation();
-                    confirmNuke(() => onNukeEnvironment(worktree.worktree_id));
+                    confirmNuke(() => onNukeEnvironment(branch.branch_id));
                   }}
                   disabled={connectionDisabled}
                   style={iconButtonStyle}

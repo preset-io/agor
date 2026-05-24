@@ -7,7 +7,7 @@ export default {
     title: 'Features',
   },
   'features-overview': 'Features Overview',
-  worktrees: 'Branches',
+  branches: 'Branches',
   sessions: 'Sessions & Trees',
   boards: 'Boards & Zones',
   assistants: 'Assistants',

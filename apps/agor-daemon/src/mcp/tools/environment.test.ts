@@ -1,7 +1,7 @@
 /**
  * Tests for the configuration verb `agor_environment_set` and the
- * `agor_worktrees_create({ variant })` flow that persists the initial variant
- * on a freshly-created worktree.
+ * `agor_branches_create({ variant })` flow that persists the initial variant
+ * on a freshly-created branch.
  *
  * `agor_environment_set` is the explicit "configure" verb that pairs with
  * `agor_environment_start`. It calls the daemon's `renderEnvironment` service
@@ -16,7 +16,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('../resolve-ids.js', () => ({
   resolveRepoId: async (_ctx: unknown, id: string) => id,
   resolveBoardId: async (_ctx: unknown, id: string) => id,
-  resolveWorktreeId: async (_ctx: unknown, id: string) => id,
+  resolveBranchId: async (_ctx: unknown, id: string) => id,
   resolveSessionId: async (_ctx: unknown, id: string) => id,
   resolveMcpServerId: async (_ctx: unknown, id: string) => id,
 }));
@@ -25,12 +25,12 @@ vi.mock('@agor/core/config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor/core/config')>();
   return {
     ...actual,
-    isWorktreeRbacEnabled: () => false,
+    isBranchRbacEnabled: () => false,
   };
 });
 
 vi.mock('@agor/core/db', () => ({
-  WorktreeRepository: class FakeWorktreeRepository {
+  BranchRepository: class FakeBranchRepository {
     async getActiveNamesByRepo() {
       return [];
     }
@@ -79,18 +79,18 @@ async function captureEnvironmentTool(
   return captured;
 }
 
-async function captureWorktreeTool(
+async function captureBranchTool(
   ctx: ReturnType<typeof makeCtx>,
   toolName: string
 ): Promise<ToolHandler> {
-  const { registerWorktreeTools } = await import('./worktrees.js');
+  const { registerBranchTools } = await import('./branches.js');
   let captured: ToolHandler | undefined;
   const fakeServer = {
     registerTool: (name: string, _cfg: unknown, cb: ToolHandler) => {
       if (name === toolName) captured = cb;
     },
   } as unknown as McpServer;
-  registerWorktreeTools(fakeServer, ctx);
+  registerBranchTools(fakeServer, ctx);
   if (!captured) throw new Error(`Tool ${toolName} was not registered`);
   return captured;
 }
@@ -115,7 +115,7 @@ const fakeRepo = {
 // ---------------------------------------------------------------------------
 
 describe('agor_environment_set', () => {
-  it('renders a stopped worktree with the requested variant and does not start', async () => {
+  it('renders a stopped branch with the requested variant and does not start', async () => {
     const renderCalls: unknown[][] = [];
     const startCalls: unknown[][] = [];
 
@@ -123,9 +123,9 @@ describe('agor_environment_set', () => {
       repos: {
         get: async () => fakeRepo,
       },
-      worktrees: {
+      branches: {
         get: async () => ({
-          worktree_id: 'wt-1',
+          branch_id: 'wt-1',
           repo_id: 'repo-1',
           environment_variant: 'dev',
           environment_instance: { status: 'stopped' },
@@ -133,19 +133,19 @@ describe('agor_environment_set', () => {
         renderEnvironment: async (...args: unknown[]) => {
           renderCalls.push(args);
           return {
-            worktree_id: 'wt-1',
+            branch_id: 'wt-1',
             environment_variant: 'e2e',
           };
         },
         startEnvironment: async (...args: unknown[]) => {
           startCalls.push(args);
-          return { worktree_id: 'wt-1' };
+          return { branch_id: 'wt-1' };
         },
       },
     });
 
     const handler = await captureEnvironmentTool(ctx, 'agor_environment_set');
-    const result = await handler({ worktreeId: 'wt-1', variant: 'e2e' });
+    const result = await handler({ branchId: 'wt-1', variant: 'e2e' });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(true);
@@ -161,26 +161,26 @@ describe('agor_environment_set', () => {
 
     const ctx = makeCtx({
       repos: { get: async () => fakeRepo },
-      worktrees: {
+      branches: {
         get: async () => ({
-          worktree_id: 'wt-1',
+          branch_id: 'wt-1',
           repo_id: 'repo-1',
           environment_variant: 'dev',
           environment_instance: { status: 'stopped' },
         }),
         renderEnvironment: async (...args: unknown[]) => {
           renderCalls.push(args);
-          return { worktree_id: 'wt-1', environment_variant: 'e2e' };
+          return { branch_id: 'wt-1', environment_variant: 'e2e' };
         },
         startEnvironment: async (...args: unknown[]) => {
           startCalls.push(args);
-          return { worktree_id: 'wt-1', environment_variant: 'e2e' };
+          return { branch_id: 'wt-1', environment_variant: 'e2e' };
         },
       },
     });
 
     const handler = await captureEnvironmentTool(ctx, 'agor_environment_set');
-    const result = await handler({ worktreeId: 'wt-1', variant: 'e2e', andStart: true });
+    const result = await handler({ branchId: 'wt-1', variant: 'e2e', andStart: true });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(true);
@@ -191,16 +191,16 @@ describe('agor_environment_set', () => {
 
   it('propagates the service-layer "running" error when renderEnvironment refuses a variant change', async () => {
     // The "don't switch variants while live" invariant lives in
-    // WorktreesService.renderEnvironment so REST/UI/MCP all honor it.
+    // BranchesService.renderEnvironment so REST/UI/MCP all honor it.
     // Here we verify the handler delegates and surfaces the error verbatim.
     const renderCalls: unknown[][] = [];
     const startCalls: unknown[][] = [];
 
     const ctx = makeCtx({
       repos: { get: async () => fakeRepo },
-      worktrees: {
+      branches: {
         get: async () => ({
-          worktree_id: 'wt-1',
+          branch_id: 'wt-1',
           repo_id: 'repo-1',
           environment_variant: 'dev',
           environment_instance: { status: 'running' },
@@ -220,7 +220,7 @@ describe('agor_environment_set', () => {
     });
 
     const handler = await captureEnvironmentTool(ctx, 'agor_environment_set');
-    const result = await handler({ worktreeId: 'wt-1', variant: 'e2e' });
+    const result = await handler({ branchId: 'wt-1', variant: 'e2e' });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(false);
@@ -235,22 +235,22 @@ describe('agor_environment_set', () => {
 
     const ctx = makeCtx({
       repos: { get: async () => fakeRepo },
-      worktrees: {
+      branches: {
         get: async () => ({
-          worktree_id: 'wt-1',
+          branch_id: 'wt-1',
           repo_id: 'repo-1',
           environment_variant: 'dev',
           environment_instance: { status: 'running' },
         }),
         renderEnvironment: async (...args: unknown[]) => {
           renderCalls.push(args);
-          return { worktree_id: 'wt-1', environment_variant: 'dev' };
+          return { branch_id: 'wt-1', environment_variant: 'dev' };
         },
       },
     });
 
     const handler = await captureEnvironmentTool(ctx, 'agor_environment_set');
-    const result = await handler({ worktreeId: 'wt-1', variant: 'dev' });
+    const result = await handler({ branchId: 'wt-1', variant: 'dev' });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(true);
@@ -263,9 +263,9 @@ describe('agor_environment_set', () => {
 
     const ctx = makeCtx({
       repos: { get: async () => fakeRepo },
-      worktrees: {
+      branches: {
         get: async () => ({
-          worktree_id: 'wt-1',
+          branch_id: 'wt-1',
           repo_id: 'repo-1',
           environment_variant: 'dev',
           environment_instance: { status: 'stopped' },
@@ -278,7 +278,7 @@ describe('agor_environment_set', () => {
     });
 
     const handler = await captureEnvironmentTool(ctx, 'agor_environment_set');
-    const result = await handler({ worktreeId: 'wt-1', variant: 'nope' });
+    const result = await handler({ branchId: 'wt-1', variant: 'nope' });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(false);
@@ -287,31 +287,31 @@ describe('agor_environment_set', () => {
     expect(renderCalls).toHaveLength(0);
   });
 
-  it("omitting variant re-renders with the worktree's CURRENT variant (regression: not the repo default)", async () => {
+  it("omitting variant re-renders with the branch's CURRENT variant (regression: not the repo default)", async () => {
     // Regression for the bug where the handler passed undefined to
     // renderEnvironment, which the service silently resolved to env.default —
-    // flipping a non-default-variant worktree back to default on a re-render.
-    // The worktree below is on 'e2e' (not the 'dev' default); omitting the
+    // flipping a non-default-variant branch back to default on a re-render.
+    // The branch below is on 'e2e' (not the 'dev' default); omitting the
     // variant arg must re-render with 'e2e', not 'dev'.
     const renderCalls: unknown[][] = [];
 
     const ctx = makeCtx({
-      worktrees: {
+      branches: {
         get: async () => ({
-          worktree_id: 'wt-1',
+          branch_id: 'wt-1',
           repo_id: 'repo-1',
           environment_variant: 'e2e',
           environment_instance: { status: 'stopped' },
         }),
         renderEnvironment: async (...args: unknown[]) => {
           renderCalls.push(args);
-          return { worktree_id: 'wt-1', environment_variant: 'e2e' };
+          return { branch_id: 'wt-1', environment_variant: 'e2e' };
         },
       },
     });
 
     const handler = await captureEnvironmentTool(ctx, 'agor_environment_set');
-    const result = await handler({ worktreeId: 'wt-1' });
+    const result = await handler({ branchId: 'wt-1' });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(true);
@@ -319,26 +319,26 @@ describe('agor_environment_set', () => {
     expect(renderCalls[0][1]).toEqual({ variant: 'e2e' });
   });
 
-  it('omitting variant on a legacy worktree (environment_variant=null) lets the service apply the repo default', async () => {
+  it('omitting variant on a legacy branch (environment_variant=null) lets the service apply the repo default', async () => {
     const renderCalls: unknown[][] = [];
 
     const ctx = makeCtx({
-      worktrees: {
+      branches: {
         get: async () => ({
-          worktree_id: 'wt-1',
+          branch_id: 'wt-1',
           repo_id: 'repo-1',
           environment_variant: null,
           environment_instance: { status: 'stopped' },
         }),
         renderEnvironment: async (...args: unknown[]) => {
           renderCalls.push(args);
-          return { worktree_id: 'wt-1', environment_variant: 'dev' };
+          return { branch_id: 'wt-1', environment_variant: 'dev' };
         },
       },
     });
 
     const handler = await captureEnvironmentTool(ctx, 'agor_environment_set');
-    const result = await handler({ worktreeId: 'wt-1' });
+    const result = await handler({ branchId: 'wt-1' });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(true);
@@ -352,16 +352,16 @@ describe('agor_environment_set', () => {
 
     const ctx = makeCtx({
       repos: { get: async () => fakeRepo },
-      worktrees: {
+      branches: {
         get: async () => ({
-          worktree_id: 'wt-1',
+          branch_id: 'wt-1',
           repo_id: 'repo-1',
           environment_variant: 'dev',
           environment_instance: { status: 'stopped' },
         }),
         renderEnvironment: async (...args: unknown[]) => {
           renderCalls.push(args);
-          return { worktree_id: 'wt-1', environment_variant: 'e2e' };
+          return { branch_id: 'wt-1', environment_variant: 'e2e' };
         },
         startEnvironment: async (...args: unknown[]) => {
           startCalls.push(args);
@@ -371,7 +371,7 @@ describe('agor_environment_set', () => {
     });
 
     const handler = await captureEnvironmentTool(ctx, 'agor_environment_set');
-    const result = await handler({ worktreeId: 'wt-1', variant: 'e2e', andStart: true });
+    const result = await handler({ branchId: 'wt-1', variant: 'e2e', andStart: true });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(false);
@@ -382,27 +382,27 @@ describe('agor_environment_set', () => {
     expect(startCalls).toHaveLength(1);
   });
 
-  it('first-time variant assignment on a legacy worktree (environment_variant=null) succeeds when stopped', async () => {
+  it('first-time variant assignment on a legacy branch (environment_variant=null) succeeds when stopped', async () => {
     const renderCalls: unknown[][] = [];
 
     const ctx = makeCtx({
       repos: { get: async () => fakeRepo },
-      worktrees: {
+      branches: {
         get: async () => ({
-          worktree_id: 'wt-1',
+          branch_id: 'wt-1',
           repo_id: 'repo-1',
           environment_variant: null,
           environment_instance: { status: 'stopped' },
         }),
         renderEnvironment: async (...args: unknown[]) => {
           renderCalls.push(args);
-          return { worktree_id: 'wt-1', environment_variant: 'e2e' };
+          return { branch_id: 'wt-1', environment_variant: 'e2e' };
         },
       },
     });
 
     const handler = await captureEnvironmentTool(ctx, 'agor_environment_set');
-    const result = await handler({ worktreeId: 'wt-1', variant: 'e2e' });
+    const result = await handler({ branchId: 'wt-1', variant: 'e2e' });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(true);
@@ -412,27 +412,27 @@ describe('agor_environment_set', () => {
 });
 
 // ---------------------------------------------------------------------------
-// agor_worktrees_create — variant param
+// agor_branches_create — variant param
 // ---------------------------------------------------------------------------
 
-describe('agor_worktrees_create', () => {
-  it('passes environment_variant to createWorktree when variant is valid', async () => {
+describe('agor_branches_create', () => {
+  it('passes environment_variant to createBranch when variant is valid', async () => {
     const createCalls: unknown[][] = [];
 
     const ctx = makeCtx({
       repos: {
         get: async () => fakeRepo,
-        createWorktree: async (...args: unknown[]) => {
+        createBranch: async (...args: unknown[]) => {
           createCalls.push(args);
-          return { worktree_id: 'wt-new', name: 'my-feature' };
+          return { branch_id: 'wt-new', name: 'my-feature' };
         },
       },
     });
 
-    const handler = await captureWorktreeTool(ctx, 'agor_worktrees_create');
+    const handler = await captureBranchTool(ctx, 'agor_branches_create');
     await handler({
       repoId: 'repo-1',
-      worktreeName: 'my-feature',
+      branchName: 'my-feature',
       boardId: 'board-1',
       variant: 'e2e',
     });
@@ -448,18 +448,18 @@ describe('agor_worktrees_create', () => {
     const ctx = makeCtx({
       repos: {
         get: async () => fakeRepo,
-        createWorktree: async (...args: unknown[]) => {
+        createBranch: async (...args: unknown[]) => {
           createCalls.push(args);
-          return { worktree_id: 'wt-new', name: 'my-feature' };
+          return { branch_id: 'wt-new', name: 'my-feature' };
         },
       },
     });
 
-    const handler = await captureWorktreeTool(ctx, 'agor_worktrees_create');
+    const handler = await captureBranchTool(ctx, 'agor_branches_create');
     await expect(
       handler({
         repoId: 'repo-1',
-        worktreeName: 'my-feature',
+        branchName: 'my-feature',
         boardId: 'board-1',
         variant: 'nope',
       })
@@ -474,38 +474,38 @@ describe('agor_worktrees_create', () => {
     const ctx = makeCtx({
       repos: {
         get: async () => repoNoVariants,
-        createWorktree: async () => ({ worktree_id: 'wt-new', name: 'my-feature' }),
+        createBranch: async () => ({ branch_id: 'wt-new', name: 'my-feature' }),
       },
     });
 
-    const handler = await captureWorktreeTool(ctx, 'agor_worktrees_create');
+    const handler = await captureBranchTool(ctx, 'agor_branches_create');
     await expect(
       handler({
         repoId: 'repo-1',
-        worktreeName: 'my-feature',
+        branchName: 'my-feature',
         boardId: 'board-1',
         variant: 'e2e',
       })
     ).rejects.toThrow(/no environment variants configured/);
   });
 
-  it('omits environment_variant from the createWorktree payload when variant is not provided', async () => {
+  it('omits environment_variant from the createBranch payload when variant is not provided', async () => {
     const createCalls: unknown[][] = [];
 
     const ctx = makeCtx({
       repos: {
         get: async () => fakeRepo,
-        createWorktree: async (...args: unknown[]) => {
+        createBranch: async (...args: unknown[]) => {
           createCalls.push(args);
-          return { worktree_id: 'wt-new', name: 'my-feature' };
+          return { branch_id: 'wt-new', name: 'my-feature' };
         },
       },
     });
 
-    const handler = await captureWorktreeTool(ctx, 'agor_worktrees_create');
+    const handler = await captureBranchTool(ctx, 'agor_branches_create');
     await handler({
       repoId: 'repo-1',
-      worktreeName: 'my-feature',
+      branchName: 'my-feature',
       boardId: 'board-1',
     });
 

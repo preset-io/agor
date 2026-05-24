@@ -11,10 +11,10 @@ import { generateId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
+import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { TaskRepository } from './tasks';
-import { WorktreeRepository } from './worktrees';
 
 /**
  * Create test task data
@@ -42,11 +42,11 @@ function createTaskData(overrides?: Partial<Task>): Partial<Task> {
   };
 }
 
-// Counter for unique worktree IDs
-let worktreeCounter = 1;
+// Counter for unique branch IDs
+let branchCounter = 1;
 
 /**
- * Create a session with required dependencies (repo and worktree)
+ * Create a session with required dependencies (repo and branch)
  * Returns the session_id that can be used for tasks
  */
 async function createSessionWithDeps(db: Database): Promise<UUID> {
@@ -62,15 +62,15 @@ async function createSessionWithDeps(db: Database): Promise<UUID> {
     default_branch: 'main',
   });
 
-  // Create worktree
-  const worktreeRepo = new WorktreeRepository(db);
-  const worktree = await worktreeRepo.create({
-    worktree_id: generateId(),
+  // Create branch
+  const branchRepo = new BranchRepository(db);
+  const branch = await branchRepo.create({
+    branch_id: generateId(),
     repo_id: repo.repo_id,
-    name: 'test-worktree',
+    name: 'test-branch',
     ref: 'main',
-    worktree_unique_id: worktreeCounter++,
-    path: '/tmp/test/worktree',
+    branch_unique_id: branchCounter++,
+    path: '/tmp/test/branch',
     created_by: 'test-user' as UUID,
   });
 
@@ -78,7 +78,7 @@ async function createSessionWithDeps(db: Database): Promise<UUID> {
   const sessionRepo = new SessionRepository(db);
   const session = await sessionRepo.create({
     session_id: generateId(),
-    worktree_id: worktree.worktree_id,
+    branch_id: branch.branch_id,
     agentic_tool: 'claude-code',
     created_by: 'test-user' as UUID,
   });

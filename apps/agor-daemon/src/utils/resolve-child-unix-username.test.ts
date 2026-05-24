@@ -3,7 +3,7 @@
  * `unix_username` stamped on a child session created via fork() / spawn().
  *
  * Behavior must stay aligned with {@link determineSpawnIdentity}:
- * - Legacy sharing (worktree opt-in `dangerously_allow_session_sharing`)
+ * - Legacy sharing (branch opt-in `dangerously_allow_session_sharing`)
  *   inherits `parent.unix_username` (identity borrowing by design).
  * - Default path (same-user forks and cross-user spawns without opt-in)
  *   uses the CALLER's current `unix_username`. We must NOT inherit
@@ -13,7 +13,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { resolveChildUnixUsername } from './worktree-authorization';
+import { resolveChildUnixUsername } from './branch-authorization';
 
 describe('resolveChildUnixUsername', () => {
   it('legacy sharing: inherits parent.unix_username (identity borrowing)', () => {

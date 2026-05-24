@@ -56,12 +56,12 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       setCreating(true);
       setError(null);
 
-      // Worktree ID is now passed directly (resolved in NewSessionModal or from worktree creation)
-      if (!config.worktree_id) {
+      // Branch ID is now passed directly (resolved in NewSessionModal or from branch creation)
+      if (!config.branch_id) {
         throw new Error('Branch ID is required');
       }
 
-      // Create session with worktree_id
+      // Create session with branch_id
       const agenticTool = config.agent as AgenticToolName;
       const permissionMode: PermissionMode =
         config.permissionMode || getDefaultPermissionMode(agenticTool);
@@ -87,7 +87,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
         status: SessionStatus.IDLE,
         title: config.title || undefined,
         description: config.initialPrompt || undefined,
-        worktree_id: config.worktree_id,
+        branch_id: config.branch_id,
         model_config: config.modelConfig
           ? {
               ...config.modelConfig,

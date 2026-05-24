@@ -1,7 +1,7 @@
 /**
- * `agor worktree show <worktree-id>` - Show worktree details
+ * `agor branch show <branch-id>` - Show branch details
  *
- * Displays comprehensive information about a specific worktree.
+ * Displays comprehensive information about a specific branch.
  */
 
 import { shortId } from '@agor-live/client';
@@ -9,8 +9,8 @@ import { Args } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
 
-export default class WorktreeShow extends BaseCommand {
-  static description = 'Show detailed information about a worktree';
+export default class BranchShow extends BaseCommand {
+  static description = 'Show detailed information about a branch';
 
   static examples = [
     '<%= config.bin %> <%= command.id %> abc123',
@@ -18,8 +18,8 @@ export default class WorktreeShow extends BaseCommand {
   ];
 
   static args = {
-    worktreeId: Args.string({
-      description: 'Worktree ID (full UUID or short ID)',
+    branchId: Args.string({
+      description: 'Branch ID (full UUID or short ID)',
       required: true,
     }),
   };
@@ -44,57 +44,57 @@ export default class WorktreeShow extends BaseCommand {
   }
 
   async run(): Promise<void> {
-    const { args } = await this.parse(WorktreeShow);
+    const { args } = await this.parse(BranchShow);
 
     // Connect to daemon
     const client = await this.connectToDaemon();
 
     try {
-      const worktreesService = client.service('worktrees');
+      const branchesService = client.service('branches');
 
-      // Fetch worktree by ID
-      const worktree = await worktreesService.get(args.worktreeId);
+      // Fetch branch by ID
+      const branch = await branchesService.get(args.branchId);
 
       this.log('');
-      this.log(chalk.bold.cyan(`Worktree: ${worktree.name}`));
+      this.log(chalk.bold.cyan(`Branch: ${branch.name}`));
       this.log(chalk.dim('─'.repeat(60)));
       this.log('');
 
       // Identity
       this.log(chalk.bold('Identity:'));
-      this.log(`  ID:           ${chalk.dim(shortId(worktree.worktree_id))}`);
-      this.log(`  Name:         ${chalk.cyan(worktree.name)}`);
-      this.log(`  Unique ID:    ${chalk.dim(worktree.worktree_unique_id)}`);
+      this.log(`  ID:           ${chalk.dim(shortId(branch.branch_id))}`);
+      this.log(`  Name:         ${chalk.cyan(branch.name)}`);
+      this.log(`  Unique ID:    ${chalk.dim(branch.branch_unique_id)}`);
       this.log('');
 
       // Git info
       this.log(chalk.bold('Git:'));
-      this.log(`  Ref:          ${chalk.green(worktree.ref)}`);
-      this.log(`  Path:         ${chalk.dim(worktree.path)}`);
-      if (worktree.base_ref) {
-        this.log(`  Base Ref:     ${chalk.dim(worktree.base_ref)}`);
+      this.log(`  Ref:          ${chalk.green(branch.ref)}`);
+      this.log(`  Path:         ${chalk.dim(branch.path)}`);
+      if (branch.base_ref) {
+        this.log(`  Base Ref:     ${chalk.dim(branch.base_ref)}`);
       }
-      if (worktree.tracking_branch) {
-        this.log(`  Tracking:     ${chalk.dim(worktree.tracking_branch)}`);
+      if (branch.tracking_branch) {
+        this.log(`  Tracking:     ${chalk.dim(branch.tracking_branch)}`);
       }
-      if (worktree.last_commit_sha) {
-        this.log(`  Last Commit:  ${chalk.dim(worktree.last_commit_sha.substring(0, 12))}`);
+      if (branch.last_commit_sha) {
+        this.log(`  Last Commit:  ${chalk.dim(branch.last_commit_sha.substring(0, 12))}`);
       }
       this.log('');
 
       // Metadata
       this.log(chalk.bold('Metadata:'));
-      if (worktree.issue_url) {
-        this.log(`  Issue:        ${chalk.blue(worktree.issue_url)}`);
+      if (branch.issue_url) {
+        this.log(`  Issue:        ${chalk.blue(branch.issue_url)}`);
       }
-      if (worktree.pull_request_url) {
-        this.log(`  PR:           ${chalk.blue(worktree.pull_request_url)}`);
+      if (branch.pull_request_url) {
+        this.log(`  PR:           ${chalk.blue(branch.pull_request_url)}`);
       }
-      if (worktree.notes) {
-        this.log(`  Notes:        ${worktree.notes}`);
+      if (branch.notes) {
+        this.log(`  Notes:        ${branch.notes}`);
       }
-      if (worktree.board_id) {
-        this.log(`  Board:        ${chalk.dim(shortId(worktree.board_id))}`);
+      if (branch.board_id) {
+        this.log(`  Board:        ${chalk.dim(shortId(branch.board_id))}`);
       }
       this.log('');
 
@@ -103,7 +103,7 @@ export default class WorktreeShow extends BaseCommand {
       const sessionsService = client.service('sessions');
       try {
         const allSessions = await sessionsService.findAll({
-          query: { worktree_id: worktree.worktree_id, $limit: 10000 },
+          query: { branch_id: branch.branch_id, $limit: 10000 },
         });
 
         if (allSessions.length > 0) {
@@ -123,8 +123,8 @@ export default class WorktreeShow extends BaseCommand {
       this.log('');
 
       // Environment
-      if (worktree.environment_instance) {
-        const env = worktree.environment_instance;
+      if (branch.environment_instance) {
+        const env = branch.environment_instance;
         this.log(chalk.bold('Environment:'));
 
         const statusColors = {
@@ -162,10 +162,10 @@ export default class WorktreeShow extends BaseCommand {
 
       // Timestamps
       this.log(chalk.bold('Timestamps:'));
-      this.log(`  Created:      ${chalk.dim(this.formatRelativeTime(worktree.created_at))}`);
-      this.log(`  Created By:   ${chalk.dim(worktree.created_by)}`);
-      if (worktree.last_used) {
-        this.log(`  Last Used:    ${chalk.dim(this.formatRelativeTime(worktree.last_used))}`);
+      this.log(`  Created:      ${chalk.dim(this.formatRelativeTime(branch.created_at))}`);
+      this.log(`  Created By:   ${chalk.dim(branch.created_by)}`);
+      if (branch.last_used) {
+        this.log(`  Last Used:    ${chalk.dim(this.formatRelativeTime(branch.last_used))}`);
       }
       this.log('');
 
@@ -175,7 +175,7 @@ export default class WorktreeShow extends BaseCommand {
     } catch (error) {
       await this.cleanupClient(client);
       this.error(
-        `Failed to fetch worktree: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to fetch branch: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }

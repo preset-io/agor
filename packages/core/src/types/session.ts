@@ -16,7 +16,7 @@ import type {
   OpenCodePermissionMode,
 } from './agentic-tool';
 import type { ContextFilePath } from './context';
-import type { BoardID, SessionID, TaskID, WorktreeID } from './id';
+import type { BoardID, BranchID, SessionID, TaskID } from './id';
 
 export const SessionStatus = {
   IDLE: 'idle',
@@ -154,24 +154,24 @@ export interface Session {
    */
   unix_username: string | null;
 
-  /** Worktree ID - all sessions must be associated with an Agor-managed worktree */
-  worktree_id: WorktreeID;
+  /** Branch ID - all sessions must be associated with an Agor-managed branch */
+  branch_id: BranchID;
 
   /**
-   * Board ID from the session's worktree (populated via LEFT JOIN)
+   * Board ID from the session's branch (populated via LEFT JOIN)
    *
    * This is a computed property populated by the repository layer when fetching sessions.
-   * It avoids N+1 queries by joining with the worktrees table.
-   * Null if the worktree is not placed on any board.
+   * It avoids N+1 queries by joining with the branches table.
+   * Null if the branch is not placed on any board.
    */
-  worktree_board_id?: BoardID | null;
+  branch_board_id?: BoardID | null;
 
   /**
    * External/user-facing URL for viewing this session in the UI.
    *
    * Computed property added by the repository layer.
    * Format: `{baseUrl}/ui/s/{sessionShortId}/`
-   * Visiting the URL resolves the session, switches to its worktree's
+   * Visiting the URL resolves the session, switches to its branch's
    * board, and opens the conversation panel. Always present when the
    * repo computes it (baseUrl available); board lookup happens at
    * click time, so we don't need to know about the board to mint the
@@ -367,14 +367,14 @@ export interface Session {
    * Materialized for UI filtering (show clock icon) and analytics.
    * True = created by scheduler, False = created manually by user
    */
-  scheduled_from_worktree: boolean;
+  scheduled_from_branch: boolean;
 
   /**
    * Whether this session is ready to receive a new prompt
    *
    * Set to true when a task completes successfully, indicating the agent is ready for more work.
    * Cleared when the user opens the conversation drawer (acknowledging completion).
-   * Used to highlight worktree cards to show which sessions need attention.
+   * Used to highlight branch cards to show which sessions need attention.
    */
   ready_for_prompt: boolean;
 
@@ -401,8 +401,8 @@ export interface Session {
      * Session ID to notify on completion (for remote session callbacks)
      *
      * When set, completion callbacks are sent to this session instead of
-     * (or in addition to) the genealogy parent. This enables cross-worktree
-     * callbacks where a session creates another session on a different worktree
+     * (or in addition to) the genealogy parent. This enables cross-branch
+     * callbacks where a session creates another session on a different branch
      * and wants to be notified when it completes.
      *
      * Defaults to the creating session's ID when enableCallback is true
@@ -441,7 +441,7 @@ export interface Session {
   /**
    * Whether this session is archived (soft deleted)
    *
-   * Usually cascaded from worktree archive, but can also be manually archived.
+   * Usually cascaded from branch archive, but can also be manually archived.
    * Archived sessions are hidden from UI but data preserved for analytics.
    */
   archived: boolean;
@@ -449,11 +449,11 @@ export interface Session {
   /**
    * Reason for archiving
    *
-   * - 'worktree_archived': Cascaded from parent worktree being archived
+   * - 'branch_archived': Cascaded from parent branch being archived
    * - 'manual': User manually archived this session
    * - 'btw_completed': Ephemeral btw fork auto-archived after task completion
    */
-  archived_reason?: 'worktree_archived' | 'manual' | 'btw_completed';
+  archived_reason?: 'branch_archived' | 'manual' | 'btw_completed';
 }
 
 /**
@@ -498,7 +498,7 @@ export function getGatewaySource(session: Pick<Session, 'custom_context'>): Gate
 }
 
 /**
- * Session type categories matching UI rendering in WorktreeCard
+ * Session type categories matching UI rendering in BranchCard
  */
 export type SessionType = 'gateway' | 'scheduled' | 'agent';
 
@@ -506,10 +506,10 @@ export type SessionType = 'gateway' | 'scheduled' | 'agent';
  * Determine the session type category.
  */
 export function getSessionType(
-  session: Pick<Session, 'custom_context' | 'scheduled_from_worktree'>
+  session: Pick<Session, 'custom_context' | 'scheduled_from_branch'>
 ): SessionType {
   if (isGatewaySession(session)) return 'gateway';
-  if (session.scheduled_from_worktree) return 'scheduled';
+  if (session.scheduled_from_branch) return 'scheduled';
   return 'agent';
 }
 
@@ -523,7 +523,7 @@ export interface ScheduledRunMetadata {
    * Rendered prompt after Handlebars template substitution
    *
    * Example:
-   * Template: "Check PR {{worktree.pull_request_url}}"
+   * Template: "Check PR {{branch.pull_request_url}}"
    * Rendered: "Check PR https://github.com/org/repo/pull/42"
    */
   rendered_prompt: string;

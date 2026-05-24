@@ -5,9 +5,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildSlugToRepoIdMap,
+  determineBranchAction,
   determineRepoAction,
   determineUserAction,
-  determineWorktreeAction,
   resolvePassword,
 } from './resource-sync';
 
@@ -45,42 +45,42 @@ describe('determineRepoAction', () => {
 });
 
 // ---------------------------------------------------------------------------
-// determineWorktreeAction
+// determineBranchAction
 // ---------------------------------------------------------------------------
 
-describe('determineWorktreeAction', () => {
-  it('returns create when no existing worktree', () => {
-    expect(determineWorktreeAction({ ref: 'main' }, null)).toBe('create');
+describe('determineBranchAction', () => {
+  it('returns create when no existing branch', () => {
+    expect(determineBranchAction({ ref: 'main' }, null)).toBe('create');
   });
 
   it('returns unchanged when existing matches', () => {
     const existing = { ref: 'main', others_can: 'session', mcp_server_ids: ['a'] };
     const config = { ref: 'main', others_can: 'session', mcp_server_ids: ['a'] };
-    expect(determineWorktreeAction(config, existing)).toBe('unchanged');
+    expect(determineBranchAction(config, existing)).toBe('unchanged');
   });
 
   it('returns update when ref differs', () => {
     const existing = { ref: 'main' };
     const config = { ref: 'develop' };
-    expect(determineWorktreeAction(config, existing)).toBe('update');
+    expect(determineBranchAction(config, existing)).toBe('update');
   });
 
   it('returns update when others_can differs', () => {
     const existing = { ref: 'main', others_can: 'session' };
     const config = { ref: 'main', others_can: 'all' };
-    expect(determineWorktreeAction(config, existing)).toBe('update');
+    expect(determineBranchAction(config, existing)).toBe('update');
   });
 
   it('returns update when mcp_server_ids differ', () => {
     const existing = { ref: 'main', mcp_server_ids: ['a'] };
     const config = { ref: 'main', mcp_server_ids: ['a', 'b'] };
-    expect(determineWorktreeAction(config, existing)).toBe('update');
+    expect(determineBranchAction(config, existing)).toBe('update');
   });
 
   it('returns unchanged when optional fields are undefined in config', () => {
     const existing = { ref: 'main', others_can: 'session', mcp_server_ids: ['a'] };
     const config = { ref: 'main' };
-    expect(determineWorktreeAction(config, existing)).toBe('unchanged');
+    expect(determineBranchAction(config, existing)).toBe('unchanged');
   });
 });
 

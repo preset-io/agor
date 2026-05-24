@@ -62,17 +62,12 @@ export function resolveSessionFromShortIdPure(
   );
 }
 
-export function resolveWorktreeFromShortIdPure(
-  worktreeShortId: string,
-  worktreeById: Map<string, { worktree_id: string }>,
+export function resolveBranchFromShortIdPure(
+  branchShortId: string,
+  branchById: Map<string, { branch_id: string }>,
   onAmbiguous?: (shortId: string, matchCount: number) => void
 ): string | null {
-  return resolveByShortIdPure(
-    worktreeShortId,
-    worktreeById.values(),
-    (w) => w.worktree_id,
-    onAmbiguous
-  );
+  return resolveByShortIdPure(branchShortId, branchById.values(), (w) => w.branch_id, onAmbiguous);
 }
 
 export function resolveArtifactFromShortIdPure(

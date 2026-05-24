@@ -25,12 +25,12 @@ import { select, update } from './database-wrapper';
 import {
   boardComments,
   boards,
+  branches,
   gatewayChannels,
   sessions,
   tasks,
   type UserRow,
   users,
-  worktrees,
 } from './schema';
 import { userRowToUser } from './user-utils';
 
@@ -93,7 +93,7 @@ export async function reattributeLegacyAnonymousRows(
   db: Database,
   targetUserId: string
 ): Promise<number> {
-  const tablesWithCreatedBy = [sessions, tasks, boards, worktrees, boardComments, gatewayChannels];
+  const tablesWithCreatedBy = [sessions, tasks, boards, branches, boardComments, gatewayChannels];
   let total = 0;
   for (const table of tablesWithCreatedBy) {
     const result = (await update(db, table)

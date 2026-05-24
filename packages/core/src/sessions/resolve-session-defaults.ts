@@ -15,7 +15,7 @@
  *                      (algorithm shared with the child resolver via
  *                      {@link resolvePermissionConfig})
  *   model_config:      overrides → user default → undefined
- *   mcp_server_ids:    overrides → worktree → user default → []
+ *   mcp_server_ids:    overrides → branch → user default → []
  *
  * The child-session variant ({@link resolveChildSessionConfig}) layers a
  * tool-gated parent source between overrides and user defaults; both
@@ -33,7 +33,7 @@ import {
 export interface SessionDefaultsOverrides extends SessionRuntimeOverrides {
   /**
    * Explicit MCP server ID list. An empty array means "no MCPs" — does NOT
-   * fall through to worktree/user defaults. Pass `undefined` to fall through.
+   * fall through to branch/user defaults. Pass `undefined` to fall through.
    */
   mcpServerIds?: string[];
 }
@@ -42,8 +42,8 @@ export interface ResolveSessionDefaultsArgs {
   agenticTool: AgenticToolName;
   /** User whose `default_agentic_config[tool]` provides the next-priority defaults. */
   user?: Pick<User, 'default_agentic_config'> | null;
-  /** Optional worktree for MCP server inheritance (worktree-level overrides user defaults). */
-  worktree?: { mcp_server_ids?: string[] | null } | null;
+  /** Optional branch for MCP server inheritance (branch-level overrides user defaults). */
+  branch?: { mcp_server_ids?: string[] | null } | null;
   overrides?: SessionDefaultsOverrides;
   /** Override `new Date()` for deterministic tests. */
   now?: Date;
@@ -59,7 +59,7 @@ export interface ResolvedSessionDefaults {
 }
 
 export function resolveSessionDefaults(args: ResolveSessionDefaultsArgs): ResolvedSessionDefaults {
-  const { agenticTool, user, worktree, overrides, now } = args;
+  const { agenticTool, user, branch, overrides, now } = args;
   const userToolDefaults = user?.default_agentic_config?.[agenticTool];
 
   const permission_config = resolvePermissionConfig({
@@ -75,12 +75,12 @@ export function resolveSessionDefaults(args: ResolveSessionDefaultsArgs): Resolv
   );
 
   // mcp_server_ids: explicit override wins (incl. empty array = "no MCPs"),
-  // then worktree config, then user defaults, then [].
+  // then branch config, then user defaults, then [].
   let mcp_server_ids: string[];
   if (overrides?.mcpServerIds !== undefined) {
     mcp_server_ids = overrides.mcpServerIds;
-  } else if (worktree?.mcp_server_ids && worktree.mcp_server_ids.length > 0) {
-    mcp_server_ids = worktree.mcp_server_ids;
+  } else if (branch?.mcp_server_ids && branch.mcp_server_ids.length > 0) {
+    mcp_server_ids = branch.mcp_server_ids;
   } else {
     mcp_server_ids = userToolDefaults?.mcpServerIds ?? [];
   }

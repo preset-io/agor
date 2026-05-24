@@ -1,12 +1,12 @@
 /**
  * Files Service
  *
- * Provides file and folder autocomplete search for session worktrees.
+ * Provides file and folder autocomplete search for session branches.
  * Uses git ls-files to search tracked files and extracts folders from file paths.
  * Results are filtered by substring match (case-insensitive).
  */
 
-import { type Database, SessionRepository, WorktreeRepository } from '@agor/core/db';
+import { BranchRepository, type Database, SessionRepository } from '@agor/core/db';
 import { createGit } from '@agor/core/git';
 import type { SessionID } from '@agor/core/types';
 
@@ -29,15 +29,15 @@ interface FileResult {
  */
 export class FilesService {
   private sessionRepo: SessionRepository;
-  private worktreeRepo: WorktreeRepository;
+  private branchRepo: BranchRepository;
 
   constructor(db: Database) {
     this.sessionRepo = new SessionRepository(db);
-    this.worktreeRepo = new WorktreeRepository(db);
+    this.branchRepo = new BranchRepository(db);
   }
 
   /**
-   * Search files and folders in a session's worktree
+   * Search files and folders in a session's branch
    *
    * Query params:
    * - sessionId: Session ID
@@ -54,15 +54,15 @@ export class FilesService {
     }
 
     try {
-      // Fetch session to get worktree_id
+      // Fetch session to get branch_id
       const session = await this.sessionRepo.findById(sessionId);
       if (!session) {
         return [];
       }
 
-      // Fetch worktree to get path
-      const worktree = await this.worktreeRepo.findById(session.worktree_id);
-      if (!worktree || !worktree.path) {
+      // Fetch branch to get path
+      const branch = await this.branchRepo.findById(session.branch_id);
+      if (!branch || !branch.path) {
         return [];
       }
 
@@ -70,7 +70,7 @@ export class FilesService {
       // is opt-in here too — otherwise a daemon env that happens to carry
       // `GIT_SSH_COMMAND` (or similar) trips the scanner before the command
       // ever reaches git.
-      const { git } = createGit(worktree.path);
+      const { git } = createGit(branch.path);
       let result: string;
 
       try {
@@ -78,8 +78,8 @@ export class FilesService {
       } catch (error) {
         // Handle "dubious ownership" error on Linux by adding to safe.directory
         if (error instanceof Error && error.message.includes('dubious ownership')) {
-          console.log(`Adding ${worktree.path} to git safe.directory`);
-          await git.addConfig('safe.directory', worktree.path, true, 'global');
+          console.log(`Adding ${branch.path} to git safe.directory`);
+          await git.addConfig('safe.directory', branch.path, true, 'global');
           // Retry the ls-files command
           result = await git.raw(['ls-files', '-z']);
         } else {

@@ -1,6 +1,6 @@
-import type { Artifact, Board, MCPServer, Session, Worktree } from '@agor-live/client';
+import type { Artifact, Board, Branch, MCPServer, Session } from '@agor-live/client';
 
-export type SearchEntityType = 'session' | 'worktree' | 'assistant' | 'artifact' | 'board' | 'mcp';
+export type SearchEntityType = 'session' | 'branch' | 'assistant' | 'artifact' | 'board' | 'mcp';
 
 export type ChipFilter = 'all' | SearchEntityType;
 
@@ -12,7 +12,7 @@ export type ChipFilter = 'all' | SearchEntityType;
  */
 export const SECTION_ORDER: SearchEntityType[] = [
   'session',
-  'worktree',
+  'branch',
   'assistant',
   'artifact',
   'board',
@@ -22,7 +22,7 @@ export const SECTION_ORDER: SearchEntityType[] = [
 export const TYPE_CHIP_ORDER: ChipFilter[] = [
   'all',
   'session',
-  'worktree',
+  'branch',
   'assistant',
   'artifact',
   'board',
@@ -30,7 +30,7 @@ export const TYPE_CHIP_ORDER: ChipFilter[] = [
 ];
 
 /**
- * Chip labels intentionally use the singular ("Session" / "Worktree") so the
+ * Chip labels intentionally use the singular ("Session" / "Branch") so the
  * Segmented control fits the 480px dropdown without wrapping. Section headers
  * in the dropdown body keep the plural ("Sessions · 5") since they sit on
  * their own line with a count beside them.
@@ -38,7 +38,7 @@ export const TYPE_CHIP_ORDER: ChipFilter[] = [
 export const TYPE_CHIP_LABELS: Record<ChipFilter, string> = {
   all: 'All',
   session: 'Session',
-  worktree: 'Worktree',
+  branch: 'Branch',
   assistant: 'Assistant',
   artifact: 'Artifact',
   board: 'Board',
@@ -48,7 +48,7 @@ export const TYPE_CHIP_LABELS: Record<ChipFilter, string> = {
 /** Plural section-header labels for the dropdown body (e.g. "Sessions · 5"). */
 export const SECTION_LABELS: Record<SearchEntityType, string> = {
   session: 'Sessions',
-  worktree: 'Worktrees',
+  branch: 'Branches',
   assistant: 'Assistants',
   artifact: 'Artifacts',
   board: 'Boards',
@@ -57,7 +57,7 @@ export const SECTION_LABELS: Record<SearchEntityType, string> = {
 
 export const TYPE_CHIP_ICONS: Record<SearchEntityType, string> = {
   session: '🤖',
-  worktree: '📁',
+  branch: '📁',
   assistant: '✨',
   artifact: '🧩',
   board: '🗺️',
@@ -65,16 +65,16 @@ export const TYPE_CHIP_ICONS: Record<SearchEntityType, string> = {
 };
 
 export type SearchResultItem =
-  | { type: 'session'; item: Session; parentWorktree?: Worktree }
-  | { type: 'worktree'; item: Worktree }
-  | { type: 'assistant'; item: Worktree }
-  | { type: 'artifact'; item: Artifact; parentWorktree?: Worktree }
+  | { type: 'session'; item: Session; parentBranch?: Branch }
+  | { type: 'branch'; item: Branch }
+  | { type: 'assistant'; item: Branch }
+  | { type: 'artifact'; item: Artifact; parentBranch?: Branch }
   | { type: 'board'; item: Board }
   | { type: 'mcp'; item: MCPServer };
 
 export interface ResultsByType {
   session: SearchResultItem[];
-  worktree: SearchResultItem[];
+  branch: SearchResultItem[];
   assistant: SearchResultItem[];
   artifact: SearchResultItem[];
   board: SearchResultItem[];
@@ -83,7 +83,7 @@ export interface ResultsByType {
 
 export const EMPTY_RESULTS: ResultsByType = {
   session: [],
-  worktree: [],
+  branch: [],
   assistant: [],
   artifact: [],
   board: [],

@@ -6,12 +6,12 @@ import { BranchFormFields } from '../BranchFormFields';
 import type { BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
 
 /** @deprecated Use BranchTabConfig directly. Kept as alias for backward compat. */
-export type NewWorktreeConfig = BranchTabConfig;
+export type NewBranchConfig = BranchTabConfig;
 
 export interface NewBranchModalProps {
   open: boolean;
   onClose: () => void;
-  onCreate: (config: NewWorktreeConfig) => void;
+  onCreate: (config: NewBranchConfig) => void;
   repoById: Map<string, Repo>;
   currentBoardId?: string; // Auto-fill board if provided
   defaultPosition?: { x: number; y: number }; // Default position on canvas (center of viewport)
@@ -47,7 +47,7 @@ export const NewBranchModal: React.FC<NewBranchModalProps> = ({
   // effect re-fires on every `repos.patched` WebSocket event (which gives
   // `repoById` a new Map reference), and `setFieldsValue({ sourceBranch })`
   // silently overwrites whatever the user typed back to the repo's default
-  // branch. The user notices only after submitting that the worktree got
+  // branch. The user notices only after submitting that the branch got
   // created off `main` instead of their chosen branch.
   const initialized = useRef(false);
   useEffect(() => {
@@ -105,10 +105,10 @@ export const NewBranchModal: React.FC<NewBranchModalProps> = ({
       storageMode === 'clone' && typeof values.clone_depth === 'number' && values.clone_depth > 0
         ? values.clone_depth
         : undefined;
-    const config: NewWorktreeConfig = {
+    const config: NewBranchConfig = {
       repoId: values.repoId,
       name: values.name,
-      ref: values.name, // Use worktree name as ref (branch name)
+      ref: values.name, // Use branch name as ref (branch name)
       refType,
       createBranch: true,
       sourceBranch: values.sourceBranch || selectedRepo?.default_branch || 'main',

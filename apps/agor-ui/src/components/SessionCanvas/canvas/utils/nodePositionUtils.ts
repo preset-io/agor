@@ -26,9 +26,9 @@ import type { Node } from 'reactflow';
  * getAbsoluteNodePosition(zoneNode, nodes) // { x: 100, y: 200 }
  *
  * @example
- * // Worktree inside zone (nested)
- * getAbsoluteNodePosition(worktreeNode, nodes)
- * // Resolves: zone.position + worktree.position = absolute
+ * // Branch inside zone (nested)
+ * getAbsoluteNodePosition(branchNode, nodes)
+ * // Resolves: zone.position + branch.position = absolute
  */
 export function getAbsoluteNodePosition(node: Node, allNodes: Node[]): { x: number; y: number } {
   // Fast path: React Flow already calculated absolute position

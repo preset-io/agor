@@ -1,19 +1,19 @@
 /**
- * `agor worktree add <name>` - Create a git worktree
+ * `agor branch add <name>` - Create a git branch
  *
  * Creates an isolated working directory for a specific branch.
  */
 
-import type { Worktree } from '@agor-live/client';
+import type { Branch } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
 
-export default class WorktreeAdd extends BaseCommand {
-  static description = 'Create a git worktree for isolated development';
+export default class BranchAdd extends BaseCommand {
+  static description = 'Create a git branch for isolated development';
 
   static examples = [
-    // Case 1: Create new branch (worktree name = branch name)
+    // Case 1: Create new branch (branch name = branch name)
     '<%= config.bin %> <%= command.id %> feature-auth --repo-id 01933e4a',
     // Case 2: Create new branch with different name
     '<%= config.bin %> <%= command.id %> my-experiment --repo-id 01933e4a --branch feature-x',
@@ -27,7 +27,7 @@ export default class WorktreeAdd extends BaseCommand {
 
   static args = {
     name: Args.string({
-      description: 'Worktree name (becomes branch name if creating new)',
+      description: 'Branch name (becomes branch name if creating new)',
       required: true,
     }),
   };
@@ -39,7 +39,7 @@ export default class WorktreeAdd extends BaseCommand {
     }),
     branch: Flags.string({
       char: 'b',
-      description: 'Branch name (defaults to same as worktree name)',
+      description: 'Branch name (defaults to same as branch name)',
     }),
     checkout: Flags.boolean({
       char: 'c',
@@ -61,7 +61,7 @@ export default class WorktreeAdd extends BaseCommand {
   };
 
   async run(): Promise<void> {
-    const { args, flags } = await this.parse(WorktreeAdd);
+    const { args, flags } = await this.parse(BranchAdd);
     const client = await this.connectToDaemon();
 
     try {
@@ -70,22 +70,22 @@ export default class WorktreeAdd extends BaseCommand {
       // Fetch repo by ID
       const repo = await reposService.get(flags['repo-id']);
 
-      // Check if worktree already exists (query worktrees table)
-      const worktreesService = client.service('worktrees');
-      const worktreesList = await worktreesService.findAll({
+      // Check if branch already exists (query branches table)
+      const branchesService = client.service('branches');
+      const branchesList = await branchesService.findAll({
         query: {
           repo_id: repo.repo_id,
           name: args.name,
         },
       });
-      if (worktreesList.length > 0) {
-        this.error(`Worktree '${args.name}' already exists at ${worktreesList[0].path}`);
+      if (branchesList.length > 0) {
+        this.error(`Branch '${args.name}' already exists at ${branchesList[0].path}`);
       }
 
       this.log('');
       this.log(
         chalk.bold(
-          `Creating worktree ${chalk.cyan(args.name)} in repository ${chalk.cyan(flags['repo-id'])}...`
+          `Creating branch ${chalk.cyan(args.name)} in repository ${chalk.cyan(flags['repo-id'])}...`
         )
       );
       this.log('');
@@ -122,23 +122,23 @@ export default class WorktreeAdd extends BaseCommand {
         }
       }
 
-      // Call daemon API to create worktree
-      const newWorktree = (await client.service('repos').createWorktree(repo.repo_id, {
+      // Call daemon API to create branch
+      const newBranch = (await client.service('repos').createBranch(repo.repo_id, {
         name: args.name,
         ref,
         createBranch,
         pullLatest,
         sourceBranch,
-      })) as unknown as Worktree;
+      })) as unknown as Branch;
 
-      this.log(`${chalk.green('✓')} Worktree created and registered`);
-      this.log(chalk.dim(`  Path: ${newWorktree.path}`));
+      this.log(`${chalk.green('✓')} Branch created and registered`);
+      this.log(chalk.dim(`  Path: ${newBranch.path}`));
 
       this.log('');
       this.log(chalk.bold('Next steps:'));
-      this.log(`  ${chalk.dim('cd')} ${newWorktree.path}`);
+      this.log(`  ${chalk.dim('cd')} ${newBranch.path}`);
       this.log(
-        `  ${chalk.dim('or start session:')} ${chalk.cyan(`agor session start --repo ${flags['repo-id']} --worktree ${args.name}`)}`
+        `  ${chalk.dim('or start session:')} ${chalk.cyan(`agor session start --repo ${flags['repo-id']} --branch ${args.name}`)}`
       );
       this.log('');
 
@@ -146,7 +146,7 @@ export default class WorktreeAdd extends BaseCommand {
     } catch (error) {
       await this.cleanupClient(client);
       this.error(
-        `Failed to create worktree: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to create branch: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }

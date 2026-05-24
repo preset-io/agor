@@ -1,8 +1,8 @@
 /**
- * Worktrees Service
+ * Branches Service
  *
- * Provides REST + WebSocket API for worktree management.
- * Uses DrizzleService adapter with WorktreeRepository.
+ * Provides REST + WebSocket API for branch management.
+ * Uses DrizzleService adapter with BranchRepository.
  */
 
 import type { ChildProcess } from 'node:child_process';
@@ -10,19 +10,19 @@ import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { ENVIRONMENT, isWorktreeRbacEnabled, loadConfig, PAGINATION } from '@agor/core/config';
-import { type Database, WorktreeRepository, type WorktreeWithZoneAndSessions } from '@agor/core/db';
-import { renderWorktreeSnapshot } from '@agor/core/environment/render-snapshot';
+import { ENVIRONMENT, isBranchRbacEnabled, loadConfig, PAGINATION } from '@agor/core/config';
+import { BranchRepository, type BranchWithZoneAndSessions, type Database } from '@agor/core/db';
+import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   BoardID,
+  Branch,
+  BranchID,
   QueryParams,
   Repo,
   UserID,
   UUID,
-  Worktree,
-  WorktreeID,
 } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { getGidFromGroupName, spawnEnvironmentCommand } from '@agor/core/unix';
@@ -31,15 +31,15 @@ import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService } from '../adapters/drizzle';
 import { ensureCanTriggerManagedEnv, ensureMinimumRole } from '../utils/authorization.js';
-import { resolveGitImpersonationForWorktree } from '../utils/git-impersonation.js';
+import { resolveGitImpersonationForBranch } from '../utils/git-impersonation.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import { generateSessionToken, getDaemonUrl, spawnExecutor } from '../utils/spawn-executor.js';
 import type { InternalEnrichmentParams } from './sessions';
 
 /**
- * Worktree service params
+ * Branch service params
  */
-export type WorktreeParams = QueryParams<{
+export type BranchParams = QueryParams<{
   repo_id?: UUID;
   name?: string;
   ref?: string;
@@ -58,39 +58,39 @@ export type WorktreeParams = QueryParams<{
 interface ManagedProcess {
   process: ChildProcess;
   pid: number;
-  worktreeId: WorktreeID;
+  branchId: BranchID;
   startedAt: Date;
   logPath: string;
 }
 
 /**
- * Extended worktrees service with custom methods
+ * Extended branches service with custom methods
  */
-export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>, WorktreeParams> {
-  private worktreeRepo: WorktreeRepository;
+export class BranchesService extends DrizzleService<Branch, Partial<Branch>, BranchParams> {
+  private branchRepo: BranchRepository;
   private db: Database;
   private app: Application;
-  private processes = new Map<WorktreeID, ManagedProcess>();
+  private processes = new Map<BranchID, ManagedProcess>();
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
   private boardObjectsService?: {
     find: (params?: unknown) => Promise<unknown>;
-    findByWorktreeId: (worktreeId: WorktreeID) => Promise<unknown>;
+    findByBranchId: (branchId: BranchID) => Promise<unknown>;
     create: (data: unknown) => Promise<unknown>;
     remove: (id: string) => Promise<unknown>;
   };
 
   constructor(db: Database, app: Application) {
-    const worktreeRepo = new WorktreeRepository(db);
-    super(worktreeRepo, {
-      id: 'worktree_id',
-      resourceType: 'Worktree',
+    const branchRepo = new BranchRepository(db);
+    super(branchRepo, {
+      id: 'branch_id',
+      resourceType: 'Branch',
       paginate: {
         default: PAGINATION.DEFAULT_LIMIT,
         max: PAGINATION.MAX_LIMIT,
       },
     });
 
-    this.worktreeRepo = worktreeRepo;
+    this.branchRepo = branchRepo;
     this.db = db;
     this.app = app;
   }
@@ -101,7 +101,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
    * since all trigger paths reach this service class.
    */
   private async ensureCanTriggerEnv(
-    params: WorktreeParams | undefined,
+    params: BranchParams | undefined,
     action: string
   ): Promise<void> {
     const config = await loadConfig();
@@ -114,7 +114,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
    * entry records explicitly.
    */
   private extractTriggeredBy(
-    params: WorktreeParams | undefined
+    params: BranchParams | undefined
   ): { user_id?: string; email?: string } | undefined {
     const user = (params as AuthenticatedParams | undefined)?.user;
     if (!user) return undefined;
@@ -129,7 +129,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     if (!this.boardObjectsService) {
       this.boardObjectsService = this.app.service('board-objects') as unknown as {
         find: (params?: unknown) => Promise<unknown>;
-        findByWorktreeId: (worktreeId: WorktreeID) => Promise<unknown>;
+        findByBranchId: (branchId: BranchID) => Promise<unknown>;
         create: (data: unknown) => Promise<unknown>;
         remove: (id: string) => Promise<unknown>;
       };
@@ -138,13 +138,13 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   }
 
   /**
-   * Compute a smart default position for a worktree on a board, based on existing entities/zones.
+   * Compute a smart default position for a branch on a board, based on existing entities/zones.
    * Falls back to a small jitter near origin if placement utilities fail.
    */
-  private async computeDefaultBoardPositionForWorktree(
+  private async computeDefaultBoardPositionForBranch(
     boardId: BoardID,
-    currentWorktreeId: WorktreeID,
-    params?: WorktreeParams
+    currentBranchId: BranchID,
+    params?: BranchParams
   ): Promise<{ x: number; y: number }> {
     try {
       const boardObjectsService = this.getBoardObjectsService();
@@ -155,21 +155,21 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       const existingResult = (await boardObjectsService.find({
         query: { board_id: boardId },
         ...params,
-      })) as { data: Array<{ worktree_id?: string | null; position: { x: number; y: number } }> };
+      })) as { data: Array<{ branch_id?: string | null; position: { x: number; y: number } }> };
 
-      const activeWorktreesResult = await this.app.service('worktrees').find({
+      const activeBranchesResult = await this.app.service('branches').find({
         query: { board_id: boardId, archived: false, $limit: 5000 },
         paginate: false,
       });
-      const activeWorktrees = Array.isArray(activeWorktreesResult)
-        ? activeWorktreesResult
-        : (activeWorktreesResult as { data: Array<{ worktree_id: string }> }).data;
-      const activeWorktreeIds = new Set(activeWorktrees.map((wt) => wt.worktree_id));
+      const activeBranches = Array.isArray(activeBranchesResult)
+        ? activeBranchesResult
+        : (activeBranchesResult as { data: Array<{ branch_id: string }> }).data;
+      const activeBranchIds = new Set(activeBranches.map((wt) => wt.branch_id));
 
       const activeEntities = existingResult.data.filter((obj) => {
-        if (!obj.worktree_id) return true;
-        if (obj.worktree_id === currentWorktreeId) return false;
-        return activeWorktreeIds.has(obj.worktree_id);
+        if (!obj.branch_id) return true;
+        if (obj.branch_id === currentBranchId) return false;
+        return activeBranchIds.has(obj.branch_id);
       });
 
       const zones = board?.objects
@@ -188,7 +188,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       return computeDefaultBoardPosition(absolutePositions, zones as never);
     } catch (error) {
       console.warn(
-        `⚠️ Failed smart board placement for worktree ${currentWorktreeId}:`,
+        `⚠️ Failed smart board placement for branch ${currentBranchId}:`,
         error instanceof Error ? error.message : String(error)
       );
       return { x: 100 + Math.random() * 200, y: 100 + Math.random() * 200 };
@@ -198,16 +198,16 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   /**
    * Apply config-driven defaults before insert.
    *
-   * Reads `worktrees.others_can_default` and `worktrees.others_fs_access_default`
+   * Reads `branches.others_can_default` and `branches.others_fs_access_default`
    * so admins can set org-wide defaults in config.yaml. Explicit values on the
    * input always win; defaults fill in only when the caller omits the field.
    */
-  private async applyWorktreeCreateDefaults(data: Partial<Worktree>): Promise<Partial<Worktree>> {
+  private async applyBranchCreateDefaults(data: Partial<Branch>): Promise<Partial<Branch>> {
     const config = await loadConfig();
-    const defaults = config.worktrees;
+    const defaults = config.branches;
     if (!defaults) return data;
 
-    const withDefaults: Partial<Worktree> = { ...data };
+    const withDefaults: Partial<Branch> = { ...data };
     if (defaults.others_can_default !== undefined && withDefaults.others_can === undefined) {
       withDefaults.others_can = defaults.others_can_default;
     }
@@ -221,9 +221,9 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   }
 
   /**
-   * Custom method: Initialize Unix group for a worktree (daemon-side privileged operation).
+   * Custom method: Initialize Unix group for a branch (daemon-side privileged operation).
    *
-   * Called by the executor via Feathers RPC after creating the git worktree on
+   * Called by the executor via Feathers RPC after creating the git branch on
    * disk, so that groupadd/chgrp/setfacl run with daemon sudo privileges
    * regardless of executor impersonation mode.
    *
@@ -231,8 +231,8 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
    * Internal calls (no `provider`) pass through.
    */
   async initializeUnixGroup(
-    data: { worktreeId: string; othersAccess?: 'none' | 'read' | 'write' },
-    params?: WorktreeParams
+    data: { branchId: string; othersAccess?: 'none' | 'read' | 'write' },
+    params?: BranchParams
   ): Promise<{ unixGroup: string }> {
     if (params?.provider) {
       const caller = (params as AuthenticatedParams | undefined)?.user;
@@ -245,44 +245,44 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       }
     }
 
-    const { initializeWorktreeUnixGroup } = await import('../utils/unix-group-init.js');
-    const unixGroup = await initializeWorktreeUnixGroup(
+    const { initializeBranchUnixGroup } = await import('../utils/unix-group-init.js');
+    const unixGroup = await initializeBranchUnixGroup(
       this.db,
       this.app,
-      data.worktreeId,
+      data.branchId,
       data.othersAccess || 'read'
     );
     return { unixGroup };
   }
 
   /**
-   * Override create to inject config-driven worktree defaults.
+   * Override create to inject config-driven branch defaults.
    */
   async create(
-    data: Partial<Worktree> | Partial<Worktree>[],
-    params?: WorktreeParams
-  ): Promise<Worktree | Worktree[]> {
+    data: Partial<Branch> | Partial<Branch>[],
+    params?: BranchParams
+  ): Promise<Branch | Branch[]> {
     if (Array.isArray(data)) {
       const withDefaults = await Promise.all(
-        data.map((item) => this.applyWorktreeCreateDefaults(item))
+        data.map((item) => this.applyBranchCreateDefaults(item))
       );
-      return super.create(withDefaults, params) as Promise<Worktree[]>;
+      return super.create(withDefaults, params) as Promise<Branch[]>;
     }
-    const withDefaults = await this.applyWorktreeCreateDefaults(data);
-    return super.create(withDefaults, params) as Promise<Worktree>;
+    const withDefaults = await this.applyBranchCreateDefaults(data);
+    return super.create(withDefaults, params) as Promise<Branch>;
   }
 
   /**
    * Override patch to handle board_objects when board_id changes and schedule validation
    */
   async patch(
-    id: WorktreeID,
-    data: Partial<Worktree>,
-    params?: WorktreeParams
-  ): Promise<WorktreeWithZoneAndSessions> {
-    // Get current worktree to check if board_id is changing
-    const currentWorktree = await super.get(id, params);
-    const oldBoardId = currentWorktree.board_id;
+    id: BranchID,
+    data: Partial<Branch>,
+    params?: BranchParams
+  ): Promise<BranchWithZoneAndSessions> {
+    // Get current branch to check if board_id is changing
+    const currentBranch = await super.get(id, params);
+    const oldBoardId = currentBranch.board_id;
     const boardIdProvided = Object.hasOwn(data, 'board_id');
     const newBoardId = data.board_id;
 
@@ -310,7 +310,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     }
 
     // If schedule_enabled is being set to true, ensure schedule config exists
-    if (data.schedule_enabled === true && !currentWorktree.schedule && !data.schedule) {
+    if (data.schedule_enabled === true && !currentBranch.schedule && !data.schedule) {
       throw new Error(
         'Cannot enable schedule without schedule configuration. Please provide schedule config in data.schedule.'
       );
@@ -322,21 +322,21 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     }
 
     // Call parent patch
-    const updatedWorktree = (await super.patch(id, data, params)) as Worktree;
+    const updatedBranch = (await super.patch(id, data, params)) as Branch;
 
     // Handle board_objects changes if board_id changed
     if (!boardIdProvided) {
-      const withZone = await this.worktreeRepo.enrichWithZoneInfo(updatedWorktree);
+      const withZone = await this.branchRepo.enrichWithZoneInfo(updatedBranch);
 
       // Only enrich with session activity if explicitly requested
       if (params?.query?.include_sessions === true || params?.query?.include_sessions === 'true') {
         const truncationLength = parseLastMessageTruncationLength(
           params?.query?.last_message_truncation_length
         );
-        return this.worktreeRepo.enrichWithSessionActivity(withZone, truncationLength);
+        return this.branchRepo.enrichWithSessionActivity(withZone, truncationLength);
       }
 
-      return withZone as WorktreeWithZoneAndSessions;
+      return withZone as BranchWithZoneAndSessions;
     }
 
     if (oldBoardId !== newBoardId) {
@@ -344,7 +344,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
       try {
         // First, check if a board_object already exists
-        const existingObject = (await boardObjectsService.findByWorktreeId(id)) as {
+        const existingObject = (await boardObjectsService.findByBranchId(id)) as {
           object_id: string;
         } | null;
 
@@ -355,37 +355,33 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
         // Now create new board_object if board_id is set
         if (newBoardId) {
-          const position = await this.computeDefaultBoardPositionForWorktree(
-            newBoardId,
-            id,
-            params
-          );
+          const position = await this.computeDefaultBoardPositionForBranch(newBoardId, id, params);
           await boardObjectsService.create({
             board_id: newBoardId,
-            worktree_id: id,
+            branch_id: id,
             position,
           });
         }
       } catch (error) {
         console.error(
-          `❌ Failed to manage board_objects for worktree ${id}:`,
+          `❌ Failed to manage board_objects for branch ${id}:`,
           error instanceof Error ? error.message : String(error)
         );
-        // Don't throw - allow worktree patch to succeed even if board_object management fails
+        // Don't throw - allow branch patch to succeed even if board_object management fails
       }
     }
 
-    const withZone = await this.worktreeRepo.enrichWithZoneInfo(updatedWorktree);
+    const withZone = await this.branchRepo.enrichWithZoneInfo(updatedBranch);
 
     // Only enrich with session activity if explicitly requested
     if (params?.query?.include_sessions === true || params?.query?.include_sessions === 'true') {
       const truncationLength = parseLastMessageTruncationLength(
         params?.query?.last_message_truncation_length
       );
-      return this.worktreeRepo.enrichWithSessionActivity(withZone, truncationLength);
+      return this.branchRepo.enrichWithSessionActivity(withZone, truncationLength);
     }
 
-    return withZone as WorktreeWithZoneAndSessions;
+    return withZone as BranchWithZoneAndSessions;
   }
 
   /**
@@ -393,14 +389,14 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
    *
    * Session activity enrichment is opt-in via include_sessions query parameter
    */
-  async get(id: WorktreeID, params?: WorktreeParams): Promise<WorktreeWithZoneAndSessions> {
+  async get(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
     // Check both query params and root-level params (root-level bypasses Feathers query filtering)
     const includeSessionsQuery = params?.query?.include_sessions;
     const includeSessionsRoot = params?._include_sessions;
     const includeSessions = includeSessionsRoot ?? includeSessionsQuery;
 
-    const worktree = await super.get(id, params);
-    const withZone = await this.worktreeRepo.enrichWithZoneInfo(worktree as Worktree);
+    const branch = await super.get(id, params);
+    const withZone = await this.branchRepo.enrichWithZoneInfo(branch as Branch);
 
     // Only enrich with session activity if explicitly requested
     if (includeSessions === true || includeSessions === 'true') {
@@ -409,11 +405,11 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       const truncationLength = parseLastMessageTruncationLength(
         truncationLengthRoot ?? truncationLengthQuery
       );
-      const result = await this.worktreeRepo.enrichWithSessionActivity(withZone, truncationLength);
+      const result = await this.branchRepo.enrichWithSessionActivity(withZone, truncationLength);
       return result;
     }
 
-    return withZone as WorktreeWithZoneAndSessions;
+    return withZone as BranchWithZoneAndSessions;
   }
 
   /**
@@ -421,15 +417,15 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
    *
    * Note: Session activity is NOT included in list operations - only on single GET
    */
-  async find(params?: WorktreeParams) {
+  async find(params?: BranchParams) {
     // Use default find to ensure all hooks and scoping are applied (including repo_id filter)
     const result = await super.find(params);
 
     // Handle both paginated and non-paginated results
     if (Array.isArray(result)) {
-      return this.worktreeRepo.enrichManyWithZoneInfo(result as Worktree[]);
+      return this.branchRepo.enrichManyWithZoneInfo(result as Branch[]);
     } else {
-      const enriched = await this.worktreeRepo.enrichManyWithZoneInfo(result.data as Worktree[]);
+      const enriched = await this.branchRepo.enrichManyWithZoneInfo(result.data as Branch[]);
       return {
         ...result,
         data: enriched,
@@ -442,11 +438,11 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
    *
    * Delegates filesystem removal to executor for Unix isolation.
    */
-  async remove(id: WorktreeID, params?: WorktreeParams): Promise<Worktree> {
+  async remove(id: BranchID, params?: BranchParams): Promise<Branch> {
     const { deleteFromFilesystem } = params?.query || {};
 
-    // Get worktree details before deletion
-    const worktree = await this.get(id, params);
+    // Get branch details before deletion
+    const branch = await this.get(id, params);
 
     // Remove from database FIRST for instant UI feedback
     // CASCADE will clean up related comments automatically
@@ -455,13 +451,13 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     // Then remove from filesystem via executor (fire-and-forget)
     // Executor handles its own logging and error reporting via Feathers
     if (deleteFromFilesystem) {
-      console.log(`🗑️  Spawning executor to remove worktree from filesystem: ${worktree.path}`);
+      console.log(`🗑️  Spawning executor to remove branch from filesystem: ${branch.path}`);
 
       // Resolve Unix user for sudo wrap. Returns undefined in simple/no-RBAC
       // mode so we don't try to sudo on hosts without passwordless sudoers
-      // (#1140 root cause; #1143 fixed the worktree-remove sister bug by
+      // (#1140 root cause; #1143 fixed the branch-remove sister bug by
       // centralizing the gate inside the resolver itself).
-      const asUser = await resolveGitImpersonationForWorktree(this.db, worktree);
+      const asUser = await resolveGitImpersonationForBranch(this.db, branch);
 
       // Generate session token for executor authentication. Hook chain
       // enforces auth before we get here, so non-null assertion is safe.
@@ -472,69 +468,69 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
       // Generate token and spawn executor (fire-and-forget)
       appWithToken.sessionTokenService
-        ?.generateToken('worktree-remove', userId)
+        ?.generateToken('branch-remove', userId)
         .then((sessionToken) => {
           spawnExecutor(
             {
-              command: 'git.worktree.remove',
+              command: 'git.branch.remove',
               sessionToken,
               daemonUrl: getDaemonUrl(),
               params: {
-                worktreeId: worktree.worktree_id,
-                worktreePath: worktree.path,
+                branchId: branch.branch_id,
+                branchPath: branch.path,
                 deleteDbRecord: false, // Already deleted above
                 // Clean up the branch if it was created by Agor
-                branch: worktree.ref,
-                deleteBranch: worktree.new_branch,
+                branch: branch.ref,
+                deleteBranch: branch.new_branch,
                 // Branch storage mode — executor needs this to pick the right
                 // teardown path (clone-mode just rm -rf; worktree-mode also
                 // runs `git worktree remove --force` against the base repo).
-                storageMode: worktree.storage_mode ?? 'worktree',
+                storageMode: branch.storage_mode ?? 'worktree',
               },
             },
             {
-              logPrefix: `[WorktreesService.remove ${worktree.name}]`,
+              logPrefix: `[BranchesService.remove ${branch.name}]`,
               asUser, // Run as resolved user (fresh groups via sudo -u)
             }
           );
         })
         .catch((error) => {
           console.error(
-            `⚠️  Failed to generate session token for worktree removal:`,
+            `⚠️  Failed to generate session token for branch removal:`,
             error instanceof Error ? error.message : String(error)
           );
         });
     }
 
-    return result as Worktree;
+    return result as Branch;
   }
 
   /**
-   * Custom method: Archive or delete worktree with filesystem options
+   * Custom method: Archive or delete branch with filesystem options
    *
    * This method implements the archive/delete modal functionality.
    * Supports both soft delete (archive) and hard delete, with granular filesystem control.
    *
-   * @param id - Worktree ID
+   * @param id - Branch ID
    * @param options - Archive/delete configuration
    * @param params - Query params
    */
   async archiveOrDelete(
-    id: WorktreeID,
+    id: BranchID,
     options: {
       metadataAction: 'archive' | 'delete';
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     },
-    params?: WorktreeParams
-  ): Promise<WorktreeWithZoneAndSessions | { deleted: true; worktree_id: WorktreeID }> {
+    params?: BranchParams
+  ): Promise<BranchWithZoneAndSessions | { deleted: true; branch_id: BranchID }> {
     const { metadataAction, filesystemAction } = options;
-    const worktree = await this.get(id, params);
+    const branch = await this.get(id, params);
     // Hook chain enforces auth before we get here.
     const currentUserId = (params as AuthenticatedParams).user!.user_id as UUID;
 
     // Stop environment if running
-    if (worktree.environment_instance?.status === 'running') {
-      console.log(`⚠️  Stopping environment for worktree ${worktree.name} before ${metadataAction}`);
+    if (branch.environment_instance?.status === 'running') {
+      console.log(`⚠️  Stopping environment for branch ${branch.name} before ${metadataAction}`);
       try {
         await this.stopEnvironment(id, params);
       } catch (error) {
@@ -554,70 +550,70 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     };
 
     if (filesystemAction === 'cleaned') {
-      console.log(`🧹 Spawning executor to clean worktree filesystem: ${worktree.path}`);
+      console.log(`🧹 Spawning executor to clean branch filesystem: ${branch.path}`);
 
       // No user impersonation for infrastructure operations — the daemon user
-      // owns all worktrees and impersonation would resolve getWorktreesDir()
+      // owns all branches and impersonation would resolve getBranchesDir()
       // to the wrong home directory, causing safety check failures.
 
       appWithToken.sessionTokenService
-        ?.generateToken('worktree-clean', userId ?? currentUserId)
+        ?.generateToken('branch-clean', userId ?? currentUserId)
         .then((sessionToken) => {
           spawnExecutor(
             {
-              command: 'git.worktree.clean',
+              command: 'git.branch.clean',
               sessionToken,
               daemonUrl: getDaemonUrl(),
               params: {
-                worktreePath: worktree.path,
+                branchPath: branch.path,
               },
             },
             {
-              logPrefix: `[WorktreesService.clean ${worktree.name}]`,
+              logPrefix: `[BranchesService.clean ${branch.name}]`,
             }
           );
         })
         .catch((error) => {
           console.error(
-            `⚠️  Failed to generate session token for worktree cleaning:`,
+            `⚠️  Failed to generate session token for branch cleaning:`,
             error instanceof Error ? error.message : String(error)
           );
         });
     } else if (filesystemAction === 'deleted') {
-      console.log(`🗑️  Spawning executor to delete worktree from filesystem: ${worktree.path}`);
+      console.log(`🗑️  Spawning executor to delete branch from filesystem: ${branch.path}`);
 
       // No user impersonation for infrastructure operations — the daemon user
-      // owns all worktrees and impersonation would resolve getWorktreesDir()
+      // owns all branches and impersonation would resolve getBranchesDir()
       // to the wrong home directory, causing safety check failures.
 
       appWithToken.sessionTokenService
-        ?.generateToken('worktree-delete', userId ?? currentUserId)
+        ?.generateToken('branch-delete', userId ?? currentUserId)
         .then((sessionToken) => {
           spawnExecutor(
             {
-              command: 'git.worktree.remove',
+              command: 'git.branch.remove',
               sessionToken,
               daemonUrl: getDaemonUrl(),
               params: {
-                worktreeId: worktree.worktree_id,
-                worktreePath: worktree.path,
+                branchId: branch.branch_id,
+                branchPath: branch.path,
                 deleteDbRecord: false, // Daemon handles DB deletion separately
                 // Clean up the branch if it was created by Agor
-                branch: worktree.ref,
-                deleteBranch: worktree.new_branch,
+                branch: branch.ref,
+                deleteBranch: branch.new_branch,
                 // Branch storage mode — see sibling call site comment in
-                // `WorktreesService.remove` above for why this matters.
-                storageMode: worktree.storage_mode ?? 'worktree',
+                // `BranchesService.remove` above for why this matters.
+                storageMode: branch.storage_mode ?? 'worktree',
               },
             },
             {
-              logPrefix: `[WorktreesService.delete ${worktree.name}]`,
+              logPrefix: `[BranchesService.delete ${branch.name}]`,
             }
           );
         })
         .catch((error) => {
           console.error(
-            `⚠️  Failed to generate session token for worktree deletion:`,
+            `⚠️  Failed to generate session token for branch deletion:`,
             error instanceof Error ? error.message : String(error)
           );
         });
@@ -625,11 +621,11 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
     // Metadata action: archive or delete
     if (metadataAction === 'archive') {
-      // Archive: Soft delete worktree and cascade to sessions
-      console.log(`📦 Archiving worktree: ${worktree.name} (filesystem: ${filesystemAction})`);
+      // Archive: Soft delete branch and cascade to sessions
+      console.log(`📦 Archiving branch: ${branch.name} (filesystem: ${filesystemAction})`);
 
-      // Update worktree
-      const archivedWorktree = await this.patch(
+      // Update branch
+      const archivedBranch = await this.patch(
         id,
         {
           archived: true,
@@ -642,11 +638,11 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
         params
       );
 
-      // Archive all sessions in this worktree
-      // Use internal call (no provider) to bypass RBAC hooks that would ignore worktree_id filter
+      // Archive all sessions in this branch
+      // Use internal call (no provider) to bypass RBAC hooks that would ignore branch_id filter
       const sessionsService = this.app.service('sessions');
       const sessionsResult = await sessionsService.find({
-        query: { worktree_id: id, $limit: 1000 },
+        query: { branch_id: id, $limit: 1000 },
         paginate: false,
       });
       const sessions = Array.isArray(sessionsResult) ? sessionsResult : sessionsResult.data;
@@ -656,46 +652,46 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           session.session_id,
           {
             archived: true,
-            archived_reason: 'worktree_archived',
+            archived_reason: 'branch_archived',
           },
           { provider: undefined } // Bypass RBAC - this is an internal cascade operation
         );
       }
 
-      console.log(`✅ Archived worktree ${worktree.name} and ${sessions.length} session(s)`);
-      return archivedWorktree;
+      console.log(`✅ Archived branch ${branch.name} and ${sessions.length} session(s)`);
+      return archivedBranch;
     } else {
       // Delete: Hard delete (CASCADE will remove sessions, messages, tasks)
-      console.log(`🗑️  Permanently deleting worktree: ${worktree.name}`);
+      console.log(`🗑️  Permanently deleting branch: ${branch.name}`);
 
       await this.remove(id, params);
 
-      console.log(`✅ Permanently deleted worktree ${worktree.name}`);
-      return { deleted: true, worktree_id: id };
+      console.log(`✅ Permanently deleted branch ${branch.name}`);
+      return { deleted: true, branch_id: id };
     }
   }
 
   /**
-   * Custom method: Unarchive a worktree
+   * Custom method: Unarchive a branch
    */
   async unarchive(
-    id: WorktreeID,
+    id: BranchID,
     options?: { boardId?: BoardID },
-    params?: WorktreeParams
-  ): Promise<WorktreeWithZoneAndSessions> {
-    const worktree = await this.get(id, params);
+    params?: BranchParams
+  ): Promise<BranchWithZoneAndSessions> {
+    const branch = await this.get(id, params);
 
-    if (!worktree.archived) {
-      throw new Error(`Worktree ${worktree.name} is not archived`);
+    if (!branch.archived) {
+      throw new Error(`Branch ${branch.name} is not archived`);
     }
 
-    console.log(`📦 Unarchiving worktree: ${worktree.name}`);
+    console.log(`📦 Unarchiving branch: ${branch.name}`);
 
     const boardIdExplicitlyProvided = options !== undefined && 'boardId' in options;
-    const targetBoardId = boardIdExplicitlyProvided ? options?.boardId : worktree.board_id;
+    const targetBoardId = boardIdExplicitlyProvided ? options?.boardId : branch.board_id;
 
-    // Update worktree - clear archive metadata
-    const patchData: Partial<Worktree> = {
+    // Update branch - clear archive metadata
+    const patchData: Partial<Branch> = {
       archived: false,
       archived_at: undefined,
       archived_by: undefined,
@@ -706,36 +702,36 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       patchData.board_id = options?.boardId;
     }
 
-    const unarchivedWorktree = await this.patch(id, patchData, params);
+    const unarchivedBranch = await this.patch(id, patchData, params);
 
-    // Recreate the git worktree on filesystem if the directory is missing
+    // Recreate the git branch on filesystem if the directory is missing
     // (e.g., it was archived with filesystemAction: 'deleted')
-    if (!existsSync(worktree.path)) {
-      console.log(`📂 Worktree directory missing, spawning executor to recreate: ${worktree.path}`);
+    if (!existsSync(branch.path)) {
+      console.log(`📂 Branch directory missing, spawning executor to recreate: ${branch.path}`);
 
       // Set filesystem_status to 'creating' while we rebuild
       await this.patch(id, { filesystem_status: 'creating' }, { provider: undefined });
 
       // Look up repo to get local_path
       const reposService = this.app.service('repos');
-      const repo = (await reposService.get(worktree.repo_id)) as Repo;
+      const repo = (await reposService.get(branch.repo_id)) as Repo;
 
-      const rbacEnabled = isWorktreeRbacEnabled();
+      const rbacEnabled = isBranchRbacEnabled();
       const { getDaemonUser } = await import('@agor/core/config');
       const daemonUser = getDaemonUser();
 
       // No user impersonation for infrastructure operations — the daemon user
-      // owns all worktrees and impersonation would resolve getWorktreesDir()
+      // owns all branches and impersonation would resolve getBranchesDir()
       // to the wrong home directory, causing safety check failures.
 
       // Mirror the create path's storage-mode forwarding. Without this, a
-      // clone-mode worktree that was archived with filesystemAction='deleted'
+      // clone-mode branch that was archived with filesystemAction='deleted'
       // would silently rebuild as native worktree mode, leaving the DB row
       // (storage_mode='clone') and disk (.git pointer file) inconsistent.
-      const storageMode = worktree.storage_mode ?? 'worktree';
+      const storageMode = branch.storage_mode ?? 'worktree';
       if (storageMode === 'clone' && !repo.remote_url) {
         const errMsg =
-          `Cannot unarchive clone-mode worktree '${worktree.name}' for repo '${repo.slug}': ` +
+          `Cannot unarchive clone-mode branch '${branch.name}' for repo '${repo.slug}': ` +
           `repo has no remote_url. The clone source URL is unknown.`;
         console.error(`⚠️  ${errMsg}`);
         await this.patch(
@@ -743,7 +739,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
           { filesystem_status: 'failed', error_message: errMsg },
           { provider: undefined }
         );
-        return unarchivedWorktree;
+        return unarchivedBranch;
       }
 
       try {
@@ -755,36 +751,36 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
         );
         spawnExecutor(
           {
-            command: 'git.worktree.add',
+            command: 'git.branch.add',
             sessionToken,
             daemonUrl: getDaemonUrl(),
             params: {
-              worktreeId: worktree.worktree_id,
+              branchId: branch.branch_id,
               repoId: repo.repo_id,
               repoPath: repo.local_path,
-              worktreeName: worktree.name,
-              worktreePath: worktree.path,
-              branch: worktree.ref,
-              refType: worktree.ref_type || 'branch',
+              branchName: branch.name,
+              branchPath: branch.path,
+              branch: branch.ref,
+              refType: branch.ref_type || 'branch',
               // Use restore mode: checks if branch exists on remote via ls-remote,
               // checks out existing branch if found, otherwise creates new branch from base_ref.
               // This is safe because it only creates a new branch when ls-remote confirms
               // the branch doesn't exist on the remote (no risk of force-deleting existing branches).
               createBranch: false,
               restoreMode: true,
-              sourceBranch: worktree.base_ref || repo.default_branch || 'main',
+              sourceBranch: branch.base_ref || repo.default_branch || 'main',
               // Unix group isolation
               initUnixGroup: rbacEnabled,
-              othersAccess: worktree.others_fs_access || 'read',
+              othersAccess: branch.others_fs_access || 'read',
               daemonUser,
               repoUnixGroup: repo.unix_group,
-              // Branch storage mode — preserves the worktree's original
+              // Branch storage mode — preserves the branch's original
               // storage_mode across archive → delete → unarchive.
               storageMode,
-              ...(worktree.clone_depth !== undefined ? { cloneDepth: worktree.clone_depth } : {}),
+              ...(branch.clone_depth !== undefined ? { cloneDepth: branch.clone_depth } : {}),
               ...(storageMode === 'clone' && repo.remote_url ? { remoteUrl: repo.remote_url } : {}),
               // `--reference` hint: see the create-path call site in
-              // ReposService.createWorktree for the rationale (executor
+              // ReposService.createBranch for the rationale (executor
               // existsSync's the path and falls back gracefully).
               ...(storageMode === 'clone' && repo.local_path
                 ? { referencePath: repo.local_path }
@@ -792,12 +788,12 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
             },
           },
           {
-            logPrefix: `[WorktreesService.unarchive ${worktree.name}]`,
+            logPrefix: `[BranchesService.unarchive ${branch.name}]`,
           }
         );
       } catch (error) {
         console.error(
-          `⚠️  Failed to spawn executor for worktree recreation:`,
+          `⚠️  Failed to spawn executor for branch recreation:`,
           error instanceof Error ? error.message : String(error)
         );
         // Mark as failed so the UI can show the error state
@@ -811,41 +807,41 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     }
 
     // Ensure a board object exists when unarchiving to a board.
-    // Older archived worktrees may have had their board object removed.
+    // Older archived branches may have had their board object removed.
     if (targetBoardId) {
       const boardObjectsService = this.getBoardObjectsService();
       try {
-        const existingObject = (await boardObjectsService.findByWorktreeId(id)) as {
+        const existingObject = (await boardObjectsService.findByBranchId(id)) as {
           object_id: string;
         } | null;
         if (!existingObject) {
-          const position = await this.computeDefaultBoardPositionForWorktree(
+          const position = await this.computeDefaultBoardPositionForBranch(
             targetBoardId,
             id,
             params
           );
           await boardObjectsService.create({
             board_id: targetBoardId,
-            worktree_id: id,
+            branch_id: id,
             position,
           });
         }
       } catch (error) {
         console.error(
-          `⚠️ Failed to restore board object for unarchived worktree ${id}:`,
+          `⚠️ Failed to restore board object for unarchived branch ${id}:`,
           error instanceof Error ? error.message : String(error)
         );
       }
     }
 
-    // Unarchive all sessions that were archived due to worktree archival
-    // Use internal call (no provider) to bypass RBAC hooks that would ignore worktree_id filter
+    // Unarchive all sessions that were archived due to branch archival
+    // Use internal call (no provider) to bypass RBAC hooks that would ignore branch_id filter
     const sessionsService = this.app.service('sessions');
     const sessionsResult = await sessionsService.find({
       query: {
-        worktree_id: id,
+        branch_id: id,
         archived: true,
-        archived_reason: 'worktree_archived',
+        archived_reason: 'branch_archived',
         $limit: 1000,
       },
       paginate: false,
@@ -863,34 +859,34 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       );
     }
 
-    console.log(`✅ Unarchived worktree ${worktree.name} and ${sessions.length} session(s)`);
-    return unarchivedWorktree;
+    console.log(`✅ Unarchived branch ${branch.name} and ${sessions.length} session(s)`);
+    return unarchivedBranch;
   }
 
   /**
-   * Custom method: Find worktree by repo_id and name
+   * Custom method: Find branch by repo_id and name
    */
   async findByRepoAndName(
     repoId: UUID,
     name: string,
-    _params?: WorktreeParams
-  ): Promise<Worktree | null> {
-    return this.worktreeRepo.findByRepoAndName(repoId, name);
+    _params?: BranchParams
+  ): Promise<Branch | null> {
+    return this.branchRepo.findByRepoAndName(repoId, name);
   }
 
   /**
-   * Custom method: Add worktree to board
+   * Custom method: Add branch to board
    *
-   * Phase 0: Sets board_id on worktree
+   * Phase 0: Sets board_id on branch
    * Phase 1: Will also create board_object entry for positioning
    */
   async addToBoard(
-    id: WorktreeID,
+    id: BranchID,
     boardId: UUID,
-    params?: WorktreeParams
-  ): Promise<WorktreeWithZoneAndSessions> {
-    // Set worktree.board_id (patch already enriches with zone info)
-    const worktree = await this.patch(
+    params?: BranchParams
+  ): Promise<BranchWithZoneAndSessions> {
+    // Set branch.board_id (patch already enriches with zone info)
+    const branch = await this.patch(
       id,
       {
         board_id: boardId,
@@ -902,26 +898,23 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     // TODO (Phase 1): Create board_object entry for positioning
     // await this.app.service('board-objects').create({
     //   board_id: boardId,
-    //   object_type: 'worktree',
-    //   worktree_id: id,
+    //   object_type: 'branch',
+    //   branch_id: id,
     //   position: { x: 100, y: 100 }, // Default position
     // });
 
-    return worktree;
+    return branch;
   }
 
   /**
-   * Custom method: Remove worktree from board
+   * Custom method: Remove branch from board
    *
-   * Phase 0: Clears board_id on worktree
+   * Phase 0: Clears board_id on branch
    * Phase 1: Will also remove board_object entry
    */
-  async removeFromBoard(
-    id: WorktreeID,
-    params?: WorktreeParams
-  ): Promise<WorktreeWithZoneAndSessions> {
-    // Clear worktree.board_id (patch already enriches with zone info, but it will be empty now)
-    const worktree = await this.patch(
+  async removeFromBoard(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
+    // Clear branch.board_id (patch already enriches with zone info, but it will be empty now)
+    const branch = await this.patch(
       id,
       {
         board_id: undefined,
@@ -932,29 +925,29 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
     // TODO (Phase 1): Remove board_object entry
     // const objects = await this.app.service('board-objects').find({
-    //   query: { worktree_id: id },
+    //   query: { branch_id: id },
     // });
     // for (const obj of objects.data) {
     //   await this.app.service('board-objects').remove(obj.object_id);
     // }
 
-    return worktree;
+    return branch;
   }
 
   /**
    * Custom method: Update environment status
    */
   async updateEnvironment(
-    id: WorktreeID,
-    environmentUpdate: Partial<Worktree['environment_instance']>,
-    params?: WorktreeParams
-  ): Promise<WorktreeWithZoneAndSessions> {
+    id: BranchID,
+    environmentUpdate: Partial<Branch['environment_instance']>,
+    params?: BranchParams
+  ): Promise<BranchWithZoneAndSessions> {
     const existing = await this.get(id, params);
 
     const updatedEnvironment = {
       ...existing.environment_instance,
       ...environmentUpdate,
-    } as Worktree['environment_instance'];
+    } as Branch['environment_instance'];
 
     // Check if environment state actually changed (ignoring timestamp-only updates)
     // For health checks, we only care about status and message changes, not timestamp
@@ -978,7 +971,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       return existing;
     }
 
-    const worktree = await this.patch(
+    const branch = await this.patch(
       id,
       {
         environment_instance: updatedEnvironment,
@@ -987,26 +980,23 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       params
     );
 
-    return worktree;
+    return branch;
   }
 
   /**
    * Custom method: Start environment
    */
-  async startEnvironment(
-    id: WorktreeID,
-    params?: WorktreeParams
-  ): Promise<WorktreeWithZoneAndSessions> {
-    await this.ensureCanTriggerEnv(params, 'start worktree environments');
-    const worktree = await this.get(id, params);
+  async startEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
+    await this.ensureCanTriggerEnv(params, 'start branch environments');
+    const branch = await this.get(id, params);
 
     // Validate static start command exists
-    if (!worktree.start_command) {
-      throw new Error('No start command configured for this worktree');
+    if (!branch.start_command) {
+      throw new Error('No start command configured for this branch');
     }
 
     // Check if already running
-    if (worktree.environment_instance?.status === 'running') {
+    if (branch.environment_instance?.status === 'running') {
       throw new Error('Environment is already running');
     }
 
@@ -1018,7 +1008,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       {
         status: 'starting',
         process: {
-          ...worktree.environment_instance?.process,
+          ...branch.environment_instance?.process,
           started_at: new Date().toISOString(),
         },
         last_health_check: undefined,
@@ -1028,18 +1018,18 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     );
 
     try {
-      // Use static start_command (initialized from template at worktree creation)
-      const command = worktree.start_command;
+      // Use static start_command (initialized from template at branch creation)
+      const command = branch.start_command;
 
-      console.log(`🚀 Starting environment for worktree ${worktree.name}: ${command}`);
+      console.log(`🚀 Starting environment for branch ${branch.name}: ${command}`);
 
       // Create log directory
       const logPath = join(
         homedir(),
         '.agor',
         'logs',
-        'worktrees',
-        worktree.worktree_id,
+        'branches',
+        branch.branch_id,
         'environment.log'
       );
       await mkdir(dirname(logPath), { recursive: true });
@@ -1048,7 +1038,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       // Use stdio: 'pipe' to capture output for error reporting
       const childProcess = await spawnEnvironmentCommand({
         command,
-        worktree,
+        branch,
         db: this.db,
         commandType: 'start',
         stdio: 'pipe',
@@ -1078,7 +1068,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       await new Promise<void>((resolve, reject) => {
         childProcess.on('exit', (code: number | null) => {
           if (code === 0) {
-            console.log(`✅ Start command completed successfully for ${worktree.name}`);
+            console.log(`✅ Start command completed successfully for ${branch.name}`);
             resolve();
           } else {
             // Combine collected output and truncate to last ~100 lines
@@ -1100,10 +1090,10 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
         childProcess.on('error', (error: Error) => reject(error));
       });
 
-      // Use static app_url (initialized from template at worktree creation)
+      // Use static app_url (initialized from template at branch creation)
       let access_urls: Array<{ name: string; url: string }> | undefined;
-      if (worktree.app_url) {
-        access_urls = [{ name: 'App', url: worktree.app_url }];
+      if (branch.app_url) {
+        access_urls = [{ name: 'App', url: branch.app_url }];
       }
 
       // Keep status as 'starting' - let health checks transition to 'running'
@@ -1146,12 +1136,9 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   /**
    * Custom method: Stop environment
    */
-  async stopEnvironment(
-    id: WorktreeID,
-    params?: WorktreeParams
-  ): Promise<WorktreeWithZoneAndSessions> {
-    await this.ensureCanTriggerEnv(params, 'stop worktree environments');
-    const worktree = await this.get(id, params);
+  async stopEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
+    await this.ensureCanTriggerEnv(params, 'stop branch environments');
+    const branch = await this.get(id, params);
 
     // Set status to 'stopping'
     await this.updateEnvironment(
@@ -1164,16 +1151,16 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
     try {
       // Check if we have a static stop command
-      if (worktree.stop_command) {
-        // Use static stop_command (initialized from template at worktree creation)
-        const command = worktree.stop_command;
+      if (branch.stop_command) {
+        // Use static stop_command (initialized from template at branch creation)
+        const command = branch.stop_command;
 
-        console.log(`🛑 Stopping environment for worktree ${worktree.name}: ${command}`);
+        console.log(`🛑 Stopping environment for branch ${branch.name}: ${command}`);
 
         // Execute down command
         const stopProcess = await spawnEnvironmentCommand({
           command,
-          worktree,
+          branch,
           db: this.db,
           commandType: 'stop',
           triggeredBy: this.extractTriggeredBy(params),
@@ -1196,13 +1183,13 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
         if (managedProcess) {
           managedProcess.process.kill('SIGTERM');
           this.processes.delete(id);
-        } else if (worktree.environment_instance?.process?.pid) {
+        } else if (branch.environment_instance?.process?.pid) {
           // Try to kill by PID stored in database
           try {
-            process.kill(worktree.environment_instance.process.pid, 'SIGTERM');
+            process.kill(branch.environment_instance.process.pid, 'SIGTERM');
           } catch (error) {
             console.warn(
-              `Failed to kill process ${worktree.environment_instance.process.pid}: ${error}`
+              `Failed to kill process ${branch.environment_instance.process.pid}: ${error}`
             );
           }
         }
@@ -1245,13 +1232,13 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
    * Custom method: Restart environment
    */
   async restartEnvironment(
-    id: WorktreeID,
-    params?: WorktreeParams
-  ): Promise<WorktreeWithZoneAndSessions> {
-    const worktree = await this.get(id, params);
+    id: BranchID,
+    params?: BranchParams
+  ): Promise<BranchWithZoneAndSessions> {
+    const branch = await this.get(id, params);
 
     // Stop if running
-    if (worktree.environment_instance?.status === 'running') {
+    if (branch.environment_instance?.status === 'running') {
       await this.stopEnvironment(id, params);
 
       // Wait a bit for processes to clean up
@@ -1265,16 +1252,13 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   /**
    * Custom method: Nuke environment (destructive operation)
    */
-  async nukeEnvironment(
-    id: WorktreeID,
-    params?: WorktreeParams
-  ): Promise<WorktreeWithZoneAndSessions> {
-    await this.ensureCanTriggerEnv(params, 'nuke worktree environments');
-    const worktree = await this.get(id, params);
+  async nukeEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
+    await this.ensureCanTriggerEnv(params, 'nuke branch environments');
+    const branch = await this.get(id, params);
 
     // Require nuke_command to be configured
-    if (!worktree.nuke_command) {
-      throw new Error('No nuke_command configured for this worktree');
+    if (!branch.nuke_command) {
+      throw new Error('No nuke_command configured for this branch');
     }
 
     // Set status to 'stopping' (reuse stopping state for nuke)
@@ -1287,15 +1271,15 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     );
 
     try {
-      const command = worktree.nuke_command;
+      const command = branch.nuke_command;
 
-      console.log(`💣 NUKING environment for worktree ${worktree.name}: ${command}`);
+      console.log(`💣 NUKING environment for branch ${branch.name}: ${command}`);
       console.warn('⚠️  This is a destructive operation!');
 
       // Execute nuke command
       const nukeProcess = await spawnEnvironmentCommand({
         command,
-        worktree,
+        branch,
         db: this.db,
         commandType: 'nuke',
         triggeredBy: this.extractTriggeredBy(params),
@@ -1355,18 +1339,18 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
   /**
    * Custom method: Check health
    */
-  async checkHealth(id: WorktreeID, params?: WorktreeParams): Promise<WorktreeWithZoneAndSessions> {
-    const worktree = await this.get(id, params);
-    const _repo = (await this.app.service('repos').get(worktree.repo_id, params)) as Repo;
+  async checkHealth(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
+    const branch = await this.get(id, params);
+    const _repo = (await this.app.service('repos').get(branch.repo_id, params)) as Repo;
 
     // Only check health for 'running' or 'starting' status
-    const currentStatus = worktree.environment_instance?.status;
+    const currentStatus = branch.environment_instance?.status;
     if (currentStatus !== 'running' && currentStatus !== 'starting') {
-      return worktree;
+      return branch;
     }
 
     // Check if we have a health check URL (static field, not template)
-    if (!worktree.health_check_url) {
+    if (!branch.health_check_url) {
       // No health check configured - stay in 'starting' forever (manual intervention required)
       // Don't auto-transition to 'running' without health check confirmation
       const managedProcess = this.processes.get(id);
@@ -1385,8 +1369,8 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       );
     }
 
-    // Use static health_check_url (initialized from template at worktree creation)
-    const healthUrl = worktree.health_check_url;
+    // Use static health_check_url (initialized from template at branch creation)
+    const healthUrl = branch.health_check_url;
 
     // Validate URL to prevent SSRF against cloud metadata or internal services
     if (!isAllowedHealthCheckUrl(healthUrl)) {
@@ -1405,7 +1389,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     }
 
     // Track previous health status to detect changes
-    const previousHealthStatus = worktree.environment_instance?.last_health_check?.status;
+    const previousHealthStatus = branch.environment_instance?.last_health_check?.status;
 
     try {
       // Perform HTTP health check with timeout
@@ -1425,7 +1409,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       // Only log if health status changed
       if (previousHealthStatus !== newHealthStatus) {
         console.log(
-          `🏥 Health status changed for ${worktree.name}: ${previousHealthStatus || 'unknown'} → ${newHealthStatus} (HTTP ${response.status})`
+          `🏥 Health status changed for ${branch.name}: ${previousHealthStatus || 'unknown'} → ${newHealthStatus} (HTTP ${response.status})`
         );
       }
 
@@ -1434,7 +1418,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
       if (shouldTransitionToRunning) {
         console.log(
-          `✅ First successful health check for ${worktree.name} - transitioning to 'running'`
+          `✅ First successful health check for ${branch.name} - transitioning to 'running'`
         );
       }
 
@@ -1466,7 +1450,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       if (currentStatus === 'starting') {
         // Don't update health check during startup - wait for first success
         // This prevents the UI from showing unhealthy state while environment is still starting
-        return worktree;
+        return branch;
       }
 
       const newHealthStatus = 'unhealthy';
@@ -1474,7 +1458,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       // Only log if health status changed or if this is an error
       if (previousHealthStatus !== newHealthStatus) {
         console.log(
-          `🏥 Health status changed for ${worktree.name}: ${previousHealthStatus || 'unknown'} → ${newHealthStatus} (${message})`
+          `🏥 Health status changed for ${branch.name}: ${previousHealthStatus || 'unknown'} → ${newHealthStatus} (${message})`
         );
       }
 
@@ -1496,19 +1480,19 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
    * Custom method: Get environment logs
    */
   async getLogs(
-    id: WorktreeID,
-    params?: WorktreeParams
+    id: BranchID,
+    params?: BranchParams
   ): Promise<{
     logs: string;
     timestamp: string;
     error?: string;
     truncated?: boolean;
   }> {
-    await this.ensureCanTriggerEnv(params, 'fetch worktree environment logs');
-    const worktree = await this.get(id, params);
+    await this.ensureCanTriggerEnv(params, 'fetch branch environment logs');
+    const branch = await this.get(id, params);
 
     // Check if static logs command is configured
-    if (!worktree.logs_command) {
+    if (!branch.logs_command) {
       return {
         logs: '',
         timestamp: new Date().toISOString(),
@@ -1517,15 +1501,15 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     }
 
     try {
-      // Use static logs_command (initialized from template at worktree creation)
-      const command = worktree.logs_command;
+      // Use static logs_command (initialized from template at branch creation)
+      const command = branch.logs_command;
 
-      console.log(`📋 Fetching logs for worktree ${worktree.name}: ${command}`);
+      console.log(`📋 Fetching logs for branch ${branch.name}: ${command}`);
 
       // Execute command with timeout and output limits
       const childProcess = await spawnEnvironmentCommand({
         command,
-        worktree,
+        branch,
         db: this.db,
         commandType: 'logs',
         stdio: 'pipe', // Need to capture output for logs
@@ -1594,7 +1578,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       const truncated = result.truncated || wasTruncatedByLines;
 
       console.log(
-        `✅ Fetched ${allLines.length} lines (${logs.length} bytes) for ${worktree.name}${truncated ? ' [truncated]' : ''}`
+        `✅ Fetched ${allLines.length} lines (${logs.length} bytes) for ${branch.name}${truncated ? ' [truncated]' : ''}`
       );
 
       return {
@@ -1604,7 +1588,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
       };
     } catch (error) {
       console.error(
-        `❌ Failed to fetch logs for ${worktree.name}:`,
+        `❌ Failed to fetch logs for ${branch.name}:`,
         error instanceof Error ? error.message : String(error)
       );
 
@@ -1618,7 +1602,7 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 
   /**
    * Custom method: Re-render environment commands from the repo's v2
-   * `environment` config and persist the result onto the worktree.
+   * `environment` config and persist the result onto the branch.
    *
    * When no `variant` is supplied, the repo's default variant is used.
    * Re-rendering with the currently-selected variant is allowed for any
@@ -1627,19 +1611,19 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
    * that run as the system user (same rationale as `requireAdminForEnvConfig`
    * in authorization.ts).
    *
-   * Returns the updated worktree (with new `environment_variant`, `start_command`,
+   * Returns the updated branch (with new `environment_variant`, `start_command`,
    * `stop_command`, etc).
    */
   async renderEnvironment(
-    id: WorktreeID,
+    id: BranchID,
     data: { variant?: string } | undefined,
-    params?: WorktreeParams
-  ): Promise<WorktreeWithZoneAndSessions> {
-    await this.ensureCanTriggerEnv(params, 'render worktree environment');
+    params?: BranchParams
+  ): Promise<BranchWithZoneAndSessions> {
+    await this.ensureCanTriggerEnv(params, 'render branch environment');
 
-    const worktree = await this.get(id, params);
+    const branch = await this.get(id, params);
     const reposService = this.app.service('repos');
-    const repo = (await reposService.get(worktree.repo_id, params)) as Repo;
+    const repo = (await reposService.get(branch.repo_id, params)) as Repo;
 
     const env = repo.environment;
     if (!env) {
@@ -1647,22 +1631,22 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     }
 
     const requestedVariant = data?.variant ?? env.default;
-    const currentVariant = worktree.environment_variant;
+    const currentVariant = branch.environment_variant;
 
     // Variant change (including first-time assignment against an existing
-    // worktree) replaces executable commands → require admin.
+    // branch) replaces executable commands → require admin.
     if (requestedVariant !== currentVariant) {
       ensureMinimumRole(
         params,
         ROLES.ADMIN,
-        `change worktree environment variant to "${requestedVariant}"`
+        `change branch environment variant to "${requestedVariant}"`
       );
 
       // Refuse to swap variants while the env is live. The current process
       // was started with the old command strings; replacing them out from
       // under it would leave us unable to stop/restart cleanly. This guard
       // is the authoritative invariant for ALL callers (REST, UI, MCP).
-      const envStatus = worktree.environment_instance?.status;
+      const envStatus = branch.environment_instance?.status;
       if (envStatus === 'running' || envStatus === 'starting') {
         throw new Error(
           `Cannot change environment variant to "${requestedVariant}" while the environment is ${envStatus} ` +
@@ -1674,22 +1658,22 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
     // Resolve host IP + unix GID (matches executor's renderEnvironmentTemplates).
     const config = await loadConfig();
     const hostIpAddress = resolveHostIpAddress(config.daemon?.host_ip_address);
-    const unixGid = worktree.unix_group ? getGidFromGroupName(worktree.unix_group) : undefined;
+    const unixGid = branch.unix_group ? getGidFromGroupName(branch.unix_group) : undefined;
 
-    const snapshot = renderWorktreeSnapshot(
+    const snapshot = renderBranchSnapshot(
       { slug: repo.slug, environment: env },
       {
-        worktree_unique_id: worktree.worktree_unique_id,
-        name: worktree.name,
-        path: worktree.path,
-        custom_context: worktree.custom_context,
+        branch_unique_id: branch.branch_unique_id,
+        name: branch.name,
+        path: branch.path,
+        custom_context: branch.custom_context,
         unix_gid: unixGid,
         host_ip_address: hostIpAddress,
       },
       requestedVariant
     );
     if (!snapshot) {
-      // Should be unreachable: env is non-null and renderWorktreeSnapshot only
+      // Should be unreachable: env is non-null and renderBranchSnapshot only
       // returns null when env is absent. Defensive throw keeps types honest.
       throw new Error('Failed to render environment snapshot');
     }
@@ -1714,6 +1698,6 @@ export class WorktreesService extends DrizzleService<Worktree, Partial<Worktree>
 /**
  * Service factory function
  */
-export function createWorktreesService(db: Database, app: Application): WorktreesService {
-  return new WorktreesService(db, app);
+export function createBranchesService(db: Database, app: Application): BranchesService {
+  return new BranchesService(db, app);
 }

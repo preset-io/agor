@@ -27,7 +27,7 @@ describe('coerceJsonRecord', () => {
 
   it('parses a complex stringified object with markdown content', () => {
     const obj = {
-      worktreeId: 'abc-123',
+      branchId: 'abc-123',
       initialPrompt:
         '# Hello\n\nSome **markdown** with `backticks` and\n\n```ts\nconst x = 1;\n```',
     };

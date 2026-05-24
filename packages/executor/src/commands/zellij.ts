@@ -6,7 +6,7 @@
  * Architecture:
  * - One executor per user (spawned when user opens first terminal)
  * - Executor owns a single PTY running `zellij attach`
- * - Zellij manages multiple tabs (one per worktree)
+ * - Zellij manages multiple tabs (one per branch)
  * - PTY I/O streams over Feathers channel: user/${userId}/terminal
  *
  * Lifecycle:
@@ -14,7 +14,7 @@
  * 2. Executor connects to daemon, joins user's terminal channel
  * 3. Executor spawns PTY with zellij attach
  * 4. PTY output → channel → browser; browser input → channel → PTY
- * 5. User opens another worktree → daemon sends zellij.tab command
+ * 5. User opens another branch → daemon sends zellij.tab command
  * 6. User closes all terminals → daemon kills executor
  */
 
@@ -223,7 +223,7 @@ export async function handleZellijAttach(
       }
     });
 
-    // Listen for tab commands (from daemon when user switches worktrees
+    // Listen for tab commands (from daemon when user switches branches
     // OR when a `claude-code-cli` session is created — the daemon passes
     // `command` + `commandArgs` so the new tab spawns the `claude` binary
     // directly into its foreground process).

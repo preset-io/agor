@@ -7,7 +7,7 @@
  *
  * Both follow the same resolution path:
  *   1. Load the widget message row by `widget_id` (message_id == widget_id).
- *   2. Authorize: caller is session creator OR has prompt-tier worktree RBAC.
+ *   2. Authorize: caller is session creator OR has prompt-tier branch RBAC.
  *   3. Idempotency: status MUST be 'pending'.
  *   4. Dispatch to the registry (`applySubmit` for submit; no side-effect
  *      for dismiss).
@@ -26,15 +26,15 @@
 
 import { Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import type {
+  Branch,
   Message,
   MessageID,
   Session,
   SessionID,
   UserID,
   WidgetMessageMetadata,
-  Worktree,
 } from '@agor/core/types';
-import { PERMISSION_RANK, resolveWorktreePermission } from '../utils/worktree-authorization.js';
+import { PERMISSION_RANK, resolveBranchPermission } from '../utils/branch-authorization.js';
 import { getWidget, type WidgetSubmitCtx } from './registry.js';
 
 /**
@@ -52,8 +52,8 @@ export interface WidgetResolverApp {
 
 export interface WidgetResolverDeps {
   app: WidgetResolverApp;
-  /** Worktree ownership lookup — pulled out so tests can stub without RBAC plumbing. */
-  isWorktreeOwner(worktreeId: string, userId: UserID): Promise<boolean>;
+  /** Branch ownership lookup — pulled out so tests can stub without RBAC plumbing. */
+  isBranchOwner(branchId: string, userId: UserID): Promise<boolean>;
 }
 
 export interface AuthenticatedCaller {
@@ -73,18 +73,18 @@ export interface WidgetResolutionResult {
 
 /**
  * Check whether the caller is allowed to resolve a widget for the given
- * session+worktree. Mirrors the rule in §5.2 / R4: session creator always
- * passes; worktree owners pass via the owner-bypass path; non-creators need
- * prompt-tier worktree RBAC.
+ * session+branch. Mirrors the rule in §5.2 / R4: session creator always
+ * passes; branch owners pass via the owner-bypass path; non-creators need
+ * prompt-tier branch RBAC.
  */
 export function canResolveWidget(
   caller: AuthenticatedCaller,
   session: Pick<Session, 'created_by'>,
-  worktree: Worktree,
+  branch: Branch,
   isOwner: boolean
 ): boolean {
   if (session.created_by === caller.user_id) return true;
-  const effective = resolveWorktreePermission(worktree, caller.user_id, isOwner, caller.role);
+  const effective = resolveBranchPermission(branch, caller.user_id, isOwner, caller.role);
   return PERMISSION_RANK[effective] >= PERMISSION_RANK.prompt;
 }
 
@@ -158,14 +158,14 @@ async function doResolveWidget(
     throw new NotFound(`Widget ${widgetId} has no widget metadata`);
   }
 
-  // 2. Load the session + worktree for authz.
+  // 2. Load the session + branch for authz.
   const session = (await deps.app.service('sessions').get(message.session_id)) as Session;
-  const worktree = (await deps.app.service('worktrees').get(session.worktree_id)) as Worktree;
-  const isOwner = await deps.isWorktreeOwner(worktree.worktree_id, caller.user_id);
+  const branch = (await deps.app.service('branches').get(session.branch_id)) as Branch;
+  const isOwner = await deps.isBranchOwner(branch.branch_id, caller.user_id);
 
-  if (!canResolveWidget(caller, session, worktree, isOwner)) {
+  if (!canResolveWidget(caller, session, branch, isOwner)) {
     throw new Forbidden(
-      `You need to be the session creator, a worktree owner, or have 'prompt' permission on the worktree to resolve this widget.`
+      `You need to be the session creator, a branch owner, or have 'prompt' permission on the branch to resolve this widget.`
     );
   }
 

@@ -11,6 +11,7 @@ export type {
   AgorClient,
   AgorService,
   BoardsService,
+  BranchesService,
   MessagesService,
   ReposCloneService,
   ReposLocalService,
@@ -26,7 +27,6 @@ export type {
   TemplateRenderRequest,
   TemplateRenderResponse,
   TemplatesService,
-  WorktreesService,
 } from '../api/index.js';
 export {
   createClient,
@@ -58,12 +58,12 @@ export {
 export {
   artifactPath,
   boardPath,
+  branchPath,
   ENTITY_PATH_SEGMENTS,
   getArtifactUrl,
   getBoardUrl,
+  getBranchUrl,
   getSessionUrl,
-  getWorktreeUrl,
   sessionPath,
   UI_MOUNT_PATH,
-  worktreePath,
 } from '../utils/url.js';

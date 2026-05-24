@@ -1,4 +1,4 @@
-import type { Artifact, Board, MCPServer, Session, Worktree } from '@agor-live/client';
+import type { Artifact, Board, Branch, MCPServer, Session } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -15,10 +15,10 @@ import { byTimestamp } from './utils';
 interface UseGlobalSearchInput {
   query: string;
   ownedByMe: boolean;
-  activeTypeChip: 'all' | 'session' | 'worktree' | 'assistant' | 'artifact' | 'board' | 'mcp';
+  activeTypeChip: 'all' | 'session' | 'branch' | 'assistant' | 'artifact' | 'board' | 'mcp';
   currentUserId?: string;
   sessionById: Map<string, Session>;
-  worktreeById: Map<string, Worktree>;
+  branchById: Map<string, Branch>;
   artifactById: Map<string, Artifact>;
   boardById: Map<string, Board>;
   mcpServerById: Map<string, MCPServer>;
@@ -38,7 +38,7 @@ export function useGlobalSearch({
   activeTypeChip,
   currentUserId,
   sessionById,
-  worktreeById,
+  branchById,
   artifactById,
   boardById,
   mcpServerById,
@@ -69,7 +69,7 @@ export function useGlobalSearch({
     const sectionLimit = activeTypeChip === 'all' ? SECTION_LIMIT : SECTION_LIMIT_EXPANDED;
     const buckets: ResultsByType = {
       session: [],
-      worktree: [],
+      branch: [],
       assistant: [],
       artifact: [],
       board: [],
@@ -89,16 +89,16 @@ export function useGlobalSearch({
         buckets.session.push({
           type: 'session',
           item: s,
-          parentWorktree: worktreeById.get(s.worktree_id),
+          parentBranch: branchById.get(s.branch_id),
         });
       }
     }
 
-    // Worktrees + Assistants share the same table — split via the canonical
+    // Branches + Assistants share the same table — split via the canonical
     // isAssistant() helper from @agor-live/client. Assistants' user-visible
     // displayName lives in custom_context.assistant and must be searchable too.
-    if (includeType('worktree') || includeType('assistant')) {
-      const allWorktrees = Array.from(worktreeById.values())
+    if (includeType('branch') || includeType('assistant')) {
+      const allBranches = Array.from(branchById.values())
         .filter((w) => !ownedByMe || w.created_by === currentUserId)
         .filter((w) =>
           matchTokens(tokens, [
@@ -110,15 +110,15 @@ export function useGlobalSearch({
         )
         .sort(byTimestamp((w) => w.updated_at));
 
-      for (const w of allWorktrees) {
+      for (const w of allBranches) {
         if (isAssistant(w) && includeType('assistant') && buckets.assistant.length < sectionLimit) {
           buckets.assistant.push({ type: 'assistant', item: w });
         } else if (
           !isAssistant(w) &&
-          includeType('worktree') &&
-          buckets.worktree.length < sectionLimit
+          includeType('branch') &&
+          buckets.branch.length < sectionLimit
         ) {
-          buckets.worktree.push({ type: 'worktree', item: w });
+          buckets.branch.push({ type: 'branch', item: w });
         }
       }
     }
@@ -134,7 +134,7 @@ export function useGlobalSearch({
         buckets.artifact.push({
           type: 'artifact',
           item: a,
-          parentWorktree: a.worktree_id ? worktreeById.get(a.worktree_id) : undefined,
+          parentBranch: a.branch_id ? branchById.get(a.branch_id) : undefined,
         });
       }
     }
@@ -169,7 +169,7 @@ export function useGlobalSearch({
     activeTypeChip,
     currentUserId,
     sessionById,
-    worktreeById,
+    branchById,
     artifactById,
     boardById,
     mcpServerById,
@@ -177,7 +177,7 @@ export function useGlobalSearch({
 
   const hasAnyResults =
     results.session.length > 0 ||
-    results.worktree.length > 0 ||
+    results.branch.length > 0 ||
     results.assistant.length > 0 ||
     results.artifact.length > 0 ||
     results.board.length > 0 ||

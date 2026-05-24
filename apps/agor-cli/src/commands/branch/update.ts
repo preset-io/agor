@@ -1,17 +1,17 @@
 /**
- * `agor worktree update <worktree-id>` - Update worktree metadata
+ * `agor branch update <branch-id>` - Update branch metadata
  *
  * Update issue URL, PR URL, notes, and other metadata fields.
  */
 
-import type { Worktree } from '@agor-live/client';
+import type { Branch } from '@agor-live/client';
 import { shortId } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
 
-export default class WorktreeUpdate extends BaseCommand {
-  static description = 'Update worktree metadata';
+export default class BranchUpdate extends BaseCommand {
+  static description = 'Update branch metadata';
 
   static examples = [
     '<%= config.bin %> <%= command.id %> abc123 --issue https://github.com/user/repo/issues/123',
@@ -21,8 +21,8 @@ export default class WorktreeUpdate extends BaseCommand {
   ];
 
   static args = {
-    worktreeId: Args.string({
-      description: 'Worktree ID (full UUID or short ID)',
+    branchId: Args.string({
+      description: 'Branch ID (full UUID or short ID)',
       required: true,
     }),
   };
@@ -40,7 +40,7 @@ export default class WorktreeUpdate extends BaseCommand {
   };
 
   async run(): Promise<void> {
-    const { args, flags } = await this.parse(WorktreeUpdate);
+    const { args, flags } = await this.parse(BranchUpdate);
 
     // Check if any updates were provided
     if (!flags.issue && !flags.pr && !flags.notes) {
@@ -51,20 +51,20 @@ export default class WorktreeUpdate extends BaseCommand {
     const client = await this.connectToDaemon();
 
     try {
-      const worktreesService = client.service('worktrees');
+      const branchesService = client.service('branches');
 
       // Build update object
-      const updates: Partial<Worktree> = {};
+      const updates: Partial<Branch> = {};
       if (flags.issue !== undefined) updates.issue_url = flags.issue;
       if (flags.pr !== undefined) updates.pull_request_url = flags.pr;
       if (flags.notes !== undefined) updates.notes = flags.notes;
 
-      // Update worktree
-      const updated = await worktreesService.patch(args.worktreeId, updates);
+      // Update branch
+      const updated = await branchesService.patch(args.branchId, updates);
 
       this.log('');
-      this.log(`${chalk.green('✓')} Worktree updated: ${chalk.cyan(updated.name)}`);
-      this.log(`  ID: ${chalk.dim(shortId(updated.worktree_id))}`);
+      this.log(`${chalk.green('✓')} Branch updated: ${chalk.cyan(updated.name)}`);
+      this.log(`  ID: ${chalk.dim(shortId(updated.branch_id))}`);
       this.log('');
 
       // Show what was updated
@@ -86,7 +86,7 @@ export default class WorktreeUpdate extends BaseCommand {
     } catch (error) {
       await this.cleanupClient(client);
       this.error(
-        `Failed to update worktree: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to update branch: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }

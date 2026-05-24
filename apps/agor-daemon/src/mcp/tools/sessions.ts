@@ -1,4 +1,4 @@
-import { shortId, WorktreeRepository, type WorktreeWithZoneAndSessions } from '@agor/core/db';
+import { BranchRepository, type BranchWithZoneAndSessions, shortId } from '@agor/core/db';
 import {
   AVAILABLE_CLAUDE_MODEL_ALIASES,
   CODEX_MODEL_METADATA,
@@ -23,12 +23,12 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { SessionsServiceImpl } from '../../declarations.js';
 import type { SessionParams } from '../../services/sessions.js';
-import { ensureCanPromptTargetSession } from '../../utils/worktree-authorization.js';
+import { ensureCanPromptTargetSession } from '../../utils/branch-authorization.js';
 import {
   resolveBoardId,
+  resolveBranchId,
   resolveMcpServerId,
   resolveSessionId,
-  resolveWorktreeId,
 } from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
@@ -122,7 +122,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .optional()
           .describe('Filter by session status'),
         boardId: z.string().optional().describe('Filter sessions by board ID (UUIDv7 or short ID)'),
-        worktreeId: z.string().optional().describe('Filter sessions by worktree ID'),
+        branchId: z.string().optional().describe('Filter sessions by branch ID'),
         includeArchived: z
           .boolean()
           .optional()
@@ -139,7 +139,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .enum(['gateway', 'scheduled', 'agent'])
           .optional()
           .describe(
-            "Filter by session type. 'gateway' = sessions from messaging integrations (Slack, Discord, GitHub). 'scheduled' = sessions created by worktree schedules. 'agent' = manually created sessions (excludes gateway and scheduled)."
+            "Filter by session type. 'gateway' = sessions from messaging integrations (Slack, Discord, GitHub). 'scheduled' = sessions created by branch schedules. 'agent' = manually created sessions (excludes gateway and scheduled)."
           ),
       }),
     },
@@ -151,7 +151,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       if (!args.sessionType && requestedLimit) query.$limit = requestedLimit;
       if (args.status) query.status = args.status;
       if (args.boardId) query.board_id = await resolveBoardId(ctx, args.boardId);
-      if (args.worktreeId) query.worktree_id = await resolveWorktreeId(ctx, args.worktreeId);
+      if (args.branchId) query.branch_id = await resolveBranchId(ctx, args.branchId);
       if (args.archived === true) {
         query.archived = true;
       } else if (!args.includeArchived) {
@@ -159,7 +159,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       }
       const result = await ctx.app.service('sessions').find({ query, ...ctx.baseServiceParams });
 
-      // Apply sessionType filter (post-query since custom_context/scheduled_from_worktree aren't in query schema)
+      // Apply sessionType filter (post-query since custom_context/scheduled_from_branch aren't in query schema)
       if (args.sessionType) {
         const targetType = args.sessionType as SessionType;
         const filterFn = (s: Session) => getSessionType(s) === targetType;
@@ -207,7 +207,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_get_current',
     {
       description:
-        'Get information about the current session (the one making this MCP call). Returns session details, denormalized worktree/repo/board context, and the MCP servers attached to this session (each with `oauth_authenticated` so callers can spot servers needing auth). To browse the broader catalog of servers eligible to attach, use `agor_mcp_servers_list`.',
+        'Get information about the current session (the one making this MCP call). Returns session details, denormalized branch/repo/board context, and the MCP servers attached to this session (each with `oauth_authenticated` so callers can spot servers needing auth). To browse the broader catalog of servers eligible to attach, use `agor_mcp_servers_list`.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({}),
     },
@@ -221,18 +221,18 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         .service('sessions')
         .get(ctx.sessionId, currentSessionParams as Parameters<SessionsServiceImpl['get']>[1]);
 
-      // Denormalize worktree, repo, and board context
-      let worktree: Record<string, unknown> | null = null;
+      // Denormalize branch, repo, and board context
+      let branch: Record<string, unknown> | null = null;
       let repo: Record<string, unknown> | null = null;
       let board: Record<string, unknown> | null = null;
 
-      if (session.worktree_id) {
+      if (session.branch_id) {
         try {
           const wt = await ctx.app
-            .service('worktrees')
-            .get(session.worktree_id, ctx.baseServiceParams);
-          worktree = {
-            worktree_id: wt.worktree_id,
+            .service('branches')
+            .get(session.branch_id, ctx.baseServiceParams);
+          branch = {
+            branch_id: wt.branch_id,
             name: wt.name,
             ref: wt.ref,
             path: wt.path,
@@ -266,7 +266,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             }
           }
         } catch {
-          // worktree may have been deleted
+          // branch may have been deleted
         }
       }
 
@@ -274,7 +274,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       return textResult({
         session,
-        worktree,
+        branch,
         repo,
         board,
         attached_mcp_servers,
@@ -289,14 +289,14 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_get_current_context',
     {
       description:
-        'Get a lean orientation snapshot for the current session in ONE call. Returns deduplicated context: session identity, user, git state, worktree (zone, issue/PR, notes, environment), board (with zones), repo (slug, default branch), genealogy, and sibling sessions. Every field appears exactly once. Use get_current or entity-specific tools for full details.',
+        'Get a lean orientation snapshot for the current session in ONE call. Returns deduplicated context: session identity, user, git state, branch (zone, issue/PR, notes, environment), board (with zones), repo (slug, default branch), genealogy, and sibling sessions. Every field appears exactly once. Use get_current or entity-specific tools for full details.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         includeSiblings: z
           .boolean()
           .optional()
           .describe(
-            'Include other active sessions in the same worktree (default: true). Set false to reduce response size.'
+            'Include other active sessions in the same branch (default: true). Set false to reduce response size.'
           ),
       }),
     },
@@ -354,17 +354,17 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       result.base_sha = session.git_state?.base_sha || null;
       result.current_sha = session.git_state?.current_sha || null;
 
-      if (session.worktree_id) {
+      if (session.branch_id) {
         try {
-          // worktrees.get returns WorktreeWithZoneAndSessions (enriched with zone info)
+          // branches.get returns BranchWithZoneAndSessions (enriched with zone info)
           const wt = (await ctx.app
-            .service('worktrees')
-            .get(session.worktree_id, ctx.baseServiceParams)) as WorktreeWithZoneAndSessions;
+            .service('branches')
+            .get(session.branch_id, ctx.baseServiceParams)) as BranchWithZoneAndSessions;
 
-          // Worktree context (no IDs that duplicate other sections)
-          result.worktree_id = wt.worktree_id;
-          result.worktree_name = wt.name;
-          result.worktree_path = wt.path;
+          // Branch context (no IDs that duplicate other sections)
+          result.branch_id = wt.branch_id;
+          result.branch_name = wt.name;
+          result.branch_path = wt.path;
           result.base_ref = wt.base_ref || null;
           result.issue_url = wt.issue_url || null;
           result.pull_request_url = wt.pull_request_url || null;
@@ -416,13 +416,13 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             }
           }
 
-          // Sibling sessions in the same worktree
+          // Sibling sessions in the same branch
           if (includeSiblings) {
             try {
               // Fetch 11 to guarantee 10 siblings after excluding current session
               const siblings = await ctx.app.service('sessions').find({
                 query: {
-                  worktree_id: session.worktree_id,
+                  branch_id: session.branch_id,
                   archived: false,
                   $limit: 11,
                   $sort: { last_updated: -1 },
@@ -453,7 +453,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             }
           }
         } catch {
-          // worktree may have been deleted
+          // branch may have been deleted
         }
       }
 
@@ -466,7 +466,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_spawn',
     {
       description:
-        'Spawn a child session (subsession) for delegating work to another agent. Inherits the current worktree and tracks parent-child genealogy. Use for subtasks like "run tests", "review this code", or "fix linting errors". Configuration is inherited from parent (same agent) or user defaults (different agent).',
+        'Spawn a child session (subsession) for delegating work to another agent. Inherits the current branch and tracks parent-child genealogy. Use for subtasks like "run tests", "review this code", or "fix linting errors". Configuration is inherited from parent (same agent) or user defaults (different agent).',
       inputSchema: z.object({
         prompt: z.string().describe('The prompt/task for the subsession agent to execute'),
         title: z
@@ -707,9 +707,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_create',
     {
       description:
-        'Create a new session in an existing worktree. Use for starting fresh work on a new task in the same codebase (e.g., new feature branch, separate investigation). Unlike spawn, this creates an independent session with no parent-child relationship. MCP servers are inherited from the worktree (if configured) or user defaults, or can be overridden via `mcpServerIds`. Model selection falls back to user defaults and can be overridden via `modelConfig` (accepts either a model ID string like "claude-opus-4-6" or a full {mode, model, effort, provider} object — call `agor_models_list` to discover valid model IDs per agenticTool). Supports optional callbacks to notify the creating session when the new session completes.',
+        'Create a new session in an existing branch. Use for starting fresh work on a new task in the same codebase (e.g., new feature branch, separate investigation). Unlike spawn, this creates an independent session with no parent-child relationship. MCP servers are inherited from the branch (if configured) or user defaults, or can be overridden via `mcpServerIds`. Model selection falls back to user defaults and can be overridden via `modelConfig` (accepts either a model ID string like "claude-opus-4-6" or a full {mode, model, effort, provider} object — call `agor_models_list` to discover valid model IDs per agenticTool). Supports optional callbacks to notify the creating session when the new session completes.',
       inputSchema: z.object({
-        worktreeId: z.string().describe('Worktree ID where the session will run (required)'),
+        branchId: z.string().describe('Branch ID where the session will run (required)'),
         agenticTool: z
           .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini'])
           .describe('Which agent to use for this session (required)'),
@@ -755,7 +755,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .array(z.string())
           .optional()
           .describe(
-            'MCP server IDs to attach. Overrides worktree and user default inheritance. Omit to use worktree config > user defaults.'
+            'MCP server IDs to attach. Overrides branch and user default inheritance. Omit to use branch config > user defaults.'
           ),
         modelConfig: modelConfigInputSchema,
       }),
@@ -766,15 +766,13 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       // Fetch user data to get unix_username
       const user = await ctx.app.service('users').get(ctx.userId, ctx.baseServiceParams);
 
-      // Get worktree to extract repo context
-      const worktree = await ctx.app
-        .service('worktrees')
-        .get(args.worktreeId, ctx.baseServiceParams);
+      // Get branch to extract repo context
+      const branch = await ctx.app.service('branches').get(args.branchId, ctx.baseServiceParams);
 
       // Get current git state
       const { getGitState, getCurrentBranch } = await import('@agor/core/git');
-      const currentSha = await getGitState(worktree.path);
-      const currentRef = await getCurrentBranch(worktree.path);
+      const currentSha = await getGitState(branch.path);
+      const currentRef = await getCurrentBranch(branch.path);
 
       // Resolve permission_config / model_config / inherited mcp_server_ids
       // from the explicit MCP args (highest priority) > user defaults > system
@@ -782,7 +780,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       // `@agor/core/sessions` so MCP tools, the gateway, and the
       // `before:create` hook can't drift apart.
       //
-      // For the explicit MCP args we resolve short IDs first; worktree/user
+      // For the explicit MCP args we resolve short IDs first; branch/user
       // defaults are already full UUIDs, so the helper passes them through.
       const explicitMcpServerIds =
         args.mcpServerIds !== undefined
@@ -791,7 +789,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       const resolvedDefaults = resolveSessionDefaults({
         agenticTool,
         user,
-        worktree,
+        branch,
         overrides: {
           modelConfig: coerceModelConfig(args.modelConfig),
           mcpServerIds: explicitMcpServerIds,
@@ -804,7 +802,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       // Track whether the caller explicitly requested these servers. When they
       // did, we surface attach failures in the response instead of silently
       // dropping them (the "mcpServerId doesn't stick" bug). For inherited
-      // servers (worktree/user defaults) we preserve the existing "gracefully
+      // servers (branch/user defaults) we preserve the existing "gracefully
       // skip deleted/invalid" behavior so startup doesn't get chatty.
       const mcpServerIdsFromArgs = args.mcpServerIds !== undefined;
 
@@ -815,15 +813,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       const effectiveCallbackSessionId = args.callbackSessionId || ctx.sessionId;
       const wantsCallback = args.enableCallback || args.callbackSessionId;
 
-      // Validate user has prompt permission on the callback target session's worktree
+      // Validate user has prompt permission on the callback target session's branch
       if (wantsCallback && args.callbackSessionId) {
-        const worktreeRepo = new WorktreeRepository(ctx.db);
-        await ensureCanPromptTargetSession(
-          args.callbackSessionId,
-          ctx.userId,
-          ctx.app,
-          worktreeRepo
-        );
+        const branchRepo = new BranchRepository(ctx.db);
+        await ensureCanPromptTargetSession(args.callbackSessionId, ctx.userId, ctx.app, branchRepo);
       }
 
       if (args.enableCallback !== undefined) {
@@ -845,7 +838,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       }
 
       const sessionData: Record<string, unknown> = {
-        worktree_id: worktree.worktree_id,
+        branch_id: branch.branch_id,
         agentic_tool: agenticTool,
         status: 'idle',
         title: args.title,
@@ -867,7 +860,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       const session = await ctx.app.service('sessions').create(sessionData, ctx.baseServiceParams);
 
-      // Attach MCP servers (inherited from worktree or user defaults, or
+      // Attach MCP servers (inherited from branch or user defaults, or
       // explicitly requested via args.mcpServerIds). Explicit failures are
       // collected and returned to the caller so they don't silently vanish.
       const mcpAttachFailures: Array<{ mcp_server_id: string; reason: string }> = [];
@@ -890,7 +883,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
               // Caller explicitly asked for this server — surface the failure.
               mcpAttachFailures.push({ mcp_server_id: mcpServerId, reason });
             } else {
-              // Inherited from worktree/user defaults — gracefully skip.
+              // Inherited from branch/user defaults — gracefully skip.
               console.warn(
                 `Skipped MCP server ${mcpServerId} for session ${session.session_id}: ${reason}`
               );
@@ -1118,7 +1111,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_bulk_archive',
     {
       description:
-        'Archive multiple sessions matching filter criteria. Supports filtering by session type (gateway/scheduled/agent), age, status, board, and worktree. Returns a dry-run preview by default — set dryRun to false to actually archive. Respects RBAC: sessions the current user cannot modify are skipped and reported as errors.',
+        'Archive multiple sessions matching filter criteria. Supports filtering by session type (gateway/scheduled/agent), age, status, board, and branch. Returns a dry-run preview by default — set dryRun to false to actually archive. Respects RBAC: sessions the current user cannot modify are skipped and reported as errors.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         sessionType: z
@@ -1139,7 +1132,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .optional()
           .describe('Only archive sessions with this status'),
         boardId: z.string().optional().describe('Only archive sessions on this board'),
-        worktreeId: z.string().optional().describe('Only archive sessions in this worktree'),
+        branchId: z.string().optional().describe('Only archive sessions in this branch'),
         dryRun: z
           .boolean()
           .optional()
@@ -1155,7 +1148,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       const query: Record<string, unknown> = { archived: false };
       if (args.status) query.status = args.status;
       if (args.boardId) query.board_id = await resolveBoardId(ctx, args.boardId);
-      if (args.worktreeId) query.worktree_id = await resolveWorktreeId(ctx, args.worktreeId);
+      if (args.branchId) query.branch_id = await resolveBranchId(ctx, args.branchId);
 
       // Fetch all matching sessions (paginate through all results)
       const allSessions: Session[] = [];
@@ -1199,7 +1192,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             session_type: getSessionType(s),
             last_updated: s.last_updated,
             created_at: s.created_at,
-            worktree_id: s.worktree_id,
+            branch_id: s.branch_id,
           })),
           message: `Would archive ${toArchive.length} session(s). Set dryRun=false to proceed.`,
         });
@@ -1300,7 +1293,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   //   - Copilot has dynamic discovery via `client.listModels()` exposed at
   //     /copilot-models in the daemon. The static fallback is exposed here.
   //   - OpenCode is a provider+model matrix and doesn't have a single static
-  //     list — it's exposed via the worktree config UI today.
+  //     list — it's exposed via the branch config UI today.
   server.registerTool(
     'agor_models_list',
     {

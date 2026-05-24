@@ -1,4 +1,4 @@
-import type { AgorClient, Session, SessionID, Worktree } from '@agor-live/client';
+import type { AgorClient, Branch, Session, SessionID } from '@agor-live/client';
 import { EyeInvisibleOutlined, EyeOutlined, SearchOutlined } from '@ant-design/icons';
 import { Badge, Input, Space, Switch, Table, Tag, Tooltip, Typography, theme } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -11,14 +11,14 @@ import { TaskStatusIcon } from '../../TaskStatusIcon';
 import { ToolIcon } from '../../ToolIcon/ToolIcon';
 
 interface SessionsTabProps {
-  worktree: Worktree;
+  branch: Branch;
   sessions: Session[];
   client: AgorClient | null;
   onSessionClick?: (sessionId: string) => void;
 }
 
 const SessionsTabInner: React.FC<SessionsTabProps> = ({
-  worktree,
+  branch,
   sessions,
   client,
   onSessionClick,
@@ -59,7 +59,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
     try {
       const result = await currentClient.service('sessions').findAll({
         query: {
-          worktree_id: worktree.worktree_id,
+          branch_id: branch.branch_id,
           archived: false,
           $limit: 1000,
           $sort: { created_at: -1 },
@@ -71,7 +71,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
     } finally {
       setActiveLoading(false);
     }
-  }, [worktree.worktree_id]);
+  }, [branch.branch_id]);
 
   const loadArchivedSessions = useCallback(async () => {
     const currentClient = clientRef.current;
@@ -81,7 +81,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
     try {
       const result = await currentClient.service('sessions').findAll({
         query: {
-          worktree_id: worktree.worktree_id,
+          branch_id: branch.branch_id,
           archived: true,
           $limit: 1000,
           $sort: { created_at: -1 },
@@ -94,19 +94,19 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
     } finally {
       setArchivedLoading(false);
     }
-  }, [worktree.worktree_id]);
+  }, [branch.branch_id]);
 
   useEffect(() => {
-    // Reset per-worktree state when switching modal context.
+    // Reset per-branch state when switching modal context.
     // Seed active list from prop for instant render, then refresh from API.
     setActiveSessions(initialActiveSessions);
     setActiveLoading(false);
-    setShowArchived(worktree.archived);
+    setShowArchived(branch.archived);
     setArchivedSessions([]);
     setArchivedLoaded(false);
     setArchivedLoading(false);
     void loadActiveSessions();
-  }, [initialActiveSessions, loadActiveSessions, worktree.archived]);
+  }, [initialActiveSessions, loadActiveSessions, branch.archived]);
 
   useEffect(() => {
     if (showArchived && !archivedLoaded && !archivedLoading) {
@@ -119,7 +119,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
     const sessionsService = client.service('sessions');
 
     const handleSessionCreated = (session: Session) => {
-      if (session.worktree_id !== worktree.worktree_id) return;
+      if (session.branch_id !== branch.branch_id) return;
       if (session.archived) {
         setArchivedSessions((prev) => upsertSession(prev, session));
       } else {
@@ -128,7 +128,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
     };
 
     const handleSessionPatched = (session: Session) => {
-      if (session.worktree_id !== worktree.worktree_id) return;
+      if (session.branch_id !== branch.branch_id) return;
       setActiveSessions((prev) => prev.filter((s) => s.session_id !== session.session_id));
       setArchivedSessions((prev) => prev.filter((s) => s.session_id !== session.session_id));
       if (session.archived) {
@@ -139,7 +139,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
     };
 
     const handleSessionRemoved = (session: Session) => {
-      if (session.worktree_id !== worktree.worktree_id) return;
+      if (session.branch_id !== branch.branch_id) return;
       setActiveSessions((prev) => prev.filter((s) => s.session_id !== session.session_id));
       setArchivedSessions((prev) => prev.filter((s) => s.session_id !== session.session_id));
     };
@@ -155,7 +155,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
       sessionsService.removeListener('updated', handleSessionPatched);
       sessionsService.removeListener('removed', handleSessionRemoved);
     };
-  }, [client, upsertSession, worktree.worktree_id]);
+  }, [client, upsertSession, branch.branch_id]);
 
   const handleArchiveToggle = useCallback(
     async (sessionId: SessionID, archive: boolean) => {
@@ -462,7 +462,7 @@ function formatRelativeTime(dateStr: string): string {
 export const SessionsTab = memo(SessionsTabInner, (prevProps, nextProps) => {
   const clientChanged = (prevProps.client === null) !== (nextProps.client === null);
   return (
-    prevProps.worktree.worktree_id === nextProps.worktree.worktree_id &&
+    prevProps.branch.branch_id === nextProps.branch.branch_id &&
     prevProps.sessions === nextProps.sessions &&
     !clientChanged
   );

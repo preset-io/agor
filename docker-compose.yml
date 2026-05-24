@@ -1,18 +1,18 @@
 # Agor Development Environment
 #
 # This Docker Compose setup supports:
-# - Multiple worktrees running simultaneously (via -p flag)
+# - Multiple branches running simultaneously (via -p flag)
 # - Both SQLite (default) and PostgreSQL databases
-# - Isolated environments per worktree (separate volumes, ports, node_modules)
+# - Isolated environments per branch (separate volumes, ports, node_modules)
 #
 # ==============================================================================
 # Quick Start
 # ==============================================================================
 #
-# Single worktree (SQLite):
+# Single branch (SQLite):
 #   docker compose up
 #
-# Multiple worktrees (recommended - see .agor.yml):
+# Multiple branches (recommended - see .agor.yml):
 #   docker compose -p agor-postgres-support up -d
 #   docker compose -p agor-main up -d
 #
@@ -24,7 +24,7 @@
 #   docker compose up
 #
 # ==============================================================================
-# Multi-Worktree Isolation
+# Multi-Branch Isolation
 # ==============================================================================
 #
 # The -p (project name) flag creates completely isolated environments:
@@ -116,7 +116,7 @@ services:
       - DATABASE_URL=${DATABASE_URL:-}
 
       # Seed development fixtures (optional, set SEED=true to populate test data)
-      # Creates: Agor repo (https://github.com/preset-io/agor.git) + test-worktree
+      # Creates: Agor repo (https://github.com/preset-io/agor.git) + test-branch
       - SEED=${SEED:-false}
 
       # Pass through API keys from host (if set)
@@ -129,10 +129,10 @@ services:
       - AGOR_USE_EXECUTOR=${AGOR_USE_EXECUTOR:-false}
       - AGOR_EXECUTOR_USERNAME=${AGOR_EXECUTOR_USERNAME:-agor_executor}
 
-      # Worktree RBAC + Unix isolation tier (written into ~/.agor/config.yaml
+      # Branch RBAC + Unix isolation tier (written into ~/.agor/config.yaml
       # by the entrypoint before the daemon boots). Both are optional — when
       # unset the existing config.yaml values are left alone.
-      #   AGOR_RBAC_ENABLED=true         → execution.worktree_rbac: true
+      #   AGOR_RBAC_ENABLED=true         → execution.branch_rbac: true
       #   AGOR_UNIX_USER_MODE=insulated  → execution.unix_user_mode: insulated
       #                                    (simple | insulated | strict)
       - AGOR_RBAC_ENABLED=${AGOR_RBAC_ENABLED:-}
@@ -142,10 +142,10 @@ services:
       - INSTANCE_LABEL=${INSTANCE_LABEL:-}
 
       # Version-sync banner: SHA captured on the host (where git can resolve
-      # the worktree's gitdir) and forwarded into the container. Without this,
+      # the branch's gitdir) and forwarded into the container. Without this,
       # loadBuildInfo() falls all the way through to 'dev' because the
       # in-container git can't follow the /app/.git pointer to the host-side
-      # worktree metadata. See .agor.yml start commands for the capture.
+      # branch metadata. See .agor.yml start commands for the capture.
       - AGOR_BUILD_SHA=${AGOR_BUILD_SHA:-}
       - AGOR_BUILT_AT=${AGOR_BUILT_AT:-}
 
@@ -207,7 +207,7 @@ services:
 
 volumes:
   # Named volume - unique per docker-compose project (via -p flag)
-  # Each worktree gets its own isolated volume for:
+  # Each branch gets its own isolated volume for:
   # - Database (~/.agor/agor.db)
   # - Config (~/.agor/config.yaml)
   # - Agent auth tokens

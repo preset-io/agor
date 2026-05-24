@@ -8,7 +8,7 @@
  *
  * Philosophy:
  * - Deny only patterns that are (a) obviously destructive or (b) trivially
- *   able to escape the worktree sandbox. Env commands are intentionally
+ *   able to escape the branch sandbox. Env commands are intentionally
  *   varied (docker, pnpm, make, custom scripts), so this list is short.
  * - Regexes operate on the final shell string. Pattern matching shell
  *   strings is *not* a hard boundary — real isolation is Unix users +
@@ -90,7 +90,7 @@ export class EnvCommandDeniedError extends Error {
  *
  * Called at spawn time from `spawnEnvironmentCommand` so it runs regardless
  * of how the command was authored (config template, .agor.yml import, direct
- * worktree edit) and regardless of caller (REST, MCP, WebSocket).
+ * branch edit) and regardless of caller (REST, MCP, WebSocket).
  */
 export function assertEnvCommandAllowed(command: string, commandType: string): void {
   for (const entry of ENV_COMMAND_DENY_PATTERNS) {

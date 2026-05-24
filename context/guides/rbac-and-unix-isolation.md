@@ -1,6 +1,6 @@
 # RBAC and Unix Isolation Guide
 
-**Agor's worktree-centric RBAC system with OS-level integration**
+**Agor's branch-centric RBAC system with OS-level integration**
 
 > **Status:** ✅ Implemented and Production-Ready
 > **Version:** v0.5+
@@ -12,13 +12,13 @@
 
 **Three modes, progressively secure:**
 
-1. **Simple (Default)** - `worktree_rbac: false` - Open access, no setup
-2. **Insulated** - `worktree_rbac: true` + `unix_user_mode: insulated` - Worktree groups, single executor
-3. **Strict** - `worktree_rbac: true` + `unix_user_mode: strict` - Full per-user isolation
+1. **Simple (Default)** - `branch_rbac: false` - Open access, no setup
+2. **Insulated** - `branch_rbac: true` + `unix_user_mode: insulated` - Branch groups, single executor
+3. **Strict** - `branch_rbac: true` + `unix_user_mode: strict` - Full per-user isolation
 
 **Key files:**
 
-- Config: `~/.agor/config.yaml` → `execution.worktree_rbac` and `execution.unix_user_mode`
+- Config: `~/.agor/config.yaml` → `execution.branch_rbac` and `execution.unix_user_mode`
 - Sudoers: `docker/sudoers/agor-daemon.sudoers` (production-ready reference)
 - Implementation: `packages/core/src/unix/` and `apps/agor-daemon/src/services/`
 
@@ -44,19 +44,19 @@ Somehow, while Unix systems were designed to support this from day zero, this ap
 
 Agor enables teams to work more closely together, from the ground up, with:
 
-- **Shared filesystem access** - direct access to worktrees, no git push/pull friction
+- **Shared filesystem access** - direct access to branches, no git push/pull friction
 - **Shared AI sessions** - see what agents are doing, learn from their approaches
 - **Live development environments** - watch builds, tests, and services in real-time
 - **Multiple access modes** - SSH, web terminal, AI agents, all with proper authorization
 
-For this to work well in a modern multi-tenant environment, **Agor implements a worktree-centric RBAC system** with optional OS-level integration.
+For this to work well in a modern multi-tenant environment, **Agor implements a branch-centric RBAC system** with optional OS-level integration.
 
 ### The Architecture
 
-Each git worktree (think of it as a feature branch or project) can be:
+Each git branch (think of it as a feature branch or project) can be:
 
 - **Private or shared** - control who sees it
-- **Multi-owner** - multiple people can own a worktree
+- **Multi-owner** - multiple people can own a branch
 - **Permission-leveled** - decide what non-owners can do:
   - `view` - read filesystem, read AI sessions
   - `prompt` - view + send messages to AI sessions
@@ -68,8 +68,8 @@ To provide users direct OS-level access (SSH, web terminal, agent execution), Ag
 
 When Agor's RBAC + Unix integration is enabled, users receive:
 
-1. **Personal home directory** - Proper `~/` with symlinks to authorized worktrees at `~/agor/worktrees/`
-   - Only worktrees they have permission to access appear
+1. **Personal home directory** - Proper `~/` with symlinks to authorized branches at `~/agor/worktrees/`
+   - Only branches they have permission to access appear
    - Symlinks have correct filesystem permissions (`view` = read-only, `all` = read-write)
 
 2. **Consistent identity** - Same Unix user across all access methods:
@@ -86,7 +86,7 @@ When Agor's RBAC + Unix integration is enabled, users receive:
 
 4. **Agor CLI integration** - Full `agor` CLI access with proper permissions:
    - List and manage authorized sessions/tasks
-   - Create worktrees (automatically become owner)
+   - Create branches (automatically become owner)
    - Prompt AI agents (with proper authorization)
 
 ### Resource Management
@@ -99,9 +99,9 @@ Agor provides utilities to sync RBAC policies with your OS, but much of what thi
 - **Docker/container access** - Manage who can spawn containers, resource constraints
 - **Network policies** - Firewalls, service access control
 - **Monitoring** - Track resource usage, prevent abuse
-- **Backup and recovery** - Protect user data and worktrees
+- **Backup and recovery** - Protect user data and branches
 
-**This guide focuses on the Agor portion** - making sure Agor-provided resources (worktrees, sessions, tasks) are properly secured and made available to authorized users.
+**This guide focuses on the Agor portion** - making sure Agor-provided resources (branches, sessions, tasks) are properly secured and made available to authorized users.
 
 ---
 
@@ -116,13 +116,13 @@ Agor supports three modes of operation, each with different trade-offs:
 ```yaml
 # ~/.agor/config.yaml
 execution:
-  worktree_rbac: false # Default
+  branch_rbac: false # Default
 ```
 
 **Characteristics:**
 
 - Single shared Unix user for all operations
-- No permission checks on worktrees, sessions, or tasks
+- No permission checks on branches, sessions, or tasks
 - All authenticated Agor users can access everything
 - Simplest setup, great for trusted teams or personal use
 
@@ -136,7 +136,7 @@ execution:
 **Limitations:**
 
 - No privacy between users
-- Cannot restrict access to sensitive worktrees
+- Cannot restrict access to sensitive branches
 - Agent execution runs as single user (usually `agor` daemon user)
 
 ### Mode 2: Soft Privacy (RBAC Only)
@@ -146,14 +146,14 @@ execution:
 ```yaml
 # ~/.agor/config.yaml
 execution:
-  worktree_rbac: true
+  branch_rbac: true
   unix_user_mode: simple # Or omit - simple is default when rbac enabled
 ```
 
 **Characteristics:**
 
 - App-layer permission checks on all operations
-- Each worktree has owners and permission levels
+- Each branch has owners and permission levels
 - API enforces `view` / `prompt` / `all` permissions
 - **BUT** all execution still happens as single Unix user
 - No filesystem-level isolation or OS-level enforcement
@@ -174,7 +174,7 @@ execution:
 
 **Implementation notes:**
 
-- Worktree owners service is registered and functional
+- Branch owners service is registered and functional
 - UI shows Owners & Permissions section
 - API returns 403 Forbidden when permission checks fail
 - No Unix groups created, no filesystem permissions modified
@@ -186,7 +186,7 @@ execution:
 ```yaml
 # ~/.agor/config.yaml
 execution:
-  worktree_rbac: true
+  branch_rbac: true
   unix_user_mode: insulated # or strict
 ```
 
@@ -194,9 +194,9 @@ execution:
 
 - Full app-layer and OS-layer security
 - Each user gets dedicated Unix account
-- Worktree filesystem permissions enforced by OS
+- Branch filesystem permissions enforced by OS
 - Agent execution runs as user's Unix account
-- Per-user `~/` with symlinks to authorized worktrees
+- Per-user `~/` with symlinks to authorized branches
 - Defense in depth: app + OS layers
 
 **Use cases:**
@@ -264,11 +264,11 @@ Before enabling RBAC + Unix integration, ensure:
 # ~/.agor/config.yaml
 execution:
   # Enable RBAC + Unix integration
-  worktree_rbac: true
+  branch_rbac: true
 
   # Unix user mode (choose one):
   # - simple: No OS integration, all runs as daemon user (Mode 2)
-  # - insulated: Create worktree groups, enforce filesystem permissions (recommended)
+  # - insulated: Create branch groups, enforce filesystem permissions (recommended)
   # - strict: Require agents run as user's Unix account, fail if not possible
   unix_user_mode: insulated
 
@@ -290,12 +290,12 @@ execution:
 
 #### `insulated` (Recommended)
 
-- **Creates Unix group per worktree** (e.g., `agor-wt-abc123`)
-- Sets filesystem permissions on worktree directories:
-  - Owner: Worktree creator's Unix user
-  - Group: `agor-wt-<worktree-id>`
+- **Creates Unix group per branch** (e.g., `agor-wt-abc123`)
+- Sets filesystem permissions on branch directories:
+  - Owner: Branch creator's Unix user
+  - Group: `agor-wt-<branch-id>`
   - Permissions: `770` (owner + group read/write/execute)
-- **Adds users to worktree groups** based on permission level:
+- **Adds users to branch groups** based on permission level:
   - `all` permission → added to group (full access)
   - `prompt` permission → NOT in group (API access only)
   - `view` permission → added to group with read-only access (via ACLs if supported)
@@ -316,7 +316,7 @@ execution:
 
 ```bash
 # Set feature flag
-agor config set execution.worktree_rbac true
+agor config set execution.branch_rbac true
 
 # Set Unix user mode
 agor config set execution.unix_user_mode insulated
@@ -328,7 +328,7 @@ agor config get execution
 Expected output:
 
 ```
-execution.worktree_rbac: true
+execution.branch_rbac: true
 execution.unix_user_mode: insulated
 ```
 
@@ -346,7 +346,7 @@ agor daemon start
 **Verify RBAC is enabled** in daemon logs:
 
 ```
-[RBAC] Worktree RBAC Enabled
+[RBAC] Branch RBAC Enabled
 [Unix Integration] Enabled (mode: insulated)
 ```
 
@@ -369,7 +369,7 @@ The sudoers file enables:
 
 - **User impersonation** - Run agents as the user who created the session
 - **User/group management** - Create Unix users/groups for RBAC
-- **Filesystem operations** - Set permissions on worktree directories
+- **Filesystem operations** - Set permissions on branch directories
 - **No TTY mode** - Essential for daemon operation
 
 **Key security properties:**
@@ -429,23 +429,23 @@ agor user list --format json | jq -r '.[].username' | while read username; do
 done
 ```
 
-#### 5. Test Worktree Permissions
+#### 5. Test Branch Permissions
 
-Create a test worktree and verify permissions:
+Create a test branch and verify permissions:
 
 ```bash
-# Create worktree (you become owner)
-agor worktree create --name test-rbac --ref main
+# Create branch (you become owner)
+agor branch create --name test-rbac --ref main
 
 # Check filesystem permissions
 ls -la ~/agor/worktrees/
-# Should show worktree directory with:
+# Should show branch directory with:
 # - Owner: your Unix user
-# - Group: agor-wt-<worktree-id>
+# - Group: agor-wt-<branch-id>
 # - Permissions: drwxrwx--- (770)
 
-# Check worktree owners via API
-agor worktree owners list <worktree-id>
+# Check branch owners via API
+agor branch owners list <branch-id>
 # Should show you as owner with 'all' permission
 ```
 
@@ -453,10 +453,10 @@ agor worktree owners list <worktree-id>
 
 ```bash
 # Add user with 'all' permission
-agor worktree owners add <worktree-id> <user-id> --permission all
+agor branch owners add <branch-id> <user-id> --permission all
 
 # Verify they're added to Unix group
-getent group agor-wt-<worktree-id>
+getent group agor-wt-<branch-id>
 # Should show both users
 ```
 
@@ -468,7 +468,7 @@ ssh other-user@agor-server
 
 # Check symlinks in home
 ls -la ~/agor/worktrees/
-# Should see test-rbac worktree
+# Should see test-rbac branch
 
 # Verify write access
 cd ~/agor/worktrees/test-rbac/
@@ -481,7 +481,7 @@ touch test-file.txt  # Should succeed
 
 ```bash
 # Add user with view permission
-agor worktree owners add <worktree-id> <user-id> --permission view
+agor branch owners add <branch-id> <user-id> --permission view
 
 # As that user, try to write
 cd ~/agor/worktrees/test-rbac/
@@ -493,15 +493,15 @@ touch test.txt
 
 ```bash
 # Add user with prompt permission
-agor worktree owners add <worktree-id> <user-id> --permission prompt
+agor branch owners add <branch-id> <user-id> --permission prompt
 
 # Verify no filesystem access
 ls ~/agor/worktrees/
-# Should NOT show test-rbac worktree
+# Should NOT show test-rbac branch
 
-# But can send messages to sessions in that worktree via API/UI
+# But can send messages to sessions in that branch via API/UI
 agor session prompt <session-id> "What files exist?"
-# Should succeed if session belongs to test-rbac worktree
+# Should succeed if session belongs to test-rbac branch
 ```
 
 #### 7. Monitor and Debug
@@ -513,7 +513,7 @@ agor session prompt <session-id> "What files exist?"
 journalctl -u agor-daemon -f
 
 # Look for:
-[RBAC] Worktree RBAC Enabled
+[RBAC] Branch RBAC Enabled
 [Unix Integration] Enabled (mode: insulated)
 [UnixIntegration] Created group: agor-wt-abc123
 [UnixIntegration] Added user alice to group agor-wt-abc123
@@ -524,13 +524,13 @@ journalctl -u agor-daemon -f
 Users seeing "403 Forbidden" or "Permission denied" should:
 
 1. Verify they're authenticated: `agor session list`
-2. Check worktree owners: `agor worktree owners list <worktree-id>`
+2. Check branch owners: `agor branch owners list <branch-id>`
 3. Verify Unix group membership: `groups` (should show `agor-wt-*` groups)
 4. Check filesystem permissions: `ls -la ~/agor/worktrees/`
 
 **Common issues:**
 
-- **"Method not found" on `/worktrees/:id/owners`** → RBAC not enabled in config
+- **"Method not found" on `/branches/:id/owners`** → RBAC not enabled in config
 - **"Permission denied" in filesystem but API works** → Unix group not set up correctly
 - **User not in group** → Check daemon logs for errors during group add
 - **Symlinks not appearing in `~/agor/worktrees/`** → Check symlink creation logic in daemon
@@ -538,8 +538,8 @@ Users seeing "403 Forbidden" or "Permission denied" should:
 ### Security Best Practices
 
 1. **Principle of least privilege** - Start users with `view` permission, upgrade as needed
-2. **Regular audits** - Review worktree owners quarterly: `agor worktree owners audit`
-3. **Separate sensitive worktrees** - Use dedicated worktrees for production, secrets, etc.
+2. **Regular audits** - Review branch owners quarterly: `agor branch owners audit`
+3. **Separate sensitive branches** - Use dedicated branches for production, secrets, etc.
 4. **Monitor group membership** - Alert on unexpected group additions
 5. **Use `strict` mode for compliance** - Enforces audit trails via process ownership
 6. **Backup `~/.agor/agor.db`** - Contains RBAC policies and ownership data
@@ -551,18 +551,18 @@ If migrating from Mode 1 (open access) to Mode 3:
 
 1. **Announce to team** - Breaking change, everyone needs Unix accounts
 2. **Create Unix users** - For all existing Agor users (see step 4)
-3. **Assign ownership** - Existing worktrees have no owners, need to assign:
+3. **Assign ownership** - Existing branches have no owners, need to assign:
    ```bash
-   # For each worktree, assign creator as owner (if known)
-   agor worktree owners add <worktree-id> <user-id> --permission all
+   # For each branch, assign creator as owner (if known)
+   agor branch owners add <branch-id> <user-id> --permission all
    ```
-4. **Enable flag** - Set `execution.worktree_rbac: true` and restart daemon
-5. **Test access** - Have each user verify they can access their worktrees
-6. **Handle orphans** - Worktrees with no owner should be assigned or deleted
+4. **Enable flag** - Set `execution.branch_rbac: true` and restart daemon
+5. **Test access** - Have each user verify they can access their branches
+6. **Handle orphans** - Branches with no owner should be assigned or deleted
 
 **Gradual rollout** (recommended):
 
-- Enable `worktree_rbac: true` with `unix_user_mode: simple` first (Mode 2)
+- Enable `branch_rbac: true` with `unix_user_mode: simple` first (Mode 2)
 - Assign ownership and test API permission checks
 - Once stable, upgrade to `unix_user_mode: insulated` (Mode 3)
 
@@ -572,12 +572,12 @@ If migrating from Mode 1 (open access) to Mode 3:
 
 ### Custom Home Directory Structure
 
-By default, Agor creates symlinks at `~/agor/worktrees/<worktree-name>`. To customize:
+By default, Agor creates symlinks at `~/agor/worktrees/<branch-name>`. To customize:
 
 ```yaml
 # ~/.agor/config.yaml
 execution:
-  worktree_symlink_base: ~/projects # Custom location
+  branch_symlink_base: ~/projects # Custom location
 ```
 
 **Result:**
@@ -626,14 +626,14 @@ To allow users direct SSH access:
    # Should land in /home/alice/
 
    ls ~/agor/worktrees/
-   # Should see authorized worktrees
+   # Should see authorized branches
    ```
 
 ### Web Terminal Integration
 
 Agor UI includes a web-based terminal (planned feature). When enabled:
 
-- Users click "Terminal" button in worktree card
+- Users click "Terminal" button in branch card
 - Opens web terminal running as user's Unix account
 - Full shell access with proper RBAC enforcement
 
@@ -654,7 +654,7 @@ When using `strict` mode, agents run as the user who created the session:
 
 ```bash
 # User alice creates session
-agor session create --worktree abc123
+agor session create --branch abc123
 
 # Agent execution runs as:
 # User: alice
@@ -666,7 +666,7 @@ agor session create --worktree abc123
 # - Alice's dotfiles (~/.bashrc, ~/.gitconfig)
 # - Alice's API keys in env vars
 # - Alice's SSH keys (~/.ssh/)
-# - Worktree files (via group permission)
+# - Branch files (via group permission)
 ```
 
 **Benefits:**
@@ -680,7 +680,7 @@ agor session create --worktree abc123
 ```typescript
 // In executor service
 const executor = await this.createExecutor({
-  worktreeId: session.worktree_id,
+  branchId: session.branch_id,
   sessionId: session.session_id,
   userId: session.user_id, // Run as this user
   unixUserMode: config.execution.unix_user_mode,
@@ -721,7 +721,7 @@ MemoryMax=4G         # Max 4GB RAM
 # ~/.agor/config.yaml
 execution:
   max_concurrent_sessions_per_user: 5
-  max_worktrees_per_user: 20
+  max_branches_per_user: 20
   session_timeout_minutes: 480 # 8 hours
 ```
 
@@ -731,28 +731,28 @@ execution:
 
 ### Permission Denied Errors
 
-**Symptom**: User sees "Permission denied" when accessing worktree files
+**Symptom**: User sees "Permission denied" when accessing branch files
 
 **Checklist:**
 
-1. ✅ RBAC enabled: `agor config get execution.worktree_rbac` → should be `true`
-2. ✅ User has permission: `agor worktree owners list <worktree-id>` → should show user
-3. ✅ Unix group membership: `groups` → should show `agor-wt-<worktree-id>`
-4. ✅ Filesystem permissions: `ls -la <worktree-path>` → should allow group access
-5. ✅ Symlink exists: `ls -la ~/agor/worktrees/` → should show worktree
+1. ✅ RBAC enabled: `agor config get execution.branch_rbac` → should be `true`
+2. ✅ User has permission: `agor branch owners list <branch-id>` → should show user
+3. ✅ Unix group membership: `groups` → should show `agor-wt-<branch-id>`
+4. ✅ Filesystem permissions: `ls -la <branch-path>` → should allow group access
+5. ✅ Symlink exists: `ls -la ~/agor/worktrees/` → should show branch
 
 **Fix:**
 
 ```bash
 # Re-sync permissions (as admin)
-agor unix-integration sync-worktree-permissions <worktree-id>
+agor unix-integration sync-branch-permissions <branch-id>
 ```
 
 ### Group Not Found
 
 **Symptom**: Error in logs: `group 'agor-wt-abc123' does not exist`
 
-**Cause**: Unix group not created when worktree was created
+**Cause**: Unix group not created when branch was created
 
 **Fix:**
 
@@ -761,7 +761,7 @@ agor unix-integration sync-worktree-permissions <worktree-id>
 sudo agor unix-integration ensure-group agor-wt-abc123
 
 # Add owners to group
-agor worktree owners list abc123 | jq -r '.[].username' | while read user; do
+agor branch owners list abc123 | jq -r '.[].username' | while read user; do
   sudo agor unix-integration add-user-to-group "$user" agor-wt-abc123
 done
 
@@ -799,20 +799,20 @@ sudo -u agor sudo -n id
 
 **Important**: All code calling sudo MUST use the `-n` flag (`sudo -n`) to fail fast instead of hanging if TTY is required.
 
-### Orphaned Worktrees
+### Orphaned Branches
 
-**Symptom**: Worktree exists but has no owners, all users get 403 Forbidden
+**Symptom**: Branch exists but has no owners, all users get 403 Forbidden
 
-**Cause**: Worktree created before RBAC was enabled, or owner deleted
+**Cause**: Branch created before RBAC was enabled, or owner deleted
 
 **Fix:**
 
 ```bash
 # Assign owner
-agor worktree owners add <worktree-id> <new-owner-user-id> --permission all
+agor branch owners add <branch-id> <new-owner-user-id> --permission all
 
 # Or delete if truly orphaned
-agor worktree delete <worktree-id>
+agor branch delete <branch-id>
 ```
 
 ---
@@ -841,48 +841,48 @@ agor worktree delete <worktree-id>
 
 ```bash
 # Configuration
-agor config set execution.worktree_rbac true
+agor config set execution.branch_rbac true
 agor config set execution.unix_user_mode insulated
 agor config get execution
 
-# Worktree owners
-agor worktree owners list <worktree-id>
-agor worktree owners add <worktree-id> <user-id> --permission all|prompt|view
-agor worktree owners remove <worktree-id> <user-id>
+# Branch owners
+agor branch owners list <branch-id>
+agor branch owners add <branch-id> <user-id> --permission all|prompt|view
+agor branch owners remove <branch-id> <user-id>
 
 # Unix integration
 agor unix-integration ensure-user <username>
 agor unix-integration ensure-group <groupname>
 agor unix-integration add-user-to-group <username> <groupname>
 agor unix-integration remove-user-from-group <username> <groupname>
-agor unix-integration sync-worktree-permissions <worktree-id>
+agor unix-integration sync-branch-permissions <branch-id>
 
 # Debugging
 agor user list
-agor worktree list
-agor session list --worktree <worktree-id>
+agor branch list
+agor session list --branch <branch-id>
 ```
 
 ### API Endpoints
 
 ```bash
-# Worktree owners (only when RBAC enabled)
-GET    /worktrees/:id/owners                    # List owners
-POST   /worktrees/:id/owners                    # Add owner
-DELETE /worktrees/:id/owners/:userId            # Remove owner
-PATCH  /worktrees/:id/owners/:userId            # Update permission
+# Branch owners (only when RBAC enabled)
+GET    /branches/:id/owners                    # List owners
+POST   /branches/:id/owners                    # Add owner
+DELETE /branches/:id/owners/:userId            # Remove owner
+PATCH  /branches/:id/owners/:userId            # Update permission
 
 # Permission checks (automatic, no direct endpoint)
-# All worktree/session/task/message operations check permissions
-GET    /worktrees/:id                           # 403 if no view permission
-POST   /sessions                                # 403 if no all permission on worktree
-GET    /messages/:id                            # 403 if no view permission on session's worktree
+# All branch/session/task/message operations check permissions
+GET    /branches/:id                           # 403 if no view permission
+POST   /sessions                                # 403 if no all permission on branch
+GET    /messages/:id                            # 403 if no view permission on session's branch
 ```
 
 ### Related Documentation
 
 - **`apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx`** - User-facing setup guide (canonical reference)
-- **`context/concepts/worktrees.md`** - Worktree-centric architecture cheat sheet
+- **`context/concepts/branches.md`** - Branch-centric architecture cheat sheet
 - **`AGENTS.md`** - Feature flag configuration and mode matrix
 
 ---

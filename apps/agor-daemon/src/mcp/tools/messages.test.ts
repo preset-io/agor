@@ -3,8 +3,8 @@
  *
  * Focus: the tool bypasses the Feathers hook pipeline by running a raw Drizzle
  * query against the messages table. These tests verify that when
- * `worktree_rbac` is enabled, the raw query is restricted to sessions the
- * caller can access (preventing cross-worktree leakage via the `search`
+ * `branch_rbac` is enabled, the raw query is restricted to sessions the
+ * caller can access (preventing cross-branch leakage via the `search`
  * parameter).
  */
 
@@ -12,14 +12,14 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Hoist-safe mocks must be declared before the module under test is imported.
-const mockIsWorktreeRbacEnabled = vi.fn(() => false);
+const mockIsBranchRbacEnabled = vi.fn(() => false);
 const mockFindAccessibleSessions = vi.fn(async () => [] as Array<{ session_id: string }>);
 
 vi.mock('@agor/core/config', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('@agor/core/config');
   return {
     ...actual,
-    isWorktreeRbacEnabled: () => mockIsWorktreeRbacEnabled(),
+    isBranchRbacEnabled: () => mockIsBranchRbacEnabled(),
   };
 });
 
@@ -86,12 +86,12 @@ async function registerAndGetHandler(ctx: { userId: string; role?: string }): Pr
 
 describe('agor_messages_list MCP tool', () => {
   beforeEach(() => {
-    mockIsWorktreeRbacEnabled.mockReset();
+    mockIsBranchRbacEnabled.mockReset();
     mockFindAccessibleSessions.mockReset();
     mockWhereSpy.mockReset();
     mockAllSpy.mockReset();
     mockAllSpy.mockResolvedValue([]);
-    mockIsWorktreeRbacEnabled.mockReturnValue(false);
+    mockIsBranchRbacEnabled.mockReturnValue(false);
     mockFindAccessibleSessions.mockResolvedValue([]);
   });
 
@@ -99,8 +99,8 @@ describe('agor_messages_list MCP tool', () => {
     vi.resetModules();
   });
 
-  it('does not enforce RBAC when worktree_rbac is disabled', async () => {
-    mockIsWorktreeRbacEnabled.mockReturnValue(false);
+  it('does not enforce RBAC when branch_rbac is disabled', async () => {
+    mockIsBranchRbacEnabled.mockReturnValue(false);
     const handler = await registerAndGetHandler({ userId: 'user-1' });
     await handler({ search: 'secret' });
     expect(mockFindAccessibleSessions).not.toHaveBeenCalled();
@@ -108,7 +108,7 @@ describe('agor_messages_list MCP tool', () => {
   });
 
   it('short-circuits to empty when user has no accessible sessions', async () => {
-    mockIsWorktreeRbacEnabled.mockReturnValue(true);
+    mockIsBranchRbacEnabled.mockReturnValue(true);
     mockFindAccessibleSessions.mockResolvedValue([]);
 
     const handler = await registerAndGetHandler({ userId: 'user-1' });
@@ -124,7 +124,7 @@ describe('agor_messages_list MCP tool', () => {
   });
 
   it('restricts raw query to accessible session ids for regular users', async () => {
-    mockIsWorktreeRbacEnabled.mockReturnValue(true);
+    mockIsBranchRbacEnabled.mockReturnValue(true);
     mockFindAccessibleSessions.mockResolvedValue([
       { session_id: 'sess-allowed-1' },
       { session_id: 'sess-allowed-2' },
@@ -155,7 +155,7 @@ describe('agor_messages_list MCP tool', () => {
   });
 
   it('bypasses RBAC filter for superadmin role', async () => {
-    mockIsWorktreeRbacEnabled.mockReturnValue(true);
+    mockIsBranchRbacEnabled.mockReturnValue(true);
     const handler = await registerAndGetHandler({ userId: 'user-1', role: 'superadmin' });
     await handler({ search: 'secret' });
     expect(mockFindAccessibleSessions).not.toHaveBeenCalled();

@@ -138,7 +138,7 @@ async function applyEnvVarsSubmit(
   }
 
   // The widget submit endpoint already authorized the caller via
-  // `canResolveWidget` (session-creator OR prompt-tier worktree RBAC), so
+  // `canResolveWidget` (session-creator OR prompt-tier branch RBAC), so
   // we set `trustedEnvVarWrite` on the users.patch hook to bypass its
   // self-only check (`register-hooks.ts`). Field-level admin gates for
   // unix_username/role/must_change_password run first and are NOT bypassed.

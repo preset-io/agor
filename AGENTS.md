@@ -2,7 +2,7 @@
 
 **Agor** — Multiplayer canvas for orchestrating Claude Code, Codex, and Gemini sessions.
 
-Manage git worktrees, track AI conversations, visualize work on spatial boards, and collaborate in real-time.
+Manage git branches, track AI conversations, visualize work on spatial boards, and collaborate in real-time.
 
 ---
 
@@ -52,7 +52,7 @@ agor/
 │
 ├── packages/
 │   └── core/                # Shared @agor/core package
-│       ├── types/           # TypeScript types (Session, Task, Worktree, etc.)
+│       ├── types/           # TypeScript types (Session, Task, Branch, etc.)
 │       ├── db/              # Drizzle ORM + repositories + schema
 │       ├── git/             # Git utils (simple-git only, no subprocess)
 │       ├── claude/          # Claude Code session loading utilities
@@ -74,47 +74,47 @@ agor/
 
 Terms you'll see across the codebase, UI, and docs:
 
-| Term | What it is |
-|---|---|
-| **Worktree** | A first-class git working directory at `~/.agor/worktrees/<repo>/<name>`, on its own branch, with its own dev environment. **Primary card on a board.** Conventionally 1 worktree = 1 feature/PR. |
-| **Board** | 2D canvas displaying worktrees as cards. Has zones. |
-| **Zone** | Rectangular region on a board with an optional Handlebars **prompt template** that fires when a worktree is dropped in. |
-| **Card** | Visual representation of a worktree (or note/markdown) on a board. |
-| **Session** | An agent conversation. Required FK to a worktree. Can **fork** (sibling, copies parent context) or **spawn** (child, fresh context window). |
-| **Task** | A single user-prompt-and-its-execution within a session. Tasks (not messages) are the queueable unit when a session is busy. |
-| **Message** | An individual conversation turn (user / assistant / tool / system) within a task. |
-| **Report** | Agent-written markdown summary at task completion. |
-| **Environment** | The runtime instance of a worktree's dev server (managed start/stop, ports allocated from `worktree.unique_id`). |
-| **Daemon** | The FeathersJS server (`apps/agor-daemon`) that owns the database, services, WebSocket events, and MCP HTTP endpoint. Default port 3030. |
-| **Executor** | Process-isolated agent runtime in `packages/executor/`. Spawns Claude / Codex / Gemini / OpenCode via their SDKs. May run as a separate Unix user. |
-| **MCP** | Model Context Protocol. Agor exposes itself as an MCP server (`POST /mcp`) so agents can introspect sessions, worktrees, boards, etc. |
-| **RBAC** | Worktree-scoped permission tiers (`none`/`view`/`session`/`prompt`/`all`). Feature-flagged via `execution.worktree_rbac`. See "Feature Flags" below. |
-| **Unix user mode** | `simple` / `insulated` / `strict` — progressive OS-level isolation tiers. See "Feature Flags" below. |
-| **Genealogy** | Parent/child + fork ancestry of a session. Surfaced as a tree inside a worktree card. |
-| **Short ID** | First 8 chars of a UUIDv7, used in UI and CLI. Resolved at API boundary via a `resolveShortId` hook. See [`context/concepts/id-management.md`](context/concepts/id-management.md). |
-| **Effort** | Reasoning depth knob (`low`/`medium`/`high`/`max`) on `model_config`. Maps to Claude API `output_config.effort`. |
+| Term               | What it is                                                                                                                                                                                      |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Branch**         | A first-class git working directory at `~/.agor/worktrees/<repo>/<name>`, on its own branch, with its own dev environment. **Primary card on a board.** Conventionally 1 branch = 1 feature/PR. |
+| **Board**          | 2D canvas displaying branches as cards. Has zones.                                                                                                                                              |
+| **Zone**           | Rectangular region on a board with an optional Handlebars **prompt template** that fires when a branch is dropped in.                                                                           |
+| **Card**           | Visual representation of a branch (or note/markdown) on a board.                                                                                                                                |
+| **Session**        | An agent conversation. Required FK to a branch. Can **fork** (sibling, copies parent context) or **spawn** (child, fresh context window).                                                       |
+| **Task**           | A single user-prompt-and-its-execution within a session. Tasks (not messages) are the queueable unit when a session is busy.                                                                    |
+| **Message**        | An individual conversation turn (user / assistant / tool / system) within a task.                                                                                                               |
+| **Report**         | Agent-written markdown summary at task completion.                                                                                                                                              |
+| **Environment**    | The runtime instance of a branch's dev server (managed start/stop, ports allocated from `branch.unique_id`).                                                                                    |
+| **Daemon**         | The FeathersJS server (`apps/agor-daemon`) that owns the database, services, WebSocket events, and MCP HTTP endpoint. Default port 3030.                                                        |
+| **Executor**       | Process-isolated agent runtime in `packages/executor/`. Spawns Claude / Codex / Gemini / OpenCode via their SDKs. May run as a separate Unix user.                                              |
+| **MCP**            | Model Context Protocol. Agor exposes itself as an MCP server (`POST /mcp`) so agents can introspect sessions, branches, boards, etc.                                                            |
+| **RBAC**           | Branch-scoped permission tiers (`none`/`view`/`session`/`prompt`/`all`). Feature-flagged via `execution.branch_rbac`. See "Feature Flags" below.                                                |
+| **Unix user mode** | `simple` / `insulated` / `strict` — progressive OS-level isolation tiers. See "Feature Flags" below.                                                                                            |
+| **Genealogy**      | Parent/child + fork ancestry of a session. Surfaced as a tree inside a branch card.                                                                                                             |
+| **Short ID**       | First 8 chars of a UUIDv7, used in UI and CLI. Resolved at API boundary via a `resolveShortId` hook. See [`context/concepts/id-management.md`](context/concepts/id-management.md).              |
+| **Effort**         | Reasoning depth knob (`low`/`medium`/`high`/`max`) on `model_config`. Maps to Claude API `output_config.effort`.                                                                                |
 
 ## Where to look first
 
-Tasked with... | Open this
----|---
-Mental model | [`context/concepts/core.md`](context/concepts/core.md)
-System shape | [`context/concepts/architecture.md`](context/concepts/architecture.md) → [`apps/agor-docs/pages/guide/architecture.mdx`](apps/agor-docs/pages/guide/architecture.mdx)
-Boards / worktrees | [`context/concepts/worktrees.md`](context/concepts/worktrees.md) → [`apps/agor-docs/pages/guide/worktrees.mdx`](apps/agor-docs/pages/guide/worktrees.mdx) and [`boards.mdx`](apps/agor-docs/pages/guide/boards.mdx)
-Sessions / fork-spawn | [`apps/agor-docs/pages/guide/sessions.mdx`](apps/agor-docs/pages/guide/sessions.mdx)
-Tasks / queue | [`context/concepts/task-queueing.md`](context/concepts/task-queueing.md)
-RBAC / Unix isolation | [`context/guides/rbac-and-unix-isolation.md`](context/guides/rbac-and-unix-isolation.md) → [`apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx`](apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx)
-MCP server / tools | [`context/concepts/mcp-session-tools.md`](context/concepts/mcp-session-tools.md) → [`apps/agor-docs/pages/guide/internal-mcp.mdx`](apps/agor-docs/pages/guide/internal-mcp.mdx)
-Real-time UI | [`apps/agor-docs/pages/guide/architecture.mdx`](apps/agor-docs/pages/guide/architecture.mdx) (Real-time Data Sync)
-Multiplayer / presence | [`apps/agor-docs/pages/guide/multiplayer-social.mdx`](apps/agor-docs/pages/guide/multiplayer-social.mdx)
-Adding a service | [`context/guides/extending-feathers-services.md`](context/guides/extending-feathers-services.md)
-Adding a migration | [`context/guides/creating-database-migrations.md`](context/guides/creating-database-migrations.md)
-Testing | [`context/guidelines/testing.md`](context/guidelines/testing.md)
-IDs / short IDs / branded types | [`context/concepts/id-management.md`](context/concepts/id-management.md)
-Web-layer security (CSP/CORS) | [`context/concepts/security.md`](context/concepts/security.md)
-Executor isolation | [`context/explorations/executor-isolation.md`](context/explorations/executor-isolation.md)
-Session sharing security flag | [`context/explorations/session-sharing.md`](context/explorations/session-sharing.md)
-Product copy / voice / taglines | [`context/messaging-and-positioning.md`](context/messaging-and-positioning.md) — **do not paraphrase from code**
+| Tasked with...                  | Open this                                                                                                                                                                                                           |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Mental model                    | [`context/concepts/core.md`](context/concepts/core.md)                                                                                                                                                              |
+| System shape                    | [`context/concepts/architecture.md`](context/concepts/architecture.md) → [`apps/agor-docs/pages/guide/architecture.mdx`](apps/agor-docs/pages/guide/architecture.mdx)                                               |
+| Boards / branches               | [`context/concepts/branches.md`](context/concepts/branches.md) → [`apps/agor-docs/pages/guide/branches.mdx`](apps/agor-docs/pages/guide/branches.mdx) and [`boards.mdx`](apps/agor-docs/pages/guide/boards.mdx)     |
+| Sessions / fork-spawn           | [`apps/agor-docs/pages/guide/sessions.mdx`](apps/agor-docs/pages/guide/sessions.mdx)                                                                                                                                |
+| Tasks / queue                   | [`context/concepts/task-queueing.md`](context/concepts/task-queueing.md)                                                                                                                                            |
+| RBAC / Unix isolation           | [`context/guides/rbac-and-unix-isolation.md`](context/guides/rbac-and-unix-isolation.md) → [`apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx`](apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx) |
+| MCP server / tools              | [`context/concepts/mcp-session-tools.md`](context/concepts/mcp-session-tools.md) → [`apps/agor-docs/pages/guide/internal-mcp.mdx`](apps/agor-docs/pages/guide/internal-mcp.mdx)                                     |
+| Real-time UI                    | [`apps/agor-docs/pages/guide/architecture.mdx`](apps/agor-docs/pages/guide/architecture.mdx) (Real-time Data Sync)                                                                                                  |
+| Multiplayer / presence          | [`apps/agor-docs/pages/guide/multiplayer-social.mdx`](apps/agor-docs/pages/guide/multiplayer-social.mdx)                                                                                                            |
+| Adding a service                | [`context/guides/extending-feathers-services.md`](context/guides/extending-feathers-services.md)                                                                                                                    |
+| Adding a migration              | [`context/guides/creating-database-migrations.md`](context/guides/creating-database-migrations.md)                                                                                                                  |
+| Testing                         | [`context/guidelines/testing.md`](context/guidelines/testing.md)                                                                                                                                                    |
+| IDs / short IDs / branded types | [`context/concepts/id-management.md`](context/concepts/id-management.md)                                                                                                                                            |
+| Web-layer security (CSP/CORS)   | [`context/concepts/security.md`](context/concepts/security.md)                                                                                                                                                      |
+| Executor isolation              | [`context/explorations/executor-isolation.md`](context/explorations/executor-isolation.md)                                                                                                                          |
+| Session sharing security flag   | [`context/explorations/session-sharing.md`](context/explorations/session-sharing.md)                                                                                                                                |
+| Product copy / voice / taglines | [`context/messaging-and-positioning.md`](context/messaging-and-positioning.md) — **do not paraphrase from code**                                                                                                    |
 
 ---
 
@@ -153,14 +153,14 @@ Product copy / voice / taglines | [`context/messaging-and-positioning.md`](conte
 **Type Reuse:**
 
 - Import types from `packages/core/src/types/`
-- Sessions, Tasks, Worktrees, Messages, Repos, Boards, Users, etc.
+- Sessions, Tasks, Branches, Messages, Repos, Boards, Users, etc.
 - Never redefine canonical types
 
-**Worktree-Centric Architecture:**
+**Branch-Centric Architecture:**
 
-- Boards display **Worktrees** as primary cards (NOT Sessions)
-- Sessions reference worktrees via required FK
-- Read [`context/concepts/worktrees.md`](context/concepts/worktrees.md) before touching boards
+- Boards display **Branches** as primary cards (NOT Sessions)
+- Sessions reference branches via required FK
+- Read [`context/concepts/branches.md`](context/concepts/branches.md) before touching boards
 
 ---
 
@@ -195,7 +195,7 @@ pnpm -w agor repo list
 
 ## Feature Flags
 
-### Worktree RBAC and Unix Isolation
+### Branch RBAC and Unix Isolation
 
 **Default: Disabled** - Open access mode for backward compatibility
 
@@ -204,7 +204,7 @@ Agor supports progressive security modes controlled by two config flags:
 ```yaml
 # ~/.agor/config.yaml
 execution:
-  worktree_rbac: false # Enable RBAC (default: false)
+  branch_rbac: false # Enable RBAC (default: false)
   unix_user_mode: simple # Unix isolation mode (default: simple)
 ```
 
@@ -214,13 +214,13 @@ execution:
 
 ```yaml
 execution:
-  worktree_rbac: false
+  branch_rbac: false
   unix_user_mode: simple
 ```
 
 **Behavior:**
 
-- ✅ All authenticated users can access all worktrees
+- ✅ All authenticated users can access all branches
 - ✅ No permission enforcement
 - ✅ All operations run as daemon user
 - ✅ No Unix groups or filesystem permissions
@@ -233,14 +233,14 @@ execution:
 
 ```yaml
 execution:
-  worktree_rbac: true
+  branch_rbac: true
   unix_user_mode: simple
 ```
 
 **Behavior:**
 
 - ✅ App-layer permission checks (none/view/session/prompt/all)
-- ✅ Worktree owners service active
+- ✅ Branch owners service active
 - ✅ UI shows permission management
 - ❌ No Unix groups (all runs as daemon user)
 
@@ -248,11 +248,11 @@ execution:
 
 ---
 
-#### Mode 3: RBAC + Worktree Groups (Insulated)
+#### Mode 3: RBAC + Branch Groups (Insulated)
 
 ```yaml
 execution:
-  worktree_rbac: true
+  branch_rbac: true
   unix_user_mode: insulated
   executor_unix_user: agor_executor
 ```
@@ -260,7 +260,7 @@ execution:
 **Behavior:**
 
 - ✅ Full app-layer RBAC
-- ✅ Unix groups per worktree (`agor_wt_*`)
+- ✅ Unix groups per branch (`agor_wt_*`)
 - ✅ Filesystem permissions enforced
 - ✅ Executors run as dedicated user
 - ❌ No per-user isolation
@@ -275,7 +275,7 @@ execution:
 
 ```yaml
 execution:
-  worktree_rbac: true
+  branch_rbac: true
   unix_user_mode: strict
 ```
 
@@ -298,7 +298,7 @@ execution:
 ```yaml
 execution:
   # RBAC toggle
-  worktree_rbac: boolean # default: false
+  branch_rbac: boolean # default: false
 
   # Unix mode: simple | insulated | strict
   unix_user_mode: string # default: simple
@@ -311,7 +311,7 @@ execution:
   session_token_max_uses: number # default: 1, -1 = unlimited
 
   # MCP session tokens (daemon ↔ MCP server channel)
-  mcp_token_expiration_ms: number            # default: 86400000 (24h)
+  mcp_token_expiration_ms: number # default: 86400000 (24h)
 
   # Password sync (strict mode)
   sync_unix_passwords: boolean # default: true
@@ -324,11 +324,11 @@ execution:
 
 The browser terminal is enabled by default for any user with role `member` or
 higher. Setting `execution.allow_web_terminal: false` disables it for everyone,
-including admins, and hides the modal from the UI. Worktree-level RBAC still
-applies: opening a terminal tab against a specific worktree requires at least
-`session` permission on that worktree.
+including admins, and hides the modal from the UI. Branch-level RBAC still
+applies: opening a terminal tab against a specific branch requires at least
+`session` permission on that branch.
 
-⚠️ **Security caveat:** this flag does *not* reason about Unix isolation. In
+⚠️ **Security caveat:** this flag does _not_ reason about Unix isolation. In
 `unix_user_mode: simple`, the terminal runs as the daemon user and gives
 members a shell with access to `~/.agor/config.yaml`, `agor.db`, and the JWT
 secret. The daemon prints a startup warning when this combination is detected.
@@ -337,27 +337,27 @@ executor user, no daemon access).
 
 ### Permission Tiers (`others_can`)
 
-The `others_can` field on worktrees controls what non-owners can do:
+The `others_can` field on branches controls what non-owners can do:
 
-| Tier | Rank | Description |
-|------|------|-------------|
-| `none` | -1 | No access (worktree is completely private to owners) |
-| `view` | 0 | Can read worktrees, sessions, tasks, messages |
-| `session` | 1 | **Default.** Can create new sessions (running as own identity) and prompt own sessions only |
-| `prompt` | 2 | Can prompt ANY session, including other users' sessions. **Warning: sessions execute under the original creator's OS identity.** |
-| `all` | 3 | Full control (create/update/delete sessions) |
+| Tier      | Rank | Description                                                                                                                      |
+| --------- | ---- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `none`    | -1   | No access (branch is completely private to owners)                                                                               |
+| `view`    | 0    | Can read branches, sessions, tasks, messages                                                                                     |
+| `session` | 1    | **Default.** Can create new sessions (running as own identity) and prompt own sessions only                                      |
+| `prompt`  | 2    | Can prompt ANY session, including other users' sessions. **Warning: sessions execute under the original creator's OS identity.** |
+| `all`     | 3    | Full control (create/update/delete sessions)                                                                                     |
 
 The `session` tier is the safe default — it lets collaborators work independently without being able to impersonate other users' OS identities.
 
 ---
 
-### Worktree-Level Flags
+### Branch-Level Flags
 
-Beyond `others_can`/`others_fs_access`, individual worktrees expose opt-in
+Beyond `others_can`/`others_fs_access`, individual branches expose opt-in
 security toggles stored alongside permissions:
 
-| Flag | Default | Description |
-|------|---------|-------------|
+| Flag                                | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `dangerously_allow_session_sharing` | `false` | When OFF (safe default), `agor_sessions_spawn` and `agor_sessions_prompt(mode:"fork"\|"subsession")` attribute the new child session to the **calling** user — it runs under the caller's Unix identity, env vars, and credentials. When ON, legacy behavior is restored: the child inherits `parent.created_by`, so a collaborator can effectively spawn agents that execute as the original session owner. Admins are always attributed to themselves regardless of this flag. Cross-user spawns under the legacy path emit `[SECURITY]` warning logs. See [`context/explorations/session-sharing.md`](context/explorations/session-sharing.md). |
 
 ---
@@ -366,13 +366,13 @@ security toggles stored alongside permissions:
 
 **Database Schema:**
 
-- `worktree_owners` table and `others_can` column exist regardless of mode
+- `branch_owners` table and `others_can` column exist regardless of mode
 - Schema migrations run on all instances
 - Safe to toggle flags at runtime
 
 **Service Registration:**
 
-- Worktree owners API (`/worktrees/:id/owners`) registered only when `worktree_rbac: true`
+- Branch owners API (`/branches/:id/owners`) registered only when `branch_rbac: true`
 - Returns 404 when RBAC disabled
 
 **Unix Integration:**
@@ -383,7 +383,7 @@ security toggles stored alongside permissions:
 
 **UI Behavior:**
 
-- Owners & Permissions section shown only when `worktree_rbac: true`
+- Owners & Permissions section shown only when `branch_rbac: true`
 - Gracefully degrades when disabled
 
 **Sudoers Setup:**
@@ -416,12 +416,12 @@ Agor exposes Claude's `effort` parameter to control how much reasoning Claude ap
 
 ### Levels
 
-| Level | Description | Use case |
-|-------|-------------|----------|
-| `low` | Minimal thinking, fastest | Simple tasks, quick lookups |
-| `medium` | Moderate thinking | Balanced speed/quality |
-| `high` | Deep reasoning (default) | Complex coding, reviews |
-| `max` | Maximum effort (Opus 4.6 only) | Critical decisions, architecture |
+| Level    | Description                    | Use case                         |
+| -------- | ------------------------------ | -------------------------------- |
+| `low`    | Minimal thinking, fastest      | Simple tasks, quick lookups      |
+| `medium` | Moderate thinking              | Balanced speed/quality           |
+| `high`   | Deep reasoning (default)       | Complex coding, reviews          |
+| `max`    | Maximum effort (Opus 4.6 only) | Critical decisions, architecture |
 
 ### Extended Context (1M tokens)
 
@@ -503,8 +503,8 @@ security:
     # default's value (e.g. setting transfer.credentialsInUrl=warn here
     # downgrades the default 'die'). 95% case.
     extras:
-      - fetch.fsckObjects=true            # opt in to object integrity
-      - http.proxy=http://corp:3128       # corp env
+      - fetch.fsckObjects=true # opt in to object integrity
+      - http.proxy=http://corp:3128 # corp env
     # override: REPLACE defaults wholesale (escape hatch).
     # Setting `override: []` disables every default explicitly.
     # Mutually exclusive with `extras` — setting both throws at load time.
@@ -571,7 +571,7 @@ cd apps/agor-daemon && pnpm dev
 ## Remember
 
 - Code is ground truth. Guides are user truth. `context/` is for orientation.
-- Worktrees are the primary card on boards — not sessions.
+- Branches are the primary card on boards — not sessions.
 - Never subprocess for git. Always `simple-git` via `packages/core/src/git/index.ts`.
 - Don't run `pnpm build` unless asked. Watch mode is running.
 - Read [`context/messaging-and-positioning.md`](context/messaging-and-positioning.md) before writing any user-facing copy.

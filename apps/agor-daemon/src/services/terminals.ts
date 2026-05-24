@@ -9,7 +9,7 @@
  * - Job control (Ctrl+C, Ctrl+Z)
  * - ANSI colors and escape codes
  * - Persistent sessions via Zellij (survive daemon restarts)
- * - One executor per user, one Zellij tab per worktree
+ * - One executor per user, one Zellij tab per branch
  *
  * Architecture:
  * - Executor process owns PTY running `zellij attach`
@@ -29,29 +29,29 @@ import {
   resolveUserEnvironment,
 } from '@agor/core/config';
 import {
+  BranchRepository,
   type Database,
   SessionRepository,
   shortId,
   UsersRepository,
-  WorktreeRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { Forbidden } from '@agor/core/feathers';
-import type { AuthenticatedParams, UserID, WorktreeID } from '@agor/core/types';
+import type { AuthenticatedParams, BranchID, UserID } from '@agor/core/types';
 import {
   resolveUnixUserForImpersonation,
   type UnixUserMode,
   UnixUserNotFoundError,
   validateResolvedUnixUser,
 } from '@agor/core/unix';
+import { hasBranchPermission } from '../utils/branch-authorization.js';
 import { generateSessionToken, spawnExecutorFireAndForget } from '../utils/spawn-executor.js';
-import { hasWorktreePermission } from '../utils/worktree-authorization.js';
 import { buildSpawnConfigForSession, isClaudeRunningFor } from './claude-cli-integration.js';
 
 interface CreateTerminalData {
   rows?: number;
   cols?: number;
-  worktreeId?: WorktreeID; // Worktree context for Zellij integration
+  branchId?: BranchID; // Branch context for Zellij integration
   /**
    * Optional Zellij tab name to focus once the executor is up. Used by
    * the Claude Code CLI adapter's in-pane EmbeddedTerminal to land on
@@ -165,7 +165,7 @@ ${exportLines.join('\n')}
  * Architecture:
  * - One executor per user (spawned when user opens first terminal)
  * - Executor owns a single PTY running `zellij attach`
- * - Zellij manages multiple tabs (one per worktree)
+ * - Zellij manages multiple tabs (one per branch)
  * - PTY I/O streams over Feathers channel: user/${userId}/terminal
  */
 export class TerminalsService {
@@ -203,7 +203,7 @@ export class TerminalsService {
    * Create a new terminal session
    *
    * Spawns an executor with Zellij for persistent terminal sessions.
-   * One executor per user, one Zellij tab per worktree.
+   * One executor per user, one Zellij tab per branch.
    */
   async create(
     data: CreateTerminalData,
@@ -213,7 +213,7 @@ export class TerminalsService {
     channel: string;
     sessionName: string;
     isNew: boolean;
-    worktreeName?: string;
+    branchName?: string;
   }> {
     // Check if Zellij is available
     if (!this.zellijAvailable) {
@@ -223,31 +223,29 @@ export class TerminalsService {
       );
     }
 
-    // Worktree RBAC check: if a worktree is provided and RBAC is enabled,
-    // the user must have at least 'session' permission on that worktree.
-    // This prevents members from opening a terminal tab in a worktree they
+    // Branch RBAC check: if a branch is provided and RBAC is enabled,
+    // the user must have at least 'session' permission on that branch.
+    // This prevents members from opening a terminal tab in a branch they
     // cannot see or prompt in.
-    if (data.worktreeId && params?.provider) {
+    if (data.branchId && params?.provider) {
       const config = await loadConfig();
-      const rbacEnabled = config.execution?.worktree_rbac === true;
+      const rbacEnabled = config.execution?.branch_rbac === true;
       if (rbacEnabled) {
         const userId = params?.user?.user_id as UserID | undefined;
         if (!userId) {
           throw new Forbidden('Authentication required to open terminals');
         }
-        const worktreeRepo = new WorktreeRepository(this.db);
-        const worktree = await worktreeRepo.findById(data.worktreeId);
-        if (!worktree) {
-          throw new Forbidden(`Worktree not found: ${data.worktreeId}`);
+        const branchRepo = new BranchRepository(this.db);
+        const branch = await branchRepo.findById(data.branchId);
+        if (!branch) {
+          throw new Forbidden(`Branch not found: ${data.branchId}`);
         }
-        const isOwner = await worktreeRepo.isOwner(worktree.worktree_id, userId);
+        const isOwner = await branchRepo.isOwner(branch.branch_id, userId);
         const allowSuperadmin = config.execution?.allow_superadmin === true;
         const userRole = params?.user?.role as string | undefined;
-        if (
-          !hasWorktreePermission(worktree, userId, isOwner, 'session', userRole, allowSuperadmin)
-        ) {
+        if (!hasBranchPermission(branch, userId, isOwner, 'session', userRole, allowSuperadmin)) {
           throw new Forbidden(
-            `You need 'session' permission on worktree ${worktree.name} to open a terminal there.`
+            `You need 'session' permission on branch ${branch.name} to open a terminal there.`
           );
         }
       }
@@ -260,20 +258,20 @@ export class TerminalsService {
     // argv.
     //
     // RBAC: enforced inside `resolveEnsureCliTab` against the
-    // **session's actual worktree** (not the caller-supplied
-    // `data.worktreeId`, which may differ or be omitted). Without this
+    // **session's actual branch** (not the caller-supplied
+    // `data.branchId`, which may differ or be omitted). Without this
     // check a caller could pass an `ensureCliSessionId` for a session
-    // whose worktree they don't have `'session'` permission on and get
+    // whose branch they don't have `'session'` permission on and get
     // the daemon to spawn a CLI tab on their behalf.
     const cliEnsure = await this.resolveEnsureCliTab(
       data.ensureCliSessionId,
-      data.worktreeId,
+      data.branchId,
       params
     );
 
     return this.createExecutorTerminal(
       {
-        worktreeId: data.worktreeId,
+        branchId: data.branchId,
         cols: data.cols,
         rows: data.rows,
         focusTabName: data.focusTabName ?? cliEnsure?.tabName,
@@ -317,13 +315,13 @@ export class TerminalsService {
 
   /**
    * Active executor processes per user
-   * Key: userId, Value: { process pid, sessionName, worktrees }
+   * Key: userId, Value: { process pid, sessionName, branches }
    */
   private executorTerminals: Map<
     UserID,
     {
       sessionName: string;
-      activeWorktrees: Set<WorktreeID | 'default'>;
+      activeBranches: Set<BranchID | 'default'>;
       startedAt: Date;
     }
   > = new Map();
@@ -340,24 +338,24 @@ export class TerminalsService {
   /**
    * Resolve `ensureCliSessionId` into the spawn args we need to emit at
    * the executor — `tabName`, `cwd`, `command`, `commandArgs`. Performs
-   * the SessionRepository + worktreeRepository lookups + builds the
+   * the SessionRepository + branchRepository lookups + builds the
    * `claude` argv via `buildSpawnConfigForSession`/`buildClaudeCliSpawn`.
    *
-   * **RBAC**: enforces `'session'`-level `hasWorktreePermission` against
-   * the **session's actual worktree** (not the caller-supplied
-   * `claimedWorktreeId`). Without this, a caller could ask the daemon
-   * to ensure-create a CLI tab for a session whose worktree they
-   * shouldn't access. Also throws `Forbidden` when `claimedWorktreeId`
-   * is supplied AND mismatches the session's worktree — defense against
-   * "spoof the worktree to bypass the upstream worktreeId check".
+   * **RBAC**: enforces `'session'`-level `hasBranchPermission` against
+   * the **session's actual branch** (not the caller-supplied
+   * `claimedBranchId`). Without this, a caller could ask the daemon
+   * to ensure-create a CLI tab for a session whose branch they
+   * shouldn't access. Also throws `Forbidden` when `claimedBranchId`
+   * is supplied AND mismatches the session's branch — defense against
+   * "spoof the branch to bypass the upstream branchId check".
    *
    * Returns `null` when the input is undefined, the session doesn't
-   * exist, isn't a CLI session, or its worktree path can't be resolved.
+   * exist, isn't a CLI session, or its branch path can't be resolved.
    * Caller falls back to the prior focus-only behavior in those cases.
    */
   private async resolveEnsureCliTab(
     sessionId: string | undefined,
-    claimedWorktreeId: WorktreeID | undefined,
+    claimedBranchId: BranchID | undefined,
     params?: AuthenticatedParams
   ): Promise<{
     tabName: string;
@@ -371,48 +369,48 @@ export class TerminalsService {
       const sessionRepo = new SessionRepository(this.db);
       const session = await sessionRepo.findById(sessionId).catch(() => null);
       if (!session || session.agentic_tool !== 'claude-code-cli') return null;
-      // Worktree-spoofing guard: when the caller supplied a worktreeId,
+      // Branch-spoofing guard: when the caller supplied a branchId,
       // it MUST match the session's. Otherwise the upstream RBAC
-      // (gated on `data.worktreeId`) checked a different worktree than
+      // (gated on `data.branchId`) checked a different branch than
       // the one we're about to spawn into.
-      if (claimedWorktreeId && claimedWorktreeId !== session.worktree_id) {
+      if (claimedBranchId && claimedBranchId !== session.branch_id) {
         throw new Forbidden(
-          `ensureCliSessionId session belongs to a different worktree than the one provided.`
+          `ensureCliSessionId session belongs to a different branch than the one provided.`
         );
       }
       // Run the same `'session'` permission check the upstream caller
-      // did, but against the *session's* worktree id. This catches the
-      // case where the caller omitted `worktreeId` entirely (so the
+      // did, but against the *session's* branch id. This catches the
+      // case where the caller omitted `branchId` entirely (so the
       // upstream check was skipped) and only passed `ensureCliSessionId`.
       if (params?.provider) {
         const config = await loadConfig();
-        const rbacEnabled = config.execution?.worktree_rbac === true;
+        const rbacEnabled = config.execution?.branch_rbac === true;
         if (rbacEnabled) {
           const callerUserId = params?.user?.user_id as UserID | undefined;
           if (!callerUserId) {
             throw new Forbidden('Authentication required to ensure a CLI tab');
           }
-          const worktreeRepo = new WorktreeRepository(this.db);
-          const wt = await worktreeRepo.findById(session.worktree_id);
+          const branchRepo = new BranchRepository(this.db);
+          const wt = await branchRepo.findById(session.branch_id);
           if (!wt) {
-            throw new Forbidden(`Session's worktree not found: ${session.worktree_id}`);
+            throw new Forbidden(`Session's branch not found: ${session.branch_id}`);
           }
-          const isOwner = await worktreeRepo.isOwner(wt.worktree_id, callerUserId);
+          const isOwner = await branchRepo.isOwner(wt.branch_id, callerUserId);
           const allowSuperadmin = config.execution?.allow_superadmin === true;
           const userRole = params?.user?.role as string | undefined;
           if (
-            !hasWorktreePermission(wt, callerUserId, isOwner, 'session', userRole, allowSuperadmin)
+            !hasBranchPermission(wt, callerUserId, isOwner, 'session', userRole, allowSuperadmin)
           ) {
             throw new Forbidden(
-              `You need 'session' permission on the session's worktree to ensure its CLI tab.`
+              `You need 'session' permission on the session's branch to ensure its CLI tab.`
             );
           }
         }
       }
-      const worktreeRepo = new WorktreeRepository(this.db);
-      const worktree = await worktreeRepo.findById(session.worktree_id);
-      if (!worktree?.path) return null;
-      const spawnCfg = buildSpawnConfigForSession(session, worktree.path);
+      const branchRepo = new BranchRepository(this.db);
+      const branch = await branchRepo.findById(session.branch_id);
+      if (!branch?.path) return null;
+      const spawnCfg = buildSpawnConfigForSession(session, branch.path);
       const built = buildClaudeCliSpawn(spawnCfg);
       const tabName =
         session.cli_state?.zellij_tab_name ??
@@ -420,7 +418,7 @@ export class TerminalsService {
         `cli-${shortId(session.session_id)}`;
       return {
         tabName,
-        cwd: worktree.path,
+        cwd: branch.path,
         command: built.bin,
         commandArgs: built.args,
         sessionId: session.session_id,
@@ -437,13 +435,13 @@ export class TerminalsService {
 
   private async createExecutorTerminal(
     data: {
-      worktreeId?: WorktreeID;
+      branchId?: BranchID;
       cols?: number;
       rows?: number;
       /**
        * Optional Zellij tab name to focus once the executor is up. Used by
        * the Claude Code CLI adapter's in-pane EmbeddedTerminal to land on
-       * the session's `cli-<short>` tab rather than the worktree default.
+       * the session's `cli-<short>` tab rather than the branch default.
        *
        * The focus emit happens server-side because browser sockets are not
        * allowed to publish on `terminal:tab` (only service tokens may).
@@ -480,7 +478,7 @@ export class TerminalsService {
     channel: string;
     sessionName: string;
     isNew: boolean;
-    worktreeName?: string;
+    branchName?: string;
   }> {
     const userId = params?.user?.user_id as UserID;
     if (!userId) {
@@ -506,7 +504,7 @@ export class TerminalsService {
         );
         this.executorTerminals.set(userId, {
           sessionName: expectedSessionName,
-          activeWorktrees: new Set(),
+          activeBranches: new Set(),
           startedAt: new Date(),
         });
       }
@@ -515,21 +513,21 @@ export class TerminalsService {
     // Check if user already has an executor running
     const existing = this.executorTerminals.get(userId);
     if (existing) {
-      // Add worktree to active set
-      const worktreeKey = data.worktreeId || 'default';
-      existing.activeWorktrees.add(worktreeKey);
+      // Add branch to active set
+      const branchKey = data.branchId || 'default';
+      existing.activeBranches.add(branchKey);
 
-      // If worktree specified, tell executor to create/focus tab
-      if (data.worktreeId) {
-        const worktreeRepo = new WorktreeRepository(this.db);
-        const worktree = await worktreeRepo.findById(data.worktreeId);
-        if (worktree) {
+      // If branch specified, tell executor to create/focus tab
+      if (data.branchId) {
+        const branchRepo = new BranchRepository(this.db);
+        const branch = await branchRepo.findById(data.branchId);
+        if (branch) {
           // Emit tab command via channel - executor will handle it
           this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
             userId,
             action: 'create',
-            tabName: worktree.name,
-            cwd: worktree.path,
+            tabName: branch.name,
+            cwd: branch.path,
           });
 
           // Ensure-create the CLI tab when an `ensureCliSessionId` was
@@ -549,7 +547,7 @@ export class TerminalsService {
           //
           // Falls back to the old plain-focus behavior when the caller
           // provided a `focusTabName` without an `ensureCliSessionId`.
-          if (data.cliEnsure && data.cliEnsure.tabName !== worktree.name) {
+          if (data.cliEnsure && data.cliEnsure.tabName !== branch.name) {
             const ensure = data.cliEnsure;
             const alive = await isClaudeRunningFor(
               ensure.sessionId as unknown as import('@agor/core/types').SessionID
@@ -573,7 +571,7 @@ export class TerminalsService {
                 });
               }
             }, 300);
-          } else if (data.focusTabName && data.focusTabName !== worktree.name) {
+          } else if (data.focusTabName && data.focusTabName !== branch.name) {
             setTimeout(() => {
               this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
                 userId,
@@ -593,7 +591,7 @@ export class TerminalsService {
             channel: `user/${userId}/terminal`,
             sessionName: existing.sessionName,
             isNew: false,
-            worktreeName: worktree.name,
+            branchName: branch.name,
           };
         }
       }
@@ -645,20 +643,20 @@ export class TerminalsService {
       throw err;
     }
 
-    // Determine cwd and worktree info
+    // Determine cwd and branch info
     let cwd = os.homedir();
-    let worktreeName: string | undefined;
+    let branchName: string | undefined;
 
-    if (data.worktreeId) {
-      const worktreeRepo = new WorktreeRepository(this.db);
-      const worktree = await worktreeRepo.findById(data.worktreeId);
-      if (worktree) {
-        worktreeName = worktree.name;
+    if (data.branchId) {
+      const branchRepo = new BranchRepository(this.db);
+      const branch = await branchRepo.findById(data.branchId);
+      if (branch) {
+        branchName = branch.name;
         if (finalUnixUser) {
-          const symlinkPath = `/home/${finalUnixUser}/agor/worktrees/${worktree.name}`;
-          cwd = fs.existsSync(symlinkPath) ? symlinkPath : worktree.path;
+          const symlinkPath = `/home/${finalUnixUser}/agor/worktrees/${branch.name}`;
+          cwd = fs.existsSync(symlinkPath) ? symlinkPath : branch.path;
         } else {
-          cwd = worktree.path;
+          cwd = branch.path;
         }
       }
     }
@@ -694,7 +692,7 @@ export class TerminalsService {
           userId,
           sessionName,
           cwd,
-          tabName: worktreeName,
+          tabName: branchName,
           cols: data.cols || 160,
           rows: data.rows || 40,
           envFile, // Pass env file path for shell to source
@@ -712,7 +710,7 @@ export class TerminalsService {
     // Track the executor
     this.executorTerminals.set(userId, {
       sessionName,
-      activeWorktrees: new Set([data.worktreeId || 'default']),
+      activeBranches: new Set([data.branchId || 'default']),
       startedAt: new Date(),
     });
 
@@ -761,18 +759,18 @@ export class TerminalsService {
       channel: `user/${userId}/terminal`,
       sessionName,
       isNew: true,
-      worktreeName,
+      branchName,
     };
   }
 
   /**
-   * Close executor terminal for a worktree
+   * Close executor terminal for a branch
    *
-   * If this is the last active worktree, the executor will exit naturally
+   * If this is the last active branch, the executor will exit naturally
    * when the user detaches from Zellij.
    */
   async closeExecutorTerminal(
-    data: { worktreeId?: WorktreeID },
+    data: { branchId?: BranchID },
     params?: AuthenticatedParams
   ): Promise<{ closed: boolean }> {
     const userId = params?.user?.user_id as UserID;
@@ -785,12 +783,12 @@ export class TerminalsService {
       return { closed: false };
     }
 
-    const worktreeKey = data.worktreeId || 'default';
-    executor.activeWorktrees.delete(worktreeKey);
+    const branchKey = data.branchId || 'default';
+    executor.activeBranches.delete(branchKey);
 
-    // If no more active worktrees, mark executor for cleanup
+    // If no more active branches, mark executor for cleanup
     // The executor will exit when Zellij detaches
-    if (executor.activeWorktrees.size === 0) {
+    if (executor.activeBranches.size === 0) {
       this.executorTerminals.delete(userId);
     }
 

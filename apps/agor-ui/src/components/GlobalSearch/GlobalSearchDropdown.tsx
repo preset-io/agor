@@ -139,9 +139,9 @@ function resultKey(result: SearchResultItem): string {
   switch (result.type) {
     case 'session':
       return `session-${result.item.session_id}`;
-    case 'worktree':
+    case 'branch':
     case 'assistant':
-      return `${result.type}-${result.item.worktree_id}`;
+      return `${result.type}-${result.item.branch_id}`;
     case 'artifact':
       return `artifact-${result.item.artifact_id}`;
     case 'board':

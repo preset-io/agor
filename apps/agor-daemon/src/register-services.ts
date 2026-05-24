@@ -12,6 +12,7 @@ import {
 } from '@agor/core/config';
 import {
   and,
+  BranchRepository,
   type Database,
   eq,
   inArray,
@@ -21,7 +22,6 @@ import {
   sessionMcpServers,
   shortId,
   UserMCPOAuthTokenRepository,
-  WorktreeRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { NotAuthenticated } from '@agor/core/feathers';
@@ -54,6 +54,8 @@ import { createArtifactsService } from './services/artifacts.js';
 import { createBoardCommentsService } from './services/board-comments.js';
 import { createBoardObjectsService } from './services/board-objects.js';
 import { createBoardsService } from './services/boards.js';
+import { setupBranchOwnersService } from './services/branch-owners.js';
+import { createBranchesService } from './services/branches.js';
 import { createCardTypesService } from './services/card-types.js';
 import { createCardsService } from './services/cards.js';
 import { createCheckAuthService } from './services/check-auth.js';
@@ -78,8 +80,6 @@ import { createTemplatesService } from './services/templates.js';
 import { TerminalsService } from './services/terminals.js';
 import { createThreadSessionMapService } from './services/thread-session-map.js';
 import { createUsersService } from './services/users.js';
-import { setupWorktreeOwnersService } from './services/worktree-owners.js';
-import { createWorktreesService } from './services/worktrees.js';
 import { userRoomName } from './setup/socketio.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { escapeHtml } from './utils/html.js';
@@ -106,7 +106,7 @@ export interface RegisterServicesContext {
   bundledUiAvailable: boolean;
   DAEMON_PORT: number;
   UI_PORT: number;
-  worktreeRbacEnabled: boolean;
+  branchRbacEnabled: boolean;
   allowSuperadmin: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
 }
@@ -118,7 +118,7 @@ export interface RegisteredServices {
   sessionsService: SessionsServiceImpl;
   messagesService: MessagesServiceImpl;
   boardsService: BoardsServiceImpl | undefined;
-  worktreeRepository: WorktreeRepository;
+  branchRepository: BranchRepository;
   usersRepository: import('@agor/core/db').UsersRepository;
   sessionsRepository: import('@agor/core/db').SessionRepository;
   sessionMCPServersService: ReturnType<typeof createSessionMCPServersService>;
@@ -132,16 +132,8 @@ export interface RegisteredServices {
  * Register all FeathersJS services on the app.
  */
 export async function registerServices(ctx: RegisterServicesContext): Promise<RegisteredServices> {
-  const {
-    db,
-    app,
-    config,
-    svcEnabled,
-    jwtSecret,
-    daemonUrl,
-    worktreeRbacEnabled,
-    allowSuperadmin,
-  } = ctx;
+  const { db, app, config, svcEnabled, jwtSecret, daemonUrl, branchRbacEnabled, allowSuperadmin } =
+    ctx;
 
   const _superadminOpts = { allowSuperadmin };
 
@@ -295,30 +287,30 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   }
 
   // ============================================================================
-  // Worktrees, repos
+  // Branches, repos
   // ============================================================================
 
-  app.use('/worktrees', createWorktreesService(db, app), {
+  app.use('/branches', createBranchesService(db, app), {
     methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'initializeUnixGroup'],
   });
 
-  console.log(`[RBAC] Worktree RBAC ${worktreeRbacEnabled ? 'Enabled' : 'Disabled'}`);
+  console.log(`[RBAC] Branch RBAC ${branchRbacEnabled ? 'Enabled' : 'Disabled'}`);
   console.log(`[RBAC] Superadmin bypass ${allowSuperadmin ? 'Enabled' : 'Disabled'}`);
 
   if (
-    worktreeRbacEnabled &&
-    !app.services['worktrees/:id/owners'] &&
-    !app.services['worktrees/:id/owners/:userId']
+    branchRbacEnabled &&
+    !app.services['branches/:id/owners'] &&
+    !app.services['branches/:id/owners/:userId']
   ) {
-    const worktreeRepo = new WorktreeRepository(db);
-    setupWorktreeOwnersService(app, worktreeRepo, {
+    const branchRepo = new BranchRepository(db);
+    setupBranchOwnersService(app, branchRepo, {
       jwtSecret,
       daemonUser: config.daemon?.unix_user,
       allowSuperadmin,
     });
   }
 
-  if (worktreeRbacEnabled) {
+  if (branchRbacEnabled) {
     const daemonUser = config.daemon?.unix_user || 'agor';
     console.log(`[Unix Integration] Executor-based sync enabled (daemon user: ${daemonUser})`);
   }
@@ -379,14 +371,14 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use('/copilot-models', createCopilotModelsService(db));
   app.service('/copilot-models').hooks({ before: { find: [ctx.requireAuth] } });
 
-  const worktreeRepository = new WorktreeRepository(db);
+  const branchRepository = new BranchRepository(db);
   const { UsersRepository, SessionRepository } = await import('@agor/core/db');
   const usersRepository = new UsersRepository(db);
   const sessionsRepository = new SessionRepository(db);
 
   if (svcEnabled('file_browser')) {
-    app.use('/context', createContextService(worktreeRepository));
-    app.use('/file', createFileService(worktreeRepository));
+    app.use('/context', createContextService(branchRepository));
+    app.use('/file', createFileService(branchRepository));
     app.use('/files', createFilesService(db));
   }
 
@@ -414,7 +406,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Unlike /session-mcp-servers, selection NAMES are a confidentiality
   // concern (they reveal which of the session creator's private env vars
   // are wired into a session), so we deliberately do NOT surface a
-  // queryable read here — a worktree collaborator with `view`/`prompt`
+  // queryable read here — a branch collaborator with `view`/`prompt`
   // must not see another user's selection names.
   //
   // Reads go exclusively through `/sessions/:id/env-selections`, which
@@ -500,7 +492,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     sessionsService,
     messagesService,
     boardsService,
-    worktreeRepository,
+    branchRepository,
     usersRepository,
     sessionsRepository,
     sessionMCPServersService,
@@ -570,14 +562,14 @@ function createExecuteHandler(
 
     const taskId = data.taskId;
 
-    // Get worktree path
+    // Get branch path
     let cwd = process.cwd();
-    if (session.worktree_id) {
+    if (session.branch_id) {
       try {
-        const worktree = await app.service('worktrees').get(session.worktree_id, params);
-        cwd = worktree.path;
+        const branch = await app.service('branches').get(session.branch_id, params);
+        cwd = branch.path;
       } catch (error) {
-        console.warn(`Could not get worktree path for ${session.worktree_id}:`, error);
+        console.warn(`Could not get branch path for ${session.branch_id}:`, error);
       }
     }
 
@@ -727,7 +719,7 @@ function createExecuteHandler(
           db,
           sessionId,
           sdkSessionId: session.sdk_session_id,
-          worktreePath: cwd,
+          branchPath: cwd,
           tool: session.agentic_tool,
           executorHomeDir,
         });
@@ -830,10 +822,10 @@ function createExecuteHandler(
               pushAsync({
                 db,
                 sessionId,
-                worktreeId: freshSession.worktree_id,
+                branchId: freshSession.branch_id,
                 taskId,
                 sdkSessionId: freshSession.sdk_session_id,
-                worktreePath: cwd,
+                branchPath: cwd,
                 tool: freshSession.agentic_tool,
                 executorHomeDir,
               });

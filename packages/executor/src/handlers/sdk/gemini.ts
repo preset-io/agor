@@ -38,7 +38,7 @@ export async function executeGeminiTask(params: {
         apiKey,
         repos.messagesService,
         repos.tasksService,
-        repos.worktrees,
+        repos.branches,
         repos.repos,
         repos.mcpServers,
         repos.sessionMCP,

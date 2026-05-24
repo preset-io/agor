@@ -182,7 +182,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   const prevSessionIdRef = React.useRef(session.session_id);
 
   // Only the session's creator or a global admin can edit env selections.
-  // Worktree `all` permission does NOT grant access.
+  // Branch `all` permission does NOT grant access.
   const canEditEnvSelections = React.useMemo(() => {
     if (!currentUser) return false;
     if (currentUser.user_id === session.created_by) return true;

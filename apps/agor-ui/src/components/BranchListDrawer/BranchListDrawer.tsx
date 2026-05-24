@@ -1,4 +1,4 @@
-import type { Board, Repo, Session, Worktree } from '@agor-live/client';
+import type { Board, Branch, Repo, Session } from '@agor-live/client';
 import { SearchOutlined } from '@ant-design/icons';
 import { Badge, Drawer, Empty, Input, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
@@ -16,9 +16,9 @@ interface BranchListDrawerProps {
   boards: Board[];
   currentBoardId: string;
   onBoardChange: (boardId: string) => void;
-  worktreeById: Map<string, Worktree>;
+  branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
-  sessionsByWorktree: Map<string, Session[]>;
+  sessionsByBranch: Map<string, Session[]>;
   onSessionClick: (sessionId: string) => void;
 }
 
@@ -41,9 +41,9 @@ export const BranchListDrawer: React.FC<BranchListDrawerProps> = ({
   boards,
   currentBoardId,
   onBoardChange,
-  worktreeById,
+  branchById,
   repoById,
-  sessionsByWorktree,
+  sessionsByBranch,
   onSessionClick,
 }) => {
   const { token } = theme.useToken();
@@ -52,21 +52,21 @@ export const BranchListDrawer: React.FC<BranchListDrawerProps> = ({
   // Get current board
   const currentBoard = boards.find((b) => b.board_id === currentBoardId);
 
-  // Filter sessions by current board (worktree-centric model)
+  // Filter sessions by current board (branch-centric model)
   const boardSessions = useMemo(() => {
-    // Get worktree IDs for this board by iterating the Map
-    const boardWorktreeIds: string[] = [];
-    for (const worktree of worktreeById.values()) {
-      if (worktree.board_id === currentBoardId) {
-        boardWorktreeIds.push(worktree.worktree_id);
+    // Get branch IDs for this board by iterating the Map
+    const boardBranchIds: string[] = [];
+    for (const branch of branchById.values()) {
+      if (branch.board_id === currentBoardId) {
+        boardBranchIds.push(branch.branch_id);
       }
     }
 
-    // Get sessions for these worktrees using O(1) Map lookups, sorted by last_updated desc
-    return boardWorktreeIds
-      .flatMap((worktreeId) => sessionsByWorktree.get(worktreeId) || [])
+    // Get sessions for these branches using O(1) Map lookups, sorted by last_updated desc
+    return boardBranchIds
+      .flatMap((branchId) => sessionsByBranch.get(branchId) || [])
       .sort((a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime());
-  }, [sessionsByWorktree, worktreeById, currentBoardId]);
+  }, [sessionsByBranch, branchById, currentBoardId]);
 
   // Filter sessions by search query
   const filteredSessions = boardSessions.filter(
@@ -113,10 +113,8 @@ export const BranchListDrawer: React.FC<BranchListDrawerProps> = ({
           />
         ) : (
           filteredSessions.map((session) => {
-            const worktree = session.worktree_id
-              ? worktreeById.get(session.worktree_id)
-              : undefined;
-            const repo = worktree ? repoById.get(worktree.repo_id) : undefined;
+            const branch = session.branch_id ? branchById.get(session.branch_id) : undefined;
+            const repo = branch ? repoById.get(branch.repo_id) : undefined;
 
             return (
               <div
@@ -175,7 +173,7 @@ export const BranchListDrawer: React.FC<BranchListDrawerProps> = ({
                   <SessionRelationshipIcon session={session} />
                 </div>
 
-                {/* Line 2: repo+worktree pill · relative timestamp */}
+                {/* Line 2: repo+branch pill · relative timestamp */}
                 <div
                   style={{
                     display: 'flex',
@@ -188,11 +186,11 @@ export const BranchListDrawer: React.FC<BranchListDrawerProps> = ({
                   }}
                 >
                   <div style={{ minWidth: 0, overflow: 'hidden' }}>
-                    {repo && worktree ? (
-                      <RepoPill repoName={repo.slug} worktreeName={worktree.name} color="default" />
-                    ) : worktree ? (
+                    {repo && branch ? (
+                      <RepoPill repoName={repo.slug} branchName={branch.name} color="default" />
+                    ) : branch ? (
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        🌳 {worktree.name}
+                        🌳 {branch.name}
                       </Typography.Text>
                     ) : (
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>

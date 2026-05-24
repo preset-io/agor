@@ -48,7 +48,7 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
     // If filtering by task_id (scalar string), use repository method.
     // The RBAC scoping hook may also inject `session_id` (scalar or `$in`)
     // alongside a user-supplied `task_id`; without intersecting here, callers
-    // with only `task_id` would bypass worktree scoping. Filter the task_id
+    // with only `task_id` would bypass branch scoping. Filter the task_id
     // rows by the accessible session_id set before returning.
     if (typeof params?.query?.task_id === 'string') {
       let messages = await this.messagesRepo.findByTaskId(params.query.task_id);

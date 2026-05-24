@@ -1,9 +1,9 @@
 /**
- * Reusable Worktree Form Fields
+ * Reusable Branch Form Fields
  *
- * Shared form fields for creating worktrees in both:
- * - NewSessionModal (create session with new worktree)
- * - BranchesTable (create standalone worktree)
+ * Shared form fields for creating branches in both:
+ * - NewSessionModal (create session with new branch)
+ * - BranchesTable (create standalone branch)
  */
 
 import type { Board, Repo } from '@agor-live/client';
@@ -26,7 +26,7 @@ export interface BranchFormFieldsProps {
   selectedRepoId: string | null;
   onRepoChange: (repoId: string) => void;
   defaultBranch: string;
-  /** Field name prefix (e.g., 'newWorktree_' for NewSessionModal) */
+  /** Field name prefix (e.g., 'newBranch_' for NewSessionModal) */
   fieldPrefix?: string;
   /** Show URL fields for issue/PR tracking */
   showUrlFields?: boolean;
@@ -193,17 +193,17 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
       <Form.Item
         name={`${fieldPrefix}storage_mode`}
         label="Storage"
-        initialValue="worktree"
+        initialValue="branch"
         tooltip={
           'How the branch is materialised on disk. ' +
-          '"Worktree" uses git\'s native shared-base model (legacy default). ' +
-          '"Branch" gives this worktree its own .git/ directory via a real ' +
+          '"Branch" uses git\'s native shared-base model (legacy default). ' +
+          '"Branch" gives this branch its own .git/ directory via a real ' +
           'git clone — credentials and config are isolated from sibling branches. ' +
           'See docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.'
         }
       >
         <Radio.Group onChange={() => onFormChange?.()}>
-          <Radio value="worktree">Worktree (default)</Radio>
+          <Radio value="branch">Branch (default)</Radio>
           <Radio value="clone">Branch</Radio>
         </Radio.Group>
       </Form.Item>
@@ -312,7 +312,7 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
 };
 
 // Export helper hook to get the branch name from form values
-export const useWorktreeBranchName = (fieldPrefix = '') => {
+export const useBranchBranchName = (fieldPrefix = '') => {
   const form = Form.useFormInstance();
   const [useSameBranchName, setUseSameBranchName] = useState(true);
 

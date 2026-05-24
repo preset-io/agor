@@ -5,13 +5,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   ExecutorPayloadSchema,
+  GitBranchAddPayloadSchema,
+  GitBranchRemovePayloadSchema,
   GitClonePayloadSchema,
-  GitWorktreeAddPayloadSchema,
-  GitWorktreeRemovePayloadSchema,
   getSupportedCommands,
+  isGitBranchAddPayload,
+  isGitBranchRemovePayload,
   isGitClonePayload,
-  isGitWorktreeAddPayload,
-  isGitWorktreeRemovePayload,
   isPromptPayload,
   isZellijAttachPayload,
   PromptPayloadSchema,
@@ -222,43 +222,43 @@ describe('GitClonePayloadSchema', () => {
   });
 });
 
-describe('GitWorktreeAddPayloadSchema', () => {
-  it('should parse valid git.worktree.add payload', () => {
+describe('GitBranchAddPayloadSchema', () => {
+  it('should parse valid git.branch.add payload', () => {
     const payload = {
-      command: 'git.worktree.add',
+      command: 'git.branch.add',
       sessionToken: 'jwt-token-here',
       params: {
-        worktreeId: '550e8400-e29b-41d4-a716-446655440002',
+        branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
         repoPath: '/data/agor/repos/github.com/user/repo.git',
-        worktreeName: 'feature-x',
-        worktreePath: '/data/agor/worktrees/user/repo/feature-x',
+        branchName: 'feature-x',
+        branchPath: '/data/agor/worktrees/user/repo/feature-x',
       },
     };
 
-    const result = GitWorktreeAddPayloadSchema.parse(payload);
-    expect(result.command).toBe('git.worktree.add');
-    expect(result.params.worktreeName).toBe('feature-x');
-    expect(result.params.worktreeId).toBe('550e8400-e29b-41d4-a716-446655440002');
+    const result = GitBranchAddPayloadSchema.parse(payload);
+    expect(result.command).toBe('git.branch.add');
+    expect(result.params.branchName).toBe('feature-x');
+    expect(result.params.branchId).toBe('550e8400-e29b-41d4-a716-446655440002');
   });
 
   it('should parse with branch creation options', () => {
     const payload = {
-      command: 'git.worktree.add',
+      command: 'git.branch.add',
       sessionToken: 'jwt-token-here',
       params: {
-        worktreeId: '550e8400-e29b-41d4-a716-446655440002',
+        branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
         repoPath: '/data/agor/repos/github.com/user/repo.git',
-        worktreeName: 'feature-x',
-        worktreePath: '/data/agor/worktrees/user/repo/feature-x',
+        branchName: 'feature-x',
+        branchPath: '/data/agor/worktrees/user/repo/feature-x',
         branch: 'feature-x',
         sourceBranch: 'main',
         createBranch: true,
       },
     };
 
-    const result = GitWorktreeAddPayloadSchema.parse(payload);
+    const result = GitBranchAddPayloadSchema.parse(payload);
     expect(result.params.branch).toBe('feature-x');
     expect(result.params.sourceBranch).toBe('main');
     expect(result.params.createBranch).toBe(true);
@@ -269,19 +269,19 @@ describe('GitWorktreeAddPayloadSchema', () => {
   // See enforceClonePayloadInvariants in payload-types.ts.
   describe('clone-mode invariants (superRefine)', () => {
     const basePayload = {
-      command: 'git.worktree.add' as const,
+      command: 'git.branch.add' as const,
       sessionToken: 'jwt-token-here',
       params: {
-        worktreeId: '550e8400-e29b-41d4-a716-446655440002',
+        branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
         repoPath: '/data/agor/repos/github.com/user/repo.git',
-        worktreeName: 'feature-x',
-        worktreePath: '/data/agor/worktrees/user/repo/feature-x',
+        branchName: 'feature-x',
+        branchPath: '/data/agor/worktrees/user/repo/feature-x',
       },
     };
 
     it('accepts a clone-mode payload with a remoteUrl (and optional cloneDepth)', () => {
-      const result = GitWorktreeAddPayloadSchema.parse({
+      const result = GitBranchAddPayloadSchema.parse({
         ...basePayload,
         params: {
           ...basePayload.params,
@@ -297,7 +297,7 @@ describe('GitWorktreeAddPayloadSchema', () => {
 
     it('rejects a clone-mode payload missing remoteUrl', () => {
       expect(() =>
-        GitWorktreeAddPayloadSchema.parse({
+        GitBranchAddPayloadSchema.parse({
           ...basePayload,
           params: {
             ...basePayload.params,
@@ -308,10 +308,10 @@ describe('GitWorktreeAddPayloadSchema', () => {
       ).toThrow(/remoteUrl is required/);
     });
 
-    it('rejects cloneDepth paired with worktree (or undefined) mode', () => {
+    it('rejects cloneDepth paired with branch (or undefined) mode', () => {
       // Explicit worktree mode.
       expect(() =>
-        GitWorktreeAddPayloadSchema.parse({
+        GitBranchAddPayloadSchema.parse({
           ...basePayload,
           params: {
             ...basePayload.params,
@@ -324,7 +324,7 @@ describe('GitWorktreeAddPayloadSchema', () => {
       // Mode unset (legacy callers) — same rule: cloneDepth without
       // explicit clone mode is a config bug, not silently dropped.
       expect(() =>
-        GitWorktreeAddPayloadSchema.parse({
+        GitBranchAddPayloadSchema.parse({
           ...basePayload,
           params: {
             ...basePayload.params,
@@ -336,35 +336,35 @@ describe('GitWorktreeAddPayloadSchema', () => {
   });
 });
 
-describe('GitWorktreeRemovePayloadSchema', () => {
-  it('should parse valid git.worktree.remove payload', () => {
+describe('GitBranchRemovePayloadSchema', () => {
+  it('should parse valid git.branch.remove payload', () => {
     const payload = {
-      command: 'git.worktree.remove',
+      command: 'git.branch.remove',
       sessionToken: 'jwt-token-here',
       params: {
-        worktreeId: '550e8400-e29b-41d4-a716-446655440002',
-        worktreePath: '/data/agor/worktrees/user/repo/feature-x',
+        branchId: '550e8400-e29b-41d4-a716-446655440002',
+        branchPath: '/data/agor/worktrees/user/repo/feature-x',
       },
     };
 
-    const result = GitWorktreeRemovePayloadSchema.parse(payload);
-    expect(result.command).toBe('git.worktree.remove');
-    expect(result.params.worktreePath).toBe('/data/agor/worktrees/user/repo/feature-x');
-    expect(result.params.worktreeId).toBe('550e8400-e29b-41d4-a716-446655440002');
+    const result = GitBranchRemovePayloadSchema.parse(payload);
+    expect(result.command).toBe('git.branch.remove');
+    expect(result.params.branchPath).toBe('/data/agor/worktrees/user/repo/feature-x');
+    expect(result.params.branchId).toBe('550e8400-e29b-41d4-a716-446655440002');
   });
 
   it('should parse with force option', () => {
     const payload = {
-      command: 'git.worktree.remove',
+      command: 'git.branch.remove',
       sessionToken: 'jwt-token-here',
       params: {
-        worktreeId: '550e8400-e29b-41d4-a716-446655440002',
-        worktreePath: '/data/agor/worktrees/user/repo/feature-x',
+        branchId: '550e8400-e29b-41d4-a716-446655440002',
+        branchPath: '/data/agor/worktrees/user/repo/feature-x',
         force: true,
       },
     };
 
-    const result = GitWorktreeRemovePayloadSchema.parse(payload);
+    const result = GitBranchRemovePayloadSchema.parse(payload);
     expect(result.params.force).toBe(true);
   });
 });
@@ -515,33 +515,33 @@ describe('Type guards', () => {
     expect(isGitClonePayload(promptPayload)).toBe(false);
   });
 
-  it('isGitWorktreeAddPayload should identify git.worktree.add payloads', () => {
+  it('isGitBranchAddPayload should identify git.branch.add payloads', () => {
     const payload = {
-      command: 'git.worktree.add' as const,
+      command: 'git.branch.add' as const,
       sessionToken: 'jwt',
       params: {
-        worktreeId: '550e8400-e29b-41d4-a716-446655440002',
+        branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
         repoPath: '/data/repos/repo.git',
-        worktreeName: 'feature',
-        worktreePath: '/data/worktrees/feature',
+        branchName: 'feature',
+        branchPath: '/data/branches/feature',
       },
     };
-    expect(isGitWorktreeAddPayload(payload)).toBe(true);
-    expect(isGitWorktreeAddPayload(promptPayload)).toBe(false);
+    expect(isGitBranchAddPayload(payload)).toBe(true);
+    expect(isGitBranchAddPayload(promptPayload)).toBe(false);
   });
 
-  it('isGitWorktreeRemovePayload should identify git.worktree.remove payloads', () => {
+  it('isGitBranchRemovePayload should identify git.branch.remove payloads', () => {
     const payload = {
-      command: 'git.worktree.remove' as const,
+      command: 'git.branch.remove' as const,
       sessionToken: 'jwt',
       params: {
-        worktreeId: '550e8400-e29b-41d4-a716-446655440002',
-        worktreePath: '/data/worktrees/feature',
+        branchId: '550e8400-e29b-41d4-a716-446655440002',
+        branchPath: '/data/branches/feature',
       },
     };
-    expect(isGitWorktreeRemovePayload(payload)).toBe(true);
-    expect(isGitWorktreeRemovePayload(promptPayload)).toBe(false);
+    expect(isGitBranchRemovePayload(payload)).toBe(true);
+    expect(isGitBranchRemovePayload(promptPayload)).toBe(false);
   });
 
   it('isZellijAttachPayload should identify zellij.attach payloads', () => {
@@ -564,10 +564,10 @@ describe('getSupportedCommands', () => {
     const commands = getSupportedCommands();
     expect(commands).toContain('prompt');
     expect(commands).toContain('git.clone');
-    expect(commands).toContain('git.worktree.add');
-    expect(commands).toContain('git.worktree.remove');
-    expect(commands).toContain('git.worktree.clean');
-    expect(commands).toContain('unix.sync-worktree');
+    expect(commands).toContain('git.branch.add');
+    expect(commands).toContain('git.branch.remove');
+    expect(commands).toContain('git.branch.clean');
+    expect(commands).toContain('unix.sync-branch');
     expect(commands).toContain('unix.sync-repo');
     expect(commands).toContain('unix.sync-user');
     expect(commands).toContain('zellij.attach');

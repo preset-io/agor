@@ -4,7 +4,7 @@
  * Generate flattened lists of repo references for UI selection
  */
 
-import type { Repo, RepoSlug, Worktree, WorktreeName } from '../types';
+import type { Branch, BranchName, Repo, RepoSlug } from '../types';
 
 /**
  * Repo reference option for UI selection
@@ -13,17 +13,17 @@ export interface RepoReferenceOption {
   /** Display label (e.g., "anthropics/agor:main" or "/Users/max/code/agor") */
   label: string;
 
-  /** ID value for selection (repo_id or worktree_id) */
+  /** ID value for selection (repo_id or branch_id) */
   value: string;
 
   /** Reference type */
-  type: 'path' | 'managed' | 'managed-worktree';
+  type: 'path' | 'managed' | 'managed-branch';
 
   /** Repository slug (for managed repos) */
   slug?: RepoSlug;
 
-  /** Worktree name (for managed worktrees) */
-  worktree?: WorktreeName;
+  /** Branch name (for managed branches) */
+  branch?: BranchName;
 
   /** Display description */
   description?: string;
@@ -34,26 +34,26 @@ export interface RepoReferenceOption {
  *
  * Creates options for:
  * - Each managed repo (bare repo)
- * - Each worktree of each managed repo
+ * - Each branch of each managed repo
  * - User paths can be added manually
  *
  * @param repos - List of Agor-managed repositories
- * @param worktrees - List of worktrees (optional, now fetched from worktrees table)
+ * @param branches - List of branches (optional, now fetched from branches table)
  * @returns Flattened list of selectable repo references
  *
  * @example
- * const options = getRepoReferenceOptions(repos, worktrees);
+ * const options = getRepoReferenceOptions(repos, branches);
  * // [
  * //   { label: "anthropics/agor", value: "anthropics/agor", type: "managed", ... },
- * //   { label: "anthropics/agor:main", value: "anthropics/agor:main", type: "managed-worktree", ... },
- * //   { label: "anthropics/agor:feat-auth", value: "anthropics/agor:feat-auth", type: "managed-worktree", ... },
+ * //   { label: "anthropics/agor:main", value: "anthropics/agor:main", type: "managed-branch", ... },
+ * //   { label: "anthropics/agor:feat-auth", value: "anthropics/agor:feat-auth", type: "managed-branch", ... },
  * //   { label: "apache/superset", value: "apache/superset", type: "managed", ... },
- * //   { label: "apache/superset:main", value: "apache/superset:main", type: "managed-worktree", ... },
+ * //   { label: "apache/superset:main", value: "apache/superset:main", type: "managed-branch", ... },
  * // ]
  */
 export function getRepoReferenceOptions(
   repos: Repo[],
-  worktrees: Worktree[] = []
+  branches: Branch[] = []
 ): RepoReferenceOption[] {
   const options: RepoReferenceOption[] = [];
 
@@ -71,19 +71,19 @@ export function getRepoReferenceOptions(
     });
   }
 
-  // Add worktree options
-  for (const worktree of worktrees) {
-    const repo = repoMap.get(worktree.repo_id);
+  // Add branch options
+  for (const branch of branches) {
+    const repo = repoMap.get(branch.repo_id);
     if (!repo) continue; // Skip if repo not found
 
-    const reference = `${repo.slug}:${worktree.name}`;
+    const reference = `${repo.slug}:${branch.name}`;
     options.push({
       label: reference,
-      value: worktree.worktree_id, // Use worktree_id as value
-      type: 'managed-worktree',
+      value: branch.branch_id, // Use branch_id as value
+      type: 'managed-branch',
       slug: repo.slug,
-      worktree: worktree.name,
-      description: `${repo.name} - ${worktree.name} (${worktree.ref})`,
+      branch: branch.name,
+      description: `${repo.name} - ${branch.name} (${branch.ref})`,
     });
   }
 
@@ -96,11 +96,11 @@ export function getRepoReferenceOptions(
  * Useful for hierarchical dropdowns/menus
  *
  * @param repos - List of Agor-managed repositories
- * @param worktrees - List of worktrees (optional, now fetched from worktrees table)
+ * @param branches - List of branches (optional, now fetched from branches table)
  * @returns Map of repo slug to options
  *
  * @example
- * const grouped = getGroupedRepoReferenceOptions(repos, worktrees);
+ * const grouped = getGroupedRepoReferenceOptions(repos, branches);
  * // {
  * //   "anthropics/agor": [
  * //     { label: "anthropics/agor", ... },
@@ -112,7 +112,7 @@ export function getRepoReferenceOptions(
  */
 export function getGroupedRepoReferenceOptions(
   repos: Repo[],
-  worktrees: Worktree[] = []
+  branches: Branch[] = []
 ): Record<RepoSlug, RepoReferenceOption[]> {
   const grouped: Record<RepoSlug, RepoReferenceOption[]> = {};
 
@@ -134,23 +134,23 @@ export function getGroupedRepoReferenceOptions(
     grouped[repo.slug] = options;
   }
 
-  // Add worktree options to their respective repo groups
-  for (const worktree of worktrees) {
-    const repo = repoMap.get(worktree.repo_id);
+  // Add branch options to their respective repo groups
+  for (const branch of branches) {
+    const repo = repoMap.get(branch.repo_id);
     if (!repo) continue; // Skip if repo not found
 
-    const reference = `${repo.slug}:${worktree.name}`;
+    const reference = `${repo.slug}:${branch.name}`;
     if (!grouped[repo.slug]) {
       grouped[repo.slug] = [];
     }
 
     grouped[repo.slug].push({
       label: reference,
-      value: worktree.worktree_id, // Use worktree_id as value
-      type: 'managed-worktree',
+      value: branch.branch_id, // Use branch_id as value
+      type: 'managed-branch',
       slug: repo.slug,
-      worktree: worktree.name,
-      description: `${repo.name} - ${worktree.name} (${worktree.ref})`,
+      branch: branch.name,
+      description: `${repo.name} - ${branch.name} (${branch.ref})`,
     });
   }
 
@@ -158,7 +158,7 @@ export function getGroupedRepoReferenceOptions(
 }
 
 /**
- * Get default repo reference (first worktree of first repo, or first repo)
+ * Get default repo reference (first branch of first repo, or first repo)
  *
  * @param repos - List of Agor-managed repositories
  * @returns Default reference or undefined if no repos
@@ -168,7 +168,7 @@ export function getDefaultRepoReference(repos: Repo[]): string | undefined {
 
   const firstRepo = repos[0];
 
-  // TODO: Update to fetch worktrees from worktrees table
+  // TODO: Update to fetch branches from branches table
   // For now, just return the bare repo
   return firstRepo.slug;
 }

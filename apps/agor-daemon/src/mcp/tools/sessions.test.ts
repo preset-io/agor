@@ -19,16 +19,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../resolve-ids.js', () => ({
   resolveBoardId: async (_ctx: unknown, id: string) => id,
   resolveSessionId: async (_ctx: unknown, id: string) => id,
-  resolveWorktreeId: async (_ctx: unknown, id: string) => id,
+  resolveBranchId: async (_ctx: unknown, id: string) => id,
   resolveMcpServerId: async (_ctx: unknown, id: string) => `full-${id}`,
 }));
 
-vi.mock('../../utils/worktree-authorization.js', () => ({
+vi.mock('../../utils/branch-authorization.js', () => ({
   ensureCanPromptTargetSession: vi.fn(async () => undefined),
 }));
 
 vi.mock('@agor/core/db', () => ({
-  WorktreeRepository: class FakeWorktreeRepository {},
+  BranchRepository: class FakeBranchRepository {},
 }));
 
 // Helper to build a minimal fake Feathers app. Each test supplies spies for
@@ -98,8 +98,8 @@ async function registerAndCaptureHandlers(
 }
 
 describe('agor_sessions_create', () => {
-  const baseWorktree = {
-    worktree_id: 'wt-1',
+  const baseBranch = {
+    branch_id: 'wt-1',
     path: '/tmp/wt',
     mcp_server_ids: [],
   };
@@ -144,7 +144,7 @@ describe('agor_sessions_create', () => {
     const sessionCreates: unknown[] = [];
     const app = makeFakeApp({
       users: { get: async () => baseUser },
-      worktrees: { get: async () => baseWorktree },
+      branches: { get: async () => baseBranch },
       sessions: {
         create: async (data: unknown) => {
           sessionCreates.push(data);
@@ -160,7 +160,7 @@ describe('agor_sessions_create', () => {
     );
 
     await agor_sessions_create({
-      worktreeId: 'wt-1',
+      branchId: 'wt-1',
       agenticTool: 'claude-code',
       modelConfig: { model: 'claude-opus-4-6', mode: 'alias', effort: 'max' },
     });
@@ -179,7 +179,7 @@ describe('agor_sessions_create', () => {
     const sessionCreates: unknown[] = [];
     const app = makeFakeApp({
       users: { get: async () => baseUser },
-      worktrees: { get: async () => baseWorktree },
+      branches: { get: async () => baseBranch },
       sessions: {
         create: async (data: unknown) => {
           sessionCreates.push(data);
@@ -195,7 +195,7 @@ describe('agor_sessions_create', () => {
     );
 
     await agor_sessions_create({
-      worktreeId: 'wt-1',
+      branchId: 'wt-1',
       agenticTool: 'claude-code',
       // no modelConfig
     });
@@ -214,7 +214,7 @@ describe('agor_sessions_create', () => {
     const attachCalls: Array<{ data: any; params: any }> = [];
     const app = makeFakeApp({
       users: { get: async () => baseUser },
-      worktrees: { get: async () => baseWorktree },
+      branches: { get: async () => baseBranch },
       sessions: {
         create: async (data: unknown) => ({
           session_id: 'sess-new',
@@ -235,7 +235,7 @@ describe('agor_sessions_create', () => {
     );
 
     const result = await agor_sessions_create({
-      worktreeId: 'wt-1',
+      branchId: 'wt-1',
       agenticTool: 'claude-code',
       mcpServerIds: ['short-id-1', 'short-id-2'],
     });
@@ -253,7 +253,7 @@ describe('agor_sessions_create', () => {
   it('surfaces attach failures in the response when caller explicitly requested mcpServerIds', async () => {
     const app = makeFakeApp({
       users: { get: async () => baseUser },
-      worktrees: { get: async () => baseWorktree },
+      branches: { get: async () => baseBranch },
       sessions: {
         create: async () => ({ session_id: 'sess-new' }),
       },
@@ -270,7 +270,7 @@ describe('agor_sessions_create', () => {
     );
 
     const result = await agor_sessions_create({
-      worktreeId: 'wt-1',
+      branchId: 'wt-1',
       agenticTool: 'claude-code',
       mcpServerIds: ['short-id-1'],
     });
@@ -282,13 +282,13 @@ describe('agor_sessions_create', () => {
   });
 
   it('silently skips (does not surface) attach failures for inherited mcpServerIds', async () => {
-    const worktreeWithMcps = {
-      ...baseWorktree,
+    const branchWithMcps = {
+      ...baseBranch,
       mcp_server_ids: ['inherited-1'],
     };
     const app = makeFakeApp({
       users: { get: async () => baseUser },
-      worktrees: { get: async () => worktreeWithMcps },
+      branches: { get: async () => branchWithMcps },
       sessions: {
         create: async () => ({ session_id: 'sess-new' }),
       },
@@ -305,9 +305,9 @@ describe('agor_sessions_create', () => {
     );
 
     const result = await agor_sessions_create({
-      worktreeId: 'wt-1',
+      branchId: 'wt-1',
       agenticTool: 'claude-code',
-      // no explicit mcpServerIds → inherits from worktree
+      // no explicit mcpServerIds → inherits from branch
     });
 
     const parsed = JSON.parse(result.content[0].text);
@@ -470,7 +470,7 @@ describe('modelConfig schema (string shorthand coercion)', () => {
     const schema = tools.agor_sessions_create.cfg.inputSchema!;
 
     const parsed = schema.parse({
-      worktreeId: 'wt-1',
+      branchId: 'wt-1',
       agenticTool: 'claude-code',
       modelConfig: 'claude-opus-4-6',
     }) as Record<string, unknown>;
@@ -489,7 +489,7 @@ describe('modelConfig schema (string shorthand coercion)', () => {
     const schema = tools.agor_sessions_create.cfg.inputSchema!;
 
     const parsed = schema.parse({
-      worktreeId: 'wt-1',
+      branchId: 'wt-1',
       agenticTool: 'claude-code',
       modelConfig: { mode: 'alias', model: 'claude-sonnet-4-6', effort: 'high' },
     }) as Record<string, unknown>;
@@ -510,7 +510,7 @@ describe('modelConfig schema (string shorthand coercion)', () => {
 
     expect(() =>
       schema.parse({
-        worktreeId: 'wt-1',
+        branchId: 'wt-1',
         agenticTool: 'claude-code',
         modelConfig: '',
       })
@@ -527,8 +527,8 @@ describe('modelConfig schema (string shorthand coercion)', () => {
           default_agentic_config: {},
         }),
       },
-      worktrees: {
-        get: async () => ({ worktree_id: 'wt-1', path: '/tmp/wt', mcp_server_ids: [] }),
+      branches: {
+        get: async () => ({ branch_id: 'wt-1', path: '/tmp/wt', mcp_server_ids: [] }),
       },
       sessions: {
         create: async (data: unknown) => {
@@ -558,7 +558,7 @@ describe('modelConfig schema (string shorthand coercion)', () => {
 
     // Parse with Zod (string → object), then dispatch to handler
     const parsed = schema.parse({
-      worktreeId: 'wt-1',
+      branchId: 'wt-1',
       agenticTool: 'claude-code',
       modelConfig: 'claude-opus-4-6',
     }) as Record<string, unknown>;
@@ -662,7 +662,7 @@ describe('attached_mcp_servers in session-info tools', () => {
       sessions: {
         get: async (id: string) => ({
           session_id: id,
-          worktree_id: null, // skip worktree denormalization for brevity
+          branch_id: null, // skip branch denormalization for brevity
         }),
       },
       'session-mcp-servers': {

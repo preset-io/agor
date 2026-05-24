@@ -37,7 +37,7 @@ export function getCodexHome(executorHomeDir?: string): string {
 
 export function getSessionFilePath(
   tool: AgenticToolName,
-  worktreePath: string,
+  branchPath: string,
   sdkSessionId: string,
   homeOverride?: string
 ): string {
@@ -47,10 +47,10 @@ export function getSessionFilePath(
       // When we need a different user's home, construct the path directly
       // using the same encoding logic.
       if (homeOverride) {
-        const projectSlug = worktreePath.replace(/[^a-zA-Z0-9]/g, '-');
+        const projectSlug = branchPath.replace(/[^a-zA-Z0-9]/g, '-');
         return path.join(homeOverride, '.claude', 'projects', projectSlug, `${sdkSessionId}.jsonl`);
       }
-      return getTranscriptPath(sdkSessionId, worktreePath);
+      return getTranscriptPath(sdkSessionId, branchPath);
     }
     case 'codex': {
       // homeOverride here is the executor user's HOME dir (not CODEX_HOME).

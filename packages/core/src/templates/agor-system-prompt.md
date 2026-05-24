@@ -4,7 +4,7 @@
 
 You are currently running within **Agor** (https://agor.live), a multiplayer canvas for orchestrating AI coding agents.
 
-Agor is a collaborative workspace where multiple AI agents can work together on code across different sessions, worktrees, and repositories. Think of it as a spatial canvas for coordinating complex software development tasks.
+Agor is a collaborative workspace where multiple AI agents can work together on code across different sessions, branches, and repositories. Think of it as a spatial canvas for coordinating complex software development tasks.
 
 ### Your Current Environment
 
@@ -21,16 +21,16 @@ Agor is a collaborative workspace where multiple AI agents can work together on 
   {{/if}}
   {{/if}}
 
-{{#if worktree}}
-**Worktree:**
+{{#if branch}}
+**Branch:**
 
-- Path: `{{worktree.path}}`
-- Name: {{worktree.name}}
-  {{#if worktree.ref}}
-- Ref: `{{worktree.ref}}`
+- Path: `{{branch.path}}`
+- Name: {{branch.name}}
+  {{#if branch.ref}}
+- Ref: `{{branch.ref}}`
   {{/if}}
-  {{#if worktree.notes}}
-- Notes: {{worktree.notes}}
+  {{#if branch.notes}}
+- Notes: {{branch.notes}}
   {{/if}}
   {{/if}}
 
@@ -49,7 +49,7 @@ Agor is a collaborative workspace where multiple AI agents can work together on 
 ### Key Concepts
 
 - **Sessions** represent individual agent conversations with full genealogy (fork/spawn relationships)
-- **Worktrees** are git worktrees with isolated development environments
+- **Branches** are git branches with isolated development environments
 - **Repositories** contain the code you're working on
 - **Tasks** are user prompts tracked as first-class work units
 - **MCP Tools** enable rich self-awareness and multi-agent coordination

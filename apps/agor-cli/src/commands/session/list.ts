@@ -151,7 +151,7 @@ export default class SessionList extends BaseCommand {
           chalk.cyan('Agent'),
           chalk.cyan('Status'),
           chalk.cyan('Tasks'),
-          chalk.cyan('Worktree'),
+          chalk.cyan('Branch'),
           chalk.cyan('Git Ref'),
           chalk.cyan('Modified'),
         ],
@@ -172,9 +172,9 @@ export default class SessionList extends BaseCommand {
         // Note: session.tasks are TaskID arrays, not full Task objects in list view
         // Task completion stats would require joining with tasks table
         const completedTasks = 0;
-        // Note: Session now uses worktree_id, not nested repo object
-        // For now, show worktree_id if available, otherwise '-'
-        const worktree = session.worktree_id ? shortId(session.worktree_id) : '-';
+        // Note: Session now uses branch_id, not nested repo object
+        // For now, show branch_id if available, otherwise '-'
+        const branch = session.branch_id ? shortId(session.branch_id) : '-';
         const gitRef = session.git_state?.ref || '-';
         const modified = this.formatRelativeTime(session.last_updated || session.created_at);
 
@@ -184,7 +184,7 @@ export default class SessionList extends BaseCommand {
           session.agentic_tool,
           this.formatStatus(session.status),
           `${completedTasks}/${taskCount}`,
-          chalk.dim(worktree),
+          chalk.dim(branch),
           chalk.dim(gitRef),
           chalk.dim(modified),
         ]);

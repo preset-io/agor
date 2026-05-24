@@ -5,6 +5,7 @@ import type {
   BoardComment,
   BoardEntityObject,
   BoardID,
+  Branch,
   CardType,
   CardWithType,
   CreateLocalRepoRequest,
@@ -19,7 +20,6 @@ import type {
   SpawnConfig,
   UpdateUserInput,
   User,
-  Worktree,
 } from '@agor-live/client';
 import { hasMinimumRole, PermissionScope } from '@agor-live/client';
 import { Layout, Upload } from 'antd';
@@ -45,12 +45,12 @@ import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { useTaskCompletionChime } from '../../hooks/useTaskCompletionChime';
 import { useUrlState } from '../../hooks/useUrlState';
 import type { AgenticToolOption } from '../../types';
-import { createAssistantWorktree } from '../../utils/assistantCreation';
+import { createAssistantBranch } from '../../utils/assistantCreation';
 import { initializeAudioOnInteraction } from '../../utils/audio';
 import { AppHeader } from '../AppHeader';
 import { BranchListDrawer } from '../BranchListDrawer';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
-import type { WorktreeUpdate } from '../BranchModal/tabs/GeneralTab';
+import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { CommentsPanel } from '../CommentsPanel';
 import { CreateDialog } from '../CreateDialog';
 import type { AssistantTabResult } from '../CreateDialog/tabs/AssistantTab';
@@ -83,7 +83,7 @@ export interface AppProps {
   connected?: boolean;
   connecting?: boolean;
   sessionById: Map<string, Session>; // O(1) lookups by session_id - efficient, stable references
-  sessionsByWorktree: Map<string, Session[]>; // O(1) worktree-scoped filtering
+  sessionsByBranch: Map<string, Session[]>; // O(1) branch-scoped filtering
   availableAgents: AgenticToolOption[];
   boardById: Map<string, Board>; // Map-based board storage
   boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
@@ -91,7 +91,7 @@ export interface AppProps {
   cardById: Map<string, CardWithType>; // Map-based card storage
   cardTypeById: Map<string, CardType>; // Map-based card type storage
   repoById: Map<string, Repo>; // Map-based repo storage
-  worktreeById: Map<string, Worktree>; // Efficient worktree lookups
+  branchById: Map<string, Branch>; // Efficient branch lookups
   userById: Map<string, User>; // Map-based user storage
   mcpServerById: Map<string, MCPServer>; // Map-based MCP server storage
   sessionMcpServerIds: Map<string, string[]>; // Map-based session-MCP relationships
@@ -101,8 +101,8 @@ export interface AppProps {
   onSettingsClose?: () => void; // Called when settings modal closes
   openUserSettings?: boolean; // Open user settings modal directly (e.g., from onboarding)
   onUserSettingsClose?: () => void; // Called when user settings modal closes
-  openNewWorktreeModal?: boolean; // Open new worktree modal
-  onNewWorktreeModalClose?: () => void; // Called when new worktree modal closes
+  openNewBranchModal?: boolean; // Open new branch modal
+  onNewBranchModalClose?: () => void; // Called when new branch modal closes
   onCreateSession?: (config: NewSessionConfig, boardId: string) => Promise<string | null>;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwForkSession?: (sessionId: string, prompt: string) => Promise<void>;
@@ -119,16 +119,16 @@ export interface AppProps {
   onCreateLocalRepo?: (data: CreateLocalRepoRequest) => void | Promise<void>;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onDeleteRepo?: (repoId: string, cleanup: boolean) => void;
-  onArchiveOrDeleteWorktree?: (
-    worktreeId: string,
+  onArchiveOrDeleteBranch?: (
+    branchId: string,
     options: {
       metadataAction: 'archive' | 'delete';
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     }
   ) => void;
-  onUnarchiveWorktree?: (worktreeId: string, options?: { boardId?: string }) => void;
-  onUpdateWorktree?: (worktreeId: string, updates: WorktreeUpdate) => void;
-  onCreateWorktree?: (
+  onUnarchiveBranch?: (branchId: string, options?: { boardId?: string }) => void;
+  onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
+  onCreateBranch?: (
     repoId: string,
     data: {
       name: string;
@@ -142,11 +142,11 @@ export interface AppProps {
       storage_mode?: 'worktree' | 'clone';
       clone_depth?: number;
     }
-  ) => Promise<Worktree | null>;
-  onStartEnvironment?: (worktreeId: string) => void;
-  onStopEnvironment?: (worktreeId: string) => void;
-  onNukeEnvironment?: (worktreeId: string) => void;
-  onExecuteScheduleNow?: (worktreeId: string) => Promise<void>;
+  ) => Promise<Branch | null>;
+  onStartEnvironment?: (branchId: string) => void;
+  onStopEnvironment?: (branchId: string) => void;
+  onNukeEnvironment?: (branchId: string) => void;
+  onExecuteScheduleNow?: (branchId: string) => Promise<void>;
   onCreateUser?: (data: CreateUserInput) => void;
   onUpdateUser?: (userId: string, updates: UpdateUserInput) => void;
   onDeleteUser?: (userId: string) => void;
@@ -187,7 +187,7 @@ export const App: React.FC<AppProps> = ({
   connected = false,
   connecting = false,
   sessionById,
-  sessionsByWorktree,
+  sessionsByBranch,
   availableAgents,
   boardById,
   boardObjectById,
@@ -195,7 +195,7 @@ export const App: React.FC<AppProps> = ({
   cardById,
   cardTypeById,
   repoById,
-  worktreeById,
+  branchById,
   userById,
   mcpServerById,
   sessionMcpServerIds,
@@ -205,8 +205,8 @@ export const App: React.FC<AppProps> = ({
   onSettingsClose,
   openUserSettings,
   onUserSettingsClose,
-  openNewWorktreeModal,
-  onNewWorktreeModalClose,
+  openNewBranchModal,
+  onNewBranchModalClose,
   onCreateSession,
   onForkSession,
   onBtwForkSession,
@@ -223,10 +223,10 @@ export const App: React.FC<AppProps> = ({
   onCreateLocalRepo,
   onUpdateRepo,
   onDeleteRepo,
-  onArchiveOrDeleteWorktree,
-  onUnarchiveWorktree,
-  onUpdateWorktree,
-  onCreateWorktree,
+  onArchiveOrDeleteBranch,
+  onUnarchiveBranch,
+  onUpdateBranch,
+  onCreateBranch,
   onStartEnvironment,
   onStopEnvironment,
   onNukeEnvironment,
@@ -257,9 +257,9 @@ export const App: React.FC<AppProps> = ({
   webTerminalEnabled = false,
 }) => {
   const sessionCanvasRef = useRef<SessionCanvasRef>(null);
-  const [newSessionWorktreeId, setNewSessionWorktreeId] = useState<string | null>(null);
+  const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [newWorktreeDefaultPosition, setNewWorktreeDefaultPosition] = useState<{
+  const [newBranchDefaultPosition, setNewBranchDefaultPosition] = useState<{
     x: number;
     y: number;
   } | null>(null);
@@ -328,11 +328,11 @@ export const App: React.FC<AppProps> = ({
 
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalCommands, setTerminalCommands] = useState<string[]>([]);
-  const [terminalWorktreeId, setTerminalWorktreeId] = useState<string | undefined>(undefined);
+  const [terminalBranchId, setTerminalBranchId] = useState<string | undefined>(undefined);
   const [sessionSettingsId, setSessionSettingsId] = useState<string | null>(null);
-  const [worktreeModalWorktreeId, setWorktreeModalWorktreeId] = useState<string | null>(null);
-  const [worktreeModalTab, setWorktreeModalTab] = useState<BranchModalTab | undefined>(undefined);
-  const [logsModalWorktreeId, setLogsModalWorktreeId] = useState<string | null>(null);
+  const [branchModalBranchId, setBranchModalBranchId] = useState<string | null>(null);
+  const [branchModalTab, setBranchModalTab] = useState<BranchModalTab | undefined>(undefined);
+  const [logsModalBranchId, setLogsModalBranchId] = useState<string | null>(null);
   const [themeEditorOpen, setThemeEditorOpen] = useState(false);
 
   // Initialize event stream panel state from localStorage (collapsed by default)
@@ -388,7 +388,7 @@ export const App: React.FC<AppProps> = ({
     currentSessionId: effectiveSelectedSessionId,
     boardById,
     sessionById,
-    worktreeById,
+    branchById,
     artifactById,
     onBoardChange: (boardId) => {
       setCurrentBoardIdInternal(boardId);
@@ -406,7 +406,7 @@ export const App: React.FC<AppProps> = ({
   const navigation = useAppNavigation({
     boardById,
     sessionById,
-    worktreeById,
+    branchById,
     artifactById,
   });
 
@@ -442,17 +442,17 @@ export const App: React.FC<AppProps> = ({
   }, [boardById, currentBoardId, setCurrentBoardId, connected]);
 
   // Recalculate default position when board changes while modal is open
-  // This ensures worktrees spawn at the center of the new board's viewport
+  // This ensures branches spawn at the center of the new board's viewport
   // biome-ignore lint/correctness/useExhaustiveDependencies: currentBoardId is intentionally included to trigger recalculation on board switch
   useEffect(() => {
     if (createDialogOpen) {
       const center = sessionCanvasRef.current?.getViewportCenter();
-      setNewWorktreeDefaultPosition(center || null);
+      setNewBranchDefaultPosition(center || null);
     }
   }, [currentBoardId, createDialogOpen]);
 
   // Update favicon based on session activity on current board
-  useFaviconStatus(currentBoardId, sessionsByWorktree, mapToArray(boardObjectById));
+  useFaviconStatus(currentBoardId, sessionsByBranch, mapToArray(boardObjectById));
 
   // Check if event stream is enabled in user preferences (default: true)
   const eventStreamEnabled = user?.preferences?.eventStream?.enabled ?? true;
@@ -463,9 +463,9 @@ export const App: React.FC<AppProps> = ({
     enabled: !eventStreamPanelCollapsed,
   });
 
-  const handleOpenTerminal = useCallback((commands: string[] = [], worktreeId?: string) => {
+  const handleOpenTerminal = useCallback((commands: string[] = [], branchId?: string) => {
     setTerminalCommands(commands);
-    setTerminalWorktreeId(worktreeId);
+    setTerminalBranchId(branchId);
     setTerminalOpen(true);
   }, []);
 
@@ -494,12 +494,12 @@ export const App: React.FC<AppProps> = ({
   const handleCloseTerminal = () => {
     setTerminalOpen(false);
     setTerminalCommands([]);
-    setTerminalWorktreeId(undefined);
+    setTerminalBranchId(undefined);
   };
 
   const handleCreateSession = async (config: NewSessionConfig) => {
     const sessionId = await onCreateSession?.(config, currentBoardId);
-    setNewSessionWorktreeId(null);
+    setNewSessionBranchId(null);
 
     // If session was created successfully, open the drawer to show it
     if (sessionId) {
@@ -507,8 +507,8 @@ export const App: React.FC<AppProps> = ({
     }
   };
 
-  const handleCreateWorktree = async (config: BranchTabConfig) => {
-    const worktree = await onCreateWorktree?.(config.repoId, {
+  const handleCreateBranch = async (config: BranchTabConfig) => {
+    const branch = await onCreateBranch?.(config.repoId, {
       name: config.name,
       ref: config.ref,
       refType: config.refType,
@@ -521,9 +521,9 @@ export const App: React.FC<AppProps> = ({
       ...(config.clone_depth !== undefined ? { clone_depth: config.clone_depth } : {}),
     });
 
-    // If board_id is provided and worktree was created, assign it to the board
-    if (worktree && config.board_id) {
-      await onUpdateWorktree?.(worktree.worktree_id, {
+    // If board_id is provided and branch was created, assign it to the board
+    if (branch && config.board_id) {
+      await onUpdateBranch?.(branch.branch_id, {
         board_id: config.board_id as BoardID,
       });
     }
@@ -533,19 +533,19 @@ export const App: React.FC<AppProps> = ({
 
   const handleCreateAssistant = async (result: AssistantTabResult) => {
     const repoId = result.repoId;
-    if (!repoId || !onCreateWorktree || !onUpdateWorktree) return;
+    if (!repoId || !onCreateBranch || !onUpdateBranch) return;
 
-    await createAssistantWorktree(
+    await createAssistantBranch(
       {
         displayName: result.displayName,
         description: result.description,
         emoji: result.emoji,
         boardChoice: result.boardChoice,
         repoId,
-        worktreeName: result.worktreeName,
+        branchName: result.branchName,
         sourceBranch: result.sourceBranch,
       },
-      { client, repoById, onCreateWorktree, onUpdateWorktree }
+      { client, repoById, onCreateBranch, onUpdateBranch }
     );
   };
 
@@ -559,8 +559,8 @@ export const App: React.FC<AppProps> = ({
   // stable and doesn't false-positive on `.current.get` reads.
   const sessionByIdRef = useRef(sessionById);
   sessionByIdRef.current = sessionById;
-  const worktreeByIdRef = useRef(worktreeById);
-  worktreeByIdRef.current = worktreeById;
+  const branchByIdRef = useRef(branchById);
+  branchByIdRef.current = branchById;
 
   const handleSessionClick = useCallback(
     (sessionId: string) => {
@@ -576,13 +576,11 @@ export const App: React.FC<AppProps> = ({
           .catch(() => {});
       }
 
-      const worktree = session?.worktree_id
-        ? worktreeByIdRef.current.get(session.worktree_id)
-        : undefined;
-      if (client && worktree?.needs_attention) {
+      const branch = session?.branch_id ? branchByIdRef.current.get(session.branch_id) : undefined;
+      if (client && branch?.needs_attention) {
         client
-          .service('worktrees')
-          .patch(worktree.worktree_id, { needs_attention: false })
+          .service('branches')
+          .patch(branch.branch_id, { needs_attention: false })
           .catch(() => {});
       }
 
@@ -625,9 +623,7 @@ export const App: React.FC<AppProps> = ({
   const selectedSession = effectiveSelectedSessionId
     ? sessionById.get(effectiveSelectedSessionId) || null
     : null;
-  const selectedSessionWorktree = selectedSession
-    ? worktreeById.get(selectedSession.worktree_id)
-    : null;
+  const selectedSessionBranch = selectedSession ? branchById.get(selectedSession.branch_id) : null;
 
   // Sync the actual state when a session disappears (for URL, localStorage, etc.).
   // The rendering already uses effectiveSelectedSessionId so this is cosmetic.
@@ -643,30 +639,26 @@ export const App: React.FC<AppProps> = ({
   // Update browser tab title based on current board
   useBoardTitle(currentBoard);
 
-  // Find worktree and repo for BranchModal
-  const selectedWorktree = worktreeModalWorktreeId
-    ? worktreeById.get(worktreeModalWorktreeId)
-    : null;
-  const selectedWorktreeRepo = selectedWorktree ? repoById.get(selectedWorktree.repo_id) : null;
-  const worktreeSessions = selectedWorktree
-    ? sessionsByWorktree.get(selectedWorktree.worktree_id) || []
-    : [];
+  // Find branch and repo for BranchModal
+  const selectedBranch = branchModalBranchId ? branchById.get(branchModalBranchId) : null;
+  const selectedBranchRepo = selectedBranch ? repoById.get(selectedBranch.repo_id) : null;
+  const branchSessions = selectedBranch ? sessionsByBranch.get(selectedBranch.branch_id) || [] : [];
 
-  // Find worktree for NewSessionModal
-  const newSessionWorktree = newSessionWorktreeId ? worktreeById.get(newSessionWorktreeId) : null;
+  // Find branch for NewSessionModal
+  const newSessionBranch = newSessionBranchId ? branchById.get(newSessionBranchId) : null;
 
-  // Filter worktrees by current board (via board_objects). Memoized so that
+  // Filter branches by current board (via board_objects). Memoized so that
   // unrelated socket churn (e.g. another user's session patch) doesn't
   // produce a fresh array reference on every render — that array flows into
   // SessionCanvas's `initialNodes` deps and would otherwise cascade into
   // every BranchCard re-rendering.
-  const boardWorktrees = useMemo(
+  const boardBranches = useMemo(
     () =>
       mapToArray(boardObjectById)
-        .filter((bo: BoardEntityObject) => bo.board_id === currentBoard?.board_id && bo.worktree_id)
-        .map((bo: BoardEntityObject) => worktreeById.get(bo.worktree_id!))
-        .filter((wt): wt is Worktree => wt !== undefined),
-    [boardObjectById, currentBoard?.board_id, worktreeById]
+        .filter((bo: BoardEntityObject) => bo.board_id === currentBoard?.board_id && bo.branch_id)
+        .map((bo: BoardEntityObject) => branchById.get(bo.branch_id!))
+        .filter((wt): wt is Branch => wt !== undefined),
+    [boardObjectById, currentBoard?.board_id, branchById]
   );
 
   // Track global presence for navbar facepile (across all boards)
@@ -712,7 +704,7 @@ export const App: React.FC<AppProps> = ({
     });
 
   // Two separately memoized context values so that high-frequency live
-  // updates (sessions / worktrees / boards / board-objects / comments)
+  // updates (sessions / branches / boards / board-objects / comments)
   // don't invalidate the slow-moving entity context that SessionPanel etc.
   // subscribe to. See AppDataContext for the rationale.
   const appEntityDataValue = useMemo(
@@ -728,10 +720,10 @@ export const App: React.FC<AppProps> = ({
   const appLiveDataValue = useMemo(
     () => ({
       sessionById,
-      worktreeById,
-      sessionsByWorktree,
+      branchById,
+      sessionsByBranch,
     }),
-    [sessionById, worktreeById, sessionsByWorktree]
+    [sessionById, branchById, sessionsByBranch]
   );
 
   // Web terminal is gated by both the instance-level feature flag and the
@@ -754,12 +746,12 @@ export const App: React.FC<AppProps> = ({
       onStartEnvironment,
       onStopEnvironment,
       onNukeEnvironment,
-      onViewLogs: (worktreeId: string) => setLogsModalWorktreeId(worktreeId),
+      onViewLogs: (branchId: string) => setLogsModalBranchId(branchId),
       onOpenSettings: (sessionId: string) => setSessionSettingsId(sessionId),
       onSessionClick: handleSessionClick,
-      onOpenWorktree: (worktreeId: string, tab?: BranchModalTab) => {
-        setWorktreeModalWorktreeId(worktreeId);
-        setWorktreeModalTab(tab);
+      onOpenBranch: (branchId: string, tab?: BranchModalTab) => {
+        setBranchModalBranchId(branchId);
+        setBranchModalTab(tab);
       },
       onOpenTerminal: canOpenTerminal ? handleOpenTerminal : undefined,
     }),
@@ -819,7 +811,7 @@ export const App: React.FC<AppProps> = ({
               boards={mapToArray(boardById)}
               currentBoardId={currentBoardId}
               onBoardChange={navigation.goToBoard}
-              worktreeById={worktreeById}
+              branchById={branchById}
               boardById={boardById}
               onUserClick={(
                 userId: string,
@@ -874,7 +866,7 @@ export const App: React.FC<AppProps> = ({
                       userById={userById}
                       currentUserId={user?.user_id || 'unknown'}
                       boardObjects={currentBoard?.objects}
-                      worktreeById={worktreeById}
+                      branchById={branchById}
                       collapsed={commentsPanelCollapsed}
                       onToggleCollapse={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
                       onSendComment={(content) => onSendComment?.(currentBoardId || '', content)}
@@ -937,11 +929,11 @@ export const App: React.FC<AppProps> = ({
                           board={currentBoard || null}
                           client={client}
                           sessionById={sessionById}
-                          sessionsByWorktree={sessionsByWorktree}
+                          sessionsByBranch={sessionsByBranch}
                           userById={userById}
                           repoById={repoById}
-                          worktrees={boardWorktrees}
-                          worktreeById={worktreeById}
+                          branches={boardBranches}
+                          branchById={branchById}
                           boardObjectById={boardObjectById}
                           commentById={commentById}
                           cardById={cardById}
@@ -957,13 +949,13 @@ export const App: React.FC<AppProps> = ({
                           onSpawnSession={onSpawnSession}
                           onUpdateSessionMcpServers={onUpdateSessionMcpServers}
                           onOpenSettings={setSessionSettingsId}
-                          onCreateSessionForWorktree={setNewSessionWorktreeId}
-                          onOpenWorktree={setWorktreeModalWorktreeId}
-                          onArchiveOrDeleteWorktree={onArchiveOrDeleteWorktree}
+                          onCreateSessionForBranch={setNewSessionBranchId}
+                          onOpenBranch={setBranchModalBranchId}
+                          onArchiveOrDeleteBranch={onArchiveOrDeleteBranch}
                           onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
                           onStartEnvironment={onStartEnvironment}
                           onStopEnvironment={onStopEnvironment}
-                          onViewLogs={setLogsModalWorktreeId}
+                          onViewLogs={setLogsModalBranchId}
                           onNukeEnvironment={onNukeEnvironment}
                           onOpenCommentsPanel={handleOpenCommentsPanel}
                           onCommentHover={setHoveredCommentId}
@@ -972,7 +964,7 @@ export const App: React.FC<AppProps> = ({
                         <NewSessionButton
                           onClick={() => {
                             const center = sessionCanvasRef.current?.getViewportCenter();
-                            setNewWorktreeDefaultPosition(center || null);
+                            setNewBranchDefaultPosition(center || null);
                             setCreateDialogOpen(true);
                           }}
                         />
@@ -1007,7 +999,7 @@ export const App: React.FC<AppProps> = ({
                             <SessionPanel
                               client={client}
                               session={selectedSession}
-                              worktree={selectedSessionWorktree}
+                              branch={selectedSessionBranch}
                               currentUserId={user?.user_id}
                               sessionMcpServerIds={
                                 sessionMcpServerIds.get(effectiveSelectedSessionId) ??
@@ -1026,12 +1018,10 @@ export const App: React.FC<AppProps> = ({
                               selectedSessionId={effectiveSelectedSessionId}
                               currentBoard={currentBoard}
                               client={client}
-                              worktreeActions={{
+                              branchActions={{
                                 onSessionClick: handleSessionClick,
-                                onCreateSession: (worktreeId) =>
-                                  setNewSessionWorktreeId(worktreeId),
-                                onOpenSettings: (worktreeId) =>
-                                  setWorktreeModalWorktreeId(worktreeId),
+                                onCreateSession: (branchId) => setNewSessionBranchId(branchId),
+                                onOpenSettings: (branchId) => setBranchModalBranchId(branchId),
                                 onNukeEnvironment,
                               }}
                             />
@@ -1051,14 +1041,14 @@ export const App: React.FC<AppProps> = ({
               openFileDialogOnClick={false}
               showUploadList={false}
             />
-            {newSessionWorktreeId && (
+            {newSessionBranchId && (
               <NewSessionModal
                 open={true}
-                onClose={() => setNewSessionWorktreeId(null)}
+                onClose={() => setNewSessionBranchId(null)}
                 onCreate={handleCreateSession}
                 availableAgents={availableAgents}
-                worktreeId={newSessionWorktreeId}
-                worktree={newSessionWorktree || undefined}
+                branchId={newSessionBranchId}
+                branch={newSessionBranch || undefined}
                 mcpServerById={mcpServerById}
                 currentUser={user}
                 client={client}
@@ -1076,9 +1066,9 @@ export const App: React.FC<AppProps> = ({
               boardById={boardById}
               boardObjects={mapToArray(boardObjectById)}
               repoById={repoById}
-              worktreeById={worktreeById}
+              branchById={branchById}
               sessionById={sessionById}
-              sessionsByWorktree={sessionsByWorktree}
+              sessionsByBranch={sessionsByBranch}
               userById={userById}
               mcpServerById={mcpServerById}
               cardById={cardById}
@@ -1101,10 +1091,10 @@ export const App: React.FC<AppProps> = ({
               onCreateLocalRepo={onCreateLocalRepo}
               onUpdateRepo={onUpdateRepo}
               onDeleteRepo={onDeleteRepo}
-              onArchiveOrDeleteWorktree={onArchiveOrDeleteWorktree}
-              onUnarchiveWorktree={onUnarchiveWorktree}
-              onUpdateWorktree={onUpdateWorktree}
-              onCreateWorktree={onCreateWorktree}
+              onArchiveOrDeleteBranch={onArchiveOrDeleteBranch}
+              onUnarchiveBranch={onUnarchiveBranch}
+              onUpdateBranch={onUpdateBranch}
+              onCreateBranch={onCreateBranch}
               onStartEnvironment={onStartEnvironment}
               onStopEnvironment={onStopEnvironment}
               onCreateUser={onCreateUser}
@@ -1137,24 +1127,24 @@ export const App: React.FC<AppProps> = ({
               />
             )}
             <BranchModal
-              open={!!worktreeModalWorktreeId}
+              open={!!branchModalBranchId}
               onClose={() => {
-                setWorktreeModalWorktreeId(null);
-                setWorktreeModalTab(undefined);
+                setBranchModalBranchId(null);
+                setBranchModalTab(undefined);
               }}
-              defaultTab={worktreeModalTab}
-              worktree={selectedWorktree || null}
-              repo={selectedWorktreeRepo || null}
-              sessions={worktreeSessions}
+              defaultTab={branchModalTab}
+              branch={selectedBranch || null}
+              repo={selectedBranchRepo || null}
+              sessions={branchSessions}
               boardById={boardById}
               mcpServerById={mcpServerById}
               client={client}
               currentUser={user}
-              onUpdateWorktree={onUpdateWorktree}
+              onUpdateBranch={onUpdateBranch}
               onUpdateRepo={onUpdateRepo}
-              onArchiveOrDelete={onArchiveOrDeleteWorktree}
+              onArchiveOrDelete={onArchiveOrDeleteBranch}
               onOpenSettings={() => {
-                setWorktreeModalWorktreeId(null);
+                setBranchModalBranchId(null);
                 openSettings();
               }}
               onSessionClick={handleSessionClick}
@@ -1166,8 +1156,8 @@ export const App: React.FC<AppProps> = ({
               boards={mapToArray(boardById)}
               currentBoardId={currentBoardId}
               onBoardChange={navigation.goToBoard}
-              sessionsByWorktree={sessionsByWorktree}
-              worktreeById={worktreeById}
+              sessionsByBranch={sessionsByBranch}
+              branchById={branchById}
               repoById={repoById}
               onSessionClick={handleSessionClick}
             />
@@ -1176,30 +1166,30 @@ export const App: React.FC<AppProps> = ({
               onClose={handleCloseTerminal}
               client={client}
               user={user}
-              worktreeId={terminalWorktreeId}
+              branchId={terminalBranchId}
               initialCommands={terminalCommands}
             />
             <CreateDialog
               open={createDialogOpen}
               onClose={() => {
                 setCreateDialogOpen(false);
-                setNewWorktreeDefaultPosition(null);
+                setNewBranchDefaultPosition(null);
               }}
               repoById={repoById}
               boardById={boardById}
               currentBoardId={currentBoardId}
-              defaultPosition={newWorktreeDefaultPosition || undefined}
-              onCreateWorktree={handleCreateWorktree}
+              defaultPosition={newBranchDefaultPosition || undefined}
+              onCreateBranch={handleCreateBranch}
               onCreateBoard={(board) => onCreateBoard?.(board)}
               onCreateRepo={(data) => onCreateRepo?.(data)}
               onCreateLocalRepo={(data) => onCreateLocalRepo?.(data)}
               onCreateAssistant={handleCreateAssistant}
             />
-            {logsModalWorktreeId && (
+            {logsModalBranchId && (
               <EnvironmentLogsModal
-                open={!!logsModalWorktreeId}
-                onClose={() => setLogsModalWorktreeId(null)}
-                worktree={worktreeById.get(logsModalWorktreeId)!}
+                open={!!logsModalBranchId}
+                onClose={() => setLogsModalBranchId(null)}
+                branch={branchById.get(logsModalBranchId)!}
                 client={client}
               />
             )}

@@ -1,11 +1,11 @@
 import type {
   AgorClient,
+  Branch,
   Repo,
   Session,
   SessionID,
   SpawnConfig,
   User,
-  Worktree,
 } from '@agor-live/client';
 import {
   getAssistantConfig,
@@ -63,7 +63,7 @@ import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
 import { ToolIcon } from '../ToolIcon';
 import { buildSessionTree, type SessionTreeNode } from './buildSessionTree';
 
-const _WORKTREE_CARD_MAX_WIDTH = 600;
+const _BRANCH_CARD_MAX_WIDTH = 600;
 const NOTES_MAX_LENGTH = 200; // Character limit for truncated notes
 
 /** Wrapper that adds hover action buttons (settings + archive) overlay to session items */
@@ -136,33 +136,33 @@ const SessionItemWithActions: React.FC<{
 };
 
 interface BranchCardProps {
-  worktree: Worktree;
+  branch: Branch;
   repo: Repo;
-  sessions: Session[]; // Sessions for this specific worktree
+  sessions: Session[]; // Sessions for this specific branch
   userById: Map<string, User>;
   currentUserId?: string;
   selectedSessionId?: string | null; // Currently open session in drawer
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
-  onCreateSession?: (worktreeId: string) => void;
+  onCreateSession?: (branchId: string) => void;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onSpawnSession?: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
   onArchiveOrDelete?: (
-    worktreeId: string,
+    branchId: string,
     options: {
       metadataAction: 'archive' | 'delete';
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     }
   ) => void;
-  onOpenSettings?: (worktreeId: string) => void;
+  onOpenSettings?: (branchId: string) => void;
   onOpenSessionSettings?: (sessionId: string) => void;
-  onOpenTerminal?: (commands: string[], worktreeId?: string) => void;
-  onStartEnvironment?: (worktreeId: string) => void;
-  onStopEnvironment?: (worktreeId: string) => void;
-  onViewLogs?: (worktreeId: string) => void;
-  onNukeEnvironment?: (worktreeId: string) => void;
-  onExecuteScheduleNow?: (worktreeId: string) => Promise<void>;
-  onUnpin?: (worktreeId: string) => void;
+  onOpenTerminal?: (commands: string[], branchId?: string) => void;
+  onStartEnvironment?: (branchId: string) => void;
+  onStopEnvironment?: (branchId: string) => void;
+  onViewLogs?: (branchId: string) => void;
+  onNukeEnvironment?: (branchId: string) => void;
+  onExecuteScheduleNow?: (branchId: string) => Promise<void>;
+  onUnpin?: (branchId: string) => void;
   isPinned?: boolean;
   zoneName?: string;
   zoneColor?: string;
@@ -172,7 +172,7 @@ interface BranchCardProps {
 }
 
 const BranchCardComponent = ({
-  worktree,
+  branch,
   repo,
   sessions,
   userById,
@@ -292,13 +292,13 @@ const BranchCardComponent = ({
 
   // Separate sessions by type: manual, scheduled, and gateway
   const manualSessions = useMemo(
-    () => activeSessions.filter((s) => !s.scheduled_from_worktree && !isGatewaySession(s)),
+    () => activeSessions.filter((s) => !s.scheduled_from_branch && !isGatewaySession(s)),
     [activeSessions, isGatewaySession]
   );
   const scheduledSessions = useMemo(
     () =>
       activeSessions
-        .filter((s) => s.scheduled_from_worktree)
+        .filter((s) => s.scheduled_from_branch)
         .sort((a, b) => (b.scheduled_run_at || 0) - (a.scheduled_run_at || 0)), // Most recent first
     [activeSessions]
   );
@@ -328,32 +328,32 @@ const BranchCardComponent = ({
     [gatewaySessions]
   );
 
-  // Check if worktree is still being created on filesystem
-  const isCreating = worktree.filesystem_status === 'creating';
-  const isFailed = worktree.filesystem_status === 'failed';
+  // Check if branch is still being created on filesystem
+  const isCreating = branch.filesystem_status === 'creating';
+  const isFailed = branch.filesystem_status === 'failed';
 
-  // Check if this worktree is a persisted agent
-  const assistantConfig = useMemo(() => getAssistantConfig(worktree), [worktree]);
-  const isAgent = isAssistant(worktree);
+  // Check if this branch is a persisted agent
+  const assistantConfig = useMemo(() => getAssistantConfig(branch), [branch]);
+  const isAgent = isAssistant(branch);
 
-  // True when one of this worktree's sessions is the currently opened
+  // True when one of this branch's sessions is the currently opened
   // conversation. Drives the "focused" highlight on the canvas card and
   // also suppresses the louder ready-for-prompt/needs-attention glow —
-  // there's no point screaming for attention at the worktree you're
+  // there's no point screaming for attention at the branch you're
   // already looking at.
   const isFocused = useMemo(
     () => activeSessions.some((s) => s.session_id === selectedSessionId),
     [activeSessions, selectedSessionId]
   );
 
-  // Check if worktree needs attention (newly created OR has ready sessions)
-  // Don't highlight if a session from this worktree is currently open in the drawer
+  // Check if branch needs attention (newly created OR has ready sessions)
+  // Don't highlight if a session from this branch is currently open in the drawer
   const needsAttention = useMemo(() => {
     const hasReadySession = activeSessions.some((s) => s.ready_for_prompt === true);
-    const shouldHighlight = (worktree.needs_attention || hasReadySession) && !isFocused;
+    const shouldHighlight = (branch.needs_attention || hasReadySession) && !isFocused;
 
     return shouldHighlight;
-  }, [activeSessions, worktree.needs_attention, isFocused]);
+  }, [activeSessions, branch.needs_attention, isFocused]);
 
   // Auto-expand all nodes on mount and when new nodes with children are added
   useEffect(() => {
@@ -507,7 +507,7 @@ const BranchCardComponent = ({
             disabled={connectionDisabled || isCreating}
             onClick={(e) => {
               e.stopPropagation();
-              onCreateSession(worktree.worktree_id);
+              onCreateSession(branch.branch_id);
             }}
             title={isCreating ? 'Branch is being created...' : undefined}
           >
@@ -727,17 +727,17 @@ const BranchCardComponent = ({
   }, [zoneColor, isDarkMode]);
 
   // Determine if notes should show "See more" button
-  const notesNeedTruncation = worktree.notes && worktree.notes.length > NOTES_MAX_LENGTH;
+  const notesNeedTruncation = branch.notes && branch.notes.length > NOTES_MAX_LENGTH;
   const displayedNotes = useMemo(() => {
-    if (!worktree.notes) return '';
-    if (!notesNeedTruncation || notesExpanded) return worktree.notes;
+    if (!branch.notes) return '';
+    if (!notesNeedTruncation || notesExpanded) return branch.notes;
     // Truncate at word boundary for cleaner display
-    const truncated = worktree.notes.slice(0, NOTES_MAX_LENGTH);
+    const truncated = branch.notes.slice(0, NOTES_MAX_LENGTH);
     const lastSpace = truncated.lastIndexOf(' ');
     return lastSpace > NOTES_MAX_LENGTH * 0.8
       ? `${truncated.slice(0, lastSpace)}...`
       : `${truncated}...`;
-  }, [worktree.notes, notesNeedTruncation, notesExpanded]);
+  }, [branch.notes, notesNeedTruncation, notesExpanded]);
 
   return (
     <Card
@@ -775,7 +775,7 @@ const BranchCardComponent = ({
         body: { padding: 16 },
       }}
     >
-      {/* Worktree header */}
+      {/* Branch header */}
       <div
         style={{
           display: 'flex',
@@ -832,18 +832,18 @@ const BranchCardComponent = ({
             <Typography.Text
               strong
               className="nodrag"
-              ellipsis={{ tooltip: assistantConfig?.displayName ?? worktree.name }}
+              ellipsis={{ tooltip: assistantConfig?.displayName ?? branch.name }}
             >
-              {assistantConfig?.displayName ?? worktree.name}
+              {assistantConfig?.displayName ?? branch.name}
             </Typography.Text>
             <Typography.Text
               type="secondary"
               style={{ fontSize: 12 }}
               ellipsis={{
-                tooltip: assistantConfig ? `${repo.slug} / ${worktree.name}` : repo.slug,
+                tooltip: assistantConfig ? `${repo.slug} / ${branch.name}` : repo.slug,
               }}
             >
-              {assistantConfig ? `${repo.slug} / ${worktree.name}` : repo.slug}
+              {assistantConfig ? `${repo.slug} / ${branch.name}` : repo.slug}
             </Typography.Text>
           </div>
         </div>
@@ -863,7 +863,7 @@ const BranchCardComponent = ({
                 icon={<PushpinFilled style={{ color: visiblePinColor }} />}
                 onClick={(e) => {
                   e.stopPropagation();
-                  onUnpin?.(worktree.worktree_id);
+                  onUnpin?.(branch.branch_id);
                 }}
                 className="nodrag"
               />
@@ -887,21 +887,21 @@ const BranchCardComponent = ({
                 icon={<CodeOutlined />}
                 onClick={(e) => {
                   e.stopPropagation();
-                  onOpenTerminal([`cd ${worktree.path}`], worktree.worktree_id);
+                  onOpenTerminal([`cd ${branch.path}`], branch.branch_id);
                 }}
                 title="Open terminal in branch directory"
               />
             )}
             {/*
-              Execute-now button: only shown when the worktree has an active,
+              Execute-now button: only shown when the branch has an active,
               fully-configured schedule. Permission enforcement is server-side
-              (requires worktree 'all' tier); a click by an unauthorized user
+              (requires branch 'all' tier); a click by an unauthorized user
               will produce a Forbidden toast from the API call.
             */}
             {onExecuteScheduleNow &&
-              worktree.schedule_enabled &&
-              worktree.schedule_cron &&
-              worktree.schedule?.prompt_template && (
+              branch.schedule_enabled &&
+              branch.schedule_cron &&
+              branch.schedule?.prompt_template && (
                 <Button
                   type="text"
                   size="small"
@@ -912,7 +912,7 @@ const BranchCardComponent = ({
                     e.stopPropagation();
                     setIsExecutingScheduleNow(true);
                     try {
-                      await onExecuteScheduleNow(worktree.worktree_id);
+                      await onExecuteScheduleNow(branch.branch_id);
                     } catch {
                       // error toast shown by handler; swallow here
                     } finally {
@@ -929,7 +929,7 @@ const BranchCardComponent = ({
                 icon={<EditOutlined />}
                 onClick={(e) => {
                   e.stopPropagation();
-                  onOpenSettings(worktree.worktree_id);
+                  onOpenSettings(branch.branch_id);
                 }}
                 title="Edit branch"
               />
@@ -952,23 +952,23 @@ const BranchCardComponent = ({
         </Space>
       </div>
 
-      {/* Worktree metadata - all pills on one row with wrapping */}
+      {/* Branch metadata - all pills on one row with wrapping */}
       <div className="nodrag" style={{ marginBottom: 8 }}>
         <Space size={4} wrap>
-          {worktree.created_by && (
+          {branch.created_by && (
             <CreatedByTag
-              createdBy={worktree.created_by}
+              createdBy={branch.created_by}
               currentUserId={currentUserId}
               userById={userById}
               prefix="Created by"
             />
           )}
-          {worktree.issue_url && <IssuePill issueUrl={worktree.issue_url} />}
-          {worktree.pull_request_url && <PullRequestPill prUrl={worktree.pull_request_url} />}
+          {branch.issue_url && <IssuePill issueUrl={branch.issue_url} />}
+          {branch.pull_request_url && <PullRequestPill prUrl={branch.pull_request_url} />}
           <EnvironmentPill
             repo={repo}
-            worktree={worktree}
-            onEdit={() => onOpenSettings?.(worktree.worktree_id)}
+            branch={branch}
+            onEdit={() => onOpenSettings?.(branch.branch_id)}
             onStartEnvironment={onStartEnvironment}
             onStopEnvironment={onStopEnvironment}
             onViewLogs={onViewLogs}
@@ -979,7 +979,7 @@ const BranchCardComponent = ({
       </div>
 
       {/* Notes */}
-      {worktree.notes && (
+      {branch.notes && (
         <div className="nodrag" style={{ marginBottom: 8 }}>
           <div
             className="markdown-compact"
@@ -1040,8 +1040,8 @@ const BranchCardComponent = ({
                 <Typography.Text type="danger" strong>
                   Branch creation failed
                 </Typography.Text>
-                {worktree.error_message && (
-                  <Tooltip title={worktree.error_message} placement="bottom">
+                {branch.error_message && (
+                  <Tooltip title={branch.error_message} placement="bottom">
                     <Typography.Text
                       type="secondary"
                       style={{
@@ -1053,7 +1053,7 @@ const BranchCardComponent = ({
                         cursor: 'help',
                       }}
                     >
-                      {worktree.error_message}
+                      {branch.error_message}
                     </Typography.Text>
                   </Tooltip>
                 )}
@@ -1065,7 +1065,7 @@ const BranchCardComponent = ({
                 disabled={connectionDisabled}
                 onClick={(e) => {
                   e.stopPropagation();
-                  onCreateSession(worktree.worktree_id);
+                  onCreateSession(branch.branch_id);
                 }}
                 size="middle"
               >
@@ -1153,11 +1153,11 @@ const BranchCardComponent = ({
       {/* Archive/Delete Modal */}
       <ArchiveDeleteBranchModal
         open={archiveDeleteModalOpen}
-        worktree={worktree}
+        branch={branch}
         sessionCount={sessions.length}
-        environmentRunning={worktree.environment_instance?.status === 'running'}
+        environmentRunning={branch.environment_instance?.status === 'running'}
         onConfirm={(options) => {
-          onArchiveOrDelete?.(worktree.worktree_id, options);
+          onArchiveOrDelete?.(branch.branch_id, options);
           setArchiveDeleteModalOpen(false);
         }}
         onCancel={() => setArchiveDeleteModalOpen(false)}
@@ -1167,7 +1167,7 @@ const BranchCardComponent = ({
 };
 
 // Memoize BranchCard to prevent unnecessary re-renders when parent updates
-// Only re-render when worktree, repo, sessions, or callback props actually change
+// Only re-render when branch, repo, sessions, or callback props actually change
 const BranchCard = React.memo(BranchCardComponent);
 
 export default BranchCard;

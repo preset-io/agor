@@ -62,7 +62,7 @@ function renderDialog(props: Partial<React.ComponentProps<typeof CreateDialog>> 
       onClose={vi.fn()}
       repoById={repoById}
       boardById={boardById}
-      onCreateWorktree={vi.fn()}
+      onCreateBranch={vi.fn()}
       onCreateBoard={vi.fn()}
       onCreateRepo={vi.fn()}
       onCreateLocalRepo={vi.fn()}

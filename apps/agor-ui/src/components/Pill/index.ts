@@ -9,6 +9,7 @@ export {
   GitShaPill,
   GitStatePill,
   IssuePill,
+  ManagedBranchPill,
   MessageCountPill,
   ModelPill,
   PILL_COLORS,
@@ -22,7 +23,6 @@ export {
   StatusPill,
   TokenCountPill,
   ToolCountPill,
-  WorktreePill,
 } from './Pill';
 export { SessionMetadataCard } from './SessionMetadataCard';
 export { TimerPill } from './TimerPill';

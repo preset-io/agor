@@ -1,4 +1,4 @@
-import type { Artifact, Board, MCPServer, Session, Worktree } from '@agor-live/client';
+import type { Artifact, Board, Branch, MCPServer, Session } from '@agor-live/client';
 import { SearchOutlined } from '@ant-design/icons';
 import { Input, type InputRef, theme } from 'antd';
 import type React from 'react';
@@ -16,7 +16,7 @@ interface GlobalSearchProps {
   currentUserId?: string;
   /** Live entity maps from useAgorData / contexts — passed in by AppHeader. */
   sessionById: Map<string, Session>;
-  worktreeById: Map<string, Worktree>;
+  branchById: Map<string, Branch>;
   artifactById: Map<string, Artifact>;
   boardById: Map<string, Board>;
   mcpServerById: Map<string, MCPServer>;
@@ -39,7 +39,7 @@ interface GlobalSearchProps {
 export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   currentUserId,
   sessionById,
-  worktreeById,
+  branchById,
   artifactById,
   boardById,
   mcpServerById,
@@ -58,7 +58,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   const navigation = useAppNavigation({
     boardById,
     sessionById,
-    worktreeById,
+    branchById,
     artifactById,
   });
 
@@ -68,7 +68,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
     activeTypeChip: activeChip,
     currentUserId,
     sessionById,
-    worktreeById,
+    branchById,
     artifactById,
     boardById,
     mcpServerById,
@@ -77,7 +77,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   const recents = useRecents({
     currentUserId,
     sessionById,
-    worktreeById,
+    branchById,
     artifactById,
   });
 
@@ -140,9 +140,9 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
         case 'board':
           navigation.goToBoard(result.item.board_id);
           break;
-        case 'worktree':
+        case 'branch':
         case 'assistant':
-          navigation.goToWorktree(result.item.worktree_id);
+          navigation.goToBranch(result.item.branch_id);
           break;
         case 'session':
           navigation.goToSession(result.item.session_id);

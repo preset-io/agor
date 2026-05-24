@@ -1,7 +1,7 @@
 // src/types/file.ts
 
 /**
- * Path to a file relative to worktree root
+ * Path to a file relative to branch root
  *
  * Examples:
  * - "README.md"
@@ -15,7 +15,7 @@ export type FilePath = string;
  * Returned by GET /file
  */
 export interface FileListResponse {
-  /** Array of files found in worktree */
+  /** Array of files found in branch */
   files: FileListItem[];
 
   /** Whether the list was truncated at MAX_FILES limit */
@@ -30,7 +30,7 @@ export interface FileListResponse {
  */
 export interface FileListItem {
   /**
-   * File path relative to worktree root (POSIX separators)
+   * File path relative to branch root (POSIX separators)
    * Examples: "src/index.ts", "README.md", "packages/core/package.json"
    */
   path: FilePath;

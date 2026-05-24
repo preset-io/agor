@@ -11,7 +11,7 @@ interface SearchChipRowProps {
 
 /**
  * Two-row chip surface above search results:
- *   [All] [Session] [Worktree] [Assistant] [Artifact] [Board] [MCP]
+ *   [All] [Session] [Branch] [Assistant] [Artifact] [Board] [MCP]
  *   [Created by me]                                       [BETA]
  * Per design doc §3.5. Single-select on type (Segmented — keyboard-nav + ARIA
  * built-in), toggle on scope (Switch).

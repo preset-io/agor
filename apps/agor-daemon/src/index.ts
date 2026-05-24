@@ -564,7 +564,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // --------------------------------------------------------------------------
   // RBAC flags
   // --------------------------------------------------------------------------
-  const worktreeRbacEnabled = config.execution?.worktree_rbac === true;
+  const branchRbacEnabled = config.execution?.branch_rbac === true;
   const allowSuperadmin = config.execution?.allow_superadmin === true;
   const superadminOpts = { allowSuperadmin };
 
@@ -588,7 +588,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     bundledUiAvailable,
     DAEMON_PORT,
     UI_PORT,
-    worktreeRbacEnabled,
+    branchRbacEnabled,
     allowSuperadmin,
     requireAuth,
   });
@@ -602,13 +602,13 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     config,
     svcEnabled,
     jwtSecret,
-    worktreeRbacEnabled,
+    branchRbacEnabled,
     requireAuth,
     superadminOpts,
     sessionsService: services.sessionsService,
     messagesService: services.messagesService,
     boardsService: services.boardsService,
-    worktreeRepository: services.worktreeRepository,
+    branchRepository: services.branchRepository,
     usersRepository: services.usersRepository,
     sessionsRepository: services.sessionsRepository,
   });
@@ -623,7 +623,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     svcEnabled,
     svcTier,
     jwtSecret,
-    worktreeRbacEnabled,
+    branchRbacEnabled,
     requireAuth,
     enforcePasswordChange,
     superadminOpts,
@@ -636,7 +636,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     sessionsService: services.sessionsService,
     messagesService: services.messagesService,
     boardsService: services.boardsService,
-    worktreeRepository: services.worktreeRepository,
+    branchRepository: services.branchRepository,
     usersRepository: services.usersRepository,
     sessionsRepository: services.sessionsRepository,
     sessionMCPServersService: services.sessionMCPServersService,
@@ -663,7 +663,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // --------------------------------------------------------------------------
   // Phase 5: Re-instantiate Claude Code CLI watchers for in-flight sessions.
   //
-  // Has to run AFTER services are up (we use `app.service('worktrees')` to
+  // Has to run AFTER services are up (we use `app.service('branches')` to
   // resolve cwds + `app.service('messages')` indirectly via the sink) and
   // AFTER `app.set('database', db)` (the watcher persister uses
   // `getDb(app)`). Sessions that were mid-turn at the previous daemon
@@ -673,10 +673,10 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // --------------------------------------------------------------------------
   try {
     const { rehydrateCliWatchers } = await import('./services/claude-cli-integration.js');
-    await rehydrateCliWatchers(app, async (worktreeId) => {
+    await rehydrateCliWatchers(app, async (branchId) => {
       try {
-        const worktree = (await app.service('worktrees').get(worktreeId)) as { path?: string };
-        return worktree?.path ?? null;
+        const branch = (await app.service('branches').get(branchId)) as { path?: string };
+        return branch?.path ?? null;
       } catch {
         return null;
       }

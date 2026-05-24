@@ -1,18 +1,18 @@
 /**
- * `agor worktree list` - List worktrees
+ * `agor branch list` - List branches
  *
- * Shows all worktrees, optionally filtered by repository.
+ * Shows all branches, optionally filtered by repository.
  */
 
-import type { Repo, Worktree } from '@agor-live/client';
+import type { Branch, Repo } from '@agor-live/client';
 import { PAGINATION, shortId } from '@agor-live/client';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';
 import Table from 'cli-table3';
 import { BaseCommand } from '../../base-command';
 
-export default class WorktreeList extends BaseCommand {
-  static description = 'List git worktrees';
+export default class BranchList extends BaseCommand {
+  static description = 'List git branches';
 
   static examples = [
     '<%= config.bin %> <%= command.id %>',
@@ -26,16 +26,16 @@ export default class WorktreeList extends BaseCommand {
       description: 'Filter by repository ID',
     }),
     all: Flags.boolean({
-      description: 'Show both active and archived worktrees',
+      description: 'Show both active and archived branches',
       default: false,
     }),
     archived: Flags.boolean({
-      description: 'Show only archived worktrees',
+      description: 'Show only archived branches',
       default: false,
     }),
     limit: Flags.integer({
       char: 'l',
-      description: 'Maximum number of worktrees to show',
+      description: 'Maximum number of branches to show',
       default: PAGINATION.CLI_DEFAULT_LIMIT,
     }),
   };
@@ -60,57 +60,57 @@ export default class WorktreeList extends BaseCommand {
   }
 
   async run(): Promise<void> {
-    const { flags } = await this.parse(WorktreeList);
+    const { flags } = await this.parse(BranchList);
 
     // Connect to daemon (auto-authenticates)
     const client = await this.connectToDaemon();
 
     try {
-      const worktreesService = client.service('worktrees');
+      const branchesService = client.service('branches');
       const reposService = client.service('repos');
 
-      // Fetch worktrees - optionally filtered by repo ID
+      // Fetch branches - optionally filtered by repo ID
       // Use high limit to get all, then filter/limit client-side for accurate counts
-      let allWorktrees: Worktree[] = [];
+      let allBranches: Branch[] = [];
 
       if (flags['repo-id']) {
         // Filter by repo ID
-        allWorktrees = await worktreesService.findAll({
+        allBranches = await branchesService.findAll({
           query: { repo_id: flags['repo-id'], $limit: PAGINATION.DEFAULT_LIMIT },
         });
       } else {
-        // Show all worktrees
-        allWorktrees = await worktreesService.findAll({
+        // Show all branches
+        allBranches = await branchesService.findAll({
           query: { $limit: PAGINATION.DEFAULT_LIMIT },
         });
       }
 
       // Filter by archive status
-      let filteredWorktrees = allWorktrees;
+      let filteredBranches = allBranches;
       if (flags.archived) {
-        filteredWorktrees = allWorktrees.filter((w) => w.archived);
+        filteredBranches = allBranches.filter((w) => w.archived);
       } else if (!flags.all) {
         // Default: show only active (not archived)
-        filteredWorktrees = allWorktrees.filter((w) => !w.archived);
+        filteredBranches = allBranches.filter((w) => !w.archived);
       }
 
       // Sort by last_used/created_at descending (most recent first)
-      filteredWorktrees.sort((a, b) => {
+      filteredBranches.sort((a, b) => {
         const aDate = new Date(a.last_used || a.created_at).getTime();
         const bDate = new Date(b.last_used || b.created_at).getTime();
         return bDate - aDate;
       });
 
       // Track total before applying limit
-      const totalFiltered = filteredWorktrees.length;
+      const totalFiltered = filteredBranches.length;
 
       // Apply display limit
-      const displayWorktrees = filteredWorktrees.slice(0, flags.limit);
+      const displayBranches = filteredBranches.slice(0, flags.limit);
 
-      if (filteredWorktrees.length === 0) {
-        this.log(chalk.dim('No worktrees found.'));
+      if (filteredBranches.length === 0) {
+        this.log(chalk.dim('No branches found.'));
         this.log('');
-        this.log(`Create one with: ${chalk.cyan('agor worktree add <name> --repo-id <id>')}`);
+        this.log(`Create one with: ${chalk.cyan('agor branch add <name> --repo-id <id>')}`);
         this.log('');
         await this.cleanupClient(client);
         process.exit(0);
@@ -119,9 +119,9 @@ export default class WorktreeList extends BaseCommand {
 
       this.log('');
 
-      // Fetch repo details for each worktree's repo_id
+      // Fetch repo details for each branch's repo_id
       const repoCache = new Map<string, Repo>();
-      for (const wt of allWorktrees) {
+      for (const wt of allBranches) {
         if (!repoCache.has(wt.repo_id)) {
           try {
             const repo = await reposService.get(wt.repo_id);
@@ -132,7 +132,7 @@ export default class WorktreeList extends BaseCommand {
         }
       }
 
-      // Query all sessions and count by worktree_id
+      // Query all sessions and count by branch_id
       const sessionsService = client.service('sessions');
       const sessionCounts = new Map<string, number>();
 
@@ -142,10 +142,10 @@ export default class WorktreeList extends BaseCommand {
           query: { $limit: PAGINATION.DEFAULT_LIMIT },
         });
 
-        // Count sessions per worktree
+        // Count sessions per branch
         for (const session of allSessions) {
-          const count = sessionCounts.get(session.worktree_id) || 0;
-          sessionCounts.set(session.worktree_id, count + 1);
+          const count = sessionCounts.get(session.branch_id) || 0;
+          sessionCounts.set(session.branch_id, count + 1);
         }
       } catch {
         // If sessions fetch fails, all counts remain 0
@@ -168,19 +168,17 @@ export default class WorktreeList extends BaseCommand {
         colWidths: [10, 18, 18, 22, 10, 15],
       });
 
-      for (const worktree of displayWorktrees) {
-        const repo = repoCache.get(worktree.repo_id);
-        const sessionCount = sessionCounts.get(worktree.worktree_id) || 0;
-        const nameDisplay = worktree.archived
-          ? `${worktree.name} ${chalk.dim('□')}`
-          : worktree.name;
+      for (const branch of displayBranches) {
+        const repo = repoCache.get(branch.repo_id);
+        const sessionCount = sessionCounts.get(branch.branch_id) || 0;
+        const nameDisplay = branch.archived ? `${branch.name} ${chalk.dim('□')}` : branch.name;
         table.push([
-          chalk.dim(shortId(worktree.worktree_id)),
-          repo ? repo.slug : chalk.dim(shortId(worktree.repo_id)),
+          chalk.dim(shortId(branch.branch_id)),
+          repo ? repo.slug : chalk.dim(shortId(branch.repo_id)),
           nameDisplay,
-          worktree.ref,
+          branch.ref,
           sessionCount.toString(),
-          chalk.dim(this.formatRelativeTime(worktree.last_used || worktree.created_at)),
+          chalk.dim(this.formatRelativeTime(branch.last_used || branch.created_at)),
         ]);
       }
 
@@ -188,10 +186,10 @@ export default class WorktreeList extends BaseCommand {
       this.log('');
 
       // Show count with "of total" if limited
-      if (displayWorktrees.length < totalFiltered) {
-        this.log(chalk.dim(`Showing ${displayWorktrees.length} of ${totalFiltered} worktree(s)`));
+      if (displayBranches.length < totalFiltered) {
+        this.log(chalk.dim(`Showing ${displayBranches.length} of ${totalFiltered} branch(s)`));
       } else {
-        this.log(chalk.dim(`Showing ${displayWorktrees.length} worktree(s)`));
+        this.log(chalk.dim(`Showing ${displayBranches.length} branch(s)`));
       }
       this.log('');
 
@@ -201,7 +199,7 @@ export default class WorktreeList extends BaseCommand {
     } catch (error) {
       await this.cleanupClient(client);
       this.error(
-        `Failed to list worktrees: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to list branches: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }

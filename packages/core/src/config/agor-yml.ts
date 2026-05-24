@@ -22,7 +22,7 @@ import type {
   RepoEnvironment,
   RepoEnvironmentConfigV1,
   RepoEnvironmentVariant,
-} from '../types/worktree';
+} from '../types/branch';
 import * as yaml from '../yaml/index.js';
 import {
   type AgorYmlSchema,

@@ -9,7 +9,7 @@ description: Branches are the primary unit of work in Agor — isolated git work
 
 > **Best practice:** 1 branch = 1 issue = 1 PR = 1 feature.
 
-Agor uses [git worktrees](https://git-scm.com/docs/git-worktree) under the hood, so multiple branches of the same repo can be checked out simultaneously without stashing or switching. Agor manages all of that for you — just create a branch in the UI or CLI and it handles the git plumbing.
+Agor uses [git branches](https://git-scm.com/docs/git-branch) under the hood, so multiple branches of the same repo can be checked out simultaneously without stashing or switching. Agor manages all of that for you — just create a branch in the UI or CLI and it handles the git plumbing.
 
 ```
 ~/.agor/worktrees/<repo>/<name>
@@ -21,7 +21,7 @@ Agor uses [git worktrees](https://git-scm.com/docs/git-worktree) under the hood,
 
 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'flex-start', marginTop: '16px', marginBottom: '16px' }}>
   <img
-    src="/screenshots/worktree-anatomy.png"
+    src="/screenshots/branch-anatomy.png"
     alt="A branch card on the board showing branch and PR badges, env / files / schedule tabs, and a list of sessions running inside"
     style={{ width: '100%', borderRadius: '8px' }}
   />
@@ -63,7 +63,7 @@ A branch is a filesystem directory plus a database record. The record tracks:
 | `environment` | Per-branch dev environment (start/stop, ports, URL) |
 
 <img
-  src="/screenshots/worktree-modal.png"
+  src="/screenshots/branch-modal.png"
   alt="Branch details modal with tabs for General, Sessions (4), Environment, Files, and Schedule. The General tab shows Name, Repository, Branch, Base Branch, Path, plus a Work Context section with Board picker, Issue, Pull Request, Notes (markdown), MCP Servers, and an Owners & Permissions section with Owners and Others Can fields"
   style={{ maxWidth: '600px', borderRadius: '8px' }}
 />
@@ -79,7 +79,7 @@ Sessions, tasks, comments, and artifacts all reference a branch. **The branch is
 Because each branch carries `issue_url` and `pull_request_url`, AI agents have unambiguous context for what they're working on. Zones can use that context directly:
 
 ```
-deeply analyze this github issue: {{ worktree.issue_url }}
+deeply analyze this github issue: {{ branch.issue_url }}
 ```
 
 When the agent runs, it sees the link, fetches the issue, and works against the right branch. No copy-paste, no "which ticket was this for again?"
@@ -93,10 +93,10 @@ Each branch can have its own **dev environment** — long-running processes (dev
 Configure once on the repo, then everyone on your team gets one-click start/stop on every branch.
 
 ```yaml
-# Per-repo template, ports derived from worktree's unique_id
-up_command: 'PORT={{add 9000 worktree.unique_id}} pnpm dev'
-down_command: "pkill -f 'vite.*{{add 9000 worktree.unique_id}}'"
-app_url_template: 'http://localhost:{{add 9000 worktree.unique_id}}'
+# Per-repo template, ports derived from branch's unique_id
+up_command: 'PORT={{add 9000 branch.unique_id}} pnpm dev'
+down_command: "pkill -f 'vite.*{{add 9000 branch.unique_id}}'"
+app_url_template: 'http://localhost:{{add 9000 branch.unique_id}}'
 ```
 
 → **[Environments guide](/guide/environment-configuration)** for the full setup.
@@ -108,7 +108,7 @@ app_url_template: 'http://localhost:{{add 9000 worktree.unique_id}}'
 When a feature ships and the PR merges, you usually want to clean up disk without losing the conversation history, analytics, or issue/PR linkage.
 
 <img
-  src="/screenshots/archive-worktree.png"
+  src="/screenshots/archive-branch.png"
   alt="Archive or Delete Branch modal showing filesystem and metadata options"
   style={{ maxWidth: '400px' }}
 />
@@ -141,7 +141,7 @@ The branch is also where several other features attach:
 
 ## Permissions (RBAC)
 
-When `execution.worktree_rbac: true` is set, branches enforce ownership and a per-tier `others_can` permission:
+When `execution.branch_rbac: true` is set, branches enforce ownership and a per-tier `others_can` permission:
 
 | Tier | What others can do |
 |---|---|

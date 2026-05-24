@@ -14,12 +14,12 @@ import { generateId, shortId } from '@agor/core/db';
 import type { PermissionMode as ClaudeSDKPermissionMode } from '@agor/core/sdk';
 import { mapPermissionMode } from '@agor/core/utils/permission-mode-mapper';
 import type {
+  BranchRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
   SessionMCPServerRepository,
   SessionRepository,
-  WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
@@ -133,7 +133,7 @@ export class ClaudeTool implements ITool {
     private tasksService?: TasksService,
     private tasksStreamingService?: TasksStreamingService,
     sessionsService?: SessionsPatchClient,
-    worktreesRepo?: WorktreeRepository,
+    branchesRepo?: BranchRepository,
     reposRepo?: RepoRepository,
     mcpEnabled?: boolean,
     _useNativeAuth?: boolean, // Claude supports `claude login` OAuth, but no special handling needed in tool
@@ -149,7 +149,7 @@ export class ClaudeTool implements ITool {
         permissionService,
         tasksService,
         sessionsService,
-        worktreesRepo,
+        branchesRepo,
         reposRepo,
         messagesService,
         mcpEnabled,

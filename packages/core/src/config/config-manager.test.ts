@@ -12,14 +12,14 @@ import {
   ensureBranchStorageModeAllowed,
   expandHomePath,
   getAgorHome,
+  getBranchesDir,
+  getBranchPath,
   getConfigPath,
   getConfigValue,
   getDaemonUrl,
   getDataHome,
   getDefaultConfig,
   getReposDir,
-  getWorktreePath,
-  getWorktreesDir,
   initConfig,
   loadConfig,
   loadConfigSync,
@@ -972,7 +972,7 @@ describe('getReposDir', () => {
   });
 });
 
-describe('getWorktreesDir', () => {
+describe('getBranchesDir', () => {
   let tempDir: string;
   let originalEnv: NodeJS.ProcessEnv;
 
@@ -989,12 +989,12 @@ describe('getWorktreesDir', () => {
     process.env = originalEnv;
   });
 
-  it('should return worktrees path under data home', () => {
-    const worktreesDir = getWorktreesDir();
-    expect(worktreesDir).toBe(path.join(tempDir, '.agor', 'worktrees'));
+  it('should return branches path under data home', () => {
+    const branchesDir = getBranchesDir();
+    expect(branchesDir).toBe(path.join(tempDir, '.agor', 'branches'));
   });
 
-  it('should use custom data_home for worktrees path', async () => {
+  it('should use custom data_home for branches path', async () => {
     const config: AgorConfig = {
       paths: { data_home: '/custom/data' },
     };
@@ -1002,19 +1002,19 @@ describe('getWorktreesDir', () => {
     await fs.mkdir(agorDir, { recursive: true });
     await fs.writeFile(path.join(agorDir, 'config.yaml'), yaml.dump(config), 'utf-8');
 
-    const worktreesDir = getWorktreesDir();
-    expect(worktreesDir).toBe('/custom/data/worktrees');
+    const branchesDir = getBranchesDir();
+    expect(branchesDir).toBe('/custom/data/branches');
   });
 
-  it('should use AGOR_DATA_HOME env var for worktrees path', () => {
+  it('should use AGOR_DATA_HOME env var for branches path', () => {
     process.env.AGOR_DATA_HOME = '/env/data';
 
-    const worktreesDir = getWorktreesDir();
-    expect(worktreesDir).toBe('/env/data/worktrees');
+    const branchesDir = getBranchesDir();
+    expect(branchesDir).toBe('/env/data/branches');
   });
 });
 
-describe('getWorktreePath', () => {
+describe('getBranchPath', () => {
   let tempDir: string;
   let originalEnv: NodeJS.ProcessEnv;
 
@@ -1031,14 +1031,12 @@ describe('getWorktreePath', () => {
     process.env = originalEnv;
   });
 
-  it('should construct worktree path from repo slug and name', () => {
-    const worktreePath = getWorktreePath('org/repo', 'feature-branch');
-    expect(worktreePath).toBe(
-      path.join(tempDir, '.agor', 'worktrees', 'org/repo', 'feature-branch')
-    );
+  it('should construct branch path from repo slug and name', () => {
+    const branchPath = getBranchPath('org/repo', 'feature-branch');
+    expect(branchPath).toBe(path.join(tempDir, '.agor', 'branches', 'org/repo', 'feature-branch'));
   });
 
-  it('should use custom data_home for worktree path', async () => {
+  it('should use custom data_home for branch path', async () => {
     const config: AgorConfig = {
       paths: { data_home: '/custom/data' },
     };
@@ -1046,15 +1044,15 @@ describe('getWorktreePath', () => {
     await fs.mkdir(agorDir, { recursive: true });
     await fs.writeFile(path.join(agorDir, 'config.yaml'), yaml.dump(config), 'utf-8');
 
-    const worktreePath = getWorktreePath('org/repo', 'feature-branch');
-    expect(worktreePath).toBe('/custom/data/worktrees/org/repo/feature-branch');
+    const branchPath = getBranchPath('org/repo', 'feature-branch');
+    expect(branchPath).toBe('/custom/data/branches/org/repo/feature-branch');
   });
 
-  it('should use AGOR_DATA_HOME env var for worktree path', () => {
+  it('should use AGOR_DATA_HOME env var for branch path', () => {
     process.env.AGOR_DATA_HOME = '/env/data';
 
-    const worktreePath = getWorktreePath('org/repo', 'feature-branch');
-    expect(worktreePath).toBe('/env/data/worktrees/org/repo/feature-branch');
+    const branchPath = getBranchPath('org/repo', 'feature-branch');
+    expect(branchPath).toBe('/env/data/branches/org/repo/feature-branch');
   });
 });
 

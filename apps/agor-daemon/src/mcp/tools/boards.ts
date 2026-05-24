@@ -11,9 +11,9 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
     'agor_boards_get',
     {
       description:
-        'Get information about a board, including zones, layout, and positioned entities (worktrees, cards). ' +
+        'Get information about a board, including zones, layout, and positioned entities (branches, cards). ' +
         'The response includes a `url` field with a clickable link to view the board in the UI. ' +
-        'Set includeEntities=true to include positioned worktree/card entities with their coordinates.',
+        'Set includeEntities=true to include positioned branch/card entities with their coordinates.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         boardId: z.string().describe('Board ID (UUIDv7 or short ID)'),
@@ -21,7 +21,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
           .boolean()
           .optional()
           .describe(
-            'Include positioned entities (worktrees, cards) with their x/y coordinates and zone assignments (default: false). Enable when you need to know where worktrees are placed on the canvas.'
+            'Include positioned entities (branches, cards) with their x/y coordinates and zone assignments (default: false). Enable when you need to know where branches are placed on the canvas.'
           ),
       }),
     },
@@ -86,7 +86,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
     'agor_boards_update',
     {
       description:
-        'Update board metadata and manage zones/objects. Can update name, icon, background, and create/update zones for organizing worktrees. Zone objects have: type="zone", x, y, width, height, label, borderColor, backgroundColor, borderStyle (optional), trigger (optional: "always_new" auto-creates sessions, "show_picker" shows agent selection). Text objects have: type="text", x, y, text, fontSize, color. Markdown objects have: type="markdown", x, y, width, height, content.',
+        'Update board metadata and manage zones/objects. Can update name, icon, background, and create/update zones for organizing branches. Zone objects have: type="zone", x, y, width, height, label, borderColor, backgroundColor, borderStyle (optional), trigger (optional: "always_new" auto-creates sessions, "show_picker" shows agent selection). Text objects have: type="text", x, y, text, fontSize, color. Markdown objects have: type="markdown", x, y, width, height, content.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
         boardId: z.string().describe('Board ID (UUIDv7 or short ID)'),

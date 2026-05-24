@@ -206,7 +206,7 @@ The unified API is implemented in `database-wrapper.ts`. Migration progress:
 - `repositories/mcp-servers.ts` (6+ occurrences)
 - `repositories/board-objects.ts` (6+ occurrences)
 - `repositories/session-mcp-servers.ts` (3+ occurrences)
-- `repositories/worktrees.ts` (2+ occurrences)
+- `repositories/branches.ts` (2+ occurrences)
 
 These can be migrated incrementally without breaking existing functionality.
 

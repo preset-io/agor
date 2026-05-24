@@ -57,17 +57,17 @@ export async function executeOpenCodeTask(params: {
       'http://localhost:4096';
     console.log(`[opencode] Using server URL: ${serverUrl}`);
 
-    // Resolve worktree path from session's worktree_id
-    let worktreePath: string | undefined;
-    if (session.worktree_id) {
+    // Resolve branch path from session's branch_id
+    let branchPath: string | undefined;
+    if (session.branch_id) {
       try {
-        const worktree = await repos.worktrees.findById(session.worktree_id);
-        if (worktree) {
-          worktreePath = worktree.path;
-          console.log(`[opencode] Using worktree directory: ${worktreePath}`);
+        const branch = await repos.branches.findById(session.branch_id);
+        if (branch) {
+          branchPath = branch.path;
+          console.log(`[opencode] Using branch directory: ${branchPath}`);
         }
       } catch (error) {
-        console.warn(`[opencode] Could not resolve worktree ${session.worktree_id}:`, error);
+        console.warn(`[opencode] Could not resolve branch ${session.branch_id}:`, error);
       }
     }
 
@@ -98,7 +98,7 @@ export async function executeOpenCodeTask(params: {
         projectName: 'agor',
         model: session.model_config?.model,
         provider: session.model_config?.provider,
-        workingDirectory: worktreePath,
+        workingDirectory: branchPath,
       });
 
       if (!sessionHandle) {
@@ -115,13 +115,13 @@ export async function executeOpenCodeTask(params: {
       console.log('[opencode] Stored OpenCode session ID in Agor session');
     }
 
-    // Set session context with model, provider, worktree path, and MCP token from session config
+    // Set session context with model, provider, branch path, and MCP token from session config
     tool.setSessionContext(
       sessionId,
       opencodeSessionId,
       session.model_config?.model,
       session.model_config?.provider,
-      worktreePath,
+      branchPath,
       session.mcp_token
     );
 

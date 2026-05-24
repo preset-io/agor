@@ -12,7 +12,7 @@ function makeUser(partial: Partial<User['default_agentic_config']> = {}): User {
     onboarding_completed: true,
     must_change_password: false,
     created_at: new Date(),
-    scheduled_from_worktree: false,
+    scheduled_from_branch: false,
     default_agentic_config: partial,
   } as unknown as User;
 }
@@ -186,26 +186,26 @@ describe('resolveSessionDefaults', () => {
       const r = resolveSessionDefaults({
         agenticTool: 'claude-code',
         user: makeUser({ 'claude-code': { mcpServerIds: ['user-1', 'user-2'] } }),
-        worktree: { mcp_server_ids: ['wt-1'] },
+        branch: { mcp_server_ids: ['wt-1'] },
         overrides: { mcpServerIds: [] },
       });
       expect(r.mcp_server_ids).toEqual([]);
     });
 
-    it('worktree config wins over user defaults when no override', () => {
+    it('branch config wins over user defaults when no override', () => {
       const r = resolveSessionDefaults({
         agenticTool: 'claude-code',
         user: makeUser({ 'claude-code': { mcpServerIds: ['user-1'] } }),
-        worktree: { mcp_server_ids: ['wt-1'] },
+        branch: { mcp_server_ids: ['wt-1'] },
       });
       expect(r.mcp_server_ids).toEqual(['wt-1']);
     });
 
-    it('falls through to user defaults when worktree has no config', () => {
+    it('falls through to user defaults when branch has no config', () => {
       const r = resolveSessionDefaults({
         agenticTool: 'claude-code',
         user: makeUser({ 'claude-code': { mcpServerIds: ['user-1'] } }),
-        worktree: { mcp_server_ids: [] },
+        branch: { mcp_server_ids: [] },
       });
       expect(r.mcp_server_ids).toEqual(['user-1']);
     });

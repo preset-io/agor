@@ -1,2 +1,2 @@
-export type { NewWorktreeConfig } from './NewBranchModal';
+export type { NewBranchConfig } from './NewBranchModal';
 export { NewBranchModal } from './NewBranchModal';

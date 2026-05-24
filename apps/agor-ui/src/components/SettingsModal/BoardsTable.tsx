@@ -1,4 +1,4 @@
-import type { AgorClient, Board, Session, Worktree } from '@agor-live/client';
+import type { AgorClient, Board, Branch, Session } from '@agor-live/client';
 import {
   CodeSandboxOutlined,
   CopyOutlined,
@@ -32,8 +32,8 @@ import { JSONEditor, validateJSON } from '../JSONEditor';
 interface BoardsTableProps {
   client: AgorClient | null;
   boardById: Map<string, Board>;
-  sessionsByWorktree: Map<string, Session[]>;
-  worktreeById: Map<string, Worktree>;
+  sessionsByBranch: Map<string, Session[]>;
+  branchById: Map<string, Branch>;
   onCreate?: (board: Partial<Board>) => void;
   onUpdate?: (boardId: string, updates: Partial<Board>) => void;
   onDelete?: (boardId: string) => void;
@@ -44,8 +44,8 @@ interface BoardsTableProps {
 export const BoardsTable: React.FC<BoardsTableProps> = ({
   client,
   boardById,
-  sessionsByWorktree,
-  worktreeById,
+  sessionsByBranch,
+  branchById,
   onCreate,
   onUpdate,
   onDelete,
@@ -62,27 +62,27 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   const [hoveredArchiveButton, setHoveredArchiveButton] = useState<string | null>(null);
   const [form] = Form.useForm();
 
-  // Calculate session count per board (worktree-centric model)
+  // Calculate session count per board (branch-centric model)
   const boardSessionCounts = useMemo(() => {
     const counts = new Map<string, number>();
 
     for (const board of boardById.values()) {
-      const boardWorktreeIds: string[] = [];
-      for (const worktree of worktreeById.values()) {
-        if (worktree.board_id === board.board_id) {
-          boardWorktreeIds.push(worktree.worktree_id);
+      const boardBranchIds: string[] = [];
+      for (const branch of branchById.values()) {
+        if (branch.board_id === board.board_id) {
+          boardBranchIds.push(branch.branch_id);
         }
       }
 
-      const sessionCount = boardWorktreeIds.flatMap(
-        (worktreeId) => sessionsByWorktree.get(worktreeId) || []
+      const sessionCount = boardBranchIds.flatMap(
+        (branchId) => sessionsByBranch.get(branchId) || []
       ).length;
 
       counts.set(board.board_id, sessionCount);
     }
 
     return counts;
-  }, [boardById, sessionsByWorktree, worktreeById]);
+  }, [boardById, sessionsByBranch, branchById]);
 
   const handleCreate = () => {
     // Validate all fields (not just 'name') so custom_context JSON rules run.

@@ -1,4 +1,4 @@
-import type { WorktreeEnvironmentInstance } from '@agor-live/client';
+import type { BranchEnvironmentInstance } from '@agor-live/client';
 
 /**
  * Inferred environment state combining runtime status + health check
@@ -19,16 +19,16 @@ export type EnvironmentInferredState =
 /**
  * Infer environment state by combining runtime status + health check
  *
- * @param env - The environment instance from the worktree
+ * @param env - The environment instance from the branch
  * @returns The inferred state
  *
  * @example
  * ```ts
- * const state = getEnvironmentState(worktree.environment_instance);
+ * const state = getEnvironmentState(branch.environment_instance);
  * // state = 'healthy' | 'unhealthy' | 'running' | 'stopped' | ...
  * ```
  */
-export function getEnvironmentState(env?: WorktreeEnvironmentInstance): EnvironmentInferredState {
+export function getEnvironmentState(env?: BranchEnvironmentInstance): EnvironmentInferredState {
   if (!env) return 'stopped';
 
   // If running, combine with health check

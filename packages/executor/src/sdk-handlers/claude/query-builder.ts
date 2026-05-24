@@ -18,13 +18,13 @@ type Options = Claude.Options;
 
 import { getDaemonUrl, resolveUserEnvironment } from '../../config.js';
 import type {
+  BranchRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
   SessionMCPServerRepository,
   SessionRepository,
   UsersRepository,
-  WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { MCPServersConfig, SessionID, TaskID, UserID } from '../../types.js';
@@ -110,7 +110,7 @@ export interface QuerySetupDeps {
   tasksService?: TasksService;
   sessionsService?: SessionsPatchClient;
   messagesService?: MessagesService;
-  worktreesRepo?: WorktreeRepository;
+  branchesRepo?: BranchRepository;
   usersRepo?: UsersRepository;
   permissionLocks: Map<SessionID, Promise<void>>;
   mcpEnabled?: boolean;
@@ -187,25 +187,25 @@ export async function setupQuery(
   const rawModel = modelConfig?.model || DEFAULT_CLAUDE_MODEL;
   const { model, betas } = parseModelWithBetas(rawModel);
 
-  // Determine CWD from worktree (if session has one)
+  // Determine CWD from branch (if session has one)
   let cwd = process.cwd();
-  if (session.worktree_id && deps.worktreesRepo) {
+  if (session.branch_id && deps.branchesRepo) {
     try {
-      const worktree = await deps.worktreesRepo.findById(session.worktree_id);
-      if (worktree) {
-        cwd = worktree.path;
-        console.log(`✅ Using worktree path as cwd: ${cwd}`);
+      const branch = await deps.branchesRepo.findById(session.branch_id);
+      if (branch) {
+        cwd = branch.path;
+        console.log(`✅ Using branch path as cwd: ${cwd}`);
       } else {
         console.warn(
-          `⚠️  Session ${sessionId} references non-existent worktree ${session.worktree_id}, using process.cwd(): ${cwd}`
+          `⚠️  Session ${sessionId} references non-existent branch ${session.branch_id}, using process.cwd(): ${cwd}`
         );
       }
     } catch (error) {
-      console.error(`❌ Failed to fetch worktree ${session.worktree_id}:`, error);
+      console.error(`❌ Failed to fetch branch ${session.branch_id}:`, error);
       console.warn(`   Falling back to process.cwd(): ${cwd}`);
     }
   } else {
-    console.warn(`⚠️  Session ${sessionId} has no worktree_id, using process.cwd(): ${cwd}`);
+    console.warn(`⚠️  Session ${sessionId} has no branch_id, using process.cwd(): ${cwd}`);
   }
 
   logPromptStart(sessionId, prompt, cwd, resume ? session.sdk_session_id : undefined);
@@ -224,9 +224,9 @@ export async function setupQuery(
         `✅ Working directory validated: ${cwd} (${fileCount} files/dirs${hasGit ? ', has .git' : ', NO .git!'}${hasClaude ? ', has .claude/' : ''}${hasCLAUDEmd ? ', has CLAUDE.md' : ''})`
       );
       if (fileCount === 0) {
-        console.warn(`⚠️  Working directory is EMPTY - worktree may be from bare repo!`);
+        console.warn(`⚠️  Working directory is EMPTY - branch may be from bare repo!`);
       } else if (!hasGit) {
-        console.warn(`⚠️  Working directory has no .git - not a valid worktree!`);
+        console.warn(`⚠️  Working directory has no .git - not a valid branch!`);
       }
       if (!hasCLAUDEmd && !hasClaude) {
         console.warn(`⚠️  No CLAUDE.md or .claude/ directory found - SDK may not load properly`);
@@ -239,8 +239,8 @@ export async function setupQuery(
     console.error(`❌ Working directory validation failed: ${errorMessage}`);
     throw new Error(
       `${errorMessage}${
-        session.worktree_id
-          ? ` Session references worktree ${session.worktree_id} which may not be initialized.`
+        session.branch_id
+          ? ` Session references branch ${session.branch_id} which may not be initialized.`
           : ''
       }`
     );
@@ -252,10 +252,10 @@ export async function setupQuery(
   // Buffer to capture stderr for better error messages
   let stderrBuffer = '';
 
-  // Render Agor system prompt with full session/worktree/repo context
+  // Render Agor system prompt with full session/branch/repo context
   const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
     sessions: deps.sessionsRepo,
-    worktrees: deps.worktreesRepo,
+    branches: deps.branchesRepo,
     repos: deps.reposRepo,
     users: deps.usersRepo,
   });
@@ -265,7 +265,7 @@ export async function setupQuery(
     systemPrompt: {
       type: 'preset',
       preset: 'claude_code',
-      append: agorSystemPrompt, // Append rich Agor context (session, worktree, repo)
+      append: agorSystemPrompt, // Append rich Agor context (session, branch, repo)
     },
     settingSources: ['user', 'project', 'local'], // Load user + project + local permissions, auto-loads CLAUDE.md
     // Defensive copy — the const is readonly but the SDK option is typed `string[]`.
@@ -473,7 +473,7 @@ export async function setupQuery(
 
         const isLikelyStale =
           hoursSinceUpdate > 24 || // Session older than 24 hours
-          !session.worktree_id; // No worktree = can't resume properly
+          !session.branch_id; // No branch = can't resume properly
 
         if (isLikelyStale) {
           console.warn(

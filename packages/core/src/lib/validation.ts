@@ -10,7 +10,7 @@ import * as fs from 'node:fs/promises';
  * Validate that a directory exists and is accessible
  *
  * @param path - Directory path to validate
- * @param context - Optional context string for error messages (e.g., "CWD", "worktree path")
+ * @param context - Optional context string for error messages (e.g., "CWD", "branch path")
  * @throws Error if directory doesn't exist or is not a directory
  */
 export async function validateDirectory(path: string, context = 'Directory'): Promise<void> {

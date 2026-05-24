@@ -9,17 +9,17 @@
  *   - treats legacy plain-string entries as global-scope
  */
 
-import type { Session, SessionID, UserID, UUID, WorktreeID } from '@agor/core/types';
+import type { BranchID, Session, SessionID, UserID, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect } from 'vitest';
 import { select, update } from '../db/database-wrapper';
 import { encryptApiKey } from '../db/encryption';
+import { BranchRepository } from '../db/repositories/branches';
 import { RepoRepository } from '../db/repositories/repos';
 import { SessionEnvSelectionRepository } from '../db/repositories/session-env-selections';
 import { SessionRepository } from '../db/repositories/sessions';
 import { UsersRepository } from '../db/repositories/users';
-import { WorktreeRepository } from '../db/repositories/worktrees';
 import { users } from '../db/schema';
 import { dbTest } from '../db/test-helpers';
 import { generateId } from '../lib/ids';
@@ -64,7 +64,7 @@ async function createUserWithEnv(db: any, envVars: Record<string, unknown>): Pro
 // biome-ignore lint/suspicious/noExplicitAny: test helper
 async function createSessionForUser(db: any, userId: UserID): Promise<SessionID> {
   const repoRepo = new RepoRepository(db);
-  const worktreeRepo = new WorktreeRepository(db);
+  const branchRepo = new BranchRepository(db);
   const sessionRepo = new SessionRepository(db);
 
   const repo = await repoRepo.create({
@@ -77,12 +77,12 @@ async function createSessionForUser(db: any, userId: UserID): Promise<SessionID>
     default_branch: 'main',
   });
 
-  const worktree = await worktreeRepo.create({
-    worktree_id: generateId() as WorktreeID,
+  const branch = await branchRepo.create({
+    branch_id: generateId() as BranchID,
     repo_id: repo.repo_id,
     name: 'main',
     ref: 'main',
-    worktree_unique_id: Math.floor(Math.random() * 1_000_000),
+    branch_unique_id: Math.floor(Math.random() * 1_000_000),
     path: '/tmp/test-repo',
     base_ref: 'main',
     new_branch: false,
@@ -91,7 +91,7 @@ async function createSessionForUser(db: any, userId: UserID): Promise<SessionID>
 
   const data: Partial<Session> = {
     session_id: generateId() as SessionID,
-    worktree_id: worktree.worktree_id,
+    branch_id: branch.branch_id,
     agentic_tool: 'claude-code',
     status: SessionStatus.IDLE,
     created_by: userId,
@@ -247,7 +247,7 @@ describe('resolveUserEnvironment — per-tool credential scoping', () => {
   dbTest('omitting `tool` excludes ALL per-tool credentials', async ({ db }) => {
     const userId = await createUserWithToolCreds(db);
     const env = await resolveUserEnvironment(userId, db);
-    // Safe default: worktree-level terminals don't run an SDK and shouldn't
+    // Safe default: branch-level terminals don't run an SDK and shouldn't
     // see any per-SDK keys.
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env.ANTHROPIC_BASE_URL).toBeUndefined();

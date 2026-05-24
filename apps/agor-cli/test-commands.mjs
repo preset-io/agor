@@ -8,7 +8,7 @@ const tests = [
   { name: 'repo list', cmd: 'pnpm -w agor repo list' },
   { name: 'mcp list', cmd: 'pnpm -w agor mcp list' },
   { name: 'user list', cmd: 'pnpm -w agor user list' },
-  { name: 'worktree list', cmd: 'pnpm -w agor worktree list' },
+  { name: 'branch list', cmd: 'pnpm -w agor branch list' },
   { name: 'session list', cmd: 'pnpm -w agor session list' },
   { name: 'board list', cmd: 'pnpm -w agor board list' },
 ];

@@ -21,13 +21,13 @@ export default defineConfig({
     'templates/spawn-subsession-template': 'src/templates/spawn-subsession-template.ts', // Spawn-subsession meta-prompt
     'templates/zone-trigger-context': 'src/templates/zone-trigger-context.ts', // Canonical zone-trigger context builder
     'environment/variable-resolver': 'src/environment/variable-resolver.ts', // Environment variable resolution
-    'environment/render-snapshot': 'src/environment/render-snapshot.ts', // v2 worktree env snapshot rendering
+    'environment/render-snapshot': 'src/environment/render-snapshot.ts', // v2 branch env snapshot rendering
     'utils/errors': 'src/utils/errors.ts', // Error handling and formatting utilities
     'utils/url': 'src/utils/url.ts', // Shared URL validation helpers
     'utils/permission-mode-mapper': 'src/utils/permission-mode-mapper.ts', // Permission mode mapping for cross-agent compatibility
     'utils/cron': 'src/utils/cron.ts', // Cron validation and parsing utilities
     'utils/context-window': 'src/utils/context-window.ts', // Context window calculation utilities
-    'utils/board-placement': 'src/utils/board-placement.ts', // Zone-relative positioning for worktree cards
+    'utils/board-placement': 'src/utils/board-placement.ts', // Zone-relative positioning for branch cards
     'utils/host-ip': 'src/utils/host-ip.ts', // Host IP detection for {{host.ip_address}} template var
     'utils/path': 'src/utils/path.ts', // Path expansion utilities (tilde to home directory)
     'utils/logger': 'src/utils/logger.ts', // Console monkey-patch for log level filtering
@@ -46,7 +46,7 @@ export default defineConfig({
     'tools/mcp/oauth-mcp-transport': 'src/tools/mcp/oauth-mcp-transport.ts', // MCP OAuth 2.1 protocol transport
     'tools/mcp/oauth-refresh': 'src/tools/mcp/oauth-refresh.ts', // MCP OAuth refresh_token persistence + mutex
     'tools/mcp/oauth-token-expiry': 'src/tools/mcp/oauth-token-expiry.ts', // MCP OAuth token expiry resolution cascade
-    'unix/index': 'src/unix/index.ts', // Unix group management utilities for worktree isolation
+    'unix/index': 'src/unix/index.ts', // Unix group management utilities for branch isolation
     'mcp/index': 'src/mcp/index.ts', // MCP template resolution utilities
     'gateway/index': 'src/gateway/index.ts', // Gateway platform connectors (Slack, etc.)
     'yaml/index': 'src/yaml/index.ts', // Browser-safe js-yaml re-export

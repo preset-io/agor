@@ -1,4 +1,4 @@
-import type { AgorClient, Board, Repo, Session, Worktree } from '@agor-live/client';
+import type { AgorClient, Board, Branch, Repo, Session } from '@agor-live/client';
 import { isAssistant } from '@agor-live/client';
 import {
   AimOutlined,
@@ -32,18 +32,18 @@ import { renderEnvCell } from './BranchEnvColumn';
 
 interface BranchesTableProps {
   client: AgorClient | null;
-  worktreeById: Map<string, Worktree>;
+  branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
   boardById: Map<string, Board>;
-  sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
+  sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
   onArchiveOrDelete?: (
-    worktreeId: string,
+    branchId: string,
     options: {
       metadataAction: 'archive' | 'delete';
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     }
   ) => void | Promise<void>;
-  onUnarchive?: (worktreeId: string, options?: { boardId?: string }) => void | Promise<void>;
+  onUnarchive?: (branchId: string, options?: { boardId?: string }) => void | Promise<void>;
   onCreate?: (
     repoId: string,
     data: {
@@ -57,9 +57,9 @@ interface BranchesTableProps {
       clone_depth?: number;
     }
   ) => void;
-  onRowClick?: (worktree: Worktree) => void;
-  onStartEnvironment?: (worktreeId: string) => void;
-  onStopEnvironment?: (worktreeId: string) => void;
+  onRowClick?: (branch: Branch) => void;
+  onStartEnvironment?: (branchId: string) => void;
+  onStopEnvironment?: (branchId: string) => void;
   /** Close the parent Settings modal. Used by the recenter action so the
    *  canvas isn't obscured by the modal after pan/zoom. */
   onClose?: () => void;
@@ -67,10 +67,10 @@ interface BranchesTableProps {
 
 export const BranchesTable: React.FC<BranchesTableProps> = ({
   client,
-  worktreeById,
+  branchById,
   repoById,
   boardById,
-  sessionsByWorktree,
+  sessionsByBranch,
   onArchiveOrDelete,
   onUnarchive,
   onCreate,
@@ -82,18 +82,18 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   const repos = mapToArray(repoById);
   const boards = mapToArray(boardById);
   const { token } = theme.useToken();
-  // Reuses the `worktreeById` prop so we don't read the same data via
-  // both props and context. Only goToWorktree is used from this table.
-  const navigation = useAppNavigation({ boardById, worktreeById });
+  // Reuses the `branchById` prop so we don't read the same data via
+  // both props and context. Only goToBranch is used from this table.
+  const navigation = useAppNavigation({ boardById, branchById });
 
   const handleRecenter = useCallback(
-    (worktree: Worktree) => {
+    (branch: Branch) => {
       // Close the modal first so the canvas isn't obscured by it after
-      // the pan/zoom. goToWorktree pushes the flat `/w/<short>/` URL;
-      // useUrlState's URL→state effect resolves the worktree, switches
+      // the pan/zoom. goToBranch pushes the flat `/w/<short>/` URL;
+      // useUrlState's URL→state effect resolves the branch, switches
       // boards if needed, and fires the recenter via recenterMap.
       onClose?.();
-      navigation.goToWorktree(worktree.worktree_id);
+      navigation.goToBranch(branch.branch_id);
     },
     [onClose, navigation]
   );
@@ -107,8 +107,8 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
     'active'
   );
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
-  const [selectedWorktree, setSelectedWorktree] = useState<Worktree | null>(null);
-  const [archivedWorktrees, setArchivedWorktrees] = useState<Worktree[]>([]);
+  const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
+  const [archivedBranches, setArchivedBranches] = useState<Branch[]>([]);
   const [archivedLoaded, setArchivedLoaded] = useState(false);
   const [archivedLoading, setArchivedLoading] = useState(false);
   const archivedFetchingRef = useRef(false);
@@ -128,11 +128,11 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
     setArchivedLoading(true);
 
     client
-      .service('worktrees')
+      .service('branches')
       .findAll({ query: { archived: true, $limit: 1000, $sort: { created_at: -1 } } })
       .then((result) => {
         if (cancelled) return;
-        setArchivedWorktrees(result as Worktree[]);
+        setArchivedBranches(result as Branch[]);
         setArchivedLoaded(true);
       })
       .catch(() => {
@@ -226,30 +226,30 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   };
 
   const handleArchiveOrDelete = async (
-    worktreeId: string,
+    branchId: string,
     options: {
       metadataAction: 'archive' | 'delete';
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     }
   ) => {
     try {
-      await onArchiveOrDelete?.(worktreeId, options);
+      await onArchiveOrDelete?.(branchId, options);
     } catch {
       return;
     }
 
     if (options.metadataAction === 'archive') {
       const source =
-        worktreeById.get(worktreeId) ||
-        archivedWorktrees.find((worktree) => worktree.worktree_id === worktreeId);
+        branchById.get(branchId) ||
+        archivedBranches.find((branch) => branch.branch_id === branchId);
       if (source) {
-        const archivedCopy: Worktree = {
+        const archivedCopy: Branch = {
           ...source,
           archived: true,
           archived_at: new Date().toISOString(),
         };
-        setArchivedWorktrees((prev) => {
-          const index = prev.findIndex((worktree) => worktree.worktree_id === worktreeId);
+        setArchivedBranches((prev) => {
+          const index = prev.findIndex((branch) => branch.branch_id === branchId);
           if (index === -1) return [archivedCopy, ...prev];
           const next = [...prev];
           next[index] = archivedCopy;
@@ -260,7 +260,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
     }
 
     // Hard-delete should disappear from both active + archived local sets
-    setArchivedWorktrees((prev) => prev.filter((worktree) => worktree.worktree_id !== worktreeId));
+    setArchivedBranches((prev) => prev.filter((branch) => branch.branch_id !== branchId));
   };
 
   const handleCreate = async () => {
@@ -284,7 +284,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
         ref: branchName,
         createBranch: true, // Always create new branch based on source branch
         sourceBranch: values.sourceBranch,
-        pullLatest: true, // Always fetch latest before creating worktree
+        pullLatest: true, // Always fetch latest before creating branch
         boardId: values.boardId, // Optional: add to board
         storage_mode: storageMode,
         ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
@@ -311,7 +311,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       title: 'Name',
       dataIndex: 'name',
       key: 'name',
-      render: (name: string, record: Worktree) => (
+      render: (name: string, record: Branch) => (
         <Space>
           {isAssistant(record) ? (
             <RobotOutlined style={{ color: token.colorInfo }} />
@@ -327,7 +327,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       key: 'env',
       width: 120,
       align: 'center' as const,
-      render: (_: unknown, record: Worktree) => {
+      render: (_: unknown, record: Branch) => {
         const repo = repos.find((r: Repo) => r.repo_id === record.repo_id);
         return renderEnvCell(record, repo, token, { onStartEnvironment, onStopEnvironment });
       },
@@ -353,8 +353,8 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       title: 'Sessions',
       key: 'sessions',
       width: 100,
-      render: (_: unknown, record: Worktree) => {
-        const sessionCount = (sessionsByWorktree.get(record.worktree_id) || []).length;
+      render: (_: unknown, record: Branch) => {
+        const sessionCount = (sessionsByBranch.get(record.branch_id) || []).length;
         return (
           <Typography.Text type="secondary">
             {sessionCount} {sessionCount === 1 ? 'session' : 'sessions'}
@@ -367,7 +367,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       key: 'path',
       width: 60,
       align: 'center' as const,
-      render: (_: unknown, record: Worktree) => (
+      render: (_: unknown, record: Branch) => (
         <Typography.Text
           copyable={{
             text: record.path,
@@ -380,10 +380,10 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       title: 'Actions',
       key: 'actions',
       width: 160,
-      render: (_: unknown, record: Worktree) => (
+      render: (_: unknown, record: Branch) => (
         <Space size="small">
           {!record.archived && record.board_id && (
-            <Tooltip title="Center map on worktree">
+            <Tooltip title="Center map on branch">
               <Button
                 type="text"
                 size="small"
@@ -401,21 +401,21 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
               if (!nextArchived) {
                 void Promise.resolve(
                   onUnarchive?.(
-                    record.worktree_id,
+                    record.branch_id,
                     record.board_id ? { boardId: record.board_id } : undefined
                   )
                 )
                   .then(() => {
-                    setArchivedWorktrees((prev) =>
-                      prev.map((worktree) =>
-                        worktree.worktree_id === record.worktree_id
+                    setArchivedBranches((prev) =>
+                      prev.map((branch) =>
+                        branch.branch_id === record.branch_id
                           ? {
-                              ...worktree,
+                              ...branch,
                               archived: false,
                               archived_at: undefined,
                               archived_by: undefined,
                             }
-                          : worktree
+                          : branch
                       )
                     );
                   })
@@ -424,7 +424,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
                   });
                 return;
               }
-              setSelectedWorktree(record);
+              setSelectedBranch(record);
               setArchiveDeleteModalOpen(true);
             }}
           />
@@ -444,7 +444,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
             danger
             onClick={(e) => {
               e.stopPropagation();
-              setSelectedWorktree(record);
+              setSelectedBranch(record);
               setArchiveDeleteModalOpen(true);
             }}
           />
@@ -453,16 +453,16 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
     },
   ];
 
-  const filteredWorktrees = useMemo(() => {
+  const filteredBranches = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
-    const activeWorktrees = Array.from(worktreeById.values());
-    const mergedById = new Map<string, Worktree>();
-    for (const worktree of activeWorktrees) {
-      mergedById.set(worktree.worktree_id, worktree);
+    const activeBranches = Array.from(branchById.values());
+    const mergedById = new Map<string, Branch>();
+    for (const branch of activeBranches) {
+      mergedById.set(branch.branch_id, branch);
     }
-    for (const worktree of archivedWorktrees) {
-      if (!mergedById.has(worktree.worktree_id)) {
-        mergedById.set(worktree.worktree_id, worktree);
+    for (const branch of archivedBranches) {
+      if (!mergedById.has(branch.branch_id)) {
+        mergedById.set(branch.branch_id, branch);
       }
     }
 
@@ -485,13 +485,13 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       return filtered;
     }
 
-    return filtered.filter((worktree) => {
-      const repo = repoById.get(worktree.repo_id);
+    return filtered.filter((branch) => {
+      const repo = repoById.get(branch.repo_id);
       const haystacks = [
-        worktree.name,
-        worktree.ref,
-        worktree.path,
-        String(worktree.worktree_unique_id),
+        branch.name,
+        branch.ref,
+        branch.path,
+        String(branch.branch_unique_id),
         repo?.name,
         repo?.slug,
       ];
@@ -503,8 +503,8 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
         return value.toString().toLowerCase().includes(term);
       });
     });
-  }, [archiveFilter, archivedWorktrees, repoById, searchTerm, worktreeById]);
-  const hasAnyWorktrees = worktreeById.size > 0 || archivedWorktrees.length > 0;
+  }, [archiveFilter, archivedBranches, repoById, searchTerm, branchById]);
+  const hasAnyBranches = branchById.size > 0 || archivedBranches.length > 0;
 
   return (
     <div>
@@ -514,7 +514,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
         style={{ marginBottom: token.sizeUnit * 2, width: '100%' }}
       >
         <Typography.Text type="secondary">
-          Manage git worktrees for isolated development contexts across sessions.
+          Manage git branches for isolated development contexts across sessions.
         </Typography.Text>
         <Space style={{ width: '100%', display: 'flex', justifyContent: 'space-between' }}>
           <Space>
@@ -566,7 +566,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
         </div>
       )}
 
-      {repos.length > 0 && !hasAnyWorktrees && (
+      {repos.length > 0 && !hasAnyBranches && (
         <div
           style={{
             display: 'flex',
@@ -583,11 +583,11 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
         </div>
       )}
 
-      {hasAnyWorktrees && (
+      {hasAnyBranches && (
         <Table
-          dataSource={filteredWorktrees}
+          dataSource={filteredBranches}
           columns={columns}
-          rowKey="worktree_id"
+          rowKey="branch_id"
           pagination={{ pageSize: 10 }}
           size="small"
           onRow={(record) => ({
@@ -622,20 +622,20 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
         </Form>
       </Modal>
 
-      {selectedWorktree && (
+      {selectedBranch && (
         <ArchiveDeleteBranchModal
           open={archiveDeleteModalOpen}
-          worktree={selectedWorktree}
-          sessionCount={(sessionsByWorktree.get(selectedWorktree.worktree_id) || []).length}
-          environmentRunning={selectedWorktree.environment_instance?.status === 'running'}
+          branch={selectedBranch}
+          sessionCount={(sessionsByBranch.get(selectedBranch.branch_id) || []).length}
+          environmentRunning={selectedBranch.environment_instance?.status === 'running'}
           onConfirm={(options) => {
-            handleArchiveOrDelete(selectedWorktree.worktree_id, options);
+            handleArchiveOrDelete(selectedBranch.branch_id, options);
             setArchiveDeleteModalOpen(false);
-            setSelectedWorktree(null);
+            setSelectedBranch(null);
           }}
           onCancel={() => {
             setArchiveDeleteModalOpen(false);
-            setSelectedWorktree(null);
+            setSelectedBranch(null);
           }}
         />
       )}

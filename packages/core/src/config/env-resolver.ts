@@ -148,7 +148,7 @@ export interface ResolveUserEnvOptions {
    * included). Global-scope vars are always included.
    *
    * If omitted, session-scope vars are EXCLUDED entirely (safe default for
-   * contexts without a session — e.g. worktree-level terminals).
+   * contexts without a session — e.g. branch-level terminals).
    */
   sessionId?: SessionID;
   /**
@@ -157,7 +157,7 @@ export interface ResolveUserEnvOptions {
    * Other tools' credentials are NEVER merged regardless of value.
    *
    * If omitted, NO per-tool credentials are merged — safe default for
-   * worktree-level terminals and other contexts that don't run an SDK.
+   * branch-level terminals and other contexts that don't run an SDK.
    */
   tool?: AgenticToolName;
 }
@@ -323,7 +323,7 @@ function buildAllowlistedEnv(): Record<string, string> {
 }
 
 /**
- * Create a clean environment for user processes (worktrees, terminals, etc.)
+ * Create a clean environment for user processes (branches, terminals, etc.)
  *
  * SECURITY: Uses an allowlist approach — starts with an empty environment and
  * only copies variables that are explicitly safe. This prevents leaking internal
@@ -343,18 +343,18 @@ function buildAllowlistedEnv(): Record<string, string> {
  * @returns Clean environment object ready for child process spawning
  *
  * @example
- * // For worktree environment startup (with user)
- * const env = await createUserProcessEnvironment(worktree.created_by, db);
+ * // For branch environment startup (with user)
+ * const env = await createUserProcessEnvironment(branch.created_by, db);
  * spawn(command, { cwd, shell: true, env });
  *
  * @example
  * // For user impersonation (strips HOME/USER/LOGNAME/SHELL)
- * const env = await createUserProcessEnvironment(worktree.created_by, db, undefined, true);
+ * const env = await createUserProcessEnvironment(branch.created_by, db, undefined, true);
  * buildSpawnArgs(command, [], { asUser: 'alice', env });
  *
  * @example
- * // For worktree environment with custom NODE_ENV
- * const env = await createUserProcessEnvironment(worktree.created_by, db, {
+ * // For branch environment with custom NODE_ENV
+ * const env = await createUserProcessEnvironment(branch.created_by, db, {
  *   NODE_ENV: 'development',
  * });
  *
@@ -384,7 +384,7 @@ export async function createUserProcessEnvironment(
   /**
    * If provided, the user's per-tool credentials for THIS tool are merged
    * into the environment (e.g. claude-code → ANTHROPIC_*). Other tools'
-   * credentials are NEVER merged. Omit for non-SDK contexts (worktree
+   * credentials are NEVER merged. Omit for non-SDK contexts (branch
    * terminals, generic background jobs).
    */
   tool?: AgenticToolName

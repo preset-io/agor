@@ -13,7 +13,7 @@ export interface AssistantTabResult {
   emoji?: string;
   boardChoice?: string;
   repoId?: string;
-  worktreeName?: string;
+  branchName?: string;
   sourceBranch?: string;
 }
 
@@ -59,7 +59,7 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
         emoji: values.emoji || undefined,
         boardChoice: values.boardChoice,
         repoId: values.repoId || frameworkRepo?.repo_id,
-        worktreeName: values.name || `private-${slugify(values.displayName)}`,
+        branchName: values.name || `private-${slugify(values.displayName)}`,
         sourceBranch: values.sourceBranch || 'main',
       };
     } catch {

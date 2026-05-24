@@ -214,7 +214,7 @@ export function createExecutionContext(
 /**
  * Capture git state at task end and update session's current_sha
  *
- * Fetches the worktree path from the session and captures the current git state.
+ * Fetches the branch path from the session and captures the current git state.
  * Also updates the session's git_state.current_sha to keep it in sync.
  * Returns the SHA (with "-dirty" suffix if working directory has uncommitted changes)
  * or undefined if it cannot be determined.
@@ -224,22 +224,22 @@ async function captureGitStateAtTaskEnd(
   sessionId: SessionID
 ): Promise<string | undefined> {
   try {
-    // Get session to find worktree
+    // Get session to find branch
     const session = await client.service('sessions').get(sessionId);
-    if (!session.worktree_id) {
-      console.warn('[Git SHA Capture] Session has no worktree_id');
+    if (!session.branch_id) {
+      console.warn('[Git SHA Capture] Session has no branch_id');
       return undefined;
     }
 
-    // Get worktree to find path
-    const worktree = await client.service('worktrees').get(session.worktree_id);
-    if (!worktree.path) {
-      console.warn('[Git SHA Capture] Worktree has no path');
+    // Get branch to find path
+    const branch = await client.service('branches').get(session.branch_id);
+    if (!branch.path) {
+      console.warn('[Git SHA Capture] Branch has no path');
       return undefined;
     }
 
     // Get current git state (includes dirty detection)
-    const sha = await getGitState(worktree.path);
+    const sha = await getGitState(branch.path);
     console.log(
       `[Git SHA Capture] Captured git state at task end: ${sha.substring(0, 8)}${sha.endsWith('-dirty') ? ' (dirty)' : ''}`
     );

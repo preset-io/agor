@@ -1,4 +1,4 @@
-import type { AgorClient, FileDetail, FileListItem, Worktree } from '@agor-live/client';
+import type { AgorClient, Branch, FileDetail, FileListItem } from '@agor-live/client';
 import { Alert, Space } from 'antd';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
@@ -10,11 +10,11 @@ import { MarkdownModal } from '../../MarkdownModal/MarkdownModal';
 const MAX_FILES = 50000;
 
 interface FilesTabProps {
-  worktree: Worktree;
+  branch: Branch;
   client: AgorClient | null;
 }
 
-const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
+const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
   const [files, setFiles] = useState<FileListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -24,12 +24,12 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
   const [modalOpen, setModalOpen] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
 
-  // Store client and worktree_id in refs to keep callbacks stable
+  // Store client and branch_id in refs to keep callbacks stable
   const clientRef = useRef(client);
   clientRef.current = client;
 
-  const worktreeIdRef = useRef(worktree.worktree_id);
-  worktreeIdRef.current = worktree.worktree_id;
+  const branchIdRef = useRef(branch.branch_id);
+  branchIdRef.current = branch.branch_id;
 
   const { showLoading, showSuccess, showError } = useThemedMessage();
 
@@ -46,7 +46,7 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
         setError(null);
 
         const data = await client.service('file').findAll({
-          query: { worktree_id: worktree.worktree_id },
+          query: { branch_id: branch.branch_id },
         });
         setFiles(data as FileListItem[]);
       } catch (err) {
@@ -58,7 +58,7 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
     };
 
     fetchFiles();
-  }, [client, worktree.worktree_id]);
+  }, [client, branch.branch_id]);
 
   // Download file (handles both UTF-8 text and base64 binary)
   const downloadFile = useCallback(
@@ -70,7 +70,7 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
         showLoading('Downloading file...', { key: 'download' });
 
         const detail = (await currentClient.service('file').get(file.path, {
-          query: { worktree_id: worktreeIdRef.current },
+          query: { branch_id: branchIdRef.current },
         })) as FileDetail;
 
         // Decode content based on encoding
@@ -126,7 +126,7 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
 
           // Fetch full file detail with content
           const detail = await currentClient.service('file').get(file.path, {
-            query: { worktree_id: worktreeIdRef.current },
+            query: { branch_id: branchIdRef.current },
           });
 
           setSelectedFile(detail as FileDetail);
@@ -206,12 +206,10 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ worktree, client }) => {
   );
 };
 
-// Memoize FilesTab to prevent re-renders when parent re-renders with same worktree
+// Memoize FilesTab to prevent re-renders when parent re-renders with same branch
 export const FilesTab = memo(FilesTabInner, (prevProps, nextProps) => {
-  // Re-render if worktree_id changes or if client availability changes (null -> non-null or vice versa)
+  // Re-render if branch_id changes or if client availability changes (null -> non-null or vice versa)
   // This ensures the fetch effect runs when client becomes available
   const clientAvailabilityChanged = (prevProps.client === null) !== (nextProps.client === null);
-  return (
-    prevProps.worktree.worktree_id === nextProps.worktree.worktree_id && !clientAvailabilityChanged
-  );
+  return prevProps.branch.branch_id === nextProps.branch.branch_id && !clientAvailabilityChanged;
 });

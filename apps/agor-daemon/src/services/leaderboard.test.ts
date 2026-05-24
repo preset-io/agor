@@ -8,6 +8,7 @@
  */
 
 import {
+  branches,
   type Database,
   generateId,
   insert,
@@ -15,7 +16,6 @@ import {
   sessions,
   tasks,
   users,
-  worktrees,
 } from '@agor/core/db';
 import { TaskStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
@@ -57,9 +57,9 @@ async function seedUser(db: Database, id: string, name: string, email: string): 
     .run();
 }
 
-async function seedRepoAndWorktree(
+async function seedRepoAndBranch(
   db: Database,
-  opts: { slug: string; worktreeId: string; worktreeName: string; uniqueId: number }
+  opts: { slug: string; branchId: string; branchName: string; uniqueId: number }
 ): Promise<string> {
   const repoRepo = new RepoRepository(db);
   const repo = await repoRepo.create({
@@ -72,15 +72,15 @@ async function seedRepoAndWorktree(
     default_branch: 'main',
   });
 
-  await insert(db, worktrees)
+  await insert(db, branches)
     .values({
-      worktree_id: opts.worktreeId,
+      branch_id: opts.branchId,
       repo_id: repo.repo_id,
       created_at: new Date(),
       created_by: 'test-user',
-      name: opts.worktreeName,
+      name: opts.branchName,
       ref: 'main',
-      worktree_unique_id: opts.uniqueId,
+      branch_unique_id: opts.uniqueId,
       data: { path: `/tmp/${opts.slug}/wt`, git_state: { ref_at_start: 'main' } },
     })
     .run();
@@ -90,7 +90,7 @@ async function seedRepoAndWorktree(
 
 async function seedSession(
   db: Database,
-  opts: { sessionId: string; worktreeId: string; tool: 'claude-code' | 'codex' | 'gemini' }
+  opts: { sessionId: string; branchId: string; tool: 'claude-code' | 'codex' | 'gemini' }
 ): Promise<void> {
   await insert(db, sessions)
     .values({
@@ -98,7 +98,7 @@ async function seedSession(
       created_at: new Date(),
       status: 'idle',
       agentic_tool: opts.tool,
-      worktree_id: opts.worktreeId,
+      branch_id: opts.branchId,
       created_by: 'test-user',
       data: { genealogy: { children: [] }, contextFiles: [], tasks: [], git_state: {} },
     })
@@ -153,33 +153,33 @@ async function seedTask(
  * Seed a canonical dataset used across several tests:
  *
  * - 2 users (alice, bob)
- * - 1 repo / 1 worktree (simplifies most assertions)
+ * - 1 repo / 1 branch (simplifies most assertions)
  * - 2 sessions, one claude-code (alice) and one codex (bob)
  * - 4 tasks spanning 3 consecutive days (Apr 15, 16, 17) on 2 models
  */
 async function seedCanonicalDataset(db: Database): Promise<{
   aliceId: string;
   bobId: string;
-  worktreeId: string;
+  branchId: string;
   claudeSessionId: string;
   codexSessionId: string;
 }> {
   const aliceId = 'user-alice';
   const bobId = 'user-bob';
-  const worktreeId = 'wt-main';
+  const branchId = 'wt-main';
   const claudeSessionId = 'sess-claude';
   const codexSessionId = 'sess-codex';
 
   await seedUser(db, aliceId, 'Alice', 'alice@example.com');
   await seedUser(db, bobId, 'Bob', 'bob@example.com');
-  await seedRepoAndWorktree(db, {
+  await seedRepoAndBranch(db, {
     slug: 'main',
-    worktreeId,
-    worktreeName: 'main-wt',
+    branchId,
+    branchName: 'main-wt',
     uniqueId: 1,
   });
-  await seedSession(db, { sessionId: claudeSessionId, worktreeId, tool: 'claude-code' });
-  await seedSession(db, { sessionId: codexSessionId, worktreeId, tool: 'codex' });
+  await seedSession(db, { sessionId: claudeSessionId, branchId, tool: 'claude-code' });
+  await seedSession(db, { sessionId: codexSessionId, branchId, tool: 'codex' });
 
   // Alice / claude-code / sonnet — 2 tasks on Apr 15 (same day)
   await seedTask(db, {
@@ -225,7 +225,7 @@ async function seedCanonicalDataset(db: Database): Promise<{
     durationMs: 1000,
   });
 
-  return { aliceId, bobId, worktreeId, claudeSessionId, codexSessionId };
+  return { aliceId, bobId, branchId, claudeSessionId, codexSessionId };
 }
 
 // ---------------------------------------------------------------------------
@@ -233,7 +233,7 @@ async function seedCanonicalDataset(db: Database): Promise<{
 // ---------------------------------------------------------------------------
 
 describe('LeaderboardService backward compatibility', () => {
-  dbTest('legacy user/worktree/repo groupBy returns the same row shape', async ({ db }) => {
+  dbTest('legacy user/branch/repo groupBy returns the same row shape', async ({ db }) => {
     await seedCanonicalDataset(db);
     const service = new LeaderboardService(db);
 
@@ -246,7 +246,7 @@ describe('LeaderboardService backward compatibility', () => {
     for (const row of result.data) {
       // Legacy fields still present
       expect(row.userId).toBeDefined();
-      expect(row.worktreeId).toBeDefined();
+      expect(row.branchId).toBeDefined();
       expect(row.repoId).toBeDefined();
       expect(typeof row.totalTokens).toBe('number');
       expect(typeof row.totalCost).toBe('number');
@@ -419,17 +419,17 @@ describe('LeaderboardService bucketing', () => {
     // the start of the next week. We explicitly span the Sun→Mon boundary to
     // verify the ISO-Monday truncation.
     const aliceId = 'user-alice';
-    const worktreeId = 'wt-main';
+    const branchId = 'wt-main';
     const claudeSessionId = 'sess-claude';
 
     await seedUser(db, aliceId, 'Alice', 'alice@example.com');
-    await seedRepoAndWorktree(db, {
+    await seedRepoAndBranch(db, {
       slug: 'main',
-      worktreeId,
-      worktreeName: 'main-wt',
+      branchId,
+      branchName: 'main-wt',
       uniqueId: 1,
     });
-    await seedSession(db, { sessionId: claudeSessionId, worktreeId, tool: 'claude-code' });
+    await seedSession(db, { sessionId: claudeSessionId, branchId, tool: 'claude-code' });
 
     // Monday Apr 13
     await seedTask(db, {
@@ -514,17 +514,17 @@ describe('LeaderboardService date filters', () => {
 describe('LeaderboardService legacy rows', () => {
   dbTest('tasks without normalized_sdk_response contribute 0 and still count', async ({ db }) => {
     const aliceId = 'user-alice';
-    const worktreeId = 'wt-main';
+    const branchId = 'wt-main';
     const claudeSessionId = 'sess-claude';
 
     await seedUser(db, aliceId, 'Alice', 'alice@example.com');
-    await seedRepoAndWorktree(db, {
+    await seedRepoAndBranch(db, {
       slug: 'main',
-      worktreeId,
-      worktreeName: 'main-wt',
+      branchId,
+      branchName: 'main-wt',
       uniqueId: 1,
     });
-    await seedSession(db, { sessionId: claudeSessionId, worktreeId, tool: 'claude-code' });
+    await seedSession(db, { sessionId: claudeSessionId, branchId, tool: 'claude-code' });
 
     // Legacy task: no normalized_sdk_response at all, only top-level duration_ms
     await insert(db, tasks)

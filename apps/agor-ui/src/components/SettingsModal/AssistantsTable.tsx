@@ -1,11 +1,11 @@
 import type {
   AgorClient,
   Board,
+  Branch,
   CreateRepoRequest,
   Repo,
   Session,
   User,
-  Worktree,
 } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import {
@@ -31,31 +31,31 @@ import {
 import { useCallback, useMemo, useState } from 'react';
 import { useAssistantForm } from '@/hooks/useAssistantForm';
 import { useEnsureFrameworkRepo } from '@/hooks/useEnsureFrameworkRepo';
-import { createAssistantWorktree } from '@/utils/assistantCreation';
+import { createAssistantBranch } from '@/utils/assistantCreation';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
-import type { WorktreeUpdate } from '../BranchModal/tabs/GeneralTab';
+import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { AssistantFormFields, CREATE_NEW_BOARD } from '../forms/AssistantFormFields';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import { UserAvatar } from '../metadata/UserAvatar';
 
 interface AssistantsTableProps {
-  worktreeById: Map<string, Worktree>;
+  branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
   boardById: Map<string, Board>;
-  sessionsByWorktree: Map<string, Session[]>;
+  sessionsByBranch: Map<string, Session[]>;
   userById: Map<string, User>;
   client: AgorClient | null;
   onArchiveOrDelete?: (
-    worktreeId: string,
+    branchId: string,
     options: {
       metadataAction: 'archive' | 'delete';
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     }
   ) => void;
-  onRowClick?: (worktree: Worktree) => void;
-  onCreateWorktree?: (
+  onRowClick?: (branch: Branch) => void;
+  onCreateBranch?: (
     repoId: string,
     data: {
       name: string;
@@ -65,8 +65,8 @@ interface AssistantsTableProps {
       pullLatest: boolean;
       boardId?: string;
     }
-  ) => Promise<Worktree | null>;
-  onUpdateWorktree?: (worktreeId: string, updates: WorktreeUpdate) => void;
+  ) => Promise<Branch | null>;
+  onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
   onCreateRepo?: (data: CreateRepoRequest) => void | Promise<void>;
   /** Close the parent Settings modal so the canvas isn't obscured by
    *  it after recenter. Wired by SettingsModal. */
@@ -74,36 +74,36 @@ interface AssistantsTableProps {
 }
 
 export const AssistantsTable: React.FC<AssistantsTableProps> = ({
-  worktreeById,
+  branchById,
   repoById,
   boardById,
-  sessionsByWorktree,
+  sessionsByBranch,
   userById,
   client,
   onArchiveOrDelete,
   onRowClick,
-  onCreateWorktree,
-  onUpdateWorktree,
+  onCreateBranch,
+  onUpdateBranch,
   onCreateRepo,
   onClose,
 }) => {
   const repos = mapToArray(repoById);
   const boards = mapToArray(boardById);
 
-  // Assistants ARE worktrees (just worktrees flagged via
+  // Assistants ARE branches (just branches flagged via
   // `custom_context.assistant`), so navigation reuses the `/w/<short>/`
-  // URL via `goToWorktree` — no separate `/assistant/<short>/` route.
-  // Reuses the `worktreeById` prop directly so we don't read the same
+  // URL via `goToBranch` — no separate `/assistant/<short>/` route.
+  // Reuses the `branchById` prop directly so we don't read the same
   // data twice (props + context).
-  const navigation = useAppNavigation({ boardById, worktreeById });
+  const navigation = useAppNavigation({ boardById, branchById });
 
   const handleRecenter = useCallback(
-    (assistant: Worktree) => {
-      // Close the modal first so the canvas isn't obscured. goToWorktree
+    (assistant: Branch) => {
+      // Close the modal first so the canvas isn't obscured. goToBranch
       // pushes `/w/<short>/`; the URL→state effect handles cross-board
       // switching + recenter.
       onClose?.();
-      navigation.goToWorktree(assistant.worktree_id);
+      navigation.goToBranch(assistant.branch_id);
     },
     [onClose, navigation]
   );
@@ -129,7 +129,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
 
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
-  const [selectedWorktree, setSelectedWorktree] = useState<Worktree | null>(null);
+  const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
 
   const handleCreate = async () => {
     try {
@@ -149,19 +149,19 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
         return;
       }
 
-      if (!onCreateWorktree || !onUpdateWorktree) return;
+      if (!onCreateBranch || !onUpdateBranch) return;
 
-      await createAssistantWorktree(
+      await createAssistantBranch(
         {
           displayName: values.displayName.trim(),
           description: values.description || undefined,
           emoji: values.emoji || undefined,
           boardChoice: values.boardChoice,
           repoId,
-          worktreeName: values.name || undefined,
+          branchName: values.name || undefined,
           sourceBranch: values.sourceBranch || undefined,
         },
-        { client, repoById, onCreateWorktree, onUpdateWorktree }
+        { client, repoById, onCreateBranch, onUpdateBranch }
       );
 
       setCreateModalOpen(false);
@@ -180,7 +180,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
 
   const assistants = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
-    const assistantWorktrees = Array.from(worktreeById.values())
+    const assistantBranches = Array.from(branchById.values())
       .filter((w) => !w.archived && isAssistant(w))
       .sort((a, b) => {
         const nameA = getAssistantConfig(a)?.displayName ?? a.name;
@@ -188,9 +188,9 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
         return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
       });
 
-    if (!term) return assistantWorktrees;
+    if (!term) return assistantBranches;
 
-    return assistantWorktrees.filter((w) => {
+    return assistantBranches.filter((w) => {
       const config = getAssistantConfig(w);
       const repo = repoById.get(w.repo_id);
       const creator = userById.get(w.created_by);
@@ -205,14 +205,14 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
       ];
       return haystacks.some((v) => v?.toLowerCase().includes(term));
     });
-  }, [worktreeById, repoById, userById, searchTerm]);
+  }, [branchById, repoById, userById, searchTerm]);
 
   const columns = [
     {
       title: 'Assistant',
       key: 'assistant',
       width: 220,
-      render: (_: unknown, record: Worktree) => {
+      render: (_: unknown, record: Branch) => {
         const config = getAssistantConfig(record);
         return (
           <Space>
@@ -229,7 +229,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
     {
       title: 'Description',
       key: 'description',
-      render: (_: unknown, record: Worktree) => {
+      render: (_: unknown, record: Branch) => {
         const notes = (record.notes ?? '').trim();
         if (!notes) {
           return (
@@ -282,7 +282,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
       title: 'Creator',
       key: 'creator',
       width: 160,
-      render: (_: unknown, record: Worktree) => {
+      render: (_: unknown, record: Branch) => {
         const user = userById.get(record.created_by);
         if (!user || record.created_by === 'anonymous') {
           return (
@@ -298,7 +298,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
       title: 'Actions',
       key: 'actions',
       width: 130,
-      render: (_: unknown, record: Worktree) => (
+      render: (_: unknown, record: Branch) => (
         <Space size="small">
           {record.board_id && (
             <Tooltip title="Center map on assistant">
@@ -332,7 +332,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
               danger
               onClick={(e) => {
                 e.stopPropagation();
-                setSelectedWorktree(record);
+                setSelectedBranch(record);
                 setArchiveDeleteModalOpen(true);
               }}
             />
@@ -396,7 +396,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
         <Table
           dataSource={assistants}
           columns={columns}
-          rowKey="worktree_id"
+          rowKey="branch_id"
           pagination={{ pageSize: 10 }}
           size="small"
           onRow={(record) => ({
@@ -435,20 +435,20 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
       </Modal>
 
       {/* Archive/Delete Modal */}
-      {selectedWorktree && (
+      {selectedBranch && (
         <ArchiveDeleteBranchModal
           open={archiveDeleteModalOpen}
-          worktree={selectedWorktree}
-          sessionCount={(sessionsByWorktree.get(selectedWorktree.worktree_id) || []).length}
-          environmentRunning={selectedWorktree.environment_instance?.status === 'running'}
+          branch={selectedBranch}
+          sessionCount={(sessionsByBranch.get(selectedBranch.branch_id) || []).length}
+          environmentRunning={selectedBranch.environment_instance?.status === 'running'}
           onConfirm={(options) => {
-            onArchiveOrDelete?.(selectedWorktree.worktree_id, options);
+            onArchiveOrDelete?.(selectedBranch.branch_id, options);
             setArchiveDeleteModalOpen(false);
-            setSelectedWorktree(null);
+            setSelectedBranch(null);
           }}
           onCancel={() => {
             setArchiveDeleteModalOpen(false);
-            setSelectedWorktree(null);
+            setSelectedBranch(null);
           }}
         />
       )}

@@ -1,16 +1,16 @@
-import type { Worktree } from '@agor-live/client';
+import type { Branch } from '@agor-live/client';
 import { Alert, Checkbox, Popconfirm, Typography } from 'antd';
 import { type ReactNode, useState } from 'react';
 
 interface DeleteBranchPopconfirmProps {
-  worktree: Worktree;
+  branch: Branch;
   sessionCount?: number;
   onConfirm: (deleteFromFilesystem: boolean) => void;
   children: ReactNode;
 }
 
 export const DeleteBranchPopconfirm: React.FC<DeleteBranchPopconfirmProps> = ({
-  worktree,
+  branch,
   sessionCount = 0,
   onConfirm,
   children,
@@ -33,7 +33,7 @@ export const DeleteBranchPopconfirm: React.FC<DeleteBranchPopconfirmProps> = ({
       onCancel={handleCancel}
       description={
         <div style={{ width: '100%' }}>
-          <p>Are you sure you want to delete branch "{worktree.name}"?</p>
+          <p>Are you sure you want to delete branch "{branch.name}"?</p>
           {sessionCount > 0 && (
             <Alert
               title={`Note: This will also delete ${sessionCount} related session(s)`}
@@ -52,7 +52,7 @@ export const DeleteBranchPopconfirm: React.FC<DeleteBranchPopconfirmProps> = ({
           <div style={{ marginTop: 4, marginBottom: 0 }}>
             <Typography.Text type="secondary">Path: </Typography.Text>
             <Typography.Text code copyable style={{ fontSize: 11 }}>
-              {worktree.path}
+              {branch.path}
             </Typography.Text>
           </div>
         </div>

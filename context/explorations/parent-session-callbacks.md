@@ -524,7 +524,7 @@ Use `agor_tasks_get` (taskId: "8f3e9a1c-1234-5678-90ab-cdef12345678") or `agor_s
 **Stats:** 8 messages, 5 tool uses
 
 **Result:**
-I encountered an error while analyzing the git history. The git log command failed with "fatal: not a git repository". It appears the worktree path may be incorrect or the repository is not initialized.
+I encountered an error while analyzing the git history. The git log command failed with "fatal: not a git repository". It appears the branch path may be incorrect or the repository is not initialized.
 
 Investigate the failure using `agor_tasks_get` (taskId: "8f3e9a1c-1234-5678-90ab-cdef12345678") or `agor_sessions_get` (sessionId: "4a7b3c2d-e5f6-7890-abcd-ef1234567890").
 
@@ -1181,7 +1181,7 @@ Queue Position 3: [Agor System] Child session 6f1a2b3c has completed...
 
    ```bash
    # Terminal 1: Create parent session
-   pnpm agor session create --worktree-id <wt> --agentic-tool claude-code
+   pnpm agor session create --branch-id <wt> --agentic-tool claude-code
    # Get session ID
 
    # Terminal 2: Spawn child (via MCP in parent session)

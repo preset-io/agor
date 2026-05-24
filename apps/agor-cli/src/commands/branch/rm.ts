@@ -1,7 +1,7 @@
 /**
- * `agor worktree rm <worktree-id>` - Remove a worktree
+ * `agor branch rm <branch-id>` - Remove a branch
  *
- * Removes a worktree from the database and optionally from the filesystem.
+ * Removes a branch from the database and optionally from the filesystem.
  */
 
 import { shortId } from '@agor-live/client';
@@ -9,8 +9,8 @@ import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
 
-export default class WorktreeRemove extends BaseCommand {
-  static description = 'Remove a worktree';
+export default class BranchRemove extends BaseCommand {
+  static description = 'Remove a branch';
 
   static examples = [
     '<%= config.bin %> <%= command.id %> abc123',
@@ -19,47 +19,47 @@ export default class WorktreeRemove extends BaseCommand {
   ];
 
   static args = {
-    worktreeId: Args.string({
-      description: 'Worktree ID (full UUID or short ID)',
+    branchId: Args.string({
+      description: 'Branch ID (full UUID or short ID)',
       required: true,
     }),
   };
 
   static flags = {
     'from-filesystem': Flags.boolean({
-      description: 'Also remove worktree from filesystem using git worktree remove',
+      description: 'Also remove branch from filesystem using git worktree remove',
       default: false,
     }),
   };
 
   async run(): Promise<void> {
-    const { args, flags } = await this.parse(WorktreeRemove);
+    const { args, flags } = await this.parse(BranchRemove);
 
     // Connect to daemon
     const client = await this.connectToDaemon();
 
     try {
-      const worktreesService = client.service('worktrees');
+      const branchesService = client.service('branches');
 
-      // Fetch worktree first to show what we're removing
-      const worktree = await worktreesService.get(args.worktreeId);
+      // Fetch branch first to show what we're removing
+      const branch = await branchesService.get(args.branchId);
 
       this.log('');
       this.log(chalk.yellow('⚠  Warning: You are about to remove:'));
-      this.log(`  Name: ${chalk.cyan(worktree.name)}`);
-      this.log(`  Path: ${chalk.dim(worktree.path)}`);
-      this.log(`  ID:   ${chalk.dim(shortId(worktree.worktree_id))}`);
+      this.log(`  Name: ${chalk.cyan(branch.name)}`);
+      this.log(`  Path: ${chalk.dim(branch.path)}`);
+      this.log(`  ID:   ${chalk.dim(shortId(branch.branch_id))}`);
 
       // Query sessions service for count
       const sessionsService = client.service('sessions');
       try {
         const allSessions = await sessionsService.findAll({
-          query: { worktree_id: worktree.worktree_id, $limit: 10000 },
+          query: { branch_id: branch.branch_id, $limit: 10000 },
         });
 
         if (allSessions.length > 0) {
           this.log(
-            `  Sessions: ${chalk.yellow(`${allSessions.length} session(s) reference this worktree`)}`
+            `  Sessions: ${chalk.yellow(`${allSessions.length} session(s) reference this branch`)}`
           );
         }
       } catch {
@@ -73,18 +73,18 @@ export default class WorktreeRemove extends BaseCommand {
 
       this.log('');
 
-      // Remove worktree
-      await worktreesService.remove(worktree.worktree_id, {
+      // Remove branch
+      await branchesService.remove(branch.branch_id, {
         query: { deleteFromFilesystem: flags['from-filesystem'] },
       });
 
-      this.log(`${chalk.green('✓')} Worktree removed from database`);
+      this.log(`${chalk.green('✓')} Branch removed from database`);
 
       if (flags['from-filesystem']) {
-        this.log(`${chalk.green('✓')} Worktree removed from filesystem`);
+        this.log(`${chalk.green('✓')} Branch removed from filesystem`);
       } else {
         this.log('');
-        this.log(chalk.dim(`Files remain at: ${worktree.path}`));
+        this.log(chalk.dim(`Files remain at: ${branch.path}`));
         this.log(chalk.dim(`To remove files, run with: ${chalk.cyan('--from-filesystem')}`));
       }
 
@@ -96,7 +96,7 @@ export default class WorktreeRemove extends BaseCommand {
     } catch (error) {
       await this.cleanupClient(client);
       this.error(
-        `Failed to remove worktree: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to remove branch: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }

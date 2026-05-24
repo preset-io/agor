@@ -4,12 +4,12 @@
  * Single source of truth for:
  *   1. The path shape rendered by the UI router and consumed by share
  *      links — top-level entity paths (`/b/<board>/`, `/s/<sessionShort>/`,
- *      `/w/<worktreeShort>/`, `/a/<artifactShort>/`).
+ *      `/w/<branchShort>/`, `/a/<artifactShort>/`).
  *   2. The UI mount point (`/ui`) at which the daemon serves the SPA.
  *   3. Composition of full external URLs (`baseUrl + UI_MOUNT_PATH +
  *      path`) handed back through REST / MCP responses.
  *
- * Design note — flat entity URLs: sub-entities (sessions, worktrees,
+ * Design note — flat entity URLs: sub-entities (sessions, branches,
  * artifacts) used to be nested under their board (`/b/<board>/w/<wt>/`).
  * Boards can move, so embedding the board in the URL of an object
  * that's only implicitly on it makes shared links rot when the object
@@ -31,7 +31,7 @@
 // `node:crypto` for `generateId()`. Going through it pulls a Node-only
 // dependency into the browser bundle, which Vite externalizes and
 // errors on at runtime (`crypto.randomBytes` not in browser scope).
-import type { ArtifactID, BoardID, SessionID, WorktreeID } from '../types/id';
+import type { ArtifactID, BoardID, BranchID, SessionID } from '../types/id';
 import { shortId } from '../types/id';
 
 // ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ export const UI_MOUNT_PATH = '/ui';
 export const ENTITY_PATH_SEGMENTS = {
   board: 'b',
   session: 's',
-  worktree: 'w',
+  branch: 'w',
   artifact: 'a',
 } as const;
 
@@ -77,18 +77,18 @@ export function boardPath(boardId: BoardID, boardSlug?: string | null): string {
 }
 
 /** `/s/<sessionShort>/` — session deep link. App resolves the session,
- *  switches to its worktree's board, and opens the conversation panel. */
+ *  switches to its branch's board, and opens the conversation panel. */
 export function sessionPath(sessionId: SessionID): string {
   return `/${ENTITY_PATH_SEGMENTS.session}/${shortId(sessionId)}/`;
 }
 
-/** `/w/<worktreeShort>/` — worktree deep link. App resolves the
- *  worktree, switches to its board, and recenters the canvas on its card. */
-export function worktreePath(worktreeId: WorktreeID): string {
-  return `/${ENTITY_PATH_SEGMENTS.worktree}/${shortId(worktreeId)}/`;
+/** `/w/<branchShort>/` — branch deep link. App resolves the
+ *  branch, switches to its board, and recenters the canvas on its card. */
+export function branchPath(branchId: BranchID): string {
+  return `/${ENTITY_PATH_SEGMENTS.branch}/${shortId(branchId)}/`;
 }
 
-/** `/a/<artifactShort>/` — artifact deep link. Same shape as worktree. */
+/** `/a/<artifactShort>/` — artifact deep link. Same shape as branch. */
 export function artifactPath(artifactId: ArtifactID): string {
   return `/${ENTITY_PATH_SEGMENTS.artifact}/${shortId(artifactId)}/`;
 }
@@ -124,10 +124,10 @@ export function getSessionUrl(sessionId: SessionID, baseUrl: string): string {
   return fullUrl(sessionPath(sessionId), baseUrl);
 }
 
-/** Generate a worktree URL. Always returns a URL — the entity resolves
+/** Generate a branch URL. Always returns a URL — the entity resolves
  *  to its board at click time. */
-export function getWorktreeUrl(worktreeId: WorktreeID, baseUrl: string): string {
-  return fullUrl(worktreePath(worktreeId), baseUrl);
+export function getBranchUrl(branchId: BranchID, baseUrl: string): string {
+  return fullUrl(branchPath(branchId), baseUrl);
 }
 
 /** Generate an artifact URL. Always returns a URL — the entity
@@ -138,7 +138,7 @@ export function getArtifactUrl(artifactId: ArtifactID, baseUrl: string): string 
 
 // ---------------------------------------------------------------------------
 // Unrelated user-input validation helpers — kept here for historical
-// reasons. Used by worktree issue_url / pull_request_url normalization
+// reasons. Used by branch issue_url / pull_request_url normalization
 // and the health-check URL allowlist.
 // ---------------------------------------------------------------------------
 

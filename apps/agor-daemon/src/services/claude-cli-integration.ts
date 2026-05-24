@@ -236,7 +236,7 @@ export function primeActiveCliTurnFromSession(app: Application, session: Session
  * `stop_reason`). It does NOT see "the user typed Ctrl-D in the REPL" or
  * "claude was killed externally" — those terminate the process without
  * writing a final assistant line. Without this watchdog, a session whose
- * REPL got killed sits in `RUNNING` forever, and the worktree pill shows
+ * REPL got killed sits in `RUNNING` forever, and the branch pill shows
  * "running" until the user notices and hits Restart.
  *
  * Design: one `setInterval` per active turn. Tick every WATCHDOG_TICK_MS;
@@ -482,7 +482,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
   /**
    * Terminal-direct path: there's no pending task from /prompt, so mint one
    * ourselves with status=RUNNING. Also patches the session row so the queue
-   * gate behaves and `session.tasks` shows the new id in the worktree pill.
+   * gate behaves and `session.tasks` shows the new id in the branch pill.
    */
   const mintTaskForOrphanTurn = async (
     sessionId: SessionID,
@@ -880,7 +880,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
           });
         }
         // Mirror the latest context-usage snapshot up onto the session
-        // row so the worktree pill's "X% of context" pill shows the
+        // row so the branch pill's "X% of context" pill shows the
         // right number across reload boundaries.
         try {
           const patch: Partial<Session> = {
@@ -1003,12 +1003,12 @@ export function getCliWatcherRegistry(app: Application): ClaudeCliWatcherRegistr
  *     `claude --resume` pickers + the terminal title.
  *   - `permissionMode` defaults to `acceptEdits` per the analysis doc's
  *     Defaults-panel out-of-box choice.
- *   - `addDirs` = `[worktree cwd]` so the agent has the worktree in its
+ *   - `addDirs` = `[branch cwd]` so the agent has the branch in its
  *     context even though that's also the spawn cwd. Cheap belt-and-suspenders.
  */
 export function buildSpawnConfigForSession(
   session: Session,
-  worktreeCwd: string
+  branchCwd: string
 ): ClaudeCliSpawnConfig {
   // If the JSONL transcript for this session id already exists on disk,
   // `claude --session-id <X>` errors out with "Session ID is already in
@@ -1017,7 +1017,7 @@ export function buildSpawnConfigForSession(
   // to `--resume <X>` whenever the transcript file is present. claude
   // treats --resume as idempotent across launches and preserves history.
   const homeDir = resolveHomeDirForCliSession(session);
-  const jsonlPath = claudeSessionJsonlPath(homeDir, worktreeCwd, session.session_id);
+  const jsonlPath = claudeSessionJsonlPath(homeDir, branchCwd, session.session_id);
   const transcriptExists = fs.existsSync(jsonlPath);
   return {
     sessionId: transcriptExists ? undefined : session.session_id,
@@ -1026,7 +1026,7 @@ export function buildSpawnConfigForSession(
     model: session.model_config?.model,
     effort: session.model_config?.effort as ClaudeCliSpawnConfig['effort'] | undefined,
     permissionMode: permissionModeForCli(session.permission_config?.mode),
-    addDirs: [worktreeCwd],
+    addDirs: [branchCwd],
     // mcpConfigPath: lands once MCP scoping is plumbed for the CLI adapter.
     // appendSystemPromptFile: lands once session-context rendering is wired.
   };
@@ -1084,13 +1084,13 @@ function dispatchZellijClaudeTab(
 export async function onCliSessionCreated(
   app: Application,
   session: Session,
-  worktreeCwd: string
+  branchCwd: string
 ): Promise<void> {
   if (session.agentic_tool !== 'claude-code-cli') return;
   const homeDir = resolveHomeDirForCliSession(session);
-  const slug = slugForCwd(worktreeCwd);
-  const jsonlPath = claudeSessionJsonlPath(homeDir, worktreeCwd, session.session_id);
-  const spawnCfg = buildSpawnConfigForSession(session, worktreeCwd);
+  const slug = slugForCwd(branchCwd);
+  const jsonlPath = claudeSessionJsonlPath(homeDir, branchCwd, session.session_id);
+  const spawnCfg = buildSpawnConfigForSession(session, branchCwd);
   const built = buildClaudeCliSpawn(spawnCfg);
   const tabName = spawnCfg.displayName ?? `cli-${shortId(session.session_id)}`;
 
@@ -1136,7 +1136,7 @@ export async function onCliSessionCreated(
     const reg = getCliWatcherRegistry(app);
     await reg.register({
       sessionId: session.session_id,
-      cwd: worktreeCwd,
+      cwd: branchCwd,
       homeDir,
       startOffset: session.cli_state?.watcher_offset ?? 0,
     });
@@ -1155,7 +1155,7 @@ export async function onCliSessionCreated(
     app,
     session.created_by,
     tabName,
-    worktreeCwd,
+    branchCwd,
     built.bin,
     built.args
   );
@@ -1192,7 +1192,7 @@ export async function onCliSessionEnded(app: Application, sessionId: SessionID):
  */
 export async function rehydrateCliWatchers(
   app: Application,
-  worktreeCwdLookup: (worktreeId: string) => Promise<string | null>
+  branchCwdLookup: (branchId: string) => Promise<string | null>
 ): Promise<void> {
   const db = getDb(app);
   if (!db) return;
@@ -1208,7 +1208,7 @@ export async function rehydrateCliWatchers(
     if (session.agentic_tool !== 'claude-code-cli') continue;
     if (session.status === 'completed' || session.status === 'failed') continue;
     if (session.archived) continue;
-    const cwd = await worktreeCwdLookup(session.worktree_id);
+    const cwd = await branchCwdLookup(session.branch_id);
     if (!cwd) continue;
     // Prime the in-memory active turn BEFORE registering the watcher so
     // the very first post-restart event sees the right task linkage.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Repo, RepoSlug, UUID, Worktree } from '../types';
+import type { Branch, Repo, RepoSlug, UUID } from '../types';
 import {
   getDefaultRepoReference,
   getGroupedRepoReferenceOptions,
@@ -38,7 +38,7 @@ describe('getRepoReferenceOptions', () => {
     });
   });
 
-  it('should create worktree options with correct structure', () => {
+  it('should create branch options with correct structure', () => {
     const repos: Repo[] = [
       {
         repo_id: 'repo_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
@@ -52,11 +52,11 @@ describe('getRepoReferenceOptions', () => {
       },
     ];
 
-    const worktrees: Worktree[] = [
+    const branches: Branch[] = [
       {
-        worktree_id: 'wt_01933e4b1234a8f39d2e1c4b5a6f7c35' as UUID,
+        branch_id: 'wt_01933e4b1234a8f39d2e1c4b5a6f7c35' as UUID,
         repo_id: 'repo_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
-        worktree_unique_id: 1,
+        branch_unique_id: 1,
         created_by: 'user_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
         name: 'main',
 
@@ -73,20 +73,20 @@ describe('getRepoReferenceOptions', () => {
       },
     ];
 
-    const result = getRepoReferenceOptions(repos, worktrees);
+    const result = getRepoReferenceOptions(repos, branches);
 
     expect(result).toHaveLength(2);
     expect(result[1]).toEqual({
       label: 'preset-io/agor:main',
       value: 'wt_01933e4b1234a8f39d2e1c4b5a6f7c35',
-      type: 'managed-worktree',
+      type: 'managed-branch',
       slug: 'preset-io/agor',
-      worktree: 'main',
+      branch: 'main',
       description: 'Agor - main (refs/heads/main)',
     });
   });
 
-  it('should handle multiple repos and worktrees', () => {
+  it('should handle multiple repos and branches', () => {
     const repos: Repo[] = [
       {
         repo_id: 'repo_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
@@ -110,11 +110,11 @@ describe('getRepoReferenceOptions', () => {
       },
     ];
 
-    const worktrees: Worktree[] = [
+    const branches: Branch[] = [
       {
-        worktree_id: 'wt_01933e4b1234a8f39d2e1c4b5a6f7c35' as UUID,
+        branch_id: 'wt_01933e4b1234a8f39d2e1c4b5a6f7c35' as UUID,
         repo_id: 'repo_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
-        worktree_unique_id: 1,
+        branch_unique_id: 1,
         created_by: 'user_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
         name: 'main',
 
@@ -130,9 +130,9 @@ describe('getRepoReferenceOptions', () => {
         needs_attention: false,
       },
       {
-        worktree_id: 'wt_01933e4c5678a8f39d2e1c4b5a6f7c35' as UUID,
+        branch_id: 'wt_01933e4c5678a8f39d2e1c4b5a6f7c35' as UUID,
         repo_id: 'repo_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
-        worktree_unique_id: 2,
+        branch_unique_id: 2,
         created_by: 'user_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
         name: 'feat-auth',
 
@@ -148,9 +148,9 @@ describe('getRepoReferenceOptions', () => {
         needs_attention: false,
       },
       {
-        worktree_id: 'wt_01934c2e9012a8f39d2e1c4b5a6f7c35' as UUID,
+        branch_id: 'wt_01934c2e9012a8f39d2e1c4b5a6f7c35' as UUID,
         repo_id: 'repo_01934c2d56787c35a8f39d2e1c4b5a6f' as UUID,
-        worktree_unique_id: 3,
+        branch_unique_id: 3,
         created_by: 'user_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
         name: 'main',
 
@@ -167,7 +167,7 @@ describe('getRepoReferenceOptions', () => {
       },
     ];
 
-    const result = getRepoReferenceOptions(repos, worktrees);
+    const result = getRepoReferenceOptions(repos, branches);
 
     expect(result).toHaveLength(5);
 
@@ -178,16 +178,16 @@ describe('getRepoReferenceOptions', () => {
     expect(result[1].type).toBe('managed');
 
     expect(result[2].label).toBe('preset-io/agor:main');
-    expect(result[2].type).toBe('managed-worktree');
+    expect(result[2].type).toBe('managed-branch');
 
     expect(result[3].label).toBe('preset-io/agor:feat-auth');
-    expect(result[3].type).toBe('managed-worktree');
+    expect(result[3].type).toBe('managed-branch');
 
     expect(result[4].label).toBe('apache/superset:main');
-    expect(result[4].type).toBe('managed-worktree');
+    expect(result[4].type).toBe('managed-branch');
   });
 
-  it('should skip orphaned worktrees without matching repo', () => {
+  it('should skip orphaned branches without matching repo', () => {
     const repos: Repo[] = [
       {
         repo_id: 'repo_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
@@ -201,11 +201,11 @@ describe('getRepoReferenceOptions', () => {
       },
     ];
 
-    const worktrees: Worktree[] = [
+    const branches: Branch[] = [
       {
-        worktree_id: 'wt_01933e4b1234a8f39d2e1c4b5a6f7c35' as UUID,
+        branch_id: 'wt_01933e4b1234a8f39d2e1c4b5a6f7c35' as UUID,
         repo_id: 'repo_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
-        worktree_unique_id: 1,
+        branch_unique_id: 1,
         created_by: 'user_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
         name: 'main',
 
@@ -221,9 +221,9 @@ describe('getRepoReferenceOptions', () => {
         needs_attention: false,
       },
       {
-        worktree_id: 'wt_orphaned1234a8f39d2e1c4b5a6f7c35' as UUID,
+        branch_id: 'wt_orphaned1234a8f39d2e1c4b5a6f7c35' as UUID,
         repo_id: 'repo_nonexistent' as UUID,
-        worktree_unique_id: 2,
+        branch_unique_id: 2,
         created_by: 'user_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
         name: 'orphan-branch',
 
@@ -240,14 +240,14 @@ describe('getRepoReferenceOptions', () => {
       },
     ];
 
-    const result = getRepoReferenceOptions(repos, worktrees);
+    const result = getRepoReferenceOptions(repos, branches);
 
     expect(result).toHaveLength(2);
-    expect(result.some((opt) => opt.worktree === 'orphan-branch')).toBe(false);
-    expect(result.some((opt) => opt.worktree === 'main')).toBe(true);
+    expect(result.some((opt) => opt.branch === 'orphan-branch')).toBe(false);
+    expect(result.some((opt) => opt.branch === 'main')).toBe(true);
   });
 
-  it('should handle repos without worktrees', () => {
+  it('should handle repos without branches', () => {
     const repos: Repo[] = [
       {
         repo_id: 'repo_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
@@ -279,7 +279,7 @@ describe('getRepoReferenceOptions', () => {
     expect(result.every((opt) => opt.type === 'managed')).toBe(true);
   });
 
-  it('should use correct ID values for repo and worktree options', () => {
+  it('should use correct ID values for repo and branch options', () => {
     const repos: Repo[] = [
       {
         repo_id: 'repo_test123' as UUID,
@@ -293,15 +293,15 @@ describe('getRepoReferenceOptions', () => {
       },
     ];
 
-    const worktrees: Worktree[] = [
+    const branches: Branch[] = [
       {
-        worktree_id: 'wt_test456' as UUID,
+        branch_id: 'wt_test456' as UUID,
         repo_id: 'repo_test123' as UUID,
-        worktree_unique_id: 1,
+        branch_unique_id: 1,
         created_by: 'user_test' as UUID,
         name: 'main',
 
-        path: '/test/worktree',
+        path: '/test/branch',
         ref: 'refs/heads/main',
         new_branch: false,
         last_commit_sha: 'abc',
@@ -314,7 +314,7 @@ describe('getRepoReferenceOptions', () => {
       },
     ];
 
-    const result = getRepoReferenceOptions(repos, worktrees);
+    const result = getRepoReferenceOptions(repos, branches);
 
     expect(result[0].value).toBe('repo_test123');
     expect(result[1].value).toBe('wt_test456');
@@ -334,15 +334,15 @@ describe('getRepoReferenceOptions', () => {
       },
     ];
 
-    const worktrees: Worktree[] = [
+    const branches: Branch[] = [
       {
-        worktree_id: 'wt_01933e4b1234a8f39d2e1c4b5a6f7c35' as UUID,
+        branch_id: 'wt_01933e4b1234a8f39d2e1c4b5a6f7c35' as UUID,
         repo_id: 'repo_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
-        worktree_unique_id: 1,
+        branch_unique_id: 1,
         created_by: 'user_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
         name: 'feature-x',
 
-        path: '/path/to/worktree',
+        path: '/path/to/branch',
         ref: 'refs/heads/feature-x',
         new_branch: true,
         last_commit_sha: 'commit123',
@@ -355,7 +355,7 @@ describe('getRepoReferenceOptions', () => {
       },
     ];
 
-    const result = getRepoReferenceOptions(repos, worktrees);
+    const result = getRepoReferenceOptions(repos, branches);
 
     expect(result[0].label).toBe('org/project');
     expect(result[0].description).toBe('My Project (bare repo)');
@@ -428,7 +428,7 @@ describe('getGroupedRepoReferenceOptions', () => {
     });
   });
 
-  it('should group worktrees under their repos', () => {
+  it('should group branches under their repos', () => {
     const repos: Repo[] = [
       {
         repo_id: 'repo_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
@@ -442,11 +442,11 @@ describe('getGroupedRepoReferenceOptions', () => {
       },
     ];
 
-    const worktrees: Worktree[] = [
+    const branches: Branch[] = [
       {
-        worktree_id: 'wt_01933e4b1234a8f39d2e1c4b5a6f7c35' as UUID,
+        branch_id: 'wt_01933e4b1234a8f39d2e1c4b5a6f7c35' as UUID,
         repo_id: 'repo_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
-        worktree_unique_id: 1,
+        branch_unique_id: 1,
         created_by: 'user_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
         name: 'main',
 
@@ -462,9 +462,9 @@ describe('getGroupedRepoReferenceOptions', () => {
         needs_attention: false,
       },
       {
-        worktree_id: 'wt_01933e4c5678a8f39d2e1c4b5a6f7c35' as UUID,
+        branch_id: 'wt_01933e4c5678a8f39d2e1c4b5a6f7c35' as UUID,
         repo_id: 'repo_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
-        worktree_unique_id: 2,
+        branch_unique_id: 2,
         created_by: 'user_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
         name: 'feat-auth',
 
@@ -481,14 +481,14 @@ describe('getGroupedRepoReferenceOptions', () => {
       },
     ];
 
-    const result = getGroupedRepoReferenceOptions(repos, worktrees);
+    const result = getGroupedRepoReferenceOptions(repos, branches);
 
     expect(result['preset-io/agor']).toHaveLength(3);
     expect(result['preset-io/agor'][0].type).toBe('managed');
-    expect(result['preset-io/agor'][1].type).toBe('managed-worktree');
-    expect(result['preset-io/agor'][2].type).toBe('managed-worktree');
-    expect(result['preset-io/agor'][1].worktree).toBe('main');
-    expect(result['preset-io/agor'][2].worktree).toBe('feat-auth');
+    expect(result['preset-io/agor'][1].type).toBe('managed-branch');
+    expect(result['preset-io/agor'][2].type).toBe('managed-branch');
+    expect(result['preset-io/agor'][1].branch).toBe('main');
+    expect(result['preset-io/agor'][2].branch).toBe('feat-auth');
   });
 
   it('should maintain separate groups for multiple repos', () => {
@@ -515,11 +515,11 @@ describe('getGroupedRepoReferenceOptions', () => {
       },
     ];
 
-    const worktrees: Worktree[] = [
+    const branches: Branch[] = [
       {
-        worktree_id: 'wt_agor_main' as UUID,
+        branch_id: 'wt_agor_main' as UUID,
         repo_id: 'repo_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
-        worktree_unique_id: 1,
+        branch_unique_id: 1,
         created_by: 'user_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
         name: 'main',
 
@@ -535,9 +535,9 @@ describe('getGroupedRepoReferenceOptions', () => {
         needs_attention: false,
       },
       {
-        worktree_id: 'wt_superset_main' as UUID,
+        branch_id: 'wt_superset_main' as UUID,
         repo_id: 'repo_01934c2d56787c35a8f39d2e1c4b5a6f' as UUID,
-        worktree_unique_id: 2,
+        branch_unique_id: 2,
         created_by: 'user_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
         name: 'main',
 
@@ -554,7 +554,7 @@ describe('getGroupedRepoReferenceOptions', () => {
       },
     ];
 
-    const result = getGroupedRepoReferenceOptions(repos, worktrees);
+    const result = getGroupedRepoReferenceOptions(repos, branches);
 
     expect(result['preset-io/agor']).toHaveLength(2);
     expect(result['apache/superset']).toHaveLength(2);
@@ -562,7 +562,7 @@ describe('getGroupedRepoReferenceOptions', () => {
     expect(result['apache/superset'][1].label).toBe('apache/superset:main');
   });
 
-  it('should skip orphaned worktrees without matching repo', () => {
+  it('should skip orphaned branches without matching repo', () => {
     const repos: Repo[] = [
       {
         repo_id: 'repo_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
@@ -576,11 +576,11 @@ describe('getGroupedRepoReferenceOptions', () => {
       },
     ];
 
-    const worktrees: Worktree[] = [
+    const branches: Branch[] = [
       {
-        worktree_id: 'wt_valid' as UUID,
+        branch_id: 'wt_valid' as UUID,
         repo_id: 'repo_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
-        worktree_unique_id: 1,
+        branch_unique_id: 1,
         created_by: 'user_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
         name: 'main',
 
@@ -596,9 +596,9 @@ describe('getGroupedRepoReferenceOptions', () => {
         needs_attention: false,
       },
       {
-        worktree_id: 'wt_orphan' as UUID,
+        branch_id: 'wt_orphan' as UUID,
         repo_id: 'repo_nonexistent' as UUID,
-        worktree_unique_id: 2,
+        branch_unique_id: 2,
         created_by: 'user_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
         name: 'orphan',
 
@@ -615,14 +615,14 @@ describe('getGroupedRepoReferenceOptions', () => {
       },
     ];
 
-    const result = getGroupedRepoReferenceOptions(repos, worktrees);
+    const result = getGroupedRepoReferenceOptions(repos, branches);
 
     expect(result['preset-io/agor']).toHaveLength(2);
     expect(Object.keys(result)).toHaveLength(1);
-    expect(result['preset-io/agor'].some((opt) => opt.worktree === 'orphan')).toBe(false);
+    expect(result['preset-io/agor'].some((opt) => opt.branch === 'orphan')).toBe(false);
   });
 
-  it('should handle repos without worktrees', () => {
+  it('should handle repos without branches', () => {
     const repos: Repo[] = [
       {
         repo_id: 'repo_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
@@ -654,7 +654,7 @@ describe('getGroupedRepoReferenceOptions', () => {
     expect(result['apache/superset'][0].type).toBe('managed');
   });
 
-  it('should create group even if only worktrees exist for that repo', () => {
+  it('should create group even if only branches exist for that repo', () => {
     const repos: Repo[] = [
       {
         repo_id: 'repo_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
@@ -668,11 +668,11 @@ describe('getGroupedRepoReferenceOptions', () => {
       },
     ];
 
-    const worktrees: Worktree[] = [
+    const branches: Branch[] = [
       {
-        worktree_id: 'wt_01933e4b1234a8f39d2e1c4b5a6f7c35' as UUID,
+        branch_id: 'wt_01933e4b1234a8f39d2e1c4b5a6f7c35' as UUID,
         repo_id: 'repo_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
-        worktree_unique_id: 1,
+        branch_unique_id: 1,
         created_by: 'user_01933e4a7b897c35a8f39d2e1c4b5a6f' as UUID,
         name: 'main',
 
@@ -689,7 +689,7 @@ describe('getGroupedRepoReferenceOptions', () => {
       },
     ];
 
-    const result = getGroupedRepoReferenceOptions(repos, worktrees);
+    const result = getGroupedRepoReferenceOptions(repos, branches);
 
     expect(result['preset-io/agor']).toBeDefined();
     expect(result['preset-io/agor']).toHaveLength(2);
@@ -709,11 +709,11 @@ describe('getGroupedRepoReferenceOptions', () => {
       },
     ];
 
-    const worktrees: Worktree[] = [
+    const branches: Branch[] = [
       {
-        worktree_id: 'wt_test' as UUID,
+        branch_id: 'wt_test' as UUID,
         repo_id: 'repo_test' as UUID,
-        worktree_unique_id: 1,
+        branch_unique_id: 1,
         created_by: 'user_test' as UUID,
         name: 'dev',
 
@@ -730,7 +730,7 @@ describe('getGroupedRepoReferenceOptions', () => {
       },
     ];
 
-    const result = getGroupedRepoReferenceOptions(repos, worktrees);
+    const result = getGroupedRepoReferenceOptions(repos, branches);
 
     const bareOption = result['test/repo'][0];
     expect(bareOption.label).toBe('test/repo');
@@ -739,13 +739,13 @@ describe('getGroupedRepoReferenceOptions', () => {
     expect(bareOption.slug).toBe('test/repo');
     expect(bareOption.description).toBe('Test (bare repo)');
 
-    const worktreeOption = result['test/repo'][1];
-    expect(worktreeOption.label).toBe('test/repo:dev');
-    expect(worktreeOption.value).toBe('wt_test');
-    expect(worktreeOption.type).toBe('managed-worktree');
-    expect(worktreeOption.slug).toBe('test/repo');
-    expect(worktreeOption.worktree).toBe('dev');
-    expect(worktreeOption.description).toBe('Test - dev (refs/heads/dev)');
+    const branchOption = result['test/repo'][1];
+    expect(branchOption.label).toBe('test/repo:dev');
+    expect(branchOption.value).toBe('wt_test');
+    expect(branchOption.type).toBe('managed-branch');
+    expect(branchOption.slug).toBe('test/repo');
+    expect(branchOption.branch).toBe('dev');
+    expect(branchOption.description).toBe('Test - dev (refs/heads/dev)');
   });
 });
 

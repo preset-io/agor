@@ -19,7 +19,7 @@ import type {
   RepoEnvironment,
   RepoEnvironmentConfigV1,
   RepoEnvironmentVariant,
-} from '../types/worktree.js';
+} from '../types/branch.js';
 import * as yaml from '../yaml/index.js';
 
 /**

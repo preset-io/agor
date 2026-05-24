@@ -28,7 +28,7 @@ It's the **static** message API. It mounts outside the React tree, so it does **
 - **Theme integration.** Themed via `App.useApp()` under the hood.
 - **Copy-to-clipboard on every toast.** A subtle copy icon appears at the right of the message. Clicking it copies the rendered text — handy for IDs, error traces, and anything else worth pasting into a bug report. No need to reach for a separate `<CopyButton>` inside the toast.
 - **Standardized durations.** Success/info: 3s. Warning: 4s. Error: 6s (longer so users can read and copy). Override per-call with `{ duration }` if you have a reason.
-- **Keyed loading→success/error.** Pass `{ key: 'download' }` to both `showLoading(...)` and the follow-up `showSuccess(...)` / `showError(...)`; antd replaces the toast in place instead of stacking. See `apps/agor-ui/src/components/WorktreeModal/tabs/FilesTab.tsx`.
+- **Keyed loading→success/error.** Pass `{ key: 'download' }` to both `showLoading(...)` and the follow-up `showSuccess(...)` / `showError(...)`; antd replaces the toast in place instead of stacking. See `apps/agor-ui/src/components/BranchModal/tabs/FilesTab.tsx`.
 - **Stable references.** The returned helpers (`showSuccess`, `showError`, etc.) are memoized over antd's stable `message` instance, so they're safe to put in `useCallback`/`useEffect` dep arrays without causing churn.
 
 ---
@@ -38,12 +38,14 @@ It's the **static** message API. It mounts outside the React tree, so it does **
 Notifications aren't built yet. There's an in-flight design doc on the `design-notification-system` branch that codifies the split below; this file is the canonical source on the main branch until that lands.
 
 > **Use a toast (`useThemedMessage`) when:**
+>
 > - The user just took an action and you're confirming it ("Saved", "Copied").
-> - There's an error tied to the user's *current* action that won't be retried automatically.
+> - There's an error tied to the user's _current_ action that won't be retried automatically.
 > - The information has no value 5 minutes from now.
 >
 > **Use a notification when:**
-> - The event happened *to* the user, not *because of* the user (an agent finished, a teammate tagged them).
+>
+> - The event happened _to_ the user, not _because of_ the user (an agent finished, a teammate tagged them).
 > - The user might miss it because they're on another board / tab / device.
 > - It needs to be actionable later, not just acknowledged now.
 

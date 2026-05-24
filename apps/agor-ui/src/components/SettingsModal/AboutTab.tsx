@@ -61,7 +61,7 @@ interface HealthInfo {
     method: string | null;
   };
   execution?: {
-    worktreeRbac: boolean;
+    branchRbac: boolean;
     unixUserMode: UnixUserMode;
   };
   security?: {
@@ -235,7 +235,7 @@ export const AboutTab: React.FC<AboutTabProps> = ({
                   {healthInfo?.execution && (
                     <>
                       <Descriptions.Item label="Branch RBAC">
-                        {healthInfo.execution.worktreeRbac ? (
+                        {healthInfo.execution.branchRbac ? (
                           <span style={{ color: '#52c41a' }}>🛡️ Enabled</span>
                         ) : (
                           <span style={{ color: '#faad14' }}>⚠️ Disabled (open access)</span>

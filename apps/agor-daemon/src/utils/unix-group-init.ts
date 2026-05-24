@@ -1,5 +1,5 @@
 /**
- * Daemon-side Unix group initialization for repos and worktrees.
+ * Daemon-side Unix group initialization for repos and branches.
  *
  * These functions were previously called directly inside the executor process
  * (packages/executor/src/commands/unix.ts). Moving them to the daemon ensures
@@ -8,7 +8,7 @@
  *
  * The executor now calls these via Feathers RPC:
  *   client.service('repos').initializeUnixGroup(...)
- *   client.service('worktrees').initializeUnixGroup(...)
+ *   client.service('branches').initializeUnixGroup(...)
  */
 
 import { exec } from 'node:child_process';
@@ -17,11 +17,11 @@ import { getDaemonUser } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
 import { shortId, UsersRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { RepoID, WorktreeID } from '@agor/core/types';
+import type { BranchID, RepoID } from '@agor/core/types';
 import {
+  generateBranchGroupName,
   generateRepoGroupName,
-  generateWorktreeGroupName,
-  getWorktreePermissionMode,
+  getBranchPermissionMode,
   REPO_GIT_PERMISSION_MODE,
   UnixGroupCommands,
 } from '@agor/core/unix';
@@ -129,24 +129,24 @@ export async function initializeRepoUnixGroup(
   return groupName;
 }
 
-// ── Worktree group init ──────────────────────────────────────────────────
+// ── Branch group init ──────────────────────────────────────────────────
 
-export async function initializeWorktreeUnixGroup(
+export async function initializeBranchUnixGroup(
   db: Database,
   app: Application,
-  worktreeId: string,
+  branchId: string,
   othersAccess: 'none' | 'read' | 'write'
 ): Promise<string> {
-  const groupName = generateWorktreeGroupName(worktreeId as WorktreeID);
+  const groupName = generateBranchGroupName(branchId as BranchID);
   const daemonUser = getDaemonUser();
 
   console.log(
-    `[unix-group-init] Creating worktree group ${groupName} for worktree ${shortId(worktreeId)}`
+    `[unix-group-init] Creating branch group ${groupName} for branch ${shortId(branchId)}`
   );
 
-  // Look up worktree from DB
-  const worktree = await app.service('worktrees').get(worktreeId);
-  const worktreePath = worktree.path;
+  // Look up branch from DB
+  const branch = await app.service('branches').get(branchId);
+  const branchPath = branch.path;
 
   // Create group if it doesn't exist
   const exists = await checkCommand(UnixGroupCommands.groupExists(groupName));
@@ -155,29 +155,27 @@ export async function initializeWorktreeUnixGroup(
     console.log(`[unix-group-init] Created group ${groupName}`);
   }
 
-  // Set permissions on worktree directory
-  const permissionMode = getWorktreePermissionMode(othersAccess);
-  const permCommands = UnixGroupCommands.setDirectoryGroup(worktreePath, groupName, permissionMode);
+  // Set permissions on branch directory
+  const permissionMode = getBranchPermissionMode(othersAccess);
+  const permCommands = UnixGroupCommands.setDirectoryGroup(branchPath, groupName, permissionMode);
   await runCommands(permCommands);
 
   // Set explicit user ACL for daemon
   if (daemonUser) {
-    await runCommands(UnixGroupCommands.setUserAcl(worktreePath, daemonUser));
+    await runCommands(UnixGroupCommands.setUserAcl(branchPath, daemonUser));
   }
 
-  // Add daemon user to worktree group
+  // Add daemon user to branch group
   if (daemonUser) {
     const inGroup = await checkCommand(UnixGroupCommands.isUserInGroup(daemonUser, groupName));
     if (!inGroup) {
       await runCommand(UnixGroupCommands.addUserToGroup(daemonUser, groupName));
-      console.log(
-        `[unix-group-init] Added daemon user ${daemonUser} to worktree group ${groupName}`
-      );
+      console.log(`[unix-group-init] Added daemon user ${daemonUser} to branch group ${groupName}`);
     }
   }
 
-  // Add creator to worktree group
-  const creatorId = worktree.created_by;
+  // Add creator to branch group
+  const creatorId = branch.created_by;
   if (creatorId) {
     try {
       const userRepo = new UsersRepository(db);
@@ -190,12 +188,12 @@ export async function initializeWorktreeUnixGroup(
         if (!inGroup) {
           await runCommand(UnixGroupCommands.addUserToGroup(creatorUnixUsername, groupName));
           console.log(
-            `[unix-group-init] Added creator ${creatorUnixUsername} to worktree group ${groupName}`
+            `[unix-group-init] Added creator ${creatorUnixUsername} to branch group ${groupName}`
           );
         }
 
         // Also add creator to repo group for .git/ access
-        const repo = await app.service('repos').get(worktree.repo_id);
+        const repo = await app.service('repos').get(branch.repo_id);
         const repoUnixGroup = repo.unix_group;
         if (repoUnixGroup) {
           const inRepoGroup = await checkCommand(
@@ -211,32 +209,30 @@ export async function initializeWorktreeUnixGroup(
       }
     } catch (error) {
       console.warn(
-        `[unix-group-init] Could not add creator to worktree group:`,
+        `[unix-group-init] Could not add creator to branch group:`,
         error instanceof Error ? error.message : String(error)
       );
     }
   }
 
   // Fix permissions on repo's .git/worktrees/<name>/ directory
-  const repo = await app.service('repos').get(worktree.repo_id);
+  const repo = await app.service('repos').get(branch.repo_id);
   if (repo.unix_group) {
-    const worktreeGitDir = `${repo.local_path}/.git/worktrees/${worktree.name}`;
+    const branchGitDir = `${repo.local_path}/.git/worktrees/${branch.name}`;
     const gitDirPermCommands = UnixGroupCommands.setDirectoryGroup(
-      worktreeGitDir,
+      branchGitDir,
       repo.unix_group,
       REPO_GIT_PERMISSION_MODE
     );
     await runCommands(gitDirPermCommands);
     if (daemonUser) {
-      await runCommands(UnixGroupCommands.setUserAcl(worktreeGitDir, daemonUser));
+      await runCommands(UnixGroupCommands.setUserAcl(branchGitDir, daemonUser));
     }
   }
 
-  // Update worktree record with group name
-  await app.service('worktrees').patch(worktreeId, { unix_group: groupName });
-  console.log(
-    `[unix-group-init] Updated worktree ${shortId(worktreeId)} with unix_group=${groupName}`
-  );
+  // Update branch record with group name
+  await app.service('branches').patch(branchId, { unix_group: groupName });
+  console.log(`[unix-group-init] Updated branch ${shortId(branchId)} with unix_group=${groupName}`);
 
   return groupName;
 }

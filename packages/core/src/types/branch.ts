@@ -1,12 +1,12 @@
-// src/types/worktree.ts
-import type { BoardID, UUID, WorktreeID } from './id';
-import type { WorktreeName } from './repo';
+// src/types/branch.ts
+import type { BoardID, BranchID, UUID } from './id';
+import type { BranchName } from './repo';
 
 /**
- * Git worktree - First-class entity for isolated development contexts
+ * Git branch - First-class entity for isolated development contexts
  *
- * Worktrees are persistent work contexts that outlive individual sessions.
- * Each worktree has:
+ * Branches are persistent work contexts that outlive individual sessions.
+ * Each branch has:
  * - Isolated git working directory and branch
  * - Environment configuration and runtime state
  * - Work metadata (issue, PR, notes)
@@ -14,27 +14,27 @@ import type { WorktreeName } from './repo';
  *
  * Relationship to sessions:
  * - Sessions = ephemeral conversations with AI agents
- * - Worktrees = persistent work contexts (git + environment + metadata)
- * - Multiple sessions can work on the same worktree over time
+ * - Branches = persistent work contexts (git + environment + metadata)
+ * - Multiple sessions can work on the same branch over time
  */
-export interface Worktree {
+export interface Branch {
   // ===== Identity =====
 
-  /** Unique worktree identifier (UUIDv7) */
-  worktree_id: WorktreeID;
+  /** Unique branch identifier (UUIDv7) */
+  branch_id: BranchID;
 
-  /** Repository this worktree belongs to */
+  /** Repository this branch belongs to */
   repo_id: UUID;
 
   /**
-   * Unique numeric ID for this worktree (auto-assigned, sequential)
+   * Unique numeric ID for this branch (auto-assigned, sequential)
    *
    * Used in environment templates for port allocation:
-   * Example: {{add 9000 WORKTREE_UNIQUE_ID}} → 9001, 9002, 9003, ...
+   * Example: {{add 9000 BRANCH_UNIQUE_ID}} → 9001, 9002, 9003, ...
    *
-   * Auto-incremented when worktree is created (1, 2, 3, ...)
+   * Auto-incremented when branch is created (1, 2, 3, ...)
    */
-  worktree_unique_id: number;
+  branch_unique_id: number;
 
   /** Start command - initialized from repo template, then user-editable (e.g., "pnpm dev") */
   start_command?: string;
@@ -55,14 +55,14 @@ export interface Worktree {
   logs_command?: string;
 
   /**
-   * Name of the environment variant this worktree is currently rendered from.
+   * Name of the environment variant this branch is currently rendered from.
    *
    * References a key under `repo.environment.variants` at the time the
-   * worktree's command fields were last rendered. Used by the UI to show
+   * branch's command fields were last rendered. Used by the UI to show
    * which variant is "active" and by the admin-only re-render flow to know
    * the last-rendered variant.
    *
-   * null/undefined means "no variant tracked" (pre-v2 / legacy worktrees)
+   * null/undefined means "no variant tracked" (pre-v2 / legacy branches)
    * or that the repo has no environment config.
    */
   environment_variant?: string;
@@ -71,19 +71,19 @@ export interface Worktree {
   created_at: string;
   updated_at: string;
 
-  /** User who created this worktree */
+  /** User who created this branch */
   created_by: UUID;
 
   /**
-   * External/user-facing URL for viewing this worktree in the UI.
+   * External/user-facing URL for viewing this branch in the UI.
    *
    * Computed property added by the repository layer. Optional —
    * undefined on inputs / fixtures constructed by hand; on read paths
    * from the repo it's always present as `string | null` (null when
-   * the worktree isn't placed on a board, since the share link has
+   * the branch isn't placed on a board, since the share link has
    * nothing to switch to).
-   * Format: `{baseUrl}/ui/w/{worktreeShortId}/`
-   * Visiting the URL resolves the worktree, switches to its board,
+   * Format: `{baseUrl}/ui/w/{branchShortId}/`
+   * Visiting the URL resolves the branch, switches to its board,
    * and recenters the canvas on its card. See
    * `apps/agor-ui/src/hooks/useUrlState.ts`.
    */
@@ -92,7 +92,7 @@ export interface Worktree {
   // ===== Materialized (for indexes/queries) =====
 
   /**
-   * Worktree name (slug format)
+   * Branch name (slug format)
    *
    * Used for:
    * - Directory name: ~/.agor/worktrees/{repo-slug}/{name}
@@ -101,7 +101,7 @@ export interface Worktree {
    *
    * Examples: "main", "feat-auth", "exp-rewrite"
    */
-  name: WorktreeName;
+  name: BranchName;
 
   /**
    * Git ref (branch/tag/commit) currently checked out
@@ -121,7 +121,7 @@ export interface Worktree {
   // ===== File System =====
 
   /**
-   * Absolute path to worktree directory
+   * Absolute path to branch directory
    *
    * Example: "/Users/max/.agor/worktrees/myapp/feat-auth"
    */
@@ -130,21 +130,21 @@ export interface Worktree {
   // ===== Git State (Current) =====
 
   /**
-   * Branch this worktree diverged from
+   * Branch this branch diverged from
    *
    * Example: "main" (if this is a feature branch)
    */
   base_ref?: string;
 
   /**
-   * SHA at worktree creation (base commit)
+   * SHA at branch creation (base commit)
    *
    * Tracks where this branch started.
    */
   base_sha?: string;
 
   /**
-   * Latest commit SHA in this worktree
+   * Latest commit SHA in this branch
    *
    * Updated when sessions make commits.
    */
@@ -160,7 +160,7 @@ export interface Worktree {
   /**
    * Whether this ref is a new branch created by Agor
    *
-   * true:  Branch was created during worktree creation
+   * true:  Branch was created during branch creation
    * false: Branch existed before (tracked from remote or local)
    */
   new_branch: boolean;
@@ -168,18 +168,18 @@ export interface Worktree {
   // ===== Work Context (Persistent Across Sessions) =====
 
   /**
-   * Board this worktree belongs to (if any)
+   * Board this branch belongs to (if any)
    *
-   * Worktrees can live on ONE board (not many).
-   * Sessions within the worktree are accessed through the worktree card.
+   * Branches can live on ONE board (not many).
+   * Sessions within the branch are accessed through the branch card.
    */
   board_id?: BoardID;
 
   /**
    * Associated GitHub/GitLab issue
    *
-   * Links worktree to issue it addresses.
-   * Worktree-level (not session) because work persists across sessions.
+   * Links branch to issue it addresses.
+   * Branch-level (not session) because work persists across sessions.
    *
    * Example: "https://github.com/org/repo/issues/123"
    */
@@ -188,7 +188,7 @@ export interface Worktree {
   /**
    * Associated pull request
    *
-   * Links worktree to PR containing changes.
+   * Links branch to PR containing changes.
    * Auto-populated when user creates PR.
    *
    * Example: "https://github.com/org/repo/pull/42"
@@ -196,7 +196,7 @@ export interface Worktree {
   pull_request_url?: string;
 
   /**
-   * Freeform notes about this worktree
+   * Freeform notes about this branch
    *
    * User can document:
    * - What they're working on
@@ -214,14 +214,14 @@ export interface Worktree {
    * Environment instance (if repo has environment config)
    *
    * Tracks runtime state, process info, variable values.
-   * Each worktree gets its own environment instance with unique ports.
+   * Each branch gets its own environment instance with unique ports.
    */
-  environment_instance?: WorktreeEnvironmentInstance;
+  environment_instance?: BranchEnvironmentInstance;
 
   // ===== Sessions =====
 
   /**
-   * Last time this worktree was used
+   * Last time this branch was used
    *
    * Updated when sessions start/complete.
    */
@@ -240,11 +240,11 @@ export interface Worktree {
   // ===== MCP Server Configuration =====
 
   /**
-   * Default MCP servers to attach to new sessions in this worktree
+   * Default MCP servers to attach to new sessions in this branch
    *
    * When creating a session, MCP servers are resolved with this priority:
    * 1. Caller explicitly specifies mcpServerIds → use those
-   * 2. Worktree mcp_server_ids → use these
+   * 2. Branch mcp_server_ids → use these
    * 3. User defaults → fallback
    *
    * Not used during spawn (spawn inherits from parent session).
@@ -255,21 +255,21 @@ export interface Worktree {
   // ===== UI State =====
 
   /**
-   * Whether this worktree needs attention (highlighted state)
+   * Whether this branch needs attention (highlighted state)
    *
    * Set to true when:
-   * - Worktree is newly created
-   * - Any session in the worktree has ready_for_prompt=true
+   * - Branch is newly created
+   * - Any session in the branch has ready_for_prompt=true
    *
-   * Cleared when user interacts with the worktree card.
-   * Used to draw attention to new or ready worktrees on the board.
+   * Cleared when user interacts with the branch card.
+   * Used to draw attention to new or ready branches on the board.
    */
   needs_attention: boolean;
 
   // ===== Scheduler Configuration =====
 
   /**
-   * Whether this worktree has an active schedule
+   * Whether this branch has an active schedule
    *
    * Materialized for efficient scheduler queries.
    * Only enabled schedules are evaluated during scheduler ticks.
@@ -311,14 +311,14 @@ export interface Worktree {
    * Contains template, agent config, retention policy.
    * Only present if schedule_enabled = true.
    */
-  schedule?: WorktreeScheduleConfig;
+  schedule?: BranchScheduleConfig;
 
   // ===== Archive State =====
 
   /**
-   * Whether this worktree is archived (soft deleted)
+   * Whether this branch is archived (soft deleted)
    *
-   * Archived worktrees:
+   * Archived branches:
    * - Hidden from board display
    * - Metadata preserved in database
    * - Can be unarchived later
@@ -326,12 +326,12 @@ export interface Worktree {
   archived: boolean;
 
   /**
-   * When this worktree was archived (if archived)
+   * When this branch was archived (if archived)
    */
   archived_at?: string;
 
   /**
-   * User who archived this worktree
+   * User who archived this branch
    */
   archived_by?: UUID;
 
@@ -340,13 +340,13 @@ export interface Worktree {
    *
    * Creation states:
    * - 'creating': DB record created, git worktree add in progress
-   * - 'ready': Worktree fully created and ready to use
-   * - 'failed': Worktree creation failed (git worktree add error)
+   * - 'ready': Branch fully created and ready to use
+   * - 'failed': Branch creation failed (git worktree add error)
    *
-   * Archive states (set when worktree is archived):
+   * Archive states (set when branch is archived):
    * - 'preserved': Filesystem left untouched
    * - 'cleaned': git clean -fdx run (removes node_modules, build artifacts)
-   * - 'deleted': Entire worktree directory deleted from disk
+   * - 'deleted': Entire branch directory deleted from disk
    *
    * Note: null/undefined means 'ready' for backward compatibility
    */
@@ -355,7 +355,7 @@ export interface Worktree {
   /**
    * Error message when filesystem_status is 'failed'
    *
-   * Contains the reason why worktree creation failed (e.g., git worktree add error).
+   * Contains the reason why branch creation failed (e.g., git worktree add error).
    * Cleared when status transitions away from 'failed'.
    */
   error_message?: string;
@@ -365,20 +365,20 @@ export interface Worktree {
   /**
    * Permission level for non-owners
    *
-   * - 'none': No access (worktree is completely private to owners)
-   * - 'view': Can read worktrees/sessions/tasks/messages
+   * - 'none': No access (branch is completely private to owners)
+   * - 'view': Can read branches/sessions/tasks/messages
    * - 'session': View + can create new sessions (running as own identity) and prompt own sessions
    * - 'prompt': View + can create tasks/messages in ANY session (run agents as session creator's identity)
    * - 'all': Full control (create/patch/delete sessions)
    *
    * Note: Owners always have 'all' permission regardless of this setting.
    */
-  others_can?: WorktreePermissionLevel;
+  others_can?: BranchPermissionLevel;
 
   // ===== RBAC: OS-layer permissions (unix-user-modes.md) =====
 
   /**
-   * Unix group for this worktree (if Unix modes enabled)
+   * Unix group for this branch (if Unix modes enabled)
    *
    * Format: 'agor_wt_<short-id>'
    * Owners are added to this group for filesystem access.
@@ -388,8 +388,8 @@ export interface Worktree {
   /**
    * Filesystem access level for non-owners ("others" in Unix terms)
    *
-   * Controls OS-level permissions for users who are NOT worktree owners.
-   * Worktree owners always have full access (7 = rwx) via group membership.
+   * Controls OS-level permissions for users who are NOT branch owners.
+   * Branch owners always have full access (7 = rwx) via group membership.
    *
    * - 'none': Others get no access (chmod 2770 → drwxrws---)
    * - 'read': Others can read files (chmod 2775 → drwxrwsr-x)
@@ -400,7 +400,7 @@ export interface Worktree {
   others_fs_access?: 'none' | 'read' | 'write';
 
   // ===== Branch Storage Mode =====
-  // See docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.
+  // See docs/internal/branch-vs-branch-migration-analysis-2026-05-20.md.
 
   /**
    * How this branch's filesystem is materialised.
@@ -414,7 +414,7 @@ export interface Worktree {
    *   the cross-branch credential/config leak vectors (Layer A defenses are
    *   then belt-and-braces, not load-bearing).
    *
-   * Selected at create time. Existing rows default to 'worktree'.
+   * Selected at create time. Existing rows default to 'branch'.
    */
   storage_mode?: 'worktree' | 'clone';
 
@@ -453,24 +453,24 @@ export interface Worktree {
 }
 
 /**
- * Ordered permission levels for worktree RBAC (least → most privileged).
+ * Ordered permission levels for branch RBAC (least → most privileged).
  *
  * Single source of truth — derive types, zod schemas, DB enums, and rank maps from this.
  */
-export const WORKTREE_PERMISSION_LEVELS = ['none', 'view', 'session', 'prompt', 'all'] as const;
+export const BRANCH_PERMISSION_LEVELS = ['none', 'view', 'session', 'prompt', 'all'] as const;
 
 /**
  * Permission level type (for app-layer RBAC)
  */
-export type WorktreePermissionLevel = (typeof WORKTREE_PERMISSION_LEVELS)[number];
+export type BranchPermissionLevel = (typeof BRANCH_PERMISSION_LEVELS)[number];
 
 /**
- * Worktree schedule configuration
+ * Branch schedule configuration
  *
  * Defines how and when to automatically spawn sessions.
  * Schedules are evaluated in UTC and use Handlebars templates for prompts.
  */
-export interface WorktreeScheduleConfig {
+export interface BranchScheduleConfig {
   /**
    * IANA timezone for cron evaluation
    *
@@ -484,13 +484,13 @@ export interface WorktreeScheduleConfig {
    * Handlebars template for prompt
    *
    * Available variables:
-   * - {{worktree.name}}, {{worktree.ref}}
-   * - {{worktree.issue_url}}, {{worktree.pull_request_url}}
-   * - {{worktree.notes}}, {{worktree.custom_context.*}}
+   * - {{branch.name}}, {{branch.ref}}
+   * - {{branch.issue_url}}, {{branch.pull_request_url}}
+   * - {{branch.notes}}, {{branch.custom_context.*}}
    * - {{board.name}}, {{board.custom_context.*}}
    * - {{schedule.cron}}, {{schedule.scheduled_time}}
    *
-   * Example: "Check PR {{worktree.pull_request_url}} for new comments"
+   * Example: "Check PR {{branch.pull_request_url}} for new comments"
    */
   prompt_template: string;
 
@@ -511,14 +511,14 @@ export interface WorktreeScheduleConfig {
 
   /**
    * Whether the schedule may spawn a new session while another session is
-   * already actively running in the same worktree.
+   * already actively running in the same branch.
    *
    * Applies to BOTH the cron tick path and the "execute now" manual trigger.
    *
    * Default: false (concurrent runs blocked — if a session is active, new runs are skipped).
    *
    * "Active" means a session with status RUNNING / STOPPING / AWAITING_PERMISSION /
-   * AWAITING_INPUT in the same worktree. IDLE / COMPLETED / FAILED / TIMED_OUT do
+   * AWAITING_INPUT in the same branch. IDLE / COMPLETED / FAILED / TIMED_OUT do
    * not count as active.
    */
   allow_concurrent_runs?: boolean;
@@ -566,14 +566,14 @@ export interface WorktreeScheduleConfig {
 }
 
 /**
- * Worktree environment instance
+ * Branch environment instance
  *
- * Runtime state for a worktree's environment (dev server, Docker, etc.).
+ * Runtime state for a branch's environment (dev server, Docker, etc.).
  * Template variables are resolved from:
- * - Built-in: WORKTREE_UNIQUE_ID, WORKTREE_NAME, WORKTREE_PATH, REPO_SLUG
- * - Custom: worktree.custom_context (JSON object)
+ * - Built-in: BRANCH_UNIQUE_ID, BRANCH_NAME, BRANCH_PATH, REPO_SLUG
+ * - Custom: branch.custom_context (JSON object)
  */
-export interface WorktreeEnvironmentInstance {
+export interface BranchEnvironmentInstance {
   /**
    * Current environment status
    */
@@ -637,11 +637,11 @@ export interface WorktreeEnvironmentInstance {
  * {@link RepoEnvironment}.
  *
  * Template context (always available):
- * - {{worktree.unique_id}} - Auto-assigned unique number (1, 2, 3, ...)
- * - {{worktree.name}} - Worktree name (e.g., "feat-auth")
- * - {{worktree.path}} - Absolute path to worktree directory
+ * - {{branch.unique_id}} - Auto-assigned unique number (1, 2, 3, ...)
+ * - {{branch.name}} - Branch name (e.g., "feat-auth")
+ * - {{branch.path}} - Absolute path to branch directory
  * - {{repo.slug}} - Repository slug (e.g., "agor")
- * - {{custom.*}} - Any custom context from worktree.custom_context
+ * - {{custom.*}} - Any custom context from branch.custom_context
  * - {{add a b}}, {{sub a b}}, {{mul a b}} - Math helpers
  */
 export interface RepoEnvironmentConfigV1 {
@@ -649,9 +649,9 @@ export interface RepoEnvironmentConfigV1 {
    * Command to start environment (Handlebars template)
    *
    * Examples:
-   * - "docker compose -p {{worktree.name}} up -d"
-   * - "UI_PORT={{add 9000 worktree.unique_id}} DAEMON_PORT={{add 8000 worktree.unique_id}} pnpm dev"
-   * - "PORT={{add 5000 worktree.unique_id}} npm start"
+   * - "docker compose -p {{branch.name}} up -d"
+   * - "UI_PORT={{add 9000 branch.unique_id}} DAEMON_PORT={{add 8000 branch.unique_id}} pnpm dev"
+   * - "PORT={{add 5000 branch.unique_id}} npm start"
    */
   up_command: string;
 
@@ -659,8 +659,8 @@ export interface RepoEnvironmentConfigV1 {
    * Command to stop environment (Handlebars template)
    *
    * Examples:
-   * - "docker compose -p {{worktree.name}} down"
-   * - "pkill -f 'vite.*{{add 9000 worktree.unique_id}}'"
+   * - "docker compose -p {{branch.name}} down"
+   * - "pkill -f 'vite.*{{add 9000 branch.unique_id}}'"
    */
   down_command: string;
 
@@ -671,8 +671,8 @@ export interface RepoEnvironmentConfigV1 {
    * Requires user confirmation before execution.
    *
    * Examples:
-   * - "docker compose -p {{worktree.name}} down -v"
-   * - "rm -rf node_modules .next .cache && docker compose -p {{worktree.name}} down -v"
+   * - "docker compose -p {{branch.name}} down -v"
+   * - "rm -rf node_modules .next .cache && docker compose -p {{branch.name}} down -v"
    */
   nuke_command?: string;
 
@@ -685,7 +685,7 @@ export interface RepoEnvironmentConfigV1 {
     /**
      * URL template for HTTP checks
      *
-     * Example: "http://localhost:{{add 9000 worktree.unique_id}}/health"
+     * Example: "http://localhost:{{add 9000 branch.unique_id}}/health"
      */
     url_template?: string;
   };
@@ -694,7 +694,7 @@ export interface RepoEnvironmentConfigV1 {
    * App URL template (Handlebars template)
    * URL to access the running application
    *
-   * Example: "http://localhost:{{add 5000 worktree.unique_id}}"
+   * Example: "http://localhost:{{add 5000 branch.unique_id}}"
    */
   app_url_template?: string;
 
@@ -706,9 +706,9 @@ export interface RepoEnvironmentConfigV1 {
    * Output is limited to 100 lines / 100KB for safety.
    *
    * Examples:
-   * - "docker compose -p {{worktree.name}} logs --tail=100"
-   * - "tail -n 100 /var/log/app-{{worktree.unique_id}}.log"
-   * - "kubectl logs deployment/{{worktree.name}} --tail=100"
+   * - "docker compose -p {{branch.name}} logs --tail=100"
+   * - "tail -n 100 /var/log/app-{{branch.unique_id}}.log"
+   * - "kubectl logs deployment/{{branch.name}} --tail=100"
    */
   logs_command?: string;
 }
@@ -782,7 +782,7 @@ export interface RepoEnvironmentVariant {
  * Repository environment configuration (v2).
  *
  * Replaces the flat v1 {@link RepoEnvironmentConfigV1} with a set of
- * named variants. `default` points at the variant used when a worktree
+ * named variants. `default` points at the variant used when a branch
  * is created or when no variant is explicitly chosen.
  *
  * `template_overrides` is a deployment-local, DB-only deep tree that is
@@ -827,10 +827,10 @@ export type RepoEnvironmentConfig = RepoEnvironmentConfigV1;
 // ===== Assistants =====
 
 /**
- * Configuration for an assistant, stored in worktree.custom_context.assistant
+ * Configuration for an assistant, stored in branch.custom_context.assistant
  *
- * Marks a worktree as a long-lived "assistant" — a persistent AI companion
- * that manages other worktrees, maintains memory, and orchestrates work.
+ * Marks a branch as a long-lived "assistant" — a persistent AI companion
+ * that manages other branches, maintains memory, and orchestrates work.
  */
 export interface AssistantConfig {
   /** Discriminator for type narrowing */
@@ -851,11 +851,11 @@ export interface AssistantConfig {
 export type PersistedAgentConfig = AssistantConfig;
 
 /**
- * Type guard: checks if a worktree is an assistant.
+ * Type guard: checks if a branch is an assistant.
  * Supports both new (`custom_context.assistant`) and legacy (`custom_context.agent`) storage.
  */
-export function isAssistant(worktree: { custom_context?: Record<string, unknown> }): boolean {
-  const config = worktree.custom_context?.assistant ?? worktree.custom_context?.agent;
+export function isAssistant(branch: { custom_context?: Record<string, unknown> }): boolean {
+  const config = branch.custom_context?.assistant ?? branch.custom_context?.agent;
   return (
     config != null &&
     typeof config === 'object' &&
@@ -868,15 +868,15 @@ export function isAssistant(worktree: { custom_context?: Record<string, unknown>
 export const isPersistedAgent = isAssistant;
 
 /**
- * Extract the assistant config from a worktree, if present.
+ * Extract the assistant config from a branch, if present.
  * Supports both new (`custom_context.assistant`) and legacy (`custom_context.agent`) storage.
  */
-export function getAssistantConfig(worktree: {
+export function getAssistantConfig(branch: {
   custom_context?: Record<string, unknown>;
 }): AssistantConfig | null {
-  if (!isAssistant(worktree)) return null;
-  const config = (worktree.custom_context!.assistant ??
-    worktree.custom_context!.agent) as AssistantConfig;
+  if (!isAssistant(branch)) return null;
+  const config = (branch.custom_context!.assistant ??
+    branch.custom_context!.agent) as AssistantConfig;
   return config;
 }
 

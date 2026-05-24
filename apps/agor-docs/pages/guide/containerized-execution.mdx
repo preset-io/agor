@@ -22,7 +22,7 @@ Agor's architecture separates the **daemon** (orchestration layer) from the **ex
 ┌─────────────────────────────────────────────────────────────┐
 │  Daemon (Orchestration Layer)                               │
 │  - REST/WebSocket API                                       │
-│  - Database (sessions, tasks, worktrees)                    │
+│  - Database (sessions, tasks, branches)                    │
 │  - User authentication                                      │
 │  - Never touches git data directly                          │
 │                                                             │
@@ -38,7 +38,7 @@ Agor's architecture separates the **daemon** (orchestration layer) from the **ex
 │  - Receives typed JSON payload                              │
 │  - Connects back to daemon via WebSocket                    │
 │  - Runs agent SDKs (Claude, Gemini, Codex)                 │
-│  - Manages git operations (clone, worktree)                 │
+│  - Manages git operations (clone, branch)                 │
 │  - Handles terminal sessions (Zellij)                       │
 │  - Short-lived: exits when command completes                │
 └─────────────────────────────────────────────────────────────┘
@@ -50,8 +50,8 @@ Agor's architecture separates the **daemon** (orchestration layer) from the **ex
 | --------------------- | ---------------------------------------------- |
 | `prompt`              | Execute agent SDK (Claude Code, Gemini, Codex) |
 | `git.clone`           | Clone repository with Unix group setup         |
-| `git.worktree.add`    | Create git worktree with permissions           |
-| `git.worktree.remove` | Remove branch and cleanup                    |
+| `git.branch.add`    | Create git branch with permissions           |
+| `git.branch.remove` | Remove branch and cleanup                    |
 | `zellij.attach`       | Attach to terminal session                     |
 | `unix.sync-*`         | Synchronize Unix users/groups                  |
 
@@ -66,11 +66,11 @@ Running Agor in Kubernetes is fundamentally different from deploying static web 
 | Static Deploys       | Agor Dev Environments   |
 | -------------------- | ----------------------- |
 | Immutable containers | Interactive development |
-| No shared state      | Shared git worktrees    |
+| No shared state      | Shared git branches    |
 | Scale out replicas   | User-specific sessions  |
 | Ephemeral storage    | Persistent filesystem   |
 
-**Key insight**: Agor executors need access to a **shared filesystem** where git worktrees live. This is similar to how traditional development servers work, not like microservice deployments.
+**Key insight**: Agor executors need access to a **shared filesystem** where git branches live. This is similar to how traditional development servers work, not like microservice deployments.
 
 ---
 
@@ -192,7 +192,7 @@ This is the single most common deployment foot-gun and worth calling out
 before the rest of the storage discussion.
 
 **If the Agor database is persistent, then `$HOME` (or whichever directory
-holds `repos/` and `worktrees/`) MUST also be persistent.** The database
+holds `repos/` and `branches/`) MUST also be persistent.** The database
 stores absolute paths to every repository clone and every branch on
 disk. If the database survives a pod restart but the filesystem does not
 — for example, the database is backed by a `PersistentVolumeClaim` while
@@ -205,7 +205,7 @@ on disk: ...` — see [issue
 \#1109](https://github.com/preset-io/agor/issues/1109)), but the only
 real fix is to restore the volume or, if the volume is unrecoverable,
 clean up the orphan database rows using
-`agor worktree remove` / `agor repo remove` before re-cloning.
+`agor branch remove` / `agor repo remove` before re-cloning.
 
 Safe configurations:
 
@@ -239,7 +239,7 @@ paths:
   # Default: ~/.agor/
   # Storage: local SSD (fast, daemon-local)
 
-  # Git data (repos, worktrees)
+  # Git data (repos, branches)
   # Default: same as agor_home
   # Storage: shared filesystem (EFS, NFS)
   data_home: /data/agor
@@ -254,7 +254,7 @@ Local SSD                    Shared Storage (EFS)
 │ ├── config.yaml  │        │ ├── repos/               │
 │ ├── agor.db      │        │ │   └── github.com/      │
 │ └── logs/        │        │ │       └── org/repo.git │
-└──────────────────┘        │ ├── worktrees/           │
+└──────────────────┘        │ ├── branches/           │
                             │ │   └── org/repo/        │
                             │ │       ├── main/        │
                             │ │       └── feature/     │
@@ -380,7 +380,7 @@ execution:
 | `{unix_user_uid}` | Target Unix UID                         | `1001`                |
 | `{unix_user_gid}` | Target Unix GID                         | `1001`                |
 | `{session_id}`    | Agor session ID (if available)          | `01abc123...`         |
-| `{worktree_id}`   | Branch ID (if available)              | `01xyz789...`         |
+| `{branch_id}`   | Branch ID (if available)              | `01xyz789...`         |
 
 ### How It Works
 
@@ -490,7 +490,7 @@ Different executor commands have different timeout needs:
 | ------------------ | ---------------- | ------------------- |
 | `prompt`           | 5-60 minutes     | 2 hours             |
 | `git.clone`        | 1-10 minutes     | 30 minutes          |
-| `git.worktree.add` | 1-30 seconds     | 5 minutes           |
+| `git.branch.add` | 1-30 seconds     | 5 minutes           |
 | `zellij.attach`    | Session duration | 8 hours             |
 
 ### Timeout Configuration
@@ -702,8 +702,8 @@ spec:
     runAsGroup: 1001 # User's primary GID
     supplementalGroups: # All groups user belongs to
       - 2001 # repo-myproject GID
-      - 3001 # worktree-feature-x GID
-      - 3002 # worktree-bugfix-y GID
+      - 3001 # branch-feature-x GID
+      - 3002 # branch-bugfix-y GID
 ```
 
 The daemon knows the user's group memberships (from branch ownership records) and can pass them to the executor template.
@@ -733,7 +733,7 @@ The executor command template supports these variables:
 | `{unix_user_primary_gid}` | User's primary GID                 |
 | `{supplemental_gids}`     | JSON array of all GIDs user needs  |
 | `{repo_gid}`              | Current repo's GID (if scoped)     |
-| `{worktree_gid}`          | Current branch's GID (if scoped) |
+| `{branch_gid}`          | Current branch's GID (if scoped) |
 
 ---
 
@@ -766,7 +766,7 @@ In a fully containerized Agor deployment, there are three distinct tiers:
 ┌─────────────────────────────────────────────────────────────┐
 │  Tier 3: Dev Environment Containers                         │
 │  - Docker Compose, npm, pytest, etc.                        │
-│  - Defined in worktree's environment config                 │
+│  - Defined in branch's environment config                 │
 │  - May run as sidecar or separate pods                      │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -780,7 +780,7 @@ In containerized mode, branch dev environments should also be containerized:
 Replace Docker Compose with `kubectl` commands in environment config:
 
 ```yaml
-# worktree environment config
+# branch environment config
 environment:
   start_command: |
     kubectl apply -f k8s/dev-environment.yaml
@@ -993,7 +993,8 @@ paths:
 ### Step 2: Migrate Existing Data
 
 ```bash
-# Move repos and worktrees to shared storage
+# Move repos and branches to shared storage. The on-disk dir name is
+# still `worktrees` for backwards compatibility with existing installs.
 mv ~/.agor/repos /data/agor/repos
 mv ~/.agor/worktrees /data/agor/worktrees
 
@@ -1008,7 +1009,7 @@ Verify everything works before adding containerization:
 
 ```bash
 agor repo list
-agor worktree list
+agor branch list
 ```
 
 ### Step 4: Configure Daemon URL and Executor Template

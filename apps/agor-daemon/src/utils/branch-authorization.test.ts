@@ -1,26 +1,26 @@
 /**
- * Worktree Authorization Tests
+ * Branch Authorization Tests
  *
- * Tests for superadmin role, allow_superadmin config flag, and worktree RBAC behavior.
+ * Tests for superadmin role, allow_superadmin config flag, and branch RBAC behavior.
  * Covers the security invariants introduced by the superadmin role feature.
  */
 
-import type { HookContext, Session, Worktree, WorktreePermissionLevel } from '@agor/core/types';
+import type { Branch, BranchPermissionLevel, HookContext, Session } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
   ensureCanPromptInSession,
-  hasWorktreePermission,
+  hasBranchPermission,
   isSuperAdmin,
-  resolveWorktreePermission,
-} from './worktree-authorization';
+  resolveBranchPermission,
+} from './branch-authorization';
 
-/** Minimal worktree fixture for permission tests */
-function makeWorktree(overrides: Partial<Worktree> = {}): Worktree {
+/** Minimal branch fixture for permission tests */
+function makeBranch(overrides: Partial<Branch> = {}): Branch {
   return {
-    worktree_id: 'wt-test-0001' as Worktree['worktree_id'],
-    repo_id: 'repo-test-0001' as Worktree['repo_id'],
-    name: 'test-worktree',
+    branch_id: 'wt-test-0001' as Branch['branch_id'],
+    repo_id: 'repo-test-0001' as Branch['repo_id'],
+    name: 'test-branch',
     branch: 'test-branch',
     path: '/tmp/test',
     others_can: 'view',
@@ -28,7 +28,7 @@ function makeWorktree(overrides: Partial<Worktree> = {}): Worktree {
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     ...overrides,
-  } as Worktree;
+  } as Branch;
 }
 
 const USER_ID = 'user-test-0001' as import('@agor/core/types').UUID;
@@ -65,60 +65,58 @@ describe('isSuperAdmin', () => {
   });
 });
 
-describe('hasWorktreePermission', () => {
+describe('hasBranchPermission', () => {
   describe('owner behavior', () => {
     it('owner always has all permission regardless of others_can', () => {
-      const wt = makeWorktree({ others_can: 'none' });
-      expect(hasWorktreePermission(wt, USER_ID, true, 'all')).toBe(true);
-      expect(hasWorktreePermission(wt, USER_ID, true, 'prompt')).toBe(true);
-      expect(hasWorktreePermission(wt, USER_ID, true, 'view')).toBe(true);
+      const wt = makeBranch({ others_can: 'none' });
+      expect(hasBranchPermission(wt, USER_ID, true, 'all')).toBe(true);
+      expect(hasBranchPermission(wt, USER_ID, true, 'prompt')).toBe(true);
+      expect(hasBranchPermission(wt, USER_ID, true, 'view')).toBe(true);
     });
   });
 
   describe('superadmin behavior', () => {
-    it('superadmin has full access to worktrees with others_can=none', () => {
-      const wt = makeWorktree({ others_can: 'none' });
-      expect(hasWorktreePermission(wt, USER_ID, false, 'all', ROLES.SUPERADMIN)).toBe(true);
-      expect(hasWorktreePermission(wt, USER_ID, false, 'prompt', ROLES.SUPERADMIN)).toBe(true);
-      expect(hasWorktreePermission(wt, USER_ID, false, 'view', ROLES.SUPERADMIN)).toBe(true);
+    it('superadmin has full access to branches with others_can=none', () => {
+      const wt = makeBranch({ others_can: 'none' });
+      expect(hasBranchPermission(wt, USER_ID, false, 'all', ROLES.SUPERADMIN)).toBe(true);
+      expect(hasBranchPermission(wt, USER_ID, false, 'prompt', ROLES.SUPERADMIN)).toBe(true);
+      expect(hasBranchPermission(wt, USER_ID, false, 'view', ROLES.SUPERADMIN)).toBe(true);
     });
 
     it('superadmin has full access regardless of others_can level', () => {
       for (const othersCan of ['none', 'view', 'session', 'prompt', 'all'] as const) {
-        const wt = makeWorktree({ others_can: othersCan });
-        expect(hasWorktreePermission(wt, USER_ID, false, 'all', ROLES.SUPERADMIN)).toBe(true);
+        const wt = makeBranch({ others_can: othersCan });
+        expect(hasBranchPermission(wt, USER_ID, false, 'all', ROLES.SUPERADMIN)).toBe(true);
       }
     });
 
     it('deprecated owner role gets same superadmin full access', () => {
-      const wt = makeWorktree({ others_can: 'none' });
-      expect(hasWorktreePermission(wt, USER_ID, false, 'all', 'owner')).toBe(true);
-      expect(hasWorktreePermission(wt, USER_ID, false, 'prompt', 'owner')).toBe(true);
-      expect(hasWorktreePermission(wt, USER_ID, false, 'view', 'owner')).toBe(true);
+      const wt = makeBranch({ others_can: 'none' });
+      expect(hasBranchPermission(wt, USER_ID, false, 'all', 'owner')).toBe(true);
+      expect(hasBranchPermission(wt, USER_ID, false, 'prompt', 'owner')).toBe(true);
+      expect(hasBranchPermission(wt, USER_ID, false, 'view', 'owner')).toBe(true);
     });
   });
 
   describe('allow_superadmin=false disables bypass', () => {
     it('superadmin denied view on others_can=none when flag disabled', () => {
-      const wt = makeWorktree({ others_can: 'none' });
-      expect(hasWorktreePermission(wt, USER_ID, false, 'view', ROLES.SUPERADMIN, false)).toBe(
-        false
-      );
+      const wt = makeBranch({ others_can: 'none' });
+      expect(hasBranchPermission(wt, USER_ID, false, 'view', ROLES.SUPERADMIN, false)).toBe(false);
     });
 
     it('superadmin treated as regular user when flag disabled', () => {
-      const wt = makeWorktree({ others_can: 'view' });
+      const wt = makeBranch({ others_can: 'view' });
       // Can view because others_can=view (not because of superadmin)
-      expect(hasWorktreePermission(wt, USER_ID, false, 'view', ROLES.SUPERADMIN, false)).toBe(true);
+      expect(hasBranchPermission(wt, USER_ID, false, 'view', ROLES.SUPERADMIN, false)).toBe(true);
       // Cannot prompt because others_can=view only
-      expect(hasWorktreePermission(wt, USER_ID, false, 'prompt', ROLES.SUPERADMIN, false)).toBe(
+      expect(hasBranchPermission(wt, USER_ID, false, 'prompt', ROLES.SUPERADMIN, false)).toBe(
         false
       );
     });
   });
 
   describe('non-owner permission levels', () => {
-    it.each<[WorktreePermissionLevel, WorktreePermissionLevel, boolean]>([
+    it.each<[BranchPermissionLevel, BranchPermissionLevel, boolean]>([
       ['all', 'all', true],
       ['all', 'prompt', true],
       ['all', 'session', true],
@@ -140,46 +138,46 @@ describe('hasWorktreePermission', () => {
       ['none', 'prompt', false],
       ['none', 'all', false],
     ])('others_can=%s, required=%s → %s', (othersCan, required, expected) => {
-      const wt = makeWorktree({ others_can: othersCan });
-      expect(hasWorktreePermission(wt, USER_ID, false, required, ROLES.MEMBER)).toBe(expected);
+      const wt = makeBranch({ others_can: othersCan });
+      expect(hasBranchPermission(wt, USER_ID, false, required, ROLES.MEMBER)).toBe(expected);
     });
   });
 });
 
-describe('resolveWorktreePermission', () => {
+describe('resolveBranchPermission', () => {
   it('owner resolves to all', () => {
-    const wt = makeWorktree({ others_can: 'none' });
-    expect(resolveWorktreePermission(wt, USER_ID, true)).toBe('all');
+    const wt = makeBranch({ others_can: 'none' });
+    expect(resolveBranchPermission(wt, USER_ID, true)).toBe('all');
   });
 
   it('superadmin resolves to all on others_can=none', () => {
-    const wt = makeWorktree({ others_can: 'none' });
-    expect(resolveWorktreePermission(wt, USER_ID, false, ROLES.SUPERADMIN)).toBe('all');
+    const wt = makeBranch({ others_can: 'none' });
+    expect(resolveBranchPermission(wt, USER_ID, false, ROLES.SUPERADMIN)).toBe('all');
   });
 
   it('superadmin resolves to all regardless of others_can', () => {
-    const wt = makeWorktree({ others_can: 'prompt' });
-    expect(resolveWorktreePermission(wt, USER_ID, false, ROLES.SUPERADMIN)).toBe('all');
+    const wt = makeBranch({ others_can: 'prompt' });
+    expect(resolveBranchPermission(wt, USER_ID, false, ROLES.SUPERADMIN)).toBe('all');
   });
 
   it('member gets others_can level', () => {
-    const wt = makeWorktree({ others_can: 'prompt' });
-    expect(resolveWorktreePermission(wt, USER_ID, false, ROLES.MEMBER)).toBe('prompt');
+    const wt = makeBranch({ others_can: 'prompt' });
+    expect(resolveBranchPermission(wt, USER_ID, false, ROLES.MEMBER)).toBe('prompt');
   });
 
   it('member gets none when others_can=none', () => {
-    const wt = makeWorktree({ others_can: 'none' });
-    expect(resolveWorktreePermission(wt, USER_ID, false, ROLES.MEMBER)).toBe('none');
+    const wt = makeBranch({ others_can: 'none' });
+    expect(resolveBranchPermission(wt, USER_ID, false, ROLES.MEMBER)).toBe('none');
   });
 
   it('member gets session when others_can=session', () => {
-    const wt = makeWorktree({ others_can: 'session' });
-    expect(resolveWorktreePermission(wt, USER_ID, false, ROLES.MEMBER)).toBe('session');
+    const wt = makeBranch({ others_can: 'session' });
+    expect(resolveBranchPermission(wt, USER_ID, false, ROLES.MEMBER)).toBe('session');
   });
 
   it('superadmin resolves to all even with others_can=session', () => {
-    const wt = makeWorktree({ others_can: 'session' });
-    expect(resolveWorktreePermission(wt, USER_ID, false, ROLES.SUPERADMIN)).toBe('all');
+    const wt = makeBranch({ others_can: 'session' });
+    expect(resolveBranchPermission(wt, USER_ID, false, ROLES.SUPERADMIN)).toBe('all');
   });
 });
 
@@ -187,7 +185,7 @@ const OTHER_USER_ID = 'user-other-0002' as import('@agor/core/types').UUID;
 
 /** Minimal HookContext mock for ensureCanPromptInSession tests */
 function makeHookContext(overrides: {
-  worktree: Worktree;
+  branch: Branch;
   session: Partial<Session>;
   userId: string;
   isOwner?: boolean;
@@ -200,9 +198,9 @@ function makeHookContext(overrides: {
         user_id: overrides.userId,
         role: overrides.userRole ?? ROLES.MEMBER,
       },
-      worktree: overrides.worktree,
+      branch: overrides.branch,
       session: overrides.session,
-      isWorktreeOwner: overrides.isOwner ?? false,
+      isBranchOwner: overrides.isOwner ?? false,
     },
   } as unknown as HookContext;
 }
@@ -212,9 +210,9 @@ describe('ensureCanPromptInSession', () => {
 
   describe('session tier — own sessions', () => {
     it('allows prompting own session with session permission', () => {
-      const wt = makeWorktree({ others_can: 'session' });
+      const wt = makeBranch({ others_can: 'session' });
       const ctx = makeHookContext({
-        worktree: wt,
+        branch: wt,
         session: { created_by: USER_ID },
         userId: USER_ID,
       });
@@ -222,9 +220,9 @@ describe('ensureCanPromptInSession', () => {
     });
 
     it('denies prompting another users session with session permission', () => {
-      const wt = makeWorktree({ others_can: 'session' });
+      const wt = makeBranch({ others_can: 'session' });
       const ctx = makeHookContext({
-        worktree: wt,
+        branch: wt,
         session: { created_by: OTHER_USER_ID },
         userId: USER_ID,
       });
@@ -234,9 +232,9 @@ describe('ensureCanPromptInSession', () => {
 
   describe('prompt tier — any session', () => {
     it('allows prompting another users session with prompt permission', () => {
-      const wt = makeWorktree({ others_can: 'prompt' });
+      const wt = makeBranch({ others_can: 'prompt' });
       const ctx = makeHookContext({
-        worktree: wt,
+        branch: wt,
         session: { created_by: OTHER_USER_ID },
         userId: USER_ID,
       });
@@ -246,9 +244,9 @@ describe('ensureCanPromptInSession', () => {
 
   describe('view tier — denied', () => {
     it('denies prompting own session with view permission', () => {
-      const wt = makeWorktree({ others_can: 'view' });
+      const wt = makeBranch({ others_can: 'view' });
       const ctx = makeHookContext({
-        worktree: wt,
+        branch: wt,
         session: { created_by: USER_ID },
         userId: USER_ID,
       });
@@ -258,9 +256,9 @@ describe('ensureCanPromptInSession', () => {
 
   describe('owner bypass', () => {
     it('owner can prompt any session regardless of others_can', () => {
-      const wt = makeWorktree({ others_can: 'none' });
+      const wt = makeBranch({ others_can: 'none' });
       const ctx = makeHookContext({
-        worktree: wt,
+        branch: wt,
         session: { created_by: OTHER_USER_ID },
         userId: USER_ID,
         isOwner: true,
@@ -271,9 +269,9 @@ describe('ensureCanPromptInSession', () => {
 
   describe('internal calls bypass', () => {
     it('skips check for internal calls (no provider)', () => {
-      const wt = makeWorktree({ others_can: 'none' });
+      const wt = makeBranch({ others_can: 'none' });
       const ctx = makeHookContext({
-        worktree: wt,
+        branch: wt,
         session: { created_by: OTHER_USER_ID },
         userId: USER_ID,
       });

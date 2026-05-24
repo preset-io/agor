@@ -15,7 +15,7 @@ import { createFaviconWithDot } from '../utils/faviconDot';
 
 export function useFaviconStatus(
   currentBoardId: string | null,
-  sessionsByWorktree: Map<string, Session[]>,
+  sessionsByBranch: Map<string, Session[]>,
   boardObjects: BoardEntityObject[]
 ) {
   const [baseFaviconUrl] = useState(`${import.meta.env.BASE_URL}favicon.png`);
@@ -33,16 +33,16 @@ export function useFaviconStatus(
       return;
     }
 
-    // Find worktrees on current board
-    const worktreesOnBoard = new Set(
+    // Find branches on current board
+    const branchesOnBoard = new Set(
       boardObjects
-        .filter((obj) => obj.board_id === currentBoardId && obj.worktree_id)
-        .map((obj) => obj.worktree_id!)
+        .filter((obj) => obj.board_id === currentBoardId && obj.branch_id)
+        .map((obj) => obj.branch_id!)
     );
 
-    // Find sessions for those worktrees using O(1) Map lookups
-    const sessionsOnBoard = Array.from(worktreesOnBoard)
-      .flatMap((worktreeId) => sessionsByWorktree.get(worktreeId!) || [])
+    // Find sessions for those branches using O(1) Map lookups
+    const sessionsOnBoard = Array.from(branchesOnBoard)
+      .flatMap((branchId) => sessionsByBranch.get(branchId!) || [])
       .filter((s) => !s.archived);
 
     // Determine status: check for running and ready independently
@@ -61,5 +61,5 @@ export function useFaviconStatus(
         }
       }
     );
-  }, [currentBoardId, sessionsByWorktree, boardObjects, baseFaviconUrl, token.colorSuccessText]);
+  }, [currentBoardId, sessionsByBranch, boardObjects, baseFaviconUrl, token.colorSuccessText]);
 }

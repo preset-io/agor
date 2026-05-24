@@ -312,7 +312,7 @@ export const AutocompleteTextarea = React.forwardRef<
     }, [highlightedIndex]);
 
     /**
-     * Search files in session's worktree
+     * Search files in session's branch
      */
     const searchFiles = useCallback(
       async (searchQuery: string) => {

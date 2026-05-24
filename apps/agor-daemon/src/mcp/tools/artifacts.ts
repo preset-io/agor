@@ -11,22 +11,22 @@
  * and no `sandpack.json`/`agor.config.js` sidecar.
  */
 
-import { WorktreeRepository } from '@agor/core/db';
+import { BranchRepository } from '@agor/core/db';
 import type {
   AgorGrants,
   AgorRuntimeConfig,
   BoardID,
+  BranchID,
   SandpackConfig,
   UserRole,
   UUID,
-  WorktreeID,
 } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ArtifactsService } from '../../services/artifacts.js';
-import { hasWorktreePermission } from '../../utils/worktree-authorization.js';
-import { resolveArtifactId, resolveBoardId, resolveWorktreeId } from '../resolve-ids.js';
+import { hasBranchPermission } from '../../utils/branch-authorization.js';
+import { resolveArtifactId, resolveBoardId, resolveBranchId } from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
@@ -91,9 +91,9 @@ export function registerArtifactTools(server: McpServer, ctx: McpContext): void 
 If artifactId is omitted, creates a new artifact.
 If artifactId is provided, updates the existing artifact (must be owned by you).
 
-The folder should contain ordinary source files (no \`sandpack.json\`, no \`agor.config.js\`). The agent decides where to create the folder — inside the worktree, a temp directory, etc. The folder is only read at publish time; after that, the artifact lives in the database.
+The folder should contain ordinary source files (no \`sandpack.json\`, no \`agor.config.js\`). The agent decides where to create the folder — inside the branch, a temp directory, etc. The folder is only read at publish time; after that, the artifact lives in the database.
 
-Recommended: create the folder inside your worktree so files can be version-controlled.
+Recommended: create the folder inside your branch so files can be version-controlled.
 
 DECLARATIVE CONFIG:
 - \`requiredEnvVars\`: array of env var NAMES the artifact needs (e.g. ["OPENAI_KEY", "STRIPE_KEY"]). The daemon synthesizes a per-viewer \`.env\` at render time using values from the viewer's stored env vars (Settings → Environment Variables). Names are stored without prefix; the daemon prefixes per template at render time. Currently only the \`react\` / \`react-ts\` mapping is verified end-to-end: those are CRA-backed (sandpack-react v2), so use \`process.env.REACT_APP_X\`. Other templates are best-effort and may need to be audited the first time an artifact publishes against them — the table in apps/agor-docs/pages/guide/artifacts.mdx tracks status. \`vanilla\` / \`vanilla-ts\` have no dotenv path (daemon warns and injects nothing).
@@ -293,7 +293,7 @@ NOTE: sandpack_error and console_logs require a browser to be viewing the artifa
     'agor_artifacts_get',
     {
       description:
-        'Get a single artifact by ID, including its full file map (path → content) and declarative metadata (sandpack_config, required_env_vars, agor_grants). Use this to read artifact source code from another worktree without filesystem access. Respects visibility: public artifacts are readable by anyone; private artifacts are only readable by their creator.',
+        'Get a single artifact by ID, including its full file map (path → content) and declarative metadata (sandpack_config, required_env_vars, agor_grants). Use this to read artifact source code from another branch without filesystem access. Respects visibility: public artifacts are readable by anyone; private artifacts are only readable by their creator.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         artifactId: z.string().describe('Artifact ID (full UUID or short prefix)'),
@@ -403,14 +403,14 @@ Caller must own the artifact (or be an admin).`,
   server.registerTool(
     'agor_artifacts_land',
     {
-      description: `Materialize an artifact's stored files to disk inside a worktree. Inverse of agor_artifacts_publish.
+      description: `Materialize an artifact's stored files to disk inside a branch. Inverse of agor_artifacts_publish.
 
-Use this when you want to tweak an artifact's code: land it into a worktree, edit the files locally, then call agor_artifacts_publish with the same artifactId to push the changes back.
+Use this when you want to tweak an artifact's code: land it into a branch, edit the files locally, then call agor_artifacts_publish with the same artifactId to push the changes back.
 
 Writes a small \`agor.artifact.json\` sidecar alongside the source files. The sidecar carries metadata that doesn't fit in the file map (template, sandpack_config, required_env_vars, agor_grants) so a round-trip publish() can preserve it. **Do not delete \`agor.artifact.json\`** — without it, a republish will reset \`required_env_vars\` and \`agor_grants\` to empty. Build tools (Vite/CRA/etc.) ignore the sidecar.
 
 Safety:
-- Destination must be inside the target worktree (cannot escape via ".." or absolute paths).
+- Destination must be inside the target branch (cannot escape via ".." or absolute paths).
 - Default subpath is \`.agor/artifacts/<slug>-<short-id>\` derived from the artifact's name (kebab-cased, ASCII-only). Pass a custom subpath if you want a different location.
 - Refuses to write to an existing destination unless overwrite=true is passed.
 - overwrite=true removes the destination directory first (symlinks are unlinked, not followed).
@@ -418,12 +418,12 @@ Safety:
 Visibility: public artifacts are readable by anyone; private artifacts are only landable by their owner.`,
       inputSchema: z.object({
         artifactId: z.string().describe('Artifact ID to materialize (full UUID or short prefix)'),
-        worktreeId: z.string().describe('Destination worktree ID (full UUID or short prefix)'),
+        branchId: z.string().describe('Destination branch ID (full UUID or short prefix)'),
         subpath: z
           .string()
           .optional()
           .describe(
-            'Worktree-relative path for the destination folder. Default: .agor/artifacts/<slug>-<short-id> derived from the artifact name. Must not be absolute or escape the worktree.'
+            'Branch-relative path for the destination folder. Default: .agor/artifacts/<slug>-<short-id> derived from the artifact name. Must not be absolute or escape the branch.'
           ),
         overwrite: z
           .boolean()
@@ -434,7 +434,7 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
     async (args) => {
       const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
       const artifactId = await resolveArtifactId(ctx, coerceString(args.artifactId)!);
-      const worktreeId = await resolveWorktreeId(ctx, coerceString(args.worktreeId)!);
+      const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
 
       let artifact: Awaited<ReturnType<typeof service.get>>;
       try {
@@ -449,24 +449,22 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
         return textResult({ error: `Artifact ${artifactId} not found` });
       }
 
-      const worktree = (await ctx.app
-        .service('worktrees')
-        .get(worktreeId, ctx.baseServiceParams)) as {
-        worktree_id: string;
+      const branch = (await ctx.app.service('branches').get(branchId, ctx.baseServiceParams)) as {
+        branch_id: string;
         path: string;
         others_can?: 'none' | 'view' | 'session' | 'prompt' | 'all';
       };
 
-      const worktreeRepo = new WorktreeRepository(ctx.db);
-      const worktreeIdBranded = worktree.worktree_id as WorktreeID;
+      const branchRepo = new BranchRepository(ctx.db);
+      const branchIdBranded = branch.branch_id as BranchID;
       const userIdBranded = ctx.userId as UUID;
-      const isOwner = await worktreeRepo.isOwner(worktreeIdBranded, userIdBranded);
-      const fullWorktree = await worktreeRepo.findById(worktreeIdBranded);
-      if (!fullWorktree) {
-        return textResult({ error: `Worktree ${worktreeId} not found` });
+      const isOwner = await branchRepo.isOwner(branchIdBranded, userIdBranded);
+      const fullBranch = await branchRepo.findById(branchIdBranded);
+      if (!fullBranch) {
+        return textResult({ error: `Branch ${branchId} not found` });
       }
-      const canWrite = hasWorktreePermission(
-        fullWorktree,
+      const canWrite = hasBranchPermission(
+        fullBranch,
         userIdBranded,
         isOwner,
         'session',
@@ -474,18 +472,18 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
       );
       if (!canWrite) {
         return textResult({
-          error: `Forbidden: 'session' permission or higher is required to land artifacts into worktree ${worktreeId}`,
+          error: `Forbidden: 'session' permission or higher is required to land artifacts into branch ${branchId}`,
         });
       }
 
-      const result = await service.land(artifactId, worktree.path, {
+      const result = await service.land(artifactId, branch.path, {
         subpath: coerceString(args.subpath),
         overwrite: args.overwrite,
       });
 
       return textResult({
         artifactId,
-        worktreeId: worktree.worktree_id,
+        branchId: branch.branch_id,
         destinationPath: result.destinationPath,
         fileCount: result.fileCount,
         bytesWritten: result.bytesWritten,

@@ -2,7 +2,7 @@
  * Regression tests for hooks registered in register-hooks.ts.
  *
  * Covers the sessions.patch permission branching introduced to fix the bug
- * where a user with `session`-tier permission on a worktree could not prompt
+ * where a user with `session`-tier permission on a branch could not prompt
  * their own session because the /sessions/:id/prompt route issues an internal
  * `{ tasks: [...] }` patch that was being gated behind `all`-tier.
  *
@@ -11,11 +11,11 @@
  *   if (isPromptFlowPatchOnly(context.data)) {
  *     → ensureCanPromptInSession (session-tier for own, prompt-tier otherwise)
  *   } else {
- *     → ensureWorktreePermission('all')   // metadata writes
+ *     → ensureBranchPermission('all')   // metadata writes
  *   }
  *
  * The two downstream hooks are covered elsewhere (see
- * worktree-authorization.test.ts), so here we only verify the classifier.
+ * branch-authorization.test.ts), so here we only verify the classifier.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -76,7 +76,7 @@ describe('isPromptFlowPatchOnly', () => {
       ['callback_config', { callback_session_id: 'sid' }],
       ['created_by', 'other-user'],
       ['unix_username', 'root'],
-      ['worktree_id', 'wt-evil'],
+      ['branch_id', 'wt-evil'],
     ])('rejects pure-metadata patch on field: %s', (field, value) => {
       expect(isPromptFlowPatchOnly({ [field]: value })).toBe(false);
     });
@@ -106,7 +106,7 @@ describe('isPromptFlowPatchOnly', () => {
 /**
  * Guards the fix for CVE-class issue: `after: get` on /sessions was minting
  * an MCP token (with `uid = session.created_by`) for any `member+` caller
- * with `view` permission on the worktree, letting them impersonate the
+ * with `view` permission on the branch, letting them impersonate the
  * creator on the MCP channel. Only the creator, a superadmin, or the
  * executor's service identity may receive the token.
  */

@@ -1,4 +1,4 @@
-import type { Worktree } from '@agor-live/client';
+import type { Branch } from '@agor-live/client';
 import { Alert, Modal, Radio, Space, Typography } from 'antd';
 import { useState } from 'react';
 
@@ -6,7 +6,7 @@ const { Text } = Typography;
 
 interface ArchiveDeleteBranchModalProps {
   open: boolean;
-  worktree: Worktree;
+  branch: Branch;
   sessionCount?: number;
   environmentRunning?: boolean;
   onConfirm: (options: {
@@ -18,7 +18,7 @@ interface ArchiveDeleteBranchModalProps {
 
 export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> = ({
   open,
-  worktree,
+  branch,
   sessionCount = 0,
   environmentRunning = false,
   onConfirm,
@@ -52,10 +52,10 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
         {/* Branch Info */}
         <div>
           <Text strong>Name: </Text>
-          <Text code>{worktree.name}</Text>
+          <Text code>{branch.name}</Text>
           <br />
           <Text strong>Git ref: </Text>
-          <Text>{worktree.ref}</Text>
+          <Text>{branch.ref}</Text>
         </div>
 
         {/* Environment Warning */}
@@ -161,7 +161,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
             Path:{' '}
           </Text>
           <Text code copyable style={{ fontSize: 11 }}>
-            {worktree.path}
+            {branch.path}
           </Text>
         </div>
       </Space>

@@ -1,7 +1,7 @@
 /**
- * `agor worktree env status <worktree-id>` - Check worktree environment status
+ * `agor branch env status <branch-id>` - Check branch environment status
  *
- * Displays the current status of a worktree's development environment.
+ * Displays the current status of a branch's development environment.
  */
 
 import { shortId } from '@agor-live/client';
@@ -9,8 +9,8 @@ import { Args } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../../base-command';
 
-export default class WorktreeEnvStatus extends BaseCommand {
-  static description = 'Check worktree environment status';
+export default class BranchEnvStatus extends BaseCommand {
+  static description = 'Check branch environment status';
 
   static examples = [
     '<%= config.bin %> <%= command.id %> abc123',
@@ -18,8 +18,8 @@ export default class WorktreeEnvStatus extends BaseCommand {
   ];
 
   static args = {
-    worktreeId: Args.string({
-      description: 'Worktree ID (full UUID or short ID)',
+    branchId: Args.string({
+      description: 'Branch ID (full UUID or short ID)',
       required: true,
     }),
   };
@@ -44,23 +44,23 @@ export default class WorktreeEnvStatus extends BaseCommand {
   }
 
   async run(): Promise<void> {
-    const { args } = await this.parse(WorktreeEnvStatus);
+    const { args } = await this.parse(BranchEnvStatus);
 
     // Connect to daemon
     const client = await this.connectToDaemon();
 
     try {
-      const worktreesService = client.service('worktrees');
+      const branchesService = client.service('branches');
 
-      // Get worktree
-      const worktree = await worktreesService.get(args.worktreeId);
+      // Get branch
+      const branch = await branchesService.get(args.branchId);
 
       this.log('');
-      this.log(chalk.bold(`Environment Status: ${chalk.cyan(worktree.name)}`));
-      this.log(`  ID: ${chalk.dim(shortId(worktree.worktree_id))}`);
+      this.log(chalk.bold(`Environment Status: ${chalk.cyan(branch.name)}`));
+      this.log(`  ID: ${chalk.dim(shortId(branch.branch_id))}`);
       this.log('');
 
-      if (!worktree.environment_instance) {
+      if (!branch.environment_instance) {
         this.log(chalk.dim('  No environment configured'));
         this.log('');
         await this.cleanupClient(client);
@@ -68,7 +68,7 @@ export default class WorktreeEnvStatus extends BaseCommand {
         return;
       }
 
-      const env = worktree.environment_instance;
+      const env = branch.environment_instance;
 
       // Status with color
       const statusColors = {
@@ -120,18 +120,18 @@ export default class WorktreeEnvStatus extends BaseCommand {
       if (env.status === 'running') {
         this.log(
           chalk.dim(
-            `    Stop:    ${chalk.cyan(`agor worktree env stop ${shortId(worktree.worktree_id)}`)}`
+            `    Stop:    ${chalk.cyan(`agor branch env stop ${shortId(branch.branch_id)}`)}`
           )
         );
         this.log(
           chalk.dim(
-            `    Restart: ${chalk.cyan(`agor worktree env restart ${shortId(worktree.worktree_id)}`)}`
+            `    Restart: ${chalk.cyan(`agor branch env restart ${shortId(branch.branch_id)}`)}`
           )
         );
       } else {
         this.log(
           chalk.dim(
-            `    Start:   ${chalk.cyan(`agor worktree env start ${shortId(worktree.worktree_id)}`)}`
+            `    Start:   ${chalk.cyan(`agor branch env start ${shortId(branch.branch_id)}`)}`
           )
         );
       }

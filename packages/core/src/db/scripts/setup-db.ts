@@ -51,7 +51,7 @@ async function dropTables(db: ReturnType<typeof createDatabase>): Promise<void> 
     await db.run(sql`DROP TABLE IF EXISTS messages`);
     await db.run(sql`DROP TABLE IF EXISTS tasks`);
     await db.run(sql`DROP TABLE IF EXISTS sessions`);
-    await db.run(sql`DROP TABLE IF EXISTS worktrees`);
+    await db.run(sql`DROP TABLE IF EXISTS branches`);
     await db.run(sql`DROP TABLE IF EXISTS boards`);
     await db.run(sql`DROP TABLE IF EXISTS repos`);
     await db.run(sql`DROP TABLE IF EXISTS users`);
@@ -63,7 +63,7 @@ async function dropTables(db: ReturnType<typeof createDatabase>): Promise<void> 
     await db.execute(sql`DROP TABLE IF EXISTS messages`);
     await db.execute(sql`DROP TABLE IF EXISTS tasks`);
     await db.execute(sql`DROP TABLE IF EXISTS sessions`);
-    await db.execute(sql`DROP TABLE IF EXISTS worktrees`);
+    await db.execute(sql`DROP TABLE IF EXISTS branches`);
     await db.execute(sql`DROP TABLE IF EXISTS boards`);
     await db.execute(sql`DROP TABLE IF EXISTS repos`);
     await db.execute(sql`DROP TABLE IF EXISTS users`);

@@ -85,8 +85,8 @@ describe('validateDirectory', () => {
     error.code = 'ENOENT';
     vi.mocked(fs.stat).mockRejectedValue(error);
 
-    await expect(validateDirectory('/nonexistent', 'worktree path')).rejects.toThrow(
-      'worktree path does not exist: /nonexistent'
+    await expect(validateDirectory('/nonexistent', 'branch path')).rejects.toThrow(
+      'branch path does not exist: /nonexistent'
     );
   });
 

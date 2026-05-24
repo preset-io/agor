@@ -15,7 +15,7 @@
  * mock, so we exercise the full state machine with a hand-rolled stub.
  */
 
-import type { Message, Session, UserID, Worktree } from '@agor/core/types';
+import type { Branch, Message, Session, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { _resetWidgetRegistryForTests, registerWidget, type WidgetRegistryEntry } from './registry';
@@ -35,7 +35,7 @@ interface MockEvent {
   payload: unknown;
 }
 
-function makeApp(records: { message: Message; session: Session; worktree: Worktree }) {
+function makeApp(records: { message: Message; session: Session; branch: Branch }) {
   const calls: MockServiceCall[] = [];
   const events: MockEvent[] = [];
   let currentMessage = records.message;
@@ -76,16 +76,16 @@ function makeApp(records: { message: Message; session: Session; worktree: Worktr
         throw new Error('sessions.create should not be called');
       },
     },
-    worktrees: {
+    branches: {
       async get() {
-        calls.push({ service: 'worktrees', method: 'get' });
-        return records.worktree;
+        calls.push({ service: 'branches', method: 'get' });
+        return records.branch;
       },
       async patch() {
-        throw new Error('worktrees.patch should not be called');
+        throw new Error('branches.patch should not be called');
       },
       async create() {
-        throw new Error('worktrees.create should not be called');
+        throw new Error('branches.create should not be called');
       },
     },
     '/sessions/:id/prompt': {
@@ -131,7 +131,7 @@ function makeFixtures(
     widgetType?: string;
     autoResume?: boolean;
     sessionCreator?: UserID;
-    worktreeOthersCan?: Worktree['others_can'];
+    branchOthersCan?: Branch['others_can'];
   } = {}
 ) {
   const sessionCreator = (opts.sessionCreator ?? 'creator-user-id') as UserID;
@@ -158,15 +158,15 @@ function makeFixtures(
   };
   const session = {
     session_id: 'sess-1',
-    worktree_id: 'wt-1',
+    branch_id: 'wt-1',
     created_by: sessionCreator,
   } as unknown as Session;
-  const worktree = {
-    worktree_id: 'wt-1',
+  const branch = {
+    branch_id: 'wt-1',
     name: 'feat-x',
-    others_can: opts.worktreeOthersCan ?? 'session',
-  } as unknown as Worktree;
-  return { message, session, worktree };
+    others_can: opts.branchOthersCan ?? 'session',
+  } as unknown as Branch;
+  return { message, session, branch };
 }
 
 function registerTestWidget(
@@ -204,38 +204,38 @@ function registerTestWidget(
 describe('canResolveWidget', () => {
   it('allows the session creator', () => {
     const session = { created_by: 'alice' as UserID };
-    const worktree = { others_can: 'view' } as unknown as Worktree;
-    expect(canResolveWidget({ user_id: 'alice' as UserID }, session, worktree, false)).toBe(true);
+    const branch = { others_can: 'view' } as unknown as Branch;
+    expect(canResolveWidget({ user_id: 'alice' as UserID }, session, branch, false)).toBe(true);
   });
 
   it('rejects a non-creator with view-only RBAC', () => {
     const session = { created_by: 'alice' as UserID };
-    const worktree = { others_can: 'view' } as unknown as Worktree;
-    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, worktree, false)).toBe(false);
+    const branch = { others_can: 'view' } as unknown as Branch;
+    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, branch, false)).toBe(false);
   });
 
   it('rejects a non-creator with session-tier RBAC (session tier is for own sessions only)', () => {
     const session = { created_by: 'alice' as UserID };
-    const worktree = { others_can: 'session' } as unknown as Worktree;
-    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, worktree, false)).toBe(false);
+    const branch = { others_can: 'session' } as unknown as Branch;
+    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, branch, false)).toBe(false);
   });
 
   it('allows a non-creator with prompt-tier RBAC', () => {
     const session = { created_by: 'alice' as UserID };
-    const worktree = { others_can: 'prompt' } as unknown as Worktree;
-    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, worktree, false)).toBe(true);
+    const branch = { others_can: 'prompt' } as unknown as Branch;
+    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, branch, false)).toBe(true);
   });
 
   it('allows a non-creator with all-tier RBAC', () => {
     const session = { created_by: 'alice' as UserID };
-    const worktree = { others_can: 'all' } as unknown as Worktree;
-    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, worktree, false)).toBe(true);
+    const branch = { others_can: 'all' } as unknown as Branch;
+    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, branch, false)).toBe(true);
   });
 
-  it('allows an explicit worktree owner even when others_can is view-only', () => {
+  it('allows an explicit branch owner even when others_can is view-only', () => {
     const session = { created_by: 'alice' as UserID };
-    const worktree = { others_can: 'view' } as unknown as Worktree;
-    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, worktree, true)).toBe(true);
+    const branch = { others_can: 'view' } as unknown as Branch;
+    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, branch, true)).toBe(true);
   });
 });
 
@@ -253,7 +253,7 @@ describe('resolveWidget', () => {
       'widget-msg-1',
       { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
       { user_id: 'creator-user-id' as UserID },
-      { app: app as never, isWorktreeOwner: async () => false }
+      { app: app as never, isBranchOwner: async () => false }
     );
 
     expect(result).toEqual({
@@ -302,7 +302,7 @@ describe('resolveWidget', () => {
 
   it('rejects a submission from a non-creator without prompt-tier RBAC', async () => {
     registerTestWidget();
-    const fixtures = makeFixtures({ worktreeOthersCan: 'session' });
+    const fixtures = makeFixtures({ branchOthersCan: 'session' });
     const { app } = makeApp(fixtures);
 
     await expect(
@@ -310,21 +310,21 @@ describe('resolveWidget', () => {
         'widget-msg-1',
         { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
         { user_id: 'someone-else' as UserID },
-        { app: app as never, isWorktreeOwner: async () => false }
+        { app: app as never, isBranchOwner: async () => false }
       )
     ).rejects.toThrow(/session creator|prompt/);
   });
 
   it('allows a submission from a non-creator with prompt-tier RBAC', async () => {
     registerTestWidget();
-    const fixtures = makeFixtures({ worktreeOthersCan: 'prompt' });
+    const fixtures = makeFixtures({ branchOthersCan: 'prompt' });
     const { app } = makeApp(fixtures);
 
     const result = await resolveWidget(
       'widget-msg-1',
       { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
       { user_id: 'someone-else' as UserID },
-      { app: app as never, isWorktreeOwner: async () => false }
+      { app: app as never, isBranchOwner: async () => false }
     );
     expect(result.status).toBe('submitted');
   });
@@ -339,7 +339,7 @@ describe('resolveWidget', () => {
         'widget-msg-1',
         { kind: 'submit', body: { value: 'k', scope: 'global' } },
         { user_id: 'creator-user-id' as UserID },
-        { app: app as never, isWorktreeOwner: async () => false }
+        { app: app as never, isBranchOwner: async () => false }
       )
     ).rejects.toThrow(/already submitted/);
   });
@@ -353,7 +353,7 @@ describe('resolveWidget', () => {
         'widget-msg-1',
         { kind: 'submit', body: {} },
         { user_id: 'creator-user-id' as UserID },
-        { app: app as never, isWorktreeOwner: async () => false }
+        { app: app as never, isBranchOwner: async () => false }
       )
     ).rejects.toThrow(/not registered/);
   });
@@ -367,7 +367,7 @@ describe('resolveWidget', () => {
       'widget-msg-1',
       { kind: 'submit', body: { value: 'k', scope: 'global' } },
       { user_id: 'creator-user-id' as UserID },
-      { app: app as never, isWorktreeOwner: async () => false }
+      { app: app as never, isBranchOwner: async () => false }
     );
 
     expect(result.auto_resume_queued).toBe(false);
@@ -384,7 +384,7 @@ describe('resolveWidget', () => {
       'widget-msg-1',
       { kind: 'dismiss' },
       { user_id: 'creator-user-id' as UserID },
-      { app: app as never, isWorktreeOwner: async () => false }
+      { app: app as never, isBranchOwner: async () => false }
     );
 
     expect(result.status).toBe('dismissed');
@@ -406,7 +406,7 @@ describe('resolveWidget', () => {
       'widget-msg-1',
       { kind: 'dismiss' },
       { user_id: 'creator-user-id' as UserID },
-      { app: app as never, isWorktreeOwner: async () => false }
+      { app: app as never, isBranchOwner: async () => false }
     );
 
     expect(result.status).toBe('dismissed');
@@ -427,7 +427,7 @@ describe('resolveWidget', () => {
         'widget-msg-1',
         { kind: 'submit', body: { value: 'k', scope: 'global' } },
         undefined,
-        { app: app as never, isWorktreeOwner: async () => false }
+        { app: app as never, isBranchOwner: async () => false }
       )
     ).rejects.toThrow(/Authentication/);
   });
@@ -442,7 +442,7 @@ describe('resolveWidget', () => {
         'widget-msg-1',
         { kind: 'submit', body: { scope: 'invalid-scope' } },
         { user_id: 'creator-user-id' as UserID },
-        { app: app as never, isWorktreeOwner: async () => false }
+        { app: app as never, isBranchOwner: async () => false }
       )
     ).rejects.toThrow(/Invalid submit/);
   });
@@ -460,13 +460,13 @@ describe('resolveWidget', () => {
         'widget-msg-1',
         { kind: 'submit', body: { value: 'one', scope: 'global' } },
         { user_id: 'creator-user-id' as UserID },
-        { app: app as never, isWorktreeOwner: async () => false }
+        { app: app as never, isBranchOwner: async () => false }
       ),
       resolveWidget(
         'widget-msg-1',
         { kind: 'submit', body: { value: 'two', scope: 'global' } },
         { user_id: 'creator-user-id' as UserID },
-        { app: app as never, isWorktreeOwner: async () => false }
+        { app: app as never, isBranchOwner: async () => false }
       ),
     ]);
 

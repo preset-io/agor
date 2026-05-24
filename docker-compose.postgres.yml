@@ -7,7 +7,7 @@
 # - PostgreSQL database (instead of SQLite)
 # - RBAC + Unix integration enabled
 # - Test users (alice, bob) with Unix accounts
-# - Test worktrees with ownership configured
+# - Test branches with ownership configured
 #
 # To test as alice/bob: docker exec -it <container> sudo su alice
 

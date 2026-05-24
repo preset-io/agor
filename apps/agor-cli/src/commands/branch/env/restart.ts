@@ -1,7 +1,7 @@
 /**
- * `agor worktree env restart <worktree-id>` - Restart worktree environment
+ * `agor branch env restart <branch-id>` - Restart branch environment
  *
- * Restarts the development environment for a worktree.
+ * Restarts the development environment for a branch.
  */
 
 import { shortId } from '@agor-live/client';
@@ -9,8 +9,8 @@ import { Args } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../../base-command';
 
-export default class WorktreeEnvRestart extends BaseCommand {
-  static description = 'Restart worktree environment';
+export default class BranchEnvRestart extends BaseCommand {
+  static description = 'Restart branch environment';
 
   static examples = [
     '<%= config.bin %> <%= command.id %> abc123',
@@ -18,31 +18,31 @@ export default class WorktreeEnvRestart extends BaseCommand {
   ];
 
   static args = {
-    worktreeId: Args.string({
-      description: 'Worktree ID (full UUID or short ID)',
+    branchId: Args.string({
+      description: 'Branch ID (full UUID or short ID)',
       required: true,
     }),
   };
 
   async run(): Promise<void> {
-    const { args } = await this.parse(WorktreeEnvRestart);
+    const { args } = await this.parse(BranchEnvRestart);
 
     // Connect to daemon
     const client = await this.connectToDaemon();
 
     try {
-      const worktreesService = client.service('worktrees');
+      const branchesService = client.service('branches');
 
-      // Get worktree info
-      const worktree = await worktreesService.get(args.worktreeId);
+      // Get branch info
+      const branch = await branchesService.get(args.branchId);
 
       this.log('');
-      this.log(`Restarting environment for ${chalk.cyan(worktree.name)}...`);
-      this.log(`  ID:   ${chalk.dim(shortId(worktree.worktree_id))}`);
+      this.log(`Restarting environment for ${chalk.cyan(branch.name)}...`);
+      this.log(`  ID:   ${chalk.dim(shortId(branch.branch_id))}`);
       this.log('');
 
       // Call custom restartEnvironment method
-      const updated = await worktreesService.restartEnvironment(worktree.worktree_id);
+      const updated = await branchesService.restartEnvironment(branch.branch_id);
 
       this.log(`${chalk.green('✓')} Environment restarted`);
 

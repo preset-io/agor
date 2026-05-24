@@ -16,7 +16,7 @@ import type { AgorConfig, UnknownJson } from './types';
 // In-memory cache for the default-path config
 //
 // The daemon's hot paths call loadConfig()/loadConfigSync() per-request — 10+
-// times in services/worktrees.ts, services/artifacts.ts, services/terminals.ts,
+// times in services/branches.ts, services/artifacts.ts, services/terminals.ts,
 // register-routes.ts, etc. Each call re-reads the YAML from disk and parses
 // it. That's wasted work for a file that rarely changes.
 //
@@ -688,7 +688,7 @@ export function getCredential(key: ConfigCredentialKey): string | undefined {
  * @example
  * ```ts
  * const daemonUser = getDaemonUser();
- * if (daemonUser && isWorktreeRbacEnabled()) {
+ * if (daemonUser && isBranchRbacEnabled()) {
  *   runAsUser('git status', { asUser: daemonUser });
  * }
  * ```
@@ -725,12 +725,12 @@ export function requireDaemonUser(config: AgorConfig): string {
 
   // 2. Check if Unix isolation is enabled - if so, require explicit config
   const unixIsolationEnabled =
-    config.execution?.worktree_rbac === true ||
+    config.execution?.branch_rbac === true ||
     (config.execution?.unix_user_mode && config.execution.unix_user_mode !== 'simple');
 
   if (unixIsolationEnabled) {
     throw new Error(
-      'Unix isolation is enabled (worktree_rbac or unix_user_mode) but daemon.unix_user is not configured.\n' +
+      'Unix isolation is enabled (branch_rbac or unix_user_mode) but daemon.unix_user is not configured.\n' +
         'Please set daemon.unix_user in ~/.agor/config.yaml to the user running the daemon.\n' +
         'Example:\n' +
         '  daemon:\n' +
@@ -750,16 +750,16 @@ export function requireDaemonUser(config: AgorConfig): string {
 }
 
 /**
- * Check if worktree RBAC is enabled
+ * Check if branch RBAC is enabled
  *
  * When RBAC is enabled, git operations need to run via sudo to get fresh group memberships.
  *
- * @returns true if worktree_rbac is enabled in config
+ * @returns true if branch_rbac is enabled in config
  */
-export function isWorktreeRbacEnabled(): boolean {
+export function isBranchRbacEnabled(): boolean {
   try {
     const config = loadConfigSync();
-    return config.execution?.worktree_rbac === true;
+    return config.execution?.branch_rbac === true;
   } catch {
     return false;
   }
@@ -784,7 +784,7 @@ export function isUnixImpersonationEnabled(): boolean {
 /**
  * Resolve `execution.branch_storage` with defaults applied.
  *
- * Default posture preserves legacy behaviour: only the native worktree
+ * Default posture preserves legacy behaviour: only the native branch
  * mode is enabled and selected by default. Operators opt in to clone mode
  * by adding `'clone'` to `allowed_modes` in `~/.agor/config.yaml`.
  *
@@ -844,11 +844,11 @@ export function ensureBranchStorageModeAllowed(mode: import('./types').BranchSto
  * overhead AND breaks for users who never configured passwordless sudoers.
  *
  * Returns true when:
- * - `worktree_rbac` is enabled (RBAC creates `agor_wt_*` groups), OR
+ * - `branch_rbac` is enabled (RBAC creates `agor_wt_*` groups), OR
  * - `unix_user_mode` is `insulated` or `strict` (per-user impersonation)
  */
 export function isUnixGroupRefreshNeeded(): boolean {
-  return isWorktreeRbacEnabled() || isUnixImpersonationEnabled();
+  return isBranchRbacEnabled() || isUnixImpersonationEnabled();
 }
 
 // =============================================================================
@@ -862,7 +862,7 @@ export function isUnixGroupRefreshNeeded(): boolean {
 //   - Fast local storage (SSD)
 //
 // AGOR_DATA_HOME (defaults to AGOR_HOME):
-//   - Git data: repos/, worktrees/
+//   - Git data: repos/, branches/
 //   - Can be shared storage (EFS) for k8s deployments
 //
 // Priority (highest to lowest):
@@ -876,7 +876,7 @@ export function isUnixGroupRefreshNeeded(): boolean {
 /**
  * Get Agor data home directory
  *
- * This is where git repos and worktrees are stored.
+ * This is where git repos and branches are stored.
  * Defaults to AGOR_HOME for backward compatibility.
  *
  * Resolution order:
@@ -926,27 +926,27 @@ export function getReposDir(): string {
 }
 
 /**
- * Get worktrees directory path
+ * Get branches directory path
  *
- * Returns: $AGOR_DATA_HOME/worktrees
+ * Returns: $AGOR_DATA_HOME/branches
  *
- * @returns Absolute path to worktrees directory
+ * @returns Absolute path to branches directory
  */
-export function getWorktreesDir(): string {
-  return path.join(getDataHome(), 'worktrees');
+export function getBranchesDir(): string {
+  return path.join(getDataHome(), 'branches');
 }
 
 /**
- * Get path for a specific worktree
+ * Get path for a specific branch
  *
- * Returns: $AGOR_DATA_HOME/worktrees/<repoSlug>/<worktreeName>
+ * Returns: $AGOR_DATA_HOME/branches/<repoSlug>/<branchName>
  *
  * @param repoSlug - Repository slug (e.g., "preset-io/agor")
- * @param worktreeName - Worktree name (e.g., "feature-x")
- * @returns Absolute path to the worktree
+ * @param branchName - Branch name (e.g., "feature-x")
+ * @returns Absolute path to the branch
  */
-export function getWorktreePath(repoSlug: string, worktreeName: string): string {
-  return path.join(getWorktreesDir(), repoSlug, worktreeName);
+export function getBranchPath(repoSlug: string, branchName: string): string {
+  return path.join(getBranchesDir(), repoSlug, branchName);
 }
 
 /**
@@ -987,10 +987,10 @@ export async function getReposDirAsync(): Promise<string> {
 }
 
 /**
- * Get worktrees directory path (async version)
+ * Get branches directory path (async version)
  *
- * @returns Absolute path to worktrees directory
+ * @returns Absolute path to branches directory
  */
-export async function getWorktreesDirAsync(): Promise<string> {
-  return path.join(await getDataHomeAsync(), 'worktrees');
+export async function getBranchesDirAsync(): Promise<string> {
+  return path.join(await getDataHomeAsync(), 'branches');
 }

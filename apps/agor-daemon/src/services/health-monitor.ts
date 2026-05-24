@@ -1,12 +1,12 @@
 /**
  * Health Monitor Service
  *
- * Periodically checks health of running worktree environments.
+ * Periodically checks health of running branch environments.
  * Runs every 5 seconds and updates environment_instance.last_health_check.
  *
  * Features:
  * - Interval-based polling (5 seconds)
- * - Only monitors worktrees with status='running'
+ * - Only monitors branches with status='running'
  * - Automatic start/stop on environment state changes
  * - Graceful cleanup on daemon shutdown
  */
@@ -14,149 +14,149 @@
 import { ENVIRONMENT } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { Worktree, WorktreeID } from '@agor/core/types';
+import type { Branch, BranchID } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
-import type { WorktreesServiceImpl } from '../declarations';
+import type { BranchesServiceImpl } from '../declarations';
 
 /**
  * Health Monitor - Singleton service for periodic health checks
  */
 export class HealthMonitor {
   private app: Application;
-  private intervals = new Map<WorktreeID, NodeJS.Timeout>();
+  private intervals = new Map<BranchID, NodeJS.Timeout>();
   private isShuttingDown = false;
 
   constructor(app: Application) {
     this.app = app;
-    this.setupWorktreeListeners();
+    this.setupBranchListeners();
   }
 
   /**
-   * Set up WebSocket listeners for worktree changes
+   * Set up WebSocket listeners for branch changes
    */
-  private setupWorktreeListeners() {
-    const worktreesService = this.app.service('worktrees');
+  private setupBranchListeners() {
+    const branchesService = this.app.service('branches');
 
-    // Listen for worktree updates (start/stop/status changes)
-    worktreesService.on('patched', (worktree: Worktree) => {
-      this.handleWorktreeUpdate(worktree);
+    // Listen for branch updates (start/stop/status changes)
+    branchesService.on('patched', (branch: Branch) => {
+      this.handleBranchUpdate(branch);
     });
 
-    // Listen for worktree creation (in case created with running status)
-    worktreesService.on('created', (worktree: Worktree) => {
-      this.handleWorktreeUpdate(worktree);
+    // Listen for branch creation (in case created with running status)
+    branchesService.on('created', (branch: Branch) => {
+      this.handleBranchUpdate(branch);
     });
 
-    // Listen for worktree removal (cleanup monitoring)
-    worktreesService.on('removed', (worktree: Worktree) => {
-      this.stopMonitoring(worktree.worktree_id);
+    // Listen for branch removal (cleanup monitoring)
+    branchesService.on('removed', (branch: Branch) => {
+      this.stopMonitoring(branch.branch_id);
     });
   }
 
   /**
-   * Handle worktree state changes
+   * Handle branch state changes
    */
-  private handleWorktreeUpdate(worktree: Worktree) {
+  private handleBranchUpdate(branch: Branch) {
     if (this.isShuttingDown) return;
 
-    const status = worktree.environment_instance?.status;
+    const status = branch.environment_instance?.status;
 
     if (status === 'running' || status === 'starting') {
       // Start monitoring if not already monitored
       // Monitor both 'running' and 'starting' - health checks will transition 'starting' → 'running'
-      if (!this.intervals.has(worktree.worktree_id)) {
-        console.log(`🏥 Starting health monitoring for worktree: ${worktree.name}`);
-        this.startMonitoring(worktree.worktree_id);
+      if (!this.intervals.has(branch.branch_id)) {
+        console.log(`🏥 Starting health monitoring for branch: ${branch.name}`);
+        this.startMonitoring(branch.branch_id);
       }
     } else {
       // Stop monitoring if status is not running or starting
-      if (this.intervals.has(worktree.worktree_id)) {
-        console.log(`🏥 Stopping health monitoring for worktree: ${worktree.name}`);
-        this.stopMonitoring(worktree.worktree_id);
+      if (this.intervals.has(branch.branch_id)) {
+        console.log(`🏥 Stopping health monitoring for branch: ${branch.name}`);
+        this.stopMonitoring(branch.branch_id);
       }
     }
   }
 
   /**
-   * Start monitoring a worktree's health
+   * Start monitoring a branch's health
    */
-  private startMonitoring(worktreeId: WorktreeID) {
+  private startMonitoring(branchId: BranchID) {
     // Clear existing interval if any
-    this.stopMonitoring(worktreeId);
+    this.stopMonitoring(branchId);
 
     // Wait grace period before first check
     setTimeout(() => {
       if (this.isShuttingDown) return;
 
       // Perform first health check
-      this.checkHealth(worktreeId);
+      this.checkHealth(branchId);
 
       // Set up periodic health checks
       const interval = setInterval(() => {
         if (this.isShuttingDown) return;
-        this.checkHealth(worktreeId);
+        this.checkHealth(branchId);
       }, ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS);
 
-      this.intervals.set(worktreeId, interval);
+      this.intervals.set(branchId, interval);
     }, ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
   }
 
   /**
-   * Stop monitoring a worktree's health
+   * Stop monitoring a branch's health
    */
-  private stopMonitoring(worktreeId: WorktreeID) {
-    const interval = this.intervals.get(worktreeId);
+  private stopMonitoring(branchId: BranchID) {
+    const interval = this.intervals.get(branchId);
     if (interval) {
       clearInterval(interval);
-      this.intervals.delete(worktreeId);
+      this.intervals.delete(branchId);
     }
   }
 
   /**
-   * Perform health check for a specific worktree
+   * Perform health check for a specific branch
    */
-  private async checkHealth(worktreeId: WorktreeID) {
+  private async checkHealth(branchId: BranchID) {
     try {
-      const worktreesService = this.app.service('worktrees') as unknown as WorktreesServiceImpl;
+      const branchesService = this.app.service('branches') as unknown as BranchesServiceImpl;
 
-      // Get current worktree state
-      const worktree = await worktreesService.get(worktreeId);
+      // Get current branch state
+      const branch = await branchesService.get(branchId);
 
       // Only check if still running or starting
-      const status = worktree.environment_instance?.status;
+      const status = branch.environment_instance?.status;
       if (status !== 'running' && status !== 'starting') {
         // Silently stop monitoring (not an error - expected when env stops)
-        // Start/stop logs are already handled in handleWorktreeUpdate()
-        this.stopMonitoring(worktreeId);
+        // Start/stop logs are already handled in handleBranchUpdate()
+        this.stopMonitoring(branchId);
         return;
       }
 
       // Perform health check via the service method
       // This will update environment_instance and broadcast via WebSocket
       // Logging is handled in checkHealth() method - only logs on state changes
-      await worktreesService.checkHealth(worktreeId);
+      await branchesService.checkHealth(branchId);
     } catch (error) {
-      // If worktree was deleted or not found, stop monitoring silently
-      // This is expected when worktrees are deleted while health checks are in progress
+      // If branch was deleted or not found, stop monitoring silently
+      // This is expected when branches are deleted while health checks are in progress
       if (error instanceof NotFoundError) {
-        this.stopMonitoring(worktreeId);
+        this.stopMonitoring(branchId);
         // Only log at debug level - this is normal cleanup, not an error
         if (process.env.DEBUG) {
-          console.log(`   Health monitoring stopped for deleted worktree ${shortId(worktreeId)}`);
+          console.log(`   Health monitoring stopped for deleted branch ${shortId(branchId)}`);
         }
         return;
       }
 
-      // Log actual errors (not "not found" errors from deleted worktrees)
+      // Log actual errors (not "not found" errors from deleted branches)
       console.error(
-        `❌ Health check failed for worktree ${shortId(worktreeId)}:`,
+        `❌ Health check failed for branch ${shortId(branchId)}:`,
         error instanceof Error ? error.message : error
       );
     }
   }
 
   /**
-   * Initialize monitoring for all currently running worktrees
+   * Initialize monitoring for all currently running branches
    *
    * Called on daemon startup to resume monitoring existing environments
    */
@@ -164,10 +164,10 @@ export class HealthMonitor {
     console.log('🏥 Initializing Health Monitor...');
 
     try {
-      const worktreesService = this.app.service('worktrees');
+      const branchesService = this.app.service('branches');
 
-      // Find all worktrees with running status
-      const result = await worktreesService.find({
+      // Find all branches with running status
+      const result = await branchesService.find({
         query: {
           $limit: 1000,
         },
@@ -175,19 +175,19 @@ export class HealthMonitor {
       });
 
       // Handle both paginated and non-paginated responses
-      const worktrees = (Array.isArray(result) ? result : result.data) as Worktree[];
+      const branches = (Array.isArray(result) ? result : result.data) as Branch[];
 
-      // Start monitoring running or starting worktrees
-      const activeWorktrees = worktrees.filter(
+      // Start monitoring running or starting branches
+      const activeBranches = branches.filter(
         (w) =>
           w.environment_instance?.status === 'running' ||
           w.environment_instance?.status === 'starting'
       );
 
-      if (activeWorktrees.length > 0) {
-        console.log(`   Found ${activeWorktrees.length} active environment(s)`);
-        for (const worktree of activeWorktrees) {
-          this.startMonitoring(worktree.worktree_id);
+      if (activeBranches.length > 0) {
+        console.log(`   Found ${activeBranches.length} active environment(s)`);
+        for (const branch of activeBranches) {
+          this.startMonitoring(branch.branch_id);
         }
       } else {
         console.log('   No active environments found');
@@ -207,9 +207,9 @@ export class HealthMonitor {
     this.isShuttingDown = true;
 
     // Clear all intervals
-    for (const [worktreeId, interval] of this.intervals.entries()) {
+    for (const [branchId, interval] of this.intervals.entries()) {
       clearInterval(interval);
-      console.log(`   Stopped monitoring: ${shortId(worktreeId)}`);
+      console.log(`   Stopped monitoring: ${shortId(branchId)}`);
     }
 
     this.intervals.clear();
@@ -222,7 +222,7 @@ export class HealthMonitor {
   getStatus() {
     return {
       isShuttingDown: this.isShuttingDown,
-      monitoredWorktrees: Array.from(this.intervals.keys()),
+      monitoredBranches: Array.from(this.intervals.keys()),
       monitoringCount: this.intervals.size,
     };
   }

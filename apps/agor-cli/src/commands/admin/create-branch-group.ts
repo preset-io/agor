@@ -1,34 +1,34 @@
 /**
- * Admin Command: Create Worktree Unix Group
+ * Admin Command: Create Branch Unix Group
  *
  * PRIVILEGED OPERATION - Must be called via sudo
  *
- * Creates a Unix group for worktree isolation (agor_wt_<short-id>).
- * This command is designed to be called by the daemon via `sudo agor admin create-worktree-group`.
+ * Creates a Unix group for branch isolation (agor_wt_<short-id>).
+ * This command is designed to be called by the daemon via `sudo agor admin create-branch-group`.
  *
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
 import {
   createAdminExecutor,
-  generateWorktreeGroupName,
-  isValidWorktreeGroupName,
+  generateBranchGroupName,
+  isValidBranchGroupName,
   UnixGroupCommands,
 } from '@agor/core/unix';
 import { Command, Flags } from '@oclif/core';
 
-export default class CreateWorktreeGroup extends Command {
-  static override description = 'Create a Unix group for a worktree (admin only)';
+export default class CreateBranchGroup extends Command {
+  static override description = 'Create a Unix group for a branch (admin only)';
 
   static override examples = [
-    '<%= config.bin %> <%= command.id %> --worktree-id 03b62447-f2c6-4259-997b-d38ed1ddafed',
-    '<%= config.bin %> <%= command.id %> --worktree-id 03b62447-f2c6-4259-997b-d38ed1ddafed --dry-run',
+    '<%= config.bin %> <%= command.id %> --branch-id 03b62447-f2c6-4259-997b-d38ed1ddafed',
+    '<%= config.bin %> <%= command.id %> --branch-id 03b62447-f2c6-4259-997b-d38ed1ddafed --dry-run',
   ];
 
   static override flags = {
-    'worktree-id': Flags.string({
+    'branch-id': Flags.string({
       char: 'w',
-      description: 'Worktree ID (full UUID)',
+      description: 'Branch ID (full UUID)',
       required: true,
     }),
     'dry-run': Flags.boolean({
@@ -44,8 +44,8 @@ export default class CreateWorktreeGroup extends Command {
   };
 
   public async run(): Promise<void> {
-    const { flags } = await this.parse(CreateWorktreeGroup);
-    const worktreeId = flags['worktree-id'];
+    const { flags } = await this.parse(CreateBranchGroup);
+    const branchId = flags['branch-id'];
     const dryRun = flags['dry-run'];
     const verbose = flags.verbose;
 
@@ -57,11 +57,11 @@ export default class CreateWorktreeGroup extends Command {
     }
 
     // Generate group name
-    // biome-ignore lint/suspicious/noExplicitAny: WorktreeID type assertion needed for branded type
-    const groupName = generateWorktreeGroupName(worktreeId as any);
+    // biome-ignore lint/suspicious/noExplicitAny: BranchID type assertion needed for branded type
+    const groupName = generateBranchGroupName(branchId as any);
 
     // Validate group name format
-    if (!isValidWorktreeGroupName(groupName)) {
+    if (!isValidBranchGroupName(groupName)) {
       this.error(`Invalid group name format: ${groupName}`);
     }
 

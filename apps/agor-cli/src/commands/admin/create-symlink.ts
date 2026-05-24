@@ -1,9 +1,9 @@
 /**
- * Admin Command: Create Worktree Symlink
+ * Admin Command: Create Branch Symlink
  *
  * PRIVILEGED OPERATION - Must be called via sudo
  *
- * Creates a symlink in a user's ~/agor/worktrees directory pointing to a worktree.
+ * Creates a symlink in a user's ~/agor/worktrees directory pointing to a branch.
  * This command is designed to be called by the daemon via `sudo agor admin create-symlink`.
  *
  * @see context/guides/rbac-and-unix-isolation.md
@@ -12,18 +12,18 @@
 import {
   AGOR_HOME_BASE,
   createAdminExecutor,
-  getWorktreeSymlinkPath,
+  getBranchSymlinkPath,
   isValidUnixUsername,
   SymlinkCommands,
 } from '@agor/core/unix';
 import { Command, Flags } from '@oclif/core';
 
 export default class CreateSymlink extends Command {
-  static override description = 'Create a worktree symlink in user home directory (admin only)';
+  static override description = 'Create a branch symlink in user home directory (admin only)';
 
   static override examples = [
-    '<%= config.bin %> <%= command.id %> --username alice --worktree-name my-feature --worktree-path /var/agor/worktrees/abc123',
-    '<%= config.bin %> <%= command.id %> --username alice --worktree-name my-feature --worktree-path /var/agor/worktrees/abc123 --dry-run',
+    '<%= config.bin %> <%= command.id %> --username alice --branch-name my-feature --branch-path /var/agor/worktrees/abc123',
+    '<%= config.bin %> <%= command.id %> --username alice --branch-name my-feature --branch-path /var/agor/worktrees/abc123 --dry-run',
   ];
 
   static override flags = {
@@ -32,14 +32,14 @@ export default class CreateSymlink extends Command {
       description: 'Unix username (owner of symlink)',
       required: true,
     }),
-    'worktree-name': Flags.string({
+    'branch-name': Flags.string({
       char: 'w',
-      description: 'Worktree name/slug (symlink name)',
+      description: 'Branch name/slug (symlink name)',
       required: true,
     }),
-    'worktree-path': Flags.string({
+    'branch-path': Flags.string({
       char: 'p',
-      description: 'Absolute path to worktree directory (symlink target)',
+      description: 'Absolute path to branch directory (symlink target)',
       required: true,
     }),
     'home-base': Flags.string({
@@ -61,8 +61,8 @@ export default class CreateSymlink extends Command {
   public async run(): Promise<void> {
     const { flags } = await this.parse(CreateSymlink);
     const { username, verbose } = flags;
-    const worktreeName = flags['worktree-name'];
-    const worktreePath = flags['worktree-path'];
+    const branchName = flags['branch-name'];
+    const branchPath = flags['branch-path'];
     const homeBase = flags['home-base'];
     const dryRun = flags['dry-run'];
 
@@ -78,20 +78,20 @@ export default class CreateSymlink extends Command {
       this.error(`Invalid Unix username format: ${username}`);
     }
 
-    // Validate worktree path is absolute
-    if (!worktreePath.startsWith('/')) {
-      this.error(`Worktree path must be absolute: ${worktreePath}`);
+    // Validate branch path is absolute
+    if (!branchPath.startsWith('/')) {
+      this.error(`Branch path must be absolute: ${branchPath}`);
     }
 
-    const linkPath = getWorktreeSymlinkPath(username, worktreeName, homeBase);
+    const linkPath = getBranchSymlinkPath(username, branchName, homeBase);
 
     // Check if symlink already exists and points to same target
     try {
       const result = await executor.exec(SymlinkCommands.readSymlink(linkPath));
       const existingTarget = result.stdout.trim();
 
-      if (existingTarget === worktreePath) {
-        this.log(`✅ Symlink already exists: ${linkPath} -> ${worktreePath}`);
+      if (existingTarget === branchPath) {
+        this.log(`✅ Symlink already exists: ${linkPath} -> ${branchPath}`);
         return;
       }
       // Symlink exists but points elsewhere - will be replaced
@@ -103,9 +103,9 @@ export default class CreateSymlink extends Command {
     // Create symlink with proper ownership
     try {
       await executor.execAll(
-        SymlinkCommands.createSymlinkWithOwnership(worktreePath, linkPath, username)
+        SymlinkCommands.createSymlinkWithOwnership(branchPath, linkPath, username)
       );
-      this.log(`✅ Created symlink: ${linkPath} -> ${worktreePath}`);
+      this.log(`✅ Created symlink: ${linkPath} -> ${branchPath}`);
     } catch (error) {
       this.error(`Failed to create symlink: ${error}`);
     }

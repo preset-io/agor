@@ -1,4 +1,4 @@
-import type { AgorClient, Worktree } from '@agor-live/client';
+import type { AgorClient, Branch } from '@agor-live/client';
 import { ReloadOutlined } from '@ant-design/icons';
 import { Alert, Button, Checkbox, Modal, Space, Typography, theme } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -10,7 +10,7 @@ const { Text } = Typography;
 interface EnvironmentLogsModalProps {
   open: boolean;
   onClose: () => void;
-  worktree: Worktree;
+  branch: Branch;
   client: AgorClient | null;
 }
 
@@ -24,7 +24,7 @@ interface LogsResponse {
 export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
   open,
   onClose,
-  worktree,
+  branch,
   client,
 }) => {
   const { token } = theme.useToken();
@@ -52,9 +52,9 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
 
       try {
         // Call the custom logs endpoint using Feathers client with query params
-        const data = (await client.service('worktrees/logs').find({
+        const data = (await client.service('branches/logs').find({
           query: {
-            worktree_id: worktree.worktree_id,
+            branch_id: branch.branch_id,
           },
         })) as unknown as LogsResponse;
         setLogs(data);
@@ -81,7 +81,7 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
         }
       }
     },
-    [client, worktree.worktree_id]
+    [client, branch.branch_id]
   );
 
   // Fetch logs when modal opens
@@ -125,7 +125,7 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
 
   return (
     <Modal
-      title={`Environment Logs - ${worktree.name}`}
+      title={`Environment Logs - ${branch.name}`}
       open={open}
       onCancel={onClose}
       width={900}

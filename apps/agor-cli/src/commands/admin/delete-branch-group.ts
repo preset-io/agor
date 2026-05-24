@@ -1,10 +1,10 @@
 /**
- * Admin Command: Delete Worktree Unix Group
+ * Admin Command: Delete Branch Unix Group
  *
  * PRIVILEGED OPERATION - Must be called via sudo
  *
- * Deletes a Unix group for worktree isolation.
- * This command is designed to be called by the daemon via `sudo agor admin delete-worktree-group`.
+ * Deletes a Unix group for branch isolation.
+ * This command is designed to be called by the daemon via `sudo agor admin delete-branch-group`.
  *
  * @see context/guides/rbac-and-unix-isolation.md
  */
@@ -12,8 +12,8 @@
 import { createAdminExecutor, UnixGroupCommands } from '@agor/core/unix';
 import { Command, Flags } from '@oclif/core';
 
-export default class DeleteWorktreeGroup extends Command {
-  static override description = 'Delete a worktree Unix group (admin only)';
+export default class DeleteBranchGroup extends Command {
+  static override description = 'Delete a branch Unix group (admin only)';
 
   static override examples = [
     '<%= config.bin %> <%= command.id %> --group agor_wt_03b62447',
@@ -39,7 +39,7 @@ export default class DeleteWorktreeGroup extends Command {
   };
 
   public async run(): Promise<void> {
-    const { flags } = await this.parse(DeleteWorktreeGroup);
+    const { flags } = await this.parse(DeleteBranchGroup);
     const { group, verbose } = flags;
     const dryRun = flags['dry-run'];
 

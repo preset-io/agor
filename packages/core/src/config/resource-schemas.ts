@@ -55,12 +55,12 @@ export const resourceRepoConfigSchema = z
   });
 
 // ---------------------------------------------------------------------------
-// ResourceWorktreeConfig
+// ResourceBranchConfig
 // ---------------------------------------------------------------------------
 
-export const resourceWorktreeConfigSchema = z.object({
-  worktree_id: uuidSchema,
-  name: z.string().min(1, 'Worktree name is required'),
+export const resourceBranchConfigSchema = z.object({
+  branch_id: uuidSchema,
+  name: z.string().min(1, 'Branch name is required'),
   ref: z.string().min(1, 'Git ref is required'),
   ref_type: z.enum(['branch', 'tag']).optional(),
   others_can: z.enum(['none', 'view', 'session', 'prompt', 'all']).optional(),
@@ -89,7 +89,7 @@ export const resourceUserConfigSchema = z.object({
 
 export const daemonResourcesConfigSchema = z.object({
   repos: z.array(resourceRepoConfigSchema).optional(),
-  worktrees: z.array(resourceWorktreeConfigSchema).optional(),
+  branches: z.array(resourceBranchConfigSchema).optional(),
   users: z.array(resourceUserConfigSchema).optional(),
 });
 
@@ -98,7 +98,7 @@ export const daemonResourcesConfigSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export type ParsedRepoConfig = z.infer<typeof resourceRepoConfigSchema>;
-export type ParsedWorktreeConfig = z.infer<typeof resourceWorktreeConfigSchema>;
+export type ParsedBranchConfig = z.infer<typeof resourceBranchConfigSchema>;
 export type ParsedUserConfig = z.infer<typeof resourceUserConfigSchema>;
 export type ParsedResourcesConfig = z.infer<typeof daemonResourcesConfigSchema>;
 
@@ -113,16 +113,16 @@ export interface ResourceValidationError {
 
 /**
  * Validate cross-references and uniqueness constraints that Zod can't express:
- * - No duplicate repo_id / worktree_id / user_id values
+ * - No duplicate repo_id / branch_id / user_id values
  * - No duplicate repo slugs
- * - worktree.repo references a declared repo slug
+ * - branch.repo references a declared repo slug
  */
 export function validateResourceCrossReferences(
   resources: z.infer<typeof daemonResourcesConfigSchema>
 ): ResourceValidationError[] {
   const errors: ResourceValidationError[] = [];
   const repos = resources.repos ?? [];
-  const worktrees = resources.worktrees ?? [];
+  const branches = resources.branches ?? [];
   const users = resources.users ?? [];
 
   // Collect repo slugs for cross-reference checking
@@ -149,24 +149,24 @@ export function validateResourceCrossReferences(
     repoSlugs.add(repo.slug);
   }
 
-  // Check worktree uniqueness and repo cross-references
-  const worktreeIds = new Set<string>();
+  // Check branch uniqueness and repo cross-references
+  const branchIds = new Set<string>();
 
-  for (let i = 0; i < worktrees.length; i++) {
-    const wt = worktrees[i];
+  for (let i = 0; i < branches.length; i++) {
+    const wt = branches[i];
 
-    if (worktreeIds.has(wt.worktree_id)) {
+    if (branchIds.has(wt.branch_id)) {
       errors.push({
-        path: `resources.worktrees[${i}].worktree_id`,
-        message: `Duplicate worktree_id: ${wt.worktree_id}`,
+        path: `resources.branches[${i}].branch_id`,
+        message: `Duplicate branch_id: ${wt.branch_id}`,
       });
     }
-    worktreeIds.add(wt.worktree_id);
+    branchIds.add(wt.branch_id);
 
     if (!repoSlugs.has(wt.repo)) {
       errors.push({
-        path: `resources.worktrees[${i}].repo`,
-        message: `Worktree references unknown repo slug: "${wt.repo}". Declared repos: [${[...repoSlugs].join(', ')}]`,
+        path: `resources.branches[${i}].repo`,
+        message: `Branch references unknown repo slug: "${wt.repo}". Declared repos: [${[...repoSlugs].join(', ')}]`,
       });
     }
   }

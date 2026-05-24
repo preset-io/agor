@@ -7,7 +7,7 @@
  * Unix names are different: they're persisted system-wide in `/etc/group`
  * and `/etc/passwd`, parsed by fixed-length regexes in this module, and
  * referenced by the `unix_group` / `unix_username` columns on every
- * worktree/repo/user row. Bumping this length would require migrating
+ * branch/repo/user row. Bumping this length would require migrating
  * every existing installation (old groups wouldn't match the new regex)
  * for no real win — Unix-name creation is rare and failure-loud
  * (`groupadd` errors if the name exists), so the collision risk that

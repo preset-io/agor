@@ -15,7 +15,7 @@ function makeUser(partial: Partial<User['default_agentic_config']> = {}): User {
     onboarding_completed: true,
     must_change_password: false,
     created_at: new Date(),
-    scheduled_from_worktree: false,
+    scheduled_from_branch: false,
     default_agentic_config: partial,
   } as unknown as User;
 }

@@ -1,16 +1,16 @@
 /**
- * Worktree Owners Service
+ * Branch Owners Service
  *
- * Manages worktree ownership via the worktree_owners junction table.
- * Exposed as a nested route: worktrees/:id/owners
+ * Manages branch ownership via the branch_owners junction table.
+ * Exposed as a nested route: branches/:id/owners
  *
  * Operations:
- * - GET /worktrees/:id/owners - List all owners of a worktree
- * - POST /worktrees/:id/owners - Add an owner to a worktree
- * - DELETE /worktrees/:id/owners/:userId - Remove an owner from a worktree
+ * - GET /branches/:id/owners - List all owners of a branch
+ * - POST /branches/:id/owners - Add an owner to a branch
+ * - DELETE /branches/:id/owners/:userId - Remove an owner from a branch
  *
  * Authorization:
- * - Only worktree owners can manage other owners (requires 'all' permission)
+ * - Only branch owners can manage other owners (requires 'all' permission)
  *
  * Unix Integration:
  * - When owners are added/removed, fire-and-forget sync to executor
@@ -18,24 +18,24 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import type { WorktreeRepository } from '@agor/core/db';
+import type { BranchRepository } from '@agor/core/db';
 import { shortId } from '@agor/core/db';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import type { HookContext, User, UUID, WorktreeID } from '@agor/core/types';
+import type { BranchID, HookContext, User, UUID } from '@agor/core/types';
+import { isSuperAdmin, PERMISSION_RANK } from '../utils/branch-authorization.js';
 import {
   createServiceToken,
   getDaemonUrl,
   spawnExecutorFireAndForget,
 } from '../utils/spawn-executor.js';
-import { isSuperAdmin, PERMISSION_RANK } from '../utils/worktree-authorization.js';
 
-interface WorktreeOwnerCreateData {
+interface BranchOwnerCreateData {
   user_id: string;
 }
 
-interface WorktreeOwnerParams {
+interface BranchOwnerParams {
   route?: {
-    id: string; // worktree_id
+    id: string; // branch_id
     userId?: string; // for removal endpoint
   };
 }
@@ -43,7 +43,7 @@ interface WorktreeOwnerParams {
 /**
  * Authorization hook - ensure user has 'view' permission to see owners
  */
-function requireViewPermission(worktreeRepo: WorktreeRepository, allowSuperadmin = true) {
+function requireViewPermission(branchRepo: BranchRepository, allowSuperadmin = true) {
   return async (context: HookContext) => {
     // Skip for internal calls
     if (!context.params.provider) {
@@ -61,30 +61,30 @@ function requireViewPermission(worktreeRepo: WorktreeRepository, allowSuperadmin
       throw new NotAuthenticated('Authentication required');
     }
 
-    const worktreeId = context.params.route?.id;
-    if (!worktreeId) {
-      throw new Error('Worktree ID is required');
+    const branchId = context.params.route?.id;
+    if (!branchId) {
+      throw new Error('Branch ID is required');
     }
 
-    // Superadmins can view owners of any worktree
+    // Superadmins can view owners of any branch
     const userRole = context.params.user?.role;
     if (isSuperAdmin(userRole, allowSuperadmin)) {
       return context;
     }
 
-    // Load worktree and check permission
-    const worktree = await worktreeRepo.findById(worktreeId);
-    if (!worktree) {
-      throw new Forbidden(`Worktree not found: ${worktreeId}`);
+    // Load branch and check permission
+    const branch = await branchRepo.findById(branchId);
+    if (!branch) {
+      throw new Forbidden(`Branch not found: ${branchId}`);
     }
 
-    const isOwner = await worktreeRepo.isOwner(worktree.worktree_id, userId as UUID);
+    const isOwner = await branchRepo.isOwner(branch.branch_id, userId as UUID);
 
     // Check if user has at least 'view' permission
-    const effectivePermission = isOwner ? 'all' : worktree.others_can || 'session';
+    const effectivePermission = isOwner ? 'all' : branch.others_can || 'session';
 
     if (PERMISSION_RANK[effectivePermission] < PERMISSION_RANK.view) {
-      throw new Forbidden('You do not have permission to view this worktree');
+      throw new Forbidden('You do not have permission to view this branch');
     }
 
     return context;
@@ -92,9 +92,9 @@ function requireViewPermission(worktreeRepo: WorktreeRepository, allowSuperadmin
 }
 
 /**
- * Authorization hook - ensure user is a worktree owner (for create/remove)
+ * Authorization hook - ensure user is a branch owner (for create/remove)
  */
-function requireWorktreeOwner(worktreeRepo: WorktreeRepository, allowSuperadmin = true) {
+function requireBranchOwner(branchRepo: BranchRepository, allowSuperadmin = true) {
   return async (context: HookContext) => {
     // Skip for internal calls
     if (!context.params.provider) {
@@ -112,21 +112,21 @@ function requireWorktreeOwner(worktreeRepo: WorktreeRepository, allowSuperadmin 
       throw new NotAuthenticated('Authentication required');
     }
 
-    const worktreeId = context.params.route?.id;
-    if (!worktreeId) {
-      throw new Error('Worktree ID is required');
+    const branchId = context.params.route?.id;
+    if (!branchId) {
+      throw new Error('Branch ID is required');
     }
 
-    // Superadmins can manage owners on any worktree (self-assign ownership)
+    // Superadmins can manage owners on any branch (self-assign ownership)
     const userRole = context.params.user?.role;
     if (isSuperAdmin(userRole, allowSuperadmin)) {
       return context;
     }
 
-    // Check if user is an owner of this worktree
-    const isOwner = await worktreeRepo.isOwner(worktreeId as UUID, userId as UUID);
+    // Check if user is an owner of this branch
+    const isOwner = await branchRepo.isOwner(branchId as UUID, userId as UUID);
     if (!isOwner) {
-      throw new Forbidden('Only worktree owners can manage owners');
+      throw new Forbidden('Only branch owners can manage owners');
     }
 
     return context;
@@ -134,9 +134,9 @@ function requireWorktreeOwner(worktreeRepo: WorktreeRepository, allowSuperadmin 
 }
 
 /**
- * Configuration options for worktree owners service
+ * Configuration options for branch owners service
  */
-export interface WorktreeOwnersServiceConfig {
+export interface BranchOwnersServiceConfig {
   /** JWT secret for creating service tokens (required for Unix integration) */
   jwtSecret?: string;
   /** Daemon Unix user (for group membership) */
@@ -146,29 +146,29 @@ export interface WorktreeOwnersServiceConfig {
 }
 
 /**
- * Setup worktree owners service
+ * Setup branch owners service
  *
- * Registers a single nested route: worktrees/:id/owners
- * - GET /worktrees/:id/owners - List all owners
- * - POST /worktrees/:id/owners - Add an owner
- * - DELETE /worktrees/:id/owners/:userId - Remove an owner (userId passed as id parameter)
+ * Registers a single nested route: branches/:id/owners
+ * - GET /branches/:id/owners - List all owners
+ * - POST /branches/:id/owners - Add an owner
+ * - DELETE /branches/:id/owners/:userId - Remove an owner (userId passed as id parameter)
  */
-export function setupWorktreeOwnersService(
+export function setupBranchOwnersService(
   app: Application,
-  worktreeRepo: WorktreeRepository,
-  config: WorktreeOwnersServiceConfig = {}
+  branchRepo: BranchRepository,
+  config: BranchOwnersServiceConfig = {}
 ) {
   app.use(
-    'worktrees/:id/owners',
+    'branches/:id/owners',
     {
-      async find(params: WorktreeOwnerParams): Promise<User[]> {
-        const worktreeId = params.route?.id;
-        if (!worktreeId) {
-          throw new Error('Worktree ID is required');
+      async find(params: BranchOwnerParams): Promise<User[]> {
+        const branchId = params.route?.id;
+        if (!branchId) {
+          throw new Error('Branch ID is required');
         }
 
         // Get owner IDs
-        const ownerIds = await worktreeRepo.getOwners(worktreeId as UUID);
+        const ownerIds = await branchRepo.getOwners(branchId as UUID);
 
         // Fetch user details for each owner (access service lazily)
         const usersService = app.service('users');
@@ -187,10 +187,10 @@ export function setupWorktreeOwnersService(
         return owners.filter((user): user is User => user !== null);
       },
 
-      async create(data: WorktreeOwnerCreateData, params: WorktreeOwnerParams): Promise<User> {
-        const worktreeId = params.route?.id;
-        if (!worktreeId) {
-          throw new Error('Worktree ID is required');
+      async create(data: BranchOwnerCreateData, params: BranchOwnerParams): Promise<User> {
+        const branchId = params.route?.id;
+        if (!branchId) {
+          throw new Error('Branch ID is required');
         }
 
         const { user_id } = data;
@@ -198,7 +198,7 @@ export function setupWorktreeOwnersService(
           throw new Error('user_id is required');
         }
 
-        await worktreeRepo.addOwner(worktreeId as UUID, user_id as UUID);
+        await branchRepo.addOwner(branchId as UUID, user_id as UUID);
 
         // Return the user that was added (access service lazily)
         const usersService = app.service('users');
@@ -206,12 +206,12 @@ export function setupWorktreeOwnersService(
         return user;
       },
 
-      async remove(id: string, params: WorktreeOwnerParams): Promise<User> {
-        const worktreeId = params.route?.id;
+      async remove(id: string, params: BranchOwnerParams): Promise<User> {
+        const branchId = params.route?.id;
         const userId = id; // The userId is passed as the id parameter
 
-        if (!worktreeId) {
-          throw new Error('Worktree ID is required');
+        if (!branchId) {
+          throw new Error('Branch ID is required');
         }
         if (!userId) {
           throw new Error('User ID is required');
@@ -221,7 +221,7 @@ export function setupWorktreeOwnersService(
         const usersService = app.service('users');
         const user = await usersService.get(userId);
 
-        await worktreeRepo.removeOwner(worktreeId as UUID, userId as UUID);
+        await branchRepo.removeOwner(branchId as UUID, userId as UUID);
 
         return user;
       },
@@ -233,15 +233,15 @@ export function setupWorktreeOwnersService(
 
   // Add authorization and Unix integration hooks
   const allowSuperadmin = config.allowSuperadmin ?? true;
-  app.service('worktrees/:id/owners').hooks({
+  app.service('branches/:id/owners').hooks({
     before: {
-      find: [requireViewPermission(worktreeRepo, allowSuperadmin)],
-      create: [requireWorktreeOwner(worktreeRepo, allowSuperadmin)],
-      remove: [requireWorktreeOwner(worktreeRepo, allowSuperadmin)],
+      find: [requireViewPermission(branchRepo, allowSuperadmin)],
+      create: [requireBranchOwner(branchRepo, allowSuperadmin)],
+      remove: [requireBranchOwner(branchRepo, allowSuperadmin)],
     },
     after: {
       // After adding owner: fire-and-forget sync to executor
-      // The executor will handle adding user to worktree group, repo group, and creating symlinks
+      // The executor will handle adding user to branch group, repo group, and creating symlinks
       create: [
         async (context: HookContext) => {
           // Skip if no jwtSecret (Unix integration not configured)
@@ -249,25 +249,23 @@ export function setupWorktreeOwnersService(
             return context;
           }
 
-          const worktreeId = context.params.route?.id as WorktreeID;
+          const branchId = context.params.route?.id as BranchID;
 
           // Fire-and-forget sync to executor
-          // Syncing the worktree will pick up the new owner from the DB
-          console.log(
-            `[Unix Integration] Syncing worktree ${shortId(worktreeId)} after owner added`
-          );
+          // Syncing the branch will pick up the new owner from the DB
+          console.log(`[Unix Integration] Syncing branch ${shortId(branchId)} after owner added`);
           const serviceToken = createServiceToken(config.jwtSecret);
           spawnExecutorFireAndForget(
             {
-              command: 'unix.sync-worktree',
+              command: 'unix.sync-branch',
               sessionToken: serviceToken,
               daemonUrl: getDaemonUrl(),
               params: {
-                worktreeId,
+                branchId,
                 daemonUser: config.daemonUser,
               },
             },
-            { logPrefix: '[Executor/worktree-owners.create]' }
+            { logPrefix: '[Executor/branch-owners.create]' }
           );
 
           return context;
@@ -282,25 +280,23 @@ export function setupWorktreeOwnersService(
             return context;
           }
 
-          const worktreeId = context.params.route?.id as WorktreeID;
+          const branchId = context.params.route?.id as BranchID;
 
           // Fire-and-forget sync to executor
-          // Syncing the worktree will handle the removed owner
-          console.log(
-            `[Unix Integration] Syncing worktree ${shortId(worktreeId)} after owner removed`
-          );
+          // Syncing the branch will handle the removed owner
+          console.log(`[Unix Integration] Syncing branch ${shortId(branchId)} after owner removed`);
           const serviceToken = createServiceToken(config.jwtSecret);
           spawnExecutorFireAndForget(
             {
-              command: 'unix.sync-worktree',
+              command: 'unix.sync-branch',
               sessionToken: serviceToken,
               daemonUrl: getDaemonUrl(),
               params: {
-                worktreeId,
+                branchId,
                 daemonUser: config.daemonUser,
               },
             },
-            { logPrefix: '[Executor/worktree-owners.remove]' }
+            { logPrefix: '[Executor/branch-owners.remove]' }
           );
 
           return context;

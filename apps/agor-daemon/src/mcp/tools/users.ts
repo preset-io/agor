@@ -101,7 +101,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
           .enum([ROLES.SUPERADMIN, ROLES.ADMIN, ROLES.MEMBER, ROLES.VIEWER])
           .optional()
           .describe(
-            'New user role (optional). superadmin=full system access + worktree RBAC bypass, admin=manage resources, member=standard user, viewer=read-only'
+            'New user role (optional). superadmin=full system access + branch RBAC bypass, admin=manage resources, member=standard user, viewer=read-only'
           ),
         unix_username: z
           .string()
@@ -173,7 +173,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
           .enum([ROLES.SUPERADMIN, ROLES.ADMIN, ROLES.MEMBER, ROLES.VIEWER])
           .optional()
           .describe(
-            'User role (optional, defaults to "member"). Roles: superadmin=full system access + worktree RBAC bypass, admin=manage resources, member=standard user, viewer=read-only'
+            'User role (optional, defaults to "member"). Roles: superadmin=full system access + branch RBAC bypass, admin=manage resources, member=standard user, viewer=read-only'
           ),
       }),
     },

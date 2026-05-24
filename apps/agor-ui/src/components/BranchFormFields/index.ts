@@ -1,2 +1,2 @@
 export type { BranchFormFieldsProps } from './BranchFormFields';
-export { BranchFormFields, useWorktreeBranchName } from './BranchFormFields';
+export { BranchFormFields, useBranchBranchName } from './BranchFormFields';

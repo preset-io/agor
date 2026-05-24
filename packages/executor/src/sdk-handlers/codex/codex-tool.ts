@@ -10,13 +10,13 @@
 import { execSync } from 'node:child_process';
 import { generateId, shortId } from '@agor/core/db';
 import type {
+  BranchRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
   SessionMCPServerRepository,
   SessionRepository,
   UsersRepository,
-  WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 import type { TokenUsage } from '../../types/token-usage.js';
@@ -70,7 +70,7 @@ export class CodexTool implements ITool {
   private promptService?: CodexPromptService;
   private messagesRepo?: MessagesRepository;
   private sessionsRepo?: SessionRepository;
-  private worktreesRepo?: WorktreeRepository;
+  private branchesRepo?: BranchRepository;
   private messagesService?: MessagesService;
   private tasksService?: TasksService;
   private tasksStreamingService?: TasksStreamingService;
@@ -79,7 +79,7 @@ export class CodexTool implements ITool {
     messagesRepo?: MessagesRepository,
     sessionsRepo?: SessionRepository,
     sessionMCPServerRepo?: SessionMCPServerRepository,
-    worktreesRepo?: WorktreeRepository,
+    branchesRepo?: BranchRepository,
     reposRepo?: RepoRepository,
     apiKey?: string,
     messagesService?: MessagesService,
@@ -91,7 +91,7 @@ export class CodexTool implements ITool {
   ) {
     this.messagesRepo = messagesRepo;
     this.sessionsRepo = sessionsRepo;
-    this.worktreesRepo = worktreesRepo;
+    this.branchesRepo = branchesRepo;
     this.messagesService = messagesService;
     this.tasksService = tasksService;
     this.tasksStreamingService = tasksStreamingService;
@@ -101,7 +101,7 @@ export class CodexTool implements ITool {
         messagesRepo,
         sessionsRepo,
         sessionMCPServerRepo,
-        worktreesRepo,
+        branchesRepo,
         reposRepo,
         apiKey,
         mcpServerRepo,
@@ -216,11 +216,11 @@ export class CodexTool implements ITool {
     const pendingSnapshotToolIds = new Set<string>();
     const snapshotContext = { snapshotScope: sessionId };
 
-    if (this.sessionsRepo && this.worktreesRepo) {
+    if (this.sessionsRepo && this.branchesRepo) {
       const session = await this.sessionsRepo.findById(sessionId);
       if (session) {
-        const worktree = await this.worktreesRepo.findById(session.worktree_id);
-        workingDirectory = worktree?.path;
+        const branch = await this.branchesRepo.findById(session.branch_id);
+        workingDirectory = branch?.path;
       }
     }
 

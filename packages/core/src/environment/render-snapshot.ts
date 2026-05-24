@@ -1,25 +1,25 @@
 /**
- * Render a worktree "environment snapshot" from a repo's v2 environment config.
+ * Render a branch "environment snapshot" from a repo's v2 environment config.
  *
  * A snapshot is the set of concrete command strings (start / stop / nuke /
- * logs / health URL / app URL) that get written onto a worktree at creation
+ * logs / health URL / app URL) that get written onto a branch at creation
  * time or when an admin re-renders against a different variant.
  *
  * Precedence (lowest → highest, per design doc §5):
- *   1. Handlebars built-in helpers + `buildWorktreeContext` defaults
- *      (worktree.*, repo.*, host.*, custom.*)
+ *   1. Handlebars built-in helpers + `buildBranchContext` defaults
+ *      (branch.*, repo.*, host.*, custom.*)
  *   2. `repo.environment.template_overrides` deep-merged in
- *   3. Per-worktree `custom_context` (already in the base context)
+ *   3. Per-branch `custom_context` (already in the base context)
  *
  * See docs/designs/env-command-variants.md.
  */
 
 import { resolveVariantOrThrow } from '../config/agor-yml';
-import { buildWorktreeContext, renderTemplate } from '../templates/handlebars-helpers';
-import type { RepoEnvironment } from '../types/worktree';
+import { buildBranchContext, renderTemplate } from '../templates/handlebars-helpers';
+import type { RepoEnvironment } from '../types/branch';
 
 /**
- * Rendered snapshot — the concrete command strings a worktree should hold.
+ * Rendered snapshot — the concrete command strings a branch should hold.
  *
  * Fields are present (possibly empty string) when the corresponding variant
  * field was defined; fields not provided by the variant are omitted.
@@ -48,11 +48,11 @@ export interface RenderRepoInput {
 }
 
 /**
- * Minimal worktree shape needed for rendering (matches the inputs that
- * {@link buildWorktreeContext} already accepts).
+ * Minimal branch shape needed for rendering (matches the inputs that
+ * {@link buildBranchContext} already accepts).
  */
-export interface RenderWorktreeInput {
-  worktree_unique_id: number;
+export interface RenderBranchInput {
+  branch_unique_id: number;
   name: string;
   path: string;
   custom_context?: Record<string, unknown>;
@@ -88,7 +88,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 /**
- * Render a single worktree's environment snapshot from a repo's v2
+ * Render a single branch's environment snapshot from a repo's v2
  * environment, optionally overriding the variant name.
  *
  * Behavior:
@@ -99,12 +99,12 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  *   before templating.
  *
  * @param repo       Repo projection with v2 environment config
- * @param worktree   Worktree projection used for template context
+ * @param branch   Branch projection used for template context
  * @param variantName Optional variant name override (defaults to `environment.default`)
  */
-export function renderWorktreeSnapshot(
+export function renderBranchSnapshot(
   repo: RenderRepoInput,
-  worktree: RenderWorktreeInput,
+  branch: RenderBranchInput,
   variantName?: string
 ): RenderedEnvironmentSnapshot | null {
   const env = repo.environment;
@@ -128,19 +128,19 @@ export function renderWorktreeSnapshot(
 
   // Build base template context (built-ins), then deep-merge
   // template_overrides INTO the context, preserving `custom.*` from the
-  // worktree by merging custom context LAST.
-  const baseContext = buildWorktreeContext({
-    worktree_unique_id: worktree.worktree_unique_id,
-    name: worktree.name,
-    path: worktree.path,
+  // branch by merging custom context LAST.
+  const baseContext = buildBranchContext({
+    branch_unique_id: branch.branch_unique_id,
+    name: branch.name,
+    path: branch.path,
     repo_slug: repo.slug,
-    custom_context: worktree.custom_context,
-    unix_gid: worktree.unix_gid,
-    host_ip_address: worktree.host_ip_address,
+    custom_context: branch.custom_context,
+    unix_gid: branch.unix_gid,
+    host_ip_address: branch.host_ip_address,
   });
 
   // Per §5 of the design: defaults → template_overrides → custom.
-  // `buildWorktreeContext` already places custom under `custom.*`, so we
+  // `buildBranchContext` already places custom under `custom.*`, so we
   // need to merge overrides in BEFORE custom. Easiest way: rebuild with
   // override'd base entities, then reattach `custom`.
   const { custom, ...nonCustomBase } = baseContext as {

@@ -1,36 +1,30 @@
 /**
- * Worktree-centric RBAC authorization utilities
+ * Branch-centric RBAC authorization utilities
  *
- * Enforces app-layer permissions for worktrees and their nested resources (sessions/tasks/messages).
+ * Enforces app-layer permissions for branches and their nested resources (sessions/tasks/messages).
  *
- * Uses RBACParams to provide type-safe access to cached RBAC entities (worktree, session, ownership).
+ * Uses RBACParams to provide type-safe access to cached RBAC entities (branch, session, ownership).
  * This avoids redundant database queries within hook chains.
  *
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import type { BoardRepository, SessionRepository, WorktreeRepository } from '@agor/core/db';
+import type { BoardRepository, BranchRepository, SessionRepository } from '@agor/core/db';
 import { shortId } from '@agor/core/db';
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import type {
-  HookContext,
-  Session,
-  UUID,
-  Worktree,
-  WorktreePermissionLevel,
-} from '@agor/core/types';
-import { ROLES, WORKTREE_PERMISSION_LEVELS } from '@agor/core/types';
+import type { Branch, BranchPermissionLevel, HookContext, Session, UUID } from '@agor/core/types';
+import { BRANCH_PERMISSION_LEVELS, ROLES } from '@agor/core/types';
 
 /**
  * Check if a user has the superadmin role (or deprecated 'owner' alias).
- * Superadmins bypass worktree-level RBAC — they can view all worktrees
+ * Superadmins bypass branch-level RBAC — they can view all branches
  * (including others_can=none) and self-assign ownership.
  *
  * Note: This does NOT grant automatic prompt access. Superadmins must
- * self-assign as worktree owner first, leaving an audit trail.
+ * self-assign as branch owner first, leaving an audit trail.
  *
  * The allow_superadmin config flag gates this. When false, superadmins
- * are treated as regular admins (no worktree RBAC bypass).
+ * are treated as regular admins (no branch RBAC bypass).
  */
 export function isSuperAdmin(role: string | undefined, allowSuperadmin = true): boolean {
   if (!allowSuperadmin) return false;
@@ -39,34 +33,34 @@ export function isSuperAdmin(role: string | undefined, allowSuperadmin = true): 
 
 /**
  * Permission level hierarchy (for comparisons).
- * Derived from WORKTREE_PERMISSION_LEVELS — rank = array index - 1 (none=-1, view=0, …, all=3).
+ * Derived from BRANCH_PERMISSION_LEVELS — rank = array index - 1 (none=-1, view=0, …, all=3).
  */
-export const PERMISSION_RANK: Record<WorktreePermissionLevel, number> = Object.fromEntries(
-  WORKTREE_PERMISSION_LEVELS.map((level, i) => [level, i - 1])
-) as Record<WorktreePermissionLevel, number>;
+export const PERMISSION_RANK: Record<BranchPermissionLevel, number> = Object.fromEntries(
+  BRANCH_PERMISSION_LEVELS.map((level, i) => [level, i - 1])
+) as Record<BranchPermissionLevel, number>;
 
 /**
- * Check if user has minimum required permission level on a worktree
+ * Check if user has minimum required permission level on a branch
  *
  * Logic:
  * - Owners always have 'all' permission
- * - Superadmins get 'view' permission on all worktrees (can see everything)
+ * - Superadmins get 'view' permission on all branches (can see everything)
  *   but must self-assign ownership to get 'prompt'/'all' (leaves audit trail)
- * - Non-owners inherit from worktree.others_can
+ * - Non-owners inherit from branch.others_can
  * - Compare effective permission against required level
  *
- * @param worktree - Worktree to check
+ * @param branch - Branch to check
  * @param userId - User ID to check
  * @param isOwner - Whether user is an owner
  * @param requiredLevel - Minimum permission level required
  * @param userRole - User's global role (for superadmin bypass)
  * @returns true if user has sufficient permission
  */
-export function hasWorktreePermission(
-  worktree: Worktree,
+export function hasBranchPermission(
+  branch: Branch,
   userId: UUID,
   isOwner: boolean,
-  requiredLevel: WorktreePermissionLevel,
+  requiredLevel: BranchPermissionLevel,
   userRole?: string,
   allowSuperadmin = true
 ): boolean {
@@ -75,13 +69,13 @@ export function hasWorktreePermission(
     return true;
   }
 
-  // Superadmins have full access to all worktrees
+  // Superadmins have full access to all branches
   if (isSuperAdmin(userRole, allowSuperadmin)) {
     return true;
   }
 
-  // Non-owners inherit from worktree.others_can (defaults to 'session')
-  const effectiveLevel = worktree.others_can ?? 'session';
+  // Non-owners inherit from branch.others_can (defaults to 'session')
+  const effectiveLevel = branch.others_can ?? 'session';
   const effectiveRank = PERMISSION_RANK[effectiveLevel];
   const requiredRank = PERMISSION_RANK[requiredLevel];
 
@@ -89,46 +83,46 @@ export function hasWorktreePermission(
 }
 
 /**
- * Resolve worktree permission for a user
+ * Resolve branch permission for a user
  *
- * Returns the effective permission level the user has on the worktree.
+ * Returns the effective permission level the user has on the branch.
  *
- * @param worktree - Worktree to check
+ * @param branch - Branch to check
  * @param userId - User ID to check
  * @param isOwner - Whether user is an owner
  * @param userRole - User's global role (for superadmin bypass)
  * @returns Effective permission level ('none', 'view', 'prompt', or 'all')
  */
-export function resolveWorktreePermission(
-  worktree: Worktree,
+export function resolveBranchPermission(
+  branch: Branch,
   userId: UUID,
   isOwner: boolean,
   userRole?: string,
   allowSuperadmin = true
-): WorktreePermissionLevel {
+): BranchPermissionLevel {
   if (isOwner) {
     return 'all';
   }
-  // Superadmins get full access to all worktrees
+  // Superadmins get full access to all branches
   if (isSuperAdmin(userRole, allowSuperadmin)) {
     return 'all';
   }
-  return worktree.others_can ?? 'session';
+  return branch.others_can ?? 'session';
 }
 
 /**
- * Load worktree and cache it on context.params
+ * Load branch and cache it on context.params
  *
- * Fetches the worktree once and caches it on context.params.worktree.
- * Also resolves ownership and caches it on context.params.isWorktreeOwner.
+ * Fetches the branch once and caches it on context.params.branch.
+ * Also resolves ownership and caches it on context.params.isBranchOwner.
  *
- * This hook should run BEFORE ensureWorktreePermission.
+ * This hook should run BEFORE ensureBranchPermission.
  *
- * @param worktreeRepo - WorktreeRepository instance
- * @param worktreeIdField - Field name containing worktree_id (default: 'worktree_id')
+ * @param branchRepo - BranchRepository instance
+ * @param branchIdField - Field name containing branch_id (default: 'branch_id')
  * @returns Feathers hook
  */
-export function loadWorktree(worktreeRepo: WorktreeRepository, worktreeIdField = 'worktree_id') {
+export function loadBranch(branchRepo: BranchRepository, branchIdField = 'branch_id') {
   return async (context: HookContext) => {
     // Skip for internal calls
     if (!context.params.provider) {
@@ -140,65 +134,65 @@ export function loadWorktree(worktreeRepo: WorktreeRepository, worktreeIdField =
       return context;
     }
 
-    // Extract worktree_id from data or query
-    let worktreeId: string | undefined;
+    // Extract branch_id from data or query
+    let branchId: string | undefined;
 
     // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
     const data = context.data as any;
     // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
     const query = context.params.query as any;
 
-    if (context.method === 'create' && data?.[worktreeIdField]) {
-      worktreeId = data[worktreeIdField];
+    if (context.method === 'create' && data?.[branchIdField]) {
+      branchId = data[branchIdField];
     } else if (context.id) {
-      // For get/patch/remove, worktree_id might be the ID itself (for worktrees service)
+      // For get/patch/remove, branch_id might be the ID itself (for branches service)
       // or we need to load the parent resource (for sessions/tasks/messages)
-      if (context.path === 'worktrees') {
-        worktreeId = context.id as string;
+      if (context.path === 'branches') {
+        branchId = context.id as string;
       } else {
-        // For nested resources, worktree_id should be in data/query
-        worktreeId = data?.[worktreeIdField] || query?.[worktreeIdField];
+        // For nested resources, branch_id should be in data/query
+        branchId = data?.[branchIdField] || query?.[branchIdField];
       }
-    } else if (query?.[worktreeIdField]) {
-      worktreeId = query[worktreeIdField];
+    } else if (query?.[branchIdField]) {
+      branchId = query[branchIdField];
     }
 
-    if (!worktreeId) {
-      throw new Error(`Cannot load worktree: ${worktreeIdField} not found`);
+    if (!branchId) {
+      throw new Error(`Cannot load branch: ${branchIdField} not found`);
     }
 
-    // Load worktree
-    const worktree = await worktreeRepo.findById(worktreeId);
-    if (!worktree) {
-      throw new Forbidden(`Worktree not found: ${worktreeId}`);
+    // Load branch
+    const branch = await branchRepo.findById(branchId);
+    if (!branch) {
+      throw new Forbidden(`Branch not found: ${branchId}`);
     }
 
     // Check ownership
     const userId = context.params.user?.user_id as UUID | undefined;
-    const isOwner = userId ? await worktreeRepo.isOwner(worktree.worktree_id, userId) : false;
+    const isOwner = userId ? await branchRepo.isOwner(branch.branch_id, userId) : false;
 
     // Cache on context for downstream hooks (type-safe via RBACParams)
-    context.params.worktree = worktree;
-    context.params.isWorktreeOwner = isOwner;
+    context.params.branch = branch;
+    context.params.isBranchOwner = isOwner;
 
     return context;
   };
 }
 
 /**
- * Ensure user has minimum required permission on the worktree
+ * Ensure user has minimum required permission on the branch
  *
  * Throws Forbidden if user lacks permission.
  * Internal calls (no params.provider) bypass this check.
  *
- * IMPORTANT: Must run AFTER loadWorktree hook (which caches worktree and ownership).
+ * IMPORTANT: Must run AFTER loadBranch hook (which caches branch and ownership).
  *
  * @param requiredLevel - Minimum permission level required
  * @param action - Human-readable action description (for error messages)
  * @returns Feathers hook
  */
-export function ensureWorktreePermission(
-  requiredLevel: WorktreePermissionLevel,
+export function ensureBranchPermission(
+  requiredLevel: BranchPermissionLevel,
   action: string = 'perform this action',
   options?: { allowSuperadmin?: boolean }
 ) {
@@ -213,28 +207,26 @@ export function ensureWorktreePermission(
     }
 
     // Service accounts (executor) bypass RBAC — they perform privileged
-    // internal operations (unix.sync-worktree, git.worktree.add, etc.)
+    // internal operations (unix.sync-branch, git.branch.add, etc.)
     if (context.params.user._isServiceAccount) {
       return context;
     }
 
-    // Worktree and ownership should have been cached by loadWorktree hook
-    const worktree = context.params.worktree;
-    const isOwner = context.params.isWorktreeOwner ?? false;
+    // Branch and ownership should have been cached by loadBranch hook
+    const branch = context.params.branch;
+    const isOwner = context.params.isBranchOwner ?? false;
 
-    if (!worktree) {
-      throw new Error('loadWorktree hook must run before ensureWorktreePermission');
+    if (!branch) {
+      throw new Error('loadBranch hook must run before ensureBranchPermission');
     }
 
     const userId = context.params.user.user_id as UUID;
     const userRole = context.params.user.role as string | undefined;
     const allowSuperadmin = options?.allowSuperadmin ?? true;
 
-    if (
-      !hasWorktreePermission(worktree, userId, isOwner, requiredLevel, userRole, allowSuperadmin)
-    ) {
-      const effectiveLevel = resolveWorktreePermission(
-        worktree,
+    if (!hasBranchPermission(branch, userId, isOwner, requiredLevel, userRole, allowSuperadmin)) {
+      const effectiveLevel = resolveBranchPermission(
+        branch,
         userId,
         isOwner,
         userRole,
@@ -250,19 +242,19 @@ export function ensureWorktreePermission(
 }
 
 /**
- * Scope worktree query to only return authorized worktrees (OPTIMIZED SQL VERSION)
+ * Scope branch query to only return authorized branches (OPTIMIZED SQL VERSION)
  *
  * Replaces the default find() query with an optimized SQL query that uses JOIN
- * to filter worktrees by access in a single database query instead of N+1 queries.
+ * to filter branches by access in a single database query instead of N+1 queries.
  *
  * This is a BEFORE hook that modifies the query to use the repository's
- * findAccessibleWorktrees method which does a LEFT JOIN with worktree_owners.
+ * findAccessibleBranches method which does a LEFT JOIN with branch_owners.
  *
- * @param worktreeRepo - WorktreeRepository instance
+ * @param branchRepo - BranchRepository instance
  * @returns Feathers hook
  */
-export function scopeWorktreeQuery(
-  worktreeRepo: WorktreeRepository,
+export function scopeBranchQuery(
+  branchRepo: BranchRepository,
   options?: { allowSuperadmin?: boolean }
 ) {
   return async (context: HookContext) => {
@@ -288,31 +280,31 @@ export function scopeWorktreeQuery(
       return context;
     }
 
-    // Superadmins see all worktrees (bypass access filtering)
+    // Superadmins see all branches (bypass access filtering)
     const userRole = context.params.user?.role as string | undefined;
     const allowSuperadmin = options?.allowSuperadmin ?? true;
 
     // Use optimized repository method (single SQL query with JOIN)
     const query = context.params.query ?? {};
-    let accessibleWorktrees: Worktree[];
+    let accessibleBranches: Branch[];
     if (isSuperAdmin(userRole, allowSuperadmin)) {
-      // Superadmins see all worktrees — use findAll and apply archived filter manually
-      const all = await worktreeRepo.findAll({ includeArchived: true });
+      // Superadmins see all branches — use findAll and apply archived filter manually
+      const all = await branchRepo.findAll({ includeArchived: true });
       if (query.archived === true) {
-        accessibleWorktrees = all.filter((wt) => wt.archived === true);
+        accessibleBranches = all.filter((wt) => wt.archived === true);
       } else if (query.archived === false) {
-        accessibleWorktrees = all.filter((wt) => !wt.archived);
+        accessibleBranches = all.filter((wt) => !wt.archived);
       } else {
-        accessibleWorktrees = all;
+        accessibleBranches = all;
       }
     } else {
-      accessibleWorktrees = await worktreeRepo.findAccessibleWorktrees(userId, {
+      accessibleBranches = await branchRepo.findAccessibleBranches(userId, {
         archived: query.archived,
       });
     }
 
     // Apply client-side filtering for non-special query params (repo_id, name, etc.)
-    let filtered = accessibleWorktrees;
+    let filtered = accessibleBranches;
     for (const [key, value] of Object.entries(query)) {
       if (key.startsWith('$') || key === 'archived') continue; // Skip operators and already-applied filters
       // biome-ignore lint/suspicious/noExplicitAny: Dynamic property access for generic query filtering
@@ -322,7 +314,7 @@ export function scopeWorktreeQuery(
     // Apply sorting if specified (matches scopeSessionQuery behavior)
     const sort = query.$sort;
     if (sort) {
-      const sortField = Object.keys(sort)[0] as keyof Worktree;
+      const sortField = Object.keys(sort)[0] as keyof Branch;
       const sortOrder = sort[sortField] as 1 | -1;
       filtered = [...filtered].sort((a, b) => {
         const aVal = a[sortField];
@@ -342,7 +334,7 @@ export function scopeWorktreeQuery(
     const paginated = filtered.slice(skip, skip + limit);
 
     // Set result directly to bypass default query
-    // This prevents the N+1 problem from the old filterWorktreesByPermission approach
+    // This prevents the N+1 problem from the old filterBranchesByPermission approach
     context.result = {
       total: filtered.length,
       limit,
@@ -375,9 +367,9 @@ function compareSessionFields(a: Session, b: Session, field: keyof Session, orde
 }
 
 /**
- * Scope session query to only return sessions from authorized worktrees (OPTIMIZED SQL VERSION)
+ * Scope session query to only return sessions from authorized branches (OPTIMIZED SQL VERSION)
  *
- * Uses an optimized SQL query with JOINs to filter sessions by worktree access
+ * Uses an optimized SQL query with JOINs to filter sessions by branch access
  * in a single database query instead of N+1 queries.
  *
  * This is a BEFORE hook that replaces the default find() query.
@@ -455,18 +447,18 @@ export function scopeSessionQuery(
 }
 
 /**
- * Filter worktrees by permission in find() results (DEPRECATED - use scopeWorktreeQuery instead)
+ * Filter branches by permission in find() results (DEPRECATED - use scopeBranchQuery instead)
  *
- * This is a post-query hook that filters out worktrees the user cannot access.
+ * This is a post-query hook that filters out branches the user cannot access.
  * Should run AFTER the database query.
  *
- * WARNING: This has an N+1 query problem. Use scopeWorktreeQuery instead.
+ * WARNING: This has an N+1 query problem. Use scopeBranchQuery instead.
  *
- * @param worktreeRepo - WorktreeRepository instance
+ * @param branchRepo - BranchRepository instance
  * @returns Feathers hook
- * @deprecated Use scopeWorktreeQuery for optimized SQL-based filtering
+ * @deprecated Use scopeBranchQuery for optimized SQL-based filtering
  */
-export function filterWorktreesByPermission(worktreeRepo: WorktreeRepository) {
+export function filterBranchesByPermission(branchRepo: BranchRepository) {
   return async (context: HookContext) => {
     // Skip for internal calls
     if (!context.params.provider) {
@@ -495,29 +487,29 @@ export function filterWorktreesByPermission(worktreeRepo: WorktreeRepository) {
       return context;
     }
 
-    // Get all worktrees from result
-    const worktrees: Worktree[] = context.result?.data ?? context.result ?? [];
+    // Get all branches from result
+    const branches: Branch[] = context.result?.data ?? context.result ?? [];
 
-    // Filter worktrees by permission
-    const authorizedWorktrees = [];
-    for (const worktree of worktrees) {
-      const isOwner = await worktreeRepo.isOwner(worktree.worktree_id, userId);
+    // Filter branches by permission
+    const authorizedBranches = [];
+    for (const branch of branches) {
+      const isOwner = await branchRepo.isOwner(branch.branch_id, userId);
       // User can access if they're an owner OR others_can allows at least 'view' permission
       // Check against permission rank: 'none' (-1) blocks access, 'view' (0) and above allows
-      const effectivePermission = worktree.others_can ?? 'session';
+      const effectivePermission = branch.others_can ?? 'session';
       const hasAccess = isOwner || PERMISSION_RANK[effectivePermission] >= PERMISSION_RANK.view;
 
       if (hasAccess) {
-        authorizedWorktrees.push(worktree);
+        authorizedBranches.push(branch);
       }
     }
 
     // Update result
     if (context.result?.data) {
-      context.result.data = authorizedWorktrees;
-      context.result.total = authorizedWorktrees.length;
+      context.result.data = authorizedBranches;
+      context.result.total = authorizedBranches.length;
     } else {
-      context.result = authorizedWorktrees;
+      context.result = authorizedBranches;
     }
 
     return context;
@@ -525,19 +517,19 @@ export function filterWorktreesByPermission(worktreeRepo: WorktreeRepository) {
 }
 
 /**
- * Load session's worktree and cache it on context.params
+ * Load session's branch and cache it on context.params
  *
- * For session/task/message operations, we need to resolve the worktree first.
- * This hook loads the session, then loads its worktree.
+ * For session/task/message operations, we need to resolve the branch first.
+ * This hook loads the session, then loads its branch.
  *
  * @param sessionService - FeathersJS sessions service
- * @param worktreeRepo - WorktreeRepository instance
+ * @param branchRepo - BranchRepository instance
  * @returns Feathers hook
  */
-export function loadSessionWorktree(
+export function loadSessionBranch(
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
   sessionService: any, // Type as FeathersService if available
-  worktreeRepo: WorktreeRepository
+  branchRepo: BranchRepository
 ) {
   return async (context: HookContext) => {
     // Skip for internal calls
@@ -546,7 +538,7 @@ export function loadSessionWorktree(
     }
 
     console.log(
-      `[loadSessionWorktree] method=${context.method}, path=${context.path}, id=${context.id || 'none'}`
+      `[loadSessionBranch] method=${context.method}, path=${context.path}, id=${context.id || 'none'}`
     );
 
     // Extract session_id from data, query, or id
@@ -570,7 +562,7 @@ export function loadSessionWorktree(
         // If session_id not provided in patch/remove, load existing record
         if (!sessionId && (context.method === 'patch' || context.method === 'remove')) {
           console.log(
-            `[loadSessionWorktree] Loading existing ${context.path} record to get session_id. ID: ${context.id}`
+            `[loadSessionBranch] Loading existing ${context.path} record to get session_id. ID: ${context.id}`
           );
           try {
             // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
@@ -579,11 +571,11 @@ export function loadSessionWorktree(
             });
             sessionId = existingRecord?.session_id;
             console.log(
-              `[loadSessionWorktree] Loaded session_id from existing record: ${sessionId ? shortId(sessionId) : 'NOT FOUND'}`
+              `[loadSessionBranch] Loaded session_id from existing record: ${sessionId ? shortId(sessionId) : 'NOT FOUND'}`
             );
           } catch (error) {
             console.error(
-              `[loadSessionWorktree] Failed to load existing ${context.path} record for session_id:`,
+              `[loadSessionBranch] Failed to load existing ${context.path} record for session_id:`,
               error
             );
           }
@@ -594,7 +586,7 @@ export function loadSessionWorktree(
     }
 
     if (!sessionId) {
-      throw new Error('Cannot load session worktree: session_id not found');
+      throw new Error('Cannot load session branch: session_id not found');
     }
 
     // Load session (bypass provider to avoid recursion)
@@ -603,27 +595,27 @@ export function loadSessionWorktree(
       throw new Forbidden(`Session not found: ${sessionId}`);
     }
 
-    // Load worktree
-    const worktree = await worktreeRepo.findById(session.worktree_id);
-    if (!worktree) {
-      throw new Forbidden(`Worktree not found: ${session.worktree_id}`);
+    // Load branch
+    const branch = await branchRepo.findById(session.branch_id);
+    if (!branch) {
+      throw new Forbidden(`Branch not found: ${session.branch_id}`);
     }
 
     // Check ownership
     const userId = context.params.user?.user_id as UUID | undefined;
-    const isOwner = userId ? await worktreeRepo.isOwner(worktree.worktree_id, userId) : false;
+    const isOwner = userId ? await branchRepo.isOwner(branch.branch_id, userId) : false;
 
     // Cache on context for downstream hooks (type-safe via RBACParams)
     context.params.session = session;
-    context.params.worktree = worktree;
-    context.params.isWorktreeOwner = isOwner;
+    context.params.branch = branch;
+    context.params.isBranchOwner = isOwner;
 
     return context;
   };
 }
 
 /**
- * Resolve session context for worktree-nested resources
+ * Resolve session context for branch-nested resources
  *
  * Extracts session_id from various sources based on the operation:
  * - Sessions: context.id (for get/patch/remove) or data.session_id (for create)
@@ -750,16 +742,16 @@ export function loadSession(
 }
 
 /**
- * Load worktree from session and check ownership
+ * Load branch from session and check ownership
  *
- * Loads the worktree referenced by the session (session.worktree_id).
- * Checks ownership and caches both worktree and ownership on context.params.
+ * Loads the branch referenced by the session (session.branch_id).
+ * Checks ownership and caches both branch and ownership on context.params.
  *
  * This is Step 3 of the RBAC hook chain.
  *
- * @param worktreeRepo - WorktreeRepository instance
+ * @param branchRepo - BranchRepository instance
  */
-export function loadWorktreeFromSession(worktreeRepo: WorktreeRepository) {
+export function loadBranchFromSession(branchRepo: BranchRepository) {
   return async (context: HookContext) => {
     // Skip for internal calls
     if (!context.params.provider) {
@@ -774,23 +766,23 @@ export function loadWorktreeFromSession(worktreeRepo: WorktreeRepository) {
     const session = context.params.session;
 
     if (!session) {
-      throw new Error('loadSession hook must run before loadWorktreeFromSession');
+      throw new Error('loadSession hook must run before loadBranchFromSession');
     }
 
-    // Load worktree
-    const worktree = await worktreeRepo.findById(session.worktree_id);
+    // Load branch
+    const branch = await branchRepo.findById(session.branch_id);
 
-    if (!worktree) {
-      throw new Forbidden(`Worktree not found: ${session.worktree_id}`);
+    if (!branch) {
+      throw new Forbidden(`Branch not found: ${session.branch_id}`);
     }
 
     // Check ownership
     const userId = context.params.user?.user_id as UUID | undefined;
-    const isOwner = userId ? await worktreeRepo.isOwner(worktree.worktree_id, userId) : false;
+    const isOwner = userId ? await branchRepo.isOwner(branch.branch_id, userId) : false;
 
     // Cache on context for downstream hooks (type-safe via RBACParams)
-    context.params.worktree = worktree;
-    context.params.isWorktreeOwner = isOwner;
+    context.params.branch = branch;
+    context.params.isBranchOwner = isOwner;
 
     return context;
   };
@@ -839,7 +831,7 @@ export function ensureSessionImmutability() {
  * tested directly and kept aligned with {@link determineSpawnIdentity}.
  *
  * Rules:
- * - Legacy sharing (worktree opt-in `dangerously_allow_session_sharing` triggered) →
+ * - Legacy sharing (branch opt-in `dangerously_allow_session_sharing` triggered) →
  *   inherit `parent.unix_username`. Identity borrowing is the whole point of this flag.
  * - Otherwise (including the common same-user path) → use the caller's CURRENT
  *   `unix_username`. We must NOT fall back to `parent.unix_username` just because
@@ -1007,7 +999,7 @@ export function validateSessionUnixUsername(
  * Validate that a user can prompt a specific session.
  *
  * Standalone helper (not a Feathers hook) — usable from MCP tools, service hooks, or anywhere
- * with access to the app and worktree repository. Resolves worktree ownership internally.
+ * with access to the app and branch repository. Resolves branch ownership internally.
  *
  * Respects the 'session' tier: users with 'session' permission can prompt their own sessions
  * but not sessions created by other users.
@@ -1017,17 +1009,17 @@ export function validateSessionUnixUsername(
  * @param sessionId - Target session ID to check prompt permission for
  * @param userId - User ID requesting access
  * @param app - FeathersJS app (for session lookup)
- * @param worktreeRepo - WorktreeRepository (for worktree + ownership lookup)
+ * @param branchRepo - BranchRepository (for branch + ownership lookup)
  * @returns The target session (for further use by caller)
  * @throws Forbidden if user lacks prompt permission
- * @throws Error if session or worktree not found
+ * @throws Error if session or branch not found
  */
 export async function ensureCanPromptTargetSession(
   sessionId: string,
   userId: string,
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS app type
   app: { service(name: string): any },
-  worktreeRepo: WorktreeRepository
+  branchRepo: BranchRepository
 ): Promise<Session> {
   // Load target session
   let targetSession: Session;
@@ -1037,23 +1029,21 @@ export async function ensureCanPromptTargetSession(
     throw new Forbidden(`Invalid callback target: session ${shortId(sessionId)} not found`);
   }
 
-  // Load its worktree
-  const worktree = await worktreeRepo.findById(targetSession.worktree_id);
-  if (!worktree) {
-    throw new Forbidden(
-      `Cannot resolve permissions: worktree ${targetSession.worktree_id} not found`
-    );
+  // Load its branch
+  const branch = await branchRepo.findById(targetSession.branch_id);
+  if (!branch) {
+    throw new Forbidden(`Cannot resolve permissions: branch ${targetSession.branch_id} not found`);
   }
 
   // Resolve ownership internally — callers shouldn't need to know this
-  const isOwner = await worktreeRepo.isOwner(worktree.worktree_id, userId as UUID);
+  const isOwner = await branchRepo.isOwner(branch.branch_id, userId as UUID);
 
   // Owners can always prompt
   if (isOwner) {
     return targetSession;
   }
 
-  const effectiveLevel = resolveWorktreePermission(worktree, userId as UUID, isOwner);
+  const effectiveLevel = resolveBranchPermission(branch, userId as UUID, isOwner);
 
   // 'prompt' or 'all' → can prompt any session
   if (PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt) {
@@ -1068,19 +1058,19 @@ export async function ensureCanPromptTargetSession(
     throw new Forbidden(
       `You have 'session' permission — you can only prompt sessions you created. ` +
         `This session was created by another user. ` +
-        `Ask a worktree owner to upgrade your access to 'prompt' if needed.`
+        `Ask a branch owner to upgrade your access to 'prompt' if needed.`
     );
   }
 
   throw new Forbidden(
-    `Cannot set callback target: you need at least 'session' permission on worktree ` +
-      `${worktree.name || shortId(worktree.worktree_id)}. ` +
+    `Cannot set callback target: you need at least 'session' permission on branch ` +
+      `${branch.name || shortId(branch.branch_id)}. ` +
       `You have '${effectiveLevel}' permission.`
   );
 }
 
 /**
- * Check if user can create a session in a worktree
+ * Check if user can create a session in a branch
  *
  * Creating a session requires 'session' or higher permission.
  * Users with 'session' can create new sessions (which run as their own identity).
@@ -1089,7 +1079,7 @@ export async function ensureCanPromptTargetSession(
  * @returns Feathers hook
  */
 export function ensureCanCreateSession(options?: { allowSuperadmin?: boolean }) {
-  return ensureWorktreePermission('session', 'create sessions in this worktree', options);
+  return ensureBranchPermission('session', 'create sessions in this branch', options);
 }
 
 /**
@@ -1100,7 +1090,7 @@ export function ensureCanCreateSession(options?: { allowSuperadmin?: boolean }) 
  * @returns Feathers hook
  */
 export function ensureCanPrompt(options?: { allowSuperadmin?: boolean }) {
-  return ensureWorktreePermission('prompt', 'create tasks/messages in this worktree', options);
+  return ensureBranchPermission('prompt', 'create tasks/messages in this branch', options);
 }
 
 /**
@@ -1110,8 +1100,8 @@ export function ensureCanPrompt(options?: { allowSuperadmin?: boolean }) {
  * For users with 'session' permission: only allowed if session.created_by === userId (own sessions).
  * For users with 'view' or 'none': denied.
  *
- * IMPORTANT: Must run AFTER loadWorktree (or loadWorktreeFromSession) AND loadSession hooks,
- * since it reads context.params.session and context.params.worktree.
+ * IMPORTANT: Must run AFTER loadBranch (or loadBranchFromSession) AND loadSession hooks,
+ * since it reads context.params.session and context.params.branch.
  *
  * Use this INSTEAD of ensureCanPrompt when the operation targets a specific session
  * (e.g., creating tasks/messages). The 'session' tier allows prompting own sessions only.
@@ -1134,11 +1124,11 @@ export function ensureCanPromptInSession(options?: { allowSuperadmin?: boolean }
       return context;
     }
 
-    const worktree = context.params.worktree;
-    const isOwner = context.params.isWorktreeOwner ?? false;
+    const branch = context.params.branch;
+    const isOwner = context.params.isBranchOwner ?? false;
 
-    if (!worktree) {
-      throw new Error('loadWorktree hook must run before ensureCanPromptInSession');
+    if (!branch) {
+      throw new Error('loadBranch hook must run before ensureCanPromptInSession');
     }
 
     const userId = context.params.user.user_id as UUID;
@@ -1150,8 +1140,8 @@ export function ensureCanPromptInSession(options?: { allowSuperadmin?: boolean }
       return context;
     }
 
-    const effectiveLevel = resolveWorktreePermission(
-      worktree,
+    const effectiveLevel = resolveBranchPermission(
+      branch,
       userId,
       isOwner,
       userRole,
@@ -1177,31 +1167,31 @@ export function ensureCanPromptInSession(options?: { allowSuperadmin?: boolean }
       throw new Forbidden(
         `You have 'session' permission — you can only prompt sessions you created. ` +
           `This session was created by another user. ` +
-          `Ask a worktree owner to upgrade your access to 'prompt' if you need to prompt other users' sessions.`
+          `Ask a branch owner to upgrade your access to 'prompt' if you need to prompt other users' sessions.`
       );
     }
 
     // 'view' or 'none' → denied
     throw new Forbidden(
-      `You need 'prompt' permission to create tasks/messages in this worktree. You have '${effectiveLevel}' permission.`
+      `You need 'prompt' permission to create tasks/messages in this branch. You have '${effectiveLevel}' permission.`
     );
   };
 }
 
 /**
- * Check if user can view worktree resources
+ * Check if user can view branch resources
  *
  * Viewing requires 'view' or higher permission (i.e., any permission).
  *
  * @returns Feathers hook
  */
 export function ensureCanView(options?: { allowSuperadmin?: boolean }) {
-  return ensureWorktreePermission('view', 'view this worktree', options);
+  return ensureBranchPermission('view', 'view this branch', options);
 }
 
 /**
  * Empty paginated result helper — used to short-circuit find() for unauthenticated
- * callers or callers whose query falls outside their accessible worktree set.
+ * callers or callers whose query falls outside their accessible branch set.
  */
 function emptyFindResult(context: HookContext): HookContext {
   const query = (context.params.query ?? {}) as Record<string, unknown>;
@@ -1294,11 +1284,11 @@ function intersectFindQuery(
 }
 
 /**
- * Scope find() queries on worktree-scoped resources to the set of worktrees
+ * Scope find() queries on branch-scoped resources to the set of branches
  * the caller can access.
  *
- * This is a BEFORE hook factory for services whose rows carry a `worktree_id`
- * foreign key (e.g. artifacts, board-objects tied to a worktree, etc.).
+ * This is a BEFORE hook factory for services whose rows carry a `branch_id`
+ * foreign key (e.g. artifacts, board-objects tied to a branch, etc.).
  *
  * Behavior:
  * - Internal calls (no `context.params.provider`) pass through unchanged.
@@ -1306,44 +1296,44 @@ function intersectFindQuery(
  * - Unauthenticated requests short-circuit with an empty paginated result.
  * - Superadmins (when `allowSuperadmin` is true) pass through; the default
  *   query runs unmodified and returns all rows.
- * - Non-superadmin authenticated users get their accessible worktree set
- *   resolved via `findAccessibleWorktrees(userId)`. The set is then intersected
- *   with any existing `worktree_id` filter in `context.params.query`:
- *   - If the caller passed `worktree_id` (string) outside the accessible set,
+ * - Non-superadmin authenticated users get their accessible branch set
+ *   resolved via `findAccessibleBranches(userId)`. The set is then intersected
+ *   with any existing `branch_id` filter in `context.params.query`:
+ *   - If the caller passed `branch_id` (string) outside the accessible set,
  *     short-circuit with an empty result.
- *   - If the caller passed `worktree_id` within the accessible set, preserve it.
+ *   - If the caller passed `branch_id` within the accessible set, preserve it.
  *   - If the caller passed `{ $in: [...] }`, intersect with accessible ids.
- *   - Otherwise, inject `worktree_id: { $in: [...accessibleIds] }`.
+ *   - Otherwise, inject `branch_id: { $in: [...accessibleIds] }`.
  *
  * Only applies when `context.method === 'find'`. No-op for other methods.
  *
- * @param worktreeRepo - WorktreeRepository instance
+ * @param branchRepo - BranchRepository instance
  * @param options - Optional flags (allowSuperadmin)
  * @returns Feathers hook
  */
-export function scopeFindToAccessibleWorktrees(
-  worktreeRepo: WorktreeRepository,
+export function scopeFindToAccessibleBranches(
+  branchRepo: BranchRepository,
   options?: { allowSuperadmin?: boolean }
 ) {
   return async (context: HookContext) => {
     const decision = await resolveFindScopeAccess(context, options, async (uid) => {
-      const accessible = await worktreeRepo.findAccessibleWorktrees(uid);
-      return accessible.map((w) => w.worktree_id as string);
+      const accessible = await branchRepo.findAccessibleBranches(uid);
+      return accessible.map((w) => w.branch_id as string);
     });
 
     if (decision.kind !== 'filter') return context;
-    return intersectFindQuery(context, 'worktree_id', decision.accessibleIds);
+    return intersectFindQuery(context, 'branch_id', decision.accessibleIds);
   };
 }
 
 /**
  * Scope find() queries on session-scoped resources to the set of sessions
- * the caller can access (via their accessible worktrees).
+ * the caller can access (via their accessible branches).
  *
  * This is a BEFORE hook factory for services whose rows carry a `session_id`
  * foreign key (e.g. tasks, messages, session-mcp-servers).
  *
- * Behavior mirrors {@link scopeFindToAccessibleWorktrees} but resolves via
+ * Behavior mirrors {@link scopeFindToAccessibleBranches} but resolves via
  * `findAccessibleSessions(userId)` and mutates `context.params.query.session_id`:
  * - Internal / service-account calls pass through.
  * - Unauthenticated → empty result.
@@ -1376,13 +1366,13 @@ export function scopeFindToAccessibleSessions(
  * Scope find() queries on the boards service to the set of boards the caller
  * can see.
  *
- * A board is visible if the caller created it OR any worktree on the board is
+ * A board is visible if the caller created it OR any branch on the board is
  * accessible to them (owner or `others_can` permits at least 'view'). Empty
  * boards stay visible to their creator; superadmins bypass.
  *
  * Resolution happens in a single SQL EXISTS query via
  * {@link BoardRepository.findVisibleBoardIds}, avoiding the hydrate-every-
- * worktree cost of the previous in-memory after-hook and letting Feathers'
+ * branch cost of the previous in-memory after-hook and letting Feathers'
  * pagination/sort run against the already-scoped id set.
  *
  * @param boardRepo - BoardRepository instance
@@ -1414,7 +1404,7 @@ export function scopeFindToAccessibleBoards(
  * - Service accounts (executor) pass through.
  * - Admin / superadmin pass through (respecting `allowSuperadmin`).
  * - Session creator passes through.
- * - Everyone else → Forbidden. Worktree `all` does NOT grant access: session
+ * - Everyone else → Forbidden. Branch `all` does NOT grant access: session
  *   env selections expose the creator's private credentials to the executor.
  *
  * Caller is responsible for rejecting unauthenticated requests (pass a user
@@ -1441,7 +1431,7 @@ export function checkSessionOwnerOrAdmin(
 
   throw new Forbidden(
     "Only the session's creator or an admin can modify this session's env var selections. " +
-      "Worktree 'all' permission does NOT grant access — session env selections expose the " +
+      "Branch 'all' permission does NOT grant access — session env selections expose the " +
       "creator's private credentials to the executor process."
   );
 }
@@ -1450,8 +1440,8 @@ export function checkSessionOwnerOrAdmin(
  * Ensure the caller is the session's creator OR a global admin/superadmin.
  *
  * Intended for session-scoped configuration that should NEVER inherit from
- * worktree-tier permissions — notably session env-var selection (v0.5
- * env-var-access). Even a worktree `all` grantee is NOT allowed to modify
+ * branch-tier permissions — notably session env-var selection (v0.5
+ * env-var-access). Even a branch `all` grantee is NOT allowed to modify
  * another user's session env selections, because those selections decrypt and
  * export the session creator's private env vars into the executor process.
  *
@@ -1463,7 +1453,7 @@ export function checkSessionOwnerOrAdmin(
  * - Unauthenticated callers → NotAuthenticated.
  * - Admin/superadmin → pass through.
  * - Session creator → pass through.
- * - Everyone else → Forbidden (worktree `all` does NOT grant access).
+ * - Everyone else → Forbidden (branch `all` does NOT grant access).
  *
  * @returns Feathers hook
  */
@@ -1499,7 +1489,7 @@ export function ensureSessionOwnerOrAdmin(options?: { allowSuperadmin?: boolean 
  *
  * Legacy "identity borrowing" (child inherits parent.created_by, so it runs
  * under the *parent owner's* identity even when spawned by a different user)
- * is preserved only when the worktree opts in via
+ * is preserved only when the branch opts in via
  * `dangerously_allow_session_sharing: true`. When that legacy path triggers
  * for a cross-user spawn, the daemon emits a loud warning so it appears in
  * audit logs.
@@ -1509,14 +1499,14 @@ export function ensureSessionOwnerOrAdmin(options?: { allowSuperadmin?: boolean 
  *
  * @param parent  - Parent session (must include created_by)
  * @param caller  - Authenticated caller (MCP-authenticated user / Feathers user)
- * @param worktree - Parent's worktree (used for the opt-in flag)
+ * @param branch - Parent's branch (used for the opt-in flag)
  * @param options - allowSuperadmin (defaults to true)
  * @returns The created_by UUID to stamp on the child session
  */
 export function determineSpawnIdentity(
   parent: { created_by: string },
   caller: { user_id?: string; role?: string; _isServiceAccount?: boolean },
-  worktree: { worktree_id: string; dangerously_allow_session_sharing?: boolean } | undefined,
+  branch: { branch_id: string; dangerously_allow_session_sharing?: boolean } | undefined,
   options?: { allowSuperadmin?: boolean }
 ): { created_by: string; usedLegacySharing: boolean } {
   const allowSuperadmin = options?.allowSuperadmin ?? true;
@@ -1548,14 +1538,14 @@ export function determineSpawnIdentity(
 
   // Cross-user spawn: a non-admin caller is spawning/forking from someone
   // else's session.
-  if (worktree?.dangerously_allow_session_sharing === true) {
+  if (branch?.dangerously_allow_session_sharing === true) {
     // Opt-in legacy behavior: preserve identity borrowing. Log loudly.
     // Structured key/value form so it can be queried by log shippers.
     console.warn('[SECURITY] legacy_session_sharing', {
       event: 'legacy_session_sharing',
       caller_id: callerId ?? null,
       parent_owner_id: parent.created_by,
-      worktree_id: worktree.worktree_id,
+      branch_id: branch.branch_id,
     });
     return { created_by: parent.created_by, usedLegacySharing: true };
   }

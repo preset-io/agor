@@ -56,7 +56,7 @@ const KNOWN_NAMES = [
   'taskId',
   'userId',
   'boardId',
-  'worktreeId',
+  'branchId',
   'repoId',
   'messageId',
   'commentId',
