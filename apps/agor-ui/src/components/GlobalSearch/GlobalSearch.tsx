@@ -79,7 +79,16 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
     sessionById,
     branchById,
     artifactById,
+    boardById,
+    mcpServerById,
   });
+  const hasAnyRecents =
+    recents.session.length > 0 ||
+    recents.branch.length > 0 ||
+    recents.assistant.length > 0 ||
+    recents.artifact.length > 0 ||
+    recents.board.length > 0 ||
+    recents.mcp.length > 0;
 
   // Recents/results predicate is derived from the **raw** query so deleting
   // a long query back to <MIN_QUERY_LENGTH feels immediate — without this,
@@ -88,11 +97,11 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   const showRecents = query.trim().length < MIN_QUERY_LENGTH;
   const effectiveQuery = showRecents ? '' : debouncedQuery.trim();
 
-  // Flatten current dropdown rows for keyboard nav. Order matches dropdown
-  // section order; recents mode is a single flat list.
+  // Flatten current dropdown rows for keyboard nav. Recents and live results
+  // share the same sectioned shape, so the flattening is identical.
   const visibleRows = useMemo<SearchResultItem[]>(() => {
-    if (showRecents) return recents;
-    return SECTION_ORDER.flatMap((t) => results[t]);
+    const source = showRecents ? recents : results;
+    return SECTION_ORDER.flatMap((t) => source[t]);
   }, [showRecents, recents, results]);
 
   // Keep selection inside the row list when results change.
@@ -274,6 +283,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
             results={results}
             hasAnyResults={hasAnyResults}
             recents={recents}
+            hasAnyRecents={hasAnyRecents}
             selectedIndex={selectedIndex}
             onResultClick={navigateToResult}
             onResultHover={setSelectedIndex}

@@ -10,7 +10,9 @@ interface GlobalSearchDropdownProps {
   query: string;
   results: ResultsByType;
   hasAnyResults: boolean;
-  recents: SearchResultItem[];
+  /** Recents reuse `ResultsByType` so the section renderer is shared. */
+  recents: ResultsByType;
+  hasAnyRecents: boolean;
   selectedIndex: number;
   onResultClick: (result: SearchResultItem) => void;
   onResultHover: (index: number) => void;
@@ -21,6 +23,7 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
   results,
   hasAnyResults,
   recents,
+  hasAnyRecents,
   selectedIndex,
   onResultClick,
   onResultHover,
@@ -28,6 +31,7 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
   const { token } = theme.useToken();
 
   const showRecents = query.length === 0;
+  const sectioned = showRecents ? recents : results;
 
   return (
     <div
@@ -41,37 +45,26 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
         padding: '2px 0',
       }}
     >
-      {showRecents ? (
-        <SectionShell title="Recent" token={token}>
-          {recents.length === 0 ? (
-            <EmptyHint text="Recent items you've created will show up here." token={token} />
-          ) : (
-            recents.map((result, index) => (
-              <SearchResult
-                key={resultKey(result)}
-                rowId={rowDomId(result)}
-                result={result}
-                selected={index === selectedIndex}
-                onClick={() => onResultClick(result)}
-                onHover={() => onResultHover(index)}
-              />
-            ))
-          )}
-        </SectionShell>
-      ) : !hasAnyResults ? (
+      {showRecents && !hasAnyRecents ? (
+        <EmptyHint text="Recent items you've created will show up here." token={token} />
+      ) : !showRecents && !hasAnyResults ? (
         <EmptyHint text={`No matches for "${query}"`} token={token} />
       ) : (
         SECTION_ORDER.map((type) => {
-          const items = results[type];
+          const items = sectioned[type];
           if (items.length === 0) return null;
 
           // Compute global index offset so the keyboard cursor lines up.
           let offset = 0;
           for (const t of SECTION_ORDER) {
             if (t === type) break;
-            offset += results[t].length;
+            offset += sectioned[t].length;
           }
 
+          // Recents reuse the live-search section labels (e.g. "Sessions") so
+          // the visual contract stays identical between empty-query and
+          // typed-query states. A single header rule above the column makes it
+          // clear the whole list is "recent."
           return (
             <SectionShell key={type} title={SECTION_LABELS[type]} token={token}>
               {items.map((result, i) => {
