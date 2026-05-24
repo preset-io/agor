@@ -3,6 +3,7 @@ import { Typography, theme } from 'antd';
 import type React from 'react';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
+import { highlightTokens } from './highlight';
 import { type SearchResultItem, TYPE_CHIP_ICONS } from './types';
 
 const { Text } = Typography;
@@ -14,6 +15,9 @@ interface SearchResultProps {
   onHover?: () => void;
   /** Stable DOM id so the input's aria-activedescendant can point at the row. */
   rowId?: string;
+  /** Query tokens to highlight inside the visible title/secondary fields.
+   * Empty array (recents view, or a no-token query) disables highlighting. */
+  tokens?: string[];
 }
 
 /**
@@ -29,9 +33,18 @@ export const SearchResult: React.FC<SearchResultProps> = ({
   onClick,
   onHover,
   rowId,
+  tokens = [],
 }) => {
   const { token } = theme.useToken();
   const { title, tag, secondary, time, icon } = renderResult(result);
+  // Token highlighting style: warning-bg accent so matches stand out without
+  // looking like links or status pills. Inherits text color from parent so
+  // the secondary (muted) line still highlights legibly.
+  const markStyle: React.CSSProperties = {
+    backgroundColor: token.colorWarningBg,
+    color: 'inherit',
+    padding: 0,
+  };
 
   return (
     <button
@@ -80,7 +93,7 @@ export const SearchResult: React.FC<SearchResultProps> = ({
               whiteSpace: 'nowrap',
             }}
           >
-            {title}
+            {highlightTokens(title, tokens, markStyle)}
           </Text>
           {tag && (
             <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap', flexShrink: 0 }}>
@@ -104,7 +117,7 @@ export const SearchResult: React.FC<SearchResultProps> = ({
               whiteSpace: 'nowrap',
             }}
           >
-            {secondary}
+            {highlightTokens(secondary, tokens, markStyle)}
           </Text>
         )}
       </div>

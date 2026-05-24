@@ -1,5 +1,7 @@
+import { tokenizeSearchQuery } from '@agor-live/client';
 import { Typography, theme } from 'antd';
 import type React from 'react';
+import { useMemo } from 'react';
 import { SearchResult } from './SearchResult';
 import { type ResultsByType, SECTION_LABELS, SECTION_ORDER, type SearchResultItem } from './types';
 
@@ -32,6 +34,13 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
 
   const showRecents = query.length === 0;
   const sectioned = showRecents ? recents : results;
+  // Tokens drive hit highlighting inside rendered result rows. Reusing the
+  // same tokenizer that the search hook uses keeps highlight ranges aligned
+  // with what the filter actually matched against. Empty in recents mode.
+  const tokens = useMemo(
+    () => (showRecents ? [] : tokenizeSearchQuery(query)),
+    [showRecents, query]
+  );
 
   return (
     <div
@@ -77,6 +86,7 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
                     selected={flatIndex === selectedIndex}
                     onClick={() => onResultClick(result)}
                     onHover={() => onResultHover(flatIndex)}
+                    tokens={tokens}
                   />
                 );
               })}
