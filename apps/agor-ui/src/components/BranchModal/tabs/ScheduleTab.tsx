@@ -1,36 +1,299 @@
 /**
- * Schedule tab placeholder.
+ * Schedules CRUD list for a branch (§6a of the design doc).
  *
- * The pre-#1253 per-branch schedule UI was driven by the
- * `branches.schedule_*` columns + `branches.data.schedule` blob; those
- * are gone. The first-class CRUD list + modal land in checkpoint 5 of
- * #1253. This stub keeps the tab compiling in the interim.
+ * Pre-#1253 this was a one-schedule-per-branch form; now it's a list of
+ * schedules with create / edit / delete / run-now / runs-drawer.
  */
-import type { Branch } from '@agor-live/client';
-import { Alert, Typography } from 'antd';
 
-const { Paragraph } = Typography;
+import type { AgorClient, Branch, MCPServer, Schedule } from '@agor-live/client';
+import { humanizeCron } from '@agor-live/client';
+import {
+  DeleteOutlined,
+  EditOutlined,
+  PlayCircleOutlined,
+  PlusOutlined,
+  UnorderedListOutlined,
+} from '@ant-design/icons';
+import { Button, Dropdown, Empty, Spin, Switch, Table, Tag, Typography } from 'antd';
+import { useCallback, useEffect, useState } from 'react';
+import { useThemedMessage } from '../../../utils/message';
+import { ScheduleModal } from '../../ScheduleModal';
+import { ScheduleRunsPanel } from '../../ScheduleRunsPanel';
+
+const { Text } = Typography;
 
 interface ScheduleTabProps {
   branch: Branch;
+  client: AgorClient | null;
+  mcpServerById?: Map<string, MCPServer>;
+  onOpenSession?: (sessionId: string) => void;
 }
 
-export const ScheduleTab: React.FC<ScheduleTabProps> = ({ branch }) => {
+const formatTimestamp = (ms: number | null | undefined) =>
+  ms ? new Date(ms).toLocaleString() : '—';
+
+const formatHumanizedCron = (cron: string): string => {
+  try {
+    return humanizeCron(cron);
+  } catch {
+    return cron;
+  }
+};
+
+const tzPill = (mode: 'local' | 'utc', tz?: string | null) => {
+  if (mode === 'utc') return 'UTC';
+  if (!tz) return 'local';
+  const tail = tz.split('/').pop() ?? tz;
+  return tail.replace(/_/g, ' ');
+};
+
+export const ScheduleTab: React.FC<ScheduleTabProps> = ({
+  branch,
+  client,
+  mcpServerById = new Map(),
+  onOpenSession,
+}) => {
+  const { showError, showSuccess } = useThemedMessage();
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
+  const [runsPanelSchedule, setRunsPanelSchedule] = useState<Schedule | null>(null);
+  const [runningId, setRunningId] = useState<string | null>(null);
+
+  const fetchSchedules = useCallback(async () => {
+    if (!client) return;
+    setLoading(true);
+    try {
+      const result = await client.service('schedules').find({
+        query: {
+          branch_id: branch.branch_id,
+          $sort: { created_at: -1 },
+        },
+      });
+      setSchedules(Array.isArray(result) ? result : result.data);
+    } catch (err) {
+      console.error('Failed to load schedules:', err);
+      showError('Failed to load schedules');
+    } finally {
+      setLoading(false);
+    }
+  }, [client, branch.branch_id, showError]);
+
+  useEffect(() => {
+    fetchSchedules();
+  }, [fetchSchedules]);
+
+  // Live updates via Feathers events. The service emits these for every
+  // CRUD op, including ones on other branches — filter to ours.
+  useEffect(() => {
+    if (!client) return;
+    const service = client.service('schedules');
+    const matchesBranch = (s: Schedule) => s.branch_id === branch.branch_id;
+    const onCreated = (s: Schedule) => {
+      if (matchesBranch(s)) setSchedules((prev) => [s, ...prev]);
+    };
+    const onPatched = (s: Schedule) => {
+      if (matchesBranch(s)) {
+        setSchedules((prev) => prev.map((p) => (p.schedule_id === s.schedule_id ? s : p)));
+      }
+    };
+    const onRemoved = (s: Schedule) => {
+      setSchedules((prev) => prev.filter((p) => p.schedule_id !== s.schedule_id));
+    };
+    service.on('created', onCreated);
+    service.on('patched', onPatched);
+    service.on('removed', onRemoved);
+    return () => {
+      service.off('created', onCreated);
+      service.off('patched', onPatched);
+      service.off('removed', onRemoved);
+    };
+  }, [client, branch.branch_id]);
+
+  const handleNew = () => {
+    setEditingSchedule(null);
+    setModalOpen(true);
+  };
+
+  const handleEdit = (schedule: Schedule) => {
+    setEditingSchedule(schedule);
+    setModalOpen(true);
+  };
+
+  const handleDelete = async (schedule: Schedule) => {
+    if (!client) return;
+    try {
+      await client.service('schedules').remove(schedule.schedule_id);
+      showSuccess(`Schedule "${schedule.name}" deleted`);
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Failed to delete schedule');
+    }
+  };
+
+  const handleRunNow = async (schedule: Schedule) => {
+    if (!client) return;
+    setRunningId(schedule.schedule_id);
+    try {
+      await client.service(`schedules/${schedule.schedule_id}/run-now`).create({});
+      showSuccess(`Triggered "${schedule.name}"`);
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Failed to trigger run');
+    } finally {
+      setRunningId(null);
+    }
+  };
+
+  const handleToggleEnabled = async (schedule: Schedule, enabled: boolean) => {
+    if (!client) return;
+    try {
+      await client.service('schedules').patch(schedule.schedule_id, { enabled });
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Failed to update schedule');
+    }
+  };
+
+  const columns = [
+    {
+      title: 'Name',
+      key: 'name',
+      render: (s: Schedule) => (
+        <Button type="link" onClick={() => setRunsPanelSchedule(s)} style={{ padding: 0 }}>
+          {s.name}
+        </Button>
+      ),
+    },
+    {
+      title: 'When',
+      key: 'cron',
+      render: (s: Schedule) => (
+        <span>
+          <Text>{formatHumanizedCron(s.cron_expression)}</Text>
+          <Tag style={{ marginLeft: 8 }}>{tzPill(s.timezone_mode, s.timezone)}</Tag>
+        </span>
+      ),
+    },
+    {
+      title: 'Enabled',
+      key: 'enabled',
+      render: (s: Schedule) => (
+        <Switch checked={s.enabled} onChange={(v) => handleToggleEnabled(s, v)} size="small" />
+      ),
+    },
+    {
+      title: 'Last run',
+      key: 'last_run_at',
+      render: (s: Schedule) =>
+        s.last_run_session_id && onOpenSession ? (
+          <Button type="link" size="small" onClick={() => onOpenSession(s.last_run_session_id!)}>
+            {formatTimestamp(s.last_run_at)}
+          </Button>
+        ) : (
+          formatTimestamp(s.last_run_at)
+        ),
+    },
+    {
+      title: 'Next run',
+      key: 'next_run_at',
+      render: (s: Schedule) => formatTimestamp(s.next_run_at),
+    },
+    {
+      title: '',
+      key: 'actions',
+      width: 60,
+      render: (s: Schedule) => (
+        <Dropdown
+          trigger={['click']}
+          menu={{
+            items: [
+              {
+                key: 'edit',
+                icon: <EditOutlined />,
+                label: 'Edit',
+                onClick: () => handleEdit(s),
+              },
+              {
+                key: 'run',
+                icon: <PlayCircleOutlined />,
+                label: runningId === s.schedule_id ? 'Running…' : 'Run now',
+                disabled: runningId === s.schedule_id,
+                onClick: () => handleRunNow(s),
+              },
+              {
+                key: 'runs',
+                icon: <UnorderedListOutlined />,
+                label: 'View runs',
+                onClick: () => setRunsPanelSchedule(s),
+              },
+              { type: 'divider' as const },
+              {
+                key: 'delete',
+                icon: <DeleteOutlined />,
+                label: 'Delete',
+                danger: true,
+                onClick: () => handleDelete(s),
+              },
+            ],
+          }}
+        >
+          <Button type="text" size="small">
+            ⋯
+          </Button>
+        </Dropdown>
+      ),
+    },
+  ];
+
   return (
     <div style={{ padding: 16 }}>
-      <Alert
-        type="info"
-        showIcon
-        message="Schedules are moving."
-        description={
-          <Paragraph style={{ margin: 0 }}>
-            The single-schedule-per-branch UI has been replaced with first-class CRUD: a branch can
-            now own multiple schedules (hourly heartbeat + daily summary, etc.). The new list +
-            modal will land here next. Until then, manage schedules via{' '}
-            <code>agor_schedules_*</code> MCP tools or <code>POST /schedules</code>. (Branch:{' '}
-            <strong>{branch.name}</strong>)
-          </Paragraph>
-        }
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+        <Text strong>Schedules for {branch.name}</Text>
+        <Button type="primary" icon={<PlusOutlined />} onClick={handleNew}>
+          New
+        </Button>
+      </div>
+      {loading ? (
+        <Spin />
+      ) : schedules.length === 0 ? (
+        <Empty
+          description={
+            <span>
+              No schedules yet. Schedule a prompt to fire on a cadence — hourly heartbeats, daily
+              summaries, weekly retros.
+            </span>
+          }
+        >
+          <Button type="primary" icon={<PlusOutlined />} onClick={handleNew}>
+            New schedule
+          </Button>
+        </Empty>
+      ) : (
+        <Table
+          rowKey="schedule_id"
+          dataSource={schedules}
+          columns={columns}
+          pagination={false}
+          size="small"
+        />
+      )}
+
+      <ScheduleModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        branchId={branch.branch_id}
+        branchName={branch.name}
+        schedule={editingSchedule}
+        mcpServerById={mcpServerById}
+        client={client}
+        onSaved={() => fetchSchedules()}
+      />
+
+      <ScheduleRunsPanel
+        open={runsPanelSchedule !== null}
+        onClose={() => setRunsPanelSchedule(null)}
+        schedule={runsPanelSchedule}
+        client={client}
+        onOpenSession={onOpenSession}
       />
     </div>
   );

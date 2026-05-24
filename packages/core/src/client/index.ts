@@ -52,6 +52,22 @@ export {
   buildZoneTriggerContext,
 } from '../templates/zone-trigger-context.js';
 export * from '../types/index.js';
+// Cron helpers — pure functions, browser-safe (cron-parser + cronstrue
+// both ship browser builds). Drives the schedules UI's live "Every
+// hour" preview, IANA-tz validation, and the visual cron picker preset.
+export {
+  CRON_PRESETS,
+  type CronValidationResult,
+  getNextRuns,
+  getNextRunTime,
+  getPrevRunTime,
+  humanizeCron,
+  isValidCron,
+  resolveScheduleTz,
+  roundToMinute,
+  validateCron,
+  validateCronWithResult,
+} from '../utils/cron.js';
 // Permission-mode helpers — pure functions, browser-safe.
 export {
   type CodexPermissionDefaults,

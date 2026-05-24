@@ -19,6 +19,7 @@ import type {
   Message,
   PermissionMode,
   Repo,
+  Schedule,
   Session,
   Task,
   TemplateRenderRequest,
@@ -162,6 +163,7 @@ export interface ServiceTypes {
   'repos/clone': Repo;
   'repos/local': Repo;
   branches: Branch;
+  schedules: Schedule;
   users: User;
   cards: CardWithType;
   'card-types': CardType; // CardType CRUD
