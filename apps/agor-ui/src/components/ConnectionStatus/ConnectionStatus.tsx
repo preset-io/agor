@@ -6,9 +6,10 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import { Space, Tooltip } from 'antd';
+import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useConnectionState } from '../../contexts/ConnectionContext';
-import { Tag } from '../Tag';
+import { Tag, type TagProps } from '../Tag';
 
 export interface ConnectionStatusProps {
   connected: boolean;
@@ -31,11 +32,10 @@ const STUCK_RECONNECT_MS = 20_000;
 /**
  * Disconnect duration above which we surface the "Reconnected — refresh?"
  * cue on the next successful reconnect. Below this, the user almost
- * certainly didn't miss anything material (the disconnect grace window in
- * useAgorClient is 1.5s; real-time events that fire in a 1–10s gap are rare
- * enough not to warrant nagging). At 10s we start to plausibly miss
- * messages, comments, or session updates that the byId caches won't notice
- * are gone.
+ * certainly didn't miss anything material (real-time events that fire in a
+ * 1–10s gap are rare enough not to warrant nagging). At 10s we start to
+ * plausibly miss messages, comments, or session updates that the byId
+ * caches won't notice are gone.
  */
 const STALE_THRESHOLD_MS = 10_000;
 
@@ -50,6 +50,40 @@ const STALE_THRESHOLD_MS = 10_000;
  */
 const STALE_AUTO_DISMISS_MS = 60_000;
 
+/** How long the green "Connected" flash lingers after a short reconnect. */
+const CONNECTED_FLASH_MS = 3_000;
+
+interface StatusTagProps {
+  tooltip: ReactNode;
+  icon: ReactNode;
+  color: TagProps['color'];
+  onClick?: () => void;
+  children: ReactNode;
+}
+
+/**
+ * Local helper that collapses the repeated Tooltip + Tag + Space scaffolding
+ * across the seven branches below. Cursor flips to `pointer` whenever the
+ * tag is actionable so a future variant can't silently lose the affordance.
+ */
+const StatusTag: React.FC<StatusTagProps> = ({ tooltip, icon, color, onClick, children }) => (
+  <Tooltip title={tooltip} placement="bottom">
+    <Tag
+      icon={icon}
+      color={color}
+      onClick={onClick}
+      style={{
+        margin: 0,
+        display: 'flex',
+        alignItems: 'center',
+        cursor: onClick ? 'pointer' : 'default',
+      }}
+    >
+      <Space size={4}>{children}</Space>
+    </Tag>
+  </Tooltip>
+);
+
 /**
  * ConnectionStatus — navbar tag that communicates connection state and the
  * action the user can take. The component is intentionally honest about
@@ -59,23 +93,23 @@ const STALE_AUTO_DISMISS_MS = 60_000;
  *
  * State machine, in priority order:
  *
- * 1. **Out of sync** (red, click → reload) — daemon SHA changed under us.
+ * 1. **Out of sync** (warning, click → reload) — daemon SHA changed under us.
  *    Reload is mandatory; UI bundle assumes a contract that's no longer there.
- * 2. **Can't reconnect** (red, click → reload) — we've been `connecting`
+ * 2. **Can't reconnect** (error, click → reload) — we've been `connecting`
  *    for > STUCK_RECONNECT_MS without succeeding. Honest "this isn't
  *    fixing itself" cue.
- * 3. **Disconnected** (red, click → retry) — `!connected && !connecting`,
+ * 3. **Disconnected** (error, click → retry) — `!connected && !connecting`,
  *    typically socket-server-disconnect after the manual-reconnect cap is
  *    hit.
- * 4. **Reconnecting** (yellow, click → retry) — the normal transient
+ * 4. **Reconnecting** (warning, click → retry) — the normal transient
  *    reconnect window. Click is a manual escape hatch in case socket.io's
  *    own retry is on a slow cycle.
- * 5. **Reconnected — refresh?** (yellow info, click → reload, × dismiss) —
+ * 5. **Reconnected — refresh?** (warning info, click → reload, × dismiss) —
  *    just reconnected after a gap ≥ STALE_THRESHOLD_MS. The byId caches
  *    and reactive sessions auto-resync for the common cases, but a long
  *    gap can drop subtle updates (sessions removed/added, comments,
  *    permission changes). Suggested-not-required.
- * 6. **Connected** (green, ephemeral) — brief success flash after a normal
+ * 6. **Connected** (success, ephemeral) — brief flash after a short
  *    reconnect that didn't qualify as stale.
  * 7. **Nothing** — steady-state connected, no clutter.
  */
@@ -86,9 +120,17 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
 }) => {
   const { outOfSync, capturedSha, currentSha } = useConnectionState();
 
-  // Timestamp the user lost connection (entered `connecting && !connected`).
-  // Null when we're not currently disconnected. Survives across renders so
-  // the second-tick effect below can derive stuck-ness without re-recording.
+  // Timestamp the user lost connection (entered `connecting` for any reason).
+  // We track on raw `connecting` rather than `connecting && !connected`
+  // because useAgorClient keeps `connected=true` for a 1.5s grace window
+  // (DISCONNECT_GRACE_MS in apps/agor-ui/src/hooks/useAgorClient.ts) to
+  // avoid flickering disabled-button states on quick reconnects. If we only
+  // started the timer once `connected` flipped, sub-grace reconnects would
+  // never get the green flash, and longer reconnects would understate
+  // downtime by the grace duration (worse for a backgrounded tab where the
+  // grace setTimeout is throttled). Ref + state in lockstep — ref so the
+  // timing survives a tear-down between effect runs, state so renders see
+  // the up-to-date value for the stuck-too-long derivation below.
   const disconnectStartedAtRef = useRef<number | null>(null);
   const [disconnectStartedAt, setDisconnectStartedAt] = useState<number | null>(null);
 
@@ -114,13 +156,15 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
     return () => clearInterval(id);
   }, [connecting]);
 
-  // Track the disconnect → reconnect transition. We record the start of
-  // every reconnect attempt and, when `connected` flips back to true,
-  // compute the duration to decide whether the user might have missed
-  // events. Ref + state in lockstep — ref so the timing survives a tear-
-  // down between effect runs, state so renders see the up-to-date value.
+  // Track the disconnect → reconnect transition. Record on raw `connecting`
+  // (see disconnectStartedAtRef comment for why), and resolve only when the
+  // socket is *actually* back (`connected && !connecting`) — we don't want a
+  // transient `connecting=false, connected=false` (e.g. the manual-reconnect
+  // cap-hit branch in useAgorClient) to be mistaken for recovery and clear
+  // the timer. That branch leaves the user in "Disconnected"; if they later
+  // recover by clicking retry, we should still count the full elapsed time.
   useEffect(() => {
-    if (connecting && !connected) {
+    if (connecting) {
       if (disconnectStartedAtRef.current === null) {
         const now = Date.now();
         disconnectStartedAtRef.current = now;
@@ -144,7 +188,7 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   // short enough not to clutter.
   useEffect(() => {
     if (!showConnected) return;
-    const id = setTimeout(() => setShowConnected(false), 3000);
+    const id = setTimeout(() => setShowConnected(false), CONNECTED_FLASH_MS);
     return () => clearTimeout(id);
   }, [showConnected]);
 
@@ -167,18 +211,14 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
         ? `Daemon was upgraded from ${capturedSha} to ${currentSha} since this tab loaded. Click to reload and pick up the latest UI. Anything unsaved (form text, etc.) will be lost.`
         : 'Backend was updated — click to reload for the latest UI. Anything unsaved will be lost.';
     return (
-      <Tooltip title={tooltipTitle} placement="bottom">
-        <Tag
-          icon={<ReloadOutlined />}
-          color="warning"
-          onClick={() => window.location.reload()}
-          style={{ margin: 0, display: 'flex', alignItems: 'center', cursor: 'pointer' }}
-        >
-          <Space size={4}>
-            <span>Out of sync — refresh</span>
-          </Space>
-        </Tag>
-      </Tooltip>
+      <StatusTag
+        tooltip={tooltipTitle}
+        icon={<ReloadOutlined />}
+        color="warning"
+        onClick={() => window.location.reload()}
+      >
+        <span>Out of sync — refresh</span>
+      </StatusTag>
     );
   }
 
@@ -193,21 +233,14 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   // thing the user would do manually; making it one click is the point.
   if (stuckTooLong) {
     return (
-      <Tooltip
-        title="Can't reconnect to the daemon. Click to reload the page — anything unsaved will be lost."
-        placement="bottom"
+      <StatusTag
+        tooltip="Can't reconnect to the daemon. Click to reload the page — anything unsaved will be lost."
+        icon={<ReloadOutlined />}
+        color="error"
+        onClick={() => window.location.reload()}
       >
-        <Tag
-          icon={<ReloadOutlined />}
-          color="error"
-          onClick={() => window.location.reload()}
-          style={{ margin: 0, display: 'flex', alignItems: 'center', cursor: 'pointer' }}
-        >
-          <Space size={4}>
-            <span>Can't reconnect — reload</span>
-          </Space>
-        </Tag>
-      </Tooltip>
+        <span>Can't reconnect — reload</span>
+      </StatusTag>
     );
   }
 
@@ -216,18 +249,14 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   // via useAgorClient's `retryConnection`.
   if (!connected && !connecting) {
     return (
-      <Tooltip title="Connection lost. Click to retry connection." placement="bottom">
-        <Tag
-          icon={<WarningOutlined />}
-          color="error"
-          onClick={onRetry}
-          style={{ margin: 0, display: 'flex', alignItems: 'center', cursor: 'pointer' }}
-        >
-          <Space size={4}>
-            <span>Disconnected</span>
-          </Space>
-        </Tag>
-      </Tooltip>
+      <StatusTag
+        tooltip="Connection lost. Click to retry connection."
+        icon={<WarningOutlined />}
+        color="error"
+        onClick={onRetry}
+      >
+        <span>Disconnected</span>
+      </StatusTag>
     );
   }
 
@@ -237,18 +266,14 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   // sitting and waiting, they can force a retry attempt right now.
   if (connecting) {
     return (
-      <Tooltip title="Reconnecting to daemon… Click to retry immediately." placement="bottom">
-        <Tag
-          icon={<LoadingOutlined spin />}
-          color="warning"
-          onClick={onRetry}
-          style={{ margin: 0, display: 'flex', alignItems: 'center', cursor: 'pointer' }}
-        >
-          <Space size={4}>
-            <span>Reconnecting</span>
-          </Space>
-        </Tag>
-      </Tooltip>
+      <StatusTag
+        tooltip="Reconnecting to daemon… Click to retry immediately."
+        icon={<LoadingOutlined spin />}
+        color="warning"
+        onClick={onRetry}
+      >
+        <span>Reconnecting</span>
+      </StatusTag>
     );
   }
 
@@ -261,29 +286,22 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   // would take manually.
   if (staleSince !== null) {
     return (
-      <Tooltip
-        title="You were disconnected long enough that some data may be stale. Click to reload, or × to dismiss."
-        placement="bottom"
+      <StatusTag
+        tooltip="You were disconnected long enough that some data may be stale. Click to reload, or × to dismiss."
+        icon={<ReloadOutlined />}
+        color="warning"
+        onClick={() => window.location.reload()}
       >
-        <Tag
-          icon={<ReloadOutlined />}
-          color="warning"
-          onClick={() => window.location.reload()}
-          style={{ margin: 0, display: 'flex', alignItems: 'center', cursor: 'pointer' }}
-        >
-          <Space size={4}>
-            <span>Reconnected — refresh?</span>
-            <CloseOutlined
-              aria-label="Dismiss"
-              onClick={(e) => {
-                e.stopPropagation();
-                setStaleSince(null);
-              }}
-              style={{ fontSize: 10, opacity: 0.7 }}
-            />
-          </Space>
-        </Tag>
-      </Tooltip>
+        <span>Reconnected — refresh?</span>
+        <CloseOutlined
+          aria-label="Dismiss"
+          onClick={(e) => {
+            e.stopPropagation();
+            setStaleSince(null);
+          }}
+          style={{ fontSize: 10, opacity: 0.7 }}
+        />
+      </StatusTag>
     );
   }
 
@@ -293,17 +311,9 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   // two cues never compete.
   if (showConnected) {
     return (
-      <Tooltip title="Connected to daemon" placement="bottom">
-        <Tag
-          icon={<CheckCircleOutlined />}
-          color="success"
-          style={{ margin: 0, display: 'flex', alignItems: 'center' }}
-        >
-          <Space size={4}>
-            <span>Connected</span>
-          </Space>
-        </Tag>
-      </Tooltip>
+      <StatusTag tooltip="Connected to daemon" icon={<CheckCircleOutlined />} color="success">
+        <span>Connected</span>
+      </StatusTag>
     );
   }
 
