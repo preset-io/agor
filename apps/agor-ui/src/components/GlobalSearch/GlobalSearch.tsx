@@ -1,5 +1,5 @@
 import type { Artifact, Board, Branch, MCPServer, Session } from '@agor-live/client';
-import { CloseOutlined, SearchOutlined } from '@ant-design/icons';
+import { CloseOutlined } from '@ant-design/icons';
 import { Button, Input, type InputRef, theme } from 'antd';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -198,41 +198,27 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
       setSelectedIndex((idx) => Math.max(idx - 1, 0));
       return;
     }
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      // If the user pressed Enter before the 220ms debounce settled, flush
-      // the debounced query so the dropdown shows fresh rows on the next
-      // render. The current Enter doesn't navigate — the next one does.
-      // This is intentionally a 2-press UX in the (rare) stale case; doing
-      // a true single-press would require synchronous filter computation
-      // outside React's render cycle. Acceptable since debounce is 220ms.
-      if (query.trim() !== debouncedQuery.trim()) {
-        flush();
-        return;
-      }
-      const target = visibleRows[selectedIndex];
-      if (target) navigateToResult(target);
+    // Enter is handled by `<Input.Search>`'s onSearch — see handleSubmit.
+  };
+
+  // Fired by `<Input.Search>` on both Enter keypress and click of the
+  // built-in search-icon button. If the user submits before the 220ms
+  // debounce settled, flush instead of navigating — next press will land
+  // on fresh rows. Acceptable 2-press UX in the rare stale case.
+  const handleSubmit = (value: string) => {
+    if (value.trim() !== debouncedQuery.trim()) {
+      flush();
       return;
     }
+    const target = visibleRows[selectedIndex];
+    if (target) navigateToResult(target);
   };
 
   return (
     <div ref={containerRef} style={{ position: 'relative', width: INPUT_WIDTH }}>
-      <Input
+      <Input.Search
         ref={inputRef}
         placeholder="Search…  ⌘K"
-        // Right-aligned search icon (matches `<Input.Search>` visual
-        // convention) without adopting its press-to-search semantics — this
-        // input is type-ahead. When the query is non-empty, hide the icon so
-        // `allowClear`'s X owns the right edge; otherwise the X and icon
-        // would stack.
-        suffix={
-          query ? (
-            <span style={{ width: 0 }} />
-          ) : (
-            <SearchOutlined style={{ color: token.colorTextQuaternary }} />
-          )
-        }
         value={query}
         onChange={(e) => {
           setQuery(e.target.value);
@@ -243,6 +229,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
         }}
         onFocus={() => setOpen(true)}
         onKeyDown={handleKeyDown}
+        onSearch={handleSubmit}
         allowClear
         aria-label="Global search"
         aria-autocomplete="list"
