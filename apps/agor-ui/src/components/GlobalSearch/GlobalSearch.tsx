@@ -232,18 +232,20 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
         <div
           role="listbox"
           id={GLOBAL_SEARCH_LISTBOX_ID}
+          // Anchored to the right edge of the input (input lives in the
+          // right cluster of the navbar) so the popover grows leftward
+          // and doesn't overflow the viewport.
           style={{
             position: 'absolute',
             top: '100%',
-            left: 0,
             right: 0,
+            width: 600,
             marginTop: 4,
             background: token.colorBgElevated,
             border: `1px solid ${token.colorBorderSecondary}`,
             borderRadius: token.borderRadiusLG,
             boxShadow: token.boxShadowSecondary,
             zIndex: 1000,
-            minWidth: 480,
           }}
         >
           <SearchChipRow

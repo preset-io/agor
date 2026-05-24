@@ -1,5 +1,5 @@
 import { getAssistantConfig } from '@agor-live/client';
-import { Space, Typography, theme } from 'antd';
+import { Typography, theme } from 'antd';
 import type React from 'react';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
@@ -57,31 +57,42 @@ export const SearchResult: React.FC<SearchResultProps> = ({
     >
       <span style={{ fontSize: 18, lineHeight: '20px', flexShrink: 0 }}>{icon}</span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <Space size={8} align="center" style={{ width: '100%', justifyContent: 'space-between' }}>
+        {/* Title row: title takes remaining width and ellipsizes; tag + time
+            stay on one line via whiteSpace:nowrap + flex-shrink:0. Plain flex
+            instead of antd Space because Space wraps each child in a div that
+            ignores parent's nowrap, which produced character-by-character
+            wrapping in the right column on long titles. */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            gap: 8,
+            width: '100%',
+          }}
+        >
           <Text
             strong
             style={{
+              flex: 1,
+              minWidth: 0,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
-              maxWidth: 340,
             }}
           >
             {title}
           </Text>
-          <Space size={8} style={{ flexShrink: 0 }}>
-            {tag && (
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {tag}
-              </Text>
-            )}
-            {time && (
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {time}
-              </Text>
-            )}
-          </Space>
-        </Space>
+          {tag && (
+            <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap', flexShrink: 0 }}>
+              {tag}
+            </Text>
+          )}
+          {time && (
+            <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap', flexShrink: 0 }}>
+              {time}
+            </Text>
+          )}
+        </div>
         {secondary && (
           <Text
             type="secondary"
