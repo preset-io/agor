@@ -303,7 +303,7 @@ export interface ReposService extends AgorService<Repo> {
       boardId?: string;
       /**
        * Branch storage model — see
-       * docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.
+       * context/explorations/clone-redesign.md.
        * 'branch' (default) = native `git worktree add`.
        * 'clone' = self-standing `git clone` with its own `.git/`.
        */

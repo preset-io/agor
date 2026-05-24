@@ -991,7 +991,7 @@ describe('getBranchesDir', () => {
 
   it('should return branches path under data home', () => {
     const branchesDir = getBranchesDir();
-    expect(branchesDir).toBe(path.join(tempDir, '.agor', 'branches'));
+    expect(branchesDir).toBe(path.join(tempDir, '.agor', 'worktrees'));
   });
 
   it('should use custom data_home for branches path', async () => {
@@ -1003,14 +1003,14 @@ describe('getBranchesDir', () => {
     await fs.writeFile(path.join(agorDir, 'config.yaml'), yaml.dump(config), 'utf-8');
 
     const branchesDir = getBranchesDir();
-    expect(branchesDir).toBe('/custom/data/branches');
+    expect(branchesDir).toBe('/custom/data/worktrees');
   });
 
   it('should use AGOR_DATA_HOME env var for branches path', () => {
     process.env.AGOR_DATA_HOME = '/env/data';
 
     const branchesDir = getBranchesDir();
-    expect(branchesDir).toBe('/env/data/branches');
+    expect(branchesDir).toBe('/env/data/worktrees');
   });
 });
 
@@ -1033,7 +1033,7 @@ describe('getBranchPath', () => {
 
   it('should construct branch path from repo slug and name', () => {
     const branchPath = getBranchPath('org/repo', 'feature-branch');
-    expect(branchPath).toBe(path.join(tempDir, '.agor', 'branches', 'org/repo', 'feature-branch'));
+    expect(branchPath).toBe(path.join(tempDir, '.agor', 'worktrees', 'org/repo', 'feature-branch'));
   });
 
   it('should use custom data_home for branch path', async () => {
@@ -1045,14 +1045,14 @@ describe('getBranchPath', () => {
     await fs.writeFile(path.join(agorDir, 'config.yaml'), yaml.dump(config), 'utf-8');
 
     const branchPath = getBranchPath('org/repo', 'feature-branch');
-    expect(branchPath).toBe('/custom/data/branches/org/repo/feature-branch');
+    expect(branchPath).toBe('/custom/data/worktrees/org/repo/feature-branch');
   });
 
   it('should use AGOR_DATA_HOME env var for branch path', () => {
     process.env.AGOR_DATA_HOME = '/env/data';
 
     const branchPath = getBranchPath('org/repo', 'feature-branch');
-    expect(branchPath).toBe('/env/data/branches/org/repo/feature-branch');
+    expect(branchPath).toBe('/env/data/worktrees/org/repo/feature-branch');
   });
 });
 

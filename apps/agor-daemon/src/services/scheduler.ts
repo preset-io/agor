@@ -19,8 +19,12 @@
  * - Checks for existing session with same scheduled_run_at before spawning
  *
  * **Template Rendering:**
- * - Uses Handlebars to render prompt templates with branch/board context
- * - Available context: {{ branch.* }}, {{ board.* }}, {{ schedule.* }}
+ * - Uses Handlebars to render prompt templates with branch + schedule context.
+ *   Branch fields are also exposed under `{{ worktree.* }}` as a v0.19
+ *   backwards-compat alias.
+ * - Available context: `{{ branch.* }}`, `{{ worktree.* }}` (alias),
+ *   `{{ schedule.* }}`. Board context is a TODO (requires fetching the board
+ *   row at tick time) — see `renderSchedulePrompt`.
  */
 
 import type { Database } from '@agor/core/db';
@@ -632,7 +636,9 @@ export class SchedulerService {
   }
 
   /**
-   * Render Handlebars prompt template with branch/board context
+   * Render Handlebars prompt template with branch + schedule context.
+   * Delegates to {@link renderSchedulePrompt}; board context is not yet
+   * wired through (see renderSchedulePrompt's inline TODO).
    */
   private renderPrompt(template: string, branch: Branch): string {
     return renderSchedulePrompt(template, branch);

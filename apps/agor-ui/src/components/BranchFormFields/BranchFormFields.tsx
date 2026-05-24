@@ -199,7 +199,7 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
           '"Worktree" uses git\'s native shared-base model (legacy default). ' +
           '"Clone" gives this branch its own .git/ directory via a real ' +
           'git clone — credentials and config are isolated from sibling branches. ' +
-          'See docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.'
+          'See context/explorations/clone-redesign.md.'
         }
       >
         <Radio.Group onChange={() => onFormChange?.()}>

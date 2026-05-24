@@ -612,7 +612,7 @@ export const branches = sqliteTable(
       .$type<'none' | 'read' | 'write'>()
       .default('read'),
 
-    // Branch storage model — see docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.
+    // Branch storage model — see context/explorations/clone-redesign.md.
     // 'worktree' = native `git worktree add` (shared base .git/config — legacy default).
     // 'clone'    = self-standing `git clone` (own .git/ — closes cross-branch leak vectors).
     //

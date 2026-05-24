@@ -1019,7 +1019,7 @@ export async function createBranch(
  * is a real directory (not a `gitdir:` pointer file), with its own
  * `.git/config`, refs, and credentials surface. Closes the cross-branch
  * leak vectors that the Layer A defenses exist to mitigate. See
- * `docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md` §1.
+ * `context/explorations/clone-redesign.md` §1.
  */
 export interface CreateBranchAsCloneOptions {
   /** Remote URL to clone from (https://, ssh://, git@host:path, file://, or local path). */

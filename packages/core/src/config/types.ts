@@ -433,15 +433,26 @@ export interface AgorExecutionSettings {
    * `allowed_modes` are rejected at the daemon service boundary with a
    * clear "enable it in config" error.
    *
-   * See docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.
+   * v0.20+ default already allows both `worktree` and `clone` with
+   * `default_mode: worktree`, so this block is only needed when an
+   * operator wants to deviate. See `context/explorations/clone-redesign.md`
+   * for the storage-model design.
    *
-   * @example Operator opt-in to clone mode
+   * @example Disable clone mode entirely (security-gradient deployment)
    * ```yaml
    * execution:
    *   branch_storage:
-   *     default_mode: branch
    *     allowed_modes:
-   *       - branch
+   *       - worktree
+   * ```
+   *
+   * @example Make clone the default backing for new branches
+   * ```yaml
+   * execution:
+   *   branch_storage:
+   *     default_mode: clone
+   *     allowed_modes:
+   *       - worktree
    *       - clone
    * ```
    */

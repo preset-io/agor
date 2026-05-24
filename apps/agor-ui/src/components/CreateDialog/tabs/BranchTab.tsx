@@ -19,7 +19,7 @@ export interface BranchTabConfig {
   /**
    * Branch storage model. 'worktree' = legacy `git worktree add`. 'clone' =
    * self-standing `git clone`. Default 'branch' preserves existing flow.
-   * See docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.
+   * See context/explorations/clone-redesign.md.
    */
   storage_mode?: 'worktree' | 'clone';
   /** Shallow-clone depth — only meaningful when storage_mode='clone'. */

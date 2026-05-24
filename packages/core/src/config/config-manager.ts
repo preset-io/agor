@@ -930,20 +930,28 @@ export function getReposDir(): string {
 }
 
 /**
- * Get branches directory path
+ * Get the on-disk root for branch directories.
  *
- * Returns: $AGOR_DATA_HOME/branches
+ * Returns: $AGOR_DATA_HOME/worktrees
  *
- * @returns Absolute path to branches directory
+ * The on-disk dir name is `worktrees/` even though the conceptual entity
+ * is now Branch — the v0.20 rename deliberately kept the dir name to
+ * avoid a filesystem migration on existing installs (renaming would
+ * orphan every branch.path row + every per-user symlink). The helper
+ * name reflects the conceptual entity; the value is a compat artifact.
+ *
+ * @returns Absolute path to the branches directory
  */
 export function getBranchesDir(): string {
-  return path.join(getDataHome(), 'branches');
+  return path.join(getDataHome(), 'worktrees');
 }
 
 /**
- * Get path for a specific branch
+ * Get path for a specific branch on disk.
  *
- * Returns: $AGOR_DATA_HOME/branches/<repoSlug>/<branchName>
+ * Returns: $AGOR_DATA_HOME/worktrees/<repoSlug>/<branchName>
+ *
+ * See {@link getBranchesDir} for why the on-disk dir is still `worktrees/`.
  *
  * @param repoSlug - Repository slug (e.g., "preset-io/agor")
  * @param branchName - Branch name (e.g., "feature-x")
@@ -991,10 +999,13 @@ export async function getReposDirAsync(): Promise<string> {
 }
 
 /**
- * Get branches directory path (async version)
+ * Get branches directory path (async version).
+ *
+ * Same on-disk-dir compat as {@link getBranchesDir} — value is
+ * `worktrees/`, helper name is Branch-conceptual.
  *
  * @returns Absolute path to branches directory
  */
 export async function getBranchesDirAsync(): Promise<string> {
-  return path.join(await getDataHomeAsync(), 'branches');
+  return path.join(await getDataHomeAsync(), 'worktrees');
 }

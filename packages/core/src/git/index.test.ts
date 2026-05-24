@@ -140,19 +140,20 @@ describe('getReposDir', () => {
 
 describe('getBranchesDir', () => {
   it('should return branches path under data home (defaults to ~/.agor/worktrees)', () => {
+    // On-disk dir name stays `worktrees/` for backwards compatibility with
+    // existing installs — see getBranchesDir() JSDoc.
     const branchesDir = getBranchesDir();
-    // Default behavior: data_home = agor_home = ~/.agor
-    expect(branchesDir).toContain('branches');
-    // Path should end with /branches
-    expect(branchesDir).toMatch(/branches$/);
+    expect(branchesDir).toContain('worktrees');
+    expect(branchesDir).toMatch(/worktrees$/);
   });
 });
 
 describe('getBranchPath', () => {
   it('should construct branch path from repo slug and name', () => {
     const branchPath = getBranchPath('org/repo', 'feature-1');
-    // Should contain branches directory, repo slug, and branch name
-    expect(branchPath).toContain('branches');
+    // Should contain branches directory (still `worktrees/` on disk for
+    // backwards compatibility), repo slug, and branch name.
+    expect(branchPath).toContain('worktrees');
     expect(branchPath).toContain('org/repo');
     expect(branchPath).toContain('feature-1');
   });

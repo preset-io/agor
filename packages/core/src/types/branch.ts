@@ -400,7 +400,7 @@ export interface Branch {
   others_fs_access?: 'none' | 'read' | 'write';
 
   // ===== Branch Storage Mode =====
-  // See docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.
+  // See context/explorations/clone-redesign.md.
 
   /**
    * How this branch's filesystem is materialised.

@@ -214,7 +214,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
               '`.git/` and is the legacy behaviour. ' +
               '"clone" = self-standing `git clone` into the branch directory — own `.git/config`, ' +
               'closes cross-branch credential/config leak vectors. ' +
-              'See docs/internal/branch-vs-worktree-migration-analysis-2026-05-20.md.'
+              'See context/explorations/clone-redesign.md.'
           ),
         clone_depth: z
           .number()
