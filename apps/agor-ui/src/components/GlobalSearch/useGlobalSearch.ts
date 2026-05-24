@@ -2,12 +2,14 @@ import type { Artifact, Board, Branch, MCPServer, Session } from '@agor-live/cli
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  EMPTY_COUNTS,
   EMPTY_RESULTS,
   MIN_QUERY_LENGTH,
   type ResultsByType,
   SEARCH_DEBOUNCE_MS,
   SECTION_LIMIT,
   SECTION_LIMIT_EXPANDED,
+  type SearchCounts,
   type SearchResultItem,
 } from './types';
 import { byTimestamp } from './utils';
@@ -44,6 +46,9 @@ export function useGlobalSearch({
   mcpServerById,
 }: UseGlobalSearchInput): {
   results: ResultsByType;
+  /** Pre-cap per-type match counts. Independent of `activeTypeChip` so chip
+   * badges reflect "how many you'd find here," not "how many fit on screen." */
+  counts: SearchCounts;
   hasAnyResults: boolean;
   debouncedQuery: string;
   /** Force the debounced query to match the raw query immediately — used by
@@ -59,110 +64,108 @@ export function useGlobalSearch({
 
   const flush = useCallback(() => setDebouncedQuery(query), [query]);
 
-  const results = useMemo<ResultsByType>(() => {
+  const { results, counts } = useMemo<{ results: ResultsByType; counts: SearchCounts }>(() => {
     const trimmed = debouncedQuery.trim();
-    if (trimmed.length < MIN_QUERY_LENGTH) return EMPTY_RESULTS;
+    if (trimmed.length < MIN_QUERY_LENGTH) {
+      return { results: EMPTY_RESULTS, counts: EMPTY_COUNTS };
+    }
 
     const tokens = trimmed.toLowerCase().split(/\s+/).filter(Boolean);
-    if (tokens.length === 0) return EMPTY_RESULTS;
+    if (tokens.length === 0) {
+      return { results: EMPTY_RESULTS, counts: EMPTY_COUNTS };
+    }
 
-    const sectionLimit = activeTypeChip === 'all' ? SECTION_LIMIT : SECTION_LIMIT_EXPANDED;
-    const buckets: ResultsByType = {
-      session: [],
-      branch: [],
-      assistant: [],
-      artifact: [],
-      board: [],
-      mcp: [],
-    };
-
+    // Counts must be independent of `activeTypeChip`: an inactive chip still
+    // shows its real match count so the badge tells you what's behind that
+    // tab. So we always run the full match pass for every type, then apply
+    // the chip filter only when slicing into `results` for render.
+    const limitFor = (t: SearchResultItem['type']) =>
+      activeTypeChip === t ? SECTION_LIMIT_EXPANDED : SECTION_LIMIT;
     const includeType = (t: SearchResultItem['type']) =>
       activeTypeChip === 'all' || activeTypeChip === t;
 
     // Sessions (timestamp field is `last_updated`, not `updated_at`)
-    if (includeType('session')) {
-      const sessions = Array.from(sessionById.values())
-        .filter((s) => !ownedByMe || s.created_by === currentUserId)
-        .filter((s) => matchTokens(tokens, [s.title, s.description]))
-        .sort(byTimestamp((s) => s.last_updated));
-      for (const s of sessions.slice(0, sectionLimit)) {
-        buckets.session.push({
-          type: 'session',
-          item: s,
-          parentBranch: branchById.get(s.branch_id),
-        });
-      }
-    }
+    const sessions = Array.from(sessionById.values())
+      .filter((s) => !ownedByMe || s.created_by === currentUserId)
+      .filter((s) => matchTokens(tokens, [s.title, s.description]))
+      .sort(byTimestamp((s) => s.last_updated));
 
     // Branches + Assistants share the same table — split via the canonical
     // isAssistant() helper from @agor-live/client. Assistants' user-visible
     // displayName lives in custom_context.assistant and must be searchable too.
-    if (includeType('branch') || includeType('assistant')) {
-      const allBranches = Array.from(branchById.values())
-        .filter((w) => !ownedByMe || w.created_by === currentUserId)
-        .filter((w) =>
-          matchTokens(tokens, [
-            w.name,
-            w.issue_url,
-            w.pull_request_url,
-            getAssistantConfig(w)?.displayName,
-          ])
-        )
-        .sort(byTimestamp((w) => w.updated_at));
-
-      for (const w of allBranches) {
-        if (isAssistant(w) && includeType('assistant') && buckets.assistant.length < sectionLimit) {
-          buckets.assistant.push({ type: 'assistant', item: w });
-        } else if (
-          !isAssistant(w) &&
-          includeType('branch') &&
-          buckets.branch.length < sectionLimit
-        ) {
-          buckets.branch.push({ type: 'branch', item: w });
-        }
-      }
-    }
+    const allBranches = Array.from(branchById.values())
+      .filter((b) => !ownedByMe || b.created_by === currentUserId)
+      .filter((b) =>
+        matchTokens(tokens, [
+          b.name,
+          b.issue_url,
+          b.pull_request_url,
+          getAssistantConfig(b)?.displayName,
+        ])
+      )
+      .sort(byTimestamp((b) => b.updated_at));
+    const branches = allBranches.filter((b) => !isAssistant(b));
+    const assistants = allBranches.filter((b) => isAssistant(b));
 
     // Artifacts (filter archived — useAgorData keeps them in the map regardless)
-    if (includeType('artifact')) {
-      const arts = Array.from(artifactById.values())
-        .filter((a) => !a.archived)
-        .filter((a) => !ownedByMe || a.created_by === currentUserId)
-        .filter((a) => matchTokens(tokens, [a.name, a.description]))
-        .sort(byTimestamp((a) => a.updated_at));
-      for (const a of arts.slice(0, sectionLimit)) {
-        buckets.artifact.push({
-          type: 'artifact',
-          item: a,
-          parentBranch: a.branch_id ? branchById.get(a.branch_id) : undefined,
-        });
-      }
-    }
+    const arts = Array.from(artifactById.values())
+      .filter((a) => !a.archived)
+      .filter((a) => !ownedByMe || a.created_by === currentUserId)
+      .filter((a) => matchTokens(tokens, [a.name, a.description]))
+      .sort(byTimestamp((a) => a.updated_at));
 
     // Boards (filter archived)
-    if (includeType('board')) {
-      const bs = Array.from(boardById.values())
-        .filter((b) => !b.archived)
-        .filter((b) => !ownedByMe || b.created_by === currentUserId)
-        .filter((b) => matchTokens(tokens, [b.name]))
-        .sort(byTimestamp((b) => b.last_updated));
-      for (const b of bs.slice(0, sectionLimit)) {
-        buckets.board.push({ type: 'board', item: b });
-      }
-    }
+    const bs = Array.from(boardById.values())
+      .filter((b) => !b.archived)
+      .filter((b) => !ownedByMe || b.created_by === currentUserId)
+      .filter((b) => matchTokens(tokens, [b.name]))
+      .sort(byTimestamp((b) => b.last_updated));
 
     // MCP servers (uses owner_user_id instead of created_by; updated_at is a Date object)
-    if (includeType('mcp')) {
-      const servers = Array.from(mcpServerById.values())
-        .filter((m) => !ownedByMe || m.owner_user_id === currentUserId)
-        .filter((m) => matchTokens(tokens, [m.name, m.display_name, m.description]))
-        .sort(byTimestamp((m) => m.updated_at));
-      for (const m of servers.slice(0, sectionLimit)) {
-        buckets.mcp.push({ type: 'mcp', item: m });
-      }
-    }
+    const servers = Array.from(mcpServerById.values())
+      .filter((m) => !ownedByMe || m.owner_user_id === currentUserId)
+      .filter((m) => matchTokens(tokens, [m.name, m.display_name, m.description]))
+      .sort(byTimestamp((m) => m.updated_at));
 
-    return buckets;
+    const counts: SearchCounts = {
+      session: sessions.length,
+      branch: branches.length,
+      assistant: assistants.length,
+      artifact: arts.length,
+      board: bs.length,
+      mcp: servers.length,
+    };
+
+    const buckets: ResultsByType = {
+      session: includeType('session')
+        ? sessions.slice(0, limitFor('session')).map((s) => ({
+            type: 'session',
+            item: s,
+            parentBranch: branchById.get(s.branch_id),
+          }))
+        : [],
+      branch: includeType('branch')
+        ? branches.slice(0, limitFor('branch')).map((b) => ({ type: 'branch', item: b }))
+        : [],
+      assistant: includeType('assistant')
+        ? assistants.slice(0, limitFor('assistant')).map((b) => ({ type: 'assistant', item: b }))
+        : [],
+      artifact: includeType('artifact')
+        ? arts.slice(0, limitFor('artifact')).map((a) => ({
+            type: 'artifact',
+            item: a,
+            parentBranch: a.branch_id ? branchById.get(a.branch_id) : undefined,
+          }))
+        : [],
+      board: includeType('board')
+        ? bs.slice(0, limitFor('board')).map((b) => ({ type: 'board', item: b }))
+        : [],
+      mcp: includeType('mcp')
+        ? servers.slice(0, limitFor('mcp')).map((m) => ({ type: 'mcp', item: m }))
+        : [],
+    };
+
+    return { results: buckets, counts };
   }, [
     debouncedQuery,
     ownedByMe,
@@ -183,7 +186,7 @@ export function useGlobalSearch({
     results.board.length > 0 ||
     results.mcp.length > 0;
 
-  return { results, hasAnyResults, debouncedQuery, flush };
+  return { results, counts, hasAnyResults, debouncedQuery, flush };
 }
 
 /** Every token must appear (case-insensitive substring) in at least one field. */

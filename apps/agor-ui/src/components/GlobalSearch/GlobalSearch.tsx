@@ -62,7 +62,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
     artifactById,
   });
 
-  const { results, hasAnyResults, debouncedQuery, flush } = useGlobalSearch({
+  const { results, counts, hasAnyResults, debouncedQuery, flush } = useGlobalSearch({
     query,
     ownedByMe,
     activeTypeChip: activeChip,
@@ -267,6 +267,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
               setOwnedByMe((v) => !v);
               setSelectedIndex(0);
             }}
+            counts={showRecents ? undefined : counts}
           />
           <GlobalSearchDropdown
             query={effectiveQuery}

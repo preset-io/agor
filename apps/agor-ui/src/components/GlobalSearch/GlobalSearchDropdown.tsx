@@ -73,11 +73,7 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
           }
 
           return (
-            <SectionShell
-              key={type}
-              title={`${SECTION_LABELS[type]} · ${items.length}`}
-              token={token}
-            >
+            <SectionShell key={type} title={SECTION_LABELS[type]} token={token}>
               {items.map((result, i) => {
                 const flatIndex = offset + i;
                 return (

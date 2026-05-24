@@ -90,6 +90,23 @@ export const EMPTY_RESULTS: ResultsByType = {
   mcp: [],
 };
 
+/**
+ * Per-entity-type total match counts — used by the chip row to render badges
+ * like "Worktree (12)". Independent of `activeTypeChip` so an inactive chip
+ * still surfaces "how many would I find if I clicked this." Pre-cap; the
+ * `results` arrays are slice-limited per section while counts are not.
+ */
+export type SearchCounts = Record<SearchEntityType, number>;
+
+export const EMPTY_COUNTS: SearchCounts = {
+  session: 0,
+  branch: 0,
+  assistant: 0,
+  artifact: 0,
+  board: 0,
+  mcp: 0,
+};
+
 /** Per-section cap in the dropdown — matches §3.4 of the design doc. */
 export const SECTION_LIMIT = 5;
 

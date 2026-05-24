@@ -1,12 +1,15 @@
 import { Segmented, Switch, Tag, Tooltip, theme } from 'antd';
 import type React from 'react';
-import { type ChipFilter, TYPE_CHIP_LABELS, TYPE_CHIP_ORDER } from './types';
+import { type ChipFilter, type SearchCounts, TYPE_CHIP_LABELS, TYPE_CHIP_ORDER } from './types';
 
 interface SearchChipRowProps {
   activeChip: ChipFilter;
   onChipChange: (chip: ChipFilter) => void;
   ownedByMe: boolean;
   onOwnedByMeToggle: () => void;
+  /** Per-type match totals. `undefined` (or all-zero) hides badges — used to
+   * suppress count tags when there's no live query (recents view). */
+  counts?: SearchCounts;
 }
 
 /**
@@ -21,8 +24,19 @@ export const SearchChipRow: React.FC<SearchChipRowProps> = ({
   onChipChange,
   ownedByMe,
   onOwnedByMeToggle,
+  counts,
 }) => {
   const { token } = theme.useToken();
+
+  const totalCount = counts
+    ? counts.session +
+      counts.branch +
+      counts.assistant +
+      counts.artifact +
+      counts.board +
+      counts.mcp
+    : 0;
+  const showCounts = !!counts && totalCount > 0;
 
   return (
     <div style={{ padding: '6px 12px', borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
@@ -31,7 +45,14 @@ export const SearchChipRow: React.FC<SearchChipRowProps> = ({
         value={activeChip}
         onChange={(value) => onChipChange(value as ChipFilter)}
         options={TYPE_CHIP_ORDER.map((chip) => ({
-          label: TYPE_CHIP_LABELS[chip],
+          label: (
+            <ChipLabel
+              label={TYPE_CHIP_LABELS[chip]}
+              count={showCounts ? (chip === 'all' ? totalCount : (counts?.[chip] ?? 0)) : undefined}
+              isActive={activeChip === chip}
+              token={token}
+            />
+          ),
           value: chip,
         }))}
         style={{ marginBottom: 4, fontSize: 12 }}
@@ -85,5 +106,40 @@ export const SearchChipRow: React.FC<SearchChipRowProps> = ({
         </Tooltip>
       </div>
     </div>
+  );
+};
+
+/**
+ * Chip label with optional count badge. The badge sits to the right of the
+ * label and uses a muted, borderless tag so it reads as supplementary rather
+ * than competing with the label. The count for the active chip is rendered
+ * with the active token color so it stays legible against Segmented's
+ * highlight background.
+ */
+const ChipLabel: React.FC<{
+  label: string;
+  count: number | undefined;
+  isActive: boolean;
+  token: ReturnType<typeof theme.useToken>['token'];
+}> = ({ label, count, isActive, token }) => {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      {label}
+      {count !== undefined && (
+        <Tag
+          style={{
+            margin: 0,
+            padding: '0 5px',
+            fontSize: 10,
+            lineHeight: '14px',
+            border: 'none',
+            background: isActive ? token.colorFillSecondary : token.colorFillTertiary,
+            color: token.colorTextSecondary,
+          }}
+        >
+          {count}
+        </Tag>
+      )}
+    </span>
   );
 };
