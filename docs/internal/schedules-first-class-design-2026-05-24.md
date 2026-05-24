@@ -1,6 +1,6 @@
 # Schedules as First-Class CRUD — Design Doc
 
-**Status:** Draft for review
+**Status:** Open questions resolved 2026-05-24 — ready for implementation
 **Author:** Max (proposal) + Claude (write-up)
 **Date:** 2026-05-24
 **Related PRs:** #1246 (global search), #1251 (reconnection), #1252 (daemon HA)
@@ -14,7 +14,7 @@ Promote schedules from a one-per-worktree blob of columns on `worktrees` into a 
 - **`schedules`** table — UUIDv7 PK, FK to `worktrees(worktree_id) ON DELETE CASCADE`, plus `name`, `cron_expression`, `timezone_mode` (`local`/`utc`), `timezone` (IANA, when mode=local), `prompt`, `agentic_tool_config` (jsonb), `enabled`, `last_run_at`, `last_run_session_id`, `next_run_at`, audit columns.
 - **Runs = sessions** — no separate `runs` table. Sessions already carry `scheduled_run_at` + `scheduled_from_worktree`. Rename the marker FK to `schedule_id` (nullable; null for ad-hoc sessions) and we keep one canonical "open the run" path.
 - **Scheduler** keeps the 30s ticker + 2min grace window — but the hot-path query becomes a real indexed `WHERE enabled = true AND next_run_at <= ?` over `schedules`, replacing today's "load every worktree, filter in memory" scan ([`scheduler.ts:214`](../../apps/agor-daemon/src/services/scheduler.ts#L214)).
-- **Migration** is two PRs: (1) add `schedules` + backfill existing enabled schedules with `timezone_mode='utc'`, ship UI; (2) drop the four `schedule_*` columns + `data.schedule` JSON blob from `worktrees` once the UI cuts over.
+- **Migration** is a single PR: add `schedules`, backfill existing enabled schedules with `timezone_mode='utc'`, ship UI, and drop the four `schedule_*` columns + `data.schedule` JSON blob from `worktrees` in the same migration. (Per Max — no PR stacking.)
 - **Modal** rewrite — **prompt textarea up top**, compact agent picker, advanced settings collapsed. Add IANA tz dropdown only when `mode=local`.
 - **Cross-cutting:** HA design ([#1252](https://github.com/preset-io/agor/pull/1252)) wants Postgres advisory locks around the tick — first-class schedules makes the locked region per-schedule instead of per-tick, which is the right scaling shape anyway.
 
@@ -261,7 +261,7 @@ CREATE INDEX sessions_schedule_id_idx ON sessions(schedule_id, scheduled_run_at)
 
 **`cron_expression`** — required. We considered making it optional ("disabled draft") but Drizzle/Zod can enforce non-null + `isValidCron` ([`cron.ts:17`](../../packages/core/src/utils/cron.ts#L17)) at the app layer. Drafts can use `enabled=false`.
 
-**`timezone_mode`** — `local` | `utc`. Enum validated at app layer (no DB CHECK, per §3.6 gotcha). Default **`local`** because users think in their own time. Existing schedules backfill to `'utc'` to preserve behavior — see §5.
+**`timezone_mode`** — `local` | `utc`. Enum validated at app layer (no DB CHECK, per §3.6 gotcha). Default **`local`** (confirmed with Max) because users think in their own time. Existing schedules backfill to `'utc'` to preserve current scheduler behavior — see §5.
 
 **`timezone`** — IANA, e.g. `'America/Los_Angeles'`. Required when `mode='local'`, ignored when `mode='utc'`. App-layer validation rejects an unknown IANA name. We do **not** add `users.timezone` in this PR — the modal seeds with `Intl.DateTimeFormat().resolvedOptions().timeZone` and the user can change it. Adding a user preference is a future increment that doesn't block this design.
 
@@ -308,6 +308,22 @@ Reasoning: The current scheduler ([`scheduler.ts:232-258`](../../apps/agor-daemo
 
 Alternative: per-schedule `catchup_policy: 'latest_only' | 'none'`. **Don't add yet** — `latest_only` matches today and is the safe default; adding the field invites confusion before we have a single user asking for the alternative.
 
+**Q: MCP tool surface — discrete CRUD verbs or upsert?**
+**Decided: standard CRUD, six tools.**
+
+```
+agor_schedules_list      (worktreeId? boardId? createdBy? enabled?)
+agor_schedules_get       (scheduleId)
+agor_schedules_create    (worktreeId, name, cron_expression, timezone_mode, timezone?, prompt, agentic_tool_config, ...)
+agor_schedules_patch     (scheduleId, partial updates)
+agor_schedules_delete    (scheduleId)
+agor_schedules_run_now   (scheduleId) → returns session_id
+```
+
+Reasoning: every other domain follows this shape (`agor_worktrees_*`, `agor_sessions_*`, `agor_boards_*`, `agor_cards_*`). The discoverability story is "find the entity, then `_list` / `_get` / `_create` / `_patch` / `_delete`" — `_upsert` is a one-off that breaks the muscle memory. `run_now` is the domain-specific verb that doesn't fit CRUD, same way `agor_sessions_spawn` is a domain-specific verb.
+
+The REST layer follows the same shape automatically because Feathers services give us `/schedules` (list/create), `/schedules/:id` (get/patch/delete), and `/schedules/:id/run-now` (custom verb, mirrors today's `/worktrees/:id/execute-schedule-now` at [`register-routes.ts:2886`](../../apps/agor-daemon/src/register-routes.ts#L2886)).
+
 **Q: On-failure behavior — retry, pause, mark broken?**
 **Recommended: None of the above in V1 — fail loud, surface in the UI, keep scheduling.**
 
@@ -317,11 +333,11 @@ Reasoning: An agent session "failing" is a fuzzy concept (did it error out? fini
 
 ## 5. Migration plan
 
-Two PRs, sequenced.
+Single PR (Max: no PR stacking). One SQLite migration, one Postgres migration: create `schedules`, backfill from `worktrees`, drop the four old columns + the `data.schedule` blob in the same file. SQLite gets one table recreation for `worktrees` (Drizzle's `__new_worktrees` dance); Postgres gets four `DROP COLUMN`s. Net schema delta on `worktrees`: -4 cols + a smaller `data` JSON. Net schema delta on `sessions`: +1 col (`schedule_id`).
 
-### PR 1: Add `schedules` + backfill + ship UI
+### 5.1 SQLite migration
 
-**Migration file `packages/core/drizzle/sqlite/0045_schedules_table.sql`:**
+**`packages/core/drizzle/sqlite/0045_schedules_table.sql`:**
 
 ```sql
 -- First-class schedules table. Design doc:
@@ -408,10 +424,28 @@ SET schedule_id = (
   SELECT s.schedule_id FROM schedules s WHERE s.worktree_id = sessions.worktree_id
 )
 WHERE sessions.scheduled_from_worktree = 1
-  AND sessions.worktree_id IN (SELECT worktree_id FROM schedules);
+  AND sessions.worktree_id IN (SELECT worktree_id FROM schedules);--> statement-breakpoint
+
+-- Drop the old materialized columns from `worktrees`. SQLite recreates the
+-- table (the `__new_worktrees` dance) — review the generated INSERT carefully
+-- per context/guides/creating-database-migrations.md §"Removing columns".
+--
+-- Drizzle generates this automatically when the schema.sqlite.ts file removes
+-- the four columns. Shown here for documentation; do not hand-write.
+ALTER TABLE `worktrees` DROP COLUMN `schedule_enabled`;--> statement-breakpoint
+ALTER TABLE `worktrees` DROP COLUMN `schedule_cron`;--> statement-breakpoint
+ALTER TABLE `worktrees` DROP COLUMN `schedule_last_triggered_at`;--> statement-breakpoint
+ALTER TABLE `worktrees` DROP COLUMN `schedule_next_run_at`;--> statement-breakpoint
+DROP INDEX `worktrees_schedule_enabled_idx`;--> statement-breakpoint
+DROP INDEX `worktrees_board_schedule_idx`;--> statement-breakpoint
+
+-- Remove the schedule key from the data JSON. SQLite 3.38+ supports json_remove.
+UPDATE worktrees SET data = json_remove(data, '$.schedule') WHERE json_extract(data, '$.schedule') IS NOT NULL;
 ```
 
-**Postgres mirror `packages/core/drizzle/postgres/0036_schedules_table.sql`:**
+### 5.2 Postgres migration
+
+**`packages/core/drizzle/postgres/0036_schedules_table.sql`:**
 
 ```sql
 -- (Same header comment.)
@@ -483,16 +517,29 @@ UPDATE sessions
 SET schedule_id = s.schedule_id
 FROM schedules s
 WHERE sessions.scheduled_from_worktree = true
-  AND sessions.worktree_id = s.worktree_id;
+  AND sessions.worktree_id = s.worktree_id;--> statement-breakpoint
+
+-- Drop the old materialized columns + indexes.
+DROP INDEX IF EXISTS "worktrees_schedule_enabled_idx";--> statement-breakpoint
+DROP INDEX IF EXISTS "worktrees_board_schedule_idx";--> statement-breakpoint
+ALTER TABLE "worktrees" DROP COLUMN "schedule_enabled";--> statement-breakpoint
+ALTER TABLE "worktrees" DROP COLUMN "schedule_cron";--> statement-breakpoint
+ALTER TABLE "worktrees" DROP COLUMN "schedule_last_triggered_at";--> statement-breakpoint
+ALTER TABLE "worktrees" DROP COLUMN "schedule_next_run_at";--> statement-breakpoint
+
+-- Remove the schedule key from the data jsonb.
+UPDATE worktrees SET data = data - 'schedule' WHERE data ? 'schedule';
 ```
 
-### 5a. PR 2: drop old columns
+### 5.3 Single-PR vs split — why this is OK
 
-After PR 1 ships and the UI cuts over, a follow-up migration drops the four `worktrees.schedule_*` columns and removes `data.schedule` from `WorktreeData`. SQLite will recreate the table; Postgres uses `ALTER TABLE DROP COLUMN`. Per the migrations doc ([`:79`](../../context/guides/creating-database-migrations.md#L79)), review the recreated `INSERT INTO __new_worktrees SELECT ...` carefully so the column list matches.
+The migrations doc ([`:79`](../../context/guides/creating-database-migrations.md#L79)) flags column-drops as the riskiest case ("review the recreation SQL carefully"). The risk in a one-shot migration is that backfill failure leaves the old columns gone with no data in the new table. We handle this with:
 
-**Why two PRs and not one:** keeps the rollback story simple. PR 1 is additive — if a bug surfaces we revert and the old columns are still authoritative. PR 2 is destructive — only run it after the scheduler has been reading from `schedules` for at least one release cycle.
+1. **Backfill INSERT runs before the DROP COLUMN.** If the INSERT fails, the migration aborts before any drop — no data loss.
+2. **The migration is wrapped in a transaction** (Drizzle's default for both SQLite and Postgres). All-or-nothing.
+3. **Rollback path is the prior commit on `main`** — `pnpm agor db migrate` is forward-only, so if a bug ships we revert the *code* (which still reads from the new table because we've removed the old paths). Production schema rollback would need a separate "restore from columns" migration written by hand if it ever came to that, but that's true of every destructive migration in the project.
 
-### 5b. Backfill ambiguity (stop-and-report)
+### 5.4 Backfill ambiguity
 
 The current schema allows three "half-configured" states:
 
@@ -502,11 +549,13 @@ The current schema allows three "half-configured" states:
 | `true` | `NULL` | any | Scheduler short-circuits at [`scheduler.ts:233`](../../apps/agor-daemon/src/services/scheduler.ts#L233); doesn't fire. UI would default to `0 0 * * *`. |
 | `true` | non-null | `NULL` | Scheduler throws at `spawnScheduledSession` ([`scheduler.ts:425-431`](../../apps/agor-daemon/src/services/scheduler.ts#L425-L431)) on first tick. |
 
-**Backfill rule (recommended):** create a `schedules` row only when both `schedule_cron IS NOT NULL` AND `data.schedule.prompt_template IS NOT NULL`. Half-configured rows are dropped silently — they weren't firing anyway. Disabled-but-configured rows DO backfill (with `enabled=false`) so users don't lose their setup.
+**Backfill rule (confirmed with Max):** create a `schedules` row only when both `schedule_cron IS NOT NULL` AND `data.schedule.prompt_template IS NOT NULL`. Half-configured rows are dropped silently — they weren't firing anyway. Disabled-but-configured rows DO backfill (with `enabled=false`) so users don't lose their setup.
 
-This is encoded in the WHERE clauses above. Worth confirming with Max before merging the implementation PR — there's a real chance Max wants to keep half-configured rows as drafts.
+Encoded in the WHERE clauses above.
 
-### 5c. Indexes
+**Going forward**, the API/UI prevents creating an invalid schedule in the first place. Both `cron_expression` and `prompt` are `NOT NULL` at the DB layer; Zod / service hooks reject empty strings and invalid cron expressions (`isValidCron` at [`cron.ts:17`](../../packages/core/src/utils/cron.ts#L17)). The "Save" button stays disabled until both are valid. No new half-configured rows can ever exist post-migration.
+
+### 5.5 Indexes
 
 The hot path is the scheduler tick:
 
@@ -633,18 +682,22 @@ Proposed: `SELECT 1 FROM sessions WHERE schedule_id = ? AND scheduled_run_at = ?
 
 ### 7d. HA / lock semantics (cross-ref #1252)
 
-[#1252](https://github.com/preset-io/agor/pull/1252) §T2 calls for a Postgres advisory lock around the scheduler tick ([`scheduler.ts:142`](../../apps/agor-daemon/src/services/scheduler.ts#L142)). With first-class schedules the right shape is **per-schedule** locking, not per-tick:
+[#1252](https://github.com/preset-io/agor/pull/1252) §T2 calls for a Postgres advisory lock around the scheduler tick ([`scheduler.ts:142`](../../apps/agor-daemon/src/services/scheduler.ts#L142)). With first-class schedules the right shape is **per-schedule** locking, not per-tick — and we're building it into V1 (Max: ok).
 
+```ts
+// pseudocode — runs once per due schedule, inside the tick loop
+const lockKey = hashScheduleId(schedule.schedule_id);  // stable bigint
+const acquired = await db.execute(sql`SELECT pg_try_advisory_xact_lock(${lockKey})`);
+if (!acquired) continue;  // another daemon is handling this one
+// spawn session, advance metadata...
+// transaction commit auto-releases the lock
 ```
-for each due schedule:
-  acquire pg_try_advisory_xact_lock(hash(schedule_id))
-    spawn session, advance metadata
-  release
-```
 
-This lets two daemons share the work — each picks up whichever schedules they can lock — instead of "one daemon owns the entire scheduler at a time." Per-tick locking is a fine V1 if HA isn't shipping yet; per-schedule locking is the right V2 shape and is *strictly easier* with first-class schedules than with the current denormalized worktree column.
+This lets two daemons share the work — each picks up whichever schedules they can lock — instead of "one daemon owns the entire scheduler at a time." It's also *strictly easier* with first-class schedules than with the current denormalized worktree column: today's tick scans every worktree, so a per-worktree lock would gate everything behind one round-trip; per-schedule locks only fire for the handful of due schedules per tick.
 
-On SQLite (single-node deployments), the tick is already single-process — no lock needed.
+**SQLite path:** the lock attempt is a no-op (or skipped at the dialect-detection layer in [`schema-factory.ts`](../../packages/core/src/db/schema-factory.ts)). SQLite is single-node by definition — no lock needed.
+
+**Coordination with #1252:** that PR's recommended advisory-lock helper goes in a new utility module; this design assumes that helper exists (or we write it as part of this work). Either order is fine since the per-schedule call site is small.
 
 ---
 
@@ -714,26 +767,21 @@ Max wrote it. Concepts that translate:
 
 ## 10. Phased rollout
 
-**V1 (this design)**
+**V1 (this PR — one PR, one merge)**
 - `schedules` table + `sessions.schedule_id` FK + indexes
 - Backfill from `worktrees.schedule_*` and `data.schedule`
-- Schedules CRUD (REST service, Feathers events)
-- Scheduler reads from `schedules`, honors `timezone_mode`
-- New modal with prompt-on-top, local-mode default
+- **Drop** the four `worktrees.schedule_*` columns + `data.schedule` blob in the same migration (§5.3)
+- Schedules CRUD service (Feathers + REST + WebSocket events)
+- Scheduler reads from `schedules`, honors `timezone_mode`, takes per-schedule `pg_try_advisory_xact_lock` (§7d)
+- New modal with prompt-on-top, local-mode default, IANA tz dropdown
 - Runs side panel
-- MCP tools: `agor_schedules_list`, `agor_schedules_create`, `agor_schedules_update`, `agor_schedules_delete`, `agor_schedules_run_now`
-- Old columns remain (dual-write OR read-from-old as fallback during the transition)
+- 6 MCP tools (§4.4): `agor_schedules_{list,get,create,patch,delete,run_now}`
 
-**V1.1 (PR 2)**
-- Drop `worktrees.schedule_*` columns
-- Remove `data.schedule` from `WorktreeData`
-- Remove the dual-write path
-
-**V2 (later)**
-- Per-schedule Postgres advisory locks (coordinated with #1252 HA work)
+**V2 (later, if asked)**
 - `auto_pause_after_n_failures` if real users hit the foot-gun
 - `interval` as a cron alternative for "every 5 minutes"-style schedules
-- Optional `users.timezone` preference + UI
+- Optional `users.timezone` preference + UI (modal seeds from browser today; this is a nice-to-have)
+- Queue-on-busy as a third concurrency mode
 
 **V3+**
 - Trigger types beyond cron (webhooks, file changes, agent-completion events)
@@ -742,13 +790,20 @@ Max wrote it. Concepts that translate:
 
 ---
 
-## 11. Open questions for Max
+## 11. Resolved decisions (from Max)
 
-1. **Backfill rule for half-configured schedules** (§5b) — skip rows with `NULL` cron OR `NULL` prompt_template? Or backfill all rows with `enabled` honored as-is?
-2. **Default `timezone_mode` for new schedules** — `local` (recommended for relatability) or `utc` (recommended for predictability)? I argued `local`; defensible the other way.
-3. **Two PRs (additive PR 1, destructive PR 2) vs one** — I argued two for rollback safety. If you're confident, one PR is fine.
-4. **MCP tool surface** — five tools (`list / create / update / delete / run_now`)? Or fold create+update into a single `agor_schedules_upsert`? Project convention seems to be discrete CRUD verbs but the call is yours.
-5. **Per-schedule Postgres advisory lock in V1** — defer to V2 alongside #1252, or build it in now (cheap and forward-compat)?
+1. ✅ **Backfill ambiguity** — skip silently AND prevent saving invalid/misconfigured schedules going forward. Encoded as `NOT NULL` on `cron_expression` + `prompt`, plus Zod / service-hook validation. See §5.4.
+2. ✅ **Default `timezone_mode = 'local'`.** Backfilled rows get `'utc'` to preserve current behavior. See §4.2.
+3. ✅ **Single PR** — no stacking. `schedules` create + backfill + old-column drop all in one migration per dialect, transaction-wrapped. See §5.3.
+4. ✅ **MCP tool surface — standard CRUD.** Six tools: `agor_schedules_list`, `agor_schedules_get`, `agor_schedules_create`, `agor_schedules_patch`, `agor_schedules_delete`, `agor_schedules_run_now`. Mirrors `agor_worktrees_*` / `agor_sessions_*` / `agor_boards_*` conventions. See §4.4.
+5. ✅ **Per-schedule Postgres advisory lock in V1.** Cheap (`pg_try_advisory_xact_lock(hash(schedule_id))` per row) and forward-compatible with #1252 HA. SQLite single-node tick stays lock-free. See §7d.
+
+### Remaining items needing review
+
+None blocking. Two minor follow-ups, called out where they live:
+
+- §6b — the modal mockup uses a wall-of-text wireframe; final visual will land in the implementation PR (no design-level decision pending).
+- §12 — the existing `custom_context.scheduled_run.schedule_config_snapshot` blob on sessions should add `schedule_id` to its payload; bookkeeping, not a design question.
 
 ---
 
