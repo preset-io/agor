@@ -627,12 +627,12 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                         gap: token.sizeUnit,
                       }}
                     >
-                      {textBeforeTools.map((text, idx) => {
+                      {textBeforeTools.map((text) => {
                         // Use CollapsibleMarkdown for long text blocks (15+ lines)
                         const shouldTruncate = text.split('\n').length > 15;
 
                         return (
-                          <div key={`text-${idx}-${text.substring(0, 20)}`}>
+                          <div key={`text-${text.length}-${text.substring(0, 32)}`}>
                             {shouldTruncate ? (
                               <CollapsibleMarkdown
                                 maxLines={10}

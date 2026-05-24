@@ -39,13 +39,13 @@ import {
 // (daemon, CLI) keep working without touching call sites.
 export {
   type AgorYmlSchema,
-  type YamlVariant,
   parseAgorYmlString,
   resolveVariant,
   resolveVariantOrThrow,
   validateAgorYmlSchema,
   validateExtends,
   validateRepoEnvironment,
+  type YamlVariant,
 };
 
 /**
