@@ -368,9 +368,9 @@ Pick the tier that mirrors the **session** equivalent (the schedule represents t
 | `create` | `session` | `MEMBER` | Creating a schedule *is* creating a recurring session-creation intent. Matches `sessions.create` at tier `session` via `ensureCanCreateSession` ([`register-hooks.ts:1656-1690`](../../apps/agor-daemon/src/register-hooks.ts#L1656-L1690), helper at [`branch-authorization.ts:1081-1083`](../../apps/agor-daemon/src/utils/branch-authorization.ts#L1081-L1083)). |
 | `patch` | `session` for own schedule, `all` for others' | `MEMBER` | Same branch logic as sessions ([`register-hooks.ts:1765-1791`](../../apps/agor-daemon/src/register-hooks.ts#L1765-L1791)): "own" check via `schedule.created_by === userId`. |
 | `delete` / `remove` | `all` | `MEMBER` | Destructive; matches `sessions.remove` ([`register-hooks.ts:1810-1817`](../../apps/agor-daemon/src/register-hooks.ts#L1810-L1817)). |
-| `run_now` | `prompt` for any schedule, `session` for own | `MEMBER` | Mirrors `ensureCanPromptInSession` ([`branch-authorization.ts:1111-1179`](../../apps/agor-daemon/src/utils/branch-authorization.ts#L1111-L1179)). Today's `execute-schedule-now` requires `'all'` ([`register-routes.ts:2928`](../../apps/agor-daemon/src/register-routes.ts#L2928)); **we're loosening that** to match session-prompt semantics, because "run my own schedule now" should not require admin-tier branch access. |
+| `run_now` | `all` | `MEMBER` | Preserves today's behavior (`execute-schedule-now` requires `'all'` at [`register-routes.ts:2928`](../../apps/agor-daemon/src/register-routes.ts#L2928)). Max chose to keep this restrictive — running a schedule on-demand has the same blast radius as editing it, so the bar matches the bar to delete it. Revisit in V2 if users hit the friction. |
 
-The `run_now` change is the only behavior change in RBAC vs today. Worth flagging — see Open Q below.
+RBAC tier requirements are now identical to today (no behavior change vs current `/branches/:id/execute-schedule-now`).
 
 #### Hook wiring (sketch)
 
@@ -436,7 +436,7 @@ app.service('/schedules/:id/run-now').hooks({
       ...(branchRbacEnabled
         ? [
             loadScheduleAndBranch(scheduleRepo, branchRepo),
-            ensureCanRunSchedule(superadminOpts),  // prompt-tier OR (session-tier AND own schedule)
+            ensureBranchPermission('all', 'run schedule', superadminOpts),  // matches today's execute-schedule-now
           ]
         : []),
     ],
@@ -918,9 +918,9 @@ Max wrote it. Concepts that translate:
 4. ✅ **MCP tool surface — standard CRUD.** Six tools: `agor_schedules_list`, `agor_schedules_get`, `agor_schedules_create`, `agor_schedules_patch`, `agor_schedules_delete`, `agor_schedules_run_now`. Mirrors `agor_branches_*` / `agor_sessions_*` / `agor_boards_*` conventions. See §4.3.
 5. ✅ **Per-schedule Postgres advisory lock in V1.** Cheap (`pg_try_advisory_xact_lock(hash(schedule_id))` per row) and forward-compatible with #1252 HA. SQLite single-node tick stays lock-free. See §7d.
 
-### Remaining items needing review
+### All RBAC questions resolved (from Max, 2026-05-24)
 
-- **`run_now` RBAC tier** (§4.4) — recommending we loosen from today's `'all'` ([`register-routes.ts:2928`](../../apps/agor-daemon/src/register-routes.ts#L2928)) to `'prompt'`-or-own-`'session'` to match `ensureCanPromptInSession` semantics. This lets a member run *their own* schedule without admin tier on the branch. **Flag for Max** — this is the only behavioral RBAC change vs today; defensible either way.
+6. ✅ **`run_now` tier = `'all'`** (matches today's `/branches/:id/execute-schedule-now`). No behavior change vs current. Revisit only if users complain.
 
 Non-blocking follow-ups, called out where they live:
 
