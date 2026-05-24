@@ -221,7 +221,18 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
       <Input
         ref={inputRef}
         placeholder="Search…  ⌘K"
-        prefix={<SearchOutlined style={{ color: token.colorTextQuaternary }} />}
+        // Right-aligned search icon (matches `<Input.Search>` visual
+        // convention) without adopting its press-to-search semantics — this
+        // input is type-ahead. When the query is non-empty, hide the icon so
+        // `allowClear`'s X owns the right edge; otherwise the X and icon
+        // would stack.
+        suffix={
+          query ? (
+            <span style={{ width: 0 }} />
+          ) : (
+            <SearchOutlined style={{ color: token.colorTextQuaternary }} />
+          )
+        }
         value={query}
         onChange={(e) => {
           setQuery(e.target.value);
