@@ -32,8 +32,6 @@ import {
   deleteBranchDirectory,
   deleteRepoDirectory,
   ensureGitRemoteUrl,
-  getCurrentBranch,
-  getGitState,
   getReposDir,
   removeGitWorktree,
   restoreBranchFilesystem,
@@ -245,18 +243,13 @@ export async function handleBranchInspect(
       throw new Error(`Branch ${branchId} has no path`);
     }
 
-    await prepareBranchInspectionGitConfig(client, branch);
-
-    const currentSha = await getGitState(branch.path);
-    let currentRef = branch.name || '';
-    try {
-      currentRef = (await getCurrentBranch(branch.path)) || currentRef;
-    } catch (error) {
-      console.warn(
-        `[branch.inspect] Failed to read current branch for ${branchId}; falling back to DB branch name:`,
-        error instanceof Error ? error.message : String(error)
-      );
-    }
+    const repo = await prepareBranchInspectionGitConfig(client, branch);
+    const { currentSha, currentRef } = await readBranchInspectState({
+      branchPath: branch.path,
+      repoPath: repo?.local_path,
+      fallbackRef: branch.name || '',
+      logPrefix: `[branch.inspect ${branchId}]`,
+    });
 
     return {
       success: true,
@@ -343,21 +336,77 @@ async function addSafeDirectoryForCurrentUser(pathToTrust: string): Promise<void
 async function prepareBranchInspectionGitConfig(
   client: AgorClient,
   branch: { path: string; repo_id?: string }
-): Promise<void> {
+): Promise<{ local_path?: string } | null> {
   await addSafeDirectoryForCurrentUser(branch.path);
 
-  if (!branch.repo_id) return;
+  if (!branch.repo_id) return null;
   try {
     const repo = await client.service('repos').get(branch.repo_id);
     if (repo?.local_path) {
       await addSafeDirectoryForCurrentUser(repo.local_path);
     }
+    return repo ?? null;
   } catch (error) {
     console.warn(
       `[branch.inspect] Failed to load repo ${branch.repo_id} for safe.directory setup:`,
       error instanceof Error ? error.message : String(error)
     );
+    return null;
   }
+}
+
+async function readBranchInspectState({
+  branchPath,
+  repoPath,
+  fallbackRef,
+  logPrefix,
+}: {
+  branchPath: string;
+  repoPath?: string;
+  fallbackRef: string;
+  logPrefix: string;
+}): Promise<{ currentSha: string; currentRef: string }> {
+  const { git } = createGit(branchPath);
+  const safeArgs = [
+    '-c',
+    `safe.directory=${branchPath}`,
+    ...(repoPath ? ['-c', `safe.directory=${repoPath}`] : []),
+  ];
+
+  let currentSha = 'unknown';
+  try {
+    currentSha = (await git.raw([...safeArgs, 'rev-parse', 'HEAD'])).trim() || 'unknown';
+  } catch (error) {
+    console.warn(
+      `${logPrefix} Failed to read HEAD SHA; returning currentSha=unknown:`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+
+  if (currentSha !== 'unknown') {
+    try {
+      const status = await git.raw([...safeArgs, 'status', '--porcelain']);
+      if (status.trim().length > 0) currentSha = `${currentSha}-dirty`;
+    } catch (error) {
+      console.warn(
+        `${logPrefix} Failed to read dirty state; returning clean SHA:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
+
+  let currentRef = fallbackRef;
+  try {
+    currentRef =
+      (await git.raw([...safeArgs, 'rev-parse', '--abbrev-ref', 'HEAD'])).trim() || currentRef;
+  } catch (error) {
+    console.warn(
+      `${logPrefix} Failed to read current branch; falling back to DB branch name:`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+
+  return { currentSha, currentRef };
 }
 
 /**

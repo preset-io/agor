@@ -7,10 +7,9 @@ const mocks = vi.hoisted(() => ({
   deleteBranchDirectory: vi.fn(),
   deleteRepoDirectory: vi.fn(),
   cloneRepo: vi.fn(),
-  getGitState: vi.fn(),
-  getCurrentBranch: vi.fn(),
   getReposDir: vi.fn(() => '/safe/repos'),
   addConfig: vi.fn(),
+  gitRaw: vi.fn(),
 }));
 
 vi.mock('@agor/core/config', async () => {
@@ -26,12 +25,10 @@ vi.mock('@agor/core/git', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('@agor/core/git');
   return {
     ...actual,
-    createGit: vi.fn(() => ({ git: { addConfig: mocks.addConfig } })),
+    createGit: vi.fn(() => ({ git: { addConfig: mocks.addConfig, raw: mocks.gitRaw } })),
     cloneRepo: mocks.cloneRepo,
     deleteBranchDirectory: mocks.deleteBranchDirectory,
     deleteRepoDirectory: mocks.deleteRepoDirectory,
-    getCurrentBranch: mocks.getCurrentBranch,
-    getGitState: mocks.getGitState,
     getReposDir: mocks.getReposDir,
   };
 });
@@ -113,8 +110,12 @@ function createClient(records: {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.getReposDir.mockReturnValue('/safe/repos');
-  mocks.getGitState.mockResolvedValue('sha-abc');
-  mocks.getCurrentBranch.mockResolvedValue('main');
+  mocks.gitRaw.mockImplementation(async (args: string[]) => {
+    if (args.includes('status')) return '';
+    if (args.includes('--abbrev-ref')) return 'main\n';
+    if (args.includes('HEAD')) return 'sha-abc\n';
+    return '';
+  });
   mocks.cloneRepo.mockResolvedValue({
     path: '/safe/repos/smoke/agor-assistant-pr1258',
     repoName: 'agor-assistant',
@@ -167,7 +168,12 @@ describe('managed executor git/fs commands', () => {
   });
 
   it('adds branch/repo safe.directory and falls back to DB branch name when current branch lookup fails', async () => {
-    mocks.getCurrentBranch.mockRejectedValue(new Error('dubious ownership'));
+    mocks.gitRaw.mockImplementation(async (args: string[]) => {
+      if (args.includes('status')) return '';
+      if (args.includes('--abbrev-ref')) throw new Error('dubious ownership');
+      if (args.includes('HEAD')) return 'sha-abc\n';
+      return '';
+    });
     createClient({
       repo: { repo_id: repoId, local_path: '/safe/repos/repo' },
       branch: {
@@ -195,6 +201,14 @@ describe('managed executor git/fs commands', () => {
       '/safe/repos/repo',
       true,
       'global'
+    );
+    expect(mocks.gitRaw).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        '-c',
+        'safe.directory=/safe/worktrees/repo/feature-x',
+        '-c',
+        'safe.directory=/safe/repos/repo',
+      ])
     );
     expect(result.data).toMatchObject({ currentSha: 'sha-abc', currentRef: 'feature-x' });
   });
@@ -222,66 +236,6 @@ describe('managed executor git/fs commands', () => {
       '/safe/worktrees/repo/branch-1000'
     );
     expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/repo');
-  });
-
-  it('uses slug-derived output paths for git.clone to avoid same-basename collisions', async () => {
-    const patchedRepos: Array<Record<string, unknown>> = [];
-    createClient({ repo: { repo_id: repoId }, patchedRepos });
-
-    const result = await handleGitClone(
-      {
-        command: 'git.clone',
-        sessionToken: 'jwt',
-        params: {
-          url: 'https://github.com/preset-io/agor-assistant.git',
-          slug: 'smoke/agor-assistant-pr1258',
-          repoId,
-          createDbRecord: true,
-        },
-      },
-      {}
-    );
-
-    expect(result.success).toBe(true);
-    expect(mocks.cloneRepo).toHaveBeenCalledWith(
-      expect.objectContaining({ targetDir: '/safe/repos/smoke/agor-assistant-pr1258' })
-    );
-    expect(patchedRepos.at(-1)).toMatchObject({
-      local_path: '/safe/repos/smoke/agor-assistant-pr1258',
-    });
-  });
-
-  it('adds branch/repo safe.directory and falls back to DB branch name when current branch lookup fails', async () => {
-    mocks.getCurrentBranch.mockRejectedValue(new Error('dubious ownership'));
-    createClient({
-      repo: { repo_id: repoId, local_path: '/safe/repos/repo' },
-      branch: {
-        branch_id: branchId,
-        repo_id: repoId,
-        name: 'feature-x',
-        path: '/safe/worktrees/repo/feature-x',
-      },
-    });
-
-    const result = await handleBranchInspect(
-      { command: 'branch.inspect', sessionToken: 'jwt', params: { branchId } },
-      {}
-    );
-
-    expect(result.success).toBe(true);
-    expect(mocks.addConfig).toHaveBeenCalledWith(
-      'safe.directory',
-      '/safe/worktrees/repo/feature-x',
-      true,
-      'global'
-    );
-    expect(mocks.addConfig).toHaveBeenCalledWith(
-      'safe.directory',
-      '/safe/repos/repo',
-      true,
-      'global'
-    );
-    expect(result.data).toMatchObject({ currentSha: 'sha-abc', currentRef: 'feature-x' });
   });
 
   it('rejects git.repo.delete if branch query returns a foreign branch', async () => {

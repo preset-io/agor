@@ -45,6 +45,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import { resolveGitImpersonationForUser } from '../utils/git-impersonation.js';
 import {
@@ -886,10 +887,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             ...(cloneDepth !== undefined ? { cloneDepth } : {}),
             ...(storageMode === 'clone' && repo.remote_url ? { remoteUrl: repo.remote_url } : {}),
             // Hand the executor the per-repo base clone as a `--reference`
-            // hint. The executor checks `existsSync` on its own filesystem;
-            // missing path → silent fallback to a full clone. Lets daemon
-            // and executor live on different mounts without coupling.
-            ...(storageMode === 'clone' && repo.local_path
+            // hint only when that object cache is readable by the eventual
+            // session identity. In strict mode, per-user sessions need fully
+            // self-standing clones instead of alternates into daemon-owned
+            // managed repos.
+            ...(storageMode === 'clone' && repo.local_path && shouldUseCloneReferencePath()
               ? { referencePath: repo.local_path }
               : {}),
           },

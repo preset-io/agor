@@ -30,6 +30,7 @@ import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService } from '../adapters/drizzle';
 import { ensureCanTriggerManagedEnv, ensureMinimumRole } from '../utils/authorization.js';
+import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { resolveGitImpersonationForBranch } from '../utils/git-impersonation.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import { generateSessionToken, getDaemonUrl, spawnExecutor } from '../utils/spawn-executor.js';
@@ -748,9 +749,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               ...(branch.clone_depth !== undefined ? { cloneDepth: branch.clone_depth } : {}),
               ...(storageMode === 'clone' && repo.remote_url ? { remoteUrl: repo.remote_url } : {}),
               // `--reference` hint: see the create-path call site in
-              // ReposService.createBranch for the rationale (executor
-              // existsSync's the path and falls back gracefully).
-              ...(storageMode === 'clone' && repo.local_path
+              // ReposService.createBranch for the rationale and strict-mode
+              // exception.
+              ...(storageMode === 'clone' && repo.local_path && shouldUseCloneReferencePath()
                 ? { referencePath: repo.local_path }
                 : {}),
             },

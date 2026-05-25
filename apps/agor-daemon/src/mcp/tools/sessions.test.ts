@@ -122,7 +122,7 @@ describe('sessionless MCP context', () => {
     expect(result.isError).toBe(true);
     expect(parsed.error).toMatch(/requires current Agor session context/i);
     expect(parsed.error).toMatch(/X-Agor-Session-Id/);
-    expect(parsed.error).toMatch(/\\?sessionId=/);
+    expect(parsed.error).toMatch(/\?sessionId=/);
     expect(sessionsGet).not.toHaveBeenCalled();
   });
 
@@ -143,6 +143,47 @@ describe('sessionless MCP context', () => {
     expect(parsed.error).toMatch(/requires current Agor session context/i);
     expect(parsed.error).toMatch(/X-Agor-Session-Id/);
     expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
+describe('agor_sessions_list', () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it('enforces branchId filtering even if the sessions service returns broader data', async () => {
+    const findCalls: unknown[] = [];
+    const app = makeFakeApp({
+      branches: { get: async (id: string) => ({ branch_id: id }) },
+      sessions: {
+        find: async (params: unknown) => {
+          findCalls.push(params);
+          return {
+            total: 2,
+            limit: 50,
+            skip: 0,
+            data: [
+              { session_id: 'sess-target', branch_id: 'wt-1', status: 'idle' },
+              { session_id: 'sess-other', branch_id: 'wt-2', status: 'idle' },
+            ],
+          };
+        },
+      },
+    });
+
+    const { agor_sessions_list } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_list']
+    );
+
+    const result = await agor_sessions_list({ branchId: 'wt-1' });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(findCalls[0]).toMatchObject({ query: { branch_id: 'wt-1', archived: false } });
+    expect(parsed.total).toBe(1);
+    expect(parsed.data).toHaveLength(1);
+    expect(parsed.data[0].session_id).toBe('sess-target');
   });
 });
 

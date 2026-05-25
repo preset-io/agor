@@ -109,6 +109,18 @@ function coerceModelConfig(
   return input;
 }
 
+function filterSessionsByBranch<T extends { branch_id?: string }>(
+  result: T[] | { data: T[]; total?: number; [key: string]: unknown },
+  branchId: string
+): T[] | { data: T[]; total?: number; [key: string]: unknown } {
+  if (Array.isArray(result)) {
+    return result.filter((session) => session.branch_id === branchId);
+  }
+
+  const data = result.data.filter((session) => session.branch_id === branchId);
+  return { ...result, data, total: data.length };
+}
+
 export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_sessions_list
   server.registerTool(
@@ -153,7 +165,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       if (!args.sessionType && requestedLimit) query.$limit = requestedLimit;
       if (args.status) query.status = args.status;
       if (args.boardId) query.board_id = await resolveBoardId(ctx, args.boardId);
-      if (args.branchId) query.branch_id = await resolveBranchId(ctx, args.branchId);
+      const branchId = args.branchId ? await resolveBranchId(ctx, args.branchId) : undefined;
+      if (branchId) query.branch_id = branchId;
       if (args.archived === true) {
         query.archived = true;
       } else if (!args.includeArchived) {
@@ -161,21 +174,29 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       }
       const result = await ctx.app.service('sessions').find({ query, ...ctx.baseServiceParams });
 
+      // Defense-in-depth: the sessions service normally handles branch_id in
+      // its query filter, but MCP callers rely on this tool contract. Keep the
+      // response scoped even if an adapter/hook layer drops or rewrites the
+      // query before it reaches the repository.
+      const branchScopedResult = branchId ? filterSessionsByBranch(result, branchId) : result;
+
       // Apply sessionType filter (post-query since custom_context/scheduled_from_branch aren't in query schema)
       if (args.sessionType) {
         const targetType = args.sessionType as SessionType;
         const filterFn = (s: Session) => getSessionType(s) === targetType;
-        const allData: Session[] = Array.isArray(result) ? result : result.data;
+        const allData: Session[] = Array.isArray(branchScopedResult)
+          ? branchScopedResult
+          : branchScopedResult.data;
         const filtered = allData.filter(filterFn);
         const limited = requestedLimit ? filtered.slice(0, requestedLimit) : filtered;
 
-        if (Array.isArray(result)) {
+        if (Array.isArray(branchScopedResult)) {
           return textResult(limited);
         }
-        return textResult({ ...result, data: limited, total: filtered.length });
+        return textResult({ ...branchScopedResult, data: limited, total: filtered.length });
       }
 
-      return textResult(result);
+      return textResult(branchScopedResult);
     }
   );
 
