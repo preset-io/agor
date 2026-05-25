@@ -74,18 +74,6 @@ import Handlebars from 'handlebars';
 import type { Application } from '../declarations';
 
 /**
- * Session statuses that indicate a session is actively consuming resources.
- * Used for the schedule concurrency guard: if any session in a branch is
- * in one of these states, the schedule is considered "busy".
- */
-const ACTIVE_SESSION_STATUSES: ReadonlySet<SessionStatus> = new Set([
-  SessionStatus.RUNNING,
-  SessionStatus.STOPPING,
-  SessionStatus.AWAITING_PERMISSION,
-  SessionStatus.AWAITING_INPUT,
-]);
-
-/**
  * Render a Handlebars schedule-prompt template against the schedule's
  * branch metadata.
  *
@@ -295,31 +283,27 @@ export class SchedulerService {
    */
   private async processSchedule(schedule: Schedule, now: number): Promise<void> {
     const tz = resolveScheduleTz(schedule.timezone_mode, schedule.timezone);
+    const nowDate = new Date(now);
 
-    // Find the right scheduled_run_at (prev within grace, or next).
-    const prevRunAt = getPrevRunTime(schedule.cron_expression, new Date(now), tz);
+    // Cron evaluation is the per-tick hot path. Parse once for prev,
+    // once for next, and reuse below — cron-parser instantiates a fresh
+    // parser per call, so two calls is the floor.
+    const prevRunAt = getPrevRunTime(schedule.cron_expression, nowDate, tz);
+    const nextRunAt = getNextRunTime(schedule.cron_expression, nowDate, tz);
+
     const timeSincePrev = now - prevRunAt;
     const isPrevDue = timeSincePrev >= 0 && timeSincePrev < this.config.gracePeriod;
+    const timeSinceNext = now - nextRunAt;
+    const isNextDue = timeSinceNext >= 0 && timeSinceNext < this.config.gracePeriod;
 
-    let scheduledRunAt: number;
-    let isDue: boolean;
-
-    if (isPrevDue) {
-      scheduledRunAt = prevRunAt;
-      isDue = true;
-    } else {
-      const nextRunAt = getNextRunTime(schedule.cron_expression, new Date(now), tz);
-      const timeSinceNext = now - nextRunAt;
-      scheduledRunAt = nextRunAt;
-      isDue = timeSinceNext >= 0 && timeSinceNext < this.config.gracePeriod;
-    }
+    const scheduledRunAt = isPrevDue ? prevRunAt : nextRunAt;
+    const isDue = isPrevDue || isNextDue;
 
     if (!isDue) {
       // next_run_at is in the future — refresh it on the row so the
       // hot-path query stops returning this schedule until it's actually
       // due again. Cheap UPDATE on a single row.
       if (schedule.next_run_at == null) {
-        const nextRunAt = getNextRunTime(schedule.cron_expression, new Date(now), tz);
         await this.scheduleRepo
           .update(schedule.schedule_id, { next_run_at: nextRunAt })
           .catch((err) =>
@@ -327,7 +311,6 @@ export class SchedulerService {
           );
       }
       if (this.config.debug) {
-        const nextRunAt = getNextRunTime(schedule.cron_expression, new Date(now), tz);
         const timeUntilNext = nextRunAt - now;
         console.log(
           `   ⏱️  ${schedule.name}: Not due yet (next run in ${Math.round(timeUntilNext / 1000)}s)`
@@ -514,11 +497,11 @@ export class SchedulerService {
       );
     }
 
-    // 1. Dedup: indexed lookup via (schedule_id, scheduled_run_at).
-    const allSessions = await this.sessionRepo.findAll();
-    const branchSessions = allSessions.filter((s) => s.branch_id === branch.branch_id);
-    const myRuns = branchSessions.filter((s) => s.schedule_id === schedule.schedule_id);
-    const existingSession = myRuns.find((s) => s.scheduled_run_at === scheduledRunAt);
+    // 1. Dedup: indexed (schedule_id, scheduled_run_at) lookup.
+    const existingSession = await this.sessionRepo.findScheduleRun(
+      schedule.schedule_id,
+      scheduledRunAt
+    );
 
     if (existingSession) {
       // Already spawned. Advance metadata so we don't keep finding this
@@ -531,8 +514,9 @@ export class SchedulerService {
     //    Any active session in the branch blocks scheduled runs, regardless
     //    of which schedule it came from. Sibling schedules on the same
     //    branch are sequential by default; opt out via allow_concurrent_runs.
+    //    Resolved via one indexed COUNT, not a full sessions scan.
     if (!schedule.allow_concurrent_runs) {
-      const active = branchSessions.some((s) => ACTIVE_SESSION_STATUSES.has(s.status));
+      const active = await this.sessionRepo.hasActiveSessionInBranch(branch.branch_id);
       if (active) {
         if (manual) {
           console.log(
@@ -552,7 +536,8 @@ export class SchedulerService {
     const renderedPrompt = renderSchedulePrompt(schedule.prompt, branch, schedule, scheduledRunAt);
 
     // 4. Run index = count of all sessions for this schedule + 1.
-    const runIndex = myRuns.length + 1;
+    //    Indexed COUNT, not a full scan + filter.
+    const runIndex = (await this.sessionRepo.countByScheduleId(schedule.schedule_id)) + 1;
 
     try {
       // 5. Resolve unix_username (schedule's creator is the execution identity).
@@ -716,11 +701,10 @@ export class SchedulerService {
     if (schedule.retention === 0) return;
 
     try {
-      const allSessions = await this.sessionRepo.findAll();
-      const mine = allSessions.filter((s) => s.schedule_id === schedule.schedule_id);
-
-      mine.sort((a, b) => (b.scheduled_run_at ?? 0) - (a.scheduled_run_at ?? 0));
-
+      // Indexed query, newest-first; slice past the keep-count for deletion.
+      const mine = await this.sessionRepo.findByScheduleId(schedule.schedule_id, {
+        orderByScheduledRunAt: 'desc',
+      });
       const sessionsToDelete = mine.slice(schedule.retention);
 
       if (sessionsToDelete.length > 0) {

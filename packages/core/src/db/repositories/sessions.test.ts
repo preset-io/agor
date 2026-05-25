@@ -13,7 +13,9 @@ import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
 import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
+import { ScheduleRepository } from './schedules';
 import { SessionRepository } from './sessions';
+import { UsersRepository } from './users';
 
 /**
  * Create test session data with all required fields
@@ -1099,5 +1101,198 @@ describe('SessionRepository edge cases', () => {
     expect(children.map((c) => c.session_id).sort()).toEqual(
       [child1.session_id, child2.session_id].sort()
     );
+  });
+});
+
+// ============================================================================
+// Schedule-linked sessions (scheduler hot-path queries)
+// ============================================================================
+
+describe('SessionRepository schedule-link queries', () => {
+  // sessions.schedule_id has a FK to schedules(schedule_id), so each test
+  // creates a real schedule row first. The methods under test query the
+  // (schedule_id, scheduled_run_at) covering index — the FK presence is
+  // incidental, but it's enforced.
+  async function createTestSchedule(
+    db: any,
+    branchId: import('@agor/core/types').BranchID
+  ): Promise<import('@agor/core/types').ScheduleID> {
+    // schedules.created_by is FK-enforced against users — create a fresh
+    // user per schedule so test ordering doesn't matter.
+    const userRepo = new UsersRepository(db);
+    const user = await userRepo.create({
+      email: `sched-test-${Date.now()}-${Math.random()}@test.example`,
+      name: 'sched-test',
+    });
+    const scheduleRepo = new ScheduleRepository(db);
+    const created = await scheduleRepo.create({
+      branch_id: branchId,
+      name: `test-schedule-${Math.random().toString(36).slice(2, 8)}`,
+      cron_expression: '0 * * * *',
+      timezone_mode: 'utc',
+      prompt: 'test',
+      agentic_tool_config: { agentic_tool: 'claude-code' },
+      created_by: user.user_id as import('@agor/core/types').UUID,
+    });
+    return created.schedule_id;
+  }
+
+  dbTest('findScheduleRun returns the matching session', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const scheduleId = await createTestSchedule(db, branch.branch_id);
+    const scheduledRunAt = 1_700_000_000_000;
+
+    const created = await repo.create(
+      createSessionData({
+        branch_id: branch.branch_id,
+        schedule_id: scheduleId,
+        scheduled_run_at: scheduledRunAt,
+        scheduled_from_branch: true,
+      })
+    );
+
+    const found = await repo.findScheduleRun(scheduleId, scheduledRunAt);
+    expect(found?.session_id).toBe(created.session_id);
+    expect(found?.schedule_id).toBe(scheduleId);
+    expect(found?.scheduled_run_at).toBe(scheduledRunAt);
+  });
+
+  dbTest('findScheduleRun returns null when no match', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const scheduleId = await createTestSchedule(db, branch.branch_id);
+    const found = await repo.findScheduleRun(scheduleId, 1_700_000_000_000);
+    expect(found).toBeNull();
+  });
+
+  dbTest('findScheduleRun does not match a different scheduled_run_at', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const scheduleId = await createTestSchedule(db, branch.branch_id);
+    await repo.create(
+      createSessionData({
+        branch_id: branch.branch_id,
+        schedule_id: scheduleId,
+        scheduled_run_at: 1_700_000_000_000,
+        scheduled_from_branch: true,
+      })
+    );
+    const found = await repo.findScheduleRun(scheduleId, 1_700_000_000_001);
+    expect(found).toBeNull();
+  });
+
+  dbTest('findByScheduleId returns all runs for a schedule', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const scheduleId = await createTestSchedule(db, branch.branch_id);
+    const otherScheduleId = await createTestSchedule(db, branch.branch_id);
+
+    for (const t of [1_700_000_000_000, 1_700_000_060_000, 1_700_000_120_000]) {
+      await repo.create(
+        createSessionData({
+          branch_id: branch.branch_id,
+          schedule_id: scheduleId,
+          scheduled_run_at: t,
+          scheduled_from_branch: true,
+        })
+      );
+    }
+    // Sibling schedule on the same branch — must NOT be returned.
+    await repo.create(
+      createSessionData({
+        branch_id: branch.branch_id,
+        schedule_id: otherScheduleId,
+        scheduled_run_at: 1_700_000_180_000,
+        scheduled_from_branch: true,
+      })
+    );
+
+    const mine = await repo.findByScheduleId(scheduleId);
+    expect(mine).toHaveLength(3);
+    expect(mine.every((s) => s.schedule_id === scheduleId)).toBe(true);
+  });
+
+  dbTest('findByScheduleId orders by scheduled_run_at desc when requested', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const scheduleId = await createTestSchedule(db, branch.branch_id);
+    const times = [1_700_000_120_000, 1_700_000_000_000, 1_700_000_060_000];
+    for (const t of times) {
+      await repo.create(
+        createSessionData({
+          branch_id: branch.branch_id,
+          schedule_id: scheduleId,
+          scheduled_run_at: t,
+          scheduled_from_branch: true,
+        })
+      );
+    }
+    const desc = await repo.findByScheduleId(scheduleId, { orderByScheduledRunAt: 'desc' });
+    expect(desc.map((s) => s.scheduled_run_at)).toEqual([
+      1_700_000_120_000, 1_700_000_060_000, 1_700_000_000_000,
+    ]);
+  });
+
+  dbTest('countByScheduleId returns the run count', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const scheduleId = await createTestSchedule(db, branch.branch_id);
+
+    expect(await repo.countByScheduleId(scheduleId)).toBe(0);
+    for (let i = 0; i < 5; i++) {
+      await repo.create(
+        createSessionData({
+          branch_id: branch.branch_id,
+          schedule_id: scheduleId,
+          scheduled_run_at: 1_700_000_000_000 + i * 60_000,
+          scheduled_from_branch: true,
+        })
+      );
+    }
+    expect(await repo.countByScheduleId(scheduleId)).toBe(5);
+  });
+
+  dbTest('hasActiveSessionInBranch reflects branch-wide active runs', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+
+    // Empty branch → no active session.
+    expect(await repo.hasActiveSessionInBranch(branch.branch_id)).toBe(false);
+
+    // Idle session → still no active session.
+    await repo.create(
+      createSessionData({ branch_id: branch.branch_id, status: SessionStatus.IDLE })
+    );
+    expect(await repo.hasActiveSessionInBranch(branch.branch_id)).toBe(false);
+
+    // Running session → active.
+    await repo.create(
+      createSessionData({ branch_id: branch.branch_id, status: SessionStatus.RUNNING })
+    );
+    expect(await repo.hasActiveSessionInBranch(branch.branch_id)).toBe(true);
+
+    // AWAITING_INPUT also counts (matches the scheduler's previous in-memory set).
+    const otherBranch = await createTestBranch(db);
+    await repo.create(
+      createSessionData({
+        branch_id: otherBranch.branch_id,
+        status: SessionStatus.AWAITING_INPUT,
+      })
+    );
+    expect(await repo.hasActiveSessionInBranch(otherBranch.branch_id)).toBe(true);
+  });
+
+  dbTest('hasActiveSessionInBranch is scoped per branch', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branchA = await createTestBranch(db);
+    const branchB = await createTestBranch(db);
+
+    await repo.create(
+      createSessionData({ branch_id: branchA.branch_id, status: SessionStatus.RUNNING })
+    );
+
+    expect(await repo.hasActiveSessionInBranch(branchA.branch_id)).toBe(true);
+    expect(await repo.hasActiveSessionInBranch(branchB.branch_id)).toBe(false);
   });
 });

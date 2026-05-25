@@ -587,6 +587,130 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   }
 
   /**
+   * Find the session that corresponds to one specific scheduled run.
+   *
+   * Used by the scheduler to dedup: "is there already a session for
+   * (schedule_id, scheduled_run_at)?". Uses the covering index
+   * `sessions_schedule_id_idx (schedule_id, scheduled_run_at)` so the
+   * lookup is O(log n), not an O(n) full table scan.
+   *
+   * Returns the matching session (with branch_board_id + url populated
+   * like the other readers in this repo) or null if no match.
+   */
+  async findScheduleRun(
+    scheduleId: import('@agor/core/types').ScheduleID,
+    scheduledRunAt: number
+  ): Promise<Session | null> {
+    try {
+      const baseUrl = await getBaseUrl();
+      const result = await select(this.db)
+        .from(sessions)
+        .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
+        .where(
+          and(eq(sessions.schedule_id, scheduleId), eq(sessions.scheduled_run_at, scheduledRunAt))
+        )
+        .one();
+      if (!result) return null;
+      const r = result as {
+        sessions: SessionRow;
+        branches?: { board_id?: string } | null;
+      };
+      const boardId = (r.branches?.board_id ?? null) as UUID | null;
+      return this.rowToSession(r.sessions, boardId, baseUrl);
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find scheduled run: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Find all sessions for a schedule, optionally ordered by scheduled_run_at.
+   *
+   * Used by the scheduler for retention enforcement (`desc` to keep the
+   * newest N) and the run-index count. Uses the same
+   * `sessions_schedule_id_idx` as `findScheduleRun`.
+   */
+  async findByScheduleId(
+    scheduleId: import('@agor/core/types').ScheduleID,
+    opts: { orderByScheduledRunAt?: 'asc' | 'desc' } = {}
+  ): Promise<Session[]> {
+    try {
+      const baseUrl = await getBaseUrl();
+      let query = select(this.db)
+        .from(sessions)
+        .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
+        .where(eq(sessions.schedule_id, scheduleId));
+      if (opts.orderByScheduledRunAt === 'desc') {
+        query = query.orderBy(desc(sessions.scheduled_run_at));
+      } else if (opts.orderByScheduledRunAt === 'asc') {
+        query = query.orderBy(sessions.scheduled_run_at);
+      }
+      const results = await query.all();
+      return results.map(
+        (result: { sessions: SessionRow; branches?: { board_id?: string } | null }) => {
+          const boardId = (result.branches?.board_id ?? null) as UUID | null;
+          return this.rowToSession(result.sessions, boardId, baseUrl);
+        }
+      );
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find sessions by schedule: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Count sessions linked to a schedule. Used by the scheduler to
+   * compute the `run_index` ('this is the Nth run of schedule X') for
+   * the spawned session's `custom_context.scheduled_run`.
+   */
+  async countByScheduleId(scheduleId: import('@agor/core/types').ScheduleID): Promise<number> {
+    try {
+      const result = await select(this.db, { count: sql<number>`count(*)` })
+        .from(sessions)
+        .where(eq(sessions.schedule_id, scheduleId))
+        .one();
+      return Number(result?.count ?? 0);
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to count sessions by schedule: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * True iff at least one session in this branch is in an active status
+   * (RUNNING / STOPPING / AWAITING_PERMISSION / AWAITING_INPUT). Used
+   * by the scheduler's concurrency guard ('don't fire if the branch is
+   * already busy'). Resolves the question with one indexed COUNT instead
+   * of `findAll().filter()`.
+   */
+  async hasActiveSessionInBranch(branchId: import('@agor/core/types').BranchID): Promise<boolean> {
+    try {
+      const activeStatuses = [
+        SessionStatus.RUNNING,
+        SessionStatus.STOPPING,
+        SessionStatus.AWAITING_PERMISSION,
+        SessionStatus.AWAITING_INPUT,
+      ];
+      const result = await select(this.db, { count: sql<number>`count(*)` })
+        .from(sessions)
+        .where(and(eq(sessions.branch_id, branchId), inArray(sessions.status, activeStatuses)))
+        .one();
+      return Number(result?.count ?? 0) > 0;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to check for active sessions in branch: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Find all sessions in branches accessible to a user (optimized RBAC query)
    *
    * Uses INNER JOIN + LEFT JOIN to filter sessions by branch access in one query
