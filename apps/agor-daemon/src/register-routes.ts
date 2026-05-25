@@ -97,7 +97,9 @@ import {
   PERMISSION_RANK,
   resolveBranchPermission,
 } from './utils/branch-authorization.js';
+import { inspectBranchViaExecutor } from './utils/branch-inspect.js';
 import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
+import { resolveExecutorReadAsUser } from './utils/executor-read-impersonation.js';
 import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
@@ -912,19 +914,23 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const startTimestamp = new Date().toISOString();
 
     // Recapture git state — the sentinels stored on a queued row are
-    // intentionally invalid; this is the moment we pin real values.
-    const { captureGitStateViaShell } = await import('./utils/git-shell-capture.js');
+    // intentionally invalid; this is the moment we pin real values. Route the
+    // branch git read through the executor so the daemon never runs git inside
+    // the managed checkout.
     let gitStateAtStart = 'unknown';
     let refAtStart = 'unknown';
     if (session.branch_id) {
       try {
         const branch = await app.service('branches').get(session.branch_id, params);
-        const gitState = await captureGitStateViaShell(branch.path);
-        gitStateAtStart = gitState.sha;
-        refAtStart = gitState.ref;
+        const { currentSha, currentRef } = await inspectBranchViaExecutor(app, branch.branch_id, {
+          asUser: await resolveExecutorReadAsUser(db, params.user),
+          logPrefix: `[task.start ${branch.name}]`,
+        });
+        gitStateAtStart = currentSha;
+        refAtStart = currentRef;
         if (gitStateAtStart === 'unknown') {
           console.warn(
-            `[Git State] captureGitStateViaShell returned 'unknown' for branch ${branch.path} (ref: ${refAtStart})`
+            `[Git State] branch.inspect returned 'unknown' for branch ${branch.path} (ref: ${refAtStart})`
           );
         }
       } catch (error) {

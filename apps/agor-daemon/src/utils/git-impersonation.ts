@@ -28,7 +28,7 @@ import type { Branch, UserID } from '@agor/core/types';
  *
  * This is the core primitive: pure config lookup, no user/db state. Used
  * both by git-execute spawn paths (via `resolveGitImpersonationForUser`)
- * and by in-process shell capture (`git-shell-capture.ts`). Keeping a
+ * and by short-lived executor git probes. Keeping a
  * single source of truth prevents the drift that caused #1143 — the same
  * stale gate copy-pasted across files.
  *

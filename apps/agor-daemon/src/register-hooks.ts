@@ -41,6 +41,7 @@ import type {
   Params,
   Session,
   User,
+  UserID,
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 import type {
@@ -83,6 +84,8 @@ import {
   setSessionUnixUsername,
   validateSessionUnixUsername,
 } from './utils/branch-authorization.js';
+import { inspectBranchViaExecutor } from './utils/branch-inspect.js';
+import { resolveExecutorReadAsUser } from './utils/executor-read-impersonation.js';
 import { injectCreatedBy } from './utils/inject-created-by.js';
 import { realignRepoOriginAfterPatchHook } from './utils/realign-repo-origin.js';
 import {
@@ -1721,26 +1724,34 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                   console.log(`✅ Populated repo.cwd from branch: ${branch.path}`);
                 }
 
-                // Auto-populate git_state if not provided (UI and gateway don't set it)
-                // IMPORTANT: Must use sudo -u to get fresh Unix group memberships
-                // because the daemon process has stale groups from startup.
-                // Without fresh groups, git can't read ACL-protected repo files.
+                // Auto-populate git_state if not provided (UI and gateway don't set it).
+                // Branch git reads go through the executor so the daemon never
+                // runs git inside the managed checkout.
                 const existingGitState = (context.data as Record<string, unknown>).git_state as
                   | { base_sha?: string }
                   | undefined;
                 if (!existingGitState?.base_sha && branch.path) {
                   try {
-                    const { captureGitStateViaShell } = await import(
-                      './utils/git-shell-capture.js'
+                    const { currentSha, currentRef } = await inspectBranchViaExecutor(
+                      context.app as Application,
+                      branch.branch_id,
+                      {
+                        asUser: await resolveExecutorReadAsUser(
+                          db,
+                          (context.params as AuthenticatedParams).user?.user_id as
+                            | UserID
+                            | undefined
+                        ),
+                        logPrefix: `[sessions.create ${branch.name}]`,
+                      }
                     );
-                    const gitState = await captureGitStateViaShell(branch.path);
                     (context.data as Record<string, unknown>).git_state = {
-                      ref: gitState.ref || branch.name || 'unknown',
-                      base_sha: gitState.sha,
-                      current_sha: gitState.sha,
+                      ref: currentRef || branch.name || 'unknown',
+                      base_sha: currentSha,
+                      current_sha: currentSha,
                     };
                     console.log(
-                      `✅ Auto-populated git_state from branch: ref=${gitState.ref}, sha=${gitState.sha.substring(0, 8)}`
+                      `✅ Auto-populated git_state from branch: ref=${currentRef}, sha=${currentSha.substring(0, 8)}`
                     );
                   } catch (gitError) {
                     console.warn('Failed to auto-populate git_state from branch:', gitError);
