@@ -104,6 +104,12 @@ interface SessionCanvasProps {
   cardById: Map<string, CardWithType>; // Map-based card storage for this board
   currentUserId?: string;
   selectedSessionId?: string | null;
+  /** Branch currently targeted by a `/w/<…>/` deep link — drives the
+   *  cyan active-URL-target ring on that branch card. */
+  activeUrlTargetBranchId?: string | null;
+  /** Artifact currently targeted by an `/a/<…>/` deep link — drives the
+   *  cyan border on that artifact node. */
+  activeUrlTargetArtifactId?: string | null;
   availableAgents?: AgenticToolOption[];
   mcpServerById?: Map<string, MCPServer>; // Map-based MCP server storage
   sessionMcpServerIds?: Map<string, string[]>; // Map sessionId -> mcpServerIds[]
@@ -215,6 +221,7 @@ interface BranchNodeData {
   zoneName?: string;
   zoneColor?: string;
   selectedSessionId?: string | null;
+  isActiveUrlTarget?: boolean;
   client: AgorClient | null;
 }
 
@@ -250,6 +257,7 @@ const BranchNode = React.memo(
           userById={data.userById}
           currentUserId={data.currentUserId}
           selectedSessionId={data.selectedSessionId}
+          isActiveUrlTarget={data.isActiveUrlTarget}
           onTaskClick={data.onTaskClick}
           onSessionClick={data.onSessionClick}
           onCreateSession={data.onCreateSession}
@@ -287,6 +295,7 @@ const BranchNode = React.memo(
       p.userById === n.userById &&
       p.currentUserId === n.currentUserId &&
       p.selectedSessionId === n.selectedSessionId &&
+      p.isActiveUrlTarget === n.isActiveUrlTarget &&
       p.isPinned === n.isPinned &&
       p.zoneName === n.zoneName &&
       p.zoneColor === n.zoneColor &&
@@ -339,6 +348,8 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       userById,
       currentUserId,
       selectedSessionId,
+      activeUrlTargetBranchId,
+      activeUrlTargetArtifactId,
       availableAgents = [],
       mcpServerById = new Map(),
       sessionMcpServerIds = new Map(),
@@ -549,6 +560,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       deletedObjectsRef,
       eraserMode: activeTool === 'eraser',
       selectedSessionId,
+      activeUrlTargetArtifactId,
       onEditMarkdown: handleEditMarkdownNote,
     });
 
@@ -683,6 +695,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             userById,
             currentUserId,
             selectedSessionId,
+            isActiveUrlTarget: branch.branch_id === activeUrlTargetBranchId,
             onTaskClick,
             onSessionClick,
             onCreateSession: onCreateSessionForBranch,
@@ -716,6 +729,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       sessionsByBranch,
       currentUserId,
       selectedSessionId,
+      activeUrlTargetBranchId,
       onSessionClick,
       onTaskClick,
       onCreateSessionForBranch,

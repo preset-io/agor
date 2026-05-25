@@ -35,6 +35,16 @@ import {
   resolveSessionFromShortIdPure,
 } from '../utils/urlResolution';
 
+/**
+ * The entity the current URL is targeting for deep-link focus. Sessions
+ * are intentionally excluded — opening a session already drives the
+ * `isFocused` ring on the owning branch card (via `selectedSessionId`),
+ * and stacking a second ring on top of that would just be visual noise.
+ * Branch and artifact URLs have no such existing signal, so this is
+ * where the "active URL target" highlight earns its keep.
+ */
+export type ActiveUrlTarget = { kind: 'branch'; id: string } | { kind: 'artifact'; id: string };
+
 export interface UseUrlStateOptions {
   /** Current board ID (full UUID) */
   currentBoardId: string | null;
@@ -55,6 +65,10 @@ export interface UseUrlStateOptions {
   onBoardChange: (boardIdOrSlug: string) => void;
   /** Callback when URL indicates a different session */
   onSessionChange: (sessionId: string | null) => void;
+  /** Callback when the URL targets a deep-link entity (branch or
+   *  artifact). Null when the URL has no such target. Fires only on
+   *  transitions to keep downstream React state updates idempotent. */
+  onActiveUrlTargetChange?: (target: ActiveUrlTarget | null) => void;
 }
 
 /** Slug lookup helper — the core `boardPath` builder takes a slug
@@ -90,6 +104,7 @@ export function useUrlState(options: UseUrlStateOptions) {
     artifactById,
     onBoardChange,
     onSessionChange,
+    onActiveUrlTargetChange,
   } = options;
 
   const navigate = useNavigate();
@@ -121,6 +136,9 @@ export function useUrlState(options: UseUrlStateOptions) {
   // one so rapid URL changes don't fire a stale recenter after a newer
   // navigation has already settled.
   const deferredRecenterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Last emitted active URL target, so we only fire the callback on
+  // actual transitions and don't churn parent state on every effect run.
+  const lastEmittedTargetRef = useRef<ActiveUrlTarget | null>(null);
 
   useEffect(() => {
     currentBoardIdRef.current = currentBoardId;
@@ -269,6 +287,13 @@ export function useUrlState(options: UseUrlStateOptions) {
       if (currentBoardIdRef.current && boardById.size > 0 && !isSettingsRoute) {
         updateUrlFromState();
       }
+      // Stale highlight cleanup: when the URL drops the deep-link
+      // segment, drop the active target too so the previously-targeted
+      // card stops glowing.
+      if (onActiveUrlTargetChange && lastEmittedTargetRef.current !== null) {
+        lastEmittedTargetRef.current = null;
+        onActiveUrlTargetChange(null);
+      }
       return;
     }
 
@@ -283,6 +308,7 @@ export function useUrlState(options: UseUrlStateOptions) {
     let resolvedBoardId: string | null = null;
     let resolvedSessionId: string | null = null;
     let recenterTargetId: string | null = null;
+    let activeUrlTarget: ActiveUrlTarget | null = null;
 
     if (urlBoardParam) {
       resolvedBoardId = resolveBoardFromUrl(urlBoardParam);
@@ -309,6 +335,7 @@ export function useUrlState(options: UseUrlStateOptions) {
       const branchId = resolveBranchFromShortId(urlBranchShortId);
       if (branchId) {
         urlParamsResolvedRef.current.branch = true;
+        activeUrlTarget = { kind: 'branch', id: branchId };
         const wt = branchById.get(branchId);
         if (wt?.board_id) {
           resolvedBoardId = wt.board_id;
@@ -323,6 +350,7 @@ export function useUrlState(options: UseUrlStateOptions) {
       const artifactId = resolveArtifactFromShortId(urlArtifactShortId);
       if (artifactId) {
         urlParamsResolvedRef.current.artifact = true;
+        activeUrlTarget = { kind: 'artifact', id: artifactId };
         const art = artifactById.get(artifactId);
         if (art?.board_id) {
           resolvedBoardId = art.board_id;
@@ -331,6 +359,23 @@ export function useUrlState(options: UseUrlStateOptions) {
       }
     } else {
       urlParamsResolvedRef.current.artifact = true;
+    }
+
+    // Emit the active URL target on transition. Session URLs are
+    // deliberately excluded — the session drawer + branch focused-ring
+    // already signal where the URL pointed. Comparing by kind+id keeps
+    // identical targets idempotent across effect re-runs.
+    if (onActiveUrlTargetChange) {
+      const prev = lastEmittedTargetRef.current;
+      const changed =
+        (prev === null) !== (activeUrlTarget === null) ||
+        (prev !== null &&
+          activeUrlTarget !== null &&
+          (prev.kind !== activeUrlTarget.kind || prev.id !== activeUrlTarget.id));
+      if (changed) {
+        lastEmittedTargetRef.current = activeUrlTarget;
+        onActiveUrlTargetChange(activeUrlTarget);
+      }
     }
 
     const boardChanged = resolvedBoardId && resolvedBoardId !== currentBoardIdRef.current;
@@ -381,6 +426,7 @@ export function useUrlState(options: UseUrlStateOptions) {
     resolveArtifactFromShortId,
     onBoardChange,
     onSessionChange,
+    onActiveUrlTargetChange,
     updateUrlFromState,
     isSettingsRoute,
     recenterMap,

@@ -168,6 +168,12 @@ interface BranchCardProps {
   zoneColor?: string;
   defaultExpanded?: boolean;
   inPopover?: boolean; // NEW: Enable popover-optimized mode (hides board-specific controls)
+  /** True when this branch is the deep-link target of the current URL
+   *  (`/w/<branchShort>/`). Drives the cyan active-URL-target ring on
+   *  the card, distinct from the white attention glow (returned /
+   *  awaiting prompt) and the primary-color focused ring (session
+   *  open in drawer). */
+  isActiveUrlTarget?: boolean;
   client: AgorClient | null;
 }
 
@@ -198,6 +204,7 @@ const BranchCardComponent = ({
   zoneColor,
   defaultExpanded = true,
   inPopover = false,
+  isActiveUrlTarget = false,
   client,
 }: BranchCardProps) => {
   const { token } = theme.useToken();
@@ -720,6 +727,15 @@ const BranchCardComponent = ({
   // wide soft halo) so users can tell the two states apart at a glance.
   const focusedRingShadow = `0 0 0 2px ${token.colorPrimary}`;
 
+  // Active-URL-target highlight: cyan ring + soft halo. Cyan is chosen
+  // to read as distinct from BOTH the white attention glow (returned /
+  // awaiting prompt) and the primary-blue focused ring (session open
+  // in drawer). When the URL also drives `needsAttention` we compose
+  // the cyan ring around the existing white halo so both signals stay
+  // visible — "you came here from a URL AND this branch needs a prompt".
+  const activeUrlTargetColor = token.cyan6 || token.cyan || '#13c2c2';
+  const activeUrlTargetRing = `0 0 0 3px ${activeUrlTargetColor}, 0 0 18px 4px ${activeUrlTargetColor}99`;
+
   // Ensure pin color is visible (adjust lightness if too pale)
   const visiblePinColor = useMemo(() => {
     if (!zoneColor) return undefined;
@@ -739,6 +755,31 @@ const BranchCardComponent = ({
       : `${truncated}...`;
   }, [branch.notes, notesNeedTruncation, notesExpanded]);
 
+  // Compose the card's box-shadow layer. Order of precedence:
+  //   1. active URL target — strongest signal, "you navigated here".
+  //      If it coincides with `needsAttention` we stack the cyan ring
+  //      around the white attention halo so neither signal is masked.
+  //   2. focused session (drawer open) — primary-color ring.
+  //   3. needsAttention (returned / awaiting prompt) — white halo.
+  // The `isPinned` / `isAgent` branches are mutually exclusive with the
+  // shadow-bearing states and only contribute a thin border.
+  const highlightStyle: React.CSSProperties = (() => {
+    if (inPopover) return {};
+    if (isActiveUrlTarget) {
+      // Stack cyan ring + attention halo if both apply, otherwise the
+      // cyan ring alone.
+      const shadow = needsAttention
+        ? `${activeUrlTargetRing}, ${attentionGlowShadow}`
+        : activeUrlTargetRing;
+      return { boxShadow: shadow, border: 'none' };
+    }
+    if (isFocused) return { boxShadow: focusedRingShadow, border: 'none' };
+    if (needsAttention) return { boxShadow: attentionGlowShadow, border: 'none' };
+    if (isPinned && zoneColor) return { borderColor: zoneColor, borderWidth: 1 };
+    if (isAgent) return { borderColor: token.colorInfo, borderWidth: 1 };
+    return {};
+  })();
+
   return (
     <Card
       style={{
@@ -746,22 +787,9 @@ const BranchCardComponent = ({
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
         transition:
           'box-shadow 0.6s ease-in-out, border 0.6s ease-in-out, opacity 0.2s ease-in-out',
-        willChange: (needsAttention || isFocused) && !inPopover ? 'box-shadow' : 'auto',
-        ...(isFocused && !inPopover
-          ? {
-              boxShadow: focusedRingShadow,
-              border: 'none',
-            }
-          : needsAttention && !inPopover
-            ? {
-                boxShadow: attentionGlowShadow,
-                border: 'none',
-              }
-            : isPinned && zoneColor
-              ? { borderColor: zoneColor, borderWidth: 1 }
-              : isAgent
-                ? { borderColor: token.colorInfo, borderWidth: 1 }
-                : {}),
+        willChange:
+          (needsAttention || isFocused || isActiveUrlTarget) && !inPopover ? 'box-shadow' : 'auto',
+        ...highlightStyle,
         ...(isAgent ? { backgroundColor: token.colorInfoBg } : {}),
         // Disconnected chokepoint: block all in-card interactions (clicking
         // into a session, env pill actions, modals) and dim to communicate

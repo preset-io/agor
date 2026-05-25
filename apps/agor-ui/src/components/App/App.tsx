@@ -43,7 +43,7 @@ import { usePresence } from '../../hooks/usePresence';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { useTaskCompletionChime } from '../../hooks/useTaskCompletionChime';
-import { useUrlState } from '../../hooks/useUrlState';
+import { type ActiveUrlTarget, useUrlState } from '../../hooks/useUrlState';
 import type { AgenticToolOption } from '../../types';
 import { createAssistantBranch } from '../../utils/assistantCreation';
 import { initializeAudioOnInteraction } from '../../utils/audio';
@@ -264,6 +264,14 @@ export const App: React.FC<AppProps> = ({
     y: number;
   } | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  // Active URL deep-link target (branch or artifact). Drives the cyan
+  // "active URL target" highlight on the board so users can tell which
+  // card the URL navigated them to, separately from `selectedSessionId`
+  // (which drives the focused ring on the owning branch).
+  const [activeUrlTarget, setActiveUrlTarget] = useState<ActiveUrlTarget | null>(null);
+  const activeUrlTargetBranchId = activeUrlTarget?.kind === 'branch' ? activeUrlTarget.id : null;
+  const activeUrlTargetArtifactId =
+    activeUrlTarget?.kind === 'artifact' ? activeUrlTarget.id : null;
 
   // Synchronously derive the effective session selection. When a session is
   // archived/deleted, it vanishes from sessionById. Without this, there is a
@@ -396,6 +404,7 @@ export const App: React.FC<AppProps> = ({
     onSessionChange: (sessionId) => {
       setSelectedSessionId(sessionId);
     },
+    onActiveUrlTargetChange: setActiveUrlTarget,
   });
 
   // Central navigation API. Every deliberate "go to X" call site routes
@@ -939,6 +948,8 @@ export const App: React.FC<AppProps> = ({
                           cardById={cardById}
                           currentUserId={user?.user_id}
                           selectedSessionId={effectiveSelectedSessionId}
+                          activeUrlTargetBranchId={activeUrlTargetBranchId}
+                          activeUrlTargetArtifactId={activeUrlTargetArtifactId}
                           availableAgents={availableAgents}
                           mcpServerById={mcpServerById}
                           sessionMcpServerIds={sessionMcpServerIds}

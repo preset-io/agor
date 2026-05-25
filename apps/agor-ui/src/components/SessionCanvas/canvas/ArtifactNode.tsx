@@ -80,6 +80,10 @@ interface ArtifactNodeData {
   artifactId: string;
   width: number;
   height: number;
+  /** True when this artifact is the deep-link target of the current URL
+   *  (`/a/<artifactShort>/`). Drives the cyan active-URL-target border,
+   *  distinct from React Flow's primary-color `selected` border. */
+  isActiveUrlTarget?: boolean;
   onUpdate: (id: string, data: BoardObject) => void;
   /** Lifecycle-safe delete: removes filesystem + board object + DB record */
   onDeleteArtifact?: (objectId: string, artifactId: string) => void;
@@ -703,13 +707,27 @@ export const ArtifactNode = ({
 
   // Shared Card chrome — body content swaps based on load state but the
   // title bar stays put so the user always knows which artifact this is.
+  // Border precedence: error → active URL target (cyan) → React Flow
+  // `selected` (primary) → default. The active-URL-target glow is added
+  // as an extra box-shadow so it reads as distinct from the click-to-
+  // select state even when both apply.
+  const activeUrlTargetColor = token.cyan6 || token.cyan || '#13c2c2';
+  const borderColor = error
+    ? token.colorErrorBorder
+    : data.isActiveUrlTarget
+      ? activeUrlTargetColor
+      : selected
+        ? token.colorPrimary
+        : token.colorBorder;
   const cardOuterStyle = {
     width: data.width,
     height: data.height,
     background: token.colorBgContainer,
-    border: `2px solid ${error ? token.colorErrorBorder : selected ? token.colorPrimary : token.colorBorder}`,
+    border: `2px solid ${borderColor}`,
     borderRadius: 8,
-    boxShadow: token.boxShadowSecondary,
+    boxShadow: data.isActiveUrlTarget
+      ? `${token.boxShadowSecondary}, 0 0 16px 4px ${activeUrlTargetColor}80`
+      : token.boxShadowSecondary,
     overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',

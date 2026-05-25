@@ -24,6 +24,10 @@ interface UseBoardObjectsProps {
   deletedObjectsRef: React.MutableRefObject<Set<string>>;
   eraserMode?: boolean;
   selectedSessionId?: string | null;
+  /** Artifact ID currently targeted by an `/a/<…>/` deep link. Used to
+   *  flag the matching ArtifactNode so it can render the cyan
+   *  active-URL-target border. */
+  activeUrlTargetArtifactId?: string | null;
   onEditMarkdown?: (objectId: string, content: string, width: number) => void;
 }
 
@@ -37,6 +41,7 @@ export const useBoardObjects = ({
   deletedObjectsRef,
   eraserMode = false,
   selectedSessionId,
+  activeUrlTargetArtifactId,
   onEditMarkdown,
 }: UseBoardObjectsProps) => {
   // Use ref to avoid recreating callbacks when board changes
@@ -261,6 +266,7 @@ export const useBoardObjects = ({
               artifactId: objectData.artifact_id,
               width: objectData.width,
               height: objectData.height,
+              isActiveUrlTarget: objectData.artifact_id === activeUrlTargetArtifactId,
               onUpdate: handleUpdateObject,
               onDeleteArtifact: deleteArtifact,
             },
@@ -348,6 +354,7 @@ export const useBoardObjects = ({
     deleteObject,
     deleteArtifact,
     eraserMode,
+    activeUrlTargetArtifactId,
     onEditMarkdown,
   ]);
 
