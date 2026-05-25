@@ -160,56 +160,57 @@ export const ZoneConfigModal = ({
           name="triggerTemplate"
           label="Trigger Template"
           help="Leave empty for an organizational-only zone (no trigger fires on drop)."
+          extra={
+            <ExpandableAlert
+              title="Handlebars template support"
+              summary="Reference branch, session, and board data with {{ ... }} syntax."
+              style={{ marginTop: 8 }}
+            >
+              <p style={{ marginBottom: 8 }}>
+                Use Handlebars syntax to reference session and board data in your trigger:
+              </p>
+              <ul style={{ marginLeft: 16, marginBottom: 8 }}>
+                <li>
+                  <code>{'{{ branch.issue_url }}'}</code> - GitHub issue URL
+                </li>
+                <li>
+                  <code>{'{{ branch.pull_request_url }}'}</code> - Pull request URL
+                </li>
+                <li>
+                  <code>{'{{ branch.notes }}'}</code> - Branch notes
+                </li>
+                <li>
+                  <code>{'{{ session.description }}'}</code> - Session description
+                </li>
+                <li>
+                  <code>{'{{ session.context.* }}'}</code> - Custom context from session settings
+                </li>
+                <li>
+                  <code>{'{{ board.name }}'}</code> - Board name
+                </li>
+                <li>
+                  <code>{'{{ board.description }}'}</code> - Board description
+                </li>
+                <li>
+                  <code>{'{{ board.context.* }}'}</code> - Custom context from board settings
+                </li>
+              </ul>
+              <p style={{ marginTop: 8, marginBottom: 0 }}>
+                Example:{' '}
+                <code>
+                  {
+                    'Review {{ branch.issue_url }} for {{ board.context.team }} sprint {{ board.context.sprint }}'
+                  }
+                </code>
+              </p>
+            </ExpandableAlert>
+          }
         >
           <Input.TextArea
             placeholder="Enter the prompt template that will be triggered when a branch is dropped here..."
             rows={6}
           />
         </Form.Item>
-
-        <ExpandableAlert
-          title="Handlebars template support"
-          summary="Reference branch, session, and board data with {{ ... }} syntax."
-          style={{ marginTop: 0 }}
-        >
-          <p style={{ marginBottom: 8 }}>
-            Use Handlebars syntax to reference session and board data in your trigger:
-          </p>
-          <ul style={{ marginLeft: 16, marginBottom: 8 }}>
-            <li>
-              <code>{'{{ branch.issue_url }}'}</code> - GitHub issue URL
-            </li>
-            <li>
-              <code>{'{{ branch.pull_request_url }}'}</code> - Pull request URL
-            </li>
-            <li>
-              <code>{'{{ branch.notes }}'}</code> - Branch notes
-            </li>
-            <li>
-              <code>{'{{ session.description }}'}</code> - Session description
-            </li>
-            <li>
-              <code>{'{{ session.context.* }}'}</code> - Custom context from session settings
-            </li>
-            <li>
-              <code>{'{{ board.name }}'}</code> - Board name
-            </li>
-            <li>
-              <code>{'{{ board.description }}'}</code> - Board description
-            </li>
-            <li>
-              <code>{'{{ board.context.* }}'}</code> - Custom context from board settings
-            </li>
-          </ul>
-          <p style={{ marginTop: 8, marginBottom: 0 }}>
-            Example:{' '}
-            <code>
-              {
-                'Review {{ branch.issue_url }} for {{ board.context.team }} sprint {{ board.context.sprint }}'
-              }
-            </code>
-          </p>
-        </ExpandableAlert>
       </Form>
     </Modal>
   );
