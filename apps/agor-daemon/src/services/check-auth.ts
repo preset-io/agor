@@ -13,7 +13,7 @@
  *   codex CLI writes after `codex login`). Executor reads from the same path,
  *   so a green check matches session behavior in simple Unix mode
  * - Server-based tools (opencode): always ready
- * - Cursor SDK: scaffolded but not validated until the runtime adapter lands
+ * - Cursor SDK: API-key presence check; the SDK validates the key at session start
  *
  * Resolution precedence (when no raw key is provided by the caller):
  *   user encrypted key → config.yaml → env var → native auth
@@ -224,21 +224,23 @@ export function createCheckAuthService(db: Database) {
         return { authenticated: true, method: 'native' };
       }
 
-      if (tool === 'cursor') {
-        return {
-          authenticated: false,
-          method: 'api-key',
-          hint: 'Cursor SDK support is scaffolded but auth validation is not implemented until the runtime adapter lands.',
-        };
-      }
-
       const keyName = TOOL_API_KEY_NAMES[tool as keyof typeof TOOL_API_KEY_NAMES];
       if (!keyName) {
         return { authenticated: false, method: 'none', hint: 'Unsupported tool' };
       }
 
       // If caller provided a raw key (user typed it in the wizard), validate directly.
+      // Cursor does not document a cheap key-validation endpoint; accept presence
+      // here and let @cursor/sdk return the authoritative auth error at session start.
       if (rawKey?.trim()) {
+        if (tool === 'cursor') {
+          return {
+            authenticated: true,
+            method: 'api-key',
+            hint: 'Cursor key saved; the SDK will validate it when a session starts.',
+          };
+        }
+
         const ok = await validateApiKey(tool, rawKey.trim());
         return {
           authenticated: ok,
@@ -267,6 +269,14 @@ export function createCheckAuthService(db: Database) {
       }
 
       if (apiKey) {
+        if (tool === 'cursor') {
+          return {
+            authenticated: true,
+            method: 'api-key',
+            hint: 'Cursor key configured; the SDK will validate it when a session starts.',
+          };
+        }
+
         const ok = await validateApiKey(tool, apiKey);
         return {
           authenticated: ok,

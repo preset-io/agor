@@ -462,7 +462,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     async create(data: { user_id?: string; expiry_ms?: number }, params?: Params) {
       // 1. Caller must be authenticated
       const authParams = params as AuthenticatedParams;
-      if (!authParams?.user || !authParams.user.user_id) {
+      if (!authParams?.user?.user_id) {
         throw new NotAuthenticated('Authentication required');
       }
 
@@ -3366,8 +3366,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // surfaces when true. Server-side gates (e.g. ArtifactsService.
           // grantTrust) are the source of truth and reject regardless.
           multiUser: (config.execution?.unix_user_mode ?? 'simple') !== 'simple',
-          // Experimental Cursor SDK provider surfaces are hidden unless explicitly enabled.
-          cursorSdk: config.execution?.cursor_sdk_enabled === true,
+          // Cursor SDK provider is available as a beta surface. The legacy
+          // cursor_sdk_enabled flag is retained in config for compatibility but
+          // no longer gates provider visibility.
+          cursorSdk: true,
         },
       };
 

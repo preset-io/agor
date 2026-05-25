@@ -1,16 +1,267 @@
 /**
- * Cursor SDK Handler (experimental skeleton)
+ * Cursor SDK Handler (beta)
  *
- * The provider is type-plumbed behind `execution.cursor_sdk_enabled`, but the
- * runtime adapter is intentionally deferred until a live SDK smoke test verifies
- * headless execution, permission behavior, MCP events, and usage metrics.
+ * Minimal local-runtime adapter for @cursor/sdk. Cursor is exposed as a beta
+ * provider, so this first implementation favors a small, observable happy path:
+ * local cwd = Agor branch worktree, SDK agent id persisted in sdk_session_id,
+ * stream text/thinking/tool events into Agor messages, and cancel the active
+ * Cursor run when Agor stops the executor.
  */
 
-import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import { generateId, shortId } from '@agor/core/db';
+import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
+import type {
+  ContentBlock,
+  MessageID,
+  MessageSource,
+  PermissionMode,
+  SessionID,
+  TaskID,
+} from '@agor/core/types';
+import { MessageRole } from '@agor/core/types';
+import { Agent, type McpServerConfig, type Run, type SDKMessage } from '@cursor/sdk';
+import { getDaemonUrl } from '../../config.js';
+import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
+import { getMcpServersForSession } from '../../sdk-handlers/base/mcp-scoping.js';
+import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import type { AgorClient } from '../../services/feathers-client.js';
+import { createStreamingCallbacks } from './base-executor.js';
 
-export async function executeCursorTask(_params: {
+type CursorKeyResolution = {
+  apiKey?: string;
+  source?: string;
+  decryptionFailed?: boolean;
+};
+
+function stringifyForPreview(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function toCursorModel(model: string | undefined): { id: string } {
+  return { id: model?.trim() || 'composer-latest' };
+}
+
+function claimMcpName(rawName: string, claimed: Set<string>): string {
+  const base = rawName.toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'server';
+  let name = base;
+  let suffix = 2;
+  while (claimed.has(name)) {
+    name = `${base}_${suffix++}`;
+  }
+  claimed.add(name);
+  return name;
+}
+
+async function resolveCursorApiKey(client: AgorClient, taskId: TaskID): Promise<string> {
+  const result = (await client.service('config/resolve-api-key').create({
+    taskId,
+    keyName: 'CURSOR_API_KEY',
+    tool: 'cursor',
+  })) as CursorKeyResolution;
+
+  if (result.decryptionFailed) {
+    throw new Error(
+      'CURSOR_API_KEY could not be decrypted. Re-enter it in Settings → Agent Setup → Cursor SDK.'
+    );
+  }
+
+  const key = result.apiKey || process.env.CURSOR_API_KEY;
+  if (!key) {
+    throw new Error(
+      'No CURSOR_API_KEY configured. Add one in Settings → Agent Setup → Cursor SDK.'
+    );
+  }
+
+  console.log(`[cursor] Using CURSOR_API_KEY from ${result.source ?? 'environment'} level`);
+  return key;
+}
+
+async function buildCursorMcpServers(args: {
+  sessionId: SessionID;
+  mcpToken?: string;
+  repos: ReturnType<typeof createFeathersBackedRepositories>;
+  forUserId?: string;
+}): Promise<Record<string, McpServerConfig> | undefined> {
+  const claimed = new Set<string>();
+  const mcpServers: Record<string, McpServerConfig> = {};
+
+  if (args.mcpToken) {
+    const daemonUrl = await getDaemonUrl();
+    claimed.add('agor');
+    mcpServers.agor = {
+      type: 'http',
+      url: `${daemonUrl}/mcp`,
+      headers: {
+        Authorization: `Bearer ${args.mcpToken}`,
+      },
+    };
+  }
+
+  const serversWithSource = await getMcpServersForSession(args.sessionId, {
+    sessionMCPRepo: args.repos.sessionMCP,
+    mcpServerRepo: args.repos.mcpServers,
+    forUserId: args.forUserId,
+  });
+
+  for (const { server } of serversWithSource) {
+    const name = claimMcpName(server.name, claimed);
+    if (server.transport === 'stdio') {
+      if (!server.command) {
+        console.warn(`[cursor] Skipping MCP stdio server ${server.name}: missing command`);
+        continue;
+      }
+      mcpServers[name] = {
+        type: 'stdio',
+        command: server.command,
+        args: server.args,
+        env: server.env,
+      };
+      continue;
+    }
+
+    if ((server.transport === 'http' || server.transport === 'sse') && server.url) {
+      const headers = await resolveMCPAuthHeaders(server.auth, server.url);
+      mcpServers[name] = {
+        type: server.transport,
+        url: server.url,
+        ...(headers ? { headers } : {}),
+      };
+    }
+  }
+
+  const count = Object.keys(mcpServers).length;
+  console.log(`[cursor] Configured ${count} MCP server(s)`);
+  return count > 0 ? mcpServers : undefined;
+}
+
+async function getNextMessageIndex(client: AgorClient, sessionId: SessionID): Promise<number> {
+  const existingMessages = await client.service('messages').find({
+    query: {
+      session_id: sessionId,
+      $sort: { index: 1 },
+    },
+  });
+  const messages = Array.isArray(existingMessages) ? existingMessages : existingMessages.data;
+  return messages?.length || 0;
+}
+
+async function createUserMessage(args: {
+  client: AgorClient;
+  sessionId: SessionID;
+  taskId: TaskID;
+  prompt: string;
+  index: number;
+}): Promise<MessageID> {
+  const messageId = generateId() as MessageID;
+  await args.client.service('messages').create({
+    message_id: messageId,
+    session_id: args.sessionId,
+    task_id: args.taskId,
+    type: 'user',
+    role: MessageRole.USER,
+    index: args.index,
+    timestamp: new Date().toISOString(),
+    content_preview: args.prompt.substring(0, 200),
+    content: args.prompt,
+  });
+  return messageId;
+}
+
+async function createAssistantMessage(args: {
+  client: AgorClient;
+  sessionId: SessionID;
+  taskId: TaskID;
+  messageId: MessageID;
+  index: number;
+  content: string | ContentBlock[];
+  preview: string;
+  model?: string;
+}): Promise<void> {
+  await args.client.service('messages').create({
+    message_id: args.messageId,
+    session_id: args.sessionId,
+    task_id: args.taskId,
+    type: 'assistant',
+    role: MessageRole.ASSISTANT,
+    index: args.index,
+    timestamp: new Date().toISOString(),
+    content_preview: args.preview.substring(0, 200),
+    content: args.content,
+    metadata: args.model ? { model: args.model } : undefined,
+  });
+}
+
+async function createToolMessage(args: {
+  client: AgorClient;
+  sessionId: SessionID;
+  taskId: TaskID;
+  index: number;
+  event: Extract<SDKMessage, { type: 'tool_call' }>;
+  model?: string;
+}): Promise<MessageID> {
+  const messageId = generateId() as MessageID;
+  const resultText =
+    args.event.result !== undefined
+      ? stringifyForPreview(args.event.result)
+      : `[${args.event.status}]`;
+  const content: ContentBlock[] = [
+    {
+      type: 'tool_use',
+      id: args.event.call_id,
+      name: args.event.name,
+      input: args.event.args ?? {},
+    },
+    {
+      type: 'tool_result',
+      tool_use_id: args.event.call_id,
+      content: resultText,
+      is_error: args.event.status === 'error',
+    },
+  ];
+
+  await createAssistantMessage({
+    client: args.client,
+    sessionId: args.sessionId,
+    taskId: args.taskId,
+    messageId,
+    index: args.index,
+    content,
+    preview: `${args.event.name}: ${resultText}`,
+    model: args.model,
+  });
+  return messageId;
+}
+
+async function createSystemErrorMessage(args: {
+  client: AgorClient;
+  sessionId: SessionID;
+  taskId: TaskID;
+  message: string;
+}): Promise<void> {
+  const index = await getNextMessageIndex(args.client, args.sessionId);
+  await args.client.service('messages').create({
+    message_id: generateId() as MessageID,
+    session_id: args.sessionId,
+    task_id: args.taskId,
+    type: 'system',
+    role: MessageRole.SYSTEM,
+    index,
+    timestamp: new Date().toISOString(),
+    content: args.message,
+    content_preview: args.message.substring(0, 200),
+  });
+}
+
+/**
+ * Execute Cursor task (Feathers/WebSocket architecture).
+ */
+export async function executeCursorTask(params: {
   client: AgorClient;
   sessionId: SessionID;
   taskId: TaskID;
@@ -20,7 +271,253 @@ export async function executeCursorTask(_params: {
   messageSource?: MessageSource;
   resolvedConfig?: ResolvedConfigSlice;
 }): Promise<void> {
-  throw new Error(
-    'Cursor SDK execution is not implemented yet. Enable only after the experimental runtime adapter lands.'
-  );
+  const { client, sessionId, taskId, prompt } = params;
+
+  console.log(`[cursor] Executing task ${shortId(taskId)}...`);
+
+  let currentRun: Run | undefined;
+  const abortHandler = () => {
+    if (!currentRun) return;
+    console.log(`[cursor] Abort signal received; cancelling Cursor run ${currentRun.id}`);
+    currentRun.cancel().catch((error) => {
+      console.warn('[cursor] Failed to cancel Cursor run:', error);
+    });
+  };
+  params.abortController.signal.addEventListener('abort', abortHandler);
+
+  try {
+    const apiKey = await resolveCursorApiKey(client, taskId);
+    const session = await client.service('sessions').get(sessionId);
+    const repos = createFeathersBackedRepositories(client);
+    const callbacks = createStreamingCallbacks(client, 'cursor', sessionId);
+
+    if (!session.branch_id) {
+      throw new Error('Cursor sessions require a branch_id so the local runtime has a cwd.');
+    }
+    const branch = await client.service('branches').get(session.branch_id);
+    if (!branch.path) {
+      throw new Error('Cursor sessions require a branch worktree path.');
+    }
+
+    const model = toCursorModel(session.model_config?.model);
+    const mcpServers = await buildCursorMcpServers({
+      sessionId,
+      mcpToken: session.mcp_token,
+      repos,
+      forUserId: session.created_by,
+    });
+
+    const agent = session.sdk_session_id
+      ? await Agent.resume(session.sdk_session_id, {
+          apiKey,
+          model,
+          local: { cwd: branch.path },
+          mcpServers,
+        })
+      : await Agent.create({
+          apiKey,
+          model,
+          name: session.title || `Agor ${shortId(sessionId)}`,
+          local: { cwd: branch.path },
+          mcpServers,
+        });
+
+    try {
+      if (!session.sdk_session_id || session.sdk_session_id !== agent.agentId) {
+        await client.service('sessions').patch(sessionId, { sdk_session_id: agent.agentId });
+      }
+
+      const userIndex = await getNextMessageIndex(client, sessionId);
+      await createUserMessage({ client, sessionId, taskId, prompt, index: userIndex });
+
+      const assistantMessageId = generateId() as MessageID;
+      let nextIndex = userIndex + 1;
+      let assistantStreamStarted = false;
+      let assistantText = '';
+      let thinkingStarted = false;
+      let thinkingText = '';
+      const toolCallMessageIds: MessageID[] = [];
+      const rawMessages: SDKMessage[] = [];
+
+      currentRun = await agent.send(prompt, {
+        model,
+        mcpServers,
+        idempotencyKey: taskId,
+      });
+
+      if (params.abortController.signal.aborted) {
+        await currentRun.cancel();
+      }
+
+      for await (const event of currentRun.stream()) {
+        rawMessages.push(event);
+        if (params.abortController.signal.aborted) {
+          await currentRun.cancel();
+          break;
+        }
+        await handleCursorEvent({
+          event,
+          client,
+          callbacks,
+          sessionId,
+          taskId,
+          assistantMessageId,
+          model: model.id,
+          getNextIndex: () => nextIndex++,
+          toolCallMessageIds,
+          getAssistantText: () => assistantText,
+          setAssistantText: (value) => {
+            assistantText = value;
+          },
+          getThinkingText: () => thinkingText,
+          setThinkingText: (value) => {
+            thinkingText = value;
+          },
+          isAssistantStreamStarted: () => assistantStreamStarted,
+          setAssistantStreamStarted: (value) => {
+            assistantStreamStarted = value;
+          },
+          isThinkingStarted: () => thinkingStarted,
+          setThinkingStarted: (value) => {
+            thinkingStarted = value;
+          },
+        });
+      }
+
+      if (assistantStreamStarted) {
+        await callbacks.onStreamEnd(assistantMessageId);
+      }
+      if (thinkingStarted && callbacks.onThinkingEnd) {
+        await callbacks.onThinkingEnd(assistantMessageId);
+      }
+
+      const runResult = await currentRun.wait();
+      const finalText = assistantText || runResult.result || '';
+      if (finalText) {
+        await createAssistantMessage({
+          client,
+          sessionId,
+          taskId,
+          messageId: assistantMessageId,
+          index: nextIndex++,
+          content: [{ type: 'text', text: finalText }],
+          preview: finalText,
+          model: runResult.model?.id ?? model.id,
+        });
+      }
+
+      const failed = runResult.status === 'error';
+      const stopped = runResult.status === 'cancelled' || params.abortController.signal.aborted;
+      await client.service('tasks').patch(taskId, {
+        status: stopped ? 'stopped' : failed ? 'failed' : 'completed',
+        completed_at: new Date().toISOString(),
+        model: runResult.model?.id ?? model.id,
+        raw_sdk_response: {
+          run: runResult,
+          messages: rawMessages,
+          agentId: agent.agentId,
+          toolCallMessageIds,
+        },
+      });
+    } finally {
+      agent.close();
+    }
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    console.error('[cursor] Execution failed:', err);
+    await client.service('tasks').patch(taskId, {
+      status: 'failed',
+      completed_at: new Date().toISOString(),
+      error_message: err.message,
+    });
+    await createSystemErrorMessage({ client, sessionId, taskId, message: err.message });
+    throw err;
+  } finally {
+    params.abortController.signal.removeEventListener('abort', abortHandler);
+  }
+}
+
+async function handleCursorEvent(args: {
+  event: SDKMessage;
+  client: AgorClient;
+  callbacks: StreamingCallbacks;
+  sessionId: SessionID;
+  taskId: TaskID;
+  assistantMessageId: MessageID;
+  model: string;
+  getNextIndex: () => number;
+  toolCallMessageIds: MessageID[];
+  getAssistantText: () => string;
+  setAssistantText: (value: string) => void;
+  getThinkingText: () => string;
+  setThinkingText: (value: string) => void;
+  isAssistantStreamStarted: () => boolean;
+  setAssistantStreamStarted: (value: boolean) => void;
+  isThinkingStarted: () => boolean;
+  setThinkingStarted: (value: boolean) => void;
+}): Promise<void> {
+  switch (args.event.type) {
+    case 'assistant': {
+      const nextText = args.event.message.content
+        .filter((block) => block.type === 'text')
+        .map((block) => block.text)
+        .join('');
+      const previousText = args.getAssistantText();
+      const delta = nextText.startsWith(previousText)
+        ? nextText.slice(previousText.length)
+        : nextText;
+      if (!delta) return;
+
+      if (!args.isAssistantStreamStarted()) {
+        await args.callbacks.onStreamStart(args.assistantMessageId, {
+          session_id: args.sessionId,
+          task_id: args.taskId,
+          role: MessageRole.ASSISTANT,
+          timestamp: new Date().toISOString(),
+        });
+        args.setAssistantStreamStarted(true);
+      }
+      await args.callbacks.onStreamChunk(args.assistantMessageId, delta);
+      args.setAssistantText(nextText);
+      return;
+    }
+
+    case 'thinking': {
+      if (!args.callbacks.onThinkingChunk) return;
+      const previousText = args.getThinkingText();
+      const delta = args.event.text.startsWith(previousText)
+        ? args.event.text.slice(previousText.length)
+        : args.event.text;
+      if (!delta) return;
+
+      if (!args.isThinkingStarted() && args.callbacks.onThinkingStart) {
+        await args.callbacks.onThinkingStart(args.assistantMessageId, {});
+        args.setThinkingStarted(true);
+      }
+      await args.callbacks.onThinkingChunk(args.assistantMessageId, delta);
+      args.setThinkingText(args.event.text);
+      return;
+    }
+
+    case 'tool_call': {
+      if (args.event.status === 'running') return;
+      const messageId = await createToolMessage({
+        client: args.client,
+        sessionId: args.sessionId,
+        taskId: args.taskId,
+        index: args.getNextIndex(),
+        event: args.event,
+        model: args.model,
+      });
+      args.toolCallMessageIds.push(messageId);
+      return;
+    }
+
+    case 'status':
+    case 'system':
+    case 'request':
+    case 'task':
+    case 'user':
+      return;
+  }
 }

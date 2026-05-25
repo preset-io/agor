@@ -1,14 +1,14 @@
 # Cursor SDK Support Analysis — 2026-05-25
 
 **Author:** Cursor SDK support audit (`analyze-cursor-sdk-support` worktree)  
-**Status:** Draft for Max review. Cursor is now surfaced as a beta provider scaffold; runtime execution intentionally still fails fast until the adapter lands.
-**Recommendation:** **Expose as a beta provider only; prototype local runtime next. Do not make it default/recommended until runtime, permission, and usage risks are resolved.**
+**Status:** Draft for Max review. Cursor is surfaced as a beta provider and this branch now includes an initial local-runtime `@cursor/sdk` adapter. Runtime support is still early and should remain beta until smoke-tested with real Cursor keys/worktrees.
+**Recommendation:** **Keep as beta; continue the local-runtime integration behind explicit beta labeling. Do not make it default/recommended until permission, usage, and live-runtime risks are resolved.**
 
 ---
 
 ## TL;DR
 
-Cursor's new TypeScript SDK is a credible fit for Agor's provider model, but it is still public beta and it adds a native-heavy package/runtime surface that deserves an isolated spike before non-beta support.
+Cursor's new TypeScript SDK is a credible fit for Agor's provider model, but it is still public beta and it adds a native-heavy package/runtime surface that deserves live smoke testing before non-beta support.
 
 1. **What exists today:** `@cursor/sdk` exposes `Agent.create`, `Agent.resume`, `agent.send`, `run.stream`, `run.wait`, `run.cancel`, artifact APIs, model/repository discovery, local/cloud runtimes, inline MCP config, custom subagents, and a structured error hierarchy. The launch post says the SDK uses the same runtime/harness/models as Cursor desktop, CLI, and web, can run locally or on Cursor cloud, and is billed with standard token-based consumption pricing ([Cursor changelog](https://cursor.com/changelog/sdk-release), [Cursor blog](https://cursor.com/blog/typescript-sdk)). The npm package currently inspected was `@cursor/sdk@1.0.13`.
 2. **Best Agor fit:** local runtime against the Agor branch worktree (`local: { cwd: branch.path }`) because Agor already owns branches, RBAC, Unix identity, git state capture, MCP session tokens, and process lifecycle. Cursor cloud runtime is valuable, but conflicts with Agor's branch-centric “worktree as card” model unless treated as a separate remote-execution mode.
@@ -111,7 +111,7 @@ Smallest viable config additions:
 - Add default model config and model list:
   - Minimal: static `composer-latest` / `composer-2` defaults.
   - Better: `Cursor.models.list()` server-side cache behind auth, with fallback static aliases.
-- Add a feature flag such as `experimental.cursor_sdk: false` or `execution.providers.cursor.enabled: false` before showing the provider in the UI.
+- Keep Cursor visibly marked as beta wherever providers are selected. A hard feature flag can still be added later if live smoke testing exposes runtime instability.
 
 ### 2. Executor handler/tool adapter
 
@@ -227,31 +227,32 @@ Reasons not to ship broadly yet:
 
 ## Proposed implementation plan split into PRs
 
-### PR 1 — Provider skeleton behind feature flag
+### PR 1 — Provider skeleton as beta
 
 - ✅ Add `cursor` to core/executor/UI type unions and static capability maps.
 - ✅ Add `CURSOR_API_KEY` credential plumbing.
 - ✅ Surface Cursor as a beta provider in agent selection/settings, matching the OpenCode beta posture.
-- Add package dependency and import smoke test for Linux CI.
-- ✅ No execution yet: executor handler and daemon route are fail-fast until the local runtime adapter lands.
+- ✅ Add package dependency (`@cursor/sdk`) to executor.
+- Add import/install smoke test for Linux CI.
 
 ### PR 2 — Local runtime happy path
 
-- Implement `CursorTool` local runtime with `Agent.create/resume`, `agent.send`, `run.stream`, `run.wait`, `run.cancel`.
-- Persist `agentId` in `sessions.sdk_session_id` and active `run.id` in task raw metadata.
-- Create user/assistant messages and basic text streaming.
+- ✅ Implement initial local runtime with `Agent.create/resume`, `agent.send`, `run.stream`, `run.wait`, `run.cancel`.
+- ✅ Persist `agentId` in `sessions.sdk_session_id`; store terminal run/raw messages in task raw metadata.
+- ✅ Create user/assistant messages and basic text streaming.
 - Tests with mocked `@cursor/sdk`.
 
 ### PR 3 — Tool/thinking/status event normalization
 
-- Map `tool_call`, `thinking`, `status`, and terminal errors to Agor messages/tool widgets.
+- ✅ Initial mapping for `tool_call`, `thinking`, and terminal errors to Agor messages/tool callbacks.
+- Further refine `status`, `task`, and duplicate/partial event behavior after live SDK traces.
 - Add `cursor/normalizer.ts` for model/duration/git and no-token explicit behavior.
 - Golden tests for representative SDK events.
 
 ### PR 4 — MCP injection
 
-- Convert Agor session/global MCP server configs to Cursor `McpServerConfig`.
-- Inject built-in Agor MCP with session bearer token.
+- ✅ Convert Agor session/global MCP server configs to Cursor `McpServerConfig`.
+- ✅ Inject built-in Agor MCP with session bearer token.
 - Tests for stdio/http/sse conversion, env template resolution, and OAuth/header handling.
 
 ### PR 5 — UI polish and model discovery
@@ -270,8 +271,6 @@ Reasons not to ship broadly yet:
 
 ## Concrete next-step checklist
 
-- [ ] Max decision: feature flag name/config shape.
-- [ ] Max decision: user-only vs global `CURSOR_API_KEY` storage.
 - [ ] Run a live local smoke test with a throwaway Cursor key in an Agor worktree:
   - [ ] Does `Agent.create({ local: { cwd } })` run headlessly under executor user?
   - [ ] Where is local state stored?
@@ -286,8 +285,7 @@ Reasons not to ship broadly yet:
 
 ## Open questions for Max
 
-1. Should Cursor API keys be **per-user only** (like Copilot) or also allowed in global `config.yaml` (like OpenAI/Gemini)?
-2. Is an **autonomous/no-permission-modal** provider acceptable if clearly labeled and constrained by Agor Unix isolation?
-3. Should cloud runtime be explicitly out-of-scope for v1, or should the spike include a “remote Cursor branch artifact” concept?
-4. Is losing token/cost/context pills acceptable for an experimental provider?
-5. Do we want to expose Cursor-native `.cursor/skills`/hooks/subagent affordances in Agor UI, or leave them as repo-native files only?
+1. Is an **autonomous/no-permission-modal** provider acceptable if clearly labeled and constrained by Agor Unix isolation?
+2. Should cloud runtime be explicitly out-of-scope for v1, or should the spike include a “remote Cursor branch artifact” concept?
+3. Is losing token/cost/context pills acceptable for an experimental provider?
+4. Do we want to expose Cursor-native `.cursor/skills`/hooks/subagent affordances in Agor UI, or leave them as repo-native files only?
