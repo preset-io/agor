@@ -575,10 +575,14 @@ describe('CodexPromptService - tool payload mapping', () => {
 
     const completeEvent = emitted.find((event) => event.type === 'complete');
     expect(completeEvent).toBeTruthy();
+    // Snapshot must use last_token_usage (current occupancy = 12_000), NOT
+    // total_token_usage (lifetime cumulative = 210_000). Percentage applies
+    // Codex CLI's baseline subtraction (12_000 baseline on a 272_000 window):
+    // used = max(0, 12_000 - 12_000) = 0  →  0% used.
     expect(completeEvent?.rawContextUsage).toEqual({
-      totalTokens: 210000,
+      totalTokens: 12000,
       maxTokens: 272000,
-      percentage: 77,
+      percentage: 0,
     });
   });
 

@@ -21,7 +21,6 @@ import type {
 import { MessageRole } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
-import { computeCodexContextWindowFromPreviousTask } from '../../sdk-handlers/codex/context-window-fallback.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 
@@ -470,25 +469,12 @@ export async function executeToolTask(params: {
         };
       }
     } else {
-      if (toolName === 'codex' && result.rawSdkResponse) {
-        try {
-          const inferredWindow = await computeCodexContextWindowFromPreviousTask(
-            client,
-            sessionId,
-            taskId,
-            result.rawSdkResponse
-          );
-          if (inferredWindow && inferredWindow > 0) {
-            patchData.computed_context_window = inferredWindow;
-            console.log(
-              `[${toolName}] Inferred context window from previous-task running totals: ${inferredWindow} tokens`
-            );
-          }
-        } catch (error) {
-          console.warn(`[${toolName}] Failed to infer context window from previous task:`, error);
-        }
-      }
-
+      // No authoritative event_msg/token_count snapshot was captured during the
+      // turn. Fall through to the tool's `computeContextWindow()` which uses a
+      // last-resort heuristic. The previous "running totals across tasks" path
+      // was removed — it relied on subtracting prior tasks' input_tokens, but
+      // each turn.completed.input_tokens already includes the full transcript,
+      // so the delta represents "new content this turn," not occupancy.
       if (patchData.computed_context_window === undefined && tool.computeContextWindow) {
         try {
           const contextWindow = await tool.computeContextWindow(

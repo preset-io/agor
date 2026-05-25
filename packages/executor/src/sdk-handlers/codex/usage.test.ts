@@ -1,9 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CODEX_BASELINE_OVERHEAD_TOKENS,
   extractCodexContextSnapshotFromEvent,
   extractCodexContextWindowUsage,
   extractCodexTokenUsage,
 } from './usage.js';
+
+// Helper that mirrors codex-rs `percent_of_context_window_remaining` (inverted
+// to "used"). Useful for asserting our extractor's percentage matches the
+// formula without re-typing it.
+function expectedPercentageUsed(usedTokens: number, contextWindow: number): number {
+  if (contextWindow <= CODEX_BASELINE_OVERHEAD_TOKENS) return 0;
+  const effective = contextWindow - CODEX_BASELINE_OVERHEAD_TOKENS;
+  const used = Math.max(0, usedTokens - CODEX_BASELINE_OVERHEAD_TOKENS);
+  return Math.max(0, Math.min(100, Math.round((used / effective) * 100)));
+}
 
 describe('extractCodexTokenUsage', () => {
   it('returns undefined for non-object payloads', () => {
@@ -138,49 +149,113 @@ describe('extractCodexContextWindowUsage', () => {
 });
 
 describe('extractCodexContextSnapshotFromEvent', () => {
-  it('extracts total usage + model context window from token_count event_msg', () => {
+  it('uses last_token_usage (current occupancy), NOT total_token_usage (lifetime cumulative)', () => {
+    // Regression: previously we read total_token_usage.total_tokens, which is
+    // the lifetime sum across every internal model API call in the thread.
+    // For tool-heavy sessions that easily exceeds the model context window
+    // and produces nonsensical >100% usage on even the first user turn.
+    // Codex CLI's TUI uses last_token_usage.total_tokens (the most recent
+    // single API call's tokens, which equals current context occupancy
+    // because every API call sees the assembled transcript).
     const result = extractCodexContextSnapshotFromEvent({
       type: 'event_msg',
       payload: {
         type: 'token_count',
         info: {
-          total_token_usage: {
-            total_tokens: 210_000,
-          },
           last_token_usage: {
+            input_tokens: 11_500,
+            cached_input_tokens: 8_000,
+            output_tokens: 500,
             total_tokens: 12_000,
           },
-          model_context_window: 272_000,
-        },
-      },
-    });
-
-    expect(result).toEqual({
-      totalTokens: 210_000,
-      maxTokens: 272_000,
-      percentage: 77,
-    });
-  });
-
-  it('clamps percentage to 100 for over-limit totals', () => {
-    const result = extractCodexContextSnapshotFromEvent({
-      type: 'event_msg',
-      payload: {
-        type: 'token_count',
-        info: {
           total_token_usage: {
-            total_tokens: 1_000_000,
+            input_tokens: 850_000,
+            output_tokens: 150_000,
+            total_tokens: 1_000_000, // lifetime cumulative — must be ignored
           },
           model_context_window: 272_000,
         },
       },
     });
 
-    expect(result).toEqual({
-      totalTokens: 1_000_000,
-      maxTokens: 272_000,
-      percentage: 100,
+    // Pulls from last_token_usage, not total_token_usage.
+    expect(result?.totalTokens).toBe(12_000);
+    expect(result?.maxTokens).toBe(272_000);
+    // Baseline-adjusted percentage mirrors codex-rs's formula:
+    // effective_window = 272_000 - 12_000 = 260_000
+    // used = max(0, 12_000 - 12_000) = 0  →  0%
+    expect(result?.percentage).toBe(expectedPercentageUsed(12_000, 272_000));
+    expect(result?.percentage).toBe(0);
+  });
+
+  it('applies the Codex CLI BASELINE_TOKENS=12000 formula to the percentage', () => {
+    // Mid-range usage: ~50K used in a 200K window
+    // effective_window = 200_000 - 12_000 = 188_000
+    // used = 50_000 - 12_000 = 38_000  →  round(38_000 / 188_000 * 100) = 20%
+    const result = extractCodexContextSnapshotFromEvent({
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          last_token_usage: { total_tokens: 50_000 },
+          model_context_window: 200_000,
+        },
+      },
     });
+
+    expect(result?.totalTokens).toBe(50_000);
+    expect(result?.percentage).toBe(20);
+    expect(result?.percentage).toBe(expectedPercentageUsed(50_000, 200_000));
+  });
+
+  it('clamps percentage to 100 for over-limit usage', () => {
+    const result = extractCodexContextSnapshotFromEvent({
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          last_token_usage: { total_tokens: 500_000 },
+          model_context_window: 200_000,
+        },
+      },
+    });
+
+    expect(result?.totalTokens).toBe(500_000);
+    expect(result?.maxTokens).toBe(200_000);
+    expect(result?.percentage).toBe(100);
+  });
+
+  it('falls back to total_token_usage only when last_token_usage is absent (legacy payloads)', () => {
+    const result = extractCodexContextSnapshotFromEvent({
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: { total_tokens: 25_000 },
+          model_context_window: 200_000,
+        },
+      },
+    });
+
+    // Fallback path: still works, but value is the cumulative — log site can
+    // warn if a regression. (Not great, but better than 0 for legacy events.)
+    expect(result?.totalTokens).toBe(25_000);
+    expect(result?.percentage).toBe(expectedPercentageUsed(25_000, 200_000));
+  });
+
+  it('returns 0% when the window is at or below the baseline overhead', () => {
+    const result = extractCodexContextSnapshotFromEvent({
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          last_token_usage: { total_tokens: 5_000 },
+          model_context_window: CODEX_BASELINE_OVERHEAD_TOKENS, // degenerate
+        },
+      },
+    });
+
+    expect(result?.percentage).toBe(0);
   });
 
   it('returns undefined for non-token_count or malformed events', () => {
@@ -190,6 +265,13 @@ describe('extractCodexContextSnapshotFromEvent', () => {
       extractCodexContextSnapshotFromEvent({
         type: 'event_msg',
         payload: { type: 'other' },
+      })
+    ).toBeUndefined();
+    // Missing both last_token_usage and total_token_usage → undefined
+    expect(
+      extractCodexContextSnapshotFromEvent({
+        type: 'event_msg',
+        payload: { type: 'token_count', info: { model_context_window: 200_000 } },
       })
     ).toBeUndefined();
   });
