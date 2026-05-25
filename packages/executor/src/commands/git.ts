@@ -289,6 +289,35 @@ async function fetchBranchForRepo(client: AgorClient, repoId: string, branchId: 
   return branch;
 }
 
+interface BranchPathRecord {
+  repo_id?: string;
+  path?: string;
+}
+
+async function fetchAllBranchesForRepo(
+  client: AgorClient,
+  repoId: string
+): Promise<BranchPathRecord[]> {
+  const branches: BranchPathRecord[] = [];
+  const limit = 1000;
+  let skip = 0;
+
+  while (true) {
+    const result = await client.service('branches').find({
+      query: { repo_id: repoId, $limit: limit, $skip: skip },
+    });
+    const page = (Array.isArray(result) ? result : result.data) as BranchPathRecord[];
+    branches.push(...page);
+
+    if (Array.isArray(result)) break;
+    if (page.length === 0 || branches.length >= result.total) break;
+
+    skip += page.length;
+  }
+
+  return branches;
+}
+
 /**
  * Handle branch.agor-yml.import command.
  * Reads branch-scoped .agor.yml from a managed checkout.
@@ -490,21 +519,16 @@ export async function handleGitRepoDelete(
       throw new Error(`Repo ${repoId} has no local_path`);
     }
 
-    const branchesResult = await client.service('branches').find({
-      query: { repo_id: repoId, $limit: 1000 },
-    });
-    const branches = Array.isArray(branchesResult) ? branchesResult : branchesResult.data;
+    const branches = await fetchAllBranchesForRepo(client, repoId);
 
-    const foreignBranches = branches.filter(
-      (branch: { repo_id?: string }) => branch.repo_id !== repoId
-    );
+    const foreignBranches = branches.filter((branch) => branch.repo_id !== repoId);
     if (foreignBranches.length > 0) {
       throw new Error(
         `SAFETY CHECK FAILED: Found ${foreignBranches.length} branch(es) not belonging to repo ${repoId}`
       );
     }
 
-    for (const branch of branches as Array<{ path?: string }>) {
+    for (const branch of branches) {
       if (!branch.path) continue;
       await deleteBranchDirectory(branch.path);
       deletedPaths.push(branch.path);

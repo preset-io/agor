@@ -42,6 +42,7 @@ const branchId = '550e8400-e29b-41d4-a716-446655440002';
 function createClient(records: {
   repo?: Record<string, unknown>;
   branches?: Array<Record<string, unknown>>;
+  branchPages?: Array<Array<Record<string, unknown>>>;
   branch?: Record<string, unknown>;
 }) {
   const client = {
@@ -51,9 +52,31 @@ function createClient(records: {
         return { get: vi.fn(async () => records.repo) };
       }
       if (name === 'branches') {
+        const find = vi.fn(
+          async ({ query }: { query?: { $skip?: number; $limit?: number } } = {}) => {
+            if (records.branchPages) {
+              const skip = query?.$skip ?? 0;
+              const limit = query?.$limit ?? 1000;
+              const allBranches = records.branchPages.flat();
+              return {
+                data: allBranches.slice(skip, skip + limit),
+                total: allBranches.length,
+                limit,
+                skip,
+              };
+            }
+            const data = records.branches ?? [];
+            return {
+              data,
+              total: data.length,
+              limit: query?.$limit ?? data.length,
+              skip: query?.$skip ?? 0,
+            };
+          }
+        );
         return {
           get: vi.fn(async () => records.branch),
-          find: vi.fn(async () => ({ data: records.branches ?? [] })),
+          find,
         };
       }
       throw new Error(`unexpected service ${name}`);
@@ -81,6 +104,31 @@ describe('managed executor git/fs commands', () => {
 
     expect(result.success).toBe(true);
     expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith('/safe/worktrees/repo/feature');
+    expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/repo');
+  });
+
+  it('pages through every branch before deleting repo directories', async () => {
+    const branches = Array.from({ length: 1002 }, (_, index) => ({
+      branch_id: `branch-${index}`,
+      repo_id: repoId,
+      path: `/safe/worktrees/repo/branch-${index}`,
+    }));
+    createClient({
+      repo: { repo_id: repoId, local_path: '/safe/repos/repo' },
+      branchPages: [branches.slice(0, 1000), branches.slice(1000)],
+    });
+
+    const result = await handleGitRepoDelete(
+      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId } },
+      {}
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.deleteBranchDirectory).toHaveBeenCalledTimes(1002);
+    expect(mocks.deleteBranchDirectory).toHaveBeenNthCalledWith(
+      1001,
+      '/safe/worktrees/repo/branch-1000'
+    );
     expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/repo');
   });
 
