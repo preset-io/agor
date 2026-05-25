@@ -81,8 +81,10 @@ interface ArtifactNodeData {
   width: number;
   height: number;
   /** True when this artifact is the deep-link target of the current URL
-   *  (`/a/<artifactShort>/`). Drives the cyan active-URL-target border,
-   *  distinct from React Flow's primary-color `selected` border. */
+   *  (`/a/<artifactShort>/`). Renders the same dashed "selected"
+   *  outline used on BranchCard, layered on top of React Flow's
+   *  primary-color `selected` border so click-selection and URL-target
+   *  stay independently legible. */
   isActiveUrlTarget?: boolean;
   onUpdate: (id: string, data: BoardObject) => void;
   /** Lifecycle-safe delete: removes filesystem + board object + DB record */
@@ -707,30 +709,32 @@ export const ArtifactNode = ({
 
   // Shared Card chrome — body content swaps based on load state but the
   // title bar stays put so the user always knows which artifact this is.
-  // Border precedence: error → active URL target (cyan) → React Flow
-  // `selected` (primary) → default. The active-URL-target glow is added
-  // as an extra box-shadow so it reads as distinct from the click-to-
-  // select state even when both apply.
-  const activeUrlTargetColor = token.cyan6 || token.cyan || '#13c2c2';
+  // Border still reflects error / React-Flow-selected state. The
+  // active-URL-target signal rides on `outline` (dashed, in
+  // `colorTextBase`) — same neutral selection language used on
+  // BranchCard so users learn one visual vocabulary for "this is what
+  // you navigated to."
   const borderColor = error
     ? token.colorErrorBorder
-    : data.isActiveUrlTarget
-      ? activeUrlTargetColor
-      : selected
-        ? token.colorPrimary
-        : token.colorBorder;
+    : selected
+      ? token.colorPrimary
+      : token.colorBorder;
   const cardOuterStyle = {
     width: data.width,
     height: data.height,
     background: token.colorBgContainer,
     border: `2px solid ${borderColor}`,
     borderRadius: 8,
-    boxShadow: data.isActiveUrlTarget
-      ? `${token.boxShadowSecondary}, 0 0 16px 4px ${activeUrlTargetColor}80`
-      : token.boxShadowSecondary,
+    boxShadow: token.boxShadowSecondary,
     overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',
+    ...(data.isActiveUrlTarget
+      ? {
+          outline: `2px dashed ${token.colorTextBase}`,
+          outlineOffset: -3,
+        }
+      : {}),
   } as const;
 
   // Shared resizer — same across loading / error / normal states.

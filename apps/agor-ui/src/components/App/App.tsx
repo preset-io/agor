@@ -264,10 +264,10 @@ export const App: React.FC<AppProps> = ({
     y: number;
   } | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  // Active URL deep-link target (branch or artifact). Drives the cyan
-  // "active URL target" highlight on the board so users can tell which
-  // card the URL navigated them to, separately from `selectedSessionId`
-  // (which drives the focused ring on the owning branch).
+  // Active URL deep-link target (branch or artifact). Folds into the
+  // unified dashed "selected" outline alongside `selectedSessionId` —
+  // both answer "what am I looking at right now?" so they share one
+  // visual.
   const [activeUrlTarget, setActiveUrlTarget] = useState<ActiveUrlTarget | null>(null);
   const activeUrlTargetBranchId = activeUrlTarget?.kind === 'branch' ? activeUrlTarget.id : null;
   const activeUrlTargetArtifactId =

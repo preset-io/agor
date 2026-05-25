@@ -169,10 +169,10 @@ interface BranchCardProps {
   defaultExpanded?: boolean;
   inPopover?: boolean; // NEW: Enable popover-optimized mode (hides board-specific controls)
   /** True when this branch is the deep-link target of the current URL
-   *  (`/w/<branchShort>/`). Drives the cyan active-URL-target ring on
-   *  the card, distinct from the white attention glow (returned /
-   *  awaiting prompt) and the primary-color focused ring (session
-   *  open in drawer). */
+   *  (`/w/<branchShort>/`). Folded together with `isFocused` (a session
+   *  is open in the drawer) into a unified "selected" state — rendered
+   *  as a dashed outline in `colorTextBase`, distinct from the white
+   *  attention halo (returned / awaiting prompt). */
   isActiveUrlTarget?: boolean;
   client: AgorClient | null;
 }
@@ -415,6 +415,11 @@ const BranchCardComponent = ({
     ];
 
     const isActive = session.status === 'running' || session.status === 'stopping';
+    // Mirrors the branch-card "selected" channel: when the URL points at
+    // a session, the session opens in the drawer (`selectedSessionId` is
+    // set) — give the matching row the same dashed selection outline so
+    // it's obvious which session inside the card the user landed on.
+    const isSessionSelected = session.session_id === selectedSessionId;
 
     return (
       <SessionItemWithActions
@@ -443,6 +448,9 @@ const BranchCardComponent = ({
             cursor: 'pointer',
             marginBottom: 4,
             boxShadow: session.ready_for_prompt ? `0 0 12px ${token.colorPrimary}30` : undefined,
+            ...(isSessionSelected
+              ? { outline: `2px dashed ${token.colorTextBase}`, outlineOffset: -2 }
+              : {}),
           }}
           onClick={() => onSessionClick?.(session.session_id)}
           onContextMenu={(e) => {
@@ -722,19 +730,19 @@ const BranchCardComponent = ({
     return `0 0 0 3px ${glowColor}, 0 0 24px 6px ${glowColor}99`;
   }, [token.colorTextBase, isDarkMode]);
 
-  // Focused-session highlight: solid 2px primary-color ring with no halo.
-  // Deliberately different shape from `attentionGlowShadow` (which has a
-  // wide soft halo) so users can tell the two states apart at a glance.
-  const focusedRingShadow = `0 0 0 2px ${token.colorPrimary}`;
-
-  // Active-URL-target highlight: cyan ring + soft halo. Cyan is chosen
-  // to read as distinct from BOTH the white attention glow (returned /
-  // awaiting prompt) and the primary-blue focused ring (session open
-  // in drawer). When the URL also drives `needsAttention` we compose
-  // the cyan ring around the existing white halo so both signals stay
-  // visible — "you came here from a URL AND this branch needs a prompt".
-  const activeUrlTargetColor = token.cyan6 || token.cyan || '#13c2c2';
-  const activeUrlTargetRing = `0 0 0 3px ${activeUrlTargetColor}, 0 0 18px 4px ${activeUrlTargetColor}99`;
+  // "Selected" state — branch is either focused (one of its sessions is
+  // open in the drawer) or it's the deep-link target of the current URL.
+  // The two are deliberately unified: from the user's perspective both
+  // answer "what am I looking at right now?". Rendered as a dashed
+  // outline in `colorTextBase` so it reads as neutral against any zone /
+  // assistant accent and works in both dark and light modes. Dashed
+  // because (per design discussion) it visually screams "selection"
+  // without leaning on a colored ring that would compete with the white
+  // attention halo. Offset is negative so the dashed line sits *inside*
+  // the card chrome — outline is paint-only and won't disturb layout
+  // or fight with `borderLeft` (assistant accent stripe).
+  const isSelected = isFocused || isActiveUrlTarget;
+  const selectedOutline = `2px dashed ${token.colorTextBase}`;
 
   // Ensure pin color is visible (adjust lightness if too pale)
   const visiblePinColor = useMemo(() => {
@@ -755,29 +763,39 @@ const BranchCardComponent = ({
       : `${truncated}...`;
   }, [branch.notes, notesNeedTruncation, notesExpanded]);
 
-  // Compose the card's box-shadow layer. Order of precedence:
-  //   1. active URL target — strongest signal, "you navigated here".
-  //      If it coincides with `needsAttention` we stack the cyan ring
-  //      around the white attention halo so neither signal is masked.
-  //   2. focused session (drawer open) — primary-color ring.
-  //   3. needsAttention (returned / awaiting prompt) — white halo.
-  // The `isPinned` / `isAgent` branches are mutually exclusive with the
-  // shadow-bearing states and only contribute a thin border.
+  // Compose card chrome from independent visual channels so multiple
+  // states can stack cleanly:
+  //   • `boxShadow` — attention halo for needs_attention / awaiting prompt
+  //   • `outline`   — dashed selected state (focused OR active URL target)
+  //   • `borderLeft` — thick accent stripe for assistant branches
+  //   • `borderColor` — zone color when pinned (no other states use it)
+  // outline + box-shadow are paint-only, so they don't disturb layout
+  // and don't fight with each other or with `borderLeft`.
   const highlightStyle: React.CSSProperties = (() => {
     if (inPopover) return {};
-    if (isActiveUrlTarget) {
-      // Stack cyan ring + attention halo if both apply, otherwise the
-      // cyan ring alone.
-      const shadow = needsAttention
-        ? `${activeUrlTargetRing}, ${attentionGlowShadow}`
-        : activeUrlTargetRing;
-      return { boxShadow: shadow, border: 'none' };
+    const style: React.CSSProperties = {};
+    if (needsAttention) style.boxShadow = attentionGlowShadow;
+    if (isSelected) {
+      style.outline = selectedOutline;
+      // Sit ~3px inside the card edge so it reads as a selection
+      // *inside* the card chrome rather than a separate ring outside.
+      style.outlineOffset = -3;
     }
-    if (isFocused) return { boxShadow: focusedRingShadow, border: 'none' };
-    if (needsAttention) return { boxShadow: attentionGlowShadow, border: 'none' };
-    if (isPinned && zoneColor) return { borderColor: zoneColor, borderWidth: 1 };
-    if (isAgent) return { borderColor: token.colorInfo, borderWidth: 1 };
-    return {};
+    if (isPinned && zoneColor) {
+      style.borderColor = zoneColor;
+      style.borderWidth = 1;
+    }
+    if (isAgent) {
+      // Assistant accent stripe: thick left border in `colorInfo`. Drops
+      // the previous full `colorInfo` border (which collided with the
+      // primary-color selected ring in the default theme where
+      // colorInfo === colorPrimary). The stripe lives only on the left
+      // edge so it doesn't compete with the dashed selected outline,
+      // and composes with the zone-color border on the other three
+      // edges when an assistant is also pinned.
+      style.borderLeft = `4px solid ${token.colorInfo}`;
+    }
+    return style;
   })();
 
   return (
@@ -786,9 +804,8 @@ const BranchCardComponent = ({
         width: 500,
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
         transition:
-          'box-shadow 0.6s ease-in-out, border 0.6s ease-in-out, opacity 0.2s ease-in-out',
-        willChange:
-          (needsAttention || isFocused || isActiveUrlTarget) && !inPopover ? 'box-shadow' : 'auto',
+          'box-shadow 0.6s ease-in-out, outline 0.2s ease-in-out, border 0.6s ease-in-out, opacity 0.2s ease-in-out',
+        willChange: needsAttention && !inPopover ? 'box-shadow' : 'auto',
         ...highlightStyle,
         ...(isAgent ? { backgroundColor: token.colorInfoBg } : {}),
         // Disconnected chokepoint: block all in-card interactions (clicking
@@ -857,22 +874,33 @@ const BranchCardComponent = ({
             </div>
           )}
           <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
-            <Typography.Text
-              strong
-              className="nodrag"
-              ellipsis={{ tooltip: assistantConfig?.displayName ?? branch.name }}
-            >
-              {assistantConfig?.displayName ?? branch.name}
-            </Typography.Text>
-            <Typography.Text
-              type="secondary"
-              style={{ fontSize: 12 }}
-              ellipsis={{
-                tooltip: assistantConfig ? `${repo.slug} / ${branch.name}` : repo.slug,
-              }}
-            >
-              {assistantConfig ? `${repo.slug} / ${branch.name}` : repo.slug}
-            </Typography.Text>
+            {isAgent ? (
+              // Assistants are identified by their persona, not their git
+              // location — render the agent name in the prominent slot
+              // and drop the repo/branch subtitle. Repo + branch are still
+              // available in the branch settings modal for power users.
+              <Typography.Title
+                level={4}
+                className="nodrag"
+                style={{ margin: 0, fontWeight: 600 }}
+                ellipsis={{ tooltip: assistantConfig?.displayName ?? branch.name }}
+              >
+                {assistantConfig?.displayName ?? branch.name}
+              </Typography.Title>
+            ) : (
+              <>
+                <Typography.Text strong className="nodrag" ellipsis={{ tooltip: branch.name }}>
+                  {branch.name}
+                </Typography.Text>
+                <Typography.Text
+                  type="secondary"
+                  style={{ fontSize: 12 }}
+                  ellipsis={{ tooltip: repo.slug }}
+                >
+                  {repo.slug}
+                </Typography.Text>
+              </>
+            )}
           </div>
         </div>
 

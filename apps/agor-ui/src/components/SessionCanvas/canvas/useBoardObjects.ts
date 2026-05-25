@@ -25,8 +25,8 @@ interface UseBoardObjectsProps {
   eraserMode?: boolean;
   selectedSessionId?: string | null;
   /** Artifact ID currently targeted by an `/a/<…>/` deep link. Used to
-   *  flag the matching ArtifactNode so it can render the cyan
-   *  active-URL-target border. */
+   *  flag the matching ArtifactNode so it can render the dashed
+   *  "selected" outline. */
   activeUrlTargetArtifactId?: string | null;
   onEditMarkdown?: (objectId: string, content: string, width: number) => void;
 }

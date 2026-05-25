@@ -104,11 +104,11 @@ interface SessionCanvasProps {
   cardById: Map<string, CardWithType>; // Map-based card storage for this board
   currentUserId?: string;
   selectedSessionId?: string | null;
-  /** Branch currently targeted by a `/w/<…>/` deep link — drives the
-   *  cyan active-URL-target ring on that branch card. */
+  /** Branch currently targeted by a `/w/<…>/` deep link — folds into
+   *  BranchCard's unified dashed "selected" outline. */
   activeUrlTargetBranchId?: string | null;
-  /** Artifact currently targeted by an `/a/<…>/` deep link — drives the
-   *  cyan border on that artifact node. */
+  /** Artifact currently targeted by an `/a/<…>/` deep link — drives
+   *  ArtifactNode's dashed "selected" outline. */
   activeUrlTargetArtifactId?: string | null;
   availableAgents?: AgenticToolOption[];
   mcpServerById?: Map<string, MCPServer>; // Map-based MCP server storage
