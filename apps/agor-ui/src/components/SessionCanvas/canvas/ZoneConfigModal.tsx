@@ -3,10 +3,11 @@
  */
 
 import type { AgenticToolName, BoardObject, ZoneTriggerBehavior } from '@agor-live/client';
-import { Alert, Form, Input, Modal, Select } from 'antd';
+import { Form, Input, Modal, Select } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../../AgentSelectionGrid';
+import { ExpandableInfoAlert } from '../../ExpandableInfoAlert';
 
 interface ZoneConfigModalProps {
   open: boolean;
@@ -166,53 +167,49 @@ export const ZoneConfigModal = ({
           />
         </Form.Item>
 
-        <Alert
-          title="Handlebars Template Support"
-          description={
-            <div>
-              <p style={{ marginBottom: 8 }}>
-                Use Handlebars syntax to reference session and board data in your trigger:
-              </p>
-              <ul style={{ marginLeft: 16, marginBottom: 8 }}>
-                <li>
-                  <code>{'{{ branch.issue_url }}'}</code> - GitHub issue URL
-                </li>
-                <li>
-                  <code>{'{{ branch.pull_request_url }}'}</code> - Pull request URL
-                </li>
-                <li>
-                  <code>{'{{ branch.notes }}'}</code> - Branch notes
-                </li>
-                <li>
-                  <code>{'{{ session.description }}'}</code> - Session description
-                </li>
-                <li>
-                  <code>{'{{ session.context.* }}'}</code> - Custom context from session settings
-                </li>
-                <li>
-                  <code>{'{{ board.name }}'}</code> - Board name
-                </li>
-                <li>
-                  <code>{'{{ board.description }}'}</code> - Board description
-                </li>
-                <li>
-                  <code>{'{{ board.context.* }}'}</code> - Custom context from board settings
-                </li>
-              </ul>
-              <p style={{ marginTop: 8, marginBottom: 0 }}>
-                Example:{' '}
-                <code>
-                  {
-                    'Review {{ branch.issue_url }} for {{ board.context.team }} sprint {{ board.context.sprint }}'
-                  }
-                </code>
-              </p>
-            </div>
-          }
-          type="info"
-          showIcon
+        <ExpandableInfoAlert
+          title="Handlebars template support"
+          summary="Reference branch, session, and board data with {{ ... }} syntax."
           style={{ marginTop: 0 }}
-        />
+        >
+          <p style={{ marginBottom: 8 }}>
+            Use Handlebars syntax to reference session and board data in your trigger:
+          </p>
+          <ul style={{ marginLeft: 16, marginBottom: 8 }}>
+            <li>
+              <code>{'{{ branch.issue_url }}'}</code> - GitHub issue URL
+            </li>
+            <li>
+              <code>{'{{ branch.pull_request_url }}'}</code> - Pull request URL
+            </li>
+            <li>
+              <code>{'{{ branch.notes }}'}</code> - Branch notes
+            </li>
+            <li>
+              <code>{'{{ session.description }}'}</code> - Session description
+            </li>
+            <li>
+              <code>{'{{ session.context.* }}'}</code> - Custom context from session settings
+            </li>
+            <li>
+              <code>{'{{ board.name }}'}</code> - Board name
+            </li>
+            <li>
+              <code>{'{{ board.description }}'}</code> - Board description
+            </li>
+            <li>
+              <code>{'{{ board.context.* }}'}</code> - Custom context from board settings
+            </li>
+          </ul>
+          <p style={{ marginTop: 8, marginBottom: 0 }}>
+            Example:{' '}
+            <code>
+              {
+                'Review {{ branch.issue_url }} for {{ board.context.team }} sprint {{ board.context.sprint }}'
+              }
+            </code>
+          </p>
+        </ExpandableInfoAlert>
       </Form>
     </Modal>
   );
