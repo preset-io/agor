@@ -470,7 +470,9 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         resolvedBranchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
       } else {
         if (!ctx.sessionId) return sessionContextRequiredResult();
-        const currentSession = await ctx.app.service('sessions').get(ctx.sessionId);
+        const currentSession = await ctx.app
+          .service('sessions')
+          .get(ctx.sessionId, ctx.baseServiceParams);
         const sessionBranchId = currentSession.branch_id;
         if (!sessionBranchId)
           throw new Error('branchId is required when current session is not bound to a branch');

@@ -457,7 +457,10 @@ export function setupMCPRoutes(
   type StatefulTransportEntry = {
     transport: StreamableHTTPServerTransport;
     server: McpServer;
+    /** Mutable context object captured by registered tool handlers. */
+    context: McpContext;
     userId: UserID;
+    /** Immutable Agor session binding established at MCP initialize time, if any. */
     sessionId?: SessionID;
     lastUsedAt: number;
     ttlTimer: NodeJS.Timeout;
@@ -475,7 +478,8 @@ export function setupMCPRoutes(
     if (!entry) return;
     statefulTransports.delete(mcpSessionId);
     clearTimeout(entry.ttlTimer);
-    entry.transport.close().catch(() => {});
+    // McpServer owns the connected transport; closing the server closes the
+    // transport. Calling both can recurse through transport.onclose.
     entry.server.close().catch(() => {});
   };
 
@@ -690,6 +694,20 @@ export function setupMCPRoutes(
             ...jsonRpcError(req, -32003, 'Forbidden: MCP session belongs to a different user'),
           });
         }
+
+        // A stateful MCP transport's Agor session binding is immutable. Tool
+        // handlers close over `entry.context`, so allowing callers to add or
+        // change X-Agor-Session-Id on later requests would be confusing at
+        // best and a stale-context authorization footgun at worst.
+        if (!entry.sessionId && sessionId) {
+          return res.status(403).json({
+            ...jsonRpcError(
+              req,
+              -32003,
+              'Forbidden: MCP session was initialized without X-Agor-Session-Id / ?sessionId context; start a new MCP session with session context instead.'
+            ),
+          });
+        }
         if (entry.sessionId && sessionId && entry.sessionId !== sessionId) {
           return res.status(403).json({
             ...jsonRpcError(
@@ -702,16 +720,30 @@ export function setupMCPRoutes(
 
         armStatefulTransportTtl(mcpSessionId, entry);
 
-        // If an SSE client disconnects without DELETE, close the stateful
-        // transport so its server, stream, and map entry are released.
-        if (req.method === 'GET') {
-          let closed = false;
-          req.on('close', () => {
-            if (closed) return;
-            closed = true;
+        // Rebuild the mutable context captured by registered handlers on each
+        // stateful request. Credentials have just been re-authenticated and
+        // the user was reloaded, so this keeps role/user data fresh for
+        // long-lived streamable HTTP sessions. If the immutable Agor session
+        // binding is no longer accessible to this user, evict the MCP session.
+        if (entry.sessionId) {
+          try {
+            const session = await app.service('sessions').get(entry.sessionId, baseServiceParams);
+            entry.sessionId = session.session_id;
+          } catch {
             closeStatefulTransport(mcpSessionId);
-          });
+            return res.status(403).json({
+              ...jsonRpcError(
+                req,
+                -32003,
+                'Forbidden: the X-Agor-Session-Id / ?sessionId context bound to this MCP session is no longer accessible.'
+              ),
+            });
+          }
         }
+        entry.context.userId = userId;
+        entry.context.sessionId = entry.sessionId;
+        entry.context.authenticatedUser = authenticatedUser;
+        entry.context.baseServiceParams = baseServiceParams;
 
         await entry.transport.handleRequest(req, res, req.body);
         return;
@@ -733,6 +765,7 @@ export function setupMCPRoutes(
             const entry: StatefulTransportEntry = {
               transport,
               server: mcpServer,
+              context: mcpContext,
               userId,
               sessionId,
               lastUsedAt: Date.now(),
@@ -752,7 +785,6 @@ export function setupMCPRoutes(
             statefulTransports.delete(sid);
             if (entry) clearTimeout(entry.ttlTimer);
           }
-          mcpServer.close().catch(() => {});
         };
 
         await mcpServer.connect(transport);
@@ -779,7 +811,6 @@ export function setupMCPRoutes(
 
       // Clean up after response is done
       res.on('close', () => {
-        transport.close().catch(() => {});
         mcpServer.close().catch(() => {});
       });
     } catch (error) {

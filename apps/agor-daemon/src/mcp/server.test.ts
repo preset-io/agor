@@ -237,6 +237,98 @@ describe('POST /mcp with personal API keys', () => {
     vi.restoreAllMocks();
   });
 
+  function mockPersonalApiKeyUser(userId = 'user-1') {
+    const keyRows = {
+      agor_sk_valid: {
+        id: 'key-1',
+        user_id: userId,
+        name: 'orchestrator',
+        prefix: 'agor_sk_123',
+        key_hash: 'hash',
+        created_at: new Date(),
+        last_used_at: null,
+      },
+      agor_sk_other: {
+        id: 'key-2',
+        user_id: 'user-2',
+        name: 'other',
+        prefix: 'agor_sk_456',
+        key_hash: 'hash',
+        created_at: new Date(),
+        last_used_at: null,
+      },
+    };
+    return import('@agor/core/db').then(({ UserApiKeysRepository }) => {
+      vi.spyOn(UserApiKeysRepository.prototype, 'verifyKey').mockImplementation(async (key) => {
+        return keyRows[key as keyof typeof keyRows] ?? null;
+      });
+      vi.spyOn(UserApiKeysRepository.prototype, 'updateLastUsed').mockResolvedValue();
+    });
+  }
+
+  async function withMcpServer(
+    services: Record<string, unknown>,
+    fn: (baseUrl: string) => Promise<void>
+  ) {
+    const webApp = express();
+    webApp.use(express.json());
+    (webApp as unknown as { service: (name: string) => unknown }).service = (name: string) => {
+      const svc = services[name];
+      if (!svc) throw new Error(`Unexpected service lookup: ${name}`);
+      return svc;
+    };
+
+    setupMCPRoutes(webApp as never, {} as never, /* toolSearchEnabled */ false);
+
+    const httpServer = webApp.listen(0);
+    try {
+      const address = httpServer.address();
+      if (!address || typeof address === 'string') throw new Error('no listen address');
+      await fn(`http://127.0.0.1:${address.port}`);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  }
+
+  function parseMcpResponse(text: string) {
+    const dataLine = text
+      .split('\n')
+      .find((line) => line.startsWith('data: '))
+      ?.slice('data: '.length);
+    return JSON.parse(dataLine ?? text) as {
+      result?: { content?: Array<{ text: string }> };
+      error?: { message: string };
+    };
+  }
+
+  async function initializeStatefulMcp(baseUrl: string, apiKey = 'agor_sk_valid') {
+    const resp = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json, text/event-stream',
+        'Content-Type': 'application/json',
+        'X-API-Key': apiKey,
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 100,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-03-26',
+          capabilities: {},
+          clientInfo: { name: 'vitest', version: '1.0.0' },
+        },
+      }),
+    });
+    expect(resp.status).toBe(200);
+    const mcpSessionId = resp.headers.get('mcp-session-id');
+    expect(mcpSessionId).toBeTruthy();
+    await resp.text();
+    return mcpSessionId!;
+  }
+
   it('can call a non-session-scoped tool without X-Agor-Session-Id / ?sessionId', async () => {
     const { UserApiKeysRepository } = await import('@agor/core/db');
     vi.spyOn(UserApiKeysRepository.prototype, 'verifyKey').mockResolvedValue({
@@ -304,5 +396,228 @@ describe('POST /mcp with personal API keys', () => {
         httpServer.close((err) => (err ? reject(err) : resolve()));
       });
     }
+  });
+
+  it('accepts a valid personal API key session context from X-Agor-Session-Id', async () => {
+    await mockPersonalApiKeyUser();
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+    }));
+    const getSession = vi.fn(async () => ({ session_id: 'session-full-id' }));
+
+    await withMcpServer(
+      { users: { get: getUser }, sessions: { get: getSession } },
+      async (baseUrl) => {
+        const resp = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json, text/event-stream',
+            'Content-Type': 'application/json',
+            'X-API-Key': 'agor_sk_valid',
+            'X-Agor-Session-Id': 'session-short',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 2,
+            method: 'tools/call',
+            params: { name: 'agor_users_get_current', arguments: {} },
+          }),
+        });
+
+        expect(resp.status).toBe(200);
+        expect(parseMcpResponse(await resp.text()).error).toBeUndefined();
+        expect(getSession).toHaveBeenCalledWith(
+          'session-short',
+          expect.objectContaining({
+            authenticated: true,
+            provider: 'mcp',
+            user: expect.objectContaining({ user_id: 'user-1', role: 'member' }),
+          })
+        );
+      }
+    );
+  });
+
+  it('accepts a valid personal API key session context from ?sessionId=', async () => {
+    await mockPersonalApiKeyUser();
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+    }));
+    const getSession = vi.fn(async () => ({ session_id: 'session-full-id' }));
+
+    await withMcpServer(
+      { users: { get: getUser }, sessions: { get: getSession } },
+      async (baseUrl) => {
+        const resp = await fetch(`${baseUrl}/mcp?sessionId=session-query`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json, text/event-stream',
+            'Content-Type': 'application/json',
+            'X-API-Key': 'agor_sk_valid',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 3,
+            method: 'tools/call',
+            params: { name: 'agor_users_get_current', arguments: {} },
+          }),
+        });
+
+        expect(resp.status).toBe(200);
+        expect(parseMcpResponse(await resp.text()).error).toBeUndefined();
+        expect(getSession).toHaveBeenCalledWith('session-query', expect.any(Object));
+      }
+    );
+  });
+
+  it('rejects inaccessible personal API key session context', async () => {
+    await mockPersonalApiKeyUser();
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+    }));
+    const getSession = vi.fn(async () => {
+      throw new Error('no access');
+    });
+
+    await withMcpServer(
+      { users: { get: getUser }, sessions: { get: getSession } },
+      async (baseUrl) => {
+        const resp = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json, text/event-stream',
+            'Content-Type': 'application/json',
+            'X-API-Key': 'agor_sk_valid',
+            'X-Agor-Session-Id': 'forbidden-session',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 4,
+            method: 'tools/call',
+            params: { name: 'agor_users_get_current', arguments: {} },
+          }),
+        });
+
+        expect(resp.status).toBe(403);
+        const body = (await resp.json()) as { error?: { message?: string } };
+        expect(body.error?.message).toMatch(/not accessible/i);
+      }
+    );
+  });
+
+  it('rejects adding X-Agor-Session-Id to a sessionless stateful MCP session', async () => {
+    await mockPersonalApiKeyUser();
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+    }));
+    const getSession = vi.fn(async () => ({ session_id: 'session-full-id' }));
+
+    await withMcpServer(
+      { users: { get: getUser }, sessions: { get: getSession } },
+      async (baseUrl) => {
+        const mcpSessionId = await initializeStatefulMcp(baseUrl);
+        const resp = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json, text/event-stream',
+            'Content-Type': 'application/json',
+            'X-API-Key': 'agor_sk_valid',
+            'Mcp-Session-Id': mcpSessionId,
+            'X-Agor-Session-Id': 'session-full-id',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 5,
+            method: 'tools/call',
+            params: { name: 'agor_users_get_current', arguments: {} },
+          }),
+        });
+
+        expect(resp.status).toBe(403);
+        const body = (await resp.json()) as { error?: { message?: string } };
+        expect(body.error?.message).toMatch(/initialized without/i);
+      }
+    );
+  });
+
+  it('rejects a stateful MCP request from a different API key user', async () => {
+    await mockPersonalApiKeyUser();
+    const getUser = vi.fn(async (id: string) => ({
+      user_id: id,
+      email: `${id}@example.com`,
+      role: 'member',
+    }));
+
+    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
+      const mcpSessionId = await initializeStatefulMcp(baseUrl, 'agor_sk_valid');
+      const resp = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json, text/event-stream',
+          'Content-Type': 'application/json',
+          'X-API-Key': 'agor_sk_other',
+          'Mcp-Session-Id': mcpSessionId,
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 6,
+          method: 'tools/call',
+          params: { name: 'agor_users_get_current', arguments: {} },
+        }),
+      });
+
+      expect(resp.status).toBe(403);
+      const body = (await resp.json()) as { error?: { message?: string } };
+      expect(body.error?.message).toMatch(/different user/i);
+    });
+  });
+
+  it('DELETE closes a stateful MCP session and subsequent use returns 404', async () => {
+    await mockPersonalApiKeyUser();
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+    }));
+
+    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
+      const mcpSessionId = await initializeStatefulMcp(baseUrl);
+      const deleteResp = await fetch(`${baseUrl}/mcp`, {
+        method: 'DELETE',
+        headers: {
+          Accept: 'application/json, text/event-stream',
+          'X-API-Key': 'agor_sk_valid',
+          'Mcp-Session-Id': mcpSessionId,
+        },
+      });
+      expect(deleteResp.status).toBe(200);
+      await deleteResp.text();
+
+      const resp = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json, text/event-stream',
+          'Content-Type': 'application/json',
+          'X-API-Key': 'agor_sk_valid',
+          'Mcp-Session-Id': mcpSessionId,
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 7,
+          method: 'tools/call',
+          params: { name: 'agor_users_get_current', arguments: {} },
+        }),
+      });
+
+      expect(resp.status).toBe(404);
+    });
   });
 });
