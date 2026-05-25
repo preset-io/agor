@@ -16,7 +16,7 @@ import { Alert, Button, Typography, theme } from 'antd';
 import type { CSSProperties, ReactNode } from 'react';
 import { useState } from 'react';
 
-export interface ExpandableInfoAlertProps {
+export interface ExpandableAlertProps {
   /** Short label shown next to the alert icon. Rendered at normal text size. */
   title: ReactNode;
   /** Optional one-line summary shown next to the title, before the toggle. */
@@ -32,7 +32,7 @@ export interface ExpandableInfoAlertProps {
   style?: CSSProperties;
 }
 
-export const ExpandableInfoAlert = ({
+export const ExpandableAlert = ({
   title,
   summary,
   children,
@@ -41,7 +41,7 @@ export const ExpandableInfoAlert = ({
   expandLabel = 'See details',
   collapseLabel = 'Hide details',
   style,
-}: ExpandableInfoAlertProps) => {
+}: ExpandableAlertProps) => {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const { token } = theme.useToken();
 

@@ -7,7 +7,7 @@ import { Form, Input, Modal, Select } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../../AgentSelectionGrid';
-import { ExpandableInfoAlert } from '../../ExpandableInfoAlert';
+import { ExpandableAlert } from '../../ExpandableAlert';
 
 interface ZoneConfigModalProps {
   open: boolean;
@@ -167,7 +167,7 @@ export const ZoneConfigModal = ({
           />
         </Form.Item>
 
-        <ExpandableInfoAlert
+        <ExpandableAlert
           title="Handlebars template support"
           summary="Reference branch, session, and board data with {{ ... }} syntax."
           style={{ marginTop: 0 }}
@@ -209,7 +209,7 @@ export const ZoneConfigModal = ({
               }
             </code>
           </p>
-        </ExpandableInfoAlert>
+        </ExpandableAlert>
       </Form>
     </Modal>
   );
