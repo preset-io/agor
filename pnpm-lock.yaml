@@ -447,6 +447,9 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.2.132
         version: 0.2.132(zod@4.4.3)
+      '@cursor/sdk':
+        specifier: ^1.0.13
+        version: 1.0.13
       '@feathersjs/authentication':
         specifier: ^5.0.44
         version: 5.0.44(typescript@5.9.3)

@@ -47,6 +47,7 @@
   "dependencies": {
     "@agor-live/client": "workspace:*",
     "@anthropic-ai/claude-agent-sdk": "^0.2.132",
+    "@cursor/sdk": "^1.0.13",
     "@feathersjs/authentication": "^5.0.44",
     "@feathersjs/authentication-client": "^5.0.44",
     "@feathersjs/authentication-local": "^5.0.44",
