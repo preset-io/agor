@@ -606,9 +606,12 @@ export class SchedulerService {
         scheduled_run_at: scheduledRunAt,
         scheduled_from_branch: true,
         schedule_id: schedule.schedule_id,
+        // Lead with the schedule name so the session list is scannable
+        // — "hourly heartbeat — 2026-05-25T14:08:00.000Z" is more useful
+        // than the generic "[Scheduled run - ...]" we used pre-#1253.
         title: manual
-          ? `[Manual run - ${new Date(scheduledRunAt).toISOString()}]`
-          : `[Scheduled run - ${new Date(scheduledRunAt).toISOString()}]`,
+          ? `${schedule.name} — manual @ ${new Date(scheduledRunAt).toISOString()}`
+          : `${schedule.name} — ${new Date(scheduledRunAt).toISOString()}`,
         contextFiles: cfg.context_files ?? [],
         permission_config: cfg.permission_mode
           ? { mode: cfg.permission_mode as PermissionMode }
