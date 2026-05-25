@@ -1312,4 +1312,86 @@ describe('SessionRepository schedule-link queries', () => {
     // Caller passed [] — defensive contract: matches nothing.
     expect(await repo.existsInBranchWithStatuses(branch.branch_id, [])).toBe(false);
   });
+
+  // The DB-level race guard. Two inserts with the same
+  // (schedule_id, scheduled_run_at) must conflict; the second one
+  // raises, and the scheduler's spawn path catches it as a dedup hit.
+  dbTest(
+    'sessions_schedule_run_unique rejects duplicate (schedule_id, scheduled_run_at)',
+    async ({ db }) => {
+      const repo = new SessionRepository(db);
+      const branch = await createTestBranch(db);
+      const scheduleId = await createTestSchedule(db, branch.branch_id);
+      const scheduledRunAt = 1_700_000_000_000;
+
+      await repo.create(
+        createSessionData({
+          branch_id: branch.branch_id,
+          schedule_id: scheduleId,
+          scheduled_run_at: scheduledRunAt,
+          scheduled_from_branch: true,
+        })
+      );
+
+      // Second insert with the same dedup key must fail.
+      await expect(
+        repo.create(
+          createSessionData({
+            branch_id: branch.branch_id,
+            schedule_id: scheduleId,
+            scheduled_run_at: scheduledRunAt,
+            scheduled_from_branch: true,
+          })
+        )
+      ).rejects.toThrow();
+    }
+  );
+
+  // The partial predicate excludes NULL columns; non-scheduled sessions
+  // (schedule_id NULL) must be able to coexist freely on the same branch.
+  dbTest(
+    'sessions_schedule_run_unique does not constrain non-scheduled sessions',
+    async ({ db }) => {
+      const repo = new SessionRepository(db);
+      const branch = await createTestBranch(db);
+
+      // Many sessions with schedule_id NULL — all must succeed.
+      for (let i = 0; i < 3; i++) {
+        await repo.create(createSessionData({ branch_id: branch.branch_id }));
+      }
+      expect(true).toBe(true); // reached without throwing
+    }
+  );
+
+  // Different schedule_id OR different scheduled_run_at → not a duplicate.
+  dbTest(
+    'sessions_schedule_run_unique allows same scheduled_run_at across different schedules',
+    async ({ db }) => {
+      const repo = new SessionRepository(db);
+      const branch = await createTestBranch(db);
+      const scheduleA = await createTestSchedule(db, branch.branch_id);
+      const scheduleB = await createTestSchedule(db, branch.branch_id);
+      const sameRunAt = 1_700_000_000_000;
+
+      await repo.create(
+        createSessionData({
+          branch_id: branch.branch_id,
+          schedule_id: scheduleA,
+          scheduled_run_at: sameRunAt,
+          scheduled_from_branch: true,
+        })
+      );
+      // Same run-at but different schedule — no conflict.
+      await expect(
+        repo.create(
+          createSessionData({
+            branch_id: branch.branch_id,
+            schedule_id: scheduleB,
+            scheduled_run_at: sameRunAt,
+            scheduled_from_branch: true,
+          })
+        )
+      ).resolves.toBeDefined();
+    }
+  );
 });

@@ -17,10 +17,17 @@
  *
  * **Per-schedule advisory lock (Postgres only):** each due schedule's
  * spawn runs inside its own transaction with
- * `pg_try_advisory_xact_lock(hash(schedule_id))`. Two daemons racing
- * the same tick will each grab a disjoint subset of schedules; whichever
- * loses a lock just skips that one and moves on. SQLite is single-node,
- * so the lock helper is a no-op there.
+ * `pg_try_advisory_xact_lock(hash(schedule_id))`. This serves
+ * same-schedule dedup if multi-daemon is ever wired up — but Agor
+ * **is single-daemon only today**, and the per-schedule lock does NOT
+ * by itself preserve the branch-wide `allow_concurrent_runs=false`
+ * invariant across daemons (two daemons could lock two different
+ * schedules on the same branch and both pass the branch concurrency
+ * check). Branch-scoped advisory locking is deferred until multi-
+ * daemon is actually supported; the partial unique index
+ * `sessions_schedule_run_unique` provides DB-level dedup either way.
+ * SQLite is single-node by definition; the lock helper is a no-op
+ * there.
  *
  * **Smart Recovery:**
  * - If scheduler is down for an extended period, only schedules LATEST
@@ -31,7 +38,7 @@
  * **Deduplication:**
  * - Uses scheduled_run_at (minute-rounded) as unique run identifier
  * - Indexed lookup `WHERE schedule_id = ? AND scheduled_run_at = ?`
- *   against `sessions_schedule_id_idx`
+ *   against `sessions_schedule_run_unique`
  *
  * **Template Rendering:**
  * - Uses Handlebars to render prompt templates with branch + schedule

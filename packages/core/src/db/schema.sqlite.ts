@@ -92,7 +92,13 @@ export const sessions = sqliteTable(
     // Scheduler tracking (materialized for deduplication and retention cleanup)
     scheduled_run_at: integer('scheduled_run_at'), // Unix timestamp (ms) - authoritative run ID
     scheduled_from_branch: t.bool('scheduled_from_branch').notNull().default(false),
-    schedule_id: text('schedule_id', { length: 36 }), // FK to schedules.schedule_id; ON DELETE SET NULL (see schedules table below)
+    // FK to schedules.schedule_id, ON DELETE SET NULL. Defined here (not
+    // just in the migration) so drizzle-kit / db introspection sees the
+    // constraint and so future schema diffs don't lose it.
+    schedule_id: text('schedule_id', { length: 36 }).references(
+      (): import('drizzle-orm/sqlite-core').AnySQLiteColumn => schedules.schedule_id,
+      { onDelete: 'set null' }
+    ),
 
     // UI state (materialized for efficient highlighting queries)
     ready_for_prompt: t.bool('ready_for_prompt').notNull().default(false),
@@ -228,7 +234,11 @@ export const sessions = sqliteTable(
     // sessions all have schedule_id NULL and must coexist.
     scheduleRunUnique: uniqueIndex('sessions_schedule_run_unique')
       .on(table.schedule_id, table.scheduled_run_at)
-      .where(sql`${table.schedule_id} IS NOT NULL`),
+      // Both columns must be non-null: the logical dedup key is
+      // (schedule_id, scheduled_run_at) and is only meaningful when
+      // both are set. Non-scheduled sessions (schedule_id NULL) must
+      // coexist freely.
+      .where(sql`${table.schedule_id} IS NOT NULL AND ${table.scheduled_run_at} IS NOT NULL`),
   })
 );
 

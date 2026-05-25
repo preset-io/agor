@@ -2,18 +2,26 @@
 -- docs/internal/schedules-first-class-design-2026-05-24.md
 --
 -- - Creates `schedules` table + `sessions.schedule_id` FK column.
+-- - The `sessions(schedule_id, scheduled_run_at)` covering index is
+--   defined as a PARTIAL UNIQUE index from the start: it serves both
+--   as the scheduler's dedup-lookup hot path AND as a DB-level guard
+--   against check-then-create races inside spawnScheduledSession
+--   (cron tick + manual run-now, or back-to-back ticks on the same
+--   scheduledRunAt). The partial predicate excludes rows where either
+--   column is NULL — ad-hoc sessions (no schedule_id) and any other
+--   row with a NULL key would otherwise spuriously clash.
 -- - Backfills one `schedules` row per branch that has a fully-configured
 --   schedule today (schedule_cron IS NOT NULL AND data.schedule.prompt_template
 --   IS NOT NULL); half-configured rows are dropped silently per §5.4.
 -- - Backfills sessions.schedule_id by joining on branch_id (one schedule
 --   per branch today, so the mapping is unambiguous).
 -- - Drops the four branches.schedule_* columns and the data.schedule key
---   in the same transaction. SQLite recreates the `branches` table to drop
---   columns (the __new_branches dance).
+--   in the same transaction. SQLite supports ALTER TABLE ... DROP COLUMN
+--   since 3.35 (2021), so we avoid the __new_branches recreation dance.
 --
 -- Order matters: INSERT into schedules → UPDATE sessions → DROP indexes →
--- table recreation for branches. If the INSERT fails, the migration aborts
--- before any destructive operation.
+-- DROP COLUMN. If the INSERT fails, the migration aborts before any
+-- destructive operation (Drizzle wraps each migration in a transaction).
 --
 -- timezone_mode is validated at the app layer (no DB CHECK) per
 -- context/guides/creating-database-migrations.md.
@@ -50,7 +58,13 @@ CREATE INDEX `schedules_created_by_idx` ON `schedules` (`created_by`);--> statem
 -- sessions shouldn't dangle; surviving sessions of a deleted schedule
 -- become orphaned runs).
 ALTER TABLE `sessions` ADD COLUMN `schedule_id` text(36) REFERENCES `schedules`(`schedule_id`) ON DELETE SET NULL;--> statement-breakpoint
-CREATE INDEX `sessions_schedule_id_idx` ON `sessions` (`schedule_id`,`scheduled_run_at`);--> statement-breakpoint
+
+-- Partial unique index: covering for the scheduler's dedup lookup AND
+-- the DB-level race guard. Predicate requires BOTH columns non-null —
+-- the logical dedup key is only meaningful when both are present, and
+-- ad-hoc sessions (NULL schedule_id) must coexist freely.
+CREATE UNIQUE INDEX `sessions_schedule_run_unique` ON `sessions` (`schedule_id`,`scheduled_run_at`)
+WHERE `schedule_id` IS NOT NULL AND `scheduled_run_at` IS NOT NULL;--> statement-breakpoint
 
 -- Backfill: one schedules row per fully-configured branch schedule.
 -- timezone_mode='utc' preserves today's hardcoded-UTC behavior.
@@ -149,9 +163,7 @@ WHERE json_extract(data, '$.schedule') IS NOT NULL;--> statement-breakpoint
 DROP INDEX IF EXISTS `branches_schedule_enabled_idx`;--> statement-breakpoint
 DROP INDEX IF EXISTS `branches_board_schedule_idx`;--> statement-breakpoint
 
--- Drop the four schedule_* columns from `branches`. SQLite supports
--- ALTER TABLE ... DROP COLUMN since 3.35 (2021), so we can avoid the
--- __new_branches table-recreation dance for these simple drops.
+-- Drop the four schedule_* columns from `branches`.
 ALTER TABLE `branches` DROP COLUMN `schedule_enabled`;--> statement-breakpoint
 ALTER TABLE `branches` DROP COLUMN `schedule_cron`;--> statement-breakpoint
 ALTER TABLE `branches` DROP COLUMN `schedule_last_triggered_at`;--> statement-breakpoint

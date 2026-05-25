@@ -1,21 +1,20 @@
 -- First-class schedules table. Design doc:
 -- docs/internal/schedules-first-class-design-2026-05-24.md
 --
--- - Creates `schedules` table + `sessions.schedule_id` FK column.
--- - Backfills one `schedules` row per branch that has a fully-configured
---   schedule today (schedule_cron IS NOT NULL AND data.schedule.prompt_template
---   IS NOT NULL); half-configured rows are dropped silently per §5.4.
--- - Backfills sessions.schedule_id by joining on branch_id (one schedule
---   per branch today, so the mapping is unambiguous).
--- - Drops the four branches.schedule_* columns and the data.schedule key
---   in the same transaction.
+-- See SQLite mirror (0046) for the full rationale. Notable Postgres-
+-- specific bits:
 --
--- Order matters: INSERT into schedules → UPDATE sessions → DROP indexes →
--- DROP COLUMN. If the INSERT fails, the migration aborts before any
--- destructive operation.
---
--- timezone_mode is validated at the app layer (no DB CHECK) to stay
--- symmetric with the SQLite mirror.
+-- - `gen_random_uuid()` is built-in on Postgres 13+; older versions
+--   need pgcrypto. Defensive `CREATE EXTENSION IF NOT EXISTS pgcrypto`
+--   makes the migration safe on pre-13 servers too. No-op on 13+.
+-- - jsonb access uses `->` / `->>`; the strict `::bigint` cast
+--   inherently rejects corrupt non-numeric values (Postgres throws,
+--   migration aborts cleanly — equivalent safety to SQLite's CAST).
+-- - The partial unique index uses the same predicate as SQLite
+--   (`schedule_id IS NOT NULL AND scheduled_run_at IS NOT NULL`) so
+--   the two dialects enforce the exact same dedup invariant.
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;--> statement-breakpoint
 
 CREATE TABLE "schedules" (
 	"schedule_id" varchar(36) PRIMARY KEY NOT NULL,
@@ -49,12 +48,14 @@ CREATE INDEX "schedules_created_by_idx" ON "schedules" ("created_by");--> statem
 -- Add schedule_id FK to sessions (ON DELETE SET NULL).
 ALTER TABLE "sessions" ADD COLUMN "schedule_id" varchar(36);--> statement-breakpoint
 ALTER TABLE "sessions" ADD CONSTRAINT "sessions_schedule_id_schedules_schedule_id_fk" FOREIGN KEY ("schedule_id") REFERENCES "schedules"("schedule_id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-CREATE INDEX "sessions_schedule_id_idx" ON "sessions" ("schedule_id","scheduled_run_at");--> statement-breakpoint
+
+-- Partial unique index: covering for dedup AND race guard. Predicate
+-- requires BOTH columns non-null — see SQLite mirror.
+CREATE UNIQUE INDEX "sessions_schedule_run_unique" ON "sessions" ("schedule_id","scheduled_run_at")
+WHERE "schedule_id" IS NOT NULL AND "scheduled_run_at" IS NOT NULL;--> statement-breakpoint
 
 -- Backfill: one schedules row per fully-configured branch schedule.
 -- timezone_mode='utc' preserves today's hardcoded-UTC behavior.
--- gen_random_uuid() requires pgcrypto/uuid-ossp; UUIDv4 is acceptable
--- for backfilled rows (the app layer generates UUIDv7 for new rows).
 INSERT INTO "schedules" (
 	schedule_id, branch_id, name, cron_expression,
 	timezone_mode, timezone, prompt, agentic_tool_config,
@@ -116,11 +117,7 @@ WHERE sessions.scheduled_from_branch = true
 	AND sessions.branch_id = s.branch_id;--> statement-breakpoint
 
 -- Backfill: point `schedules.last_run_session_id` at the session that
--- corresponds to `schedules.last_run_at`. Pre-#1253 the scheduler
--- already stored the minute-rounded scheduled_run_at on both sides, so
--- the join is exact when a matching session survives retention. NULL
--- when no match (acceptable — UI will simply not render a clickable
--- link until the next run fires).
+-- corresponds to `schedules.last_run_at`.
 UPDATE "schedules"
 SET last_run_session_id = s.session_id
 FROM "sessions" s

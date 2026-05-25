@@ -591,7 +591,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    *
    * Used by the scheduler to dedup: "is there already a session for
    * (schedule_id, scheduled_run_at)?". Uses the covering index
-   * `sessions_schedule_id_idx (schedule_id, scheduled_run_at)` so the
+   * `sessions_schedule_run_unique (schedule_id, scheduled_run_at)` so the
    * lookup is O(log n), not an O(n) full table scan.
    *
    * Returns the matching session (with branch_board_id + url populated
@@ -630,7 +630,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    *
    * Used by the scheduler for retention enforcement (`desc` to keep the
    * newest N) and the run-index count. Uses the same
-   * `sessions_schedule_id_idx` as `findScheduleRun`.
+   * `sessions_schedule_run_unique` as `findScheduleRun`.
    */
   async findByScheduleId(
     scheduleId: import('@agor/core/types').ScheduleID,

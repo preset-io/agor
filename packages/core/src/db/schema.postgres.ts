@@ -104,7 +104,13 @@ export const sessions = pgTable(
     // Scheduler tracking (materialized for deduplication and retention cleanup)
     scheduled_run_at: bigint('scheduled_run_at', { mode: 'number' }), // Unix timestamp (ms) - authoritative run ID - bigint to support dates beyond 2038
     scheduled_from_branch: t.bool('scheduled_from_branch').notNull().default(false),
-    schedule_id: varchar('schedule_id', { length: 36 }), // FK to schedules.schedule_id; ON DELETE SET NULL (see schedules table below)
+    // FK to schedules.schedule_id, ON DELETE SET NULL. Defined here (not
+    // just in the migration) so drizzle-kit / db introspection sees the
+    // constraint and so future schema diffs don't lose it.
+    schedule_id: varchar('schedule_id', { length: 36 }).references(
+      (): import('drizzle-orm/pg-core').AnyPgColumn => schedules.schedule_id,
+      { onDelete: 'set null' }
+    ),
 
     // UI state (materialized for efficient highlighting queries)
     ready_for_prompt: t.bool('ready_for_prompt').notNull().default(false),
@@ -224,7 +230,8 @@ export const sessions = pgTable(
     // in spawnScheduledSession.
     scheduleRunUnique: uniqueIndex('sessions_schedule_run_unique')
       .on(table.schedule_id, table.scheduled_run_at)
-      .where(sql`${table.schedule_id} IS NOT NULL`),
+      // Both columns must be non-null — see SQLite mirror.
+      .where(sql`${table.schedule_id} IS NOT NULL AND ${table.scheduled_run_at} IS NOT NULL`),
   })
 );
 
