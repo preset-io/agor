@@ -98,8 +98,9 @@ export function useAppNavigation({
   // created from `useRef(...)` directly) doesn't falsely flag the
   // useCallback deps below.
   //
-  // Missing optional maps fall back to a shared empty map — the goToX
-  // method just no-ops on lookup miss, same as if the id wasn't found.
+  // Missing optional maps fall back to a shared empty map. URL pushes
+  // work from the ID alone; the lookups are only consulted for the
+  // same-URL recenter fallback, which silently no-ops on miss.
   const sessionByIdRef = useRef(sessionById ?? (EMPTY_MAP as Map<string, Session>));
   sessionByIdRef.current = sessionById ?? (EMPTY_MAP as Map<string, Session>);
   const branchByIdRef = useRef(branchById ?? (EMPTY_MAP as Map<string, Branch>));

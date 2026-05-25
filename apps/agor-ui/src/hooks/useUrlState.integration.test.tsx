@@ -20,7 +20,7 @@
 
 import type { Branch, Session } from '@agor-live/client';
 import { act, render } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { CanvasNavigationProvider } from '../contexts/CanvasNavigationContext';
 import { type UseUrlStateOptions, useUrlState } from './useUrlState';
@@ -30,8 +30,17 @@ const SESSION_SHORT = '019e99990000700080000000';
 const BRANCH_ID = '019e8888-0000-7000-8000-000000000001';
 const BOARD_ID = '019e7777-0000-7000-8000-000000000001';
 
-function HookHost({ options }: { options: UseUrlStateOptions }) {
+/** Read the live pathname out of MemoryRouter into a shared ref so
+ *  tests can assert that the state→URL self-heal did NOT fire. */
+function HookHost({
+  options,
+  pathRef,
+}: {
+  options: UseUrlStateOptions;
+  pathRef: { current: string };
+}) {
   useUrlState(options);
+  pathRef.current = useLocation().pathname;
   return null;
 }
 
@@ -39,18 +48,23 @@ function HookHost({ options }: { options: UseUrlStateOptions }) {
  *  inside `useUrlState` sees `sessionShortId`. Mirrors the routing
  *  shape declared in `apps/agor-ui/src/App.tsx`. */
 function renderAt(pathname: string, options: UseUrlStateOptions) {
-  const ui = (
+  const pathRef = { current: pathname };
+  const tree = (opts: UseUrlStateOptions) => (
     <MemoryRouter initialEntries={[pathname]}>
       <CanvasNavigationProvider>
         <Routes>
-          <Route path="/s/:sessionShortId/" element={<HookHost options={options} />} />
-          <Route path="/b/:boardParam/" element={<HookHost options={options} />} />
-          <Route path="/*" element={<HookHost options={options} />} />
+          <Route
+            path="/s/:sessionShortId/"
+            element={<HookHost options={opts} pathRef={pathRef} />}
+          />
+          <Route path="/b/:boardParam/" element={<HookHost options={opts} pathRef={pathRef} />} />
+          <Route path="/*" element={<HookHost options={opts} pathRef={pathRef} />} />
         </Routes>
       </CanvasNavigationProvider>
     </MemoryRouter>
   );
-  return render(ui);
+  const { rerender } = render(tree(options));
+  return { pathRef, rerender: (next: UseUrlStateOptions) => rerender(tree(next)) };
 }
 
 function baseOptions(overrides: Partial<UseUrlStateOptions> = {}): UseUrlStateOptions {
@@ -68,13 +82,13 @@ function baseOptions(overrides: Partial<UseUrlStateOptions> = {}): UseUrlStateOp
 }
 
 describe('useUrlState — deferred session resolution', () => {
-  it('does not fire onSessionChange while the session is missing from sessionById', () => {
+  it('does not fire onSessionChange OR rewrite the URL while the session is missing', () => {
     const onSessionChange = vi.fn();
     const onBoardChange = vi.fn();
 
     // URL points at /s/<short>/, but sessionById is empty (simulates the
     // window between create() resolving and the socket `created` event).
-    renderAt(
+    const { pathRef } = renderAt(
       `/s/${SESSION_SHORT}/`,
       baseOptions({
         sessionById: new Map(),
@@ -86,9 +100,12 @@ describe('useUrlState — deferred session resolution', () => {
 
     expect(onSessionChange).not.toHaveBeenCalled();
     expect(onBoardChange).not.toHaveBeenCalled();
+    // State→URL self-heal must NOT erase the unresolved session segment
+    // back to /b/<board>/ — that was the original regression.
+    expect(pathRef.current).toBe(`/s/${SESSION_SHORT}/`);
   });
 
-  it('fires onSessionChange once the session arrives in sessionById', () => {
+  it('fires onSessionChange and preserves the URL once the session arrives in sessionById', () => {
     const onSessionChange = vi.fn();
     const onBoardChange = vi.fn();
 
@@ -99,7 +116,7 @@ describe('useUrlState — deferred session resolution', () => {
       onBoardChange,
     });
 
-    const { rerender } = renderAt(`/s/${SESSION_SHORT}/`, initial);
+    const { pathRef, rerender } = renderAt(`/s/${SESSION_SHORT}/`, initial);
     expect(onSessionChange).not.toHaveBeenCalled();
 
     // Socket `created` event lands: session + branch flow into the hook.
@@ -113,19 +130,10 @@ describe('useUrlState — deferred session resolution', () => {
     });
 
     act(() => {
-      rerender(
-        <MemoryRouter initialEntries={[`/s/${SESSION_SHORT}/`]}>
-          <CanvasNavigationProvider>
-            <Routes>
-              <Route path="/s/:sessionShortId/" element={<HookHost options={resolved} />} />
-              <Route path="/b/:boardParam/" element={<HookHost options={resolved} />} />
-              <Route path="/*" element={<HookHost options={resolved} />} />
-            </Routes>
-          </CanvasNavigationProvider>
-        </MemoryRouter>
-      );
+      rerender(resolved);
     });
 
     expect(onSessionChange).toHaveBeenCalledWith(SESSION_ID);
+    expect(pathRef.current).toBe(`/s/${SESSION_SHORT}/`);
   });
 });
