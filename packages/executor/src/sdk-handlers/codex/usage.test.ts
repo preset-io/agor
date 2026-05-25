@@ -146,6 +146,17 @@ describe('codexUsedPercentage', () => {
   const cases: Array<{ used: number; window: number; expected: number; note: string }> = [
     { used: 0, window: 200_000, expected: 0, note: 'zero usage' },
     { used: 12_000, window: 272_000, expected: 0, note: 'exactly at baseline' },
+    // Rust-parity regression: effective used 20_500 / effective window 100_000.
+    // Rounding the "used" side directly would give 21 (round(20.5)), but Rust
+    // rounds the "remaining" side: 100 - round(79.5) = 100 - 80 = 20. Locks in
+    // that codexUsedPercentage uses the same formula as codex-rs's
+    // percent_of_context_window_remaining, so our UI agrees with the Codex TUI.
+    {
+      used: CODEX_BASELINE_OVERHEAD_TOKENS + 20_500,
+      window: CODEX_BASELINE_OVERHEAD_TOKENS + 100_000,
+      expected: 20,
+      note: 'matches Rust complement at .5 rounding boundary',
+    },
     // 50_000 - 12_000 = 38_000; 200_000 - 12_000 = 188_000; round(38000/188000)
     { used: 50_000, window: 200_000, expected: 20, note: 'mid range' },
     // 215_000 - 12_000 = 203_000; 258_400 - 12_000 = 246_400; round(203000/246400)
