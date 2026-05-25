@@ -449,7 +449,7 @@ const BranchCardComponent = ({
             marginBottom: 4,
             boxShadow: session.ready_for_prompt ? `0 0 12px ${token.colorPrimary}30` : undefined,
             ...(isSessionSelected
-              ? { outline: `4px dashed ${token.colorTextBase}`, outlineOffset: -4 }
+              ? { outline: `2px dashed ${token.colorTextBase}`, outlineOffset: -2 }
               : {}),
           }}
           onClick={() => onSessionClick?.(session.session_id)}
@@ -738,11 +738,12 @@ const BranchCardComponent = ({
   // assistant accent and works in both dark and light modes. Dashed
   // because (per design discussion) it visually screams "selection"
   // without leaning on a colored ring that would compete with the white
-  // attention halo. Offset is negative so the dashed line sits *inside*
-  // the card chrome — outline is paint-only and won't disturb layout
-  // or fight with `borderLeft` (assistant accent stripe).
+  // attention halo. Dash length is the browser default — CSS doesn't
+  // expose a knob to customize it on `outline` / `border-style: dashed`,
+  // and going to SVG / `border-image` for true custom dashes is more
+  // complexity than this visual warrants.
   const isSelected = isFocused || isActiveUrlTarget;
-  const selectedOutline = `4px dashed ${token.colorTextBase}`;
+  const selectedOutline = `2px dashed ${token.colorTextBase}`;
 
   // Ensure pin color is visible (adjust lightness if too pale)
   const visiblePinColor = useMemo(() => {
@@ -777,10 +778,10 @@ const BranchCardComponent = ({
     if (needsAttention) style.boxShadow = attentionGlowShadow;
     if (isSelected) {
       style.outline = selectedOutline;
-      // Pull the outline fully inside the card edge — offset matches
-      // the stroke width so the outer paint edge lines up with the
-      // card's outer edge instead of extending past it.
-      style.outlineOffset = -4;
+      // Pull the outline fully inside the card edge so it reads as a
+      // selection *inside* the card chrome rather than a separate ring
+      // outside.
+      style.outlineOffset = -3;
     }
     if (isPinned && zoneColor) {
       style.borderColor = zoneColor;
