@@ -23,6 +23,12 @@
  *   the agent create/switch/remove branches from inside its own session
  *   would nest branches on the same branch and could delete the session's
  *   CWD.
+ * - `ScheduleWakeup`: a Claude Code CLI feature for the `/loop` skill
+ *   (self-paced recurring tasks). Relies on the CLI harness to wake the
+ *   conversation at a future time, which doesn't exist when Agor invokes
+ *   claude-code through the Agent SDK — the model would call it, get a
+ *   confirmation, then never be woken. Schedules in Agor are first-class
+ *   (`agor_schedules_*`); the model should point users at those instead.
  *
  * Passed to the SDK via `Options.disallowedTools`, which removes the named
  * tools from the model's context. The list is unioned with whatever
@@ -34,4 +40,5 @@ export const CLAUDE_CODE_DISALLOWED_TOOLS = [
   'ExitPlanMode',
   'EnterBranch',
   'ExitBranch',
+  'ScheduleWakeup',
 ] as const satisfies readonly string[];

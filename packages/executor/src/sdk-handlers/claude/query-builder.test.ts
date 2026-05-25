@@ -63,12 +63,14 @@ describe('setupQuery - Local Settings Support', () => {
   // (e.g. dropping `ExitBranch`) trips this test, not just the plumbing one.
   // See `constants.ts` for why each name is on the list — #1177 covers
   // AskUserQuestion; the rest were operator-approved at the same time.
-  it('locks the disallowed-tools list to the four operator-approved names', () => {
+  // `ScheduleWakeup` added in #1253 (Agor schedules supersede /loop).
+  it('locks the disallowed-tools list to the operator-approved names', () => {
     expect(CLAUDE_CODE_DISALLOWED_TOOLS).toEqual([
       'AskUserQuestion',
       'ExitPlanMode',
       'EnterBranch',
       'ExitBranch',
+      'ScheduleWakeup',
     ]);
   });
 
