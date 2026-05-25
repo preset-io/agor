@@ -175,6 +175,8 @@ function apiKeyPlaceholder(agent: AgenticToolName): string {
       return 'AIza...';
     case 'copilot':
       return 'ghp_...';
+    case 'cursor':
+      return 'key_...';
     default:
       return 'sk-ant-...';
   }
@@ -187,6 +189,7 @@ const AGENT_LABELS: Record<AgenticToolName, string> = {
   gemini: 'Gemini',
   opencode: 'OpenCode',
   copilot: 'GitHub Copilot',
+  cursor: 'Cursor SDK',
 };
 
 /**
@@ -248,6 +251,7 @@ const AGENT_KEY_CONSOLES: Record<AgenticToolName, { label: string; url: string }
   codex: { label: 'platform.openai.com', url: 'https://platform.openai.com/api-keys' },
   gemini: { label: 'aistudio.google.com', url: 'https://aistudio.google.com/apikey' },
   copilot: { label: 'github.com/features/copilot', url: 'https://github.com/features/copilot' },
+  cursor: { label: 'cursor.com', url: 'https://cursor.com' },
   opencode: null,
 };
 

@@ -25,7 +25,7 @@ export interface ExecutorConfig {
   sessionId: string;
   taskId: string;
   prompt: string;
-  tool: 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot';
+  tool: 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' | 'cursor';
   permissionMode?: PermissionMode;
   daemonUrl: string;
   messageSource?: MessageSource;

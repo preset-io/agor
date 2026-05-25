@@ -104,6 +104,15 @@ export const TOOL_FIELD_CONFIGS: Record<AgenticToolName, AgenticToolFieldConfig[
       docUrl: 'https://github.com/settings/tokens',
     },
   ],
+  cursor: [
+    {
+      field: 'CURSOR_API_KEY',
+      label: 'Cursor API Key',
+      description: '(experimental SDK)',
+      placeholder: 'key_...',
+      docUrl: 'https://cursor.com/dashboard/integrations',
+    },
+  ],
   opencode: [],
   // Claude Code CLI uses the same Anthropic credentials as the SDK
   // path — surface the same fields so the Defaults panel renders

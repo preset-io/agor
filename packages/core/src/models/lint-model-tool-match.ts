@@ -29,7 +29,11 @@ const TOOL_MODEL_PREFIXES: Partial<Record<AgenticToolName, readonly string[]>> =
  * A `claude-*` model on a Copilot session is legitimate — there is no useful
  * lint to perform. The validator returns `null` (no opinion) for these.
  */
-const UNOPINIONATED_TOOLS: ReadonlySet<AgenticToolName> = new Set(['copilot', 'opencode']);
+const UNOPINIONATED_TOOLS: ReadonlySet<AgenticToolName> = new Set([
+  'copilot',
+  'opencode',
+  'cursor',
+]);
 
 /** Result of a model/tool match check. `null` means "no opinion". */
 export type ModelToolMatch =

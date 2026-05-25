@@ -12,6 +12,7 @@ import type {
   CodexApprovalPolicy,
   CodexPermissionMode,
   CodexSandboxMode,
+  CursorPermissionMode,
   GeminiPermissionMode,
   OpenCodePermissionMode,
 } from './agentic-tool';
@@ -78,6 +79,7 @@ export type {
   CodexApprovalPolicy,
   CodexPermissionMode,
   CodexSandboxMode,
+  CursorPermissionMode,
   GeminiPermissionMode,
   OpenCodePermissionMode,
 };
@@ -101,6 +103,8 @@ export type {
  *   sandbox still constrains shell exec.
  * - Gemini: 'autoEdit' (unchanged — pending separate audit)
  * - OpenCode: 'autoEdit' (unchanged — pending separate audit)
+ * - Cursor: 'bypassPermissions' — scaffolded as autonomous until the SDK
+ *   exposes/Agor wires a permission callback.
  *
  * Users / parent sessions / per-session overrides still trump these
  * defaults via resolvePermissionConfig.
@@ -115,6 +119,8 @@ export function getDefaultPermissionMode(agenticTool: AgenticToolName): Permissi
       return 'autoEdit'; // OpenCode auto-approves, similar to Gemini
     case 'copilot':
       return 'acceptEdits'; // Copilot uses same semantics as Claude Code
+    case 'cursor':
+      return 'bypassPermissions'; // Cursor SDK is experimental/autonomous until permission callbacks exist
     default:
       return 'acceptEdits'; // Claude Code
   }

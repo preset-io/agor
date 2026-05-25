@@ -275,6 +275,9 @@ export interface AgorExecutionSettings {
    */
   allow_web_terminal?: boolean;
 
+  /** Enable experimental Cursor SDK provider surfaces (default: false). */
+  cursor_sdk_enabled?: boolean;
+
   /** Allow superadmin role (default: false). When true, superadmin role gets branch RBAC bypass. Opt-in for self-hosted deployments. */
   allow_superadmin?: boolean;
 
@@ -702,6 +705,7 @@ export enum CredentialKey {
   OPENAI_API_KEY = 'OPENAI_API_KEY',
   GEMINI_API_KEY = 'GEMINI_API_KEY',
   COPILOT_GITHUB_TOKEN = 'COPILOT_GITHUB_TOKEN',
+  CURSOR_API_KEY = 'CURSOR_API_KEY',
 }
 
 /**
@@ -727,6 +731,9 @@ export interface AgorCredentials {
 
   /** GitHub token for Copilot */
   COPILOT_GITHUB_TOKEN?: string;
+
+  /** Cursor API key for the experimental Cursor SDK provider */
+  CURSOR_API_KEY?: string;
 }
 
 /**

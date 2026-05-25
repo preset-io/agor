@@ -637,7 +637,8 @@ export type ConfigCredentialKey =
   | 'ANTHROPIC_AUTH_TOKEN'
   | 'ANTHROPIC_BASE_URL'
   | 'OPENAI_API_KEY'
-  | 'GEMINI_API_KEY';
+  | 'GEMINI_API_KEY'
+  | 'CURSOR_API_KEY';
 
 const CONFIG_CREDENTIAL_KEYS: ReadonlySet<string> = new Set<ConfigCredentialKey>([
   'ANTHROPIC_API_KEY',
@@ -645,6 +646,7 @@ const CONFIG_CREDENTIAL_KEYS: ReadonlySet<string> = new Set<ConfigCredentialKey>
   'ANTHROPIC_BASE_URL',
   'OPENAI_API_KEY',
   'GEMINI_API_KEY',
+  'CURSOR_API_KEY',
 ]);
 
 export function isConfigCredentialKey(key: string): key is ConfigCredentialKey {

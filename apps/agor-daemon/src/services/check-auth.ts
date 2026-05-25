@@ -13,6 +13,7 @@
  *   codex CLI writes after `codex login`). Executor reads from the same path,
  *   so a green check matches session behavior in simple Unix mode
  * - Server-based tools (opencode): always ready
+ * - Cursor SDK: scaffolded but not validated until the runtime adapter lands
  *
  * Resolution precedence (when no raw key is provided by the caller):
  *   user encrypted key → config.yaml → env var → native auth
@@ -221,6 +222,14 @@ export function createCheckAuthService(db: Database) {
       // opencode is server-based — no credentials concept, always ready
       if (tool === 'opencode') {
         return { authenticated: true, method: 'native' };
+      }
+
+      if (tool === 'cursor') {
+        return {
+          authenticated: false,
+          method: 'api-key',
+          hint: 'Cursor SDK support is scaffolded but auth validation is not implemented until the runtime adapter lands.',
+        };
       }
 
       const keyName = TOOL_API_KEY_NAMES[tool as keyof typeof TOOL_API_KEY_NAMES];

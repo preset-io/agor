@@ -23,8 +23,22 @@ export interface ModelConfig {
 export interface ModelSelectorProps {
   value?: ModelConfig;
   onChange?: (config: ModelConfig) => void;
-  agent?: 'claude-code' | 'claude-code-cli' | 'codex' | 'gemini' | 'opencode' | 'copilot'; // Kept as 'agent' for backwards compat in prop name
-  agentic_tool?: 'claude-code' | 'claude-code-cli' | 'codex' | 'gemini' | 'opencode' | 'copilot';
+  agent?:
+    | 'claude-code'
+    | 'claude-code-cli'
+    | 'codex'
+    | 'gemini'
+    | 'opencode'
+    | 'copilot'
+    | 'cursor'; // Kept as 'agent' for backwards compat in prop name
+  agentic_tool?:
+    | 'claude-code'
+    | 'claude-code-cli'
+    | 'codex'
+    | 'gemini'
+    | 'opencode'
+    | 'copilot'
+    | 'cursor';
   /**
    * Optional Feathers client. When provided AND the agentic tool is Copilot,
    * the picker fetches the live model list from /copilot-models (which calls
@@ -71,6 +85,14 @@ const COPILOT_STATIC_MODEL_OPTIONS = Object.entries(COPILOT_MODEL_METADATA).map(
     description: meta.description,
   })
 );
+
+const CURSOR_MODEL_OPTIONS = [
+  {
+    id: 'composer-latest',
+    label: 'Composer Latest',
+    description: 'Cursor SDK default model alias (experimental)',
+  },
+];
 
 /**
  * Model Selector Component
@@ -138,7 +160,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           ? [] // OpenCode doesn't use this list
           : effectiveTool === 'copilot'
             ? (copilotServerOptions ?? COPILOT_STATIC_MODEL_OPTIONS)
-            : AVAILABLE_CLAUDE_MODEL_ALIASES;
+            : effectiveTool === 'cursor'
+              ? CURSOR_MODEL_OPTIONS
+              : AVAILABLE_CLAUDE_MODEL_ALIASES;
 
   // Determine initial mode based on whether the value is in the aliases list
   // If no value provided, default to 'alias' mode (recommended)
@@ -186,6 +210,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         defaultModel = 'gemini-2.5-flash';
       } else if (effectiveTool === 'copilot') {
         defaultModel = DEFAULT_COPILOT_MODEL;
+      } else if (effectiveTool === 'cursor') {
+        defaultModel = 'composer-latest';
       } else {
         // claude-code (opencode is handled earlier in the component)
         defaultModel = 'claude-sonnet-4-6';
@@ -268,7 +294,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                       ? 'e.g., gemini-2.5-pro'
                       : effectiveTool === 'copilot'
                         ? 'e.g., gpt-4o or claude-3.5-sonnet'
-                        : 'e.g., claude-opus-4-20250514' // claude-code (opencode handled earlier)
+                        : effectiveTool === 'cursor'
+                          ? 'e.g., composer-latest'
+                          : 'e.g., claude-opus-4-20250514' // claude-code (opencode handled earlier)
                 }
                 style={{ width: '100%', minWidth: 400 }}
               />
@@ -282,7 +310,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                         ? 'https://ai.google.dev/gemini-api/docs/models'
                         : effectiveTool === 'copilot'
                           ? 'https://github.com/features/copilot'
-                          : 'https://platform.claude.com/docs/en/about-claude/models' // claude-code (opencode handled earlier)
+                          : effectiveTool === 'cursor'
+                            ? 'https://cursor.com/docs/api/sdk/typescript'
+                            : 'https://platform.claude.com/docs/en/about-claude/models' // claude-code (opencode handled earlier)
                   }
                   target="_blank"
                   rel="noopener noreferrer"

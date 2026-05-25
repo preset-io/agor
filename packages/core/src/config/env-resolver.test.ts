@@ -240,6 +240,7 @@ describe('resolveUserEnvironment — per-tool credential scoping', () => {
     );
     await usersRepo.setToolConfigField(userId, 'gemini', 'GEMINI_API_KEY', 'gemini-key');
     await usersRepo.setToolConfigField(userId, 'copilot', 'COPILOT_GITHUB_TOKEN', 'gh-copilot');
+    await usersRepo.setToolConfigField(userId, 'cursor', 'CURSOR_API_KEY', 'cursor-key');
 
     return userId;
   }
@@ -254,6 +255,7 @@ describe('resolveUserEnvironment — per-tool credential scoping', () => {
     expect(env.OPENAI_API_KEY).toBeUndefined();
     expect(env.GEMINI_API_KEY).toBeUndefined();
     expect(env.COPILOT_GITHUB_TOKEN).toBeUndefined();
+    expect(env.CURSOR_API_KEY).toBeUndefined();
   });
 
   dbTest('tool=claude-code merges only claude-code fields', async ({ db }) => {
@@ -265,6 +267,7 @@ describe('resolveUserEnvironment — per-tool credential scoping', () => {
     expect(env.OPENAI_API_KEY).toBeUndefined();
     expect(env.GEMINI_API_KEY).toBeUndefined();
     expect(env.COPILOT_GITHUB_TOKEN).toBeUndefined();
+    expect(env.CURSOR_API_KEY).toBeUndefined();
   });
 
   dbTest('tool=codex merges OPENAI_API_KEY + OPENAI_BASE_URL only', async ({ db }) => {
@@ -278,6 +281,7 @@ describe('resolveUserEnvironment — per-tool credential scoping', () => {
     expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
     expect(env.GEMINI_API_KEY).toBeUndefined();
     expect(env.COPILOT_GITHUB_TOKEN).toBeUndefined();
+    expect(env.CURSOR_API_KEY).toBeUndefined();
   });
 
   dbTest('tool=gemini merges only GEMINI_API_KEY', async ({ db }) => {
@@ -286,6 +290,7 @@ describe('resolveUserEnvironment — per-tool credential scoping', () => {
     expect(env.GEMINI_API_KEY).toBe('gemini-key');
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.CURSOR_API_KEY).toBeUndefined();
   });
 
   dbTest('tool=copilot merges only COPILOT_GITHUB_TOKEN', async ({ db }) => {
@@ -295,6 +300,17 @@ describe('resolveUserEnvironment — per-tool credential scoping', () => {
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env.OPENAI_API_KEY).toBeUndefined();
     expect(env.GEMINI_API_KEY).toBeUndefined();
+    expect(env.CURSOR_API_KEY).toBeUndefined();
+  });
+
+  dbTest('tool=cursor merges only CURSOR_API_KEY', async ({ db }) => {
+    const userId = await createUserWithToolCreds(db);
+    const env = await resolveUserEnvironment(userId, db, { tool: 'cursor' });
+    expect(env.CURSOR_API_KEY).toBe('cursor-key');
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.GEMINI_API_KEY).toBeUndefined();
+    expect(env.COPILOT_GITHUB_TOKEN).toBeUndefined();
   });
 
   dbTest('tool credentials override same-named global env vars', async ({ db }) => {

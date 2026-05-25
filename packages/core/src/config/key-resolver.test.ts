@@ -96,4 +96,17 @@ describe('resolveApiKey — per-tool credential scoping', () => {
     expect(result.apiKey).toBe('copilot-key');
     expect(result.source).toBe('user');
   });
+
+  dbTest('tool=cursor resolves CURSOR_API_KEY from its own bucket', async ({ db }) => {
+    const userId = await createUserWithToolCreds(db, {
+      cursor: { CURSOR_API_KEY: encryptApiKey('cursor-key') },
+      // A nonsense entry under another bucket should never be returned even
+      // though a cross-bucket sweep would otherwise pick it up first.
+      'claude-code': { CURSOR_API_KEY: encryptApiKey('wrong-bucket') },
+    });
+
+    const result = await resolveApiKey('CURSOR_API_KEY', { userId, db, tool: 'cursor' });
+    expect(result.apiKey).toBe('cursor-key');
+    expect(result.source).toBe('user');
+  });
 });

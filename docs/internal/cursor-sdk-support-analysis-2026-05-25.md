@@ -1,7 +1,7 @@
 # Cursor SDK Support Analysis — 2026-05-25
 
 **Author:** Cursor SDK support audit (`analyze-cursor-sdk-support` worktree)  
-**Status:** Draft for Max review. Doc-only; no production integration code.  
+**Status:** Draft for Max review. Initial provider skeleton added after the audit; runtime execution intentionally still unimplemented.
 **Recommendation:** **Prototype behind a feature flag, local runtime first. Do not ship as a default provider yet.**
 
 ---
@@ -229,11 +229,11 @@ Reasons not to ship broadly yet:
 
 ### PR 1 — Provider skeleton behind feature flag
 
-- Add `cursor` to core/executor/UI type unions and static capability maps.
-- Add `CURSOR_API_KEY` credential plumbing.
-- Hide UI unless feature flag enabled.
+- ✅ Add `cursor` to core/executor/UI type unions and static capability maps.
+- ✅ Add `CURSOR_API_KEY` credential plumbing.
+- ✅ Hide normal agent-selection UI unless feature flag/runtime implementation is completed.
 - Add package dependency and import smoke test for Linux CI.
-- No execution yet.
+- ✅ No execution yet: executor handler is a fail-fast skeleton and the daemon exposes `execution.cursor_sdk_enabled` only as an experimental surface flag.
 
 ### PR 2 — Local runtime happy path
 

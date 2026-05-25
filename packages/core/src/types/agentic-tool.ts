@@ -14,7 +14,8 @@ export type ApiKeyName =
   | 'CLAUDE_CODE_OAUTH_TOKEN'
   | 'OPENAI_API_KEY'
   | 'GEMINI_API_KEY'
-  | 'COPILOT_GITHUB_TOKEN';
+  | 'COPILOT_GITHUB_TOKEN'
+  | 'CURSOR_API_KEY';
 
 /**
  * Agentic coding tool names
@@ -31,6 +32,7 @@ export type ApiKeyName =
  * - gemini: Google's Gemini Code Assist
  * - opencode: Open-source terminal-based AI assistant with 75+ LLM providers
  * - copilot: GitHub Copilot's agentic runtime via @github/copilot-sdk
+ * - cursor: Cursor's agentic runtime via @cursor/sdk (experimental)
  *
  * Not to be confused with "execution tools" (Bash, Write, Read, etc.)
  * which are the primitives that agentic tools use to perform work.
@@ -41,7 +43,8 @@ export type AgenticToolName =
   | 'codex'
   | 'gemini'
   | 'opencode'
-  | 'copilot';
+  | 'copilot'
+  | 'cursor';
 
 /**
  * Agentic tool metadata for UI display
@@ -154,6 +157,14 @@ export type CodexNetworkAccess = boolean;
  */
 export type CopilotPermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions';
 
+/**
+ * Cursor permission modes (via @cursor/sdk, experimental).
+ *
+ * Cursor SDK does not currently expose a blocking Agor-style permission callback,
+ * so these mirror the autonomous-provider modes until a richer policy surface exists.
+ */
+export type CursorPermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions';
+
 // ============================================================================
 // Tool Capabilities (static, shared between backend and UI)
 // ============================================================================
@@ -200,6 +211,7 @@ export const TOOL_API_KEY_NAMES: Partial<Record<AgenticToolName, ApiKeyName>> = 
   codex: 'OPENAI_API_KEY',
   gemini: 'GEMINI_API_KEY',
   copilot: 'COPILOT_GITHUB_TOKEN',
+  cursor: 'CURSOR_API_KEY',
 };
 
 export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapabilities> = {
@@ -240,6 +252,12 @@ export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapab
     supportsStatelessFsMode: false,
   },
   copilot: {
+    supportsSessionFork: false,
+    supportsChildSpawn: true,
+    supportsSessionImport: false,
+    supportsStatelessFsMode: false,
+  },
+  cursor: {
     supportsSessionFork: false,
     supportsChildSpawn: true,
     supportsSessionImport: false,

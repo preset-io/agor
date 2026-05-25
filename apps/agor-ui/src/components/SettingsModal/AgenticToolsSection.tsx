@@ -48,6 +48,7 @@ const GLOBAL_TOOL_FIELDS: Record<AgenticToolName, AgenticToolFieldConfig[]> = {
   codex: TOOL_FIELD_CONFIGS.codex.filter((f) => f.field !== 'OPENAI_BASE_URL'),
   gemini: TOOL_FIELD_CONFIGS.gemini,
   copilot: TOOL_FIELD_CONFIGS.copilot,
+  cursor: TOOL_FIELD_CONFIGS.cursor,
   opencode: TOOL_FIELD_CONFIGS.opencode,
 };
 

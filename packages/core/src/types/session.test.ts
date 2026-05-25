@@ -9,6 +9,7 @@
  *   default_tools_approval_mode in the executor)
  * - Gemini: autoEdit (unchanged — pending separate audit)
  * - OpenCode: autoEdit (unchanged — pending separate audit)
+ * - Cursor: bypassPermissions (experimental/autonomous until permission callbacks exist)
  */
 
 import { describe, expect, it } from 'vitest';
@@ -30,6 +31,10 @@ describe('getDefaultPermissionMode', () => {
 
   it('returns "autoEdit" for opencode (uses Gemini-like modes)', () => {
     expect(getDefaultPermissionMode('opencode')).toBe('autoEdit');
+  });
+
+  it('returns "bypassPermissions" for cursor (experimental autonomous provider)', () => {
+    expect(getDefaultPermissionMode('cursor')).toBe('bypassPermissions');
   });
 
   it('returns "acceptEdits" for any unknown tool (default case)', () => {
@@ -68,7 +73,15 @@ describe('getDefaultPermissionMode', () => {
 
   describe('all agentic tools coverage', () => {
     it('handles all valid AgenticToolName values', () => {
-      const allTools: AgenticToolName[] = ['claude-code', 'codex', 'gemini', 'opencode'];
+      const allTools: AgenticToolName[] = [
+        'claude-code',
+        'claude-code-cli',
+        'codex',
+        'gemini',
+        'opencode',
+        'copilot',
+        'cursor',
+      ];
       const results: Record<string, string> = {};
 
       for (const tool of allTools) {
@@ -79,10 +92,20 @@ describe('getDefaultPermissionMode', () => {
       expect(results.codex).toBe('allow-all');
       expect(results.gemini).toBe('autoEdit');
       expect(results.opencode).toBe('autoEdit');
+      expect(results.copilot).toBe('acceptEdits');
+      expect(results.cursor).toBe('bypassPermissions');
     });
 
     it('returns valid PermissionMode values', () => {
-      const allTools: AgenticToolName[] = ['claude-code', 'codex', 'gemini', 'opencode'];
+      const allTools: AgenticToolName[] = [
+        'claude-code',
+        'claude-code-cli',
+        'codex',
+        'gemini',
+        'opencode',
+        'copilot',
+        'cursor',
+      ];
       const validModes = [
         // Claude Code native modes
         'default',

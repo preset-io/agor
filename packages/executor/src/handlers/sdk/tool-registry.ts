@@ -13,7 +13,7 @@ import type { AgorClient } from '../../services/feathers-client.js';
 /**
  * Tool identifier
  */
-export type Tool = 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot';
+export type Tool = 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' | 'cursor';
 
 /**
  * Tool runner function - executes via Feathers WebSocket
@@ -119,12 +119,13 @@ export class ToolRegistry {
  */
 export async function initializeToolRegistry(): Promise<void> {
   // Import all tool handlers
-  const [claude, codex, gemini, opencode, copilot] = await Promise.all([
+  const [claude, codex, gemini, opencode, copilot, cursor] = await Promise.all([
     import('./claude.js'),
     import('./codex.js'),
     import('./gemini.js'),
     import('./opencode.js'),
     import('./copilot.js'),
+    import('./cursor.js'),
   ]);
 
   // Register Claude Code
@@ -165,5 +166,13 @@ export async function initializeToolRegistry(): Promise<void> {
     name: 'GitHub Copilot',
     apiKeyEnvVar: TOOL_API_KEY_NAMES['copilot']!, // Note: execution also accepts GH_TOKEN / GITHUB_TOKEN aliases
     runner: copilot.executeCopilotTask,
+  });
+
+  // Register Cursor SDK (experimental skeleton; handler intentionally fails until runtime lands)
+  ToolRegistry.register({
+    tool: 'cursor',
+    name: 'Cursor SDK',
+    apiKeyEnvVar: TOOL_API_KEY_NAMES.cursor!,
+    runner: cursor.executeCursorTask,
   });
 }

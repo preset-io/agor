@@ -78,6 +78,7 @@ export const ToolTypeSchema = z.enum([
   'codex',
   'opencode',
   'copilot',
+  'cursor',
 ]);
 export type ToolType = z.infer<typeof ToolTypeSchema>;
 

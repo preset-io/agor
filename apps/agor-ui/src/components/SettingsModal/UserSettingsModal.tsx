@@ -80,6 +80,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const [geminiForm] = Form.useForm();
   const [opencodeForm] = Form.useForm();
   const [copilotForm] = Form.useForm();
+  const [cursorForm] = Form.useForm();
   const [audioForm] = Form.useForm();
 
   // Per-tool credential presence state, keyed `${tool}.${field}` for spinner
@@ -92,6 +93,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     gemini: {},
     opencode: {},
     copilot: {},
+    cursor: {},
   });
   const [savingToolField, setSavingToolField] = useState<Record<string, boolean>>({});
 
@@ -107,6 +109,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     gemini: false,
     opencode: false,
     copilot: false,
+    cursor: false,
   });
 
   // Initialize forms when user changes or modal opens
@@ -129,6 +132,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       claudeForm.setFieldsValue(getFormValuesFromConfig('claude-code', defaults?.['claude-code']));
       codexForm.setFieldsValue(getFormValuesFromConfig('codex', defaults?.codex));
       geminiForm.setFieldsValue(getFormValuesFromConfig('gemini', defaults?.gemini));
+      opencodeForm.setFieldsValue(getFormValuesFromConfig('opencode', defaults?.opencode));
+      copilotForm.setFieldsValue(getFormValuesFromConfig('copilot', defaults?.copilot));
+      cursorForm.setFieldsValue(getFormValuesFromConfig('cursor', defaults?.cursor));
 
       // Initialize audio form with user's preferences
       const audioPrefs = userData.preferences?.audio;
@@ -140,7 +146,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           audioPrefs?.minDurationSeconds ?? DEFAULT_AUDIO_PREFERENCES.minDurationSeconds,
       });
     },
-    [form, claudeForm, codexForm, geminiForm, audioForm]
+    [form, claudeForm, codexForm, geminiForm, opencodeForm, copilotForm, cursorForm, audioForm]
   );
 
   // Initialize when modal opens with user data
@@ -162,6 +168,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       gemini: {},
       opencode: {},
       copilot: {},
+      cursor: {},
     };
     const stored = user?.agentic_tools;
     if (stored) {
@@ -187,6 +194,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     claudeForm.resetFields();
     codexForm.resetFields();
     geminiForm.resetFields();
+    opencodeForm.resetFields();
+    copilotForm.resetFields();
+    cursorForm.resetFields();
     setActiveTab('general');
     onClose();
   };
@@ -359,6 +369,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       gemini: geminiForm,
       opencode: opencodeForm,
       copilot: copilotForm,
+      cursor: cursorForm,
     };
 
     try {
@@ -394,6 +405,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       gemini: geminiForm,
       opencode: opencodeForm,
       copilot: copilotForm,
+      cursor: cursorForm,
     };
 
     formMap[tool].setFieldsValue(getClearedFormValues(tool));
@@ -655,7 +667,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       case 'codex':
       case 'gemini':
       case 'opencode':
-      case 'copilot': {
+      case 'copilot':
+      case 'cursor': {
         const toolName = activeTab as AgenticToolName;
         const formMap: Record<AgenticToolName, ReturnType<typeof Form.useForm>[0]> = {
           'claude-code': claudeForm,
@@ -664,6 +677,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           gemini: geminiForm,
           opencode: opencodeForm,
           copilot: copilotForm,
+          cursor: cursorForm,
         };
         const currentForm = formMap[toolName];
         const displayNames: Record<AgenticToolName, string> = {
@@ -673,6 +687,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           gemini: 'Gemini',
           opencode: 'OpenCode',
           copilot: 'Copilot',
+          cursor: 'Cursor SDK',
         };
         // Field set is owned by ApiKeyFields' `TOOL_FIELD_CONFIGS`. Per-field
         // saving spinners are tracked in `savingToolField` keyed by `${tool}.${field}`.

@@ -93,6 +93,7 @@ export const ALLOWED_ENV_VARS = new Set([
   'OPENAI_BASE_URL',
   'GEMINI_API_KEY',
   'GOOGLE_API_KEY',
+  'CURSOR_API_KEY',
 
   // Vertex AI (Claude Code on GCP)
   'CLAUDE_CODE_USE_VERTEX',

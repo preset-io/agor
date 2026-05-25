@@ -20,7 +20,14 @@ interface ModeOption {
 export interface PermissionModeSelectorProps {
   value?: PermissionMode;
   onChange?: (value: PermissionMode) => void;
-  agentic_tool?: 'claude-code' | 'claude-code-cli' | 'codex' | 'gemini' | 'opencode' | 'copilot';
+  agentic_tool?:
+    | 'claude-code'
+    | 'claude-code-cli'
+    | 'codex'
+    | 'gemini'
+    | 'opencode'
+    | 'copilot'
+    | 'cursor';
   /** If true, renders as a compact Select dropdown instead of Radio buttons */
   compact?: boolean;
   /**
@@ -130,7 +137,7 @@ const GEMINI_MODES: ModeOption[] = [
   },
 ];
 
-// Copilot permission modes (GitHub Copilot SDK - same semantics as Claude Code)
+// Copilot/Cursor autonomous permission modes.
 const COPILOT_MODES: ModeOption[] = [
   {
     mode: 'default',
@@ -233,6 +240,7 @@ const getModesForTool = (tool: PermissionModeSelectorProps['agentic_tool']): Mod
     case 'opencode':
       return OPENCODE_MODES;
     case 'copilot':
+    case 'cursor':
       return COPILOT_MODES;
     default:
       return CLAUDE_CODE_MODES;

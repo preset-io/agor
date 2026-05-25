@@ -9,6 +9,7 @@
  * - Claude Code: default, acceptEdits, bypassPermissions, plan, dontAsk
  * - Gemini: default, autoEdit, yolo
  * - Codex: ask, auto, on-failure, allow-all
+ * - Cursor: default, acceptEdits, bypassPermissions (experimental surface)
  */
 
 import type {
@@ -36,6 +37,7 @@ export function mapPermissionMode(
   switch (agenticTool) {
     case 'claude-code':
     case 'copilot':
+    case 'cursor':
       // Claude Code native modes: default, acceptEdits, bypassPermissions, plan, dontAsk
       switch (mode) {
         // Native Claude modes - pass through

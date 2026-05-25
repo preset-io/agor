@@ -86,7 +86,7 @@ export const sessions = pgTable(
       ],
     }).notNull(),
     agentic_tool: text('agentic_tool', {
-      enum: ['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'copilot'],
+      enum: ['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'copilot', 'cursor'],
     }).notNull(),
     board_id: varchar('board_id', { length: 36 }), // NULL = no board
 

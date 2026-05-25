@@ -3344,6 +3344,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             ),
             OPENAI_API_KEY: !!(config.credentials?.OPENAI_API_KEY || process.env.OPENAI_API_KEY),
             GEMINI_API_KEY: !!(config.credentials?.GEMINI_API_KEY || process.env.GEMINI_API_KEY),
+            CURSOR_API_KEY: !!(config.credentials?.CURSOR_API_KEY || process.env.CURSOR_API_KEY),
           },
         },
         services: servicesConfig,
@@ -3365,6 +3366,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // surfaces when true. Server-side gates (e.g. ArtifactsService.
           // grantTrust) are the source of truth and reject regardless.
           multiUser: (config.execution?.unix_user_mode ?? 'simple') !== 'simple',
+          // Experimental Cursor SDK provider surfaces are hidden unless explicitly enabled.
+          cursorSdk: config.execution?.cursor_sdk_enabled === true,
         },
       };
 

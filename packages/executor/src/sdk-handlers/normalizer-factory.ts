@@ -29,7 +29,7 @@ const geminiNormalizer = new GeminiNormalizer();
  * @returns Normalized data with consistent structure, or undefined if normalization fails
  */
 export function normalizeRawSdkResponse(
-  agenticTool: 'claude-code' | 'codex' | 'gemini' | 'opencode' | string,
+  agenticTool: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot' | 'cursor' | string,
   rawSdkResponse: unknown
 ): NormalizedSdkData | undefined {
   if (!rawSdkResponse) {
@@ -61,6 +61,11 @@ export function normalizeRawSdkResponse(
       case 'opencode':
         // OpenCode doesn't have a normalizer yet - return undefined
         console.debug('[Normalizer] OpenCode normalizer not implemented yet');
+        return undefined;
+
+      case 'cursor':
+        // Cursor runtime adapter and event normalizer are not implemented yet.
+        console.debug('[Normalizer] Cursor normalizer not implemented yet');
         return undefined;
 
       default:

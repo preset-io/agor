@@ -122,6 +122,7 @@ export interface DefaultAgenticConfig {
   gemini?: DefaultAgenticToolConfig;
   opencode?: DefaultAgenticToolConfig;
   copilot?: DefaultAgenticToolConfig;
+  cursor?: DefaultAgenticToolConfig;
 }
 
 /**
@@ -151,6 +152,10 @@ export interface CopilotConfig {
   COPILOT_GITHUB_TOKEN?: string;
 }
 
+export interface CursorConfig {
+  CURSOR_API_KEY?: string;
+}
+
 /**
  * Per-tool credential map. Each tool's config is independent and
  * scoped to its own SDK at session-spawn time.
@@ -165,6 +170,7 @@ export interface AgenticToolsConfig {
   codex?: CodexConfig;
   gemini?: GeminiConfig;
   copilot?: CopilotConfig;
+  cursor?: CursorConfig;
   opencode?: Record<string, never>;
 }
 
@@ -173,7 +179,8 @@ export type AgenticToolConfigField =
   | keyof ClaudeCodeConfig
   | keyof CodexConfig
   | keyof GeminiConfig
-  | keyof CopilotConfig;
+  | keyof CopilotConfig
+  | keyof CursorConfig;
 
 /**
  * Public DTO shape: per-tool credential presence flags.

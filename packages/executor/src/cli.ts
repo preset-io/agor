@@ -233,7 +233,7 @@ async function handleLegacyMode(values: {
     sessionId: values['session-id'] as string,
     taskId: values['task-id'] as string,
     prompt: values.prompt as string,
-    tool: values.tool as 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot',
+    tool: values.tool as 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' | 'cursor',
     permissionMode: (values['permission-mode'] as 'ask' | 'auto' | 'allow-all') || undefined,
     daemonUrl: resolvedDaemonUrl,
   });

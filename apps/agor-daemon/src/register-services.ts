@@ -536,6 +536,18 @@ function createExecuteHandler(
       throw new Error(`Session ${sessionId} not found`);
     }
 
+    // Cursor SDK support is scaffolded but intentionally hidden until the
+    // runtime adapter is implemented and smoke-tested.
+    if (session.agentic_tool === 'cursor') {
+      const flagHint =
+        config.execution?.cursor_sdk_enabled === true
+          ? 'The runtime adapter is not implemented in this build.'
+          : 'The provider is hidden unless execution.cursor_sdk_enabled is true.';
+      throw new Error(
+        `Cursor SDK sessions are scaffolded but execution is not available yet. ${flagHint}`
+      );
+    }
+
     // Validate stateless_fs_mode compatibility with agentic tool
     if (config.execution?.stateless_fs_mode) {
       const toolName = session.agentic_tool as import('@agor/core/types').AgenticToolName;
@@ -707,7 +719,13 @@ function createExecuteHandler(
         sessionId,
         taskId,
         prompt: data.prompt,
-        tool: session.agentic_tool as 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot',
+        tool: session.agentic_tool as
+          | 'claude-code'
+          | 'gemini'
+          | 'codex'
+          | 'opencode'
+          | 'copilot'
+          | 'cursor',
         permissionMode: permissionModeForPayload as 'ask' | 'auto' | 'allow-all' | undefined,
         cwd,
         messageSource: data.messageSource,

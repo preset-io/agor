@@ -29,7 +29,7 @@ const repoSlugSchema = z
 
 export const enforcedAgentConfigSchema = z.object({
   agentic_tool: z
-    .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'copilot'])
+    .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'copilot', 'cursor'])
     .optional(),
   permission_mode: z.string().optional(),
   model: z.string().optional(),

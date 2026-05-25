@@ -62,6 +62,7 @@ const MODEL_LABELS: Record<string, string> = {
   gemini: 'Gemini Model',
   opencode: 'OpenCode LLM Provider',
   copilot: 'Copilot Model',
+  cursor: 'Cursor Model',
 };
 
 export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({

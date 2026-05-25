@@ -47,6 +47,8 @@ export const CommonSchemas = {
     Type.Literal('gemini'),
     Type.Literal('opencode'),
     Type.Literal('copilot'),
+    Type.Literal('claude-code-cli'),
+    Type.Literal('cursor'),
   ]),
 
   // Permission mode enum - union of all native SDK modes

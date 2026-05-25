@@ -16,7 +16,8 @@ export type ToolType =
   | 'codex'
   | 'gemini'
   | 'opencode'
-  | 'copilot';
+  | 'copilot'
+  | 'cursor';
 
 /**
  * Streaming callback interface for agents that support real-time streaming

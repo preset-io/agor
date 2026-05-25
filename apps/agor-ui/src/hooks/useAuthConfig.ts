@@ -22,6 +22,7 @@ interface SystemCredentials {
   ANTHROPIC_API_KEY?: boolean;
   OPENAI_API_KEY?: boolean;
   GEMINI_API_KEY?: boolean;
+  CURSOR_API_KEY?: boolean;
 }
 
 interface OnboardingConfig {
@@ -53,6 +54,8 @@ interface FeaturesConfig {
    * consent modal). Server-side gates are the source of truth.
    */
   multiUser?: boolean;
+  /** Experimental Cursor SDK provider enabled on the daemon. */
+  cursorSdk?: boolean;
 }
 
 interface HealthResponse {
