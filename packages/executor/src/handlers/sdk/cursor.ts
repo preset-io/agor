@@ -12,6 +12,7 @@ import { generateId, shortId } from '@agor/core/db';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type {
   ContentBlock,
+  Message,
   MessageID,
   MessageSource,
   PermissionMode,
@@ -140,15 +141,22 @@ async function buildCursorMcpServers(args: {
   return count > 0 ? mcpServers : undefined;
 }
 
-async function getNextMessageIndex(client: AgorClient, sessionId: SessionID): Promise<number> {
+async function getSessionMessages(client: AgorClient, sessionId: SessionID): Promise<Message[]> {
   const existingMessages = await client.service('messages').find({
     query: {
       session_id: sessionId,
       $sort: { index: 1 },
     },
   });
-  const messages = Array.isArray(existingMessages) ? existingMessages : existingMessages.data;
-  return messages?.length || 0;
+  return Array.isArray(existingMessages) ? existingMessages : existingMessages.data;
+}
+
+function getNextMessageIndexFrom(messages: ReadonlyArray<Message>): number {
+  return messages.length;
+}
+
+async function getNextMessageIndex(client: AgorClient, sessionId: SessionID): Promise<number> {
+  return getNextMessageIndexFrom(await getSessionMessages(client, sessionId));
 }
 
 async function createUserMessage(args: {
@@ -157,7 +165,15 @@ async function createUserMessage(args: {
   taskId: TaskID;
   prompt: string;
   index: number;
-}): Promise<MessageID> {
+  existingMessages?: ReadonlyArray<Message>;
+}): Promise<Message> {
+  const existing = args.existingMessages?.find(
+    (message) => message.task_id === args.taskId && message.role === MessageRole.USER
+  );
+  if (existing) {
+    return existing;
+  }
+
   const messageId = generateId() as MessageID;
   await args.client.service('messages').create({
     message_id: messageId,
@@ -170,7 +186,17 @@ async function createUserMessage(args: {
     content_preview: args.prompt.substring(0, 200),
     content: args.prompt,
   });
-  return messageId;
+  return {
+    message_id: messageId,
+    session_id: args.sessionId,
+    task_id: args.taskId,
+    type: 'user',
+    role: MessageRole.USER,
+    index: args.index,
+    timestamp: new Date().toISOString(),
+    content_preview: args.prompt.substring(0, 200),
+    content: args.prompt,
+  };
 }
 
 async function createAssistantMessage(args: {
@@ -327,11 +353,18 @@ export async function executeCursorTask(params: {
         await client.service('sessions').patch(sessionId, { sdk_session_id: agent.agentId });
       }
 
-      const userIndex = await getNextMessageIndex(client, sessionId);
-      await createUserMessage({ client, sessionId, taskId, prompt, index: userIndex });
+      const existingMessages = await getSessionMessages(client, sessionId);
+      const userMessage = await createUserMessage({
+        client,
+        sessionId,
+        taskId,
+        prompt,
+        index: getNextMessageIndexFrom(existingMessages),
+        existingMessages,
+      });
 
       const assistantMessageId = generateId() as MessageID;
-      let nextIndex = userIndex + 1;
+      let nextIndex = Math.max(getNextMessageIndexFrom(existingMessages), userMessage.index + 1);
       let assistantStreamStarted = false;
       let assistantText = '';
       let thinkingStarted = false;
@@ -392,7 +425,8 @@ export async function executeCursorTask(params: {
       }
 
       const runResult = await currentRun.wait();
-      const finalText = assistantText || runResult.result || '';
+      const resultText = typeof runResult.result === 'string' ? runResult.result : '';
+      const finalText = resultText.length > assistantText.length ? resultText : assistantText;
       if (finalText) {
         await createAssistantMessage({
           client,
@@ -463,10 +497,10 @@ async function handleCursorEvent(args: {
         .map((block) => block.text)
         .join('');
       const previousText = args.getAssistantText();
-      const delta = nextText.startsWith(previousText)
-        ? nextText.slice(previousText.length)
-        : nextText;
+      const isCumulative = nextText.startsWith(previousText);
+      const delta = isCumulative ? nextText.slice(previousText.length) : nextText;
       if (!delta) return;
+      const updatedText = isCumulative ? nextText : previousText + nextText;
 
       if (!args.isAssistantStreamStarted()) {
         await args.callbacks.onStreamStart(args.assistantMessageId, {
@@ -478,7 +512,7 @@ async function handleCursorEvent(args: {
         args.setAssistantStreamStarted(true);
       }
       await args.callbacks.onStreamChunk(args.assistantMessageId, delta);
-      args.setAssistantText(nextText);
+      args.setAssistantText(updatedText);
       return;
     }
 
