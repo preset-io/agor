@@ -93,13 +93,25 @@ SELECT
 		'context_files',    json_extract(b.data, '$.schedule.context_files')
 	),
 	b.schedule_enabled,
-	COALESCE(json_extract(b.data, '$.schedule.allow_concurrent_runs'), 0),
-	COALESCE(json_extract(b.data, '$.schedule.retention'), 5),
+	-- Wrap JSON-extracted numeric values in CAST AS INTEGER. SQLite has
+	-- loose type affinity — `json_extract` of a string value (e.g.
+	-- corrupted JSON like `"retention": "10"`) would otherwise silently
+	-- write text into the INTEGER NOT NULL column. CAST coerces to
+	-- INTEGER (text "10" → 10, garbage → 0). Postgres' strict typing
+	-- catches this naturally; SQLite needs the explicit cast.
+	CAST(COALESCE(json_extract(b.data, '$.schedule.allow_concurrent_runs'), 0) AS INTEGER),
+	CAST(COALESCE(json_extract(b.data, '$.schedule.retention'), 5) AS INTEGER),
 	b.schedule_last_triggered_at,
 	b.schedule_next_run_at,
-	COALESCE(json_extract(b.data, '$.schedule.created_at'), b.created_at),
+	CAST(COALESCE(json_extract(b.data, '$.schedule.created_at'), b.created_at) AS INTEGER),
 	b.updated_at,
-	COALESCE(json_extract(b.data, '$.schedule.created_by'), b.created_by)
+	-- ALWAYS use the branch's created_by. The schedule blob also stores
+	-- the user who originally saved it, but if THAT user was later
+	-- deleted, schedules.created_by → users(user_id) would FK-violate
+	-- and abort the migration. b.created_by is guaranteed valid (it's
+	-- the branch's FK to users). Minor attribution fidelity loss; high
+	-- migration safety.
+	b.created_by
 FROM `branches` b
 WHERE b.schedule_cron IS NOT NULL
 	AND json_extract(b.data, '$.schedule.prompt_template') IS NOT NULL;--> statement-breakpoint

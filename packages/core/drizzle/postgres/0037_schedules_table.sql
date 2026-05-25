@@ -97,7 +97,13 @@ SELECT
 	b.schedule_next_run_at,
 	COALESCE(to_timestamp((b.data->'schedule'->>'created_at')::bigint / 1000.0), b.created_at),
 	b.updated_at,
-	COALESCE(b.data->'schedule'->>'created_by', b.created_by)
+	-- ALWAYS use the branch's created_by. The schedule blob also stores
+	-- the user who originally saved it, but if THAT user was later
+	-- deleted, schedules.created_by → users(user_id) would FK-violate
+	-- and abort the migration. b.created_by is guaranteed valid (it's
+	-- the branch's FK to users). Minor attribution fidelity loss; high
+	-- migration safety.
+	b.created_by
 FROM "branches" b
 WHERE b.schedule_cron IS NOT NULL
 	AND b.data->'schedule'->>'prompt_template' IS NOT NULL;--> statement-breakpoint
