@@ -25,8 +25,8 @@ Agor's repo ships [`.agor.yml`](https://github.com/preset-io/agor/blob/main/.ago
 | Variant | What you get | Base ports |
 |---|---|---|
 | **`sqlite`** _(default)_ | SQLite, single-user, no RBAC. Fastest to boot. | daemon: `3000 + branch.unique_id`, UI: `5000 + …` |
-| **`postgres`** | Postgres backend (closer to multi-user prod). RBAC off. | same as `sqlite` |
-| **`full`** | Postgres + branch RBAC + strict Unix-user impersonation. Requires the sudoers config under `docker/sudoers/`. | same as `sqlite` |
+| **`postgres`** | Postgres backend (closer to multi-user prod). RBAC off. **Requires Postgres 13+** (migrations use `gen_random_uuid()` from pg_catalog). | same as `sqlite` |
+| **`full`** | Postgres + branch RBAC + strict Unix-user impersonation. Requires the sudoers config under `docker/sudoers/`. Same PG13+ floor as `postgres`. | same as `sqlite` |
 | **`docs`** | The Nextra docs site (`apps/agor-docs`) in its own self-contained container. Standalone — no daemon, no DB. | `7000 + branch.unique_id` |
 
 Ports derive from `branch.unique_id` so multiple branches run side-by-side without colliding. The `docs` variant uses `{{host.ip_address}}` in its app URL so the dev server is reachable from your laptop, not just localhost on the daemon host.

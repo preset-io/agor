@@ -623,7 +623,7 @@ INSERT INTO schedules (
   created_at, updated_at, created_by
 )
 SELECT
-  gen_random_uuid()::text,                           -- pgcrypto; UUIDv4 acceptable for backfill
+  gen_random_uuid()::text,                           -- PG13+ built-in; UUIDv4 acceptable for backfill
   b.branch_id,
   'Default',
   b.schedule_cron,
