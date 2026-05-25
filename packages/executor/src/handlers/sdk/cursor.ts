@@ -128,7 +128,14 @@ export function buildCursorAssistantContent(args: {
   thinkingText?: string;
 }): ContentBlock[] {
   const content: ContentBlock[] = [];
-  if (args.thinkingText?.trim()) {
+  const normalizedText = args.text.trim().replace(/\s+/g, ' ');
+  const normalizedThinkingText = args.thinkingText?.trim().replace(/\s+/g, ' ');
+
+  // Cursor can emit answer-like content on `thinking` events for simple
+  // prompts. Persist real reasoning when it differs from the final answer, but
+  // avoid showing the same assistant answer twice (once as a thought, once as
+  // normal text).
+  if (args.thinkingText?.trim() && normalizedThinkingText !== normalizedText) {
     content.push({ type: 'thinking', text: args.thinkingText });
   }
   if (args.text) {

@@ -18,6 +18,15 @@ describe('Cursor SDK handler helpers', () => {
     ]);
   });
 
+  it('does not persist a thinking block that duplicates the final answer', () => {
+    expect(
+      buildCursorAssistantContent({
+        thinkingText: 'Hello!  How can I help you today?',
+        text: 'Hello! How can I help you today?',
+      })
+    ).toEqual([{ type: 'text', text: 'Hello! How can I help you today?' }]);
+  });
+
   it('normalizes shell commands for existing Bash tool widgets', () => {
     const input = normalizeCursorToolInput({
       type: 'tool_call',
