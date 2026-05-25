@@ -731,8 +731,8 @@ export const ArtifactNode = ({
     flexDirection: 'column',
     ...(data.isActiveUrlTarget
       ? {
-          outline: `2px dashed ${token.colorTextBase}`,
-          outlineOffset: -3,
+          outline: `4px dashed ${token.colorTextBase}`,
+          outlineOffset: -4,
         }
       : {}),
   } as const;

@@ -449,7 +449,7 @@ const BranchCardComponent = ({
             marginBottom: 4,
             boxShadow: session.ready_for_prompt ? `0 0 12px ${token.colorPrimary}30` : undefined,
             ...(isSessionSelected
-              ? { outline: `2px dashed ${token.colorTextBase}`, outlineOffset: -2 }
+              ? { outline: `4px dashed ${token.colorTextBase}`, outlineOffset: -4 }
               : {}),
           }}
           onClick={() => onSessionClick?.(session.session_id)}
@@ -742,7 +742,7 @@ const BranchCardComponent = ({
   // the card chrome — outline is paint-only and won't disturb layout
   // or fight with `borderLeft` (assistant accent stripe).
   const isSelected = isFocused || isActiveUrlTarget;
-  const selectedOutline = `2px dashed ${token.colorTextBase}`;
+  const selectedOutline = `4px dashed ${token.colorTextBase}`;
 
   // Ensure pin color is visible (adjust lightness if too pale)
   const visiblePinColor = useMemo(() => {
@@ -777,9 +777,10 @@ const BranchCardComponent = ({
     if (needsAttention) style.boxShadow = attentionGlowShadow;
     if (isSelected) {
       style.outline = selectedOutline;
-      // Sit ~3px inside the card edge so it reads as a selection
-      // *inside* the card chrome rather than a separate ring outside.
-      style.outlineOffset = -3;
+      // Pull the outline fully inside the card edge — offset matches
+      // the stroke width so the outer paint edge lines up with the
+      // card's outer edge instead of extending past it.
+      style.outlineOffset = -4;
     }
     if (isPinned && zoneColor) {
       style.borderColor = zoneColor;
