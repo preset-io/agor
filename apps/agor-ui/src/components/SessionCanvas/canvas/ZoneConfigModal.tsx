@@ -162,9 +162,12 @@ export const ZoneConfigModal = ({
           help="Leave empty for an organizational-only zone (no trigger fires on drop)."
           extra={
             <ExpandableAlert
+              // Re-mount when the modal opens or the zone changes so the
+              // details collapse back to default; otherwise the AntD Modal
+              // keeps children mounted and stale `expanded` state persists.
+              key={`${objectId}:${open}`}
               title="Handlebars template support"
               summary="Reference branch, session, and board data with {{ ... }} syntax."
-              style={{ marginTop: 8 }}
             >
               <p style={{ marginBottom: 8 }}>
                 Use Handlebars syntax to reference session and board data in your trigger:

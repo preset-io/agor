@@ -12,9 +12,9 @@
  * a command users need to copy).
  */
 import { DownOutlined } from '@ant-design/icons';
-import { Alert, Button, Typography, theme } from 'antd';
-import type { CSSProperties, ReactNode } from 'react';
-import { useState } from 'react';
+import { Alert, type AlertProps, Button, Typography, theme } from 'antd';
+import type { ReactNode } from 'react';
+import { useId, useState } from 'react';
 
 export interface ExpandableAlertProps {
   /** Short label shown next to the alert icon. Rendered at normal text size. */
@@ -24,12 +24,13 @@ export interface ExpandableAlertProps {
   /** Detailed content revealed when expanded. */
   children: ReactNode;
   /** Visual variant. Defaults to `info`. */
-  type?: 'info' | 'success' | 'warning' | 'error';
+  type?: AlertProps['type'];
   /** Whether the details start expanded. Defaults to `false`. */
   defaultExpanded?: boolean;
   expandLabel?: string;
   collapseLabel?: string;
-  style?: CSSProperties;
+  style?: AlertProps['style'];
+  className?: AlertProps['className'];
 }
 
 export const ExpandableAlert = ({
@@ -41,50 +42,56 @@ export const ExpandableAlert = ({
   expandLabel = 'See details',
   collapseLabel = 'Hide details',
   style,
+  className,
 }: ExpandableAlertProps) => {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const { token } = theme.useToken();
+  const detailsId = useId();
 
   const toggle = () => setExpanded((prev) => !prev);
+
+  const header = (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'baseline',
+        flexWrap: 'wrap',
+        columnGap: token.marginXS,
+        rowGap: token.marginXXS,
+      }}
+    >
+      <Typography.Text strong>{title}</Typography.Text>
+      {summary && (
+        <Typography.Text type="secondary" style={{ fontWeight: 'normal' }}>
+          {summary}
+        </Typography.Text>
+      )}
+      <Button
+        type="link"
+        size="small"
+        onClick={toggle}
+        aria-expanded={expanded}
+        aria-controls={detailsId}
+        style={{ paddingInline: 0, height: 'auto' }}
+      >
+        {expanded ? collapseLabel : expandLabel}{' '}
+        <DownOutlined aria-hidden style={{ fontSize: 10 }} rotate={expanded ? 180 : 0} />
+      </Button>
+    </div>
+  );
 
   return (
     <Alert
       type={type}
       showIcon
       style={style}
-      title={
-        <div>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'baseline',
-              flexWrap: 'wrap',
-              columnGap: token.marginXS,
-              rowGap: token.marginXXS,
-            }}
-          >
-            <Typography.Text strong>{title}</Typography.Text>
-            {summary && (
-              <Typography.Text type="secondary" style={{ fontWeight: 'normal' }}>
-                {summary}
-              </Typography.Text>
-            )}
-            <Button
-              type="link"
-              size="small"
-              onClick={toggle}
-              aria-expanded={expanded}
-              style={{ paddingInline: 0, height: 'auto' }}
-            >
-              {expanded ? collapseLabel : expandLabel}{' '}
-              <DownOutlined style={{ fontSize: 10 }} rotate={expanded ? 180 : 0} />
-            </Button>
-          </div>
-          {expanded && (
-            <div style={{ marginTop: token.marginXS, fontWeight: 'normal' }}>{children}</div>
-          )}
-        </div>
-      }
+      className={className}
+      // Tame the slot's default font-size — AntD bumps the title up when a
+      // description is also present, but our header is just normal text with
+      // a Typography.Text strong wrapper for the title itself.
+      styles={{ title: { fontSize: token.fontSize } }}
+      title={header}
+      description={expanded ? <div id={detailsId}>{children}</div> : undefined}
     />
   );
 };
