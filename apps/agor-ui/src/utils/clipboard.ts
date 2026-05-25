@@ -16,6 +16,15 @@ import React from 'react';
  * @returns true if copy succeeded, false otherwise
  */
 export async function copyToClipboard(text: string): Promise<boolean> {
+  // On HTTP/local-network dev URLs, `navigator.clipboard.writeText` may exist
+  // but reject because the page is not a secure context. If we await that
+  // rejection first, browsers can consume the click's transient user activation
+  // and make the execCommand fallback fail too. Prefer the synchronous fallback
+  // immediately in known-insecure contexts.
+  if (globalThis.isSecureContext === false && copyWithExecCommand(text)) {
+    return true;
+  }
+
   // Try modern Clipboard API first (requires HTTPS / secure context)
   if (navigator.clipboard?.writeText) {
     try {
@@ -27,8 +36,13 @@ export async function copyToClipboard(text: string): Promise<boolean> {
   }
 
   // Fallback to execCommand for HTTP/dev mode
+  return copyWithExecCommand(text);
+}
+
+function copyWithExecCommand(text: string): boolean {
+  let textArea: HTMLTextAreaElement | undefined;
   try {
-    const textArea = document.createElement('textarea');
+    textArea = document.createElement('textarea');
     textArea.value = text;
     textArea.style.position = 'fixed';
     textArea.style.left = '-999999px';
@@ -38,13 +52,14 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     textArea.select();
 
     const successful = document.execCommand('copy');
-    document.body.removeChild(textArea);
 
     if (successful) {
       return true;
     }
   } catch (error) {
     console.error('Failed to copy to clipboard:', error);
+  } finally {
+    textArea?.remove();
   }
 
   return false;
