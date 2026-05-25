@@ -3,18 +3,27 @@
  *
  * Transforms Codex SDK's raw turn.completed event into standardized format.
  *
- * The raw event structure from Codex SDK:
+ * The raw event structure (@openai/codex-sdk >= 0.133) is:
  * {
  *   type: 'turn.completed',
- *   usage: { input_tokens, output_tokens, cached_input_tokens },
- *   model: string (optional)
+ *   usage: {
+ *     input_tokens,
+ *     cached_input_tokens,
+ *     output_tokens,
+ *     reasoning_output_tokens  // subset of output_tokens
+ *   }
  * }
  *
+ * The TurnCompletedEvent payload does NOT include the model name; resolved
+ * model is read off ThreadOptions in prompt-service. It also does NOT include
+ * total_tokens or model_context_window — those are derived/looked up here.
+ *
  * Key responsibilities:
- * - Extract token usage from raw SDK event
+ * - Extract token usage from raw SDK event (totalTokens = input + output)
  * - Map cached_input_tokens to cacheReadTokens for consistency
- * - Calculate context window from input + cached tokens
- * - Determine context window limit based on model
+ * - Determine context window limit based on model registry (best-effort —
+ *   the authoritative model_context_window is captured separately from
+ *   Codex CLI's event_msg/token_count events in base-executor)
  */
 
 import type { CodexSdkResponse } from '../../types/sdk-response.js';

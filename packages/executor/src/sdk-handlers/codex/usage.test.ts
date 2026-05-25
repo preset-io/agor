@@ -12,7 +12,28 @@ describe('extractCodexTokenUsage', () => {
     expect(extractCodexTokenUsage('tokens')).toBeUndefined();
   });
 
-  it('maps core fields from Codex usage payload', () => {
+  it('maps the realistic @openai/codex-sdk Usage shape and derives total_tokens', () => {
+    // Matches the actual TurnCompletedEvent.usage shape in @openai/codex-sdk >= 0.133:
+    // input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens.
+    // The SDK does NOT emit total_tokens — we derive it from input + output.
+    // reasoning_output_tokens is a SUBSET of output_tokens (Responses API), so it
+    // must NOT be added to the total.
+    const result = extractCodexTokenUsage({
+      input_tokens: 1200,
+      cached_input_tokens: 300,
+      output_tokens: 800,
+      reasoning_output_tokens: 200,
+    });
+
+    expect(result).toEqual({
+      input_tokens: 1200,
+      output_tokens: 800,
+      cache_read_tokens: 300,
+      total_tokens: 2000, // input + output; reasoning_output_tokens is NOT added
+    });
+  });
+
+  it('respects an explicit total_tokens when provided (legacy)', () => {
     const result = extractCodexTokenUsage({
       input_tokens: 1200,
       output_tokens: 800,
@@ -20,12 +41,7 @@ describe('extractCodexTokenUsage', () => {
       total_tokens: 2000,
     });
 
-    expect(result).toEqual({
-      input_tokens: 1200,
-      output_tokens: 800,
-      cache_read_tokens: 300,
-      total_tokens: 2000,
-    });
+    expect(result?.total_tokens).toBe(2000);
   });
 
   it('derives total tokens when SDK omits it', () => {

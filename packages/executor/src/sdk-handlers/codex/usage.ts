@@ -12,15 +12,21 @@ function sanitizeTokenCount(value: number | undefined): number | undefined {
 /**
  * Normalize Codex SDK usage payload into Agor's TokenUsage shape.
  *
- * Codex emits turn.completed events with a usage block:
+ * Codex (@openai/codex-sdk >= 0.133) emits turn.completed events with a usage block:
  * {
  *   input_tokens,
+ *   cached_input_tokens,
  *   output_tokens,
- *   cached_input_tokens
+ *   reasoning_output_tokens   // subset of output_tokens (Responses API convention)
  * }
  *
- * We map cached_input_tokens → cache_read_tokens so downstream utilities
- * (cost + context window) can treat Codex like Claude/Gemini.
+ * Notes:
+ * - We map cached_input_tokens → cache_read_tokens so downstream utilities
+ *   (cost + context window) can treat Codex like Claude/Gemini.
+ * - reasoning_output_tokens is intentionally NOT added to totals because
+ *   per the OpenAI Responses API it is already included in output_tokens.
+ *   It is preserved on the raw SDK response for debugging/UI surfacing.
+ * - The SDK does NOT emit total_tokens. We derive it from input + output.
  */
 export function extractCodexTokenUsage(raw: unknown): TokenUsage | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {

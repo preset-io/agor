@@ -11,11 +11,14 @@ function buildTurnCompletedEvent(overrides: Partial<CodexSdkResponse> = {}): Cod
 }
 
 function buildUsage(overrides: Record<string, number | undefined> = {}): CodexSdkResponse['usage'] {
+  // Mirror the real @openai/codex-sdk Usage shape (input/cached_input/output/
+  // reasoning_output). The SDK does NOT include total_tokens — normalizer
+  // derives it as input + output.
   return {
     input_tokens: overrides.input_tokens,
-    output_tokens: overrides.output_tokens,
     cached_input_tokens: overrides.cached_input_tokens,
-    total_tokens: overrides.total_tokens,
+    output_tokens: overrides.output_tokens,
+    reasoning_output_tokens: overrides.reasoning_output_tokens,
   } as CodexSdkResponse['usage'];
 }
 
@@ -64,6 +67,27 @@ describe('CodexNormalizer', () => {
       cacheCreationTokens: 0,
     });
     expect(result.primaryModel).toBe(models.DEFAULT_CODEX_MODEL);
+  });
+
+  it('does not double-count reasoning_output_tokens against totals', () => {
+    // reasoning_output_tokens is a subset of output_tokens per the Responses API
+    // shape Codex inherits — totalTokens must remain input + output.
+    const normalizer = new CodexNormalizer();
+    const event = buildTurnCompletedEvent({
+      usage: buildUsage({
+        input_tokens: 1_000,
+        output_tokens: 600,
+        cached_input_tokens: 100,
+        reasoning_output_tokens: 250,
+      }),
+    });
+
+    const result = normalizer.normalize(event);
+
+    expect(result.tokenUsage.inputTokens).toBe(1_000);
+    expect(result.tokenUsage.outputTokens).toBe(600);
+    expect(result.tokenUsage.totalTokens).toBe(1_600);
+    expect(result.tokenUsage.cacheReadTokens).toBe(100);
   });
 
   it('defaults missing usage fields to zero', () => {
