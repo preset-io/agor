@@ -510,17 +510,9 @@ export const App: React.FC<AppProps> = ({
     const sessionId = await onCreateSession?.(config, currentBoardId);
     setNewSessionBranchId(null);
 
-    // Route through the URL so useUrlState owns the resulting selection.
-    // Setting selectedSessionId directly raced with two effects that
-    // could revert it before the drawer ever opened:
-    //   1. `effectiveSelectedSessionId` filters via sessionById.has(...),
-    //      which is false until the socket `created` event arrives.
-    //   2. The cleanup effect below clears selectedSessionId for the
-    //      same reason, then the state→URL self-heal rewrites the URL
-    //      back to /b/<board>/.
-    // goToSession pushes the URL immediately; once the session lands in
-    // sessionById, useUrlState's URL→state effect resolves it and sets
-    // selection, which is the durable path.
+    // Route through the URL so useUrlState owns selection — setting
+    // selectedSessionId directly raced with the cleanup effect (and the
+    // state→URL self-heal) before the socket `created` event arrived.
     if (sessionId) {
       navigation.goToSession(sessionId);
     }
@@ -808,7 +800,7 @@ export const App: React.FC<AppProps> = ({
               onEventStreamClick={() => {
                 // If session is open, close it and show event stream
                 if (effectiveSelectedSessionId) {
-                  setSelectedSessionId(null);
+                  if (currentBoardId) navigation.goToBoard(currentBoardId);
                   setEventStreamPanelCollapsed(false);
                 } else {
                   // Toggle event stream panel

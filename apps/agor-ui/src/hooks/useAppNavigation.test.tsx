@@ -16,7 +16,7 @@ import type { Branch, Session } from '@agor-live/client';
 import { act, renderHook } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { CanvasNavigationProvider } from '../contexts/CanvasNavigationContext';
 import { useAppNavigation } from './useAppNavigation';
 
@@ -130,6 +130,3 @@ describe('useAppNavigation.goToSession', () => {
     expect(result.current.pathname).toBe(`/s/${NEW_SESSION_SHORT}/`);
   });
 });
-
-// Quiet the unused-import lint when vi.mock isn't needed; vitest globals.
-void vi;

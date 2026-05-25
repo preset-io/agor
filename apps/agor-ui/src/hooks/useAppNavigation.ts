@@ -44,7 +44,10 @@ interface UseAppNavigationOptions {
    *  Each map is optional: callers only pass what their methods need
    *  (e.g. a Settings table that only uses `goToBranch` can omit
    *  `sessionById` and `artifactById`). The unused maps fall back to
-   *  empty Maps; the corresponding goToX no-ops on lookup miss. */
+   *  empty Maps. URL pushes work from the ID alone — the lookups are
+   *  only needed for the same-URL recenter fallback (re-click on the
+   *  entity that's already focused), which silently no-ops when the
+   *  map is empty. */
   sessionById?: Map<string, Session>;
   branchById?: Map<string, Branch>;
   artifactById?: Map<string, Artifact>;
@@ -151,14 +154,19 @@ export function useAppNavigation({
 
   const goToBranch = useCallback(
     (branchId: string, opts?: NavigationOpts) => {
-      const branch = branchByIdRef.current.get(branchId);
-      if (!branch?.board_id) return;
-      // Push first; let useUrlState's URL→state effect fire the
-      // recenter. Only fall back to a direct recenter when the URL
-      // didn't actually change (no history transition, so the effect
-      // won't re-run) — avoids the prior double-recenter animation.
+      // Push unconditionally — same rationale as goToSession: the URL
+      // can be built from the ID alone, and bailing on a missing local
+      // entity would silently strand future "create branch then
+      // navigate immediately" flows on the prior URL. useUrlState's
+      // URL→state effect resolves the branch when it lands in the map.
       if (!pushPath(branchPath(branchId as BranchID), opts)) {
-        recenterMap(branchId, { boardId: branch.board_id });
+        // Same-URL fallback: no history transition, so the URL→state
+        // recenter effect won't run — recenter directly when we know
+        // the board.
+        const branch = branchByIdRef.current.get(branchId);
+        if (branch?.board_id) {
+          recenterMap(branchId, { boardId: branch.board_id });
+        }
       }
     },
     [pushPath, recenterMap]
@@ -166,13 +174,14 @@ export function useAppNavigation({
 
   const goToArtifact = useCallback(
     (artifactId: string, opts?: NavigationOpts) => {
-      const artifact = artifactByIdRef.current.get(artifactId);
-      if (!artifact?.board_id) return;
-      // Parallel to goToBranch. The canvas's recenter impl handles
-      // the artifact-id-vs-board-object-id mismatch via a
-      // data.artifactId fallback scan, so callers stay logical-id-only.
+      // Parallel to goToBranch / goToSession. The canvas's recenter
+      // impl handles the artifact-id-vs-board-object-id mismatch via
+      // a data.artifactId fallback scan, so callers stay logical-id-only.
       if (!pushPath(artifactPath(artifactId as ArtifactID), opts)) {
-        recenterMap(artifactId, { boardId: artifact.board_id });
+        const artifact = artifactByIdRef.current.get(artifactId);
+        if (artifact?.board_id) {
+          recenterMap(artifactId, { boardId: artifact.board_id });
+        }
       }
     },
     [pushPath, recenterMap]
