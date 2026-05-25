@@ -5,6 +5,7 @@
 
 // Re-export commonly used types from @agor/core for convenience
 export type {
+  ContextUsageSnapshot,
   MCPServersConfig,
   Message,
   MessageCreate,

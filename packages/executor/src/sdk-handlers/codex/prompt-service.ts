@@ -31,7 +31,7 @@ import type { CodexOptions, Thread, ThreadItem } from '@agor/core/sdk';
 import { Codex } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
-import type { CodexSandboxMode, EffortLevel } from '@agor/core/types';
+import type { CodexSandboxMode, ContextUsageSnapshot, EffortLevel } from '@agor/core/types';
 import { getDefaultCodexPermissionConfig } from '@agor/core/utils/permission-mode-mapper';
 import { getDaemonUrl } from '../../config.js';
 import type {
@@ -168,11 +168,7 @@ export type CodexStreamEvent =
       resolvedModel?: string;
       usage?: TokenUsage;
       rawSdkEvent?: import('../../types/sdk-response').CodexSdkResponse; // The actual turn.completed event from Codex SDK
-      rawContextUsage?: {
-        totalTokens: number;
-        maxTokens: number;
-        percentage: number;
-      };
+      rawContextUsage?: ContextUsageSnapshot;
     };
 
 export class CodexPromptService {
@@ -1068,13 +1064,7 @@ export class CodexPromptService {
       const resolvedModel: string | undefined = session.model_config?.model || undefined;
       let allToolUses: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
       let todoIdsEmittedViaUpdate = new Set<string>();
-      let latestContextUsage:
-        | {
-            totalTokens: number;
-            maxTokens: number;
-            percentage: number;
-          }
-        | undefined;
+      let latestContextUsage: ContextUsageSnapshot | undefined;
 
       let eventCount = 0;
 

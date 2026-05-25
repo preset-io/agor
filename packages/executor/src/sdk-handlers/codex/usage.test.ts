@@ -1,20 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   CODEX_BASELINE_OVERHEAD_TOKENS,
+  codexUsedPercentage,
   extractCodexContextSnapshotFromEvent,
   extractCodexContextWindowUsage,
   extractCodexTokenUsage,
 } from './usage.js';
-
-// Helper that mirrors codex-rs `percent_of_context_window_remaining` (inverted
-// to "used"). Useful for asserting our extractor's percentage matches the
-// formula without re-typing it.
-function expectedPercentageUsed(usedTokens: number, contextWindow: number): number {
-  if (contextWindow <= CODEX_BASELINE_OVERHEAD_TOKENS) return 0;
-  const effective = contextWindow - CODEX_BASELINE_OVERHEAD_TOKENS;
-  const used = Math.max(0, usedTokens - CODEX_BASELINE_OVERHEAD_TOKENS);
-  return Math.max(0, Math.min(100, Math.round((used / effective) * 100)));
-}
 
 describe('extractCodexTokenUsage', () => {
   it('returns undefined for non-object payloads', () => {
@@ -148,6 +139,34 @@ describe('extractCodexContextWindowUsage', () => {
   });
 });
 
+describe('codexUsedPercentage', () => {
+  // Lock the production formula via explicit table cases instead of a test
+  // helper that re-implements the math (which would tautologically pass any
+  // bug introduced in the helper).
+  const cases: Array<{ used: number; window: number; expected: number; note: string }> = [
+    { used: 0, window: 200_000, expected: 0, note: 'zero usage' },
+    { used: 12_000, window: 272_000, expected: 0, note: 'exactly at baseline' },
+    // 50_000 - 12_000 = 38_000; 200_000 - 12_000 = 188_000; round(38000/188000)
+    { used: 50_000, window: 200_000, expected: 20, note: 'mid range' },
+    // 215_000 - 12_000 = 203_000; 258_400 - 12_000 = 246_400; round(203000/246400)
+    { used: 215_000, window: 258_400, expected: 82, note: 'near saturation' },
+    { used: 500_000, window: 200_000, expected: 100, note: 'over-limit clamp' },
+    {
+      used: 50_000,
+      window: CODEX_BASELINE_OVERHEAD_TOKENS,
+      expected: 0,
+      note: 'degenerate window',
+    },
+    { used: 50_000, window: 0, expected: 0, note: 'zero window' },
+  ];
+
+  for (const { used, window, expected, note } of cases) {
+    it(`${note}: codexUsedPercentage(${used}, ${window}) === ${expected}`, () => {
+      expect(codexUsedPercentage(used, window)).toBe(expected);
+    });
+  }
+});
+
 describe('extractCodexContextSnapshotFromEvent', () => {
   it('uses last_token_usage (current occupancy), NOT total_token_usage (lifetime cumulative)', () => {
     // Regression: previously we read total_token_usage.total_tokens, which is
@@ -181,17 +200,11 @@ describe('extractCodexContextSnapshotFromEvent', () => {
     // Pulls from last_token_usage, not total_token_usage.
     expect(result?.totalTokens).toBe(12_000);
     expect(result?.maxTokens).toBe(272_000);
-    // Baseline-adjusted percentage mirrors codex-rs's formula:
-    // effective_window = 272_000 - 12_000 = 260_000
-    // used = max(0, 12_000 - 12_000) = 0  →  0%
-    expect(result?.percentage).toBe(expectedPercentageUsed(12_000, 272_000));
+    // Baseline-adjusted percentage (used == baseline → 0%).
     expect(result?.percentage).toBe(0);
   });
 
-  it('applies the Codex CLI BASELINE_TOKENS=12000 formula to the percentage', () => {
-    // Mid-range usage: ~50K used in a 200K window
-    // effective_window = 200_000 - 12_000 = 188_000
-    // used = 50_000 - 12_000 = 38_000  →  round(38_000 / 188_000 * 100) = 20%
+  it('applies the Codex baseline-adjusted percentage formula', () => {
     const result = extractCodexContextSnapshotFromEvent({
       type: 'event_msg',
       payload: {
@@ -205,7 +218,6 @@ describe('extractCodexContextSnapshotFromEvent', () => {
 
     expect(result?.totalTokens).toBe(50_000);
     expect(result?.percentage).toBe(20);
-    expect(result?.percentage).toBe(expectedPercentageUsed(50_000, 200_000));
   });
 
   it('clamps percentage to 100 for over-limit usage', () => {
@@ -225,6 +237,35 @@ describe('extractCodexContextSnapshotFromEvent', () => {
     expect(result?.percentage).toBe(100);
   });
 
+  it('handles the auto-compaction marker (input=0, output=0, total=<new baseline>)', () => {
+    // Codex emits a special token_count event at the moment of auto-compact
+    // where input/output are zero but total_tokens carries the post-compact
+    // context size. Observed in a real session JSONL on disk during the
+    // bug investigation. Our extractor must report the post-compact size as
+    // the current occupancy (not 0).
+    const result = extractCodexContextSnapshotFromEvent({
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          last_token_usage: {
+            input_tokens: 0,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            total_tokens: 10_040,
+          },
+          total_token_usage: { total_tokens: 13_320_903 },
+          model_context_window: 258_400,
+        },
+      },
+    });
+
+    expect(result?.totalTokens).toBe(10_040);
+    expect(result?.maxTokens).toBe(258_400);
+    expect(result?.percentage).toBe(0); // 10_040 ≤ 12_000 baseline → 0%
+  });
+
   it('falls back to total_token_usage only when last_token_usage is absent (legacy payloads)', () => {
     const result = extractCodexContextSnapshotFromEvent({
       type: 'event_msg',
@@ -240,7 +281,7 @@ describe('extractCodexContextSnapshotFromEvent', () => {
     // Fallback path: still works, but value is the cumulative — log site can
     // warn if a regression. (Not great, but better than 0 for legacy events.)
     expect(result?.totalTokens).toBe(25_000);
-    expect(result?.percentage).toBe(expectedPercentageUsed(25_000, 200_000));
+    expect(result?.percentage).toBe(7); // (25k-12k)/(200k-12k) ≈ 6.9 → 7
   });
 
   it('returns 0% when the window is at or below the baseline overhead', () => {
@@ -256,6 +297,24 @@ describe('extractCodexContextSnapshotFromEvent', () => {
     });
 
     expect(result?.percentage).toBe(0);
+  });
+
+  it('accepts camelCase field variants (defensive — supported in code)', () => {
+    const result = extractCodexContextSnapshotFromEvent({
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          lastTokenUsage: { totalTokens: 50_000 },
+          totalTokenUsage: { totalTokens: 850_000 },
+          modelContextWindow: 200_000,
+        },
+      },
+    });
+
+    expect(result?.totalTokens).toBe(50_000);
+    expect(result?.maxTokens).toBe(200_000);
+    expect(result?.percentage).toBe(20);
   });
 
   it('returns undefined for non-token_count or malformed events', () => {

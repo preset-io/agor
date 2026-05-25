@@ -1,3 +1,4 @@
+import type { ContextUsageSnapshot } from '@agor/core/types';
 import type { TokenUsage } from '../../types/token-usage.js';
 
 /**
@@ -23,13 +24,20 @@ function sanitizeTokenCount(value: number | undefined): number | undefined {
 }
 
 /**
- * Mirror codex-rs `percent_of_context_window_remaining` so our UI shows the
- * same number as `codex` TUI's "Context XX% used".
+ * Codex baseline-adjusted "% context used" — equivalent to
+ * `100 - percent_of_context_window_remaining(window)` from codex-rs
+ * (protocol.rs), so our UI shows the same number as the Codex TUI's
+ * "Context XX% used" indicator.
  *
- * Returns a 0-100 integer percentage of context that is *used*. Returns 0 when
- * either side is non-positive after baseline subtraction.
+ * Both `usedTokens` and `contextWindow` have `CODEX_BASELINE_OVERHEAD_TOKENS`
+ * subtracted before the division, so the percentage reflects user-controllable
+ * context only. Returns a 0–100 integer; returns 0 when the window is at or
+ * below the baseline (degenerate).
+ *
+ * Exported so tests can assert against the production formula instead of
+ * re-implementing it in a test helper.
  */
-function codexUsedPercentage(usedTokens: number, contextWindow: number): number {
+export function codexUsedPercentage(usedTokens: number, contextWindow: number): number {
   if (contextWindow <= CODEX_BASELINE_OVERHEAD_TOKENS) return 0;
   const effectiveWindow = contextWindow - CODEX_BASELINE_OVERHEAD_TOKENS;
   const used = Math.max(0, usedTokens - CODEX_BASELINE_OVERHEAD_TOKENS);
@@ -197,7 +205,7 @@ export function extractCodexContextWindowUsage(raw: unknown): number | undefined
  */
 export function extractCodexContextSnapshotFromEvent(
   raw: unknown
-): { totalTokens: number; maxTokens: number; percentage: number } | undefined {
+): ContextUsageSnapshot | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return undefined;
   }

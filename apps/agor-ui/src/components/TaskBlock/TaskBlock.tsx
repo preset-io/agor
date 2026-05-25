@@ -441,7 +441,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     // If undefined, it means the backend computation failed or hasn't run yet
     const contextWindowUsed = task.computed_context_window ?? 0;
     const contextWindowLimit = normalized?.contextWindowLimit ?? 200000;
-    const taskHeaderGradient = getContextWindowGradient(contextWindowUsed, contextWindowLimit);
+    const taskHeaderGradient = getContextWindowGradient(
+      contextWindowUsed,
+      contextWindowLimit,
+      normalized?.contextUsageSnapshot
+    );
 
     // Task header shows when collapsed
     const taskHeader = (

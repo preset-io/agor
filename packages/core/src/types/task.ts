@@ -64,6 +64,26 @@ export function isNaturalCompletion(status: TaskStatus): boolean {
   return status === TaskStatus.COMPLETED || status === TaskStatus.FAILED;
 }
 
+/**
+ * Authoritative context-window snapshot captured at task completion.
+ *
+ * Source depends on the agentic tool:
+ * - Claude Code: derived from the Claude Agent SDK `getContextUsage()` response.
+ * - Codex: extracted from the Codex CLI's `event_msg/token_count.last_token_usage`
+ *   payload — see `extractCodexContextSnapshotFromEvent` in the executor.
+ *
+ * `percentage` is the value the source tool itself reports/displays for
+ * "Context XX% used" (i.e. for Codex it is baseline-adjusted to match the
+ * CLI TUI's indicator). Consumers should prefer this over recomputing
+ * `totalTokens / maxTokens` so per-tool conventions are respected.
+ */
+export interface ContextUsageSnapshot {
+  totalTokens: number;
+  maxTokens: number;
+  /** 0–100, integer, ready to display */
+  percentage: number;
+}
+
 export interface Task {
   /** Unique task identifier (UUIDv7) */
   task_id: TaskID;
@@ -148,11 +168,8 @@ export interface Task {
     costUsd?: number; // Estimated cost in USD (if pricing available)
     primaryModel?: string; // Resolved model used for the task
     durationMs?: number; // Total execution duration from SDK, when available
-    contextUsageSnapshot?: {
-      totalTokens: number;
-      maxTokens: number;
-      percentage: number;
-    }; // Authoritative SDK context snapshot when available
+    /** Authoritative SDK/protocol context-window snapshot when available */
+    contextUsageSnapshot?: ContextUsageSnapshot;
   };
 
   // Computed context window - cumulative token usage for this session

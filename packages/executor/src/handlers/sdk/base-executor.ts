@@ -10,6 +10,7 @@ import { generateId, shortId } from '@agor/core/db';
 import { getGitState } from '@agor/core/git';
 import type {
   AgenticToolName,
+  ContextUsageSnapshot,
   MessageID,
   MessageSource,
   PermissionMode,
@@ -52,12 +53,14 @@ export interface BaseTool {
     errorDetails?: string[];
     /** Raw SDK response for token accounting - stored and normalized */
     rawSdkResponse?: unknown;
-    /** Raw SDK context usage from getContextUsage() — authoritative context window snapshot */
-    rawContextUsage?: {
-      totalTokens: number;
-      maxTokens: number;
-      percentage: number;
-    };
+    /**
+     * Authoritative context-window snapshot captured during the turn.
+     * - Claude: from the Agent SDK's `getContextUsage()` response.
+     * - Codex: from the CLI's `event_msg/token_count.last_token_usage` payload.
+     * When present, base-executor uses it as the source of truth for
+     * `Task.computed_context_window` and `normalized_sdk_response.contextUsageSnapshot`.
+     */
+    rawContextUsage?: ContextUsageSnapshot;
   }>;
 
   // Optional stopTask method for tools that support interruption
@@ -444,21 +447,25 @@ export async function executeToolTask(params: {
       }
     }
 
-    // Use SDK's authoritative context usage when available,
-    // fall back to tool-specific computation otherwise.
-    // Handled independently of rawSdkResponse since the two data sources are separate.
-    if (result.rawContextUsage && result.rawContextUsage.totalTokens > 0) {
+    // Prefer the authoritative context-window snapshot when the tool surfaced
+    // one (Claude: Agent SDK getContextUsage(); Codex: CLI event_msg/token_count
+    // last_token_usage). Falls back to tool-specific computation otherwise.
+    // Handled independently of rawSdkResponse — the two data sources are separate.
+    //
+    // The `maxTokens > 0` guard (vs `totalTokens > 0`) preserves the snapshot
+    // even at the moment of auto-compaction, when `totalTokens` can legitimately
+    // be near zero.
+    if (result.rawContextUsage && result.rawContextUsage.maxTokens > 0) {
       patchData.computed_context_window = result.rawContextUsage.totalTokens;
       console.log(
-        `[${toolName}] SDK context usage: ${result.rawContextUsage.totalTokens}/${result.rawContextUsage.maxTokens} tokens (${result.rawContextUsage.percentage}%)`
+        `[${toolName}] Authoritative context snapshot: ${result.rawContextUsage.totalTokens}/${result.rawContextUsage.maxTokens} tokens (${result.rawContextUsage.percentage}%)`
       );
 
       // Override contextWindowLimit in normalized response with the authoritative
-      // maxTokens from getContextUsage() so the UI computes percentage correctly
+      // maxTokens from the snapshot so the UI computes percentage correctly.
       if (
         patchData.normalized_sdk_response &&
-        typeof patchData.normalized_sdk_response === 'object' &&
-        result.rawContextUsage.maxTokens > 0
+        typeof patchData.normalized_sdk_response === 'object'
       ) {
         const normalizedResponse = patchData.normalized_sdk_response as Record<string, unknown>;
         normalizedResponse.contextWindowLimit = result.rawContextUsage.maxTokens;

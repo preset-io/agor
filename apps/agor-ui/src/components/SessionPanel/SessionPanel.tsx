@@ -441,11 +441,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           return {
             used: task.computed_context_window,
             limit: contextWindowLimit || 0,
+            // Forward the full normalized response so ContextWindowPill can
+            // honor `contextUsageSnapshot.percentage` instead of recomputing
+            // from raw used/limit (which is wrong for Codex's baseline-adjusted
+            // display).
             taskMetadata: {
               model: task.model,
               duration_ms: task.duration_ms,
               agentic_tool: session.agentic_tool,
               raw_sdk_response: task.raw_sdk_response,
+              normalized_sdk_response: task.normalized_sdk_response,
             },
           };
         }
@@ -456,7 +461,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const footerGradient = React.useMemo(() => {
     if (!latestContextWindow) return undefined;
-    return getContextWindowGradient(latestContextWindow.used, latestContextWindow.limit);
+    return getContextWindowGradient(
+      latestContextWindow.used,
+      latestContextWindow.limit,
+      latestContextWindow.taskMetadata.normalized_sdk_response?.contextUsageSnapshot
+    );
   }, [latestContextWindow]);
 
   const footerTimerTask = React.useMemo(() => {

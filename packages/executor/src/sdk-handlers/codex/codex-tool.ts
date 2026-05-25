@@ -21,6 +21,7 @@ import type {
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import {
+  type ContextUsageSnapshot,
   type Message,
   type MessageID,
   MessageRole,
@@ -55,11 +56,7 @@ interface CodexExecutionResult {
   contextWindowLimit?: number;
   model?: string;
   rawSdkResponse?: unknown; // Raw SDK event from Codex
-  rawContextUsage?: {
-    totalTokens: number;
-    maxTokens: number;
-    percentage: number;
-  };
+  rawContextUsage?: ContextUsageSnapshot;
   wasStopped?: boolean; // True if execution was stopped early via stopTask()
 }
 
@@ -199,13 +196,7 @@ export class CodexTool implements ITool {
     let resolvedModel: string | undefined;
     let currentMessageId: MessageID | null = null;
     let tokenUsage: TokenUsage | undefined;
-    let rawContextUsage:
-      | {
-          totalTokens: number;
-          maxTokens: number;
-          percentage: number;
-        }
-      | undefined;
+    let rawContextUsage: ContextUsageSnapshot | undefined;
     let _streamStartTime = Date.now();
     let _firstTokenTime: number | null = null;
     let rawSdkResponse: unknown;
@@ -696,13 +687,7 @@ export class CodexTool implements ITool {
     let _contextWindow: number | undefined;
     let _contextWindowLimit: number | undefined;
     let rawSdkResponse: unknown;
-    let rawContextUsage:
-      | {
-          totalTokens: number;
-          maxTokens: number;
-          percentage: number;
-        }
-      | undefined;
+    let rawContextUsage: ContextUsageSnapshot | undefined;
     let wasStopped = false;
 
     for await (const event of this.promptService.promptSessionStreaming(
