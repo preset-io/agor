@@ -4,17 +4,18 @@
 -- See SQLite mirror (0046) for the full rationale. Notable Postgres-
 -- specific bits:
 --
--- - `gen_random_uuid()` is built-in on Postgres 13+; older versions
---   need pgcrypto. Defensive `CREATE EXTENSION IF NOT EXISTS pgcrypto`
---   makes the migration safe on pre-13 servers too. No-op on 13+.
+-- - `gen_random_uuid()` requires Postgres 13+ (built-in via pgcrypto's
+--   internal namespace). We deliberately don't `CREATE EXTENSION
+--   pgcrypto` here: it would fail in managed-Postgres environments
+--   where the migrator role lacks extension-create privileges, even
+--   though `gen_random_uuid()` already works without the extension.
+--   PG13+ is the floor for Agor.
 -- - jsonb access uses `->` / `->>`; the strict `::bigint` cast
 --   inherently rejects corrupt non-numeric values (Postgres throws,
 --   migration aborts cleanly — equivalent safety to SQLite's CAST).
 -- - The partial unique index uses the same predicate as SQLite
 --   (`schedule_id IS NOT NULL AND scheduled_run_at IS NOT NULL`) so
 --   the two dialects enforce the exact same dedup invariant.
-
-CREATE EXTENSION IF NOT EXISTS pgcrypto;--> statement-breakpoint
 
 CREATE TABLE "schedules" (
 	"schedule_id" varchar(36) PRIMARY KEY NOT NULL,

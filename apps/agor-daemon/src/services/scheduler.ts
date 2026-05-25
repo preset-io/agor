@@ -317,8 +317,10 @@ export class SchedulerService {
    * 2. If prev is within grace period and no session exists, spawn it.
    * 3. Otherwise, check if we're close to the next scheduled time.
    *
-   * Wrapped in a Postgres advisory lock so two daemons can share the
-   * tick safely.
+   * Wrapped in a Postgres advisory lock that guards same-schedule
+   * duplicate work; Agor remains single-daemon for branch-wide
+   * concurrency (see top-of-file docblock). On SQLite the lock is a
+   * no-op.
    */
   private async processSchedule(schedule: Schedule, now: number): Promise<void> {
     const tz = resolveScheduleTz(schedule.timezone_mode, schedule.timezone);

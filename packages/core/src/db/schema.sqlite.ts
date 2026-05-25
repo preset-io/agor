@@ -225,7 +225,7 @@ export const sessions = sqliteTable(
     createdIdx: index('sessions_created_idx').on(table.created_at),
     parentIdx: index('sessions_parent_idx').on(table.parent_session_id),
     forkedIdx: index('sessions_forked_idx').on(table.forked_from_session_id),
-    // Scheduler indexes (note: partial indexes defined in migration, not here)
+    // Scheduler indexes — including the partial unique index below.
     scheduledFromBranchIdx: index('sessions_scheduled_flag_idx').on(table.scheduled_from_branch),
     // Partial unique index — covering for the scheduler's dedup lookup
     // AND serves as the DB-level guard against check-then-create races
