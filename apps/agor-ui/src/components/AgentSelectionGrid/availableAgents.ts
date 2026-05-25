@@ -34,6 +34,13 @@ export const AVAILABLE_AGENTS: AgenticToolOption[] = [
     beta: true,
   },
   {
+    id: 'cursor',
+    name: 'Cursor SDK',
+    icon: '⌘',
+    description: 'Cursor agentic runtime via the Cursor SDK',
+    beta: true,
+  },
+  {
     id: 'copilot',
     name: 'GitHub Copilot',
     icon: '✈️',

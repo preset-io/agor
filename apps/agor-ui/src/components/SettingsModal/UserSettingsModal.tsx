@@ -519,6 +519,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           icon: <RobotOutlined />,
         },
         {
+          key: 'cursor',
+          label: 'Cursor SDK',
+          icon: <RobotOutlined />,
+        },
+        {
           key: 'copilot',
           label: 'GitHub Copilot',
           icon: <RobotOutlined />,
@@ -765,6 +770,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       codex: 'Codex',
       gemini: 'Gemini',
       opencode: 'OpenCode',
+      cursor: 'Cursor SDK',
       copilot: 'GitHub Copilot',
     };
     return titles[activeTab] || 'User Settings';

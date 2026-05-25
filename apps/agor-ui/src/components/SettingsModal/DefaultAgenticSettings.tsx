@@ -128,6 +128,12 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
       form: opencodeForm,
     },
     {
+      key: 'cursor',
+      label: 'Cursor SDK',
+      tool: 'cursor',
+      form: cursorForm,
+    },
+    {
       key: 'copilot',
       label: 'GitHub Copilot',
       tool: 'copilot',

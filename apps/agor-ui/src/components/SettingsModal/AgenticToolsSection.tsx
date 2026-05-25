@@ -355,6 +355,21 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
             ),
           },
           {
+            key: 'cursor',
+            label: 'Cursor SDK',
+            children: (
+              <ApiKeyTabContent
+                tool="cursor"
+                fieldStatus={fieldStatus}
+                keysError={keysError}
+                savingKeys={savingKeys}
+                onSave={handleSaveKey}
+                onClear={handleClearKey}
+                onClearError={() => setKeysError(null)}
+              />
+            ),
+          },
+          {
             key: 'opencode',
             label: 'OpenCode',
             children: (

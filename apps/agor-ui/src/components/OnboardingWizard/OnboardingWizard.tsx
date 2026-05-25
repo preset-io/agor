@@ -1497,6 +1497,7 @@ export function OnboardingWizard({
                 { value: 'gemini', label: 'Gemini' },
                 { value: 'copilot', label: 'GitHub Copilot' },
                 { value: 'opencode', label: 'OpenCode' },
+                { value: 'cursor', label: 'Cursor SDK (Beta)' },
               ]}
               style={{ width: '100%' }}
             />

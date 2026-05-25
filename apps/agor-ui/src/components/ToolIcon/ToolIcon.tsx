@@ -49,6 +49,7 @@ export const ToolIcon: React.FC<ToolIconProps> = ({ tool, size = 32, className =
     gemini: '💎',
     opencode: '🌐',
     copilot: '✈️',
+    cursor: '⌘',
   };
 
   if (!logoSrc) {

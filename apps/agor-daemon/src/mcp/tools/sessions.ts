@@ -478,7 +478,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .optional()
           .describe('Optional title for the session (defaults to first 100 chars of prompt)'),
         agenticTool: z
-          .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode'])
+          .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'cursor'])
           .optional()
           .describe('Which agent to use for the subsession (defaults to same as parent)'),
         enableCallback: z
@@ -563,7 +563,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             'How to route the work: continue (add to existing session), fork (create sibling session), subsession (create child session), btw (ephemeral fork — works even on running sessions, auto-callbacks result to caller, auto-archives when done)'
           ),
         agenticTool: z
-          .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini'])
+          .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'cursor'])
           .optional()
           .describe(
             'Agent for subsession (subsession mode only, defaults to parent agent). Fork mode always uses parent agent.'
@@ -722,7 +722,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       inputSchema: z.object({
         branchId: z.string().describe('Branch ID where the session will run (required)'),
         agenticTool: z
-          .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini'])
+          .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'cursor'])
           .describe('Which agent to use for this session (required)'),
         title: z.string().optional().describe('Session title (optional)'),
         description: z.string().optional().describe('Session description (optional)'),
@@ -1314,7 +1314,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         agenticTool: z
-          .enum(['claude-code', 'claude-code-cli', 'codex', 'copilot', 'gemini'])
+          .enum(['claude-code', 'claude-code-cli', 'codex', 'copilot', 'gemini', 'cursor'])
           .optional()
           .describe('Filter to a single agentic tool. Omit to return all tools.'),
       }),
@@ -1375,6 +1375,17 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           default: DEFAULT_GEMINI_MODEL,
           models: geminiModels,
           note: 'Gemini models are normally fetched live from the Google API per-user. This is the static fallback list — newer models may exist.',
+        },
+        cursor: {
+          default: 'composer-latest',
+          models: [
+            {
+              id: 'composer-latest',
+              displayName: 'Composer Latest',
+              description: 'Cursor SDK default model alias (beta; runtime adapter pending).',
+            },
+          ],
+          note: 'Cursor is exposed as a beta provider. Runtime execution currently fails fast until the SDK adapter lands.',
         },
       };
 

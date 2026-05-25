@@ -19,7 +19,7 @@ import { textResult } from '../server.js';
 const agenticToolConfigSchema = z
   .object({
     agentic_tool: z
-      .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'copilot'])
+      .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'copilot', 'cursor'])
       .describe('Agent to spawn for runs of this schedule.'),
     permission_mode: z.string().optional().describe("Permission mode (e.g., 'auto', 'ask')."),
     model_config: z

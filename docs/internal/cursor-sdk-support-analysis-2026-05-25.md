@@ -1,19 +1,19 @@
 # Cursor SDK Support Analysis — 2026-05-25
 
 **Author:** Cursor SDK support audit (`analyze-cursor-sdk-support` worktree)  
-**Status:** Draft for Max review. Initial provider skeleton added after the audit; runtime execution intentionally still unimplemented.
-**Recommendation:** **Prototype behind a feature flag, local runtime first. Do not ship as a default provider yet.**
+**Status:** Draft for Max review. Cursor is now surfaced as a beta provider scaffold; runtime execution intentionally still fails fast until the adapter lands.
+**Recommendation:** **Expose as a beta provider only; prototype local runtime next. Do not make it default/recommended until runtime, permission, and usage risks are resolved.**
 
 ---
 
 ## TL;DR
 
-Cursor's new TypeScript SDK is a credible fit for Agor's provider model, but it is still public beta and it adds a native-heavy package/runtime surface that deserves an isolated spike before user-facing support.
+Cursor's new TypeScript SDK is a credible fit for Agor's provider model, but it is still public beta and it adds a native-heavy package/runtime surface that deserves an isolated spike before non-beta support.
 
 1. **What exists today:** `@cursor/sdk` exposes `Agent.create`, `Agent.resume`, `agent.send`, `run.stream`, `run.wait`, `run.cancel`, artifact APIs, model/repository discovery, local/cloud runtimes, inline MCP config, custom subagents, and a structured error hierarchy. The launch post says the SDK uses the same runtime/harness/models as Cursor desktop, CLI, and web, can run locally or on Cursor cloud, and is billed with standard token-based consumption pricing ([Cursor changelog](https://cursor.com/changelog/sdk-release), [Cursor blog](https://cursor.com/blog/typescript-sdk)). The npm package currently inspected was `@cursor/sdk@1.0.13`.
 2. **Best Agor fit:** local runtime against the Agor branch worktree (`local: { cwd: branch.path }`) because Agor already owns branches, RBAC, Unix identity, git state capture, MCP session tokens, and process lifecycle. Cursor cloud runtime is valuable, but conflicts with Agor's branch-centric “worktree as card” model unless treated as a separate remote-execution mode.
 3. **Largest blocker:** no obvious public permission callback equivalent to Claude/Copilot. Cursor has hooks and sandbox options, and the background/cloud agent docs warn cloud agents auto-run terminal commands, but the SDK public types do not expose an Agor-style interactive permission request channel. Treat v1 as “autonomous/auto-approved inside Agor's OS sandbox,” similar to OpenCode, until proven otherwise.
-4. **Maturity risk:** Cursor marks the SDK public beta; their Terms say beta services are evaluation/non-production, as-is, and may be discontinued ([Terms §1.6](https://cursor.com/en-US/terms-of-service)). That argues for `experimental.cursor_sdk` or equivalent.
+4. **Maturity risk:** Cursor marks the SDK public beta; their Terms say beta services are evaluation/non-production, as-is, and may be discontinued ([Terms §1.6](https://cursor.com/en-US/terms-of-service)). That argues for beta labeling plus an operator-visible experimental flag/runtime guard.
 5. **Implementation shape:** add a `cursor` agentic tool, credentials (`CURSOR_API_KEY`), model discovery/cache, `CursorTool` adapter that maps `SDKMessage` events to Agor messages/tool widgets, session persistence via `sdk_session_id = Cursor agentId`, run tracking via task metadata, MCP injection via inline `mcpServers`, and cancellation via `Run.cancel()`.
 
 ---
@@ -208,7 +208,7 @@ Follow-up options:
 
 ## Recommendation
 
-**Prototype behind a feature flag, local runtime only, with no permission-modal promise.**
+**Expose as beta, then prototype local runtime only, with no permission-modal promise.**
 
 Reasons to prototype now:
 
@@ -231,9 +231,9 @@ Reasons not to ship broadly yet:
 
 - ✅ Add `cursor` to core/executor/UI type unions and static capability maps.
 - ✅ Add `CURSOR_API_KEY` credential plumbing.
-- ✅ Hide normal agent-selection UI unless feature flag/runtime implementation is completed.
+- ✅ Surface Cursor as a beta provider in agent selection/settings, matching the OpenCode beta posture.
 - Add package dependency and import smoke test for Linux CI.
-- ✅ No execution yet: executor handler is a fail-fast skeleton and the daemon exposes `execution.cursor_sdk_enabled` only as an experimental surface flag.
+- ✅ No execution yet: executor handler and daemon route are fail-fast until the local runtime adapter lands.
 
 ### PR 2 — Local runtime happy path
 
