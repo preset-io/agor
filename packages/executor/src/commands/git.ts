@@ -245,8 +245,18 @@ export async function handleBranchInspect(
       throw new Error(`Branch ${branchId} has no path`);
     }
 
+    await prepareBranchInspectionGitConfig(client, branch);
+
     const currentSha = await getGitState(branch.path);
-    const currentRef = await getCurrentBranch(branch.path);
+    let currentRef = branch.name || '';
+    try {
+      currentRef = (await getCurrentBranch(branch.path)) || currentRef;
+    } catch (error) {
+      console.warn(
+        `[branch.inspect] Failed to read current branch for ${branchId}; falling back to DB branch name:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
 
     return {
       success: true,
@@ -316,6 +326,38 @@ async function fetchAllBranchesForRepo(
   }
 
   return branches;
+}
+
+async function addSafeDirectoryForCurrentUser(pathToTrust: string): Promise<void> {
+  try {
+    const { git } = createGit();
+    await git.addConfig('safe.directory', pathToTrust, true, 'global');
+  } catch (error) {
+    console.warn(
+      `[branch.inspect] Failed to add safe.directory for ${pathToTrust}:`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+}
+
+async function prepareBranchInspectionGitConfig(
+  client: AgorClient,
+  branch: { path: string; repo_id?: string }
+): Promise<void> {
+  await addSafeDirectoryForCurrentUser(branch.path);
+
+  if (!branch.repo_id) return;
+  try {
+    const repo = await client.service('repos').get(branch.repo_id);
+    if (repo?.local_path) {
+      await addSafeDirectoryForCurrentUser(repo.local_path);
+    }
+  } catch (error) {
+    console.warn(
+      `[branch.inspect] Failed to load repo ${branch.repo_id} for safe.directory setup:`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
 }
 
 /**
@@ -603,6 +645,10 @@ export async function handleGitClone(
     };
   }
 
+  const cloneOutputPath =
+    payload.params.outputPath ??
+    (payload.params.slug ? join(getReposDir(), payload.params.slug) : undefined);
+
   let client: AgorClient | null = null;
 
   try {
@@ -617,10 +663,10 @@ export async function handleGitClone(
       console.log('[git.clone] Resolved credentials:', Object.keys(env));
     }
 
-    // Determine output path - only pass targetDir if explicitly specified
-    // Otherwise let cloneRepo() compute the correct path (reposDir + repoName)
-    const outputPath = payload.params.outputPath;
+    // Determine output path. Prefer the daemon-supplied path; otherwise use
+    // the Agor slug when present so same-basename remotes do not collide.
     const reposDir = getReposDir();
+    const outputPath = cloneOutputPath;
 
     // Clone the repository. If the caller pinned a default_branch, forward
     // it as `branch` so the working tree lands on that branch — otherwise
@@ -800,7 +846,7 @@ export async function handleGitClone(
         message: errorMessage,
         details: {
           url: payload.params.url,
-          outputPath: payload.params.outputPath,
+          outputPath: cloneOutputPath,
         },
       },
     };

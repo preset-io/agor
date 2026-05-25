@@ -26,7 +26,6 @@ import { BranchRepository, type Database, RepoRepository, shortId } from '@agor/
 import { autoAssignBranchUniqueId } from '@agor/core/environment/variable-resolver';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
-  extractRepoName,
   getBranchPath,
   getDefaultBranch,
   getRemoteUrl,
@@ -231,11 +230,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // a "cloning" card immediately, then transition to ready/failed when the
     // executor patches the row.
     //
-    // local_path is computed best-effort (mirrors what the executor will use
-    // inside `cloneRepo`); the executor patches it to the actual on-disk path
-    // on success.
-    const expectedRepoName = extractRepoName(data.url);
-    const expectedLocalPath = path.join(getReposDir(), expectedRepoName);
+    // local_path is computed best-effort (mirrors what the executor will use).
+    // Use the slug, not the URL basename, so two remotes with the same repo
+    // name but distinct Agor slugs do not collide on disk.
+    const expectedLocalPath = path.join(getReposDir(), slug);
     const placeholder = (await this.create(
       {
         slug: slug as RepoSlug,
@@ -268,6 +266,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           url: data.url,
           slug,
           repoId,
+          outputPath: expectedLocalPath,
           // Forward the user-supplied default_branch so the executor
           // persists what the operator typed in "Add Repository" instead
           // of silently overwriting it with origin/HEAD.

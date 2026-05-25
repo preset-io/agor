@@ -10,7 +10,7 @@
 
 import { existsSync } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { simpleGit } from 'simple-git';
 import { getBranchesDir, getReposDir } from '../config/config-manager';
 import type { RepoCloneErrorCategory } from '../types/repo';
@@ -563,8 +563,9 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
   // argv (visible via `ps` / `/proc/<pid>/cmdline` to anyone on the host),
   // which is exactly the leak this refactor exists to close. See PR #1103.
 
-  // Ensure repos directory exists
-  await mkdir(reposDir, { recursive: true });
+  // Ensure the clone parent exists. Slug-derived targetDir values may be nested
+  // (for example ~/.agor/repos/org/repo), not just direct children of reposDir.
+  await mkdir(dirname(targetPath), { recursive: true });
 
   // Check if target directory already exists
   if (existsSync(targetPath)) {

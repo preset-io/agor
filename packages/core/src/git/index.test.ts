@@ -1088,6 +1088,22 @@ describe('cloneRepo', () => {
     expect(await isGitRepo(customTarget)).toBe(true);
   });
 
+  it('should create parent directories for nested custom target paths', async () => {
+    await createBareRepo(remoteDir);
+
+    const tmpRepoDir = path.join(tempDir, 'tmp-for-push');
+    await createTestRepo(tmpRepoDir);
+    const git = simpleGit(tmpRepoDir);
+    await git.addRemote('origin', remoteDir);
+    await git.push('origin', 'main');
+
+    const nestedTarget = path.join(tempDir, 'nested', 'slug', 'custom-location');
+    const result = await cloneRepo({ url: remoteDir, targetDir: nestedTarget });
+
+    expect(result.path).toBe(nestedTarget);
+    expect(await isGitRepo(nestedTarget)).toBe(true);
+  });
+
   it('should return existing repo if already cloned', async () => {
     await createBareRepo(remoteDir);
 
