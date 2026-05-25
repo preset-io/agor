@@ -329,6 +329,45 @@ describe('POST /mcp with personal API keys', () => {
     return mcpSessionId!;
   }
 
+  async function markStatefulMcpInitialized(baseUrl: string, mcpSessionId: string) {
+    const resp = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json, text/event-stream',
+        'Content-Type': 'application/json',
+        'X-API-Key': 'agor_sk_valid',
+        'Mcp-Session-Id': mcpSessionId,
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'notifications/initialized',
+      }),
+    });
+    expect(resp.status).toBeGreaterThanOrEqual(200);
+    expect(resp.status).toBeLessThan(300);
+    await resp.text();
+  }
+
+  async function callCurrentUserStatefully(baseUrl: string, mcpSessionId: string) {
+    const resp = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json, text/event-stream',
+        'Content-Type': 'application/json',
+        'X-API-Key': 'agor_sk_valid',
+        'Mcp-Session-Id': mcpSessionId,
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 101,
+        method: 'tools/call',
+        params: { name: 'agor_users_get_current', arguments: {} },
+      }),
+    });
+    const parsed = parseMcpResponse(await resp.text());
+    return { resp, parsed };
+  }
+
   it('can call a non-session-scoped tool without X-Agor-Session-Id / ?sessionId', async () => {
     const { UserApiKeysRepository } = await import('@agor/core/db');
     vi.spyOn(UserApiKeysRepository.prototype, 'verifyKey').mockResolvedValue({
@@ -618,6 +657,65 @@ describe('POST /mcp with personal API keys', () => {
       });
 
       expect(resp.status).toBe(404);
+    });
+  });
+
+  it('refreshes user role context on each stateful MCP request', async () => {
+    await mockPersonalApiKeyUser();
+    let role = 'superadmin';
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role,
+    }));
+
+    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
+      const mcpSessionId = await initializeStatefulMcp(baseUrl);
+      await markStatefulMcpInitialized(baseUrl, mcpSessionId);
+
+      role = 'member';
+      const { resp, parsed } = await callCurrentUserStatefully(baseUrl, mcpSessionId);
+
+      expect(resp.status).toBe(200);
+      expect(parsed.error).toBeUndefined();
+      const result = JSON.parse(parsed.result!.content![0].text);
+      expect(result.role).toBe('member');
+      // initialize auth, initialized notification auth, tool-call auth, then
+      // the tool itself. The returned role proves the stateful tool context
+      // observed the freshly reloaded user rather than the initialize-time one.
+      expect(getUser).toHaveBeenCalledTimes(4);
+    });
+  });
+
+  it('keeps a stateful MCP session usable after a GET SSE disconnect', async () => {
+    await mockPersonalApiKeyUser();
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+    }));
+
+    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
+      const mcpSessionId = await initializeStatefulMcp(baseUrl);
+      await markStatefulMcpInitialized(baseUrl, mcpSessionId);
+
+      const sseResp = await fetch(`${baseUrl}/mcp`, {
+        method: 'GET',
+        headers: {
+          Accept: 'text/event-stream',
+          'X-API-Key': 'agor_sk_valid',
+          'Mcp-Session-Id': mcpSessionId,
+        },
+      });
+      expect(sseResp.status).toBe(200);
+      await sseResp.body?.cancel();
+
+      const { resp, parsed } = await callCurrentUserStatefully(baseUrl, mcpSessionId);
+
+      expect(resp.status).toBe(200);
+      expect(parsed.error).toBeUndefined();
+      const result = JSON.parse(parsed.result!.content![0].text);
+      expect(result.user_id).toBe('user-1');
     });
   });
 });
