@@ -86,6 +86,11 @@ import {
 import { injectCreatedBy } from './utils/inject-created-by.js';
 import { realignRepoOriginAfterPatchHook } from './utils/realign-repo-origin.js';
 import {
+  ensureCurrentScheduleLoaded,
+  recomputeNextRunAt,
+  validateScheduleConfig,
+} from './utils/schedule-hooks.js';
+import {
   createServiceToken,
   getDaemonUrl,
   spawnExecutorFireAndForget,
@@ -2068,121 +2073,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   const scheduleRepository = new ScheduleRepository(db);
 
-  // Load the current schedule into `context.params.schedule` if it's not
-  // already cached. `loadScheduleAndBranch` (the canonical RBAC hook)
-  // caches it for us — but only runs when branch_rbac is enabled. The
-  // schedule normalization/validation hooks need the current row too,
-  // and they have to work whether RBAC is on or off, so we lazy-load
-  // here as a fallback. Cached on `params.schedule` so downstream hooks
-  // (recompute, validation, etc.) all see the same instance.
-  const ensureCurrentScheduleLoaded = async (context: HookContext) => {
-    if (context.method !== 'patch') return context;
-    if (context.params.schedule) return context;
-    const id = context.id as string | undefined;
-    if (!id) return context;
-    const current = await scheduleRepository.findById(id);
-    if (current) context.params.schedule = current;
-    return context;
-  };
-
-  // Inline cron / IANA / Handlebars-template validator.
-  // Runs on both create and patch — the latter must re-validate when
-  // cron / timezone_mode / timezone / prompt are touched. On patch we
-  // validate against the MERGED current+patch shape so e.g. switching
-  // to `timezone_mode: 'local'` doesn't require resending the existing
-  // `timezone` value just to pass validation.
-  const validateScheduleConfig = async (context: HookContext) => {
-    const data = context.data as Partial<import('@agor/core/types').Schedule> | undefined;
-    if (!data) return context;
-
-    const current =
-      context.method === 'patch'
-        ? (context.params.schedule as import('@agor/core/types').Schedule | undefined)
-        : undefined;
-    const merged = { ...(current ?? {}), ...data } as Partial<import('@agor/core/types').Schedule>;
-
-    // Use the dialect-agnostic cron helper. We pass the schedule's
-    // effective tz so DST-sensitive crons get validated against the
-    // right timezone (cron-parser rejects e.g. tz='not_a_zone').
-    if (data.cron_expression !== undefined) {
-      const { isValidCron } = await import('@agor/core/utils/cron');
-      const tz = merged.timezone_mode === 'local' && merged.timezone ? merged.timezone : 'UTC';
-      if (!isValidCron(data.cron_expression, tz)) {
-        throw new BadRequest(`Invalid cron expression: '${data.cron_expression}'`);
-      }
-    }
-
-    if (merged.timezone_mode === 'local' && !merged.timezone) {
-      throw new BadRequest("timezone_mode='local' requires a non-empty IANA timezone.");
-    }
-    if (data.timezone) {
-      // Cheap IANA validation via Intl.DateTimeFormat — throws RangeError
-      // on unknown zones. No external dep required.
-      try {
-        new Intl.DateTimeFormat('en-US', { timeZone: data.timezone });
-      } catch {
-        throw new BadRequest(`Unknown IANA timezone: '${data.timezone}'`);
-      }
-    }
-
-    if (data.prompt !== undefined && data.prompt.trim() === '') {
-      throw new BadRequest('Schedule prompt cannot be empty.');
-    }
-
-    return context;
-  };
-
-  // Recompute `next_run_at` whenever cron / timezone fields change, when
-  // a disabled schedule flips to enabled, or on create. The scheduler
-  // tick reads this column for its hot-path query; leaving it stale
-  // after a cron change means the schedule fires on the OLD cadence
-  // until the old next_run_at passes. Keeping the invariant here
-  // (rather than waiting for the next tick to self-heal) makes the
-  // persisted state coherent on commit.
-  //
-  // The scheduler bypasses the service when it advances metadata after
-  // a run, so its `scheduleRepo.update({ next_run_at })` writes are
-  // not double-handled.
-  const recomputeNextRunAt = async (context: HookContext) => {
-    const data = context.data as Partial<import('@agor/core/types').Schedule> | undefined;
-    if (!data) return context;
-
-    const { getNextRunTime } = await import('@agor/core/utils/cron');
-
-    if (context.method === 'create') {
-      if (data.cron_expression && data.next_run_at == null) {
-        const tz = data.timezone_mode === 'local' && data.timezone ? data.timezone : 'UTC';
-        try {
-          data.next_run_at = getNextRunTime(data.cron_expression, new Date(), tz);
-        } catch {
-          // validateScheduleConfig already rejected invalid crons; ignore here.
-        }
-      }
-      return context;
-    }
-
-    // patch: recompute on any timing change OR on enable-toggle (so the
-    // row doesn't sit hot-path-due every tick until the next fire).
-    const current = context.params.schedule as import('@agor/core/types').Schedule | undefined;
-    if (!current) return context; // No current row (shouldn't happen after ensureCurrentScheduleLoaded).
-
-    const touchesTiming =
-      data.cron_expression !== undefined ||
-      data.timezone_mode !== undefined ||
-      data.timezone !== undefined;
-    const reEnabling = data.enabled === true && current.enabled === false;
-    if (!touchesTiming && !reEnabling) return context;
-
-    const merged = { ...current, ...data };
-    const tz = merged.timezone_mode === 'local' && merged.timezone ? merged.timezone : 'UTC';
-    try {
-      data.next_run_at = getNextRunTime(merged.cron_expression, new Date(), tz);
-    } catch {
-      // validateScheduleConfig already rejected invalid crons; ignore here.
-    }
-    return context;
-  };
-
   app.service('schedules').hooks({
     before: {
       all: [requireAuth],
@@ -2203,8 +2093,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           ? [loadBranch(branchRepository, 'branch_id'), ensureCanCreateSession(superadminOpts)]
           : []),
         injectCreatedBy(),
-        validateScheduleConfig,
-        recomputeNextRunAt,
+        validateScheduleConfig(),
+        recomputeNextRunAt(),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update schedules'),
@@ -2218,9 +2108,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // us. `validateScheduleConfig` and `recomputeNextRunAt` both
         // need the merged current+patch shape to do their work
         // correctly, and they have to run on every install.
-        ensureCurrentScheduleLoaded,
-        validateScheduleConfig,
-        recomputeNextRunAt,
+        ensureCurrentScheduleLoaded(scheduleRepository),
+        validateScheduleConfig(),
+        recomputeNextRunAt(),
       ],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete schedules'),
