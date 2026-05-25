@@ -683,28 +683,30 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   }
 
   /**
-   * True iff at least one session in this branch is in an active status
-   * (RUNNING / STOPPING / AWAITING_PERMISSION / AWAITING_INPUT). Used
-   * by the scheduler's concurrency guard ('don't fire if the branch is
-   * already busy'). Resolves the question with one indexed COUNT instead
-   * of `findAll().filter()`.
+   * True iff at least one session in this branch has a status in the
+   * given set. Generic primitive — the caller owns the policy
+   * (e.g. the scheduler's "active statuses" list lives in `scheduler.ts`
+   * next to the concurrency-guard call site, not here).
+   *
+   * Implemented as an existence probe (`SELECT 1 ... LIMIT 1`) rather
+   * than a COUNT so busy branches don't pay the cost of counting every
+   * matching row.
    */
-  async hasActiveSessionInBranch(branchId: import('@agor/core/types').BranchID): Promise<boolean> {
+  async existsInBranchWithStatuses(
+    branchId: import('@agor/core/types').BranchID,
+    statuses: ReadonlyArray<Session['status']>
+  ): Promise<boolean> {
+    if (statuses.length === 0) return false;
     try {
-      const activeStatuses = [
-        SessionStatus.RUNNING,
-        SessionStatus.STOPPING,
-        SessionStatus.AWAITING_PERMISSION,
-        SessionStatus.AWAITING_INPUT,
-      ];
-      const result = await select(this.db, { count: sql<number>`count(*)` })
+      const row = await select(this.db, { one: sql<number>`1` })
         .from(sessions)
-        .where(and(eq(sessions.branch_id, branchId), inArray(sessions.status, activeStatuses)))
+        .where(and(eq(sessions.branch_id, branchId), inArray(sessions.status, [...statuses])))
+        .limit(1)
         .one();
-      return Number(result?.count ?? 0) > 0;
+      return row != null;
     } catch (error) {
       throw new RepositoryError(
-        `Failed to check for active sessions in branch: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to probe sessions in branch: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

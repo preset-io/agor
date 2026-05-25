@@ -221,7 +221,14 @@ export const sessions = sqliteTable(
     forkedIdx: index('sessions_forked_idx').on(table.forked_from_session_id),
     // Scheduler indexes (note: partial indexes defined in migration, not here)
     scheduledFromBranchIdx: index('sessions_scheduled_flag_idx').on(table.scheduled_from_branch),
-    scheduleIdIdx: index('sessions_schedule_id_idx').on(table.schedule_id, table.scheduled_run_at),
+    // Partial unique index — covering for the scheduler's dedup lookup
+    // AND serves as the DB-level guard against check-then-create races
+    // in spawnScheduledSession (cron tick vs manual run-now, or two
+    // tick async paths). Partial because schedule_id is nullable: ad-hoc
+    // sessions all have schedule_id NULL and must coexist.
+    scheduleRunUnique: uniqueIndex('sessions_schedule_run_unique')
+      .on(table.schedule_id, table.scheduled_run_at)
+      .where(sql`${table.schedule_id} IS NOT NULL`),
   })
 );
 

@@ -1253,26 +1253,32 @@ describe('SessionRepository schedule-link queries', () => {
     expect(await repo.countByScheduleId(scheduleId)).toBe(5);
   });
 
-  dbTest('hasActiveSessionInBranch reflects branch-wide active runs', async ({ db }) => {
+  dbTest('existsInBranchWithStatuses returns true only when a status matches', async ({ db }) => {
     const repo = new SessionRepository(db);
     const branch = await createTestBranch(db);
+    const ACTIVE = [
+      SessionStatus.RUNNING,
+      SessionStatus.STOPPING,
+      SessionStatus.AWAITING_PERMISSION,
+      SessionStatus.AWAITING_INPUT,
+    ] as const;
 
-    // Empty branch → no active session.
-    expect(await repo.hasActiveSessionInBranch(branch.branch_id)).toBe(false);
+    // Empty branch → no match.
+    expect(await repo.existsInBranchWithStatuses(branch.branch_id, ACTIVE)).toBe(false);
 
-    // Idle session → still no active session.
+    // Idle session → still no match for the "active" set.
     await repo.create(
       createSessionData({ branch_id: branch.branch_id, status: SessionStatus.IDLE })
     );
-    expect(await repo.hasActiveSessionInBranch(branch.branch_id)).toBe(false);
+    expect(await repo.existsInBranchWithStatuses(branch.branch_id, ACTIVE)).toBe(false);
 
-    // Running session → active.
+    // Running session → match.
     await repo.create(
       createSessionData({ branch_id: branch.branch_id, status: SessionStatus.RUNNING })
     );
-    expect(await repo.hasActiveSessionInBranch(branch.branch_id)).toBe(true);
+    expect(await repo.existsInBranchWithStatuses(branch.branch_id, ACTIVE)).toBe(true);
 
-    // AWAITING_INPUT also counts (matches the scheduler's previous in-memory set).
+    // AWAITING_INPUT also matches.
     const otherBranch = await createTestBranch(db);
     await repo.create(
       createSessionData({
@@ -1280,19 +1286,30 @@ describe('SessionRepository schedule-link queries', () => {
         status: SessionStatus.AWAITING_INPUT,
       })
     );
-    expect(await repo.hasActiveSessionInBranch(otherBranch.branch_id)).toBe(true);
+    expect(await repo.existsInBranchWithStatuses(otherBranch.branch_id, ACTIVE)).toBe(true);
   });
 
-  dbTest('hasActiveSessionInBranch is scoped per branch', async ({ db }) => {
+  dbTest('existsInBranchWithStatuses is scoped per branch', async ({ db }) => {
     const repo = new SessionRepository(db);
     const branchA = await createTestBranch(db);
     const branchB = await createTestBranch(db);
+    const ACTIVE = [SessionStatus.RUNNING] as const;
 
     await repo.create(
       createSessionData({ branch_id: branchA.branch_id, status: SessionStatus.RUNNING })
     );
 
-    expect(await repo.hasActiveSessionInBranch(branchA.branch_id)).toBe(true);
-    expect(await repo.hasActiveSessionInBranch(branchB.branch_id)).toBe(false);
+    expect(await repo.existsInBranchWithStatuses(branchA.branch_id, ACTIVE)).toBe(true);
+    expect(await repo.existsInBranchWithStatuses(branchB.branch_id, ACTIVE)).toBe(false);
+  });
+
+  dbTest('existsInBranchWithStatuses returns false for an empty status list', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    await repo.create(
+      createSessionData({ branch_id: branch.branch_id, status: SessionStatus.RUNNING })
+    );
+    // Caller passed [] — defensive contract: matches nothing.
+    expect(await repo.existsInBranchWithStatuses(branch.branch_id, [])).toBe(false);
   });
 });

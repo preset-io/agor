@@ -47,6 +47,7 @@ import {
   ScheduleRepository,
   SessionMCPServerRepository,
   SessionRepository,
+  shortId,
   tryAdvisoryXactLock,
   txAsDb,
   UsersRepository,
@@ -72,6 +73,37 @@ import {
 } from '@agor/core/utils/cron';
 import Handlebars from 'handlebars';
 import type { Application } from '../declarations';
+
+/**
+ * Session statuses that count as "actively consuming the branch" for
+ * the scheduler's concurrency guard. Owned by the scheduler (not the
+ * SessionRepository) because the definition of "busy" is a scheduler-
+ * policy decision, not a generic session-store fact.
+ */
+const ACTIVE_SESSION_STATUSES: ReadonlyArray<SessionStatus> = [
+  SessionStatus.RUNNING,
+  SessionStatus.STOPPING,
+  SessionStatus.AWAITING_PERMISSION,
+  SessionStatus.AWAITING_INPUT,
+];
+
+/**
+ * Best-effort detection of the partial-unique-index conflict raised by
+ * `sessions_schedule_run_unique` when a concurrent spawn races past
+ * the dedup check. SQLite returns `SQLITE_CONSTRAINT_UNIQUE` /
+ * `SQLITE_CONSTRAINT`; postgres-js raises an error whose `.code` is
+ * `'23505'`. We match on the message too in case the underlying error
+ * is wrapped (the repo wraps insert errors in `RepositoryError`).
+ */
+function isUniqueConstraintError(err: unknown): boolean {
+  if (!err) return false;
+  const e = err as { code?: string; cause?: { code?: string }; message?: string };
+  const code = e.code ?? e.cause?.code ?? '';
+  if (code === '23505') return true; // postgres
+  if (code.startsWith('SQLITE_CONSTRAINT')) return true; // libsql / sqlite
+  const msg = (e.message ?? '').toLowerCase();
+  return msg.includes('unique constraint') || msg.includes('sqlite_constraint_unique');
+}
 
 /**
  * Render a Handlebars schedule-prompt template against the schedule's
@@ -300,14 +332,19 @@ export class SchedulerService {
     const isDue = isPrevDue || isNextDue;
 
     if (!isDue) {
-      // next_run_at is in the future — refresh it on the row so the
-      // hot-path query stops returning this schedule until it's actually
-      // due again. Cheap UPDATE on a single row.
-      if (schedule.next_run_at == null) {
+      // Advance `next_run_at` to the real next fire whenever the stored
+      // value isn't already pointing at it. This covers both the
+      // never-fired case (NULL) and the stale-past case (a missed fire
+      // is outside the grace window — e.g. a weekly schedule that was
+      // disabled past its Monday-9am slot, or the daemon was down long
+      // enough to miss the window). Without this, findDue keeps
+      // returning the schedule on every tick until the next real fire,
+      // turning the hot-path index back into a scan of stale rows.
+      if (schedule.next_run_at == null || schedule.next_run_at <= now) {
         await this.scheduleRepo
           .update(schedule.schedule_id, { next_run_at: nextRunAt })
           .catch((err) =>
-            console.error(`Failed to seed next_run_at for ${schedule.schedule_id}:`, err)
+            console.error(`Failed to advance next_run_at for ${schedule.schedule_id}:`, err)
           );
       }
       if (this.config.debug) {
@@ -465,17 +502,28 @@ export class SchedulerService {
    * 1. Look up the schedule's branch (cascaded delete means it should
    *    always exist; we still handle null defensively).
    * 2. Dedup against `sessions(schedule_id, scheduled_run_at)`.
-   * 3. Enforce `allow_concurrent_runs` against active sessions on the
-   *    schedule (not the branch — multiple schedules per branch may run
-   *    independently subject to this flag).
+   * 3. Enforce `allow_concurrent_runs` against any active session in the
+   *    SAME BRANCH (sibling schedules on the same branch are sequential
+   *    by default; opt out per-schedule via allow_concurrent_runs).
    * 4. Render prompt template (Handlebars).
    * 5. Look up creator's unix_username for execution context.
    * 6. Create session with schedule metadata + `schedule_id` FK.
+   *    A partial unique index on (schedule_id, scheduled_run_at) acts
+   *    as the DB-level race guard — if a concurrent path raced past
+   *    the dedup check, the insert fails and we treat it as dedup.
    * 7. Attach MCP servers and trigger prompt.
    * 8. Update schedule metadata (last_run_at, last_run_session_id,
    *    next_run_at).
    * 9. Enforce retention policy (oldest sessions on this schedule_id
    *    are deleted).
+   *
+   * NOTE (multi-daemon, deferred): with the current per-schedule
+   * advisory lock, two daemons can each lock different schedules on
+   * the same branch and both pass the branch-wide concurrency guard
+   * before either creates a session, then both spawn. Branch-scoped
+   * coordination (lock on branch when allow_concurrent_runs=false)
+   * will be needed once we support multi-daemon. Out of scope for V1
+   * since multi-daemon isn't supported yet.
    */
   private async spawnScheduledSession(
     schedule: Schedule,
@@ -510,13 +558,16 @@ export class SchedulerService {
       return existingSession;
     }
 
-    // 2. Concurrency guard — branch-wide (matches pre-#1253 behavior).
-    //    Any active session in the branch blocks scheduled runs, regardless
-    //    of which schedule it came from. Sibling schedules on the same
-    //    branch are sequential by default; opt out via allow_concurrent_runs.
-    //    Resolved via one indexed COUNT, not a full sessions scan.
+    // 2. Concurrency guard — branch-wide. Any active session in the
+    //    branch blocks scheduled runs, regardless of which schedule it
+    //    came from. Sibling schedules on the same branch are sequential
+    //    by default; opt out per-schedule via allow_concurrent_runs.
+    //    Existence probe (LIMIT 1) — no need to count.
     if (!schedule.allow_concurrent_runs) {
-      const active = await this.sessionRepo.hasActiveSessionInBranch(branch.branch_id);
+      const active = await this.sessionRepo.existsInBranchWithStatuses(
+        branch.branch_id,
+        ACTIVE_SESSION_STATUSES
+      );
       if (active) {
         if (manual) {
           console.log(
@@ -591,8 +642,29 @@ export class SchedulerService {
       };
 
       // Use service for session creation (triggers WebSocket events).
+      // The partial unique index on (schedule_id, scheduled_run_at)
+      // catches any concurrent path that raced past the dedup check —
+      // we surface that as a normal dedup hit rather than an error.
       const sessionsService = this.app.service('sessions');
-      const createdSession = await sessionsService.create(session);
+      let createdSession: Session;
+      try {
+        createdSession = await sessionsService.create(session);
+      } catch (err) {
+        if (isUniqueConstraintError(err)) {
+          const winner = await this.sessionRepo.findScheduleRun(
+            schedule.schedule_id,
+            scheduledRunAt
+          );
+          if (winner) {
+            console.log(
+              `      🪞 ${schedule.name}: lost the spawn race — using existing session ${shortId(winner.session_id)}`
+            );
+            await this.updateScheduleMetadata(schedule, scheduledRunAt, winner.session_id, now);
+            return winner;
+          }
+        }
+        throw err;
+      }
       console.log(
         `      ✅ Spawned ${manual ? 'manual' : 'scheduled'} session for ${schedule.name} (run #${runIndex})` +
           (manual && triggeredBy ? ` triggered_by=${triggeredBy.substring(0, 8)}` : '')
