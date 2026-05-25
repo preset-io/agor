@@ -121,6 +121,21 @@ function filterSessionsByBranch<T extends { branch_id?: string }>(
   return { ...result, data, total: data.length };
 }
 
+function redactSessionForMcp<T extends { mcp_token?: unknown }>(session: T): Omit<T, 'mcp_token'> {
+  const { mcp_token: _mcpToken, ...safeSession } = session;
+  return safeSession;
+}
+
+function redactSessionFindResult<T extends { mcp_token?: unknown }>(
+  result: T[] | { data: T[]; [key: string]: unknown }
+): Array<Omit<T, 'mcp_token'>> | { data: Array<Omit<T, 'mcp_token'>>; [key: string]: unknown } {
+  if (Array.isArray(result)) {
+    return result.map(redactSessionForMcp);
+  }
+
+  return { ...result, data: result.data.map(redactSessionForMcp) };
+}
+
 export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_sessions_list
   server.registerTool(
@@ -191,12 +206,16 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         const limited = requestedLimit ? filtered.slice(0, requestedLimit) : filtered;
 
         if (Array.isArray(branchScopedResult)) {
-          return textResult(limited);
+          return textResult(limited.map(redactSessionForMcp));
         }
-        return textResult({ ...branchScopedResult, data: limited, total: filtered.length });
+        return textResult({
+          ...branchScopedResult,
+          data: limited.map(redactSessionForMcp),
+          total: filtered.length,
+        });
       }
 
-      return textResult(branchScopedResult);
+      return textResult(redactSessionFindResult(branchScopedResult));
     }
   );
 
@@ -221,7 +240,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         .service('sessions')
         .get(args.sessionId, sessionParams as Parameters<SessionsServiceImpl['get']>[1]);
       const attached_mcp_servers = await listAttachedMcpServers(ctx, session.session_id);
-      return textResult({ ...session, attached_mcp_servers });
+      return textResult({ ...redactSessionForMcp(session), attached_mcp_servers });
     }
   );
 
@@ -298,7 +317,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       const attached_mcp_servers = await listAttachedMcpServers(ctx, currentSessionId);
 
       return textResult({
-        session,
+        session: redactSessionForMcp(session),
         branch,
         repo,
         board,
@@ -563,7 +582,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       );
 
       return textResult({
-        session: childSession,
+        session: redactSessionForMcp(childSession),
         taskId: task.task_id,
         status: task.status,
         note: 'Subsession created and prompt execution started in background.',
@@ -696,7 +715,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             : 'Forked session created and prompt execution started.';
 
         return textResult({
-          session: updatedSession,
+          session: redactSessionForMcp(updatedSession),
           taskId: task.task_id,
           status: task.status,
           note,
@@ -725,7 +744,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         );
 
         return textResult({
-          session: childSession,
+          session: redactSessionForMcp(childSession),
           taskId: task.task_id,
           status: task.status,
           note: 'Subsession created and prompt execution started.',
@@ -949,7 +968,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           : '';
 
       return textResult({
-        session,
+        session: redactSessionForMcp(session),
         taskId: initialTask?.task_id,
         note: args.initialPrompt
           ? `Session created and initial prompt execution started.${callbackNote}${mcpFailureNote}`
@@ -1023,7 +1042,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       const session = await ctx.app
         .service('sessions')
         .patch(args.sessionId, updates, ctx.baseServiceParams);
-      return textResult({ session, note: 'Session updated successfully.' });
+      return textResult({
+        session: redactSessionForMcp(session),
+        note: 'Session updated successfully.',
+      });
     }
   );
 

@@ -164,8 +164,8 @@ describe('agor_sessions_list', () => {
             limit: 50,
             skip: 0,
             data: [
-              { session_id: 'sess-target', branch_id: 'wt-1', status: 'idle' },
-              { session_id: 'sess-other', branch_id: 'wt-2', status: 'idle' },
+              { session_id: 'sess-target', branch_id: 'wt-1', status: 'idle', mcp_token: 'tok1' },
+              { session_id: 'sess-other', branch_id: 'wt-2', status: 'idle', mcp_token: 'tok2' },
             ],
           };
         },
@@ -184,6 +184,39 @@ describe('agor_sessions_list', () => {
     expect(parsed.total).toBe(1);
     expect(parsed.data).toHaveLength(1);
     expect(parsed.data[0].session_id).toBe('sess-target');
+    expect(parsed.data[0]).not.toHaveProperty('mcp_token');
+  });
+});
+
+describe('agor_sessions_get', () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it('redacts mcp_token from the returned session payload', async () => {
+    const app = makeFakeApp({
+      sessions: {
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          status: 'idle',
+          mcp_token: 'secret-token',
+        }),
+      },
+      'session-mcp-servers': { find: async () => ({ data: [] }) },
+    });
+
+    const { agor_sessions_get } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_get']
+    );
+
+    const result = await agor_sessions_get({ sessionId: 'sess-target' });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.session_id).toBe('sess-target');
+    expect(parsed).not.toHaveProperty('mcp_token');
   });
 });
 
@@ -237,7 +270,11 @@ describe('agor_sessions_create', () => {
       sessions: {
         create: async (data: unknown) => {
           sessionCreates.push(data);
-          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+          return {
+            session_id: 'sess-new',
+            mcp_token: 'secret-token',
+            ...(data as Record<string, unknown>),
+          };
         },
       },
       '/sessions/:id/mcp-servers': { create: async () => ({}) },
@@ -248,7 +285,7 @@ describe('agor_sessions_create', () => {
       ['agor_sessions_create']
     );
 
-    await agor_sessions_create({
+    const result = await agor_sessions_create({
       branchId: 'wt-1',
       agenticTool: 'claude-code',
       modelConfig: { model: 'claude-opus-4-6', mode: 'alias', effort: 'max' },
@@ -262,6 +299,9 @@ describe('agor_sessions_create', () => {
     expect(created.model_config.mode).toBe('alias');
     expect(created.model_config.effort).toBe('max');
     expect(typeof created.model_config.updated_at).toBe('string');
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.session).not.toHaveProperty('mcp_token');
   });
 
   it('falls back to user default modelConfig when none is explicitly provided', async () => {
