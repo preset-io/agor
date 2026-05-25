@@ -137,7 +137,7 @@ const GEMINI_MODES: ModeOption[] = [
   },
 ];
 
-// Copilot/Cursor autonomous permission modes.
+// Copilot autonomous permission modes.
 const COPILOT_MODES: ModeOption[] = [
   {
     mode: 'default',
@@ -159,6 +159,19 @@ const COPILOT_MODES: ModeOption[] = [
     description: 'Auto-approve all operations without prompting',
     icon: <UnlockOutlined />,
     color: '#faad14', // Orange/yellow
+  },
+];
+
+// Cursor SDK is currently autonomous in Agor: @cursor/sdk does not expose a
+// blocking permission callback that we can proxy to the Agor UI. Keep the UI
+// honest by showing only the effective mode instead of borrowed Copilot modes.
+const CURSOR_MODES: ModeOption[] = [
+  {
+    mode: 'bypassPermissions',
+    label: 'Autonomous',
+    description: 'Cursor SDK runs autonomously; Agor cannot intercept permission requests yet',
+    icon: <UnlockOutlined />,
+    color: '#faad14',
   },
 ];
 
@@ -240,8 +253,9 @@ const getModesForTool = (tool: PermissionModeSelectorProps['agentic_tool']): Mod
     case 'opencode':
       return OPENCODE_MODES;
     case 'copilot':
-    case 'cursor':
       return COPILOT_MODES;
+    case 'cursor':
+      return CURSOR_MODES;
     default:
       return CLAUDE_CODE_MODES;
   }
@@ -260,7 +274,10 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
 }) => {
   const { token } = theme.useToken();
   const modes = getModesForTool(agentic_tool);
-  const effectiveValue = value || getDefaultPermissionMode(agentic_tool);
+  const effectiveValue =
+    agentic_tool === 'cursor'
+      ? 'bypassPermissions'
+      : value || getDefaultPermissionMode(agentic_tool);
   // Fill Codex prop defaults from the resolved mode so the dropdown shows
   // the same values the executor will actually run with for a session
   // missing explicit sub-config.

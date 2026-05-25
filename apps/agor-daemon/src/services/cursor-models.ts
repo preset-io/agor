@@ -26,6 +26,7 @@ export interface CursorModelsResult {
 }
 
 const DEFAULT_CURSOR_MODEL = 'composer-latest';
+const CURSOR_MODELS_TIMEOUT_MS = 8_000;
 
 const STATIC_RESULT: CursorModelsResult = {
   default: DEFAULT_CURSOR_MODEL,
@@ -53,6 +54,20 @@ function toModelOption(model: SDKModel): CursorModelOption {
   };
 }
 
+async function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export class CursorModelsService {
   constructor(private db: Database) {}
 
@@ -72,7 +87,11 @@ export class CursorModelsService {
     }
 
     try {
-      const dynamic = await Cursor.models.list({ apiKey: resolution.apiKey });
+      const dynamic = await withTimeout(
+        Cursor.models.list({ apiKey: resolution.apiKey }),
+        CURSOR_MODELS_TIMEOUT_MS,
+        'Cursor.models.list() timed out'
+      );
       console.log(
         `[Cursor Models] Fetched ${dynamic.length} models for user ${userId ? shortId(userId) : 'unknown'} (source: ${resolution.source})`
       );

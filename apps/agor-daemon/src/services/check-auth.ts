@@ -42,6 +42,20 @@ const SDK_AUTH_PROBE_TIMEOUT_MS = 10_000;
 // Codex treats the OAuth session as stale after ~8 days (per OpenAI docs).
 const CODEX_SESSION_STALE_MS = 8 * 24 * 60 * 60 * 1000;
 
+async function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /**
  * Verify Claude Code auth by spawning the SDK in streaming-input mode and
  * reading `accountInfo()` from its init handshake. The SDK launches the
@@ -199,7 +213,11 @@ async function validateApiKey(tool: string, key: string): Promise<boolean> {
       }
       case 'cursor': {
         const { Cursor } = await import('@cursor/sdk');
-        await Cursor.me({ apiKey: key });
+        await withTimeout(
+          Cursor.me({ apiKey: key }),
+          FETCH_TIMEOUT_MS,
+          'Cursor auth check timed out'
+        );
         return true;
       }
       default:

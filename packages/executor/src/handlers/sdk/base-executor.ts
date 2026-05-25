@@ -219,7 +219,7 @@ export function createExecutionContext(
  * Returns the SHA (with "-dirty" suffix if working directory has uncommitted changes)
  * or undefined if it cannot be determined.
  */
-async function captureGitStateAtTaskEnd(
+export async function captureGitStateAtTaskEnd(
   client: AgorClient,
   sessionId: SessionID
 ): Promise<string | undefined> {

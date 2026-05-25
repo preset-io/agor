@@ -93,6 +93,17 @@ const CURSOR_MODEL_OPTIONS = [
     description: 'Cursor SDK default model alias (experimental)',
   },
 ];
+const DEFAULT_CURSOR_MODEL = 'composer-latest';
+
+function preferDefaultModel<T extends { id: string }>(models: T[], defaultModel: string): T[] {
+  const defaultIndex = models.findIndex((model) => model.id === defaultModel);
+  if (defaultIndex <= 0) return models;
+  return [
+    models[defaultIndex],
+    ...models.slice(0, defaultIndex),
+    ...models.slice(defaultIndex + 1),
+  ];
+}
 
 /**
  * Model Selector Component
@@ -131,6 +142,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     description?: string;
   }> | null>(null);
   const [cursorSource, setCursorSource] = useState<'dynamic' | 'static' | null>(null);
+  const [cursorDefaultModel, setCursorDefaultModel] = useState(DEFAULT_CURSOR_MODEL);
 
   useEffect(() => {
     if (effectiveTool !== 'copilot' || !client) return;
@@ -165,13 +177,18 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         const raw = await client.service('cursor-models').find();
         const response = raw as unknown as DynamicModelsResponse;
         if (cancelled || !response?.models?.length) return;
+        const defaultModel = response.default || DEFAULT_CURSOR_MODEL;
         setCursorServerOptions(
-          response.models.map((m) => ({
-            id: m.id,
-            label: m.displayName,
-            description: m.description,
-          }))
+          preferDefaultModel(
+            response.models.map((m) => ({
+              id: m.id,
+              label: m.displayName,
+              description: m.description,
+            })),
+            defaultModel
+          )
         );
+        setCursorDefaultModel(defaultModel);
         setCursorSource(response.source);
       } catch {
         // Silent fallback to local static — best-effort.
@@ -192,7 +209,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           : effectiveTool === 'copilot'
             ? (copilotServerOptions ?? COPILOT_STATIC_MODEL_OPTIONS)
             : effectiveTool === 'cursor'
-              ? (cursorServerOptions ?? CURSOR_MODEL_OPTIONS)
+              ? preferDefaultModel(cursorServerOptions ?? CURSOR_MODEL_OPTIONS, cursorDefaultModel)
               : AVAILABLE_CLAUDE_MODEL_ALIASES;
 
   // Determine initial mode based on whether the value is in the aliases list
@@ -242,7 +259,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       } else if (effectiveTool === 'copilot') {
         defaultModel = DEFAULT_COPILOT_MODEL;
       } else if (effectiveTool === 'cursor') {
-        defaultModel = 'composer-latest';
+        defaultModel = cursorDefaultModel;
       } else {
         // claude-code (opencode is handled earlier in the component)
         defaultModel = 'claude-sonnet-4-6';
@@ -279,7 +296,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           {mode === 'alias' && (
             <div style={{ marginLeft: 24, marginTop: 8 }}>
               <Select
-                value={value?.model || modelList[0].id}
+                value={
+                  value?.model ||
+                  (effectiveTool === 'cursor' ? cursorDefaultModel : modelList[0].id)
+                }
                 onChange={handleModelChange}
                 style={{ width: '100%', minWidth: 400 }}
                 options={modelList.map((m) => ({

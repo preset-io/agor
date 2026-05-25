@@ -17,6 +17,7 @@ import type {
   MessageSource,
   PermissionMode,
   SessionID,
+  Task,
   TaskID,
 } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
@@ -27,7 +28,7 @@ import type { ResolvedConfigSlice } from '../../payload-types.js';
 import { getMcpServersForSession } from '../../sdk-handlers/base/mcp-scoping.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import type { AgorClient } from '../../services/feathers-client.js';
-import { createStreamingCallbacks } from './base-executor.js';
+import { captureGitStateAtTaskEnd, createStreamingCallbacks } from './base-executor.js';
 
 type CursorKeyResolution = {
   apiKey?: string;
@@ -54,7 +55,7 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function normalizeCursorToolName(name: string): string {
+export function normalizeCursorToolName(name: string): string {
   switch (name.toLowerCase()) {
     case 'shell':
     case 'bash':
@@ -83,7 +84,7 @@ function normalizeCursorToolName(name: string): string {
   }
 }
 
-function normalizeCursorToolInput(
+export function normalizeCursorToolInput(
   event: Extract<SDKMessage, { type: 'tool_call' }>
 ): Record<string, unknown> {
   const input = { ...asRecord(event.args) };
@@ -120,6 +121,20 @@ function normalizeCursorToolInput(
   }
 
   return input;
+}
+
+export function buildCursorAssistantContent(args: {
+  text: string;
+  thinkingText?: string;
+}): ContentBlock[] {
+  const content: ContentBlock[] = [];
+  if (args.thinkingText?.trim()) {
+    content.push({ type: 'thinking', text: args.thinkingText });
+  }
+  if (args.text) {
+    content.push({ type: 'text', text: args.text });
+  }
+  return content;
 }
 
 function claimMcpName(rawName: string, claimed: Set<string>): string {
@@ -239,6 +254,7 @@ async function createUserMessage(args: {
   taskId: TaskID;
   prompt: string;
   index: number;
+  messageSource?: MessageSource;
   existingMessages?: ReadonlyArray<Message>;
 }): Promise<Message> {
   const existing = args.existingMessages?.find(
@@ -259,6 +275,7 @@ async function createUserMessage(args: {
     timestamp: new Date().toISOString(),
     content_preview: args.prompt.substring(0, 200),
     content: args.prompt,
+    metadata: args.messageSource ? { source: args.messageSource } : undefined,
   });
   return {
     message_id: messageId,
@@ -270,6 +287,7 @@ async function createUserMessage(args: {
     timestamp: new Date().toISOString(),
     content_preview: args.prompt.substring(0, 200),
     content: args.prompt,
+    metadata: args.messageSource ? { source: args.messageSource } : undefined,
   };
 }
 
@@ -404,6 +422,11 @@ export async function executeCursorTask(params: {
   const { client, sessionId, taskId, prompt } = params;
 
   console.log(`[cursor] Executing task ${shortId(taskId)}...`);
+  if (params.permissionMode && params.permissionMode !== 'bypassPermissions') {
+    console.warn(
+      `[cursor] Ignoring permission mode "${params.permissionMode}"; @cursor/sdk currently runs autonomously in Agor.`
+    );
+  }
 
   let currentRun: Run | undefined;
   const abortHandler = () => {
@@ -464,11 +487,17 @@ export async function executeCursorTask(params: {
         taskId,
         prompt,
         index: getNextMessageIndexFrom(existingMessages),
+        messageSource: params.messageSource,
         existingMessages,
       });
 
       const assistantMessageId = generateId() as MessageID;
       let nextIndex = Math.max(getNextMessageIndexFrom(existingMessages), userMessage.index + 1);
+      let assistantMessageIndex: number | undefined;
+      const ensureAssistantMessageIndex = () => {
+        assistantMessageIndex ??= nextIndex++;
+        return assistantMessageIndex;
+      };
       let assistantStreamStarted = false;
       let assistantText = '';
       let thinkingStarted = false;
@@ -516,6 +545,7 @@ export async function executeCursorTask(params: {
           setAssistantStreamStarted: (value) => {
             assistantStreamStarted = value;
           },
+          ensureAssistantMessageIndex,
           isThinkingStarted: () => thinkingStarted,
           setThinkingStarted: (value) => {
             thinkingStarted = value;
@@ -533,14 +563,15 @@ export async function executeCursorTask(params: {
       const runResult = await currentRun.wait();
       const resultText = typeof runResult.result === 'string' ? runResult.result : '';
       const finalText = resultText.length > assistantText.length ? resultText : assistantText;
-      if (finalText) {
+      const finalContent = buildCursorAssistantContent({ text: finalText, thinkingText });
+      if (finalContent.length > 0) {
         await createAssistantMessage({
           client,
           sessionId,
           taskId,
           messageId: assistantMessageId,
-          index: nextIndex++,
-          content: [{ type: 'text', text: finalText }],
+          index: assistantMessageIndex ?? nextIndex++,
+          content: finalContent,
           preview: finalText,
           model: runResult.model?.id ?? model.id,
         });
@@ -548,7 +579,8 @@ export async function executeCursorTask(params: {
 
       const failed = runResult.status === 'error';
       const stopped = runResult.status === 'cancelled' || params.abortController.signal.aborted;
-      await client.service('tasks').patch(taskId, {
+      const shaAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
+      const taskPatch: Partial<Task> = {
         status: stopped ? 'stopped' : failed ? 'failed' : 'completed',
         completed_at: new Date().toISOString(),
         model: runResult.model?.id ?? model.id,
@@ -558,18 +590,29 @@ export async function executeCursorTask(params: {
           agentId: agent.agentId,
           toolCallMessageIds,
         },
-      });
+      };
+      if (shaAtEnd) {
+        // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
+        taskPatch.git_state = { sha_at_end: shaAtEnd };
+      }
+      await client.service('tasks').patch(taskId, taskPatch);
     } finally {
       agent.close();
     }
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
     console.error('[cursor] Execution failed:', err);
-    await client.service('tasks').patch(taskId, {
+    const shaAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
+    const taskPatch: Partial<Task> = {
       status: 'failed',
       completed_at: new Date().toISOString(),
       error_message: err.message,
-    });
+    };
+    if (shaAtEnd) {
+      // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
+      taskPatch.git_state = { sha_at_end: shaAtEnd };
+    }
+    await client.service('tasks').patch(taskId, taskPatch);
     await createSystemErrorMessage({ client, sessionId, taskId, message: err.message });
     throw err;
   } finally {
@@ -594,6 +637,7 @@ async function handleCursorEvent(args: {
   setThinkingText: (value: string) => void;
   isAssistantStreamStarted: () => boolean;
   setAssistantStreamStarted: (value: boolean) => void;
+  ensureAssistantMessageIndex: () => number;
   isThinkingStarted: () => boolean;
   setThinkingStarted: (value: boolean) => void;
 }): Promise<void> {
@@ -610,6 +654,7 @@ async function handleCursorEvent(args: {
       const updatedText = isCumulative ? nextText : previousText + nextText;
 
       if (!args.isAssistantStreamStarted()) {
+        args.ensureAssistantMessageIndex();
         await args.callbacks.onStreamStart(args.assistantMessageId, {
           session_id: args.sessionId,
           task_id: args.taskId,
@@ -626,17 +671,18 @@ async function handleCursorEvent(args: {
     case 'thinking': {
       if (!args.callbacks.onThinkingChunk) return;
       const previousText = args.getThinkingText();
-      const delta = args.event.text.startsWith(previousText)
-        ? args.event.text.slice(previousText.length)
-        : args.event.text;
+      const isCumulative = args.event.text.startsWith(previousText);
+      const delta = isCumulative ? args.event.text.slice(previousText.length) : args.event.text;
       if (!delta) return;
+      const updatedText = isCumulative ? args.event.text : previousText + args.event.text;
 
       if (!args.isThinkingStarted() && args.callbacks.onThinkingStart) {
+        args.ensureAssistantMessageIndex();
         await args.callbacks.onThinkingStart(args.assistantMessageId, {});
         args.setThinkingStarted(true);
       }
       await args.callbacks.onThinkingChunk(args.assistantMessageId, delta);
-      args.setThinkingText(args.event.text);
+      args.setThinkingText(updatedText);
       return;
     }
 
