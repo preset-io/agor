@@ -510,9 +510,19 @@ export const App: React.FC<AppProps> = ({
     const sessionId = await onCreateSession?.(config, currentBoardId);
     setNewSessionBranchId(null);
 
-    // If session was created successfully, open the drawer to show it
+    // Route through the URL so useUrlState owns the resulting selection.
+    // Setting selectedSessionId directly raced with two effects that
+    // could revert it before the drawer ever opened:
+    //   1. `effectiveSelectedSessionId` filters via sessionById.has(...),
+    //      which is false until the socket `created` event arrives.
+    //   2. The cleanup effect below clears selectedSessionId for the
+    //      same reason, then the state→URL self-heal rewrites the URL
+    //      back to /b/<board>/.
+    // goToSession pushes the URL immediately; once the session lands in
+    // sessionById, useUrlState's URL→state effect resolves it and sets
+    // selection, which is the durable path.
     if (sessionId) {
-      setSelectedSessionId(sessionId);
+      navigation.goToSession(sessionId);
     }
   };
 

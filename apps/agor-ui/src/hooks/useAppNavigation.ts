@@ -128,13 +128,19 @@ export function useAppNavigation({
 
   const goToSession = useCallback(
     (sessionId: string, opts?: NavigationOpts) => {
-      const session = sessionByIdRef.current.get(sessionId);
-      if (!session) return;
-      // pushPath returns false when the target equals current path — no
-      // history transition fires, so the URL→state recenter effect
-      // won't run. Fall back to a direct recenter via the branch.
+      // Push unconditionally: a just-created session may not be in
+      // `sessionById` yet (socket `created` event still in flight), and
+      // bailing here on lookup miss would silently strand the caller on
+      // the prior URL. useUrlState's URL→state effect re-runs when the
+      // session arrives in the map and drives selection from there.
       if (!pushPath(sessionPath(sessionId as SessionID), opts)) {
-        const branch = branchByIdRef.current.get(session.branch_id);
+        // Same-URL click on the already-open session — no history
+        // transition, so the URL→state recenter effect won't run. Fall
+        // back to a direct recenter via the branch when we have it.
+        const session = sessionByIdRef.current.get(sessionId);
+        const branch = session?.branch_id
+          ? branchByIdRef.current.get(session.branch_id)
+          : undefined;
         if (branch?.board_id) {
           recenterMap(branch.branch_id, { boardId: branch.board_id });
         }
