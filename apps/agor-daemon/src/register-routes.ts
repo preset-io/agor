@@ -97,9 +97,7 @@ import {
   PERMISSION_RANK,
   resolveBranchPermission,
 } from './utils/branch-authorization.js';
-import { inspectBranchViaExecutor } from './utils/branch-inspect.js';
 import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
-import { resolveExecutorReadAsUser } from './utils/executor-read-impersonation.js';
 import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
@@ -913,30 +911,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const messageStartIndex = await sessionsRepository.countMessages(task.session_id);
     const startTimestamp = new Date().toISOString();
 
-    // Recapture git state — the sentinels stored on a queued row are
-    // intentionally invalid; this is the moment we pin real values. Route the
-    // branch git read through the executor so the daemon never runs git inside
-    // the managed checkout.
-    let gitStateAtStart = 'unknown';
-    let refAtStart = 'unknown';
-    if (session.branch_id) {
-      try {
-        const branch = await app.service('branches').get(session.branch_id, params);
-        const { currentSha, currentRef } = await inspectBranchViaExecutor(app, branch.branch_id, {
-          asUser: await resolveExecutorReadAsUser(db, params.user),
-          logPrefix: `[task.start ${branch.name}]`,
-        });
-        gitStateAtStart = currentSha;
-        refAtStart = currentRef;
-        if (gitStateAtStart === 'unknown') {
-          console.warn(
-            `[Git State] branch.inspect returned 'unknown' for branch ${branch.path} (ref: ${refAtStart})`
-          );
-        }
-      } catch (error) {
-        console.warn(`[Git State] Failed to get git state for branch ${session.branch_id}:`, error);
-      }
-    }
+    // The daemon transitions the task to RUNNING and writes required sentinel
+    // git fields before executor spawn. The executor overwrites these with the
+    // authoritative task-start git state from inside the managed checkout.
+    const gitStateAtStart = 'unknown';
+    const refAtStart = 'unknown';
 
     // Patch task: queued/created → running, with real ranges. queue_position
     // is cleared here so a draining task is no longer considered queued.

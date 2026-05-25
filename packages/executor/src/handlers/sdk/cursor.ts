@@ -28,7 +28,12 @@ import type { ResolvedConfigSlice } from '../../payload-types.js';
 import { getMcpServersForSession } from '../../sdk-handlers/base/mcp-scoping.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import type { AgorClient } from '../../services/feathers-client.js';
-import { captureGitStateAtTaskEnd, createStreamingCallbacks } from './base-executor.js';
+import {
+  captureGitStateAtTaskEnd,
+  createStreamingCallbacks,
+  stampGitStateAtTaskStart,
+} from './base-executor.js';
+import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
 
 type CursorKeyResolution = {
   apiKey?: string;
@@ -446,6 +451,9 @@ export async function executeCursorTask(params: {
   params.abortController.signal.addEventListener('abort', abortHandler);
 
   try {
+    await configureSessionGitSafeDirectories(client, sessionId, '[cursor git.safe-directory]');
+    await stampGitStateAtTaskStart(client, sessionId, taskId);
+
     const apiKey = await resolveCursorApiKey(client, taskId);
     const session = await client.service('sessions').get(sessionId);
     const repos = createFeathersBackedRepositories(client);

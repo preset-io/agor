@@ -7,7 +7,7 @@
 
 import { type ApiKeyName, resolveApiKey } from '@agor/core/config';
 import { generateId, shortId } from '@agor/core/db';
-import { getGitState } from '@agor/core/git';
+import { getCurrentBranch, getGitState } from '@agor/core/git';
 import type {
   AgenticToolName,
   ContextUsageSnapshot,
@@ -210,54 +210,94 @@ export function createExecutionContext(
   };
 }
 
+type CapturedGitState = {
+  sha: string;
+  ref: string;
+};
+
 /**
- * Capture git state at task end and update session's current_sha
+ * Capture git state from inside the executor process.
  *
- * Fetches the branch path from the session and captures the current git state.
- * Also updates the session's git_state.current_sha to keep it in sync.
- * Returns the SHA (with "-dirty" suffix if working directory has uncommitted changes)
- * or undefined if it cannot be determined.
+ * The daemon should not run git inside managed branch checkouts just to stamp
+ * task bookkeeping. The executor is already running with the correct Unix
+ * identity/environment, so task start/end snapshots belong here.
  */
-export async function captureGitStateAtTaskEnd(
+async function captureGitStateForSession(
   client: AgorClient,
-  sessionId: SessionID
-): Promise<string | undefined> {
+  sessionId: SessionID,
+  phase: 'start' | 'end'
+): Promise<CapturedGitState | undefined> {
   try {
-    // Get session to find branch
     const session = await client.service('sessions').get(sessionId);
     if (!session.branch_id) {
-      console.warn('[Git SHA Capture] Session has no branch_id');
+      console.warn(`[Git SHA Capture] Session has no branch_id at task ${phase}`);
       return undefined;
     }
 
-    // Get branch to find path
     const branch = await client.service('branches').get(session.branch_id);
     if (!branch.path) {
-      console.warn('[Git SHA Capture] Branch has no path');
+      console.warn(`[Git SHA Capture] Branch has no path at task ${phase}`);
       return undefined;
     }
 
-    // Get current git state (includes dirty detection)
     const sha = await getGitState(branch.path);
+    let ref = 'unknown';
+    try {
+      ref = await getCurrentBranch(branch.path);
+    } catch (error) {
+      console.warn(
+        `[Git SHA Capture] Failed to capture git ref at task ${phase}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+
     console.log(
-      `[Git SHA Capture] Captured git state at task end: ${sha.substring(0, 8)}${sha.endsWith('-dirty') ? ' (dirty)' : ''}`
+      `[Git SHA Capture] Captured git state at task ${phase}: ${sha.substring(0, 8)}${sha.endsWith('-dirty') ? ' (dirty)' : ''} ref=${ref}`
     );
 
-    // Update session's current_sha to keep it in sync as tasks complete
-    if (sha && sha !== 'unknown') {
+    // Update session's current_sha to keep it in sync as tasks complete.
+    if (phase === 'end' && sha && sha !== 'unknown') {
       try {
         await client.service('sessions').patch(sessionId, {
-          git_state: { ...session.git_state, current_sha: sha },
+          git_state: { ...session.git_state, current_sha: sha, ref },
         });
       } catch (sessionPatchError) {
         console.warn('[Git SHA Capture] Failed to update session current_sha:', sessionPatchError);
       }
     }
 
-    return sha;
+    return { sha, ref };
   } catch (error) {
-    console.warn('[Git SHA Capture] Failed to capture git SHA at task end:', error);
+    console.warn(`[Git SHA Capture] Failed to capture git state at task ${phase}:`, error);
     return undefined;
+  }
+}
+
+export async function captureGitStateAtTaskEnd(
+  client: AgorClient,
+  sessionId: SessionID
+): Promise<string | undefined> {
+  const gitState = await captureGitStateForSession(client, sessionId, 'end');
+  return gitState?.sha;
+}
+
+export async function stampGitStateAtTaskStart(
+  client: AgorClient,
+  sessionId: SessionID,
+  taskId: TaskID
+): Promise<void> {
+  const gitState = await captureGitStateForSession(client, sessionId, 'start');
+  if (!gitState) return;
+
+  try {
+    await client.service('tasks').patch(taskId, {
+      git_state: {
+        ref_at_start: gitState.ref,
+        sha_at_start: gitState.sha,
+      },
+    });
+  } catch (error) {
+    console.warn('[Git SHA Capture] Failed to stamp task start git state:', error);
   }
 }
 
@@ -324,6 +364,12 @@ export async function executeToolTask(params: {
   // create and run successfully through executor-mediated git probes while
   // `git status` inside the agent shell still fails with dubious ownership.
   await configureSessionGitSafeDirectories(client, sessionId, `[${toolName} git.safe-directory]`);
+
+  // Capture and stamp task-start git state inside the executor as early as
+  // possible. The daemon transitions the task to RUNNING before spawn, but the
+  // authoritative branch git read belongs here with the rest of
+  // executor-mediated git work.
+  await stampGitStateAtTaskStart(client, sessionId, taskId);
 
   // Resolve API key with proper precedence (user → config → env → native auth).
   // Pass `toolName` so the daemon scopes the per-user lookup to this tool's
@@ -402,7 +448,7 @@ export async function executeToolTask(params: {
     );
 
     // Capture git SHA at task end
-    const shaAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
+    const gitStateAtEnd = await captureGitStateForSession(client, sessionId, 'end');
 
     // Determine task status based on SDK result
     // - wasStopped: user explicitly stopped the task
@@ -423,10 +469,10 @@ export async function executeToolTask(params: {
 
     // Add git_state if we captured a SHA
     // Note: This will be deep-merged with existing git_state by the repository layer
-    if (shaAtEnd) {
+    if (gitStateAtEnd) {
       // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
       patchData.git_state = {
-        sha_at_end: shaAtEnd,
+        sha_at_end: gitStateAtEnd.sha,
       };
     }
 
@@ -506,7 +552,7 @@ export async function executeToolTask(params: {
     console.error(`[${toolName}] Execution failed:`, err);
 
     // Capture git SHA at task end (even for failed tasks)
-    const shaAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
+    const gitStateAtEnd = await captureGitStateForSession(client, sessionId, 'end');
 
     // Build patch data
     const patchData: Partial<Task> = {
@@ -519,10 +565,10 @@ export async function executeToolTask(params: {
 
     // Add git_state if we captured a SHA
     // Note: This will be deep-merged with existing git_state by the repository layer
-    if (shaAtEnd) {
+    if (gitStateAtEnd) {
       // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
       patchData.git_state = {
-        sha_at_end: shaAtEnd,
+        sha_at_end: gitStateAtEnd.sha,
       };
     }
 
