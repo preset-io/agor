@@ -10,12 +10,11 @@
  */
 import { json } from '@codemirror/lang-json';
 import { yaml } from '@codemirror/lang-yaml';
+import { oneDark } from '@codemirror/theme-one-dark';
 import CodeMirror from '@uiw/react-codemirror';
 import type React from 'react';
 import { useMemo } from 'react';
 import { useTheme } from '../../contexts/ThemeContext';
-// Local rebuild of oneDark — see oneDarkTheme.ts for the why.
-import { oneDark } from './oneDarkTheme';
 
 export type CodeEditorLanguage = 'json' | 'yaml';
 
