@@ -404,14 +404,18 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
   taskMetadata,
   style,
 }) => {
-  // Prefer the executor-supplied snapshot percentage (matches the agent's own
-  // "Context XX% used" indicator — e.g. Codex applies a baseline subtraction
-  // that does NOT equal raw `used / limit`). Falls back to the ratio when no
-  // snapshot is available.
+  // Prefer the executor-supplied snapshot — its totalTokens/maxTokens are
+  // authoritative (agent-reported), and its `percentage` matches the agent's
+  // own "Context XX% used" display (e.g. Codex applies a baseline subtraction
+  // that does NOT equal raw `used / limit`). Fall back to the explicit
+  // used/limit props when no snapshot is available.
   const snapshot = taskMetadata?.normalized_sdk_response?.contextUsageSnapshot;
-  const percentage =
-    limit > 0 || snapshot ? Math.round(resolveContextWindowPercentage(used, limit, snapshot)) : 0;
-  const hasLimit = limit > 0;
+  const effectiveUsed = snapshot?.totalTokens ?? used;
+  const effectiveLimit = snapshot?.maxTokens ?? limit;
+  const hasLimit = effectiveLimit > 0;
+  const percentage = hasLimit
+    ? Math.round(resolveContextWindowPercentage(effectiveUsed, effectiveLimit, snapshot))
+    : 0;
 
   // Color-code based on usage: green (<50%), yellow (50-80%), red (>80%)
   const getColor = () => {
@@ -431,8 +435,8 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
     <Popover
       content={
         <ContextWindowPopoverContent
-          used={used}
-          limit={limit}
+          used={effectiveUsed}
+          limit={effectiveLimit}
           percentage={percentage}
           taskMetadata={taskMetadata}
         />

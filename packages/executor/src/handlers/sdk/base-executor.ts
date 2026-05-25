@@ -74,16 +74,12 @@ export interface BaseTool {
   }>;
 
   /**
-   * Compute cumulative context window usage for a session
+   * Fallback: compute current context-window occupancy for a session.
    *
-   * Each tool implements its own strategy:
-   * - Claude Code: Sum input+output tokens across tasks since last compaction
-   * - Codex/Gemini: May use SDK's cumulative reporting
-   *
-   * @param sessionId - Session ID to compute context for
-   * @param currentTaskId - Current task ID (optional)
-   * @param currentRawSdkResponse - Raw SDK response for current task (required during task completion)
-   * @returns Cumulative context window usage in tokens
+   * Only invoked when no authoritative `rawContextUsage` snapshot was
+   * captured during the turn. See the canonical doc on
+   * `ITool.computeContextWindow` in `sdk-handlers/base/tool.interface.ts`
+   * for the full source-precedence rules and per-tool strategy notes.
    */
   computeContextWindow?(
     sessionId: string,
@@ -461,19 +457,13 @@ export async function executeToolTask(params: {
         `[${toolName}] Authoritative context snapshot: ${result.rawContextUsage.totalTokens}/${result.rawContextUsage.maxTokens} tokens (${result.rawContextUsage.percentage}%)`
       );
 
-      // Override contextWindowLimit in normalized response with the authoritative
-      // maxTokens from the snapshot so the UI computes percentage correctly.
-      if (
-        patchData.normalized_sdk_response &&
-        typeof patchData.normalized_sdk_response === 'object'
-      ) {
-        const normalizedResponse = patchData.normalized_sdk_response as Record<string, unknown>;
-        normalizedResponse.contextWindowLimit = result.rawContextUsage.maxTokens;
-        normalizedResponse.contextUsageSnapshot = {
-          totalTokens: result.rawContextUsage.totalTokens,
-          maxTokens: result.rawContextUsage.maxTokens,
-          percentage: result.rawContextUsage.percentage,
-        };
+      // Override contextWindowLimit in the normalized response with the
+      // authoritative maxTokens so the UI computes percentage against the
+      // model's actual reported window, and attach the snapshot itself so
+      // UI consumers can prefer the agent's own displayed percentage.
+      if (patchData.normalized_sdk_response) {
+        patchData.normalized_sdk_response.contextWindowLimit = result.rawContextUsage.maxTokens;
+        patchData.normalized_sdk_response.contextUsageSnapshot = result.rawContextUsage;
       }
     } else {
       // No authoritative event_msg/token_count snapshot was captured during the

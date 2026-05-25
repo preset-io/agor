@@ -172,10 +172,19 @@ export interface Task {
     contextUsageSnapshot?: ContextUsageSnapshot;
   };
 
-  // Computed context window - cumulative token usage for this session
-  // Calculated by tool.computeContextWindow() and stored for efficient access
-  // For Claude Code: sum of input+output tokens from all tasks since last compaction
-  // For Codex/Gemini: may use latest task's SDK-reported cumulative value
+  // Current context-window occupancy in tokens at the end of this task.
+  //
+  // Source precedence (set by base-executor):
+  // 1. `normalized_sdk_response.contextUsageSnapshot.totalTokens` when the
+  //    tool surfaced an authoritative snapshot (Claude SDK getContextUsage,
+  //    Codex CLI event_msg/token_count last_token_usage). This is the common
+  //    case and is what UI consumers should rely on.
+  // 2. Otherwise the tool's `computeContextWindow()` fallback (per-tool
+  //    heuristic — see tool.interface.ts).
+  //
+  // For display percentages, prefer `contextUsageSnapshot.percentage` over
+  // recomputing here — Codex applies a baseline subtraction that does NOT
+  // equal raw `computed_context_window / contextWindowLimit`.
   computed_context_window?: number;
 
   // Report (auto-generated after task completion)

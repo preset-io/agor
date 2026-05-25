@@ -24,15 +24,20 @@ function sanitizeTokenCount(value: number | undefined): number | undefined {
 }
 
 /**
- * Codex baseline-adjusted "% context used" — equivalent to
- * `100 - percent_of_context_window_remaining(window)` from codex-rs
- * (protocol.rs), so our UI shows the same number as the Codex TUI's
+ * Codex baseline-adjusted "% context used" — exact complement of
+ * `percent_of_context_window_remaining(window)` in codex-rs
+ * (protocol.rs), so our UI shows the same integer as the Codex TUI's
  * "Context XX% used" indicator.
  *
+ * Implemented by computing `remaining` first and returning
+ * `100 - round(remaining/effective * 100)`. Doing it the other way
+ * (rounding `used/effective` directly) drifts by 1 at `.5` boundaries
+ * because of how rounding is asymmetric around the midpoint.
+ *
  * Both `usedTokens` and `contextWindow` have `CODEX_BASELINE_OVERHEAD_TOKENS`
- * subtracted before the division, so the percentage reflects user-controllable
- * context only. Returns a 0–100 integer; returns 0 when the window is at or
- * below the baseline (degenerate).
+ * subtracted before the division, so the percentage reflects
+ * user-controllable context only. Returns a 0–100 integer; returns 0
+ * when the window is at or below the baseline (degenerate).
  *
  * Exported so tests can assert against the production formula instead of
  * re-implementing it in a test helper.
@@ -41,7 +46,12 @@ export function codexUsedPercentage(usedTokens: number, contextWindow: number): 
   if (contextWindow <= CODEX_BASELINE_OVERHEAD_TOKENS) return 0;
   const effectiveWindow = contextWindow - CODEX_BASELINE_OVERHEAD_TOKENS;
   const used = Math.max(0, usedTokens - CODEX_BASELINE_OVERHEAD_TOKENS);
-  return Math.max(0, Math.min(100, Math.round((used / effectiveWindow) * 100)));
+  const remaining = Math.max(0, effectiveWindow - used);
+  const remainingPercent = Math.max(
+    0,
+    Math.min(100, Math.round((remaining / effectiveWindow) * 100))
+  );
+  return 100 - remainingPercent;
 }
 
 /**
