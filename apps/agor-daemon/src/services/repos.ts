@@ -21,7 +21,6 @@ import {
   PAGINATION,
   parseAgorYml,
   resolveBranchStorageConfig,
-  writeAgorYml,
 } from '@agor/core/config';
 import { BranchRepository, type Database, RepoRepository, shortId } from '@agor/core/db';
 import { autoAssignBranchUniqueId } from '@agor/core/environment/variable-resolver';
@@ -47,6 +46,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import { resolveGitImpersonationForUser } from '../utils/git-impersonation.js';
 import {
   generateSessionToken,
@@ -912,30 +912,58 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   }
 
   /**
-   * Resolve the `.agor.yml` location for an import/export request.
-   *
-   * Always reads from / writes to the given branch's working directory:
-   * `.agor.yml` is a branch-scoped file, so every import/export must name
-   * which branch (branch) it targets. Reading from the repo's base path
-   * would silently cross branch boundaries and is never what the caller
-   * wants.
+   * Authorize branch-scoped .agor.yml import/export requests.
    *
    * Routes through the branches service so RBAC hooks (loadBranch +
-   * ensureCanView) fire against the caller's params — calling the repository
-   * directly would bypass branch-level permission checks and let a user
-   * with repo access read/write a branch path they cannot see.
+   * ensureCanView) fire against the caller's params. File I/O itself happens
+   * inside the executor; the daemon only validates the branch/repo relation.
    */
-  private async resolveAgorYmlPath(
+  private async getAuthorizedAgorYmlBranch(
     repo: Repo,
     branchId: string,
     params?: RepoParams
-  ): Promise<string> {
+  ): Promise<Branch> {
     const branchesService = this.app.service('branches');
     const branch = (await branchesService.get(branchId, params)) as Branch;
     if (branch.repo_id !== repo.repo_id) {
       throw new Error(`Branch ${branchId} does not belong to repo ${repo.repo_id}`);
     }
-    return path.join(branch.path, '.agor.yml');
+    return branch;
+  }
+
+  private async runAgorYmlExecutorCommand(
+    repo: Repo,
+    branch: Branch,
+    command: 'branch.agor-yml.import' | 'branch.agor-yml.export',
+    params: Record<string, unknown>,
+    serviceParams?: RepoParams
+  ) {
+    const sessionToken = generateSessionToken(
+      this.app as unknown as { settings: { authentication?: { secret?: string } } }
+    );
+    const asUser = await resolveExecutorReadAsUser(
+      this.db,
+      (serviceParams as Partial<AuthenticatedParams> | undefined)?.user?.user_id as
+        | UserID
+        | undefined
+    );
+
+    return runExecutorCommand(
+      {
+        command,
+        sessionToken,
+        daemonUrl: getDaemonUrl(),
+        params: {
+          repoId: repo.repo_id,
+          branchId: branch.branch_id,
+          ...params,
+        },
+      },
+      {
+        logPrefix: `[${command} ${repo.slug}/${branch.name}]`,
+        asUser,
+      }
+    );
   }
 
   /**
@@ -955,11 +983,27 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       throw new Error('branch_id is required to import .agor.yml');
     }
     const repo = await this.get(id, params);
-    const agorYmlPath = await this.resolveAgorYmlPath(repo, data.branch_id, params);
+    const branch = await this.getAuthorizedAgorYmlBranch(repo, data.branch_id, params);
 
-    // Parse .agor.yml (returns v2 RepoEnvironment; v1 is wrapped automatically).
+    const importResult = await this.runAgorYmlExecutorCommand(
+      repo,
+      branch,
+      'branch.agor-yml.import',
+      {},
+      params
+    );
+    if (!importResult.success) {
+      throw new Error(
+        `Cannot import .agor.yml from ${branch.name}: ${importResult.error?.message ?? 'executor failed'}`
+      );
+    }
+
+    // Executor parsing returns v2 RepoEnvironment; v1 is wrapped automatically.
     // `template_overrides:` at any level throws — it is DB-only.
-    const environment = parseAgorYml(agorYmlPath);
+    const environment =
+      importResult.data && typeof importResult.data === 'object'
+        ? ((importResult.data as { environment?: RepoEnvironment | null }).environment ?? null)
+        : null;
 
     if (!environment) {
       throw new Error('.agor.yml not found or has no environment configuration');
@@ -1009,13 +1053,31 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       throw new Error('Repository has no environment configuration to export');
     }
 
-    const agorYmlPath = await this.resolveAgorYmlPath(repo, data.branch_id, params);
+    const branch = await this.getAuthorizedAgorYmlBranch(repo, data.branch_id, params);
 
     // Prefer v2 source of truth; fall back to legacy v1 view if somehow the
-    // v2 wrapper wasn't materialized (writeAgorYml handles both).
-    writeAgorYml(agorYmlPath, envToWrite ?? repo.environment_config!);
+    // v2 wrapper wasn't materialized (executor writeAgorYml handles both).
+    const exportResult = await this.runAgorYmlExecutorCommand(
+      repo,
+      branch,
+      'branch.agor-yml.export',
+      { environment: envToWrite ?? repo.environment_config! },
+      params
+    );
+    if (!exportResult.success) {
+      throw new Error(
+        `Cannot export .agor.yml to ${branch.name}: ${exportResult.error?.message ?? 'executor failed'}`
+      );
+    }
 
-    return { path: agorYmlPath };
+    const exportedPath =
+      exportResult.data && typeof exportResult.data === 'object'
+        ? (exportResult.data as { path?: unknown }).path
+        : undefined;
+
+    return {
+      path: typeof exportedPath === 'string' ? exportedPath : path.join(branch.path, '.agor.yml'),
+    };
   }
 
   /**
@@ -1072,8 +1134,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           daemonUrl: getDaemonUrl(),
           params: {
             repoId: repo.repo_id,
-            repoPath: repo.local_path,
-            branchPaths: branches.map((branch) => branch.path),
           },
         },
         {

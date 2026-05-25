@@ -492,6 +492,53 @@ export const BranchInspectPayloadSchema = BasePayloadSchema.extend({
 export type BranchInspectPayload = z.infer<typeof BranchInspectPayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
+// Branch .agor.yml Payloads
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Import branch-scoped .agor.yml from a managed branch checkout.
+ */
+export const BranchAgorYmlImportPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.agor-yml.import'),
+
+  /** JWT for Feathers authentication */
+  sessionToken: z.string(),
+
+  params: z.object({
+    /** Repo ID the branch must belong to */
+    repoId: z.string().uuid(),
+
+    /** Branch ID whose checkout should be read */
+    branchId: z.string().uuid(),
+  }),
+});
+
+export type BranchAgorYmlImportPayload = z.infer<typeof BranchAgorYmlImportPayloadSchema>;
+
+/**
+ * Export environment config into branch-scoped .agor.yml in a managed checkout.
+ */
+export const BranchAgorYmlExportPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.agor-yml.export'),
+
+  /** JWT for Feathers authentication */
+  sessionToken: z.string(),
+
+  params: z.object({
+    /** Repo ID the branch must belong to */
+    repoId: z.string().uuid(),
+
+    /** Branch ID whose checkout should be written */
+    branchId: z.string().uuid(),
+
+    /** Environment config to serialize */
+    environment: z.unknown(),
+  }),
+});
+
+export type BranchAgorYmlExportPayload = z.infer<typeof BranchAgorYmlExportPayloadSchema>;
+
+// ═══════════════════════════════════════════════════════════
 // Git Repo Realign Origin Payload
 // ═══════════════════════════════════════════════════════════
 
@@ -527,14 +574,8 @@ export const GitRepoDeletePayloadSchema = BasePayloadSchema.extend({
   sessionToken: z.string(),
 
   params: z.object({
-    /** Repo being deleted (for logs / result metadata) */
+    /** Repo being deleted; executor fetches/derives managed paths itself */
     repoId: z.string().uuid(),
-
-    /** Path to the managed repo directory */
-    repoPath: z.string(),
-
-    /** Managed branch directories to remove before the repo directory */
-    branchPaths: z.array(z.string()),
   }),
 });
 
@@ -759,6 +800,8 @@ export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   GitBranchCleanPayloadSchema,
   BranchFilesListPayloadSchema,
   BranchInspectPayloadSchema,
+  BranchAgorYmlImportPayloadSchema,
+  BranchAgorYmlExportPayloadSchema,
   GitRepoRealignOriginPayloadSchema,
   GitRepoDeletePayloadSchema,
   UnixSyncBranchPayloadSchema,
@@ -819,6 +862,8 @@ export function getSupportedCommands(): string[] {
     'git.branch.clean',
     'branch.files.list',
     'branch.inspect',
+    'branch.agor-yml.import',
+    'branch.agor-yml.export',
     'git.repo.realign-origin',
     'git.repo.delete',
     'unix.sync-branch',

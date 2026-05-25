@@ -37,6 +37,10 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf-8');
 }
 
+function emitExecutorResult(result: unknown): void {
+  console.log(`AGOR_EXECUTOR_RESULT ${JSON.stringify(result)}`);
+}
+
 /**
  * Handle JSON-over-stdin mode
  */
@@ -82,8 +86,8 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
   if (payload.command === 'zellij.attach') {
     const result = await executeCommand(payload, { dryRun: options.dryRun });
 
-    // Output result as JSON to stdout (for daemon to parse)
-    console.log(JSON.stringify(result));
+    // Output result on a sentinel line so daemon parsers can suppress it from logs.
+    emitExecutorResult(result);
 
     if (!result.success) {
       process.exit(1);
@@ -98,8 +102,8 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
   // All other commands go through the command router
   const result = await executeCommand(payload, { dryRun: options.dryRun });
 
-  // Output result as JSON to stdout
-  console.log(JSON.stringify(result));
+  // Output result on a sentinel line so daemon parsers can suppress it from logs.
+  emitExecutorResult(result);
 
   process.exit(result.success ? 0 : 1);
 }

@@ -21,6 +21,8 @@ describe('Command Registry', () => {
     expect(commands).toContain('git.branch.remove');
     expect(commands).toContain('branch.files.list');
     expect(commands).toContain('branch.inspect');
+    expect(commands).toContain('branch.agor-yml.import');
+    expect(commands).toContain('branch.agor-yml.export');
     expect(commands).toContain('git.repo.realign-origin');
     expect(commands).toContain('git.repo.delete');
     expect(commands).toContain('zellij.attach');
@@ -33,6 +35,8 @@ describe('Command Registry', () => {
     expect(hasCommand('git.branch.remove')).toBe(true);
     expect(hasCommand('branch.files.list')).toBe(true);
     expect(hasCommand('branch.inspect')).toBe(true);
+    expect(hasCommand('branch.agor-yml.import')).toBe(true);
+    expect(hasCommand('branch.agor-yml.export')).toBe(true);
     expect(hasCommand('git.repo.realign-origin')).toBe(true);
     expect(hasCommand('git.repo.delete')).toBe(true);
     expect(hasCommand('zellij.attach')).toBe(true);

@@ -9,6 +9,7 @@
 import { BranchRepository, type Database, SessionRepository, UsersRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, SessionID, UserID } from '@agor/core/types';
+import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import { generateSessionToken, getDaemonUrl, runExecutorCommand } from '../utils/spawn-executor.js';
 
 // Constants for file search
@@ -53,7 +54,7 @@ export class FilesService {
   private usersRepo: UsersRepository;
 
   constructor(
-    db: Database,
+    private db: Database,
     private app: Application
   ) {
     this.sessionRepo = new SessionRepository(db);
@@ -113,9 +114,10 @@ export class FilesService {
         },
         {
           logPrefix: `[FilesService ${sessionId}]`,
-          // In strict mode, autocomplete should run as the current user when
-          // available rather than as the session creator.
-          asUser: currentUser?.unix_username ?? undefined,
+          // In strict mode, autocomplete runs as the requesting Unix user.
+          // In simple/insulated mode this stays undefined so default installs
+          // do not require sudo and configured executor defaults can apply.
+          asUser: await resolveExecutorReadAsUser(this.db, currentUser ?? currentUserId),
         }
       );
 

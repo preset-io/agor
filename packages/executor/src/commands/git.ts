@@ -19,7 +19,7 @@
 
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseAgorYml } from '@agor/core/config';
+import { parseAgorYml, writeAgorYml } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import {
   categorizeGitError,
@@ -39,6 +39,8 @@ import {
   restoreBranchFilesystem,
 } from '@agor/core/git';
 import type {
+  BranchAgorYmlExportPayload,
+  BranchAgorYmlImportPayload,
   BranchFilesListPayload,
   BranchInspectPayload,
   ExecutorResult,
@@ -276,6 +278,113 @@ export async function handleBranchInspect(
   }
 }
 
+async function fetchBranchForRepo(client: AgorClient, repoId: string, branchId: string) {
+  const branch = await client.service('branches').get(branchId);
+  if (!branch?.path) {
+    throw new Error(`Branch ${branchId} has no path`);
+  }
+  if (branch.repo_id !== repoId) {
+    throw new Error(`Branch ${branchId} does not belong to repo ${repoId}`);
+  }
+  return branch;
+}
+
+/**
+ * Handle branch.agor-yml.import command.
+ * Reads branch-scoped .agor.yml from a managed checkout.
+ */
+export async function handleBranchAgorYmlImport(
+  payload: BranchAgorYmlImportPayload,
+  options: CommandOptions
+): Promise<ExecutorResult> {
+  const { repoId, branchId } = payload.params;
+
+  if (options.dryRun) {
+    return {
+      success: true,
+      data: { dryRun: true, command: 'branch.agor-yml.import', repoId, branchId },
+    };
+  }
+
+  let client: AgorClient | null = null;
+  try {
+    const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
+    client = await createExecutorClient(daemonUrl, payload.sessionToken);
+    const branch = await fetchBranchForRepo(client, repoId, branchId);
+    const agorYmlPath = join(branch.path, '.agor.yml');
+    const environment = parseAgorYml(agorYmlPath);
+
+    return { success: true, data: { repoId, branchId, environment } };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('[branch.agor-yml.import] Failed:', errorMessage);
+    return {
+      success: false,
+      error: {
+        code: 'BRANCH_AGOR_YML_IMPORT_FAILED',
+        message: errorMessage,
+        details: { repoId, branchId },
+      },
+    };
+  } finally {
+    if (client) {
+      try {
+        client.io.disconnect();
+      } catch {
+        // Ignore disconnect errors
+      }
+    }
+  }
+}
+
+/**
+ * Handle branch.agor-yml.export command.
+ * Writes environment config to branch-scoped .agor.yml in a managed checkout.
+ */
+export async function handleBranchAgorYmlExport(
+  payload: BranchAgorYmlExportPayload,
+  options: CommandOptions
+): Promise<ExecutorResult> {
+  const { repoId, branchId, environment } = payload.params;
+
+  if (options.dryRun) {
+    return {
+      success: true,
+      data: { dryRun: true, command: 'branch.agor-yml.export', repoId, branchId },
+    };
+  }
+
+  let client: AgorClient | null = null;
+  try {
+    const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
+    client = await createExecutorClient(daemonUrl, payload.sessionToken);
+    const branch = await fetchBranchForRepo(client, repoId, branchId);
+    const agorYmlPath = join(branch.path, '.agor.yml');
+    writeAgorYml(agorYmlPath, environment as Parameters<typeof writeAgorYml>[1]);
+
+    return { success: true, data: { repoId, branchId, path: agorYmlPath } };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('[branch.agor-yml.export] Failed:', errorMessage);
+    return {
+      success: false,
+      error: {
+        code: 'BRANCH_AGOR_YML_EXPORT_FAILED',
+        message: errorMessage,
+        details: { repoId, branchId },
+      },
+    };
+  } finally {
+    if (client) {
+      try {
+        client.io.disconnect();
+      } catch {
+        // Ignore disconnect errors
+      }
+    }
+  }
+}
+
 /**
  * Handle git.repo.realign-origin command.
  * Ensures the on-disk remote.origin.url matches the DB's canonical remote_url.
@@ -354,7 +463,7 @@ export async function handleGitRepoDelete(
   payload: GitRepoDeletePayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
-  const { repoId, repoPath, branchPaths } = payload.params;
+  const { repoId } = payload.params;
 
   if (options.dryRun) {
     return {
@@ -363,19 +472,43 @@ export async function handleGitRepoDelete(
         dryRun: true,
         command: 'git.repo.delete',
         repoId,
-        repoPath,
-        branchPaths,
       },
     };
   }
 
+  let client: AgorClient | null = null;
   const deletedPaths: string[] = [];
+  let repoPath: string | undefined;
 
   try {
-    for (const branchPath of branchPaths) {
-      await deleteBranchDirectory(branchPath);
-      deletedPaths.push(branchPath);
-      console.log(`🗑️  [git.repo.delete] Deleted branch directory: ${branchPath}`);
+    const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
+    client = await createExecutorClient(daemonUrl, payload.sessionToken);
+
+    const repo = await client.service('repos').get(repoId);
+    repoPath = repo.local_path;
+    if (!repoPath) {
+      throw new Error(`Repo ${repoId} has no local_path`);
+    }
+
+    const branchesResult = await client.service('branches').find({
+      query: { repo_id: repoId, $limit: 1000 },
+    });
+    const branches = Array.isArray(branchesResult) ? branchesResult : branchesResult.data;
+
+    const foreignBranches = branches.filter(
+      (branch: { repo_id?: string }) => branch.repo_id !== repoId
+    );
+    if (foreignBranches.length > 0) {
+      throw new Error(
+        `SAFETY CHECK FAILED: Found ${foreignBranches.length} branch(es) not belonging to repo ${repoId}`
+      );
+    }
+
+    for (const branch of branches as Array<{ path?: string }>) {
+      if (!branch.path) continue;
+      await deleteBranchDirectory(branch.path);
+      deletedPaths.push(branch.path);
+      console.log(`🗑️  [git.repo.delete] Deleted branch directory: ${branch.path}`);
     }
 
     await deleteRepoDirectory(repoPath);
@@ -404,6 +537,14 @@ export async function handleGitRepoDelete(
         },
       },
     };
+  } finally {
+    if (client) {
+      try {
+        client.io.disconnect();
+      } catch {
+        // Ignore disconnect errors
+      }
+    }
   }
 }
 

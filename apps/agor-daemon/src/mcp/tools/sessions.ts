@@ -25,6 +25,7 @@ import type { SessionsServiceImpl } from '../../declarations.js';
 import type { SessionParams } from '../../services/sessions.js';
 import { ensureCanPromptTargetSession } from '../../utils/branch-authorization.js';
 import { inspectBranchViaExecutor } from '../../utils/branch-inspect.js';
+import { resolveExecutorReadAsUser } from '../../utils/executor-read-impersonation.js';
 import {
   resolveBoardId,
   resolveBranchId,
@@ -783,7 +784,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       // Get current git state via executor so the daemon does not run git in the branch checkout.
       const { currentSha, currentRef } = await inspectBranchViaExecutor(ctx.app, branch.branch_id, {
-        asUser: user.unix_username,
+        asUser: await resolveExecutorReadAsUser(ctx.db, user),
         logPrefix: `[mcp.sessions.create ${branch.name}]`,
       });
 

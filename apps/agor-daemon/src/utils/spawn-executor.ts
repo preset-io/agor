@@ -410,6 +410,8 @@ function spawnExecutorWithTemplate(
   executorProcess.stdin?.end();
 }
 
+const EXECUTOR_RESULT_PREFIX = 'AGOR_EXECUTOR_RESULT ';
+
 function parseExecutorResultFromStdout(stdout: string): ExecutorCommandResult | null {
   const lines = stdout
     .split(/\r?\n/)
@@ -418,9 +420,14 @@ function parseExecutorResultFromStdout(stdout: string): ExecutorCommandResult | 
 
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i];
-    if (!line.startsWith('{') || !line.endsWith('}')) continue;
+    const resultJson = line.startsWith(EXECUTOR_RESULT_PREFIX)
+      ? line.slice(EXECUTOR_RESULT_PREFIX.length)
+      : line.startsWith('{') && line.endsWith('}')
+        ? line
+        : null;
+    if (!resultJson) continue;
     try {
-      const parsed = JSON.parse(line) as unknown;
+      const parsed = JSON.parse(resultJson) as unknown;
       if (parsed && typeof parsed === 'object' && 'success' in parsed) {
         return parsed as ExecutorCommandResult;
       }
@@ -436,8 +443,11 @@ function logChunkedOutput(prefix: string, stream: 'stdout' | 'stderr', chunk: Bu
   const text = chunk.toString();
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
+    if (line.trim().startsWith(EXECUTOR_RESULT_PREFIX)) continue;
     if (stream === 'stdout') {
-      console.log(`${prefix} ${line}`);
+      if (process.env.AGOR_EXECUTOR_DEBUG_STDOUT === '1') {
+        console.log(`${prefix} ${line}`);
+      }
     } else {
       console.error(`${prefix} ${line}`);
     }
@@ -622,7 +632,11 @@ function runExecutorCommandLocal(
         error: {
           code: 'EXECUTOR_RESULT_MISSING',
           message: `Executor exited with code ${code} but did not emit a JSON result`,
-          details: { command: payload.command, exitCode: code, stdout, stderr },
+          details: {
+            command: payload.command,
+            exitCode: code,
+            stderr: stderr ? '[redacted; enable executor debug logs]' : '',
+          },
         },
       });
     });
@@ -712,7 +726,11 @@ function runExecutorCommandWithTemplate(
         error: {
           code: 'EXECUTOR_RESULT_MISSING',
           message: `Executor exited with code ${code} but did not emit a JSON result`,
-          details: { command: payload.command, exitCode: code, stdout, stderr },
+          details: {
+            command: payload.command,
+            exitCode: code,
+            stderr: stderr ? '[redacted; enable executor debug logs]' : '',
+          },
         },
       });
     });
