@@ -24,6 +24,7 @@ import { createFeathersBackedRepositories } from '../../db/feathers-repositories
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
+import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
 
 /**
  * Tool interface that all SDK wrappers must implement
@@ -317,6 +318,12 @@ export async function executeToolTask(params: {
     params;
 
   console.log(`[${toolName}] Executing task ${shortId(taskId)}...`);
+
+  // Ensure plain git commands launched by the agent SDK inherit safe.directory
+  // trust for this managed checkout. Without this, Unix-isolated sessions can
+  // create and run successfully through executor-mediated git probes while
+  // `git status` inside the agent shell still fails with dubious ownership.
+  await configureSessionGitSafeDirectories(client, sessionId, `[${toolName} git.safe-directory]`);
 
   // Resolve API key with proper precedence (user → config → env → native auth).
   // Pass `toolName` so the daemon scopes the per-user lookup to this tool's
