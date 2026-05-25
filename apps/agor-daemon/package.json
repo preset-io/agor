@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@agor/core": "workspace:*",
+    "@cursor/sdk": "^1.0.13",
     "@github/copilot-sdk": "^0.2.2",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@octokit/auth-app": "^8.2.0",

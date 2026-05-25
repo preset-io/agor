@@ -1302,8 +1302,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   //   - Gemini's authoritative list is fetched live from the Google API per
   //     user (fetchGeminiModels). The hardcoded fallback IS exposed here as a
   //     best-effort starter list.
-  //   - Copilot has dynamic discovery via `client.listModels()` exposed at
-  //     /copilot-models in the daemon. The static fallback is exposed here.
+  //   - Copilot and Cursor have dynamic discovery exposed via /copilot-models
+  //     and /cursor-models in the daemon. Static fallbacks are exposed here.
   //   - OpenCode is a provider+model matrix and doesn't have a single static
   //     list — it's exposed via the branch config UI today.
   server.registerTool(
@@ -1382,10 +1382,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             {
               id: 'composer-latest',
               displayName: 'Composer Latest',
-              description: 'Cursor SDK default model alias (beta; runtime adapter pending).',
+              description: 'Cursor SDK default model alias (beta).',
             },
           ],
-          note: 'Cursor is exposed as a beta provider. Runtime execution currently fails fast until the SDK adapter lands.',
+          note: "Cursor models are also fetched live via /cursor-models (uses @cursor/sdk's Cursor.models.list()). This is the static fallback — account-specific models may not appear here.",
         },
       };
 

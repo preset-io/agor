@@ -40,24 +40,24 @@ export interface ModelSelectorProps {
     | 'copilot'
     | 'cursor';
   /**
-   * Optional Feathers client. When provided AND the agentic tool is Copilot,
-   * the picker fetches the live model list from /copilot-models (which calls
-   * the SDK's `listModels()` server-side) and merges it with the static
-   * fallback. Without a client, the picker only shows static models.
+   * Optional Feathers client. When provided AND the agentic tool supports
+   * dynamic model discovery (Copilot/Cursor), the picker fetches the live
+   * model list server-side and merges it with the static fallback. Without a
+   * client, the picker only shows static models.
    */
   client?: AgorClient | null;
 }
 
-interface CopilotModelOption {
+interface DynamicModelOption {
   id: string;
   displayName: string;
   description?: string;
   source: 'dynamic' | 'static';
 }
 
-interface CopilotModelsResponse {
+interface DynamicModelsResponse {
   default: string;
-  models: CopilotModelOption[];
+  models: DynamicModelOption[];
   source: 'dynamic' | 'static';
 }
 
@@ -125,6 +125,12 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     description?: string;
   }> | null>(null);
   const [copilotSource, setCopilotSource] = useState<'dynamic' | 'static' | null>(null);
+  const [cursorServerOptions, setCursorServerOptions] = useState<Array<{
+    id: string;
+    label: string;
+    description?: string;
+  }> | null>(null);
+  const [cursorSource, setCursorSource] = useState<'dynamic' | 'static' | null>(null);
 
   useEffect(() => {
     if (effectiveTool !== 'copilot' || !client) return;
@@ -132,7 +138,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     (async () => {
       try {
         const raw = await client.service('copilot-models').find();
-        const response = raw as unknown as CopilotModelsResponse;
+        const response = raw as unknown as DynamicModelsResponse;
         if (cancelled || !response?.models?.length) return;
         setCopilotServerOptions(
           response.models.map((m) => ({
@@ -142,6 +148,31 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           }))
         );
         setCopilotSource(response.source);
+      } catch {
+        // Silent fallback to local static — best-effort.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveTool, client]);
+
+  useEffect(() => {
+    if (effectiveTool !== 'cursor' || !client) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await client.service('cursor-models').find();
+        const response = raw as unknown as DynamicModelsResponse;
+        if (cancelled || !response?.models?.length) return;
+        setCursorServerOptions(
+          response.models.map((m) => ({
+            id: m.id,
+            label: m.displayName,
+            description: m.description,
+          }))
+        );
+        setCursorSource(response.source);
       } catch {
         // Silent fallback to local static — best-effort.
       }
@@ -161,7 +192,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           : effectiveTool === 'copilot'
             ? (copilotServerOptions ?? COPILOT_STATIC_MODEL_OPTIONS)
             : effectiveTool === 'cursor'
-              ? CURSOR_MODEL_OPTIONS
+              ? (cursorServerOptions ?? CURSOR_MODEL_OPTIONS)
               : AVAILABLE_CLAUDE_MODEL_ALIASES;
 
   // Determine initial mode based on whether the value is in the aliases list
@@ -266,6 +297,21 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                     <>
                       Showing static fallback. Set <code>COPILOT_GITHUB_TOKEN</code> on the daemon
                       to see your account's live list (including BYOK models).
+                    </>
+                  )}
+                </div>
+              )}
+              {effectiveTool === 'cursor' && cursorSource && (
+                <div style={{ marginTop: 6, fontSize: 12, color: 'rgba(255, 255, 255, 0.45)' }}>
+                  {cursorSource === 'dynamic' ? (
+                    <>
+                      Live list from your Cursor account (via SDK <code>Cursor.models.list()</code>
+                      ).
+                    </>
+                  ) : (
+                    <>
+                      Showing static fallback. Set <code>CURSOR_API_KEY</code> to see your account's
+                      live Cursor model list.
                     </>
                   )}
                 </div>

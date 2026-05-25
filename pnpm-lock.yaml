@@ -135,6 +135,9 @@ importers:
       '@agor/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@cursor/sdk':
+        specifier: ^1.0.13
+        version: 1.0.13
       '@github/copilot-sdk':
         specifier: ^0.2.2
         version: 0.2.2
