@@ -48,6 +48,80 @@ function toCursorModel(model: string | undefined): { id: string } {
   return { id: model?.trim() || 'composer-latest' };
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function normalizeCursorToolName(name: string): string {
+  switch (name.toLowerCase()) {
+    case 'shell':
+    case 'bash':
+    case 'terminal':
+    case 'run_terminal_cmd':
+      return 'Bash';
+    case 'read':
+    case 'ls':
+      return 'Read';
+    case 'write':
+      return 'Write';
+    case 'edit':
+      return 'Edit';
+    case 'delete':
+      return 'Delete';
+    case 'grep':
+      return 'Grep';
+    case 'glob':
+      return 'Glob';
+    case 'update_todos':
+      return 'TodoWrite';
+    case 'task':
+      return 'Task';
+    default:
+      return name;
+  }
+}
+
+function normalizeCursorToolInput(
+  event: Extract<SDKMessage, { type: 'tool_call' }>
+): Record<string, unknown> {
+  const input = { ...asRecord(event.args) };
+  const normalizedName = normalizeCursorToolName(event.name);
+
+  // Preserve Cursor's native tool name when we map it to an Agor/Claude-ish
+  // renderer name. This keeps raw provenance inspectable while unlocking
+  // existing UI renderers like BashRenderer/EditRenderer/WriteRenderer.
+  if (normalizedName !== event.name) {
+    input.cursor_tool_name = event.name;
+  }
+  input.status = event.status;
+
+  if (normalizedName === 'Bash' && input.command == null) {
+    const command = input.cmd ?? input.script ?? input.shell ?? input.shellCommand ?? input.args;
+    if (Array.isArray(command)) {
+      input.command = command.map(String).join(' ');
+    } else if (command != null) {
+      input.command = String(command);
+    }
+  }
+
+  if (
+    (normalizedName === 'Read' ||
+      normalizedName === 'Write' ||
+      normalizedName === 'Edit' ||
+      normalizedName === 'Delete') &&
+    input.file_path == null
+  ) {
+    const path = input.path ?? input.file ?? input.target;
+    if (path != null) {
+      input.file_path = String(path);
+    }
+  }
+
+  return input;
+}
+
 function claimMcpName(rawName: string, claimed: Set<string>): string {
   const base = rawName.toLowerCase().replace(/[^a-z0-9_-]/g, '_') || 'server';
   let name = base;
@@ -229,12 +303,14 @@ function getToolMessageContent(event: Extract<SDKMessage, { type: 'tool_call' }>
 } {
   const resultText =
     event.result !== undefined ? stringifyForPreview(event.result) : `[${event.status}]`;
+  const toolName = normalizeCursorToolName(event.name);
+  const input = normalizeCursorToolInput(event);
   const content: ContentBlock[] = [
     {
       type: 'tool_use',
       id: event.call_id,
-      name: event.name,
-      input: event.args ?? {},
+      name: toolName,
+      input,
       status: event.status,
       ...(event.truncated ? { truncated: event.truncated } : {}),
     },
@@ -252,7 +328,7 @@ function getToolMessageContent(event: Extract<SDKMessage, { type: 'tool_call' }>
 
   return {
     content,
-    preview: `${event.name}: ${resultText}`,
+    preview: `${toolName}: ${input.command ? String(input.command) : resultText}`,
   };
 }
 
