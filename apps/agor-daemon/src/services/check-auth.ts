@@ -197,6 +197,11 @@ async function validateApiKey(tool: string, key: string): Promise<boolean> {
         headers.Accept = 'application/vnd.github.v3+json';
         break;
       }
+      case 'cursor': {
+        const { Cursor } = await import('@cursor/sdk');
+        await Cursor.me({ apiKey: key });
+        return true;
+      }
       default:
         return false;
     }
@@ -230,17 +235,7 @@ export function createCheckAuthService(db: Database) {
       }
 
       // If caller provided a raw key (user typed it in the wizard), validate directly.
-      // Cursor does not document a cheap key-validation endpoint; accept presence
-      // here and let @cursor/sdk return the authoritative auth error at session start.
       if (rawKey?.trim()) {
-        if (tool === 'cursor') {
-          return {
-            authenticated: true,
-            method: 'api-key',
-            hint: 'Cursor key saved; the SDK will validate it when a session starts.',
-          };
-        }
-
         const ok = await validateApiKey(tool, rawKey.trim());
         return {
           authenticated: ok,
@@ -269,14 +264,6 @@ export function createCheckAuthService(db: Database) {
       }
 
       if (apiKey) {
-        if (tool === 'cursor') {
-          return {
-            authenticated: true,
-            method: 'api-key',
-            hint: 'Cursor key configured; the SDK will validate it when a session starts.',
-          };
-        }
-
         const ok = await validateApiKey(tool, apiKey);
         return {
           authenticated: ok,

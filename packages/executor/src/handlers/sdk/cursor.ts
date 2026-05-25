@@ -223,6 +223,39 @@ async function createAssistantMessage(args: {
   });
 }
 
+function getToolMessageContent(event: Extract<SDKMessage, { type: 'tool_call' }>): {
+  content: ContentBlock[];
+  preview: string;
+} {
+  const resultText =
+    event.result !== undefined ? stringifyForPreview(event.result) : `[${event.status}]`;
+  const content: ContentBlock[] = [
+    {
+      type: 'tool_use',
+      id: event.call_id,
+      name: event.name,
+      input: event.args ?? {},
+      status: event.status,
+      ...(event.truncated ? { truncated: event.truncated } : {}),
+    },
+  ];
+
+  if (event.status !== 'running') {
+    content.push({
+      type: 'tool_result',
+      tool_use_id: event.call_id,
+      content: resultText,
+      is_error: event.status === 'error',
+      ...(event.truncated ? { truncated: event.truncated } : {}),
+    });
+  }
+
+  return {
+    content,
+    preview: `${event.name}: ${resultText}`,
+  };
+}
+
 async function createToolMessage(args: {
   client: AgorClient;
   sessionId: SessionID;
@@ -232,24 +265,7 @@ async function createToolMessage(args: {
   model?: string;
 }): Promise<MessageID> {
   const messageId = generateId() as MessageID;
-  const resultText =
-    args.event.result !== undefined
-      ? stringifyForPreview(args.event.result)
-      : `[${args.event.status}]`;
-  const content: ContentBlock[] = [
-    {
-      type: 'tool_use',
-      id: args.event.call_id,
-      name: args.event.name,
-      input: args.event.args ?? {},
-    },
-    {
-      type: 'tool_result',
-      tool_use_id: args.event.call_id,
-      content: resultText,
-      is_error: args.event.status === 'error',
-    },
-  ];
+  const { content, preview } = getToolMessageContent(args.event);
 
   await createAssistantMessage({
     client: args.client,
@@ -258,10 +274,22 @@ async function createToolMessage(args: {
     messageId,
     index: args.index,
     content,
-    preview: `${args.event.name}: ${resultText}`,
+    preview,
     model: args.model,
   });
   return messageId;
+}
+
+async function updateToolMessage(args: {
+  client: AgorClient;
+  messageId: MessageID;
+  event: Extract<SDKMessage, { type: 'tool_call' }>;
+}): Promise<void> {
+  const { content, preview } = getToolMessageContent(args.event);
+  await args.client.service('messages').patch(args.messageId, {
+    content,
+    content_preview: preview.substring(0, 200),
+  });
 }
 
 async function createSystemErrorMessage(args: {
@@ -370,6 +398,7 @@ export async function executeCursorTask(params: {
       let thinkingStarted = false;
       let thinkingText = '';
       const toolCallMessageIds: MessageID[] = [];
+      const toolCallMessageIdsByCallId = new Map<string, MessageID>();
       const rawMessages: SDKMessage[] = [];
 
       currentRun = await agent.send(prompt, {
@@ -398,6 +427,7 @@ export async function executeCursorTask(params: {
           model: model.id,
           getNextIndex: () => nextIndex++,
           toolCallMessageIds,
+          toolCallMessageIdsByCallId,
           getAssistantText: () => assistantText,
           setAssistantText: (value) => {
             assistantText = value;
@@ -481,6 +511,7 @@ async function handleCursorEvent(args: {
   model: string;
   getNextIndex: () => number;
   toolCallMessageIds: MessageID[];
+  toolCallMessageIdsByCallId: Map<string, MessageID>;
   getAssistantText: () => string;
   setAssistantText: (value: string) => void;
   getThinkingText: () => string;
@@ -534,7 +565,16 @@ async function handleCursorEvent(args: {
     }
 
     case 'tool_call': {
-      if (args.event.status === 'running') return;
+      const existingMessageId = args.toolCallMessageIdsByCallId.get(args.event.call_id);
+      if (existingMessageId) {
+        await updateToolMessage({
+          client: args.client,
+          messageId: existingMessageId,
+          event: args.event,
+        });
+        return;
+      }
+
       const messageId = await createToolMessage({
         client: args.client,
         sessionId: args.sessionId,
@@ -543,6 +583,7 @@ async function handleCursorEvent(args: {
         event: args.event,
         model: args.model,
       });
+      args.toolCallMessageIdsByCallId.set(args.event.call_id, messageId);
       args.toolCallMessageIds.push(messageId);
       return;
     }
