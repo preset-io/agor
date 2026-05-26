@@ -101,6 +101,25 @@ interface UseAgorDataResult extends DataMaps {
   refetch: () => Promise<void>;
 }
 
+// Generic byId-map replacer used by the per-entity `*Patched` handlers below.
+// Returns `prev` unchanged when the incoming entity is shallow-equal to what
+// we already hold — combined with the wrapper-level no-op short-circuit in
+// `setMapSlice`, idempotent server-side patches become true no-ops. The
+// per-entity handlers stay responsible for archive / branch-migration /
+// cross-map cleanup; this helper only covers the plain "replace one entry"
+// case.
+function replaceIfChanged<T extends object>(
+  prev: Map<string, T>,
+  id: string,
+  entity: T
+): Map<string, T> {
+  const existing = prev.get(id);
+  if (existing && shallowEqualEntity(existing, entity)) return prev;
+  const next = new Map(prev);
+  next.set(id, entity);
+  return next;
+}
+
 /**
  * Fetch and subscribe to Agor data from daemon
  *
@@ -118,99 +137,37 @@ export function useAgorData(
   // Single state for all server-backed maps — reset is setMaps(EMPTY_MAPS), one call, can't miss a field.
   const [maps, setMaps] = useState<DataMaps>(EMPTY_MAPS);
 
-  // Per-field setter helpers with the same functional-update API as individual useState setters.
-  // Plain functions are fine — they only close over setMaps which is a stable useState setter.
-  // Biome can't statically prove stability so fetchData and the subscribe effect below carry
-  // a biome-ignore instead of listing every setter in the dep arrays.
-  //
-  // No-op short-circuit: when the inner functional update returns the same
-  // reference for the slice it owns (handler bailouts on `return prev`), the
-  // wrapper returns the outer `maps` object unchanged. Without this, the
-  // spread `{ ...m, sessionById: same }` would still produce a fresh `maps`
-  // reference and force `AppContent` → `App` → SessionCanvas to re-render on
-  // every socket event the handler chose to discard (e.g. `messages` /
-  // `tasks` events arriving for sessions we've already pruned from the map,
-  // archived branch patches for branches we don't track, idempotent entity
-  // patches caught by the shallow-equal checks below). The downstream cost
-  // is real — board re-layout work, MiniMap repaint, React Flow internal
-  // diff — so bailing at the source is the cheapest fix.
-  const setSessionById = (v) =>
-    setMaps((m) => {
-      const next = typeof v === 'function' ? v(m.sessionById) : v;
-      return next === m.sessionById ? m : { ...m, sessionById: next };
-    });
-  const setSessionsByBranch = (v) =>
-    setMaps((m) => {
-      const next = typeof v === 'function' ? v(m.sessionsByBranch) : v;
-      return next === m.sessionsByBranch ? m : { ...m, sessionsByBranch: next };
-    });
-  const setBoardById = (v) =>
-    setMaps((m) => {
-      const next = typeof v === 'function' ? v(m.boardById) : v;
-      return next === m.boardById ? m : { ...m, boardById: next };
-    });
-  const setBoardObjectById = (v) =>
-    setMaps((m) => {
-      const next = typeof v === 'function' ? v(m.boardObjectById) : v;
-      return next === m.boardObjectById ? m : { ...m, boardObjectById: next };
-    });
-  const setCommentById = (v) =>
-    setMaps((m) => {
-      const next = typeof v === 'function' ? v(m.commentById) : v;
-      return next === m.commentById ? m : { ...m, commentById: next };
-    });
-  const setCardById = (v) =>
-    setMaps((m) => {
-      const next = typeof v === 'function' ? v(m.cardById) : v;
-      return next === m.cardById ? m : { ...m, cardById: next };
-    });
-  const setCardTypeById = (v) =>
-    setMaps((m) => {
-      const next = typeof v === 'function' ? v(m.cardTypeById) : v;
-      return next === m.cardTypeById ? m : { ...m, cardTypeById: next };
-    });
-  const setRepoById = (v) =>
-    setMaps((m) => {
-      const next = typeof v === 'function' ? v(m.repoById) : v;
-      return next === m.repoById ? m : { ...m, repoById: next };
-    });
-  const setBranchById = (v) =>
-    setMaps((m) => {
-      const next = typeof v === 'function' ? v(m.branchById) : v;
-      return next === m.branchById ? m : { ...m, branchById: next };
-    });
-  const setUserById = (v) =>
-    setMaps((m) => {
-      const next = typeof v === 'function' ? v(m.userById) : v;
-      return next === m.userById ? m : { ...m, userById: next };
-    });
-  const setMcpServerById = (v) =>
-    setMaps((m) => {
-      const next = typeof v === 'function' ? v(m.mcpServerById) : v;
-      return next === m.mcpServerById ? m : { ...m, mcpServerById: next };
-    });
-  const setGatewayChannelById = (v) =>
-    setMaps((m) => {
-      const next = typeof v === 'function' ? v(m.gatewayChannelById) : v;
-      return next === m.gatewayChannelById ? m : { ...m, gatewayChannelById: next };
-    });
-  const setArtifactById = (v) =>
-    setMaps((m) => {
-      const next = typeof v === 'function' ? v(m.artifactById) : v;
-      return next === m.artifactById ? m : { ...m, artifactById: next };
-    });
-  const setSessionMcpServerIds = (v) =>
-    setMaps((m) => {
-      const next = typeof v === 'function' ? v(m.sessionMcpServerIds) : v;
-      return next === m.sessionMcpServerIds ? m : { ...m, sessionMcpServerIds: next };
-    });
-  const setUserAuthenticatedMcpServerIds = (v) =>
-    setMaps((m) => {
-      const next = typeof v === 'function' ? v(m.userAuthenticatedMcpServerIds) : v;
-      return next === m.userAuthenticatedMcpServerIds
-        ? m
-        : { ...m, userAuthenticatedMcpServerIds: next };
-    });
+  // Per-field setter factory. Returns a setter with the same functional-update
+  // API as `useState`, with a no-op short-circuit: when the inner update
+  // returns the same reference for its slice, we preserve the outer `maps`
+  // reference too. Without this, `{ ...m, key: same }` would always allocate
+  // a fresh `maps` and force every `useAppLiveData()` / `useAppRepoData()`
+  // consumer to re-render on socket events the handler decided to discard.
+  const setMapSlice =
+    <K extends keyof DataMaps>(key: K) =>
+    (value: DataMaps[K] | ((prev: DataMaps[K]) => DataMaps[K])) =>
+      setMaps((prev) => {
+        const next =
+          typeof value === 'function'
+            ? (value as (p: DataMaps[K]) => DataMaps[K])(prev[key])
+            : value;
+        return Object.is(next, prev[key]) ? prev : { ...prev, [key]: next };
+      });
+  const setSessionById = setMapSlice('sessionById');
+  const setSessionsByBranch = setMapSlice('sessionsByBranch');
+  const setBoardById = setMapSlice('boardById');
+  const setBoardObjectById = setMapSlice('boardObjectById');
+  const setCommentById = setMapSlice('commentById');
+  const setCardById = setMapSlice('cardById');
+  const setCardTypeById = setMapSlice('cardTypeById');
+  const setRepoById = setMapSlice('repoById');
+  const setBranchById = setMapSlice('branchById');
+  const setUserById = setMapSlice('userById');
+  const setMcpServerById = setMapSlice('mcpServerById');
+  const setGatewayChannelById = setMapSlice('gatewayChannelById');
+  const setArtifactById = setMapSlice('artifactById');
+  const setSessionMcpServerIds = setMapSlice('sessionMcpServerIds');
+  const setUserAuthenticatedMcpServerIds = setMapSlice('userAuthenticatedMcpServerIds');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Per-item counts captured at fetch-resolution time. Presence in this
@@ -678,16 +635,7 @@ export function useAgorData(
       });
     };
     const handleBoardPatched = (board: Board) => {
-      setBoardById((prev) => {
-        const existing = prev.get(board.board_id);
-        // Bail out on content-equal patches. Wrapper-level `same-ref` check
-        // turns this `prev` return into a true no-op (no `maps` churn, no
-        // downstream re-renders).
-        if (existing && shallowEqualEntity(existing, board)) return prev;
-        const next = new Map(prev);
-        next.set(board.board_id, board);
-        return next;
-      });
+      setBoardById((prev) => replaceIfChanged(prev, board.board_id, board));
     };
     const handleBoardRemoved = (board: Board) => {
       setBoardById((prev) => {
@@ -714,13 +662,7 @@ export function useAgorData(
       });
     };
     const handleBoardObjectPatched = (boardObject: BoardEntityObject) => {
-      setBoardObjectById((prev) => {
-        const existing = prev.get(boardObject.object_id);
-        if (existing && shallowEqualEntity(existing, boardObject)) return prev;
-        const next = new Map(prev);
-        next.set(boardObject.object_id, boardObject);
-        return next;
-      });
+      setBoardObjectById((prev) => replaceIfChanged(prev, boardObject.object_id, boardObject));
     };
     const handleBoardObjectRemoved = (boardObject: BoardEntityObject) => {
       setBoardObjectById((prev) => {
@@ -747,13 +689,7 @@ export function useAgorData(
       });
     };
     const handleRepoPatched = (repo: Repo) => {
-      setRepoById((prev) => {
-        const existing = prev.get(repo.repo_id);
-        if (existing && shallowEqualEntity(existing, repo)) return prev;
-        const next = new Map(prev);
-        next.set(repo.repo_id, repo);
-        return next;
-      });
+      setRepoById((prev) => replaceIfChanged(prev, repo.repo_id, repo));
     };
     const handleRepoRemoved = (repo: Repo) => {
       setRepoById((prev) => {
@@ -781,56 +717,48 @@ export function useAgorData(
         return next;
       });
     };
+    // Drop a branch from `branchById` and prune every session that lived on
+    // it from `sessionById` / `sessionsByBranch`. Shared between the
+    // `archived: true` patch path and the hard-delete `removed` path —
+    // either way we never want an orphan session card to linger.
+    const evictBranchAndSessions = (branchId: string) => {
+      setBranchById((prev) => {
+        if (!prev.has(branchId)) return prev;
+        const next = new Map(prev);
+        next.delete(branchId);
+        return next;
+      });
+      setSessionsByBranch((prev) => {
+        if (!prev.has(branchId)) return prev;
+        const next = new Map(prev);
+        next.delete(branchId);
+        return next;
+      });
+      setSessionById((prev) => {
+        let changed = false;
+        const next = new Map(prev);
+        for (const [sessionId, session] of prev.entries()) {
+          if (session.branch_id === branchId) {
+            next.delete(sessionId);
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    };
+
     const handleBranchPatched = (branch: Branch) => {
       if (branch.archived) {
-        // Remove archived branch from core map
-        setBranchById((prev) => {
-          if (!prev.has(branch.branch_id)) return prev;
-          const next = new Map(prev);
-          next.delete(branch.branch_id);
-          return next;
-        });
-
-        // Remove sessions under archived branch from core maps
-        setSessionsByBranch((prev) => {
-          if (!prev.has(branch.branch_id)) return prev;
-          const next = new Map(prev);
-          next.delete(branch.branch_id);
-          return next;
-        });
-        setSessionById((prev) => {
-          let changed = false;
-          const next = new Map(prev);
-          for (const [sessionId, session] of prev.entries()) {
-            if (session.branch_id === branch.branch_id) {
-              next.delete(sessionId);
-              changed = true;
-            }
-          }
-          return changed ? next : prev;
-        });
+        evictBranchAndSessions(branch.branch_id);
         return;
       }
 
-      setBranchById((prev) => {
-        const existing = prev.get(branch.branch_id);
-        // Drop ghost patches that don't actually move any branch field — the
-        // board canvas only depends on branchById for its initialNodes useMemo,
-        // so bailing here is what keeps zoom/pan smooth when daemon-side
-        // bookkeeping fires `branches.patched` with unchanged content.
-        if (existing && shallowEqualEntity(existing, branch)) return prev;
-        const next = new Map(prev);
-        next.set(branch.branch_id, branch);
-        return next;
-      });
+      setBranchById((prev) => replaceIfChanged(prev, branch.branch_id, branch));
     };
     const handleBranchRemoved = (branch: Branch) => {
-      setBranchById((prev) => {
-        if (!prev.has(branch.branch_id)) return prev; // Doesn't exist, nothing to remove
-        const next = new Map(prev);
-        next.delete(branch.branch_id);
-        return next;
-      });
+      // Mirror the archive path: a hard delete should also evict any
+      // sessions we still track on that branch.
+      evictBranchAndSessions(branch.branch_id);
     };
 
     branchesService.on('created', handleBranchCreated);
@@ -849,13 +777,7 @@ export function useAgorData(
       });
     };
     const handleUserPatched = (user: User) => {
-      setUserById((prev) => {
-        const existing = prev.get(user.user_id);
-        if (existing && shallowEqualEntity(existing, user)) return prev;
-        const next = new Map(prev);
-        next.set(user.user_id, user);
-        return next;
-      });
+      setUserById((prev) => replaceIfChanged(prev, user.user_id, user));
     };
     const handleUserRemoved = (user: User) => {
       setUserById((prev) => {
@@ -882,13 +804,7 @@ export function useAgorData(
       });
     };
     const handleMCPServerPatched = (server: MCPServer) => {
-      setMcpServerById((prev) => {
-        const existing = prev.get(server.mcp_server_id);
-        if (existing && shallowEqualEntity(existing, server)) return prev;
-        const next = new Map(prev);
-        next.set(server.mcp_server_id, server);
-        return next;
-      });
+      setMcpServerById((prev) => replaceIfChanged(prev, server.mcp_server_id, server));
     };
     const handleMCPServerRemoved = (server: MCPServer) => {
       setMcpServerById((prev) => {
@@ -915,13 +831,7 @@ export function useAgorData(
       });
     };
     const handleGatewayChannelPatched = (channel: GatewayChannel) => {
-      setGatewayChannelById((prev) => {
-        const existing = prev.get(channel.id);
-        if (existing && shallowEqualEntity(existing, channel)) return prev;
-        const next = new Map(prev);
-        next.set(channel.id, channel);
-        return next;
-      });
+      setGatewayChannelById((prev) => replaceIfChanged(prev, channel.id, channel));
     };
     const handleGatewayChannelRemoved = (channel: GatewayChannel) => {
       setGatewayChannelById((prev) => {
@@ -941,19 +851,14 @@ export function useAgorData(
     const cardsService = client.service('cards');
     const handleCardCreated = (card: CardWithType) => {
       setCardById((prev) => {
+        if (prev.has(card.card_id)) return prev; // Duplicate event — bail.
         const next = new Map(prev);
         next.set(card.card_id, card);
         return next;
       });
     };
     const handleCardPatched = (card: CardWithType) => {
-      setCardById((prev) => {
-        const existing = prev.get(card.card_id);
-        if (existing && shallowEqualEntity(existing, card)) return prev;
-        const next = new Map(prev);
-        next.set(card.card_id, card);
-        return next;
-      });
+      setCardById((prev) => replaceIfChanged(prev, card.card_id, card));
     };
     const handleCardRemoved = (card: CardWithType) => {
       setCardById((prev) => {
@@ -973,19 +878,14 @@ export function useAgorData(
     const cardTypesService = client.service('card-types');
     const handleCardTypeCreated = (cardType: CardType) => {
       setCardTypeById((prev) => {
+        if (prev.has(cardType.card_type_id)) return prev; // Duplicate event — bail.
         const next = new Map(prev);
         next.set(cardType.card_type_id, cardType);
         return next;
       });
     };
     const handleCardTypePatched = (cardType: CardType) => {
-      setCardTypeById((prev) => {
-        const existing = prev.get(cardType.card_type_id);
-        if (existing && shallowEqualEntity(existing, cardType)) return prev;
-        const next = new Map(prev);
-        next.set(cardType.card_type_id, cardType);
-        return next;
-      });
+      setCardTypeById((prev) => replaceIfChanged(prev, cardType.card_type_id, cardType));
     };
     const handleCardTypeRemoved = (cardType: CardType) => {
       setCardTypeById((prev) => {
@@ -1012,27 +912,18 @@ export function useAgorData(
       });
     };
     const handleArtifactPatched = (artifact: Artifact) => {
-      let payloadChanged = true;
-      setArtifactById((prev) => {
-        const existing = prev.get(artifact.artifact_id);
-        if (existing && shallowEqualEntity(existing, artifact)) {
-          payloadChanged = false;
-          return prev;
-        }
-        const next = new Map(prev);
-        next.set(artifact.artifact_id, artifact);
-        return next;
-      });
-      // Notify ArtifactNode components that payload may have changed.
-      // Skip the dispatch on no-op patches so iframes don't churn on
-      // idempotent server-side bookkeeping.
-      if (payloadChanged) {
-        window.dispatchEvent(
-          new CustomEvent('agor:artifact-patched', {
-            detail: { artifactId: artifact.artifact_id, contentHash: artifact.content_hash },
-          })
-        );
-      }
+      setArtifactById((prev) => replaceIfChanged(prev, artifact.artifact_id, artifact));
+      // Notify ArtifactNode components that payload may have changed. The
+      // consumer (apps/agor-ui/src/components/SessionCanvas/canvas/ArtifactNode.tsx)
+      // already filters by `contentHash !== lastHashRef.current`, so an
+      // idempotent dispatch is a cheap no-op there — no need to mirror the
+      // shallow-equal bailout from a state-updater side effect (which would
+      // not be pure under StrictMode anyway).
+      window.dispatchEvent(
+        new CustomEvent('agor:artifact-patched', {
+          detail: { artifactId: artifact.artifact_id, contentHash: artifact.content_hash },
+        })
+      );
     };
     const handleArtifactRemoved = (artifact: Artifact) => {
       setArtifactById((prev) => {
@@ -1115,13 +1006,7 @@ export function useAgorData(
       });
     };
     const handleCommentPatched = (comment: BoardComment) => {
-      setCommentById((prev) => {
-        const existing = prev.get(comment.comment_id);
-        if (existing && shallowEqualEntity(existing, comment)) return prev;
-        const next = new Map(prev);
-        next.set(comment.comment_id, comment);
-        return next;
-      });
+      setCommentById((prev) => replaceIfChanged(prev, comment.comment_id, comment));
     };
     const handleCommentRemoved = (comment: BoardComment) => {
       setCommentById((prev) => {

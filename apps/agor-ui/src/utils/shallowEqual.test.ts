@@ -21,6 +21,17 @@ describe('shallowEqualEntity', () => {
     ).toBe(false);
   });
 
+  it('returns false when key sets differ but lengths match (both undefined values)', () => {
+    // Regression: bag-of-keys check that only compared lengths would say
+    // `{a: undefined}` equals `{b: undefined}` because `obj.a` and `obj.b`
+    // both read back as `undefined`. The hasOwnProperty check catches this.
+    expect(shallowEqualEntity({ a: undefined } as object, { b: undefined } as object)).toBe(false);
+  });
+
+  it('treats NaN as equal to NaN (Object.is semantics)', () => {
+    expect(shallowEqualEntity({ x: Number.NaN }, { x: Number.NaN })).toBe(true);
+  });
+
   it('returns false when a nested object has a fresh reference', () => {
     // Documents the safe failure mode — fresh JSON-parsed payloads always
     // produce new nested object refs, so shallow-equal won't catch content-

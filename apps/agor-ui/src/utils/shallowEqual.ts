@@ -16,18 +16,16 @@
  */
 
 /**
- * Strict-equal two values. Used as the leaf comparator for shallow-equal.
- */
-const sameValue = (a: unknown, b: unknown): boolean => a === b;
-
-/**
  * Shallow-equal two plain objects. Returns true iff both have the same
- * key set and every top-level key holds a referentially equal value.
+ * key set (own enumerable keys) and every top-level key holds a referentially
+ * equal value.
  *
  * - `null` / `undefined` are never equal to a populated object.
  * - Arrays compare by reference (use a dedicated array helper if you need
  *   element-by-element checks).
  * - Nested objects compare by reference — see file docstring above.
+ * - Same length but different keys (e.g. `{a: undefined}` vs `{b: undefined}`)
+ *   is correctly false because we verify `b` owns each key from `a`.
  */
 export function shallowEqualEntity<T extends object>(
   a: T | null | undefined,
@@ -41,7 +39,8 @@ export function shallowEqualEntity<T extends object>(
   if (keysA.length !== keysB.length) return false;
 
   for (const key of keysA) {
-    if (!sameValue(a[key], b[key as keyof T])) return false;
+    if (!Object.hasOwn(b, key)) return false;
+    if (!Object.is(a[key], b[key as keyof T])) return false;
   }
   return true;
 }

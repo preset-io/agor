@@ -218,4 +218,64 @@ describe('useAgorData — socket-event bailouts', () => {
     expect(result.current.boardById).toBe(beforeBoards);
     expect(result.current.userById).toBe(beforeUsers);
   });
+
+  it('migrates a session between branches when branch_id changes', async () => {
+    const session = makeSession({ session_id: 's-1', branch_id: 'b-1' });
+    const { client, emit } = makeMockClient({ sessions: [session] });
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+
+    expect(result.current.sessionsByBranch.get('b-1')?.map((s) => s.session_id)).toEqual(['s-1']);
+
+    act(() => emit('sessions', 'patched', { ...session, branch_id: 'b-2' }));
+
+    // Old branch bucket is cleaned up; new branch bucket holds the session.
+    expect(result.current.sessionsByBranch.has('b-1')).toBe(false);
+    expect(result.current.sessionsByBranch.get('b-2')?.map((s) => s.session_id)).toEqual(['s-1']);
+    expect(result.current.sessionById.get('s-1')?.branch_id).toBe('b-2');
+  });
+
+  it('evicts a branch and its sessions on `branches.removed`', async () => {
+    const session = makeSession({ session_id: 's-1', branch_id: 'b-1' });
+    const branch = makeBranch({ branch_id: 'b-1' });
+    const { client, emit } = makeMockClient({ sessions: [session], branches: [branch] });
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+
+    expect(result.current.branchById.has('b-1')).toBe(true);
+    expect(result.current.sessionById.has('s-1')).toBe(true);
+    expect(result.current.sessionsByBranch.has('b-1')).toBe(true);
+
+    act(() => emit('branches', 'removed', branch));
+
+    expect(result.current.branchById.has('b-1')).toBe(false);
+    expect(result.current.sessionById.has('s-1')).toBe(false);
+    expect(result.current.sessionsByBranch.has('b-1')).toBe(false);
+  });
+
+  it('dispatches `agor:artifact-patched` when the artifact actually changes', async () => {
+    const artifact = {
+      artifact_id: 'a-1',
+      name: 'demo',
+      content_hash: 'h1',
+      board_id: 'board-1',
+      created_by: 'u-1',
+    };
+    const { client, emit } = makeMockClient({ artifacts: [artifact] });
+    const events: Array<{ artifactId: string; contentHash: string }> = [];
+    const listener = (e: Event) => events.push((e as CustomEvent).detail);
+    window.addEventListener('agor:artifact-patched', listener);
+
+    try {
+      const { result } = renderHook(() => useAgorData(client));
+      await waitForInitialLoad(result);
+
+      act(() => emit('artifacts', 'patched', { ...artifact, content_hash: 'h2' }));
+
+      expect(events).toEqual([{ artifactId: 'a-1', contentHash: 'h2' }]);
+      expect(result.current.artifactById.get('a-1')?.content_hash).toBe('h2');
+    } finally {
+      window.removeEventListener('agor:artifact-patched', listener);
+    }
+  });
 });
