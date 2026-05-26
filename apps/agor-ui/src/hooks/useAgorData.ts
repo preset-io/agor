@@ -22,6 +22,7 @@ import type {
 } from '@agor-live/client';
 import { PAGINATION } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { shallowEqualEntity } from '../utils/shallowEqual';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 
 // Canonical list of initial-load items tracked by the loading checklist.
@@ -121,49 +122,95 @@ export function useAgorData(
   // Plain functions are fine — they only close over setMaps which is a stable useState setter.
   // Biome can't statically prove stability so fetchData and the subscribe effect below carry
   // a biome-ignore instead of listing every setter in the dep arrays.
+  //
+  // No-op short-circuit: when the inner functional update returns the same
+  // reference for the slice it owns (handler bailouts on `return prev`), the
+  // wrapper returns the outer `maps` object unchanged. Without this, the
+  // spread `{ ...m, sessionById: same }` would still produce a fresh `maps`
+  // reference and force `AppContent` → `App` → SessionCanvas to re-render on
+  // every socket event the handler chose to discard (e.g. `messages` /
+  // `tasks` events arriving for sessions we've already pruned from the map,
+  // archived branch patches for branches we don't track, idempotent entity
+  // patches caught by the shallow-equal checks below). The downstream cost
+  // is real — board re-layout work, MiniMap repaint, React Flow internal
+  // diff — so bailing at the source is the cheapest fix.
   const setSessionById = (v) =>
-    setMaps((m) => ({ ...m, sessionById: typeof v === 'function' ? v(m.sessionById) : v }));
+    setMaps((m) => {
+      const next = typeof v === 'function' ? v(m.sessionById) : v;
+      return next === m.sessionById ? m : { ...m, sessionById: next };
+    });
   const setSessionsByBranch = (v) =>
-    setMaps((m) => ({
-      ...m,
-      sessionsByBranch: typeof v === 'function' ? v(m.sessionsByBranch) : v,
-    }));
+    setMaps((m) => {
+      const next = typeof v === 'function' ? v(m.sessionsByBranch) : v;
+      return next === m.sessionsByBranch ? m : { ...m, sessionsByBranch: next };
+    });
   const setBoardById = (v) =>
-    setMaps((m) => ({ ...m, boardById: typeof v === 'function' ? v(m.boardById) : v }));
+    setMaps((m) => {
+      const next = typeof v === 'function' ? v(m.boardById) : v;
+      return next === m.boardById ? m : { ...m, boardById: next };
+    });
   const setBoardObjectById = (v) =>
-    setMaps((m) => ({ ...m, boardObjectById: typeof v === 'function' ? v(m.boardObjectById) : v }));
+    setMaps((m) => {
+      const next = typeof v === 'function' ? v(m.boardObjectById) : v;
+      return next === m.boardObjectById ? m : { ...m, boardObjectById: next };
+    });
   const setCommentById = (v) =>
-    setMaps((m) => ({ ...m, commentById: typeof v === 'function' ? v(m.commentById) : v }));
+    setMaps((m) => {
+      const next = typeof v === 'function' ? v(m.commentById) : v;
+      return next === m.commentById ? m : { ...m, commentById: next };
+    });
   const setCardById = (v) =>
-    setMaps((m) => ({ ...m, cardById: typeof v === 'function' ? v(m.cardById) : v }));
+    setMaps((m) => {
+      const next = typeof v === 'function' ? v(m.cardById) : v;
+      return next === m.cardById ? m : { ...m, cardById: next };
+    });
   const setCardTypeById = (v) =>
-    setMaps((m) => ({ ...m, cardTypeById: typeof v === 'function' ? v(m.cardTypeById) : v }));
+    setMaps((m) => {
+      const next = typeof v === 'function' ? v(m.cardTypeById) : v;
+      return next === m.cardTypeById ? m : { ...m, cardTypeById: next };
+    });
   const setRepoById = (v) =>
-    setMaps((m) => ({ ...m, repoById: typeof v === 'function' ? v(m.repoById) : v }));
+    setMaps((m) => {
+      const next = typeof v === 'function' ? v(m.repoById) : v;
+      return next === m.repoById ? m : { ...m, repoById: next };
+    });
   const setBranchById = (v) =>
-    setMaps((m) => ({ ...m, branchById: typeof v === 'function' ? v(m.branchById) : v }));
+    setMaps((m) => {
+      const next = typeof v === 'function' ? v(m.branchById) : v;
+      return next === m.branchById ? m : { ...m, branchById: next };
+    });
   const setUserById = (v) =>
-    setMaps((m) => ({ ...m, userById: typeof v === 'function' ? v(m.userById) : v }));
+    setMaps((m) => {
+      const next = typeof v === 'function' ? v(m.userById) : v;
+      return next === m.userById ? m : { ...m, userById: next };
+    });
   const setMcpServerById = (v) =>
-    setMaps((m) => ({ ...m, mcpServerById: typeof v === 'function' ? v(m.mcpServerById) : v }));
+    setMaps((m) => {
+      const next = typeof v === 'function' ? v(m.mcpServerById) : v;
+      return next === m.mcpServerById ? m : { ...m, mcpServerById: next };
+    });
   const setGatewayChannelById = (v) =>
-    setMaps((m) => ({
-      ...m,
-      gatewayChannelById: typeof v === 'function' ? v(m.gatewayChannelById) : v,
-    }));
+    setMaps((m) => {
+      const next = typeof v === 'function' ? v(m.gatewayChannelById) : v;
+      return next === m.gatewayChannelById ? m : { ...m, gatewayChannelById: next };
+    });
   const setArtifactById = (v) =>
-    setMaps((m) => ({ ...m, artifactById: typeof v === 'function' ? v(m.artifactById) : v }));
+    setMaps((m) => {
+      const next = typeof v === 'function' ? v(m.artifactById) : v;
+      return next === m.artifactById ? m : { ...m, artifactById: next };
+    });
   const setSessionMcpServerIds = (v) =>
-    setMaps((m) => ({
-      ...m,
-      sessionMcpServerIds: typeof v === 'function' ? v(m.sessionMcpServerIds) : v,
-    }));
+    setMaps((m) => {
+      const next = typeof v === 'function' ? v(m.sessionMcpServerIds) : v;
+      return next === m.sessionMcpServerIds ? m : { ...m, sessionMcpServerIds: next };
+    });
   const setUserAuthenticatedMcpServerIds = (v) =>
-    setMaps((m) => ({
-      ...m,
-      userAuthenticatedMcpServerIds:
-        typeof v === 'function' ? v(m.userAuthenticatedMcpServerIds) : v,
-    }));
+    setMaps((m) => {
+      const next = typeof v === 'function' ? v(m.userAuthenticatedMcpServerIds) : v;
+      return next === m.userAuthenticatedMcpServerIds
+        ? m
+        : { ...m, userAuthenticatedMcpServerIds: next };
+    });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Per-item counts captured at fetch-resolution time. Presence in this
@@ -515,7 +562,12 @@ export function useAgorData(
           return next;
         }
 
-        if (existing === session) return prev; // Same reference, no change
+        // Bail out on no-op patches. Feathers always emits a fresh object so
+        // `existing === session` never holds, but the daemon does emit
+        // idempotent patches (e.g. callback bookkeeping that lands at the same
+        // status). Shallow-equal misses nested fields the daemon reserializes
+        // — that's a safe false negative.
+        if (existing && shallowEqualEntity(existing, session)) return prev;
 
         const next = new Map(prev);
         next.set(session.session_id, session);
@@ -563,7 +615,15 @@ export function useAgorData(
           return next;
         }
 
-        if (branchSessions[index] === session) {
+        // Bail out when the session is content-equal to what we already hold.
+        // Mirrors the sessionById bailout above so an idempotent patch doesn't
+        // produce a fresh branch-bucket array (which would invalidate
+        // `data.sessions === n.sessions` in BranchNode's custom areEqual and
+        // re-render every BranchCard on the affected branch).
+        if (
+          branchSessions[index] === session ||
+          shallowEqualEntity(branchSessions[index], session)
+        ) {
           return changed ? next : prev;
         }
 
@@ -574,17 +634,23 @@ export function useAgorData(
       });
     };
     const handleSessionRemoved = (session: Session) => {
-      // Update sessionById
+      // Update sessionById — bail out when the id isn't tracked so the
+      // wrapper short-circuit prevents the spurious `maps` update.
       setSessionById((prev) => {
+        if (!prev.has(session.session_id)) return prev;
         const next = new Map(prev);
         next.delete(session.session_id);
         return next;
       });
 
-      // Update sessionsByBranch
+      // Update sessionsByBranch — same bail when the session isn't in the
+      // branch's bucket.
       setSessionsByBranch((prev) => {
+        const branchSessions = prev.get(session.branch_id);
+        if (!branchSessions?.some((s) => s.session_id === session.session_id)) {
+          return prev;
+        }
         const next = new Map(prev);
-        const branchSessions = next.get(session.branch_id) || [];
         const filtered = branchSessions.filter((s) => s.session_id !== session.session_id);
         if (filtered.length > 0) {
           next.set(session.branch_id, filtered);
@@ -614,9 +680,10 @@ export function useAgorData(
     const handleBoardPatched = (board: Board) => {
       setBoardById((prev) => {
         const existing = prev.get(board.board_id);
-        if (existing === board) {
-          return prev; // Same reference, no change
-        }
+        // Bail out on content-equal patches. Wrapper-level `same-ref` check
+        // turns this `prev` return into a true no-op (no `maps` churn, no
+        // downstream re-renders).
+        if (existing && shallowEqualEntity(existing, board)) return prev;
         const next = new Map(prev);
         next.set(board.board_id, board);
         return next;
@@ -649,7 +716,7 @@ export function useAgorData(
     const handleBoardObjectPatched = (boardObject: BoardEntityObject) => {
       setBoardObjectById((prev) => {
         const existing = prev.get(boardObject.object_id);
-        if (existing === boardObject) return prev; // Same reference, no change
+        if (existing && shallowEqualEntity(existing, boardObject)) return prev;
         const next = new Map(prev);
         next.set(boardObject.object_id, boardObject);
         return next;
@@ -682,7 +749,7 @@ export function useAgorData(
     const handleRepoPatched = (repo: Repo) => {
       setRepoById((prev) => {
         const existing = prev.get(repo.repo_id);
-        if (existing === repo) return prev; // Same reference, no change
+        if (existing && shallowEqualEntity(existing, repo)) return prev;
         const next = new Map(prev);
         next.set(repo.repo_id, repo);
         return next;
@@ -747,7 +814,11 @@ export function useAgorData(
 
       setBranchById((prev) => {
         const existing = prev.get(branch.branch_id);
-        if (existing === branch) return prev; // Same reference, no change
+        // Drop ghost patches that don't actually move any branch field — the
+        // board canvas only depends on branchById for its initialNodes useMemo,
+        // so bailing here is what keeps zoom/pan smooth when daemon-side
+        // bookkeeping fires `branches.patched` with unchanged content.
+        if (existing && shallowEqualEntity(existing, branch)) return prev;
         const next = new Map(prev);
         next.set(branch.branch_id, branch);
         return next;
@@ -780,7 +851,7 @@ export function useAgorData(
     const handleUserPatched = (user: User) => {
       setUserById((prev) => {
         const existing = prev.get(user.user_id);
-        if (existing === user) return prev; // Same reference, no change
+        if (existing && shallowEqualEntity(existing, user)) return prev;
         const next = new Map(prev);
         next.set(user.user_id, user);
         return next;
@@ -813,7 +884,7 @@ export function useAgorData(
     const handleMCPServerPatched = (server: MCPServer) => {
       setMcpServerById((prev) => {
         const existing = prev.get(server.mcp_server_id);
-        if (existing === server) return prev; // Same reference, no change
+        if (existing && shallowEqualEntity(existing, server)) return prev;
         const next = new Map(prev);
         next.set(server.mcp_server_id, server);
         return next;
@@ -846,7 +917,7 @@ export function useAgorData(
     const handleGatewayChannelPatched = (channel: GatewayChannel) => {
       setGatewayChannelById((prev) => {
         const existing = prev.get(channel.id);
-        if (existing === channel) return prev;
+        if (existing && shallowEqualEntity(existing, channel)) return prev;
         const next = new Map(prev);
         next.set(channel.id, channel);
         return next;
@@ -878,7 +949,7 @@ export function useAgorData(
     const handleCardPatched = (card: CardWithType) => {
       setCardById((prev) => {
         const existing = prev.get(card.card_id);
-        if (existing === card) return prev;
+        if (existing && shallowEqualEntity(existing, card)) return prev;
         const next = new Map(prev);
         next.set(card.card_id, card);
         return next;
@@ -910,7 +981,7 @@ export function useAgorData(
     const handleCardTypePatched = (cardType: CardType) => {
       setCardTypeById((prev) => {
         const existing = prev.get(cardType.card_type_id);
-        if (existing === cardType) return prev;
+        if (existing && shallowEqualEntity(existing, cardType)) return prev;
         const next = new Map(prev);
         next.set(cardType.card_type_id, cardType);
         return next;
@@ -941,19 +1012,27 @@ export function useAgorData(
       });
     };
     const handleArtifactPatched = (artifact: Artifact) => {
+      let payloadChanged = true;
       setArtifactById((prev) => {
         const existing = prev.get(artifact.artifact_id);
-        if (existing === artifact) return prev;
+        if (existing && shallowEqualEntity(existing, artifact)) {
+          payloadChanged = false;
+          return prev;
+        }
         const next = new Map(prev);
         next.set(artifact.artifact_id, artifact);
         return next;
       });
-      // Notify ArtifactNode components that payload may have changed
-      window.dispatchEvent(
-        new CustomEvent('agor:artifact-patched', {
-          detail: { artifactId: artifact.artifact_id, contentHash: artifact.content_hash },
-        })
-      );
+      // Notify ArtifactNode components that payload may have changed.
+      // Skip the dispatch on no-op patches so iframes don't churn on
+      // idempotent server-side bookkeeping.
+      if (payloadChanged) {
+        window.dispatchEvent(
+          new CustomEvent('agor:artifact-patched', {
+            detail: { artifactId: artifact.artifact_id, contentHash: artifact.content_hash },
+          })
+        );
+      }
     };
     const handleArtifactRemoved = (artifact: Artifact) => {
       setArtifactById((prev) => {
@@ -1038,7 +1117,7 @@ export function useAgorData(
     const handleCommentPatched = (comment: BoardComment) => {
       setCommentById((prev) => {
         const existing = prev.get(comment.comment_id);
-        if (existing === comment) return prev; // Same reference, no change
+        if (existing && shallowEqualEntity(existing, comment)) return prev;
         const next = new Map(prev);
         next.set(comment.comment_id, comment);
         return next;
