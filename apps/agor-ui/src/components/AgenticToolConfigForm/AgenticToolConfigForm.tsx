@@ -122,12 +122,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
               : undefined
           }
         >
-          <InputNumber
-            min={30}
-            max={3600}
-            placeholder="300"
-            style={{ width: '100%' }}
-          />
+          <InputNumber min={30} max={3600} placeholder="300" style={{ width: '100%' }} />
         </Form.Item>
       )}
 
