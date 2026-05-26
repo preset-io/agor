@@ -49,6 +49,12 @@ export interface AgenticToolConfigFormProps {
    */
   hideMcpServers?: boolean;
   /**
+   * Show the Claude SDK idle-timeout field. This is currently only wired for
+   * new-session creation; other consumers of this shared form either do not
+   * persist the value or edit already-created sessions.
+   */
+  showSdkIdleTimeout?: boolean;
+  /**
    * Optional Feathers client. When set, the embedded ModelSelector can fetch
    * dynamic Copilot models via `/copilot-models`. Without it, the picker
    * silently uses the static fallback — fine for forms that don't need
@@ -71,10 +77,13 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
   showHelpText = true,
   compact = false,
   hideMcpServers = false,
+  showSdkIdleTimeout = false,
   client,
 }) => {
   const modelLabel = MODEL_LABELS[agenticTool] ?? 'Claude Model';
   const showCodexFields = agenticTool === 'codex' && !compact;
+  const showClaudeSdkIdleTimeout =
+    showSdkIdleTimeout && (agenticTool === 'claude-code' || agenticTool === 'claude-code-cli');
 
   return (
     <>
@@ -112,7 +121,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
         </Form.Item>
       )}
 
-      {(agenticTool === 'claude-code' || agenticTool === 'claude-code-cli') && (
+      {showClaudeSdkIdleTimeout && (
         <Form.Item
           name="sdkIdleTimeoutSeconds"
           label="Idle timeout (seconds)"
