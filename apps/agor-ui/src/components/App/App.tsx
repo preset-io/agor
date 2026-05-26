@@ -110,7 +110,7 @@ export interface AppProps {
   onSendPrompt?: (sessionId: string, prompt: string, permissionMode?: PermissionMode) => void;
   onUpdateSession?: (sessionId: string, updates: Partial<Session>) => void;
   onDeleteSession?: (sessionId: string) => void;
-  onCreateBoard?: (board: Partial<Board>) => Promise<Board | null> | undefined;
+  onCreateBoard?: (board: Partial<Board>) => Promise<Board | null>;
   onUpdateBoard?: (boardId: string, updates: Partial<Board>) => void;
   onDeleteBoard?: (boardId: string) => void;
   onArchiveBoard?: (boardId: string) => void;
@@ -139,6 +139,8 @@ export interface AppProps {
       pullLatest: boolean;
       issue_url?: string;
       pull_request_url?: string;
+      boardId?: string;
+      position?: { x: number; y: number };
       storage_mode?: 'worktree' | 'clone';
       clone_depth?: number;
     }
@@ -519,6 +521,12 @@ export const App: React.FC<AppProps> = ({
   };
 
   const handleCreateBranch = async (config: BranchTabConfig) => {
+    // Thread board placement (boardId + position) through the create
+    // call so it lands atomically. The previous shape did a follow-up
+    // PATCH for board_id and dropped position entirely — the API already
+    // accepts both at create time, so the patch is redundant and the
+    // dropped position made the BranchTab `defaultPosition` plumbing a
+    // no-op.
     const branch = await onCreateBranch?.(config.repoId, {
       name: config.name,
       ref: config.ref,
@@ -528,16 +536,11 @@ export const App: React.FC<AppProps> = ({
       pullLatest: config.pullLatest,
       issue_url: config.issue_url,
       pull_request_url: config.pull_request_url,
+      ...(config.board_id ? { boardId: config.board_id } : {}),
+      ...(config.position ? { position: config.position } : {}),
       ...(config.storage_mode ? { storage_mode: config.storage_mode } : {}),
       ...(config.clone_depth !== undefined ? { clone_depth: config.clone_depth } : {}),
     });
-
-    // If board_id is provided and branch was created, assign it to the board
-    if (branch && config.board_id) {
-      await onUpdateBranch?.(branch.branch_id, {
-        board_id: config.board_id as BoardID,
-      });
-    }
 
     setCreateDialogOpen(false);
 
@@ -553,7 +556,8 @@ export const App: React.FC<AppProps> = ({
   };
 
   const handleCreateBoardFromDialog = async (board: Partial<Board>) => {
-    const created = await onCreateBoard?.(board);
+    if (!onCreateBoard) return;
+    const created = await onCreateBoard(board);
     // Boards have their own URL (/b/<slug-or-short>/) — switch to the
     // new board after creation so the user lands on the empty canvas
     // they're about to populate. Same intent as goToBranch/goToSession

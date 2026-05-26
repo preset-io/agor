@@ -2747,13 +2747,18 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   }
                 }
 
-                // Execute action
+                // Execute action and capture the session the user
+                // should land on so we can route through the normal
+                // session-click pipe afterward (same URL push as
+                // handleCreateSession / a card click).
+                let resultSessionId: string | undefined;
                 switch (action) {
                   case 'prompt': {
                     await client.sessions.prompt(targetSessionId, renderedTemplate, {
                       permissionMode,
                       messageSource: 'agor',
                     });
+                    resultSessionId = targetSessionId;
                     break;
                   }
                   case 'fork': {
@@ -2764,6 +2769,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       permissionMode,
                       messageSource: 'agor',
                     });
+                    resultSessionId = forkedSession.session_id;
                     break;
                   }
                   case 'spawn': {
@@ -2774,9 +2780,16 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       permissionMode,
                       messageSource: 'agor',
                     });
+                    resultSessionId = spawnedSession.session_id;
                     break;
                   }
                 }
+
+                // Open the session the trigger landed on (new for
+                // fork/spawn/new-session, existing for prompt). Routes
+                // through the same handler as a session-card click, so
+                // URL push + recenter + flag cleanup all run in lockstep.
+                if (resultSessionId) onSessionClick?.(resultSessionId);
               } catch (error) {
                 console.error('❌ Failed to execute zone trigger:', error);
               } finally {
