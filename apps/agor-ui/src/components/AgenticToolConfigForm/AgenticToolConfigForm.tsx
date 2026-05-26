@@ -118,7 +118,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
           label="Idle timeout (seconds)"
           help={
             showHelpText
-              ? 'Max seconds without a Claude SDK event before the session is considered hung. Default: 300. Increase for Opus 4.7 with extended thinking. Set at create time only.'
+              ? 'Max seconds without a Claude SDK event before the session is considered hung. Default: 300. Increase for Opus 4.7 with extended thinking. Set at create time.'
               : undefined
           }
         >
