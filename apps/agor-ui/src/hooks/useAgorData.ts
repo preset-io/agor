@@ -1055,11 +1055,7 @@ export function useAgorData(
       // `apps/agor-daemon/src/register-hooks.ts`), so a single `get` is enough.
       try {
         const fresh = (await client.service('mcp-servers').get(event.mcp_server_id)) as MCPServer;
-        setMcpServerById((prev) => {
-          const next = new Map(prev);
-          next.set(fresh.mcp_server_id, fresh);
-          return next;
-        });
+        setMcpServerById((prev) => replaceIfChanged(prev, fresh.mcp_server_id, fresh));
       } catch (err) {
         console.warn('[OAuth] Failed to refetch MCP server after re-auth:', err);
       }
@@ -1103,11 +1099,7 @@ export function useAgorData(
       // Still refetch to get the canonical server state from the daemon.
       try {
         const fresh = (await client.service('mcp-servers').get(event.mcp_server_id)) as MCPServer;
-        setMcpServerById((prev) => {
-          const next = new Map(prev);
-          next.set(fresh.mcp_server_id, fresh);
-          return next;
-        });
+        setMcpServerById((prev) => replaceIfChanged(prev, fresh.mcp_server_id, fresh));
       } catch (err) {
         console.warn('[OAuth] Failed to refetch MCP server after disconnect:', err);
       }

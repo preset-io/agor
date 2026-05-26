@@ -105,12 +105,18 @@ const makeSession = (overrides: Record<string, unknown> = {}) => ({
 });
 
 /**
- * Wait until the initial fetch has populated the byId maps. The hook
- * fetches a fixed set of services on mount; we wait for one (sessions)
- * to land which implies the others completed in the same Promise.all.
+ * Wait until the hook has finished its initial fetch AND populated the
+ * byId maps. The two flip in separate setState calls — `itemCounts` is
+ * updated as each tracked promise resolves (driving `initialLoadComplete`)
+ * while the byId Maps are populated after the `Promise.all` body runs —
+ * so we gate on `loading === false` which only flips inside the same
+ * `finally` block as the map writes.
  */
 async function waitForInitialLoad(result: { current: ReturnType<typeof useAgorData> }) {
-  await waitFor(() => expect(result.current.initialLoadComplete).toBe(true));
+  await waitFor(() => {
+    expect(result.current.loading).toBe(false);
+    expect(result.current.initialLoadComplete).toBe(true);
+  });
 }
 
 describe('useAgorData — socket-event bailouts', () => {
@@ -277,5 +283,28 @@ describe('useAgorData — socket-event bailouts', () => {
     } finally {
       window.removeEventListener('agor:artifact-patched', listener);
     }
+  });
+
+  it('keeps `artifactById` reference-stable on a content-equal artifact patch', async () => {
+    // Pin the contract: idempotent artifact patches must NOT invalidate
+    // `artifactById`. The window event fires either way (consumer filters
+    // by contentHash), but the central store stays put — that's what
+    // protects the canvas from re-rendering on no-op artifact patches.
+    const artifact = {
+      artifact_id: 'a-1',
+      name: 'demo',
+      content_hash: 'h1',
+      board_id: 'board-1',
+      created_by: 'u-1',
+    };
+    const { client, emit } = makeMockClient({ artifacts: [artifact] });
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+
+    const before = result.current.artifactById;
+
+    act(() => emit('artifacts', 'patched', { ...artifact }));
+
+    expect(result.current.artifactById).toBe(before);
   });
 });
