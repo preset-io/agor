@@ -187,4 +187,40 @@ describe('ClaudePromptService sdk_idle_timeout_ms', () => {
       expect(result.outputTokens).toBe(2);
     });
   });
+
+  describe('ClaudeSdkIdleWatchdog', () => {
+    it('keeps the watchdog paused until all overlapping pauses resume', async () => {
+      vi.useFakeTimers();
+      let watchdog: import('./prompt-service.js').ClaudeSdkIdleWatchdog | undefined;
+
+      try {
+        const { ClaudeSdkIdleWatchdog } = await import('./prompt-service.js');
+        const abortController = new AbortController();
+        watchdog = new ClaudeSdkIdleWatchdog(1000, abortController);
+
+        watchdog.pause('permission_flow:a');
+        watchdog.pause('permission_flow:b');
+        watchdog.resume('permission_wait_finished:a');
+
+        await vi.advanceTimersByTimeAsync(5000);
+
+        expect(abortController.signal.aborted).toBe(false);
+        expect(watchdog.hasTimedOut()).toBe(false);
+
+        watchdog.resume('permission_wait_finished:b');
+        await vi.advanceTimersByTimeAsync(999);
+
+        expect(abortController.signal.aborted).toBe(false);
+        expect(watchdog.hasTimedOut()).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1);
+
+        expect(abortController.signal.aborted).toBe(true);
+        expect(watchdog.hasTimedOut()).toBe(true);
+      } finally {
+        watchdog?.stop();
+        vi.useRealTimers();
+      }
+    });
+  });
 });

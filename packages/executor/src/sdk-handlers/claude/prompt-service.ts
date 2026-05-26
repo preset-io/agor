@@ -23,10 +23,10 @@ import type { MessagesService, SessionsPatchClient, TasksService } from '../base
 import { type ProcessedEvent, SDKMessageProcessor } from './message-processor.js';
 import { setupQuery } from './query-builder.js';
 
-class ClaudeSdkIdleWatchdog {
+export class ClaudeSdkIdleWatchdog {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private timedOut = false;
-  private paused = false;
+  private pauseDepth = 0;
   private lastActivityTime = Date.now();
 
   constructor(
@@ -38,7 +38,7 @@ class ClaudeSdkIdleWatchdog {
     if (this.timedOut || this.abortController.signal.aborted) return;
 
     this.lastActivityTime = Date.now();
-    if (this.paused) return;
+    if (this.pauseDepth > 0) return;
 
     if (this.timer) clearTimeout(this.timer);
 
@@ -48,11 +48,11 @@ class ClaudeSdkIdleWatchdog {
     }, this.idleTimeoutMs);
   }
 
-  pause(reason: string): void {
+  pause(_reason: string): void {
     if (this.timedOut || this.abortController.signal.aborted) return;
 
-    this.paused = true;
-    this.refresh(reason);
+    this.pauseDepth += 1;
+    this.lastActivityTime = Date.now();
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
   }
@@ -60,13 +60,19 @@ class ClaudeSdkIdleWatchdog {
   resume(reason: string): void {
     if (this.timedOut || this.abortController.signal.aborted) return;
 
-    this.paused = false;
-    this.refresh(reason);
+    this.pauseDepth = Math.max(0, this.pauseDepth - 1);
+    if (this.pauseDepth === 0) {
+      this.refresh(reason);
+      return;
+    }
+
+    this.lastActivityTime = Date.now();
   }
 
   stop(): void {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
+    this.pauseDepth = 0;
   }
 
   hasTimedOut(): boolean {
