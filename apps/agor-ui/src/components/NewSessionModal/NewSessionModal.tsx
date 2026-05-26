@@ -151,7 +151,8 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         agentDefaults?.permissionMode ??
         getDefaultPermissionMode(selectedAgent as AgenticToolName);
 
-      const sdkIdleTimeoutSeconds = values.sdkIdleTimeoutSeconds as number | undefined;
+      // InputNumber returns null when cleared; coerce null → undefined downstream.
+      const sdkIdleTimeoutSeconds = values.sdkIdleTimeoutSeconds as number | null | undefined;
       const config: NewSessionConfig = {
         branch_id: branchId,
         agent: selectedAgent,
@@ -163,8 +164,9 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         mcpServerIds: values.mcpServerIds ?? fallbackMcpServerIds,
         permissionMode,
         envVarNames: envVarNames.length > 0 ? envVarNames : undefined,
+        // seconds in UI, ms on the wire
         sdkIdleTimeoutMs:
-          sdkIdleTimeoutSeconds !== undefined && sdkIdleTimeoutSeconds > 0
+          sdkIdleTimeoutSeconds != null && sdkIdleTimeoutSeconds > 0
             ? sdkIdleTimeoutSeconds * 1000
             : undefined,
       };
@@ -261,7 +263,9 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         {/* MCP Servers — first-class field, mirrors SessionSettingsModal */}
         <SessionMcpServersField mcpServerById={mcpServerById} />
 
-        {/* Advanced Configuration (Collapsible) */}
+        {/* Advanced Configuration (Collapsible)
+            destroyOnHidden={false} keeps panel fields mounted when collapsed so
+            getFieldsValue(true) in handleCreate can still read their values. */}
         <Collapse
           ghost
           destroyOnHidden={false}

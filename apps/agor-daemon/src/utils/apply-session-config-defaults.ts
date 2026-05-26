@@ -67,7 +67,10 @@ export function applySessionConfigDefaults(opts: ApplySessionConfigDefaultsOpts 
     if (!data) return context;
 
     const hasPermission = data.permission_config != null;
-    const hasModel = data.model_config != null;
+    // Gate on model *identity* (mode+model), not just object presence.
+    // A caller may supply a sparse model_config containing only
+    // sdk_idle_timeout_ms — that must still trigger default model filling.
+    const hasModel = data.model_config?.model != null;
     if (hasPermission && hasModel) return context; // nothing to fill
 
     const agenticTool = data.agentic_tool as AgenticToolName | undefined;
@@ -109,7 +112,13 @@ export function applySessionConfigDefaults(opts: ApplySessionConfigDefaultsOpts 
       }
     }
     if (!hasModel && resolved.model_config) {
-      data.model_config = resolved.model_config;
+      // Merge: resolved defaults supply the model identity; caller-supplied
+      // fields (e.g. sdk_idle_timeout_ms) are preserved by overlaying them on
+      // top of the defaults rather than wiping the whole object.
+      data.model_config = {
+        ...resolved.model_config,
+        ...(data.model_config ?? {}),
+      };
     }
 
     return context;

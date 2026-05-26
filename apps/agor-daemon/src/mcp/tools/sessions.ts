@@ -870,7 +870,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         ...((modelConfig || args.sdkIdleTimeoutMs !== undefined) && {
           model_config: {
             ...(modelConfig ?? {}),
-            ...(args.sdkIdleTimeoutMs !== undefined && { sdk_idle_timeout_ms: args.sdkIdleTimeoutMs }),
+            ...(args.sdkIdleTimeoutMs !== undefined && {
+              sdk_idle_timeout_ms: args.sdkIdleTimeoutMs,
+            }),
+            updated_at: new Date().toISOString(),
           },
         }),
         ...(Object.keys(callbackConfig).length > 0 && { callback_config: callbackConfig }),

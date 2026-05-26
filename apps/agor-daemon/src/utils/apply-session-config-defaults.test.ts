@@ -209,6 +209,36 @@ describe('applySessionConfigDefaults', () => {
     expect(matched).toBe(false);
   });
 
+  describe('regression: sdk_idle_timeout_ms-only model_config still fills default model', () => {
+    it('fills user-default model when model_config contains only sdk_idle_timeout_ms', async () => {
+      const hook = applySessionConfigDefaults({ warnOnExternalDefaultFill: false });
+      const ctx = makeContext({
+        provider: 'rest',
+        user: { user_id: ALICE },
+        data: {
+          agentic_tool: 'claude-code',
+          created_by: ALICE,
+          // Sparse: only the timeout override, no model field
+          model_config: { sdk_idle_timeout_ms: 900000 },
+        },
+        users: {
+          [ALICE]: {
+            user_id: ALICE,
+            default_agentic_config: {
+              'claude-code': { modelConfig: { model: 'claude-opus-4-7' } },
+            },
+          },
+        },
+      });
+      await hook(ctx);
+      const result = ctx.data as { model_config: { model: string; sdk_idle_timeout_ms: number } };
+      // User default model must be filled in
+      expect(result.model_config.model).toBe('claude-opus-4-7');
+      // Caller-supplied timeout must survive the merge
+      expect(result.model_config.sdk_idle_timeout_ms).toBe(900000);
+    });
+  });
+
   describe('regression: issue #1064', () => {
     it('UI-shaped payload (no permission_config) gets bypassPermissions when user default is bypassPermissions', async () => {
       // Mirrors the exact UI drag-into-zone payload from

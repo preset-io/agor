@@ -210,7 +210,10 @@ If you continue to see authentication errors, please contact your Agor administr
       sessionId,
       existingSdkSessionId,
       enableTokenStreaming: ClaudePromptService.ENABLE_TOKEN_STREAMING,
-      idleTimeoutMs: session?.model_config?.sdk_idle_timeout_ms ?? ClaudePromptService.IDLE_TIMEOUT_MS,
+      idleTimeoutMs: Math.max(
+        30000,
+        session?.model_config?.sdk_idle_timeout_ms ?? ClaudePromptService.IDLE_TIMEOUT_MS
+      ),
     });
 
     // With AbortController passed to SDK, cancellation is handled natively.
@@ -375,7 +378,10 @@ If you continue to see authentication errors, please contact your Agor administr
       sessionId,
       existingSdkSessionId,
       enableTokenStreaming: false, // Non-streaming mode
-      idleTimeoutMs: session?.model_config?.sdk_idle_timeout_ms ?? ClaudePromptService.IDLE_TIMEOUT_MS,
+      idleTimeoutMs: Math.max(
+        30000,
+        session?.model_config?.sdk_idle_timeout_ms ?? ClaudePromptService.IDLE_TIMEOUT_MS
+      ),
     });
 
     // Collect response messages from async generator

@@ -33,6 +33,8 @@ export interface AgenticFormValues {
   codexSandboxMode?: string;
   codexApprovalPolicy?: string;
   codexNetworkAccess?: boolean;
+  /** Ant Design InputNumber returns null when cleared, so null is valid here. */
+  sdkIdleTimeoutSeconds?: number | null;
 }
 
 /**
@@ -141,6 +143,7 @@ export function getClearedFormValues(tool: AgenticToolName): AgenticFormValues {
     effort: undefined,
     permissionMode: getDefaultPermissionMode(tool),
     mcpServerIds: [],
+    sdkIdleTimeoutSeconds: undefined,
     ...(tool === 'codex' && {
       codexSandboxMode: undefined,
       codexApprovalPolicy: undefined,
