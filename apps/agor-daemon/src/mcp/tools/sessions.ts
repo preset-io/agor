@@ -769,6 +769,15 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             'MCP server IDs to attach. Overrides branch and user default inheritance. Omit to use branch config > user defaults.'
           ),
         modelConfig: modelConfigInputSchema,
+        sdkIdleTimeoutMs: z
+          .number()
+          .int()
+          .min(30000)
+          .max(3600000)
+          .optional()
+          .describe(
+            'Claude SDK idle timeout in milliseconds for this session. If no events are received from the Claude SDK for this duration, the session is considered hung and terminated. Set at create time only — cannot be changed afterward. Default: 300000 (5 minutes). Min: 30000 (30s), Max: 3600000 (1h). Useful for Opus 4.7 with extended thinking, which may batch server-side without streaming deltas for longer periods.'
+          ),
       }),
     },
     async (args) => {
@@ -858,7 +867,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         created_by: ctx.userId,
         unix_username: user.unix_username,
         permission_config: permissionConfig,
-        ...(modelConfig && { model_config: modelConfig }),
+        ...((modelConfig || args.sdkIdleTimeoutMs !== undefined) && {
+          model_config: {
+            ...(modelConfig ?? {}),
+            ...(args.sdkIdleTimeoutMs !== undefined && { sdk_idle_timeout_ms: args.sdkIdleTimeoutMs }),
+          },
+        }),
         ...(Object.keys(callbackConfig).length > 0 && { callback_config: callbackConfig }),
         contextFiles: args.contextFiles || [],
         git_state: {

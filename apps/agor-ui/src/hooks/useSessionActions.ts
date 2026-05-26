@@ -88,14 +88,16 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
         title: config.title || undefined,
         description: config.initialPrompt || undefined,
         branch_id: config.branch_id,
-        model_config: config.modelConfig
-          ? {
-              ...config.modelConfig,
-              ...(config.effort && { effort: config.effort }),
-              updated_at: new Date().toISOString(),
-            }
-          : config.effort
-            ? { effort: config.effort, updated_at: new Date().toISOString() }
+        model_config:
+          config.modelConfig || config.effort || config.sdkIdleTimeoutMs !== undefined
+            ? {
+                ...(config.modelConfig ?? {}),
+                ...(config.effort && { effort: config.effort }),
+                ...(config.sdkIdleTimeoutMs !== undefined && {
+                  sdk_idle_timeout_ms: config.sdkIdleTimeoutMs,
+                }),
+                updated_at: new Date().toISOString(),
+              }
             : undefined,
         permission_config: permissionConfig,
       } as Partial<Session>);

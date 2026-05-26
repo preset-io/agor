@@ -42,6 +42,11 @@ export interface NewSessionConfig {
    * session's executor process once it is created.
    */
   envVarNames?: string[];
+  /**
+   * Claude SDK idle timeout in milliseconds. Set at create time only.
+   * Default: 300000 (5 min). Useful for Opus 4.7 with extended thinking.
+   */
+  sdkIdleTimeoutMs?: number;
 }
 
 export interface NewSessionModalProps {
@@ -146,6 +151,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         agentDefaults?.permissionMode ??
         getDefaultPermissionMode(selectedAgent as AgenticToolName);
 
+      const sdkIdleTimeoutSeconds = values.sdkIdleTimeoutSeconds as number | undefined;
       const config: NewSessionConfig = {
         branch_id: branchId,
         agent: selectedAgent,
@@ -157,6 +163,10 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         mcpServerIds: values.mcpServerIds ?? fallbackMcpServerIds,
         permissionMode,
         envVarNames: envVarNames.length > 0 ? envVarNames : undefined,
+        sdkIdleTimeoutMs:
+          sdkIdleTimeoutSeconds !== undefined && sdkIdleTimeoutSeconds > 0
+            ? sdkIdleTimeoutSeconds * 1000
+            : undefined,
       };
 
       if (selectedAgent === 'codex') {

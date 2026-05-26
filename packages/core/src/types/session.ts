@@ -258,6 +258,15 @@ export interface Session {
      * Only applicable when agentic_tool='opencode'
      */
     provider?: string;
+    /**
+     * Per-session Claude SDK idle timeout in milliseconds.
+     * If no events are received from the Claude SDK for this duration, the session
+     * is considered hung and terminated. Set at create time only.
+     * Default: 300000 (5 minutes). Min: 30000 (30s). Max: 3600000 (1h).
+     * Useful for Opus 4.7 with extended thinking, which may batch server-side
+     * for longer than the default 5-minute window.
+     */
+    sdk_idle_timeout_ms?: number;
   };
 
   /**

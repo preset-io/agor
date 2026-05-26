@@ -16,7 +16,7 @@
  */
 
 import type { AgenticToolName, AgorClient, MCPServer } from '@agor-live/client';
-import { Form, Select } from 'antd';
+import { Form, InputNumber, Select } from 'antd';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
 import { EffortSelector } from '../EffortSelector';
 import { SessionMcpServersField } from '../MCPServerSelect';
@@ -109,6 +109,25 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
           }
         >
           <EffortSelector />
+        </Form.Item>
+      )}
+
+      {(agenticTool === 'claude-code' || agenticTool === 'claude-code-cli') && (
+        <Form.Item
+          name="sdkIdleTimeoutSeconds"
+          label="Idle timeout (seconds)"
+          help={
+            showHelpText
+              ? 'Max seconds without a Claude SDK event before the session is considered hung. Default: 300. Increase for Opus 4.7 with extended thinking. Set at create time only.'
+              : undefined
+          }
+        >
+          <InputNumber
+            min={30}
+            max={3600}
+            placeholder="300"
+            style={{ width: '100%' }}
+          />
         </Form.Item>
       )}
 
