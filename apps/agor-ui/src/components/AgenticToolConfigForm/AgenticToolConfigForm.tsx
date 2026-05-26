@@ -15,6 +15,11 @@
  * - Codex-specific fields are omitted (rendered separately via CodexSettingsForm)
  */
 
+import {
+  CLAUDE_SDK_IDLE_TIMEOUT_DEFAULT_SECONDS,
+  CLAUDE_SDK_IDLE_TIMEOUT_MAX_SECONDS,
+  CLAUDE_SDK_IDLE_TIMEOUT_MIN_SECONDS,
+} from '@agor/core/sessions';
 import type { AgenticToolName, AgorClient, MCPServer } from '@agor-live/client';
 import { Form, InputNumber, Select } from 'antd';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
@@ -82,8 +87,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
 }) => {
   const modelLabel = MODEL_LABELS[agenticTool] ?? 'Claude Model';
   const showCodexFields = agenticTool === 'codex' && !compact;
-  const showClaudeSdkIdleTimeout =
-    showSdkIdleTimeout && (agenticTool === 'claude-code' || agenticTool === 'claude-code-cli');
+  const showClaudeSdkIdleTimeout = showSdkIdleTimeout && agenticTool === 'claude-code';
 
   return (
     <>
@@ -131,7 +135,12 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
               : undefined
           }
         >
-          <InputNumber min={30} max={3600} placeholder="300" style={{ width: '100%' }} />
+          <InputNumber
+            min={CLAUDE_SDK_IDLE_TIMEOUT_MIN_SECONDS}
+            max={CLAUDE_SDK_IDLE_TIMEOUT_MAX_SECONDS}
+            placeholder={String(CLAUDE_SDK_IDLE_TIMEOUT_DEFAULT_SECONDS)}
+            style={{ width: '100%' }}
+          />
         </Form.Item>
       )}
 

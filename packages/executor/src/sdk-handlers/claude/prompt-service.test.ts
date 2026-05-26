@@ -21,6 +21,8 @@ const processorInstances: Array<{
   hasTimedOut: ReturnType<typeof vi.fn>;
 }> = [];
 let queryMessages: Array<Record<string, unknown>> = [];
+let queryWaitsForRelease = false;
+let lastReleaseInput: ReturnType<typeof vi.fn> | undefined;
 
 vi.mock('./message-processor.js', () => {
   return {
@@ -29,7 +31,15 @@ vi.mock('./message-processor.js', () => {
       this: Record<string, unknown>,
       opts: { idleTimeoutMs: number }
     ) {
-      const process = vi.fn().mockResolvedValue([]);
+      const process = vi.fn().mockImplementation(async (msg: { type?: string }) => {
+        if (msg.type === 'result') {
+          return [
+            { type: 'result', raw_sdk_message: msg },
+            { type: 'end', reason: 'result' },
+          ];
+        }
+        return [];
+      });
       const hasTimedOut = vi.fn().mockReturnValue(false);
       processorCalls.push({ idleTimeoutMs: opts.idleTimeoutMs });
       processorInstances.push({ process, hasTimedOut });
@@ -50,15 +60,23 @@ vi.mock('@agor/core/db', () => ({ shortId: (id: string) => id.slice(0, 8) }));
 // Return a fresh empty generator on every call so tests don't share state.
 vi.mock('./query-builder.js', () => ({
   setupQuery: vi.fn().mockImplementation(async () => {
+    let releaseInputResolve: (() => void) | undefined;
+    const releaseInputPromise = new Promise<void>((resolve) => {
+      releaseInputResolve = resolve;
+    });
     const query = (async function* () {
       for (const msg of queryMessages) {
         yield msg;
+      }
+      if (queryWaitsForRelease) {
+        await releaseInputPromise;
       }
     })() as AsyncGenerator<Record<string, unknown>> & {
       releaseInput: ReturnType<typeof vi.fn>;
       getContextUsage: ReturnType<typeof vi.fn>;
     };
-    query.releaseInput = vi.fn();
+    query.releaseInput = vi.fn(() => releaseInputResolve?.());
+    lastReleaseInput = query.releaseInput;
     query.getContextUsage = vi
       .fn()
       .mockResolvedValue({ totalTokens: 0, maxTokens: 200000, percentage: 0 });
@@ -77,6 +95,8 @@ describe('ClaudePromptService sdk_idle_timeout_ms', () => {
     processorCalls.length = 0;
     processorInstances.length = 0;
     queryMessages = [];
+    queryWaitsForRelease = false;
+    lastReleaseInput = undefined;
     sessionsRepo = { findById: vi.fn() };
   });
 
@@ -93,7 +113,7 @@ describe('ClaudePromptService sdk_idle_timeout_ms', () => {
     const { ClaudePromptService } = await import('./prompt-service.js');
     const svc = new ClaudePromptService(undefined as never, sessionsRepo as never);
     sessionsRepo.findById.mockResolvedValue(session);
-    await svc.promptSession(session.session_id as SessionID, 'test');
+    return svc.promptSession(session.session_id as SessionID, 'test');
   }
 
   describe('streaming path (promptSessionStreaming)', () => {
@@ -146,6 +166,25 @@ describe('ClaudePromptService sdk_idle_timeout_ms', () => {
         model_config: { sdk_idle_timeout_ms: 900000 },
       });
       expect(processorCalls[0]?.idleTimeoutMs).toBe(900000);
+    });
+
+    it('releases the held SDK input after a successful result', async () => {
+      queryWaitsForRelease = true;
+      queryMessages = [
+        {
+          type: 'result',
+          usage: { input_tokens: 1, output_tokens: 2 },
+        },
+      ];
+
+      const result = await runNonStreaming({
+        session_id: 'sess-f',
+        model_config: { sdk_idle_timeout_ms: 30000 },
+      });
+
+      expect(lastReleaseInput).toHaveBeenCalledTimes(1);
+      expect(result.inputTokens).toBe(1);
+      expect(result.outputTokens).toBe(2);
     });
   });
 });

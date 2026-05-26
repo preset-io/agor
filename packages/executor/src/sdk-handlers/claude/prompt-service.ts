@@ -7,6 +7,7 @@
 
 import { shortId } from '@agor/core/db';
 import type { PermissionMode, SDKResultMessage } from '@agor/core/sdk';
+import { normalizeClaudeSdkIdleTimeoutMs } from '@agor/core/sessions';
 import type {
   BranchRepository,
   MCPServerRepository,
@@ -21,21 +22,6 @@ import { MessageRole } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 import { type ProcessedEvent, SDKMessageProcessor } from './message-processor.js';
 import { setupQuery } from './query-builder.js';
-
-export const CLAUDE_SDK_IDLE_TIMEOUT_DEFAULT_MS = 300_000;
-export const CLAUDE_SDK_IDLE_TIMEOUT_MIN_MS = 30_000;
-export const CLAUDE_SDK_IDLE_TIMEOUT_MAX_MS = 3_600_000;
-
-export function normalizeClaudeSdkIdleTimeoutMs(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return CLAUDE_SDK_IDLE_TIMEOUT_DEFAULT_MS;
-  }
-
-  return Math.min(
-    CLAUDE_SDK_IDLE_TIMEOUT_MAX_MS,
-    Math.max(CLAUDE_SDK_IDLE_TIMEOUT_MIN_MS, Math.trunc(value))
-  );
-}
 
 class ClaudeSdkIdleWatchdog {
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -93,6 +79,21 @@ class ClaudeSdkIdleWatchdog {
       idleTimeoutMs: this.idleTimeoutMs,
     };
   }
+}
+
+function buildClaudeSdkIdleTimeoutError(
+  watchdog: ClaudeSdkIdleWatchdog,
+  processor: SDKMessageProcessor
+): Error {
+  const watchdogState = watchdog.getState();
+  const processorState = processor.getState();
+  const idleSeconds = Math.round((Date.now() - watchdogState.lastActivityTime) / 1000);
+  const timeoutSeconds = Math.round(watchdogState.idleTimeoutMs / 1000);
+
+  return new Error(
+    `Claude SDK idle timeout: No SDK activity for ${idleSeconds}s (timeout: ${timeoutSeconds}s). ` +
+      `SDK may have hung or crashed. Last processed message was #${processorState.messageCount}.`
+  );
 }
 
 export interface PromptResult {
@@ -295,6 +296,12 @@ If you continue to see authentication errors, please contact your Agor administr
       idleTimeoutMs,
     });
     watchdog.refresh('query_started');
+    let inputReleased = false;
+    const releaseQueryInput = () => {
+      if (inputReleased) return;
+      result.releaseInput();
+      inputReleased = true;
+    };
 
     // With AbortController passed to SDK, cancellation is handled natively.
     // When abortController.abort() is called, SDK throws AbortError which we catch below.
@@ -343,7 +350,7 @@ If you continue to see authentication errors, please contact your Agor administr
               );
             } finally {
               // Release the held input iterable so the SDK can close stdin
-              result.releaseInput();
+              releaseQueryInput();
             }
           }
 
@@ -364,10 +371,9 @@ If you continue to see authentication errors, please contact your Agor administr
       }
     } catch (error) {
       // Ensure stdin is released on any error so the subprocess can exit cleanly
-      result.releaseInput();
+      releaseQueryInput();
 
       const state = processor.getState();
-      const watchdogState = watchdog.getState();
 
       // Check if this is an AbortError from AbortController.abort()
       // This is EXPECTED during stop - the SDK throws AbortError when cancelled
@@ -376,15 +382,7 @@ If you continue to see authentication errors, please contact your Agor administr
         (error.name === 'AbortError' || error.message.includes('abort'))
       ) {
         if (watchdog.hasTimedOut()) {
-          const idleSeconds = Math.round(
-            (Date.now() - watchdogState.lastActivityTime) / 1000
-          );
-          const timeoutSeconds = Math.round(watchdogState.idleTimeoutMs / 1000);
-
-          throw new Error(
-            `Claude SDK idle timeout: No SDK activity for ${idleSeconds}s (timeout: ${timeoutSeconds}s). ` +
-              `SDK may have hung or crashed. Last processed message was #${state.messageCount}.`
-          );
+          throw buildClaudeSdkIdleTimeoutError(watchdog, processor);
         }
 
         console.log(`🛑 [Stop] Query aborted for session ${shortId(sessionId)} - this is expected`);
@@ -415,6 +413,10 @@ If you continue to see authentication errors, please contact your Agor administr
       throw enhancedError;
     } finally {
       watchdog.stop();
+    }
+
+    if (watchdog.hasTimedOut()) {
+      throw buildClaudeSdkIdleTimeoutError(watchdog, processor);
     }
   }
 
@@ -482,6 +484,12 @@ If you continue to see authentication errors, please contact your Agor administr
       idleTimeoutMs,
     });
     watchdog.refresh('query_started');
+    let inputReleased = false;
+    const releaseQueryInput = () => {
+      if (inputReleased) return;
+      result.releaseInput();
+      inputReleased = true;
+    };
 
     // Collect response messages from async generator
     // IMPORTANT: Keep assistant messages SEPARATE (don't merge into one)
@@ -520,14 +528,18 @@ If you continue to see authentication errors, please contact your Agor administr
             });
           }
 
-          // Capture token usage from result events
-          if (event.type === 'result' && event.raw_sdk_message?.usage) {
-            tokenUsage = event.raw_sdk_message.usage as {
-              input_tokens?: number;
-              output_tokens?: number;
-              cache_creation_tokens?: number;
-              cache_read_tokens?: number;
-            };
+          // Capture token usage from result events and release the held input
+          // iterable so the SDK can close cleanly.
+          if (event.type === 'result') {
+            if (event.raw_sdk_message?.usage) {
+              tokenUsage = event.raw_sdk_message.usage as {
+                input_tokens?: number;
+                output_tokens?: number;
+                cache_creation_tokens?: number;
+                cache_read_tokens?: number;
+              };
+            }
+            releaseQueryInput();
           }
 
           // Break on end event
@@ -537,25 +549,16 @@ If you continue to see authentication errors, please contact your Agor administr
         }
       }
     } catch (error) {
+      // Ensure stdin is released on any error so the subprocess can exit cleanly
+      releaseQueryInput();
+
       // Check if this is an AbortError from interrupt() - this is EXPECTED during stop
       if (
         error instanceof Error &&
         (error.name === 'AbortError' || error.message.includes('abort'))
       ) {
-        result.releaseInput();
-
         if (watchdog.hasTimedOut()) {
-          const watchdogState = watchdog.getState();
-          const state = processor.getState();
-          const idleSeconds = Math.round(
-            (Date.now() - watchdogState.lastActivityTime) / 1000
-          );
-          const timeoutSeconds = Math.round(watchdogState.idleTimeoutMs / 1000);
-
-          throw new Error(
-            `Claude SDK idle timeout: No SDK activity for ${idleSeconds}s (timeout: ${timeoutSeconds}s). ` +
-              `SDK may have hung or crashed. Last processed message was #${state.messageCount}.`
-          );
+          throw buildClaudeSdkIdleTimeoutError(watchdog, processor);
         }
 
         console.log(
@@ -573,6 +576,10 @@ If you continue to see authentication errors, please contact your Agor administr
       throw error;
     } finally {
       watchdog.stop();
+    }
+
+    if (watchdog.hasTimedOut()) {
+      throw buildClaudeSdkIdleTimeoutError(watchdog, processor);
     }
 
     // Extract token counts from SDK result metadata
