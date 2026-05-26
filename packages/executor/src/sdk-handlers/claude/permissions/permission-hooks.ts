@@ -42,6 +42,11 @@ export function createCanUseToolCallback(
     permissionLocks: Map<SessionID, Promise<void>>;
     mcpServerRepo: MCPServerRepository;
     sessionMCPRepo: SessionMCPServerRepository;
+    idleWatchdog?: {
+      refresh(reason: string): void;
+      pause(reason: string): void;
+      resume(reason: string): void;
+    };
   }
 ) {
   return async (
@@ -139,6 +144,7 @@ export function createCanUseToolCallback(
 
     // Track lock release function for finally block
     let releaseLock: (() => void) | undefined;
+    let idleWatchdogPaused = false;
 
     try {
       // STEP 1: Wait for any pending permission check to finish (queue serialization)
@@ -222,12 +228,16 @@ export function createCanUseToolCallback(
       });
 
       // Wait for UI decision (Promise pauses SDK execution)
+      deps.idleWatchdog?.pause(`permission_wait:${toolName}`);
+      idleWatchdogPaused = true;
       const decision = await deps.permissionService.waitForDecision(
         requestId,
         taskId,
         sessionId,
         options.signal
       );
+      idleWatchdogPaused = false;
+      deps.idleWatchdog?.resume(`permission_decision:${toolName}`);
 
       // Determine the resulting permission status
       const permissionStatus = decision.timedOut
@@ -384,6 +394,10 @@ export function createCanUseToolCallback(
         message: error instanceof Error ? error.message : 'Unknown error in permission flow',
       };
     } finally {
+      if (idleWatchdogPaused) {
+        deps.idleWatchdog?.resume(`permission_wait_finished:${toolName}`);
+      }
+
       // STEP 3: Always release the lock when done (success or error)
       if (releaseLock) {
         releaseLock();

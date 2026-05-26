@@ -16,6 +16,11 @@ type StubSession = {
 
 // Capture constructor args passed to SDKMessageProcessor
 const processorCalls: Array<{ idleTimeoutMs: number }> = [];
+const processorInstances: Array<{
+  process: ReturnType<typeof vi.fn>;
+  hasTimedOut: ReturnType<typeof vi.fn>;
+}> = [];
+let queryMessages: Array<Record<string, unknown>> = [];
 
 vi.mock('./message-processor.js', () => {
   return {
@@ -24,9 +29,12 @@ vi.mock('./message-processor.js', () => {
       this: Record<string, unknown>,
       opts: { idleTimeoutMs: number }
     ) {
+      const process = vi.fn().mockResolvedValue([]);
+      const hasTimedOut = vi.fn().mockReturnValue(false);
       processorCalls.push({ idleTimeoutMs: opts.idleTimeoutMs });
-      this.process = vi.fn().mockResolvedValue([]);
-      this.hasTimedOut = vi.fn().mockReturnValue(false);
+      processorInstances.push({ process, hasTimedOut });
+      this.process = process;
+      this.hasTimedOut = hasTimedOut;
       this.getState = vi.fn().mockReturnValue({
         messageCount: 0,
         lastActivityTime: Date.now(),
@@ -41,14 +49,25 @@ vi.mock('@agor/core/db', () => ({ shortId: (id: string) => id.slice(0, 8) }));
 
 // Return a fresh empty generator on every call so tests don't share state.
 vi.mock('./query-builder.js', () => ({
-  setupQuery: vi.fn().mockImplementation(async () => ({
-    query: (async function* () {})(),
-    getStderr: vi.fn().mockReturnValue(''),
-    releaseInput: vi.fn(),
-    getContextUsage: vi
+  setupQuery: vi.fn().mockImplementation(async () => {
+    const query = (async function* () {
+      for (const msg of queryMessages) {
+        yield msg;
+      }
+    })() as AsyncGenerator<Record<string, unknown>> & {
+      releaseInput: ReturnType<typeof vi.fn>;
+      getContextUsage: ReturnType<typeof vi.fn>;
+    };
+    query.releaseInput = vi.fn();
+    query.getContextUsage = vi
       .fn()
-      .mockResolvedValue({ totalTokens: 0, maxTokens: 200000, percentage: 0 }),
-  })),
+      .mockResolvedValue({ totalTokens: 0, maxTokens: 200000, percentage: 0 });
+
+    return {
+      query,
+      getStderr: vi.fn().mockReturnValue(''),
+    };
+  }),
 }));
 
 describe('ClaudePromptService sdk_idle_timeout_ms', () => {
@@ -56,6 +75,8 @@ describe('ClaudePromptService sdk_idle_timeout_ms', () => {
 
   beforeEach(() => {
     processorCalls.length = 0;
+    processorInstances.length = 0;
+    queryMessages = [];
     sessionsRepo = { findById: vi.fn() };
   });
 
@@ -89,6 +110,27 @@ describe('ClaudePromptService sdk_idle_timeout_ms', () => {
     it('uses minimum valid value (30000) without falling back to default', async () => {
       await runStreaming({ session_id: 'sess-c', model_config: { sdk_idle_timeout_ms: 30000 } });
       expect(processorCalls[0]?.idleTimeoutMs).toBe(30000);
+    });
+
+    it('clamps invalid low and high values before constructing the processor', async () => {
+      await runStreaming({ session_id: 'sess-low', model_config: { sdk_idle_timeout_ms: 1 } });
+      expect(processorCalls[0]?.idleTimeoutMs).toBe(30000);
+
+      processorCalls.length = 0;
+      await runStreaming({
+        session_id: 'sess-high',
+        model_config: { sdk_idle_timeout_ms: 9_999_999 },
+      });
+      expect(processorCalls[0]?.idleTimeoutMs).toBe(3600000);
+    });
+
+    it('processes a newly arrived SDK message instead of rejecting it with a stale timeout check', async () => {
+      queryMessages = [{ type: 'stream_event', event: { type: 'message_start' } }];
+
+      await runStreaming({ session_id: 'sess-msg', model_config: { sdk_idle_timeout_ms: 30000 } });
+
+      expect(processorInstances[0]?.process).toHaveBeenCalledTimes(1);
+      expect(processorInstances[0]?.hasTimedOut).not.toHaveBeenCalled();
     });
   });
 
