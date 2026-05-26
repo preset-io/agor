@@ -151,7 +151,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
 
       if (!onCreateBranch || !onUpdateBranch) return;
 
-      await createAssistantBranch(
+      const branch = await createAssistantBranch(
         {
           displayName: values.displayName.trim(),
           description: values.description || undefined,
@@ -166,6 +166,15 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
 
       setCreateModalOpen(false);
       resetForm();
+
+      // Match the recenter-from-row behavior: close the Settings modal
+      // so the canvas isn't obscured, then push `/w/<short>/`. Cross-
+      // board switching (when the assistant landed on a freshly created
+      // board) is handled by useUrlState's URL→state effect.
+      if (branch) {
+        onClose?.();
+        navigation.goToBranch(branch.branch_id);
+      }
     } catch (error) {
       console.error('Assistant creation failed:', error);
     } finally {

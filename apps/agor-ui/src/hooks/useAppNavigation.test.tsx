@@ -10,6 +10,11 @@
  * silently strand the user on the prior URL — the very regression this
  * fix addresses. The lookup is now scoped to the same-URL recenter
  * fallback (where it actually matters) instead of gating the navigation.
+ *
+ * The same contract applies to `goToBranch` and `goToBoard` — used by the
+ * post-create handlers in `App/App.tsx` (handleCreateBranch,
+ * handleCreateAssistant, handleCreateBoardFromDialog) — so each helper
+ * has its own race-condition test below.
  */
 
 import type { Branch, Session } from '@agor-live/client';
@@ -27,6 +32,10 @@ const NEW_SESSION_ID = '019e9999-0000-7000-8000-000000000001';
 const NEW_SESSION_SHORT = '019e99990000700080000000';
 const EXISTING_BRANCH_ID = '019e8888-0000-7000-8000-000000000001';
 const EXISTING_BOARD_ID = '019e7777-0000-7000-8000-000000000001';
+const NEW_BRANCH_ID = '019e6666-0000-7000-8000-000000000001';
+const NEW_BRANCH_SHORT = '019e66660000700080000000';
+const NEW_BOARD_ID = '019e5555-0000-7000-8000-000000000001';
+const NEW_BOARD_SHORT = '019e55550000700080000000';
 
 function wrap(initialEntry = '/') {
   return ({ children }: { children: ReactNode }) => (
@@ -128,5 +137,103 @@ describe('useAppNavigation.goToSession', () => {
 
     // No navigation should have happened — already on this URL.
     expect(result.current.pathname).toBe(`/s/${NEW_SESSION_SHORT}/`);
+  });
+});
+
+describe('useAppNavigation.goToBranch', () => {
+  it('pushes /w/<short>/ even when the branch is NOT yet in branchById (just-created race)', () => {
+    // Mirror the create-session race: handleCreateBranch (in App/App.tsx)
+    // calls navigation.goToBranch immediately after the create() promise
+    // resolves, but the `branches.created` socket event may not have
+    // populated branchById yet. The URL push must fire anyway —
+    // useUrlState's URL→state effect re-runs when the branch lands in
+    // the map and drives selection + cross-board recenter from there.
+    const branchById = new Map<string, Branch>();
+
+    const { result } = renderHook(
+      () =>
+        useTestNav({
+          boardById: new Map(),
+          branchById,
+        }),
+      { wrapper: wrap('/b/somewhere/') }
+    );
+
+    expect(result.current.pathname).toBe('/b/somewhere/');
+
+    act(() => {
+      result.current.nav.goToBranch(NEW_BRANCH_ID);
+    });
+
+    expect(result.current.pathname).toBe(`/w/${NEW_BRANCH_SHORT}/`);
+  });
+
+  it('still navigates when the branch IS in branchById', () => {
+    const branch = {
+      branch_id: NEW_BRANCH_ID,
+      board_id: EXISTING_BOARD_ID,
+    } as Branch;
+
+    const branchById = new Map([[branch.branch_id, branch]]);
+
+    const { result } = renderHook(
+      () =>
+        useTestNav({
+          boardById: new Map(),
+          branchById,
+        }),
+      { wrapper: wrap('/b/somewhere/') }
+    );
+
+    act(() => {
+      result.current.nav.goToBranch(NEW_BRANCH_ID);
+    });
+
+    expect(result.current.pathname).toBe(`/w/${NEW_BRANCH_SHORT}/`);
+  });
+});
+
+describe('useAppNavigation.goToBoard', () => {
+  it('pushes /b/<short>/ even when the board is NOT yet in boardById (just-created race)', () => {
+    // handleCreateBoardFromDialog (in App/App.tsx) calls
+    // navigation.goToBoard immediately after the create() promise
+    // resolves. The `boards.created` socket event may land later — the
+    // URL must still flip so the user lands on the new board.
+    const boardById = new Map<string, { board_id: string; slug?: string }>();
+
+    const { result } = renderHook(
+      () =>
+        useTestNav({
+          boardById,
+        }),
+      { wrapper: wrap('/b/somewhere/') }
+    );
+
+    act(() => {
+      result.current.nav.goToBoard(NEW_BOARD_ID);
+    });
+
+    // No slug yet — buildBoardPath falls back to the short id.
+    expect(result.current.pathname).toBe(`/b/${NEW_BOARD_SHORT}/`);
+  });
+
+  it('prefers the slug when the board IS in boardById', () => {
+    const boardById = new Map<string, { board_id: string; slug?: string }>([
+      [NEW_BOARD_ID, { board_id: NEW_BOARD_ID, slug: 'my-board' }],
+    ]);
+
+    const { result } = renderHook(
+      () =>
+        useTestNav({
+          boardById,
+        }),
+      { wrapper: wrap('/b/somewhere/') }
+    );
+
+    act(() => {
+      result.current.nav.goToBoard(NEW_BOARD_ID);
+    });
+
+    expect(result.current.pathname).toBe('/b/my-board/');
   });
 });

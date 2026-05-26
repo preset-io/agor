@@ -60,7 +60,7 @@ export interface CreateDialogProps {
   defaultPosition?: { x: number; y: number };
   defaultTab?: ActiveTab;
   onCreateBranch: (config: BranchTabConfig) => void;
-  onCreateBoard: (board: Partial<Board>) => void;
+  onCreateBoard: (board: Partial<Board>) => void | Promise<void>;
   onCreateRepo: (data: CreateRepoRequest) => void | Promise<void>;
   onCreateLocalRepo: (data: CreateLocalRepoRequest) => void | Promise<void>;
   onCreateAssistant: (result: AssistantTabResult) => void;
@@ -136,7 +136,11 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
         case 'board': {
           const board = await boardFormRef.current?.();
           if (board) {
-            onCreateBoard(board);
+            // Fire-and-forget: the parent's handler may navigate after
+            // create resolves; closing the modal first matches the
+            // branch/assistant/repo cases. Swallow rejections to avoid
+            // unhandled-rejection noise — the parent surfaces errors.
+            Promise.resolve(onCreateBoard(board)).catch(() => {});
             onClose();
           }
           break;

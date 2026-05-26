@@ -701,16 +701,18 @@ function AppContent() {
   };
 
   // Handle board CRUD
-  const handleCreateBoard = async (board: Partial<Board>) => {
+  const handleCreateBoard = async (board: Partial<Board>): Promise<Board | null> => {
     if (board.board_id) {
-      // Board already exists (clone/import already persisted it)
-      return;
+      // Board already exists (clone/import already persisted it) — return
+      // the prebuilt row so callers can navigate to it without re-creating.
+      return board as Board;
     }
 
     const created = await createBoard(board);
     if (created) {
       showSuccess('Board created successfully!');
     }
+    return created;
   };
 
   const handleUpdateBoard = async (boardId: string, updates: Partial<Board>) => {

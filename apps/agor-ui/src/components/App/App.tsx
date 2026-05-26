@@ -110,7 +110,7 @@ export interface AppProps {
   onSendPrompt?: (sessionId: string, prompt: string, permissionMode?: PermissionMode) => void;
   onUpdateSession?: (sessionId: string, updates: Partial<Session>) => void;
   onDeleteSession?: (sessionId: string) => void;
-  onCreateBoard?: (board: Partial<Board>) => void;
+  onCreateBoard?: (board: Partial<Board>) => Promise<Board | null> | undefined;
   onUpdateBoard?: (boardId: string, updates: Partial<Board>) => void;
   onDeleteBoard?: (boardId: string) => void;
   onArchiveBoard?: (boardId: string) => void;
@@ -540,13 +540,34 @@ export const App: React.FC<AppProps> = ({
     }
 
     setCreateDialogOpen(false);
+
+    // Mirror handleCreateSession: route through the URL so useUrlState
+    // owns selection. The just-created branch may not be in branchById
+    // yet (socket `created` event still in flight) — goToBranch pushes
+    // `/w/<short>/` unconditionally and useUrlState's URL→state effect
+    // resolves the branch on a subsequent render to switch boards (if
+    // needed) and recenter the canvas.
+    if (branch) {
+      navigation.goToBranch(branch.branch_id);
+    }
+  };
+
+  const handleCreateBoardFromDialog = async (board: Partial<Board>) => {
+    const created = await onCreateBoard?.(board);
+    // Boards have their own URL (/b/<slug-or-short>/) — switch to the
+    // new board after creation so the user lands on the empty canvas
+    // they're about to populate. Same intent as goToBranch/goToSession
+    // after their respective creates.
+    if (created?.board_id) {
+      navigation.goToBoard(created.board_id);
+    }
   };
 
   const handleCreateAssistant = async (result: AssistantTabResult) => {
     const repoId = result.repoId;
     if (!repoId || !onCreateBranch || !onUpdateBranch) return;
 
-    await createAssistantBranch(
+    const branch = await createAssistantBranch(
       {
         displayName: result.displayName,
         description: result.description,
@@ -558,6 +579,14 @@ export const App: React.FC<AppProps> = ({
       },
       { client, repoById, onCreateBranch, onUpdateBranch }
     );
+
+    // Assistants are branches under the hood, so the `/w/<short>/` URL
+    // is the canonical deep link. Routing through goToBranch picks up
+    // the cross-board recenter for free when the assistant was created
+    // on a new board.
+    if (branch) {
+      navigation.goToBranch(branch.branch_id);
+    }
   };
 
   // Refs for the data `handleSessionClick` reads. Using refs (vs
@@ -1193,7 +1222,7 @@ export const App: React.FC<AppProps> = ({
               currentBoardId={currentBoardId}
               defaultPosition={newBranchDefaultPosition || undefined}
               onCreateBranch={handleCreateBranch}
-              onCreateBoard={(board) => onCreateBoard?.(board)}
+              onCreateBoard={handleCreateBoardFromDialog}
               onCreateRepo={(data) => onCreateRepo?.(data)}
               onCreateLocalRepo={(data) => onCreateLocalRepo?.(data)}
               onCreateAssistant={handleCreateAssistant}
