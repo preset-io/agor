@@ -10,6 +10,7 @@ import type {
   Board,
   BoardExportBlob,
   Branch,
+  BranchPermissionLevel,
   CardType,
   CardWithType,
   CloneRepositoryResult,
@@ -303,10 +304,18 @@ export interface ReposService extends AgorService<Repo> {
       issue_url?: string;
       pull_request_url?: string;
       boardId?: string;
+      custom_context?: Record<string, unknown>;
+      notes?: string | null;
+      /** Explicit board position. Honored as-is when supplied. */
+      position?: { x: number; y: number };
+      zoneId?: string;
+      others_can?: BranchPermissionLevel;
+      others_fs_access?: 'none' | 'read' | 'write';
+      environment_variant?: string;
       /**
        * Branch storage model — see
        * context/explorations/clone-redesign.md.
-       * 'branch' (default) = native `git worktree add`.
+       * 'worktree' (default) = native `git worktree add`.
        * 'clone' = self-standing `git clone` with its own `.git/`.
        */
       storage_mode?: 'worktree' | 'clone';
@@ -314,7 +323,7 @@ export interface ReposService extends AgorService<Repo> {
       clone_depth?: number;
     },
     params?: Params
-  ): Promise<Repo>;
+  ): Promise<Branch>;
 
   /**
    * Remove a git branch

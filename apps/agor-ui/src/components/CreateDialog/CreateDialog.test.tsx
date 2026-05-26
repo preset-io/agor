@@ -62,6 +62,9 @@ function renderDialog(props: Partial<React.ComponentProps<typeof CreateDialog>> 
       onClose={vi.fn()}
       repoById={repoById}
       boardById={boardById}
+      availableAgents={[
+        { id: 'claude-code', name: 'Claude Code', icon: '🤖', description: 'Claude' },
+      ]}
       onCreateBranch={vi.fn()}
       onCreateBoard={vi.fn()}
       onCreateRepo={vi.fn()}
@@ -82,11 +85,11 @@ function renderDialog(props: Partial<React.ComponentProps<typeof CreateDialog>> 
 const ASYNC = { timeout: 10_000 };
 
 describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () => {
-  it('enables Create Assistant once Display Name is typed', async () => {
+  it('enables Create Assistant once Name is typed', async () => {
     renderDialog({ defaultTab: 'assistant' });
 
-    const displayName = (await screen.findByLabelText(
-      /Display Name/i,
+    const displayName = (await screen.findByPlaceholderText(
+      /PR Reviewer/i,
       undefined,
       ASYNC
     )) as HTMLInputElement;
@@ -101,8 +104,8 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
   it('preserves Assistant validity when user switches tabs and switches back', async () => {
     renderDialog({ defaultTab: 'assistant' });
 
-    const displayName = (await screen.findByLabelText(
-      /Display Name/i,
+    const displayName = (await screen.findByPlaceholderText(
+      /PR Reviewer/i,
       undefined,
       ASYNC
     )) as HTMLInputElement;
@@ -114,7 +117,7 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
     fireEvent.click(screen.getByRole('tab', { name: /Board/i }));
     fireEvent.click(screen.getByRole('tab', { name: /Assistant/i }));
 
-    // Display Name is still filled — submit must be enabled without the user
+    // Name is still filled — submit must be enabled without the user
     // having to re-touch the field. Pre-fix: handleTabChange reset the shared
     // isValid to false and AssistantTab's useEffect didn't re-fire (its
     // isFormValid hadn't changed), so the button stayed stuck disabled.
@@ -123,11 +126,42 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
     }, ASYNC);
   });
 
+  it('submits assistant agentic defaults with the assistant fields', async () => {
+    const onCreateAssistant = vi.fn();
+    renderDialog({ defaultTab: 'assistant', onCreateAssistant });
+
+    const displayName = (await screen.findByPlaceholderText(
+      /PR Reviewer/i,
+      undefined,
+      ASYNC
+    )) as HTMLInputElement;
+    fireEvent.change(displayName, { target: { value: 'Bootstrap Bot' } });
+
+    const button = screen.getByRole('button', { name: /Create Assistant/i });
+    await waitFor(() => {
+      expect(button).not.toBeDisabled();
+    }, ASYNC);
+
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(onCreateAssistant).toHaveBeenCalledWith(
+        expect.objectContaining({
+          displayName: 'Bootstrap Bot',
+          emoji: '🤖',
+          agent: 'claude-code',
+          permissionMode: 'acceptEdits',
+        }),
+        expect.objectContaining({ onStatusChange: expect.any(Function) })
+      );
+    }, ASYNC);
+  });
+
   it('reports each tab its own validity (no spillover when switching to an empty tab)', async () => {
     renderDialog({ defaultTab: 'assistant' });
 
-    const displayName = (await screen.findByLabelText(
-      /Display Name/i,
+    const displayName = (await screen.findByPlaceholderText(
+      /PR Reviewer/i,
       undefined,
       ASYNC
     )) as HTMLInputElement;

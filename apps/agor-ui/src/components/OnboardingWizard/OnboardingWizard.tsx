@@ -2,8 +2,8 @@
  * OnboardingWizard - Multi-step wizard for new user onboarding
  *
  * Two paths:
- * - Assistant: Clone assistant framework repo -> create board -> create branch -> API keys -> launch
- * - Own Repo: Add user repo -> create board -> create branch -> API keys -> launch
+ * - Assistant: identity -> API keys -> clone assistant framework repo -> create board -> create branch/session
+ * - Own Repo: API keys -> add repo -> create board -> create branch/session
  *
  * Replaces GettingStartedPopover entirely.
  */
@@ -33,7 +33,7 @@ import {
   ExperimentOutlined,
   FolderOpenOutlined,
   KeyOutlined,
-  RocketOutlined,
+  RobotOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import {
@@ -59,7 +59,10 @@ import {
   FRAMEWORK_REPO_URL,
   findFrameworkRepo,
 } from '../../hooks/useFrameworkRepo';
-import { extractSlugFromPath } from '../../utils/repoSlug';
+import { buildAssistantBootstrapPrompt } from '../../utils/assistantBootstrapPrompt';
+import { extractSlugFromPath, slugify } from '../../utils/repoSlug';
+import { startAssistantBootstrapSession } from '../../utils/startAssistantBootstrapSession';
+import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import type { NewSessionConfig } from '../NewSessionModal/NewSessionModal';
 
 const { Text, Title, Paragraph } = Typography;
@@ -69,22 +72,11 @@ const { useToken } = theme;
 
 const CLONE_TIMEOUT_MS = 120_000;
 
-// Minimal kickoff: context only, no role-instructions. The framework owns
-// "who you are / what to do" — putting that in the prompt makes the agent
-// perform an intro for the prompt rather than internalize the framework.
-//
-// BOOTSTRAP.md is the dedicated first-run ritual in the agor-assistant
-// framework: explicit about "ship something useful fast, don't ceremonialize"
-// and self-deletes after. BOOT.md (every-session ritual) just redirects to
-// BOOTSTRAP.md on first run anyway — pointing there saves one indirection
-// and surfaces the first-run-specific tone-setting.
-const ASSISTANT_BOOT_PROMPT = `Fresh Agor branch, first session. Start with BOOTSTRAP.md.`;
-
 // ─── Types ──────────────────────────────────────────────
 
 type WizardPath = 'assistant' | 'own-repo';
 
-type WizardStep = 'welcome' | 'add-repo' | 'clone' | 'board' | 'branch' | 'api-keys' | 'launch';
+type WizardStep = 'welcome' | 'identity' | 'add-repo' | 'clone' | 'board' | 'branch' | 'api-keys';
 
 export interface OnboardingWizardProps {
   open: boolean;
@@ -116,6 +108,8 @@ export interface OnboardingWizardProps {
       sourceBranch: string;
       pullLatest: boolean;
       boardId?: string;
+      custom_context?: Record<string, unknown>;
+      notes?: string | null;
       position?: { x: number; y: number };
     }
   ) => Promise<Branch | null>;
@@ -147,10 +141,10 @@ function getUsernameSlug(user?: User | null): string {
 
 function getStepsForPath(path: WizardPath | null): WizardStep[] {
   if (path === 'assistant') {
-    return ['welcome', 'api-keys', 'clone', 'board', 'branch', 'launch'];
+    return ['welcome', 'identity', 'api-keys', 'clone', 'board', 'branch'];
   }
   if (path === 'own-repo') {
-    return ['welcome', 'api-keys', 'add-repo', 'clone', 'board', 'branch', 'launch'];
+    return ['welcome', 'api-keys', 'add-repo', 'clone', 'board', 'branch'];
   }
   return ['welcome'];
 }
@@ -270,7 +264,6 @@ export function OnboardingWizard({
   onCreateBranch,
   onCreateSession,
   onUpdateUser,
-  onUpdateBranch,
   onCheckAuth,
   assistantPending,
   frameworkRepoUrl,
@@ -306,6 +299,8 @@ export function OnboardingWizard({
   const [localRepoPath, setLocalRepoPath] = useState('');
   const [repoMode, setRepoMode] = useState<'remote' | 'local'>('remote');
   const [branchName, setBranchName] = useState('');
+  const [assistantDisplayName, setAssistantDisplayName] = useState('My Assistant');
+  const [assistantEmoji, setAssistantEmoji] = useState('🤖');
   const [apiKey, setApiKey] = useState('');
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName>('claude-code');
   const [testAuthLoading, setTestAuthLoading] = useState(false);
@@ -458,6 +453,16 @@ export function OnboardingWizard({
       onboarding.path === 'persisted-agent' ? 'assistant' : (onboarding.path as WizardPath);
     setPath(resumedPath);
 
+    if (resumedPath === 'assistant') {
+      if (typeof onboarding.assistantDisplayName === 'string') {
+        setAssistantDisplayName(onboarding.assistantDisplayName);
+        setBranchName(`private-${slugify(onboarding.assistantDisplayName || 'My Assistant')}`);
+      }
+      if (typeof onboarding.assistantEmoji === 'string') {
+        setAssistantEmoji(onboarding.assistantEmoji);
+      }
+    }
+
     // Restore created resource IDs (only the validated ones)
     if (validBoardId) {
       setCreatedBoardId(validBoardId);
@@ -475,8 +480,9 @@ export function OnboardingWizard({
 
     // Figure out which step to resume from
     if (validBranchId) {
-      // Branch exists AND is owned by current user — go to launch
-      setCurrentStep('launch');
+      // Branch exists AND is owned by current user — stay on the branch
+      // step, which can retry launching the first session inline.
+      setCurrentStep('branch');
     } else if (validBoardId) {
       // Board exists AND is owned by current user — go to branch creation
       setCurrentStep('branch');
@@ -484,8 +490,9 @@ export function OnboardingWizard({
       // Repo is registered (already restored above) — go straight to board
       setCurrentStep('board');
     } else {
-      // Nothing the user actually created yet — restart from api-keys
-      setCurrentStep('api-keys');
+      // Nothing the user actually created yet — restart from identity for
+      // assistants so naming/emoji stays in the shared form flow.
+      setCurrentStep(resumedPath === 'assistant' ? 'identity' : 'api-keys');
     }
   }, [
     open,
@@ -706,7 +713,14 @@ export function OnboardingWizard({
   // createdRepoId-persist effect below) reference it — moving this further
   // down re-introduces a TDZ ReferenceError on mount.
   const saveOnboardingProgress = useCallback(
-    (updates: { path?: WizardPath; repoId?: string; boardId?: string; branchId?: string }) => {
+    (updates: {
+      path?: WizardPath;
+      repoId?: string;
+      boardId?: string;
+      branchId?: string;
+      assistantDisplayName?: string;
+      assistantEmoji?: string;
+    }) => {
       if (!user) return;
       const current = user.preferences?.onboarding || {};
       const prefs: Record<string, unknown> = {
@@ -720,6 +734,18 @@ export function OnboardingWizard({
     },
     [user, onUpdateUser]
   );
+
+  const handleAssistantIdentityContinue = useCallback(() => {
+    const trimmedName = assistantDisplayName.trim() || 'My Assistant';
+    setAssistantDisplayName(trimmedName);
+    setBranchName(`private-${slugify(trimmedName)}`);
+    saveOnboardingProgress({
+      assistantDisplayName: trimmedName,
+      assistantEmoji: assistantEmoji || '🤖',
+    });
+    setError(null);
+    setCurrentStep('api-keys');
+  }, [assistantDisplayName, assistantEmoji, saveOnboardingProgress, setCurrentStep]);
 
   // Persist createdRepoId so a refresh / reset-then-resume of the wizard
   // lands back on the branch step with the repo still wired up. Without
@@ -739,7 +765,8 @@ export function OnboardingWizard({
       // Persist chosen path immediately
       saveOnboardingProgress({ path: selectedPath });
 
-      // Always advance to api-keys after path selection.
+      // Assistant path first captures assistant identity (name + emoji) in
+      // form territory. Other paths advance to api-keys after selection.
       //
       // Previously the assistant branch did `findReadyFrameworkRepo(repoById)`
       // and skipped to "board" if any framework repo was found anywhere in
@@ -753,7 +780,7 @@ export function OnboardingWizard({
       // The assistant clone step is now reached via the api-keys path like
       // every other tool; handleStartClone deduplicates against the shared
       // framework repo at the daemon level (so re-cloning is a no-op).
-      setCurrentStep('api-keys');
+      setCurrentStep(selectedPath === 'assistant' ? 'identity' : 'api-keys');
     },
     [saveOnboardingProgress, setCurrentStep]
   );
@@ -871,12 +898,17 @@ export function OnboardingWizard({
     setError(null);
     setLoading(true);
 
-    const displayName = user?.name || user?.email?.split('@')[0] || 'My';
+    const userDisplayName = user?.name || user?.email?.split('@')[0] || 'My';
+    const boardName =
+      path === 'assistant'
+        ? `${assistantDisplayName.trim() || 'My Assistant'}'s Board`
+        : `${userDisplayName}'s Board`;
+    const boardIcon = path === 'assistant' ? assistantEmoji || '🤖' : '\u{1F3E0}';
     try {
       if (!client) throw new Error('Not connected');
       const board = await client.service('boards').create({
-        name: `${displayName}'s Board`,
-        icon: '\u{1F3E0}',
+        name: boardName,
+        icon: boardIcon,
       });
       if (board?.board_id) {
         setCreatedBoardId(board.board_id);
@@ -889,7 +921,78 @@ export function OnboardingWizard({
       setLoading(false);
       setError(`Failed to create board: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [client, user, boardById, saveOnboardingProgress, setCurrentStep]);
+  }, [
+    client,
+    user,
+    boardById,
+    saveOnboardingProgress,
+    setCurrentStep,
+    path,
+    assistantDisplayName,
+    assistantEmoji,
+  ]);
+
+  const launchSessionForBranch = useCallback(
+    async (branchId: string, boardId: string) => {
+      if (!path) {
+        setError('Missing onboarding path.');
+        setLoading(false);
+        return;
+      }
+
+      setError(null);
+      setLoading(true);
+
+      try {
+        const sessionConfig: NewSessionConfig = {
+          branch_id: branchId,
+          agent: selectedAgent,
+          ...(path === 'assistant' && {
+            initialPrompt: buildAssistantBootstrapPrompt({
+              displayName: assistantDisplayName,
+              emoji: assistantEmoji,
+              userName: user?.name,
+              userEmail: user?.email,
+            }),
+          }),
+        };
+        const sessionId =
+          path === 'assistant'
+            ? await startAssistantBootstrapSession({
+                client,
+                branchId,
+                boardId,
+                sessionConfig,
+                onCreateSession,
+              })
+            : await onCreateSession(sessionConfig, boardId);
+
+        if (sessionId) {
+          setLoading(false);
+          onComplete({ branchId, sessionId, boardId, path });
+        } else {
+          setLoading(false);
+          setError('Branch created, but failed to create the first session. Please try again.');
+        }
+      } catch (err) {
+        setLoading(false);
+        setError(
+          `Branch created, but failed to create the first session: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    },
+    [
+      path,
+      selectedAgent,
+      assistantDisplayName,
+      assistantEmoji,
+      user?.name,
+      user?.email,
+      onCreateSession,
+      onComplete,
+      client,
+    ]
+  );
 
   const handleCreateBranch = useCallback(async () => {
     if (!createdRepoId || !createdBoardId) {
@@ -909,6 +1012,17 @@ export function OnboardingWizard({
     const sourceBranch = repoById.get(createdRepoId)?.default_branch || 'main';
 
     try {
+      const assistantConfig: AssistantConfig | null =
+        path === 'assistant'
+          ? {
+              kind: 'assistant',
+              displayName: assistantDisplayName.trim() || 'My Assistant',
+              emoji: assistantEmoji || undefined,
+              frameworkRepo: FRAMEWORK_REPO_SLUG,
+              createdViaOnboarding: true,
+            }
+          : null;
+
       const branch = await onCreateBranch(createdRepoId, {
         name: sanitized,
         ref: sanitized,
@@ -916,6 +1030,7 @@ export function OnboardingWizard({
         sourceBranch,
         pullLatest: true,
         boardId: createdBoardId,
+        ...(assistantConfig ? { custom_context: { assistant: assistantConfig } } : {}),
       });
 
       if (branch) {
@@ -923,21 +1038,7 @@ export function OnboardingWizard({
         // Persist branch ID so restarts don't re-create it
         saveOnboardingProgress({ branchId: branch.branch_id });
 
-        // Tag assistant branches
-        if (path === 'assistant' && onUpdateBranch) {
-          const assistantConfig: AssistantConfig = {
-            kind: 'assistant',
-            displayName: 'My Assistant',
-            frameworkRepo: FRAMEWORK_REPO_SLUG,
-            createdViaOnboarding: true,
-          };
-          await onUpdateBranch(branch.branch_id, {
-            custom_context: { ...branch.custom_context, assistant: assistantConfig },
-          });
-        }
-
-        setLoading(false);
-        setCurrentStep('launch');
+        await launchSessionForBranch(branch.branch_id, createdBoardId);
       } else {
         setLoading(false);
         setError('Failed to create branch. Please try again.');
@@ -951,11 +1052,12 @@ export function OnboardingWizard({
     createdBoardId,
     path,
     branchName,
+    assistantDisplayName,
+    assistantEmoji,
     repoById,
     onCreateBranch,
-    onUpdateBranch,
     saveOnboardingProgress,
-    setCurrentStep,
+    launchSessionForBranch,
   ]);
 
   const handleSaveApiKey = useCallback(async () => {
@@ -1001,38 +1103,6 @@ export function OnboardingWizard({
     setManualTestResult(result);
   }, [onCheckAuth, selectedAgent, apiKey]);
 
-  const handleLaunch = useCallback(async () => {
-    if (!createdBranchId || !createdBoardId || !path) {
-      setError('Missing branch or board.');
-      return;
-    }
-
-    setError(null);
-    setLoading(true);
-
-    try {
-      const sessionId = await onCreateSession(
-        {
-          branch_id: createdBranchId,
-          agent: selectedAgent,
-          ...(path === 'assistant' && { initialPrompt: ASSISTANT_BOOT_PROMPT }),
-        },
-        createdBoardId
-      );
-
-      if (sessionId) {
-        setLoading(false);
-        onComplete({ branchId: createdBranchId, sessionId, boardId: createdBoardId, path });
-      } else {
-        setLoading(false);
-        setError('Failed to create session. Please try again.');
-      }
-    } catch (err) {
-      setLoading(false);
-      setError(`Failed to launch session: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }, [createdBranchId, createdBoardId, selectedAgent, path, onCreateSession, onComplete]);
-
   const handleSkip = useCallback(() => {
     if (!user) return;
     // onComplete sets onboarding_completed; updating it here too would double-PATCH.
@@ -1074,6 +1144,8 @@ export function OnboardingWizard({
     setLocalRepoPath('');
     setRepoMode('remote');
     setBranchName('');
+    setAssistantDisplayName('My Assistant');
+    setAssistantEmoji('🤖');
     setApiKey('');
     setSelectedAgent('claude-code');
     setTestAuthLoading(false);
@@ -1083,7 +1155,11 @@ export function OnboardingWizard({
     setCreatedBoardId(null);
     setCreatedBranchId(null);
     setCloneElapsedSeconds(0);
-    resumedRef.current = false;
+    // Do not allow the resume effect to re-run against the still-stale
+    // user.preferences snapshot before the PATCH clearing onboarding state
+    // comes back over the socket. Otherwise Reset(dev) can appear to need
+    // two clicks: first local reset, then stale prefs immediately resume it.
+    resumedRef.current = true;
     branchNameInitRef.current = false;
     knownFailedRepoIdsRef.current = new Set();
 
@@ -1128,7 +1204,7 @@ export function OnboardingWizard({
                 workflows.
               </Paragraph>
               <Text type="secondary" style={{ fontSize: 12 }}>
-                API key → Clone assistant framework → Board → Branch → Launch
+                Identity → API key → Clone assistant framework → Board → Branch/session
               </Text>
             </div>
           </Space>
@@ -1152,12 +1228,48 @@ export function OnboardingWizard({
                 Connect an existing Git repository and start coding with AI agents.
               </Paragraph>
               <Text type="secondary" style={{ fontSize: 12 }}>
-                API key → Add repository → Board → Branch → Launch
+                API key → Add repository → Board → Branch/session
               </Text>
             </div>
           </Space>
         </Card>
       </Space>
+    </div>
+  );
+
+  const renderAssistantIdentity = () => (
+    <div style={{ padding: '16px 0' }}>
+      <Title level={4}>Name Your Assistant</Title>
+      <Paragraph type="secondary">
+        Pick the name and emoji this assistant will use in its first bootstrap session.
+      </Paragraph>
+
+      <Form layout="vertical">
+        <Form.Item label="Name" required>
+          <Space.Compact style={{ display: 'flex' }}>
+            <EmojiPickerInput
+              value={assistantEmoji}
+              onChange={setAssistantEmoji}
+              defaultEmoji="🤖"
+            />
+            <Input
+              placeholder="e.g. PR Reviewer, Command Center"
+              value={assistantDisplayName}
+              onChange={(e) => setAssistantDisplayName(e.target.value)}
+              autoFocus
+              style={{ flex: 1 }}
+            />
+          </Space.Compact>
+        </Form.Item>
+      </Form>
+
+      <Button
+        type="primary"
+        onClick={handleAssistantIdentityContinue}
+        disabled={!assistantDisplayName.trim()}
+      >
+        Continue
+      </Button>
     </div>
   );
 
@@ -1371,14 +1483,43 @@ export function OnboardingWizard({
   const renderBranch = () => {
     const sourceBranch =
       (createdRepoId ? repoById.get(createdRepoId)?.default_branch : null) || 'main';
+
+    if (createdBranchId && createdBoardId) {
+      return (
+        <div style={{ textAlign: 'center', padding: '24px 0' }}>
+          <Result
+            icon={<CheckCircleOutlined style={{ color: token.colorSuccess }} />}
+            title="Branch Created"
+            subTitle="The branch is ready. Create the first session to finish onboarding."
+          />
+          {error && (
+            <Alert
+              type="error"
+              message={error}
+              showIcon
+              style={{ marginBottom: 16, textAlign: 'left' }}
+            />
+          )}
+          <Button
+            type="primary"
+            size="large"
+            onClick={() => launchSessionForBranch(createdBranchId, createdBoardId)}
+            loading={loading}
+          >
+            Create First Session
+          </Button>
+        </div>
+      );
+    }
+
     return (
       <div style={{ padding: '16px 0' }}>
         <Title level={4}>Create Your Branch</Title>
         <Paragraph type="secondary">
           A branch is an isolated workspace backed by its own git branch.
           {path === 'assistant'
-            ? " We'll set up a branch for your assistant."
-            : ' Name it whatever you like.'}
+            ? " We'll set up a branch for your assistant and create its first session."
+            : ' Name it whatever you like. We’ll create the first session after the branch is ready.'}
         </Paragraph>
 
         <Form layout="vertical">
@@ -1407,7 +1548,7 @@ export function OnboardingWizard({
           loading={loading}
           disabled={!branchName.trim()}
         >
-          Create Branch
+          Create Branch & First Session
         </Button>
       </div>
     );
@@ -1609,40 +1750,12 @@ export function OnboardingWizard({
     );
   };
 
-  const renderLaunch = () => (
-    <div style={{ textAlign: 'center', padding: '24px 0' }}>
-      <Title level={4}>Ready to Launch</Title>
-      <Paragraph type="secondary">
-        {path === 'assistant'
-          ? "Your assistant is set up. Let's create your first session!"
-          : "Your branch is ready. Let's launch a session!"}
-      </Paragraph>
-
-      {error && (
-        <Alert
-          type="error"
-          message={error}
-          showIcon
-          style={{ marginBottom: 16, textAlign: 'left' }}
-        />
-      )}
-
-      <Button
-        type="primary"
-        size="large"
-        icon={<RocketOutlined />}
-        onClick={handleLaunch}
-        loading={loading}
-      >
-        Launch Session
-      </Button>
-    </div>
-  );
-
   const renderStepContent = () => {
     switch (currentStep) {
       case 'welcome':
         return renderWelcome();
+      case 'identity':
+        return renderAssistantIdentity();
       case 'add-repo':
         return renderAddRepo();
       case 'clone':
@@ -1653,8 +1766,6 @@ export function OnboardingWizard({
         return renderBranch();
       case 'api-keys':
         return renderApiKeys();
-      case 'launch':
-        return renderLaunch();
       default:
         return null;
     }
@@ -1677,22 +1788,22 @@ export function OnboardingWizard({
 
     const labelMap: Record<WizardStep, string> = {
       welcome: 'Welcome',
+      identity: 'Identity',
       'add-repo': 'Repo',
       clone: path === 'own-repo' ? 'Repo' : 'Clone',
       board: 'Board',
       branch: 'Branch',
       'api-keys': 'Keys',
-      launch: 'Launch',
     };
 
     const iconMap: Record<WizardStep, React.ReactNode> = {
       welcome: null,
+      identity: <RobotOutlined />,
       'add-repo': <FolderOpenOutlined />,
       clone: <CloudDownloadOutlined />,
       board: <ExperimentOutlined />,
       branch: <FolderOpenOutlined />,
       'api-keys': <KeyOutlined />,
-      launch: <RocketOutlined />,
     };
 
     return displaySteps.map((step) => ({

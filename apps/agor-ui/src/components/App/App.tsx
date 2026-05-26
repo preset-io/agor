@@ -45,14 +45,17 @@ import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { useTaskCompletionChime } from '../../hooks/useTaskCompletionChime';
 import { type ActiveUrlTarget, useUrlState } from '../../hooks/useUrlState';
 import type { AgenticToolOption } from '../../types';
+import { buildAssistantBootstrapPrompt } from '../../utils/assistantBootstrapPrompt';
 import { createAssistantBranch } from '../../utils/assistantCreation';
 import { initializeAudioOnInteraction } from '../../utils/audio';
+import { useThemedMessage } from '../../utils/message';
+import { startAssistantBootstrapSession } from '../../utils/startAssistantBootstrapSession';
 import { AppHeader } from '../AppHeader';
 import { BranchListDrawer } from '../BranchListDrawer';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { CommentsPanel } from '../CommentsPanel';
-import { CreateDialog } from '../CreateDialog';
+import { CreateDialog, type CreateDialogProgress } from '../CreateDialog';
 import type { AssistantTabResult } from '../CreateDialog/tabs/AssistantTab';
 import type { BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
@@ -127,7 +130,7 @@ export interface AppProps {
     }
   ) => void;
   onUnarchiveBranch?: (branchId: string, options?: { boardId?: string }) => void;
-  onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
+  onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void | Promise<void>;
   onCreateBranch?: (
     repoId: string,
     data: {
@@ -140,6 +143,8 @@ export interface AppProps {
       issue_url?: string;
       pull_request_url?: string;
       boardId?: string;
+      custom_context?: Record<string, unknown>;
+      notes?: string | null;
       position?: { x: number; y: number };
       storage_mode?: 'worktree' | 'clone';
       clone_depth?: number;
@@ -258,6 +263,7 @@ export const App: React.FC<AppProps> = ({
   instanceDescription,
   webTerminalEnabled = false,
 }) => {
+  const { showWarning } = useThemedMessage();
   const sessionCanvasRef = useRef<SessionCanvasRef>(null);
   const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -567,9 +573,16 @@ export const App: React.FC<AppProps> = ({
     }
   };
 
-  const handleCreateAssistant = async (result: AssistantTabResult) => {
+  const handleCreateAssistant = async (
+    result: AssistantTabResult,
+    progress?: CreateDialogProgress
+  ) => {
     const repoId = result.repoId;
-    if (!repoId || !onCreateBranch || !onUpdateBranch) return;
+    if (!repoId || !onCreateBranch || !onUpdateBranch) {
+      throw new Error('Missing repository or branch creation handler for assistant creation.');
+    }
+
+    progress?.onStatusChange?.('Creating assistant branch…');
 
     const branch = await createAssistantBranch(
       {
@@ -584,13 +597,61 @@ export const App: React.FC<AppProps> = ({
       { client, repoById, onCreateBranch, onUpdateBranch }
     );
 
-    // Assistants are branches under the hood, so the `/w/<short>/` URL
-    // is the canonical deep link. Routing through goToBranch picks up
-    // the cross-board recenter for free when the assistant was created
-    // on a new board.
-    if (branch) {
-      navigation.goToBranch(branch.branch_id);
+    if (!branch) {
+      throw new Error(
+        'Assistant branch could not be created. Please check the branch details and try again.'
+      );
     }
+
+    const sessionConfig: NewSessionConfig = {
+      branch_id: branch.branch_id,
+      agent: result.agent,
+      title: `${result.emoji ? `${result.emoji} ` : ''}${result.displayName} bootstrap`,
+      initialPrompt: buildAssistantBootstrapPrompt({
+        displayName: result.displayName,
+        emoji: result.emoji,
+        description: result.description,
+        userName: user?.name,
+        userEmail: user?.email,
+      }),
+      modelConfig: result.modelConfig,
+      effort: result.effort,
+      mcpServerIds: result.mcpServerIds,
+      permissionMode: result.permissionMode,
+      codexSandboxMode: result.codexSandboxMode,
+      codexApprovalPolicy: result.codexApprovalPolicy,
+      codexNetworkAccess: result.codexNetworkAccess,
+    };
+
+    try {
+      if (!onCreateSession) {
+        throw new Error('Missing session creation handler.');
+      }
+      const sessionId = await startAssistantBootstrapSession({
+        client,
+        branchId: branch.branch_id,
+        boardId: branch.board_id || currentBoardId,
+        sessionConfig,
+        onCreateSession,
+        onStatusChange: progress?.onStatusChange,
+      });
+      navigation.goToSession(sessionId);
+      return;
+    } catch (error) {
+      console.error('Assistant session bootstrap failed:', error);
+      showWarning(
+        `Assistant branch was created, but the first session could not start: ${
+          error instanceof Error ? error.message : String(error)
+        }. Opening the branch instead.`,
+        { key: 'assistant-bootstrap-session', duration: 8 }
+      );
+    }
+
+    // If the branch was created but the session failed, still take the user
+    // to the assistant branch so the created assistant is not lost. The
+    // top-level create-session handler surfaces the failure toast.
+    progress?.onStatusChange?.('Opening assistant branch…');
+    navigation.goToBranch(branch.branch_id);
   };
 
   // Refs for the data `handleSessionClick` reads. Using refs (vs
@@ -1230,6 +1291,10 @@ export const App: React.FC<AppProps> = ({
               onCreateRepo={(data) => onCreateRepo?.(data)}
               onCreateLocalRepo={(data) => onCreateLocalRepo?.(data)}
               onCreateAssistant={handleCreateAssistant}
+              availableAgents={availableAgents}
+              mcpServerById={mcpServerById}
+              currentUser={user}
+              client={client}
             />
             {logsModalBranchId && (
               <EnvironmentLogsModal

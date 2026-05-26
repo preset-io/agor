@@ -1,2 +1,2 @@
-export type { CreateDialogProps } from './CreateDialog';
+export type { CreateDialogProgress, CreateDialogProps } from './CreateDialog';
 export { CreateDialog } from './CreateDialog';

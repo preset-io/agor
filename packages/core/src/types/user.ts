@@ -366,6 +366,10 @@ export interface OnboardingState {
   branchId?: string;
   /** The board ID created for this user */
   boardId?: string;
+  /** Assistant display name captured during onboarding identity step */
+  assistantDisplayName?: string;
+  /** Assistant emoji captured during onboarding identity step */
+  assistantEmoji?: string;
 }
 
 /**

@@ -989,6 +989,8 @@ function AppContent() {
       issue_url?: string;
       pull_request_url?: string;
       boardId?: string;
+      custom_context?: Record<string, unknown>;
+      notes?: string | null;
       position?: { x: number; y: number };
       storage_mode?: 'worktree' | 'clone';
       clone_depth?: number;
@@ -1008,6 +1010,8 @@ function AppContent() {
         issue_url: data.issue_url,
         pull_request_url: data.pull_request_url,
         boardId: data.boardId, // Optional: add to board
+        custom_context: data.custom_context,
+        notes: data.notes,
         position: data.position, // Optional: position on board (defaults to center of viewport)
         storage_mode: data.storage_mode,
         clone_depth: data.clone_depth,

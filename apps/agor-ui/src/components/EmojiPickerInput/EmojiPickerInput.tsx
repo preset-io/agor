@@ -80,22 +80,17 @@ export const EmojiPickerInput: React.FC<EmojiPickerInputProps> = ({
 
 /**
  * Form.Item wrapper that integrates with Ant Design forms.
- * Thin wrapper around EmojiPickerInput that reads/writes via form.setFieldValue.
+ * Registers the emoji field with the form so validateFields/getFieldsValue
+ * include it in submitted values.
  */
 export const FormEmojiPickerInput: React.FC<{
   form: ReturnType<typeof Form.useForm>[0];
   fieldName: string;
   defaultEmoji?: string;
-}> = ({ form, fieldName, defaultEmoji }) => {
+}> = ({ fieldName, defaultEmoji }) => {
   return (
-    <Form.Item noStyle shouldUpdate>
-      {() => (
-        <EmojiPickerInput
-          value={form.getFieldValue(fieldName)}
-          onChange={(emoji) => form.setFieldValue(fieldName, emoji)}
-          defaultEmoji={defaultEmoji}
-        />
-      )}
+    <Form.Item name={fieldName} noStyle initialValue={defaultEmoji}>
+      <EmojiPickerInput defaultEmoji={defaultEmoji} />
     </Form.Item>
   );
 };

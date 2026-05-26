@@ -1,7 +1,7 @@
 import type { Board, Repo } from '@agor-live/client';
-import { InfoCircleOutlined, LoadingOutlined, SettingOutlined } from '@ant-design/icons';
+import { DownOutlined, InfoCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
-import { Alert, Collapse, Form, Input, Select, Space, Typography } from 'antd';
+import { Alert, Collapse, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
 import { CREATE_NEW_BOARD } from '@/utils/assistantConstants';
 import { FormEmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 
@@ -16,13 +16,15 @@ export interface AssistantFormFieldsProps {
   onDisplayNameChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   customRepoSelected: boolean;
   onCustomRepoChange: (selected: boolean) => void;
+  /** Optional section inserted before the repo/branch advanced settings collapse. */
+  extraBeforeAdvanced?: React.ReactNode;
 }
 
 /**
  * Shared assistant form fields used in both the CreateDialog AssistantTab
  * and the SettingsModal AssistantsTable create modal.
  *
- * Renders: Display Name, Icon, Board, board advice Alert, Advanced collapse
+ * Renders: Name + icon, Board, board advice Alert, Advanced collapse
  * (Framework Repository, Branch Name, Source Branch).
  * Does NOT render a <Form> wrapper — the parent owns the form instance.
  */
@@ -35,6 +37,7 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
   onDisplayNameChange,
   customRepoSelected,
   onCustomRepoChange,
+  extraBeforeAdvanced,
 }) => {
   const boardOptions = [
     {
@@ -57,21 +60,22 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
 
   return (
     <>
-      <Form.Item
-        name="displayName"
-        label="Display Name"
-        rules={[{ required: true, message: 'Please enter a display name' }]}
-        tooltip="Human-friendly name for this assistant"
-      >
-        <Input
-          placeholder="e.g. PR Reviewer, Command Center"
-          autoFocus
-          onChange={onDisplayNameChange}
-        />
-      </Form.Item>
-
-      <Form.Item name="emoji" label="Icon">
-        <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="🤖" />
+      <Form.Item label="Name" required tooltip="Human-friendly name and icon for this assistant">
+        <Space.Compact style={{ display: 'flex' }}>
+          <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="🤖" />
+          <Form.Item
+            name="displayName"
+            noStyle
+            rules={[{ required: true, message: 'Please enter a name' }]}
+          >
+            <Input
+              placeholder="e.g. PR Reviewer, Command Center"
+              autoFocus
+              onChange={onDisplayNameChange}
+              style={{ flex: 1 }}
+            />
+          </Form.Item>
+        </Space.Compact>
       </Form.Item>
 
       <Form.Item
@@ -109,6 +113,8 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
         }
       />
 
+      {extraBeforeAdvanced}
+
       {isCloning && !frameworkRepo && (
         <Alert
           type="info"
@@ -128,13 +134,16 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
         ghost
         size="small"
         destroyOnHidden={false}
+        expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
         items={[
           {
             key: 'advanced',
             label: (
-              <Space>
-                <SettingOutlined />
-                <Typography.Text type="secondary">Advanced</Typography.Text>
+              <Space size={6}>
+                <Typography.Text type="secondary">Advanced Assistant Settings</Typography.Text>
+                <Tooltip title="Assistants live in an Agor branch. These settings control the framework repository, branch name, and source branch used to create that assistant branch.">
+                  <InfoCircleOutlined style={{ color: 'var(--ant-color-text-tertiary)' }} />
+                </Tooltip>
               </Space>
             ),
             children: (

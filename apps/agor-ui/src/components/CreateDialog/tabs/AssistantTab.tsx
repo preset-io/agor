@@ -1,11 +1,29 @@
-import type { Board, CreateRepoRequest, Repo } from '@agor-live/client';
-import { Form } from 'antd';
-import { useEffect } from 'react';
+import type {
+  AgenticToolName,
+  AgorClient,
+  Board,
+  CodexApprovalPolicy,
+  CodexSandboxMode,
+  CreateRepoRequest,
+  EffortLevel,
+  MCPServer,
+  PermissionMode,
+  Repo,
+  User,
+} from '@agor-live/client';
+import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
+import { DownOutlined } from '@ant-design/icons';
+import { Collapse, Form, Typography } from 'antd';
+import { useEffect, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { slugify } from '@/utils/repoSlug';
 import { useAssistantForm } from '../../../hooks/useAssistantForm';
 import { useEnsureFrameworkRepo } from '../../../hooks/useEnsureFrameworkRepo';
+import type { AgenticToolOption } from '../../../types';
+import { AgenticToolConfigForm, getFormValuesFromConfig } from '../../AgenticToolConfigForm';
+import { AgentSelectionGrid } from '../../AgentSelectionGrid';
 import { AssistantFormFields, CREATE_NEW_BOARD } from '../../forms/AssistantFormFields';
+import type { ModelConfig } from '../../ModelSelector';
 
 export interface AssistantTabResult {
   displayName: string;
@@ -15,6 +33,14 @@ export interface AssistantTabResult {
   repoId?: string;
   branchName?: string;
   sourceBranch?: string;
+  agent: AgenticToolName;
+  modelConfig?: ModelConfig;
+  effort?: EffortLevel;
+  mcpServerIds?: string[];
+  permissionMode?: PermissionMode;
+  codexSandboxMode?: CodexSandboxMode;
+  codexApprovalPolicy?: CodexApprovalPolicy;
+  codexNetworkAccess?: boolean;
 }
 
 export interface AssistantTabProps {
@@ -23,6 +49,10 @@ export interface AssistantTabProps {
   onValidityChange: (valid: boolean) => void;
   formRef: React.MutableRefObject<(() => Promise<AssistantTabResult | null>) | null>;
   onCreateRepo?: (data: CreateRepoRequest) => void | Promise<void>;
+  availableAgents: AgenticToolOption[];
+  mcpServerById?: Map<string, MCPServer>;
+  currentUser?: User | null;
+  client?: AgorClient | null;
 }
 
 export const AssistantTab: React.FC<AssistantTabProps> = ({
@@ -31,10 +61,15 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
   onValidityChange,
   formRef,
   onCreateRepo,
+  availableAgents,
+  mcpServerById = new Map(),
+  currentUser,
+  client,
 }) => {
   const repos = mapToArray(repoById);
   const boards = mapToArray(boardById);
   const { frameworkRepo, isCloning } = useEnsureFrameworkRepo(repos, onCreateRepo);
+  const [selectedAgent, setSelectedAgent] = useState<AgenticToolName>('claude-code');
 
   const {
     form,
@@ -45,6 +80,24 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
     handleDisplayNameChange,
   } = useAssistantForm(frameworkRepo);
 
+  useEffect(() => {
+    if (!availableAgents.some((agent) => agent.id === selectedAgent) && availableAgents[0]?.id) {
+      setSelectedAgent(availableAgents[0].id as AgenticToolName);
+    }
+  }, [availableAgents, selectedAgent]);
+
+  useEffect(() => {
+    const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent];
+    form.setFieldsValue({
+      ...getFormValuesFromConfig(selectedAgent, agentDefaults),
+      ...(selectedAgent !== 'codex' && {
+        codexSandboxMode: undefined,
+        codexApprovalPolicy: undefined,
+        codexNetworkAccess: undefined,
+      }),
+    });
+  }, [selectedAgent, currentUser, form]);
+
   // Sync form validity to parent
   useEffect(() => {
     onValidityChange(isFormValid);
@@ -53,7 +106,13 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
   formRef.current = async () => {
     try {
       const values = await form.validateFields();
-      return {
+      const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent];
+      const permissionMode: PermissionMode =
+        (values.permissionMode as PermissionMode | undefined) ??
+        agentDefaults?.permissionMode ??
+        getDefaultPermissionMode(selectedAgent);
+
+      const result: AssistantTabResult = {
         displayName: values.displayName.trim(),
         description: values.description || undefined,
         emoji: values.emoji || undefined,
@@ -61,7 +120,30 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
         repoId: values.repoId || frameworkRepo?.repo_id,
         branchName: values.name || `private-${slugify(values.displayName)}`,
         sourceBranch: values.sourceBranch || 'main',
+        agent: selectedAgent,
+        modelConfig: values.modelConfig ?? agentDefaults?.modelConfig,
+        effort: (values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort,
+        mcpServerIds: values.mcpServerIds ?? agentDefaults?.mcpServerIds,
+        permissionMode,
       };
+
+      if (selectedAgent === 'codex') {
+        const codexDefaults = mapToCodexPermissionConfig(permissionMode);
+        result.codexSandboxMode =
+          (values.codexSandboxMode as CodexSandboxMode | undefined) ??
+          agentDefaults?.codexSandboxMode ??
+          codexDefaults.sandboxMode;
+        result.codexApprovalPolicy =
+          (values.codexApprovalPolicy as CodexApprovalPolicy | undefined) ??
+          agentDefaults?.codexApprovalPolicy ??
+          codexDefaults.approvalPolicy;
+        result.codexNetworkAccess =
+          values.codexNetworkAccess ??
+          agentDefaults?.codexNetworkAccess ??
+          codexDefaults.networkAccess;
+      }
+
+      return result;
     } catch {
       return null;
     }
@@ -83,6 +165,60 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
         onDisplayNameChange={handleDisplayNameChange}
         customRepoSelected={customRepoSelected}
         onCustomRepoChange={setCustomRepoSelected}
+        extraBeforeAdvanced={
+          <Collapse
+            ghost
+            size="small"
+            defaultActiveKey={['first-session']}
+            destroyOnHidden={false}
+            expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
+            items={[
+              {
+                key: 'first-session',
+                label: <Typography.Text strong>First Session Configuration</Typography.Text>,
+                children: (
+                  <>
+                    <Form.Item label="Agentic Tool" required>
+                      <AgentSelectionGrid
+                        agents={availableAgents}
+                        selectedAgentId={selectedAgent}
+                        onSelect={(agentId) => setSelectedAgent(agentId as AgenticToolName)}
+                        variant="select"
+                        showComparisonLink
+                      />
+                    </Form.Item>
+
+                    <Collapse
+                      ghost
+                      size="small"
+                      destroyOnHidden={false}
+                      expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
+                      items={[
+                        {
+                          key: 'session-config',
+                          label: (
+                            <Typography.Text type="secondary">
+                              Session Configuration
+                            </Typography.Text>
+                          ),
+                          children: (
+                            <AgenticToolConfigForm
+                              agenticTool={selectedAgent}
+                              mcpServerById={mcpServerById}
+                              showHelpText={false}
+                              client={client}
+                            />
+                          ),
+                        },
+                      ]}
+                    />
+                  </>
+                ),
+              },
+            ]}
+            style={{ marginBottom: 8 }}
+          />
+        }
       />
     </Form>
   );

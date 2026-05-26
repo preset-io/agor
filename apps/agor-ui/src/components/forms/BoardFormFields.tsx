@@ -1,16 +1,6 @@
 import type { Board } from '@agor-live/client';
 import type { FormInstance } from 'antd';
-import {
-  Checkbox,
-  Collapse,
-  ColorPicker,
-  Flex,
-  Form,
-  Input,
-  Select,
-  Space,
-  Typography,
-} from 'antd';
+import { Checkbox, Collapse, ColorPicker, Form, Input, Select, Space, Typography } from 'antd';
 import { useState } from 'react';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 
@@ -217,20 +207,17 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
 
   return (
     <>
-      <Form.Item label="Name" style={{ marginBottom: 24 }}>
-        <Flex gap={8}>
-          <Form.Item name="icon" noStyle>
-            <FormEmojiPickerInput form={form} fieldName="icon" defaultEmoji="📋" />
-          </Form.Item>
+      <Form.Item label="Name" required style={{ marginBottom: 24 }}>
+        <Space.Compact style={{ display: 'flex' }}>
+          <FormEmojiPickerInput form={form} fieldName="icon" defaultEmoji="📋" />
           <Form.Item
             name="name"
             noStyle
-            style={{ flex: 1 }}
             rules={[{ required: true, message: 'Please enter a board name' }]}
           >
             <Input placeholder="My Board" style={{ flex: 1 }} autoFocus={autoFocus} />
           </Form.Item>
-        </Flex>
+        </Space.Compact>
       </Form.Item>
 
       <Form.Item label="Description" name="description">

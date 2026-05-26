@@ -1,4 +1,12 @@
-import type { Board, CreateLocalRepoRequest, CreateRepoRequest, Repo } from '@agor-live/client';
+import type {
+  AgorClient,
+  Board,
+  CreateLocalRepoRequest,
+  CreateRepoRequest,
+  MCPServer,
+  Repo,
+  User,
+} from '@agor-live/client';
 import {
   AppstoreOutlined,
   BranchesOutlined,
@@ -7,6 +15,7 @@ import {
 } from '@ant-design/icons';
 import { Alert, Button, Modal, Tabs } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { AgenticToolOption } from '../../types';
 import type { AssistantTabResult } from './tabs/AssistantTab';
 import { AssistantTab } from './tabs/AssistantTab';
 import { BoardTab } from './tabs/BoardTab';
@@ -16,6 +25,10 @@ import type { RepoTabResult } from './tabs/RepoTab';
 import { RepoTab } from './tabs/RepoTab';
 
 type ActiveTab = 'branch' | 'assistant' | 'board' | 'repository';
+
+export interface CreateDialogProgress {
+  onStatusChange?: (status: string) => void;
+}
 
 const INITIAL_VALIDITY: Record<ActiveTab, boolean> = {
   branch: false,
@@ -58,12 +71,19 @@ export interface CreateDialogProps {
   boardById: Map<string, Board>;
   currentBoardId?: string;
   defaultPosition?: { x: number; y: number };
+  availableAgents: AgenticToolOption[];
+  mcpServerById?: Map<string, MCPServer>;
+  currentUser?: User | null;
+  client?: AgorClient | null;
   defaultTab?: ActiveTab;
   onCreateBranch: (config: BranchTabConfig) => void | Promise<void>;
   onCreateBoard: (board: Partial<Board>) => void | Promise<void>;
   onCreateRepo: (data: CreateRepoRequest) => void | Promise<void>;
   onCreateLocalRepo: (data: CreateLocalRepoRequest) => void | Promise<void>;
-  onCreateAssistant: (result: AssistantTabResult) => void | Promise<void>;
+  onCreateAssistant: (
+    result: AssistantTabResult,
+    progress?: CreateDialogProgress
+  ) => void | Promise<void>;
 }
 
 /** Fire the parent handler and close the dialog. We don't `await` here
@@ -82,6 +102,10 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   boardById,
   currentBoardId,
   defaultPosition,
+  availableAgents,
+  mcpServerById,
+  currentUser,
+  client,
   defaultTab = 'branch',
   onCreateBranch,
   onCreateBoard,
@@ -96,6 +120,8 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   const [validByTab, setValidByTab] = useState<Record<ActiveTab, boolean>>(INITIAL_VALIDITY);
   const isValid = validByTab[activeTab];
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitStatus, setSubmitStatus] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // Form submit refs — each tab exposes a submit function
   const branchFormRef = useRef<(() => Promise<BranchTabConfig | null>) | null>(null);
@@ -108,6 +134,9 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
     if (!open) {
       setValidByTab(INITIAL_VALIDITY);
       setActiveTab(defaultTab);
+      setIsSubmitting(false);
+      setSubmitStatus(null);
+      setSubmitError(null);
     }
   }, [open, defaultTab]);
 
@@ -128,10 +157,15 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
 
   const handleTabChange = (key: string) => {
     setActiveTab(key as ActiveTab);
+    setSubmitError(null);
+    setSubmitStatus(null);
   };
 
   const handleSubmit = async () => {
     setIsSubmitting(true);
+    setSubmitError(null);
+    setSubmitStatus(null);
+
     try {
       switch (activeTab) {
         case 'branch': {
@@ -165,18 +199,22 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
         case 'assistant': {
           const result = await assistantFormRef.current?.();
           if (result) {
-            fireAndForget(onCreateAssistant(result));
+            setSubmitStatus('Creating assistant…');
+            await onCreateAssistant(result, { onStatusChange: setSubmitStatus });
             onClose();
           }
           break;
         }
       }
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : String(error));
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleCancel = () => {
+    if (isSubmitting) return;
     onClose();
   };
 
@@ -229,6 +267,10 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
             onValidityChange={handleAssistantValid}
             formRef={assistantFormRef}
             onCreateRepo={onCreateRepo}
+            availableAgents={availableAgents}
+            mcpServerById={mcpServerById}
+            currentUser={currentUser}
+            client={client}
           />
         </div>
       ),
@@ -282,8 +324,11 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
       onCancel={handleCancel}
       destroyOnHidden
       width={720}
+      closable={!isSubmitting}
+      maskClosable={!isSubmitting}
+      keyboard={!isSubmitting}
       footer={[
-        <Button key="cancel" onClick={handleCancel}>
+        <Button key="cancel" onClick={handleCancel} disabled={isSubmitting}>
           Cancel
         </Button>,
         <Button
@@ -293,7 +338,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
           disabled={!isValid}
           loading={isSubmitting}
         >
-          {ACTION_LABELS[activeTab]}
+          {isSubmitting && submitStatus ? submitStatus : ACTION_LABELS[activeTab]}
         </Button>,
       ]}
       styles={{
@@ -306,6 +351,15 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
         items={tabItems}
         style={{ minHeight: 360 }}
       />
+      {submitError && (
+        <Alert
+          type="error"
+          showIcon
+          message="Couldn't finish creating this item"
+          description={submitError}
+          style={{ marginTop: 16 }}
+        />
+      )}
     </Modal>
   );
 };

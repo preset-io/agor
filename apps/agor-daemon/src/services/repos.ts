@@ -562,6 +562,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       issue_url?: string;
       pull_request_url?: string;
       boardId?: string;
+      custom_context?: Record<string, unknown>;
+      notes?: string | null;
       /** Explicit board position. Honored as-is when supplied; otherwise
        *  the service computes a smart placement (zone-relative if a
        *  zoneId was passed, else next-free slot among existing entities).
@@ -725,6 +727,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         last_used: new Date().toISOString(),
         issue_url: data.issue_url,
         pull_request_url: data.pull_request_url,
+        notes: data.notes,
+        custom_context: data.custom_context,
         board_id: data.boardId,
         created_by: userId,
       },
