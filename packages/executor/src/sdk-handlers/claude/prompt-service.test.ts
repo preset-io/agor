@@ -19,20 +19,25 @@ const processorCalls: Array<{ idleTimeoutMs: number }> = [];
 
 vi.mock('./message-processor.js', () => {
   return {
-    SDKMessageProcessor: vi.fn().mockImplementation((opts: { idleTimeoutMs: number }) => {
+    // Must use `function` (not arrow) so vitest 4.x can call it with `new`.
+    SDKMessageProcessor: vi.fn().mockImplementation(function (
+      this: Record<string, unknown>,
+      opts: { idleTimeoutMs: number }
+    ) {
       processorCalls.push({ idleTimeoutMs: opts.idleTimeoutMs });
-      return {
-        process: vi.fn().mockResolvedValue([]),
-        hasTimedOut: vi.fn().mockReturnValue(false),
-        getState: vi.fn().mockReturnValue({
-          messageCount: 0,
-          lastActivityTime: Date.now(),
-          idleTimeoutMs: opts.idleTimeoutMs,
-        }),
-      };
+      this.process = vi.fn().mockResolvedValue([]);
+      this.hasTimedOut = vi.fn().mockReturnValue(false);
+      this.getState = vi.fn().mockReturnValue({
+        messageCount: 0,
+        lastActivityTime: Date.now(),
+        idleTimeoutMs: opts.idleTimeoutMs,
+      });
     }),
   };
 });
+
+// Stub out heavy core imports that pull in db/orm dependencies.
+vi.mock('@agor/core/db', () => ({ shortId: (id: string) => id.slice(0, 8) }));
 
 // Return a fresh empty generator on every call so tests don't share state.
 vi.mock('./query-builder.js', () => ({
