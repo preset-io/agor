@@ -858,6 +858,17 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         callbackConfig.callback_mode = args.callbackMode ?? 'once';
       }
 
+      const newModelConfig =
+        modelConfig || args.sdkIdleTimeoutMs !== undefined
+          ? {
+              ...modelConfig,
+              ...(args.sdkIdleTimeoutMs !== undefined && {
+                sdk_idle_timeout_ms: args.sdkIdleTimeoutMs,
+              }),
+              updated_at: new Date().toISOString(),
+            }
+          : undefined;
+
       const sessionData: Record<string, unknown> = {
         branch_id: branch.branch_id,
         agentic_tool: agenticTool,
@@ -867,15 +878,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         created_by: ctx.userId,
         unix_username: user.unix_username,
         permission_config: permissionConfig,
-        ...((modelConfig || args.sdkIdleTimeoutMs !== undefined) && {
-          model_config: {
-            ...(modelConfig ?? {}),
-            ...(args.sdkIdleTimeoutMs !== undefined && {
-              sdk_idle_timeout_ms: args.sdkIdleTimeoutMs,
-            }),
-            updated_at: new Date().toISOString(),
-          },
-        }),
+        ...(newModelConfig && { model_config: newModelConfig }),
         ...(Object.keys(callbackConfig).length > 0 && { callback_config: callbackConfig }),
         contextFiles: args.contextFiles || [],
         git_state: {
