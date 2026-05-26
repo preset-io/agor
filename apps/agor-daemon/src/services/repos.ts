@@ -562,6 +562,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       issue_url?: string;
       pull_request_url?: string;
       boardId?: string;
+      /** Explicit board position. Honored as-is when supplied; otherwise
+       *  the service computes a smart placement (zone-relative if a
+       *  zoneId was passed, else next-free slot among existing entities).
+       *  Agents/MCP callers should omit this so they don't have to think
+       *  about x/y; the UI passes the viewport center. */
+      position?: { x: number; y: number };
       zoneId?: string;
       others_can?: BranchPermissionLevel;
       others_fs_access?: 'none' | 'read' | 'write';
@@ -735,13 +741,16 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     if (data.boardId) {
       const boardObjectsService = this.app.service('board-objects');
 
-      // Compute position automatically — agents should never need to think about x/y
-      let position: { x: number; y: number } | undefined;
+      // Honor an explicit position from the caller (the UI passes the
+      // viewport center so the new card lands where the user invoked
+      // the dialog). Agents/MCP callers omit `position` so they don't
+      // have to think about x/y; fall through to smart placement.
+      let position: { x: number; y: number } | undefined = data.position;
       const resolvedZoneId = data.zoneId;
 
       try {
         // If placing in a zone, compute zone-relative position
-        if (resolvedZoneId && board) {
+        if (!position && resolvedZoneId && board) {
           const zone = board.objects?.[resolvedZoneId];
           if (zone?.type === 'zone') {
             const { computeZoneRelativePosition } = await import(
