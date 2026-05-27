@@ -98,6 +98,7 @@ import {
   resolveBranchPermission,
 } from './utils/branch-authorization.js';
 import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
+import { buildPrompterPrefixedPrompt } from './utils/build-prompter-prefix.js';
 import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
@@ -126,17 +127,6 @@ interface RouteParams extends Params {
  */
 function isPaginated<T>(result: T[] | Paginated<T>): result is Paginated<T> {
   return !Array.isArray(result) && 'data' in result && 'total' in result;
-}
-
-/**
- * Sanitize a user-provided field (name, email) before interpolating into prompts.
- * Strips newlines and control characters to prevent prompt injection, and caps length.
- */
-function sanitizeUserField(value: string, maxLength = 100): string {
-  return value
-    .replace(/[\r\n\t]/g, ' ')
-    .trim()
-    .substring(0, maxLength);
 }
 
 /**
@@ -1014,22 +1004,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       params
     );
 
-    // Build prompter context — preserved from the previous inline impl.
-    let promptForExecutor = task.full_prompt;
-    const prompterUserId = params.user?.user_id;
-    if (prompterUserId && prompterUserId !== session.created_by) {
-      try {
-        const prompterUserRepo = new UsersRepository(db);
-        const prompterUser = await prompterUserRepo.findById(prompterUserId);
-        if (prompterUser) {
-          const prompterName = sanitizeUserField(prompterUser.name || prompterUser.email);
-          const prompterEmail = sanitizeUserField(prompterUser.email);
-          promptForExecutor = `[Prompted by: ${prompterName} (${prompterEmail})]\n\n${task.full_prompt}`;
-        }
-      } catch (err) {
-        console.warn(`[Prompt] Failed to look up prompter user ${shortId(prompterUserId)}:`, err);
-      }
-    }
+    // Tag the bytes shipped to the executor with `[Prompted by: ...]` when a
+    // non-owner is prompting. We use `task.created_by` (not `params.user`) as
+    // the prompter identity: it's stamped at prompt submission and survives
+    // the queue → drain hop intact, whereas `params.user` can drop on
+    // callback / hook-triggered drains that don't carry `queued_by_user_id`.
+    // See `./utils/build-prompter-prefix.ts` for the helper + tests.
+    const { prompt: promptForExecutor } = await buildPrompterPrefixedPrompt({
+      rawPrompt: task.full_prompt,
+      sessionCreatedBy: session.created_by,
+      prompterUserId: task.created_by ?? params.user?.user_id,
+      usersRepo: new UsersRepository(db),
+    });
 
     const useStreaming = options.stream !== false;
     const sessionId = task.session_id;
