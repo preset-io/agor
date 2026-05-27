@@ -280,6 +280,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
                   mcpServerById={mcpServerById}
                   showHelpText={true}
                   hideMcpServers
+                  showSdkIdleTimeout
                   client={client}
                 />
               ),

@@ -9,7 +9,12 @@ import {
   DEFAULT_GEMINI_MODEL,
   GEMINI_MODELS,
 } from '@agor/core/models';
-import { resolveSessionDefaults } from '@agor/core/sessions';
+import {
+  CLAUDE_SDK_IDLE_TIMEOUT_DEFAULT_MS,
+  CLAUDE_SDK_IDLE_TIMEOUT_MAX_MS,
+  CLAUDE_SDK_IDLE_TIMEOUT_MIN_MS,
+  resolveSessionDefaults,
+} from '@agor/core/sessions';
 import {
   AGENTIC_TOOL_CAPABILITIES,
   type AgenticToolName,
@@ -772,16 +777,19 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         sdkIdleTimeoutMs: z
           .number()
           .int()
-          .min(30000)
-          .max(3600000)
+          .min(CLAUDE_SDK_IDLE_TIMEOUT_MIN_MS)
+          .max(CLAUDE_SDK_IDLE_TIMEOUT_MAX_MS)
           .optional()
           .describe(
-            'Claude SDK idle timeout in milliseconds for this session. If no events are received from the Claude SDK for this duration, the session is considered hung and terminated. Set at create time only — cannot be changed afterward. Default: 300000 (5 minutes). Min: 30000 (30s), Max: 3600000 (1h). Useful for Opus 4.7 with extended thinking, which may batch server-side without streaming deltas for longer periods.'
+            `Claude SDK idle timeout in milliseconds for claude-code sessions. If no events are received from the Claude SDK for this duration, the session is considered hung and terminated. Set at create time only — cannot be changed afterward. Default: ${CLAUDE_SDK_IDLE_TIMEOUT_DEFAULT_MS} (5 minutes). Min: ${CLAUDE_SDK_IDLE_TIMEOUT_MIN_MS} (30s), Max: ${CLAUDE_SDK_IDLE_TIMEOUT_MAX_MS} (1h). Useful for Opus 4.7 with extended thinking, which may batch server-side without streaming deltas for longer periods.`
           ),
       }),
     },
     async (args) => {
       const agenticTool = args.agenticTool as AgenticToolName;
+      if (args.sdkIdleTimeoutMs !== undefined && agenticTool !== 'claude-code') {
+        throw new Error('sdkIdleTimeoutMs only applies to claude-code sessions');
+      }
 
       // Fetch user data to get unix_username
       const user = await ctx.app.service('users').get(ctx.userId, ctx.baseServiceParams);

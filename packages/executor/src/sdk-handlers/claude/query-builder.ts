@@ -116,6 +116,12 @@ export interface QuerySetupDeps {
   mcpEnabled?: boolean;
 }
 
+export interface IdleWatchdogHooks {
+  refresh(reason: string): void;
+  pause(reason: string): void;
+  resume(reason: string): void;
+}
+
 /**
  * Setup and configure query for Claude Agent SDK
  * Handles session loading, CWD resolution, MCP configuration, and resume/fork/spawn logic
@@ -148,13 +154,14 @@ export async function setupQuery(
     permissionMode?: PermissionMode;
     resume?: boolean;
     abortController?: AbortController;
+    idleWatchdog?: IdleWatchdogHooks;
   } = {}
 ): Promise<{
   query: InterruptibleQuery;
   resolvedModel: string;
   getStderr: () => string;
 }> {
-  const { taskId, permissionMode, resume = true, abortController } = options;
+  const { taskId, permissionMode, resume = true, abortController, idleWatchdog } = options;
 
   const session = await deps.sessionsRepo.findById(sessionId);
   if (!session) {
@@ -346,6 +353,7 @@ export async function setupQuery(
       permissionLocks: deps.permissionLocks,
       mcpServerRepo: deps.mcpServerRepo,
       sessionMCPRepo: deps.sessionMCPRepo,
+      idleWatchdog,
     });
     console.log(`✅ canUseTool callback added (permission mode: ${effectivePermissionMode})`);
   }

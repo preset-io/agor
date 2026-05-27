@@ -7,6 +7,7 @@
 
 import { shortId } from '@agor/core/db';
 import type { PermissionMode, SDKResultMessage } from '@agor/core/sdk';
+import { normalizeClaudeSdkIdleTimeoutMs } from '@agor/core/sessions';
 import type {
   BranchRepository,
   MCPServerRepository,
@@ -21,6 +22,85 @@ import { MessageRole } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 import { type ProcessedEvent, SDKMessageProcessor } from './message-processor.js';
 import { setupQuery } from './query-builder.js';
+
+export class ClaudeSdkIdleWatchdog {
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private timedOut = false;
+  private pauseDepth = 0;
+  private lastActivityTime = Date.now();
+
+  constructor(
+    private readonly idleTimeoutMs: number,
+    private readonly abortController: AbortController
+  ) {}
+
+  refresh(_reason: string): void {
+    if (this.timedOut || this.abortController.signal.aborted) return;
+
+    this.lastActivityTime = Date.now();
+    if (this.pauseDepth > 0) return;
+
+    if (this.timer) clearTimeout(this.timer);
+
+    this.timer = setTimeout(() => {
+      this.timedOut = true;
+      this.abortController.abort();
+    }, this.idleTimeoutMs);
+  }
+
+  pause(_reason: string): void {
+    if (this.timedOut || this.abortController.signal.aborted) return;
+
+    this.pauseDepth += 1;
+    this.lastActivityTime = Date.now();
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+
+  resume(reason: string): void {
+    if (this.timedOut || this.abortController.signal.aborted) return;
+
+    this.pauseDepth = Math.max(0, this.pauseDepth - 1);
+    if (this.pauseDepth === 0) {
+      this.refresh(reason);
+      return;
+    }
+
+    this.lastActivityTime = Date.now();
+  }
+
+  stop(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+    this.pauseDepth = 0;
+  }
+
+  hasTimedOut(): boolean {
+    return this.timedOut;
+  }
+
+  getState(): { lastActivityTime: number; idleTimeoutMs: number } {
+    return {
+      lastActivityTime: this.lastActivityTime,
+      idleTimeoutMs: this.idleTimeoutMs,
+    };
+  }
+}
+
+function buildClaudeSdkIdleTimeoutError(
+  watchdog: ClaudeSdkIdleWatchdog,
+  processor: SDKMessageProcessor
+): Error {
+  const watchdogState = watchdog.getState();
+  const processorState = processor.getState();
+  const idleSeconds = Math.round((Date.now() - watchdogState.lastActivityTime) / 1000);
+  const timeoutSeconds = Math.round(watchdogState.idleTimeoutMs / 1000);
+
+  return new Error(
+    `Claude SDK idle timeout: No SDK activity for ${idleSeconds}s (timeout: ${timeoutSeconds}s). ` +
+      `SDK may have hung or crashed. Last processed message was #${processorState.messageCount}.`
+  );
+}
 
 export interface PromptResult {
   /** Assistant messages (can be multiple: tool invocation, then response) */
@@ -47,9 +127,6 @@ export interface PromptResult {
 export class ClaudePromptService {
   /** Enable token-level streaming from Claude Agent SDK */
   private static readonly ENABLE_TOKEN_STREAMING = true;
-
-  /** Idle timeout for SDK event loop - throws error if no messages received for this duration */
-  private static readonly IDLE_TIMEOUT_MS = 300000; // 5 minutes
 
   /** Serialize permission checks per session to prevent duplicate prompts for concurrent tool calls */
   private permissionLocks = new Map<SessionID, Promise<void>>();
@@ -174,6 +251,13 @@ If you continue to see authentication errors, please contact your Agor administr
       }
     }
 
+    const sessionForTimeout = await this.sessionsRepo?.findById(sessionId);
+    const idleTimeoutMs = normalizeClaudeSdkIdleTimeoutMs(
+      sessionForTimeout?.model_config?.sdk_idle_timeout_ms
+    );
+    const queryAbortController = abortController ?? new AbortController();
+    const watchdog = new ClaudeSdkIdleWatchdog(idleTimeoutMs, queryAbortController);
+
     const { query: result, getStderr } = await setupQuery(
       sessionId,
       prompt,
@@ -197,7 +281,12 @@ If you continue to see authentication errors, please contact your Agor administr
         taskId,
         permissionMode,
         resume: true,
-        abortController,
+        abortController: queryAbortController,
+        idleWatchdog: {
+          refresh: (reason) => watchdog.refresh(reason),
+          pause: (reason) => watchdog.pause(reason),
+          resume: (reason) => watchdog.resume(reason),
+        },
       }
     );
 
@@ -210,28 +299,25 @@ If you continue to see authentication errors, please contact your Agor administr
       sessionId,
       existingSdkSessionId,
       enableTokenStreaming: ClaudePromptService.ENABLE_TOKEN_STREAMING,
-      idleTimeoutMs: Math.max(
-        30000,
-        session?.model_config?.sdk_idle_timeout_ms ?? ClaudePromptService.IDLE_TIMEOUT_MS
-      ),
+      idleTimeoutMs,
     });
+    watchdog.refresh('query_started');
+    let inputReleased = false;
+    const releaseQueryInput = () => {
+      if (inputReleased) return;
+      result.releaseInput();
+      inputReleased = true;
+    };
 
     // With AbortController passed to SDK, cancellation is handled natively.
     // When abortController.abort() is called, SDK throws AbortError which we catch below.
 
     try {
       for await (const msg of result) {
-        // Check for timeout - throw error to trigger proper cleanup
-        if (processor.hasTimedOut()) {
-          const state = processor.getState();
-          const idleSeconds = Math.round((Date.now() - state.lastActivityTime) / 1000);
-          const timeoutSeconds = Math.round(state.idleTimeoutMs / 1000);
-
-          throw new Error(
-            `Claude SDK idle timeout: No activity for ${idleSeconds}s (timeout: ${timeoutSeconds}s). ` +
-              `SDK may have hung or crashed. Last message type was #${state.messageCount}.`
-          );
-        }
+        // Any SDK message proves the process is alive. Refresh the watchdog
+        // before deeper processing so a delayed-but-valid message is not
+        // rejected solely because the previous quiet period was long.
+        watchdog.refresh(`sdk_message:${(msg as { type?: string }).type ?? 'unknown'}`);
 
         // Process message through processor
         const events = await processor.process(msg);
@@ -270,7 +356,7 @@ If you continue to see authentication errors, please contact your Agor administr
               );
             } finally {
               // Release the held input iterable so the SDK can close stdin
-              result.releaseInput();
+              releaseQueryInput();
             }
           }
 
@@ -291,7 +377,7 @@ If you continue to see authentication errors, please contact your Agor administr
       }
     } catch (error) {
       // Ensure stdin is released on any error so the subprocess can exit cleanly
-      result.releaseInput();
+      releaseQueryInput();
 
       const state = processor.getState();
 
@@ -301,6 +387,10 @@ If you continue to see authentication errors, please contact your Agor administr
         error instanceof Error &&
         (error.name === 'AbortError' || error.message.includes('abort'))
       ) {
+        if (watchdog.hasTimedOut()) {
+          throw buildClaudeSdkIdleTimeoutError(watchdog, processor);
+        }
+
         console.log(`🛑 [Stop] Query aborted for session ${shortId(sessionId)} - this is expected`);
         // Yield stopped event to signal execution was halted
         yield { type: 'stopped' } as ProcessedEvent;
@@ -327,6 +417,12 @@ If you continue to see authentication errors, please contact your Agor administr
         stderr: stderrOutput || '(no stderr output)',
       });
       throw enhancedError;
+    } finally {
+      watchdog.stop();
+    }
+
+    if (watchdog.hasTimedOut()) {
+      throw buildClaudeSdkIdleTimeoutError(watchdog, processor);
     }
   }
 
@@ -343,6 +439,13 @@ If you continue to see authentication errors, please contact your Agor administr
    * @returns Complete assistant response with metadata
    */
   async promptSession(sessionId: SessionID, prompt: string): Promise<PromptResult> {
+    const sessionForTimeout = await this.sessionsRepo?.findById(sessionId);
+    const idleTimeoutMs = normalizeClaudeSdkIdleTimeoutMs(
+      sessionForTimeout?.model_config?.sdk_idle_timeout_ms
+    );
+    const queryAbortController = new AbortController();
+    const watchdog = new ClaudeSdkIdleWatchdog(idleTimeoutMs, queryAbortController);
+
     const { query: result } = await setupQuery(
       sessionId,
       prompt,
@@ -366,6 +469,12 @@ If you continue to see authentication errors, please contact your Agor administr
         taskId: undefined,
         permissionMode: undefined,
         resume: false,
+        abortController: queryAbortController,
+        idleWatchdog: {
+          refresh: (reason) => watchdog.refresh(reason),
+          pause: (reason) => watchdog.pause(reason),
+          resume: (reason) => watchdog.resume(reason),
+        },
       }
     );
 
@@ -378,11 +487,15 @@ If you continue to see authentication errors, please contact your Agor administr
       sessionId,
       existingSdkSessionId,
       enableTokenStreaming: false, // Non-streaming mode
-      idleTimeoutMs: Math.max(
-        30000,
-        session?.model_config?.sdk_idle_timeout_ms ?? ClaudePromptService.IDLE_TIMEOUT_MS
-      ),
+      idleTimeoutMs,
     });
+    watchdog.refresh('query_started');
+    let inputReleased = false;
+    const releaseQueryInput = () => {
+      if (inputReleased) return;
+      result.releaseInput();
+      inputReleased = true;
+    };
 
     // Collect response messages from async generator
     // IMPORTANT: Keep assistant messages SEPARATE (don't merge into one)
@@ -409,6 +522,7 @@ If you continue to see authentication errors, please contact your Agor administr
 
     try {
       for await (const msg of result) {
+        watchdog.refresh(`sdk_message:${(msg as { type?: string }).type ?? 'unknown'}`);
         const events = await processor.process(msg);
 
         for (const event of events) {
@@ -420,14 +534,18 @@ If you continue to see authentication errors, please contact your Agor administr
             });
           }
 
-          // Capture token usage from result events
-          if (event.type === 'result' && event.raw_sdk_message?.usage) {
-            tokenUsage = event.raw_sdk_message.usage as {
-              input_tokens?: number;
-              output_tokens?: number;
-              cache_creation_tokens?: number;
-              cache_read_tokens?: number;
-            };
+          // Capture token usage from result events and release the held input
+          // iterable so the SDK can close cleanly.
+          if (event.type === 'result') {
+            if (event.raw_sdk_message?.usage) {
+              tokenUsage = event.raw_sdk_message.usage as {
+                input_tokens?: number;
+                output_tokens?: number;
+                cache_creation_tokens?: number;
+                cache_read_tokens?: number;
+              };
+            }
+            releaseQueryInput();
           }
 
           // Break on end event
@@ -437,11 +555,18 @@ If you continue to see authentication errors, please contact your Agor administr
         }
       }
     } catch (error) {
+      // Ensure stdin is released on any error so the subprocess can exit cleanly
+      releaseQueryInput();
+
       // Check if this is an AbortError from interrupt() - this is EXPECTED during stop
       if (
         error instanceof Error &&
         (error.name === 'AbortError' || error.message.includes('abort'))
       ) {
+        if (watchdog.hasTimedOut()) {
+          throw buildClaudeSdkIdleTimeoutError(watchdog, processor);
+        }
+
         console.log(
           `🛑 [Stop] Query aborted via interrupt() for session ${shortId(sessionId)} (non-streaming) - this is expected`
         );
@@ -455,6 +580,12 @@ If you continue to see authentication errors, please contact your Agor administr
       }
       // Re-throw other errors
       throw error;
+    } finally {
+      watchdog.stop();
+    }
+
+    if (watchdog.hasTimedOut()) {
+      throw buildClaudeSdkIdleTimeoutError(watchdog, processor);
     }
 
     // Extract token counts from SDK result metadata

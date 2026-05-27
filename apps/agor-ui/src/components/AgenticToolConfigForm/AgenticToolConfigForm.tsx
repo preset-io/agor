@@ -15,6 +15,11 @@
  * - Codex-specific fields are omitted (rendered separately via CodexSettingsForm)
  */
 
+import {
+  CLAUDE_SDK_IDLE_TIMEOUT_DEFAULT_SECONDS,
+  CLAUDE_SDK_IDLE_TIMEOUT_MAX_SECONDS,
+  CLAUDE_SDK_IDLE_TIMEOUT_MIN_SECONDS,
+} from '@agor/core/sessions';
 import type { AgenticToolName, AgorClient, MCPServer } from '@agor-live/client';
 import { Form, InputNumber, Select } from 'antd';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
@@ -49,6 +54,12 @@ export interface AgenticToolConfigFormProps {
    */
   hideMcpServers?: boolean;
   /**
+   * Show the Claude SDK idle-timeout field. This is currently only wired for
+   * new-session creation; other consumers of this shared form either do not
+   * persist the value or edit already-created sessions.
+   */
+  showSdkIdleTimeout?: boolean;
+  /**
    * Optional Feathers client. When set, the embedded ModelSelector can fetch
    * dynamic Copilot models via `/copilot-models`. Without it, the picker
    * silently uses the static fallback — fine for forms that don't need
@@ -71,10 +82,12 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
   showHelpText = true,
   compact = false,
   hideMcpServers = false,
+  showSdkIdleTimeout = false,
   client,
 }) => {
   const modelLabel = MODEL_LABELS[agenticTool] ?? 'Claude Model';
   const showCodexFields = agenticTool === 'codex' && !compact;
+  const showClaudeSdkIdleTimeout = showSdkIdleTimeout && agenticTool === 'claude-code';
 
   return (
     <>
@@ -112,7 +125,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
         </Form.Item>
       )}
 
-      {(agenticTool === 'claude-code' || agenticTool === 'claude-code-cli') && (
+      {showClaudeSdkIdleTimeout && (
         <Form.Item
           name="sdkIdleTimeoutSeconds"
           label="Idle timeout (seconds)"
@@ -122,7 +135,12 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
               : undefined
           }
         >
-          <InputNumber min={30} max={3600} placeholder="300" style={{ width: '100%' }} />
+          <InputNumber
+            min={CLAUDE_SDK_IDLE_TIMEOUT_MIN_SECONDS}
+            max={CLAUDE_SDK_IDLE_TIMEOUT_MAX_SECONDS}
+            placeholder={String(CLAUDE_SDK_IDLE_TIMEOUT_DEFAULT_SECONDS)}
+            style={{ width: '100%' }}
+          />
         </Form.Item>
       )}
 

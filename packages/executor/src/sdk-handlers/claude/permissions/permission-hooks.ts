@@ -42,6 +42,11 @@ export function createCanUseToolCallback(
     permissionLocks: Map<SessionID, Promise<void>>;
     mcpServerRepo: MCPServerRepository;
     sessionMCPRepo: SessionMCPServerRepository;
+    idleWatchdog?: {
+      refresh(reason: string): void;
+      pause(reason: string): void;
+      resume(reason: string): void;
+    };
   }
 ) {
   return async (
@@ -59,6 +64,8 @@ export function createCanUseToolCallback(
     }>;
     message?: string;
   }> => {
+    deps.idleWatchdog?.refresh(`permission_callback:${toolName}`);
+
     // Auto-approve MCP tools only if they belong to an attached MCP server
     // MCP tool names follow pattern: mcp__<server_name>__<tool_name>
     if (toolName.startsWith('mcp__')) {
@@ -139,8 +146,12 @@ export function createCanUseToolCallback(
 
     // Track lock release function for finally block
     let releaseLock: (() => void) | undefined;
+    let idleWatchdogPaused = false;
 
     try {
+      deps.idleWatchdog?.pause(`permission_flow:${toolName}`);
+      idleWatchdogPaused = true;
+
       // STEP 1: Wait for any pending permission check to finish (queue serialization)
       const existingLock = deps.permissionLocks.get(sessionId);
       if (existingLock) {
@@ -384,6 +395,10 @@ export function createCanUseToolCallback(
         message: error instanceof Error ? error.message : 'Unknown error in permission flow',
       };
     } finally {
+      if (idleWatchdogPaused) {
+        deps.idleWatchdog?.resume(`permission_wait_finished:${toolName}`);
+      }
+
       // STEP 3: Always release the lock when done (success or error)
       if (releaseLock) {
         releaseLock();

@@ -254,6 +254,28 @@ describe('agor_sessions_create', () => {
     expect(created.model_config.effort).toBe('medium');
   });
 
+  it('rejects sdkIdleTimeoutMs for non-Claude-SDK tools', async () => {
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => baseBranch },
+      sessions: { create: vi.fn() },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    await expect(
+      agor_sessions_create({
+        branchId: 'wt-1',
+        agenticTool: 'claude-code-cli',
+        sdkIdleTimeoutMs: 900000,
+      })
+    ).rejects.toThrow(/only applies to claude-code/);
+  });
+
   it('attaches explicit mcpServerIds via the /sessions/:id/mcp-servers route (Bug 1)', async () => {
     // Regression: previously called the flat `session-mcp-servers` service which
     // is read-only (find-only), so every attach silently failed with
