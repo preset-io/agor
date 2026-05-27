@@ -6,7 +6,9 @@
  * the standardized format used by UI and analytics.
  *
  * Usage:
- *   const normalized = normalizeRawSdkResponse('claude-code', rawSdkResponse);
+ *   const normalized = normalizeRawSdkResponse('codex', rawSdkResponse, {
+ *     modelHint: result.model, // configured model from session.model_config
+ *   });
  */
 
 import type { NormalizedSdkData } from './base/normalizer.interface.js';
@@ -22,15 +24,35 @@ const copilotNormalizer = new CopilotNormalizer();
 const geminiNormalizer = new GeminiNormalizer();
 
 /**
+ * Optional context that callers can pass to refine derived fields without
+ * mutating the raw SDK response.
+ *
+ * Currently:
+ * - `modelHint`: the configured / resolved model from `session.model_config.model`.
+ *   Codex and Gemini raw events do not echo the model, so without a hint
+ *   their normalizers default `contextWindowLimit` to the tool-wide default,
+ *   which can disagree with the model recorded on `Task.model`. The hint
+ *   lets the normalizer look up the right limit. **It is NEVER used to
+ *   populate `primaryModel`** — that field stays bound to "did the SDK
+ *   event actually echo a model?" so we don't reintroduce the lie this
+ *   PR was opened to fix.
+ */
+export interface NormalizeOptions {
+  modelHint?: string;
+}
+
+/**
  * Normalize raw SDK response to common format
  *
  * @param agenticTool - The agentic tool type (determines which normalizer to use)
  * @param rawSdkResponse - Raw SDK response from the tool
+ * @param options - Optional context (see `NormalizeOptions`)
  * @returns Normalized data with consistent structure, or undefined if normalization fails
  */
 export function normalizeRawSdkResponse(
   agenticTool: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot' | 'cursor' | string,
-  rawSdkResponse: unknown
+  rawSdkResponse: unknown,
+  options?: NormalizeOptions
 ): NormalizedSdkData | undefined {
   if (!rawSdkResponse) {
     return undefined;
@@ -39,21 +61,27 @@ export function normalizeRawSdkResponse(
   try {
     switch (agenticTool) {
       case 'claude-code':
+        // Claude's modelUsage carries per-model token + context window data
+        // directly; no hint needed.
         return claudeNormalizer.normalize(
           rawSdkResponse as Parameters<typeof claudeNormalizer.normalize>[0]
         );
 
       case 'codex':
         return codexNormalizer.normalize(
-          rawSdkResponse as Parameters<typeof codexNormalizer.normalize>[0]
+          rawSdkResponse as Parameters<typeof codexNormalizer.normalize>[0],
+          options
         );
 
       case 'gemini':
         return geminiNormalizer.normalize(
-          rawSdkResponse as Parameters<typeof geminiNormalizer.normalize>[0]
+          rawSdkResponse as Parameters<typeof geminiNormalizer.normalize>[0],
+          options
         );
 
       case 'copilot':
+        // Copilot's raw response already includes the model field, so no
+        // hint is needed for limit lookup.
         return copilotNormalizer.normalize(
           rawSdkResponse as Parameters<typeof copilotNormalizer.normalize>[0]
         );

@@ -109,7 +109,7 @@ describe('GeminiNormalizer', () => {
     });
   });
 
-  it('uses context window limit lookup for the default model', () => {
+  it('uses context window limit lookup for the default model when no hint is given', () => {
     const contextWindowLimit = 2048;
     const spy = vi
       .spyOn(modelsModule, 'getGeminiContextWindowLimit')
@@ -128,5 +128,43 @@ describe('GeminiNormalizer', () => {
 
     expect(spy).toHaveBeenCalledWith(DEFAULT_GEMINI_MODEL);
     expect(normalized.contextWindowLimit).toBe(contextWindowLimit);
+  });
+
+  // Regression: same as Codex — the hint refines contextWindowLimit so
+  // it stays consistent with `Task.model`, but must not leak into
+  // `primaryModel` (the SDK never echoed a model).
+  it('uses modelHint for context-window-limit lookup but not for primaryModel', () => {
+    const spy = vi.spyOn(modelsModule, 'getGeminiContextWindowLimit');
+
+    const event = {
+      value: {
+        usageMetadata: {
+          promptTokenCount: 1,
+          candidatesTokenCount: 1,
+        },
+      },
+    } as GeminiSdkResponse;
+
+    const result = normalizer.normalize(event, { modelHint: 'gemini-2.5-pro' });
+
+    expect(spy).toHaveBeenCalledWith('gemini-2.5-pro');
+    expect(result.primaryModel).toBeUndefined();
+  });
+
+  it('falls back to DEFAULT_GEMINI_MODEL when modelHint is empty', () => {
+    const spy = vi.spyOn(modelsModule, 'getGeminiContextWindowLimit');
+
+    const event = {
+      value: {
+        usageMetadata: {
+          promptTokenCount: 1,
+          candidatesTokenCount: 1,
+        },
+      },
+    } as GeminiSdkResponse;
+
+    normalizer.normalize(event, { modelHint: '' });
+
+    expect(spy).toHaveBeenCalledWith(DEFAULT_GEMINI_MODEL);
   });
 });

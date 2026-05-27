@@ -449,8 +449,14 @@ export async function executeToolTask(params: {
     // Store both raw (for debugging) and normalized (for UI/analytics)
     if (result.rawSdkResponse) {
       patchData.raw_sdk_response = result.rawSdkResponse;
-      // Normalize using tool-specific normalizer (toolName maps to agentic tool type)
-      const normalized = normalizeRawSdkResponse(toolName, result.rawSdkResponse);
+      // Normalize using tool-specific normalizer (toolName maps to agentic tool type).
+      // `modelHint` lets Codex/Gemini normalizers compute the correct
+      // contextWindowLimit when their raw SDK event doesn't carry a model
+      // — see `normalizer-factory.ts`. The hint is NOT used to populate
+      // `primaryModel`; that stays bound to actual SDK echoes.
+      const normalized = normalizeRawSdkResponse(toolName, result.rawSdkResponse, {
+        modelHint: result.model,
+      });
       if (normalized) {
         patchData.normalized_sdk_response = normalized;
         console.log(

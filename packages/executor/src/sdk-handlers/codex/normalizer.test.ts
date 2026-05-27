@@ -113,7 +113,7 @@ describe('CodexNormalizer', () => {
     });
   });
 
-  it('uses context window limit lookup for the default model', () => {
+  it('uses context window limit lookup for the default model when no hint is given', () => {
     const contextWindowLimit = 123_456;
     const lookupSpy = vi
       .spyOn(models, 'getCodexContextWindowLimit')
@@ -133,5 +133,31 @@ describe('CodexNormalizer', () => {
     expect(lookupSpy).toHaveBeenCalledWith(models.DEFAULT_CODEX_MODEL);
     expect(result.contextWindowLimit).toBe(contextWindowLimit);
     expect(result.tokenUsage.totalTokens).toBe(30);
+  });
+
+  // Regression: without the modelHint plumbing, Task.model could say
+  // "gpt-5.5" while normalized_sdk_response.contextWindowLimit reflected
+  // DEFAULT_CODEX_MODEL's limit — the ContextWindow popover would then
+  // disagree with the model pill. The hint resolves this without ever
+  // leaking into `primaryModel`.
+  it('uses modelHint for context-window-limit lookup but not for primaryModel', () => {
+    const lookupSpy = vi.spyOn(models, 'getCodexContextWindowLimit');
+    const normalizer = new CodexNormalizer();
+
+    const result = normalizer.normalize(buildTurnCompletedEvent({ usage: buildUsage({}) }), {
+      modelHint: 'gpt-5.5',
+    });
+
+    expect(lookupSpy).toHaveBeenCalledWith('gpt-5.5');
+    expect(result.primaryModel).toBeUndefined();
+  });
+
+  it('falls back to DEFAULT_CODEX_MODEL when modelHint is empty', () => {
+    const lookupSpy = vi.spyOn(models, 'getCodexContextWindowLimit');
+    const normalizer = new CodexNormalizer();
+
+    normalizer.normalize(buildTurnCompletedEvent({ usage: buildUsage({}) }), { modelHint: '' });
+
+    expect(lookupSpy).toHaveBeenCalledWith(models.DEFAULT_CODEX_MODEL);
   });
 });

@@ -35,10 +35,23 @@
 
 import type { CodexSdkResponse } from '../../types/sdk-response.js';
 import type { INormalizer, NormalizedSdkData } from '../base/normalizer.interface.js';
+import type { NormalizeOptions } from '../normalizer-factory.js';
 import { DEFAULT_CODEX_MODEL, getCodexContextWindowLimit } from './models.js';
 
 export class CodexNormalizer implements INormalizer<CodexSdkResponse> {
-  normalize(event: CodexSdkResponse): NormalizedSdkData {
+  /**
+   * `options.modelHint` is the configured/resolved model from
+   * `session.model_config.model`. Codex's TurnCompletedEvent doesn't
+   * carry a model, so without the hint the context-window limit defaults
+   * to the tool's default model — which can disagree with `Task.model`
+   * once we record the user's actual selection. The hint refines the
+   * limit lookup only; it is **never** propagated to `primaryModel`,
+   * which stays bound to "did the SDK event actually echo a model?".
+   */
+  normalize(event: CodexSdkResponse, options?: NormalizeOptions): NormalizedSdkData {
+    const lookupModel = options?.modelHint || DEFAULT_CODEX_MODEL;
+    const contextWindowLimit = getCodexContextWindowLimit(lookupModel);
+
     // Extract usage from TurnCompletedEvent
     const usage = event.usage;
 
@@ -52,7 +65,7 @@ export class CodexNormalizer implements INormalizer<CodexSdkResponse> {
           cacheReadTokens: 0,
           cacheCreationTokens: 0,
         },
-        contextWindowLimit: getCodexContextWindowLimit(DEFAULT_CODEX_MODEL),
+        contextWindowLimit,
         // Intentionally omit primaryModel — see file header.
         durationMs: undefined,
       };
@@ -61,11 +74,6 @@ export class CodexNormalizer implements INormalizer<CodexSdkResponse> {
     const inputTokens = usage.input_tokens || 0;
     const outputTokens = usage.output_tokens || 0;
     const cacheReadTokens = usage.cached_input_tokens || 0;
-
-    // Context window limit lookup uses the default model only as a fallback
-    // ceiling for the per-task popover. The authoritative limit (from the
-    // CLI's token_count event) overrides this in base-executor when present.
-    const contextWindowLimit = getCodexContextWindowLimit(DEFAULT_CODEX_MODEL);
 
     return {
       tokenUsage: {

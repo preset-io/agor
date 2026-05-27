@@ -30,10 +30,21 @@
 
 import type { GeminiSdkResponse } from '../../types/sdk-response.js';
 import type { INormalizer, NormalizedSdkData } from '../base/normalizer.interface.js';
+import type { NormalizeOptions } from '../normalizer-factory.js';
 import { DEFAULT_GEMINI_MODEL, getGeminiContextWindowLimit } from './models.js';
 
 export class GeminiNormalizer implements INormalizer<GeminiSdkResponse> {
-  normalize(event: GeminiSdkResponse): NormalizedSdkData {
+  /**
+   * `options.modelHint` is the configured/resolved model from
+   * `session.model_config.model`. Gemini's Finished event doesn't
+   * reliably carry a model, so without the hint the context-window
+   * limit defaults to the tool's default model — which can disagree
+   * with `Task.model` once we record the user's actual selection. The
+   * hint refines the limit lookup only; it is **never** propagated to
+   * `primaryModel`, which stays bound to "did the SDK event actually
+   * echo a model?".
+   */
+  normalize(event: GeminiSdkResponse, options?: NormalizeOptions): NormalizedSdkData {
     // Extract usageMetadata from ServerGeminiFinishedEvent
     // Note: event.value can be undefined in some cases (e.g., errors, incomplete responses)
     const usageMetadata = event.value?.usageMetadata;
@@ -41,11 +52,8 @@ export class GeminiNormalizer implements INormalizer<GeminiSdkResponse> {
     const outputTokens = usageMetadata?.candidatesTokenCount ?? 0;
     const cacheReadTokens = usageMetadata?.cachedContentTokenCount ?? 0;
 
-    // Context window = input_tokens + output_tokens
-    // NOTE: promptTokenCount = context sent to model in THIS turn (includes conversation history)
-    // candidatesTokenCount = response generated in THIS turn (will be context for NEXT turn)
-    // Get context window limit based on model (Gemini doesn't include model in event)
-    const contextWindowLimit = getGeminiContextWindowLimit(DEFAULT_GEMINI_MODEL);
+    const lookupModel = options?.modelHint || DEFAULT_GEMINI_MODEL;
+    const contextWindowLimit = getGeminiContextWindowLimit(lookupModel);
 
     return {
       tokenUsage: {
