@@ -10,6 +10,7 @@ import type { Message, MessageID, MessageSource, SessionID, TaskID } from '@agor
 import { MessageRole } from '@agor/core/types';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { MessagesService, TasksService } from '../base/index.js';
+import { buildAssistantMessageMetadata, patchTaskModelIfKnown } from '../base/model-recording.js';
 
 /**
  * Safely extract and validate token usage from SDK response
@@ -194,26 +195,11 @@ export async function createAssistantMessage(
     tool_uses: toolUses,
     task_id: taskId,
     parent_tool_use_id: parentToolUseId || undefined,
-    metadata: {
-      // Honest record: when resolvedModel is undefined (e.g. legacy session
-      // with no model_config and SDK didn't echo), leave the field unset
-      // rather than stamping the tool default. Substituting a default here
-      // historically caused user-facing model-tag drift; see the same fix in
-      // the Codex/Gemini normalizers and in base-executor.
-      model: resolvedModel,
-      tokens: {
-        input: tokenUsage?.input_tokens ?? 0,
-        output: tokenUsage?.output_tokens ?? 0,
-      },
-    },
+    metadata: buildAssistantMessageMetadata({ model: resolvedModel, tokenUsage }),
   };
 
   await messagesService.create(message);
-
-  // If task exists, update it with resolved model
-  if (taskId && resolvedModel && tasksService) {
-    await tasksService.patch(taskId, { model: resolvedModel });
-  }
+  await patchTaskModelIfKnown(tasksService, taskId, resolvedModel);
 
   return message;
 }
@@ -270,9 +256,9 @@ export async function createSystemMessage(
     content: content as Message['content'],
     task_id: taskId,
     metadata: {
-      // See createAssistantMessage for the rationale on leaving model
-      // undefined when resolvedModel is unknown.
-      model: resolvedModel,
+      // Omit `model` key entirely when unknown rather than writing
+      // undefined (matches `buildAssistantMessageMetadata` semantics).
+      ...(resolvedModel ? { model: resolvedModel } : {}),
       is_meta: true, // Mark as synthetic system message
     },
   };

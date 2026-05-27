@@ -23,7 +23,7 @@ export interface ExtractedTask {
   git_state: {
     sha_at_start: string;
   };
-  model: string;
+  model?: string;
   tool_use_count: number;
   created_at: string;
   completed_at?: string;
@@ -82,6 +82,14 @@ export function extractTasksFromMessages(
     const endMessage = messages[endIndex];
     const endTimestamp = endMessage?.timestamp;
 
+    // Find the model from the most informative message in this range.
+    // Assistant/system messages are more likely to carry SDK-echoed model
+    // metadata than the user message at the head of the task. Leave
+    // undefined when no message records one — we will NOT substitute a
+    // tool default here (see `sdk-handlers/base/model-recording.ts` for
+    // the no-substitution contract).
+    const model = messagesInRange.find((msg) => msg.metadata?.model)?.metadata?.model;
+
     // Create task
     tasks.push({
       task_id: generateId() as UUID,
@@ -98,7 +106,7 @@ export function extractTasksFromMessages(
         ref_at_start: 'unknown', // No git tracking in Claude Code transcripts
         sha_at_start: 'unknown', // No git tracking in Claude Code transcripts
       },
-      model: userMessage.metadata?.model || 'claude-sonnet-4-6',
+      ...(model ? { model } : {}),
       tool_use_count: toolUseCount,
       created_at: startTimestamp,
       completed_at: endTimestamp,

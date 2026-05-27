@@ -838,10 +838,10 @@ describe('createAssistantMessage', () => {
     expect(result.content_preview).toBe('');
   });
 
-  it('leaves metadata.model undefined when resolvedModel is undefined', async () => {
+  it('omits metadata.model entirely when resolvedModel is undefined', async () => {
     // Regression: previously we silently substituted DEFAULT_CLAUDE_MODEL,
     // which lied about what actually ran on legacy sessions / when the SDK
-    // didn't echo the model. Honest record = leave it unset.
+    // didn't echo the model. Honest record = leave the key absent.
     const messagesService = createMockMessagesService();
     const sessionId = generateId() as SessionID;
     const messageId = generateId() as MessageID;
@@ -858,7 +858,7 @@ describe('createAssistantMessage', () => {
       messagesService
     );
 
-    expect(result.metadata?.model).toBeUndefined();
+    expect(result.metadata).not.toHaveProperty('model');
   });
 
   it('should update task with resolved model', async () => {

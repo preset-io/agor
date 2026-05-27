@@ -134,7 +134,12 @@ export class GeminiPromptService {
     // Get or create Gemini client for this session
     const client = await this.getOrCreateClient(sessionId, permissionMode, contextUserId);
 
-    const model = (session.model_config?.model as GeminiModel) || DEFAULT_GEMINI_MODEL;
+    // Recorded model only — must reflect the user's explicit selection,
+    // not a tool-wide default. SDK invocation uses the model bound on the
+    // client at creation time (see getOrCreateClient below); we never
+    // re-pass model through `sendMessageStream`. See
+    // `sdk-handlers/base/model-recording.ts` for the contract.
+    const configuredModel = session.model_config?.model;
 
     // Prepare initial prompt (just text for now - can enhance with file paths later)
     let parts: Part[] = [{ text: prompt }];
@@ -189,7 +194,7 @@ export class GeminiPromptService {
               yield {
                 type: 'partial',
                 textChunk,
-                resolvedModel: model,
+                resolvedModel: configuredModel,
                 sessionId,
               };
               break;
@@ -288,7 +293,7 @@ export class GeminiPromptService {
                   type: 'complete',
                   content,
                   toolUses: toolUses.length > 0 ? toolUses : undefined,
-                  resolvedModel: model,
+                  resolvedModel: configuredModel,
                   sessionId,
                   usage: mappedUsage,
                   rawSdkResponse: finishedEvent, // Pass through the actual SDK response (UNMUTATED)
@@ -621,7 +626,12 @@ export class GeminiPromptService {
       );
     }
 
-    // Get model from session config
+    // SDK invocation only — the Gemini SDK requires a string here, so the
+    // tool default is a legitimate fallback for sessions without an
+    // explicit `model_config`. Do NOT propagate this value into recording
+    // paths (stream events, `Task.model`, message metadata) — those must
+    // stay undefined when the user never picked a model. See
+    // `sdk-handlers/base/model-recording.ts`.
     const model = (session.model_config?.model as GeminiModel) || DEFAULT_GEMINI_MODEL;
 
     // approvalMode already mapped at top of function

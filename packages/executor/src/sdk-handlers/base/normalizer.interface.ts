@@ -57,13 +57,11 @@ export interface NormalizedSdkData {
    * Only populate when the raw SDK response actually carries the model
    * (Claude system event, Copilot response). Leave undefined when the
    * event doesn't echo a model (Codex turn.completed, Gemini Finished)
-   * — base-executor falls back to the tool's `result.model` (which is
-   * the user-selected model from `session.model_config.model`).
-   *
-   * Do NOT substitute `DEFAULT_<TOOL>_MODEL` here. Historically that
-   * pattern caused user-facing model-tag drift, because base-executor
-   * patches `Task.model = normalized.primaryModel` after streaming and
-   * overwrote the correct resolved model with a stale default.
+   * — base-executor prefers the tool's `result.model` (the user-selected
+   * model from `session.model_config.model`) and uses `primaryModel`
+   * only as a fallback. See `sdk-handlers/base/model-recording.ts` for
+   * the full precedence and the no-substitution contract that applies
+   * here, to `BaseTool` result `model`, and to `Message.metadata.model`.
    */
   primaryModel?: string;
 

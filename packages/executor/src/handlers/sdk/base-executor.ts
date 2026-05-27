@@ -21,6 +21,7 @@ import type {
 } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
+import { resolveTaskModelFromResult } from '../../sdk-handlers/base/model-recording.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
@@ -67,18 +68,19 @@ export interface BaseTool {
      * Sourced from `session.model_config.model` at execution time (via the
      * tool's prompt-service), so it reflects the user's current selection
      * — including models whose raw SDK event does not echo the model name
-     * back (Codex turn.completed, Gemini Finished). base-executor uses this
-     * as the authoritative value for `Task.model` so the task header and
-     * `Task.model` always match what the user selected, instead of falling
-     * back to a tool-wide default in the normalizer.
+     * back (Codex turn.completed, Gemini Finished). base-executor prefers
+     * this value when patching `Task.model`, falling back to
+     * `normalized.primaryModel` only when this is absent. See
+     * `sdk-handlers/base/model-recording.ts` for the precedence helper and
+     * the no-substitution contract that applies to this field, to
+     * `Message.metadata.model`, and to a normalizer's `primaryModel`.
      *
      * Tool authors: leave this `undefined` when you genuinely don't know
      * (no model_config, SDK didn't echo). Do NOT substitute
      * `DEFAULT_<TOOL>_MODEL` here — historically that pattern silently
      * lied about what ran (e.g. user picked GPT 5.5, audit said GPT 5.4).
-     * The same rule applies to `Message.metadata.model` and to a
-     * normalizer's `primaryModel`. The display layer is responsible for
-     * rendering "unknown" if needed; it already handles undefined.
+     * The UI currently omits the model pill on undefined, which is the
+     * intended UX.
      */
     model?: string;
   }>;
@@ -115,33 +117,6 @@ export interface ExecutionContext {
   client: AgorClient;
   repos: ReturnType<typeof createFeathersBackedRepositories>;
   callbacks: StreamingCallbacks;
-}
-
-/**
- * Resolve which model to persist on `Task.model` after a turn completes.
- *
- * Priority:
- *   1. `result.model` — the model the tool actually invoked, sourced from
- *      `session.model_config.model` at execution time. This is the
- *      authoritative value, especially for tools whose raw SDK event omits
- *      the model name (Codex turn.completed, Gemini Finished).
- *   2. `normalized.primaryModel` — only populated when the raw SDK event
- *      itself echoes the model back (Claude, Copilot). Codex/Gemini
- *      normalizers intentionally leave this undefined so a stale tool-wide
- *      default cannot mask the user's selection.
- *
- * Returns undefined when neither source has a usable value, so callers can
- * skip the `Task.model` patch entirely instead of writing an empty string.
- *
- * Extracted as a pure helper so the regression for "GPT 5.5 selected, task
- * header shows GPT 5.4" stays unit-testable independent of the executor
- * scaffolding (Feathers client, repos, tools).
- */
-export function resolveTaskModelFromResult(
-  resultModel: string | undefined,
-  normalizedPrimaryModel: string | undefined
-): string | undefined {
-  return resultModel || normalizedPrimaryModel || undefined;
 }
 
 /**
@@ -485,13 +460,14 @@ export async function executeToolTask(params: {
     }
 
     // Set Task.model from the model the tool actually invoked. See
-    // `resolveTaskModelFromResult` above for the precedence rules and why
-    // this exists. Runs AFTER the normalized_sdk_response assignment so the
-    // tool's reported `result.model` wins over any normalizer-derived value.
-    const resolvedTaskModel = resolveTaskModelFromResult(
-      result.model,
-      patchData.normalized_sdk_response?.primaryModel
-    );
+    // `resolveTaskModelFromResult` in sdk-handlers/base/model-recording.ts
+    // for the precedence rules. Runs AFTER the normalized_sdk_response
+    // assignment so the tool's reported `result.model` wins over any
+    // normalizer-derived value.
+    const resolvedTaskModel = resolveTaskModelFromResult({
+      resultModel: result.model,
+      normalizedPrimaryModel: patchData.normalized_sdk_response?.primaryModel,
+    });
     if (resolvedTaskModel) {
       patchData.model = resolvedTaskModel;
       console.log(`[${toolName}] Task model set to: ${resolvedTaskModel}`);

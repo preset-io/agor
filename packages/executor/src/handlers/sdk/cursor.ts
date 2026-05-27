@@ -459,7 +459,13 @@ export async function executeCursorTask(params: {
       throw new Error('Cursor sessions require a branch worktree path.');
     }
 
-    const model = toCursorModel(session.model_config?.model);
+    // Split invocation model (what we hand the Cursor SDK as `{ id }`) from
+    // configured model (what we record on `Task.model` / assistant
+    // metadata). The SDK requires a model id; the audit trail must reflect
+    // only what the user explicitly selected. See
+    // `sdk-handlers/base/model-recording.ts` for the contract.
+    const configuredModel = session.model_config?.model;
+    const model = toCursorModel(configuredModel);
     const mcpServers = await buildCursorMcpServers({
       sessionId,
       mcpToken: session.mcp_token,
@@ -536,7 +542,7 @@ export async function executeCursorTask(params: {
           sessionId,
           taskId,
           assistantMessageId,
-          model: model.id,
+          model: configuredModel,
           getNextIndex: () => nextIndex++,
           toolCallMessageIds,
           toolCallMessageIdsByCallId,
@@ -571,6 +577,12 @@ export async function executeCursorTask(params: {
       const resultText = typeof runResult.result === 'string' ? runResult.result : '';
       const finalText = resultText.length > assistantText.length ? resultText : assistantText;
       const finalContent = buildCursorAssistantContent({ text: finalText, thinkingText });
+      // Recorded model: prefer SDK echo (`runResult.model`) over the
+      // user's configured selection — both reflect "what actually ran".
+      // Falls back to undefined when neither source has a value (legacy
+      // session with no model_config and SDK didn't echo); the display
+      // layer renders no model pill, which is the correct UX.
+      const recordedModel = runResult.model?.id ?? configuredModel;
       if (finalContent.length > 0) {
         await createAssistantMessage({
           client,
@@ -580,7 +592,7 @@ export async function executeCursorTask(params: {
           index: assistantMessageIndex ?? nextIndex++,
           content: finalContent,
           preview: finalText,
-          model: runResult.model?.id ?? model.id,
+          model: recordedModel,
         });
       }
 
@@ -590,7 +602,7 @@ export async function executeCursorTask(params: {
       const taskPatch: Partial<Task> = {
         status: stopped ? 'stopped' : failed ? 'failed' : 'completed',
         completed_at: new Date().toISOString(),
-        model: runResult.model?.id ?? model.id,
+        ...(recordedModel ? { model: recordedModel } : {}),
         raw_sdk_response: {
           run: runResult,
           messages: rawMessages,
@@ -634,7 +646,11 @@ async function handleCursorEvent(args: {
   sessionId: SessionID;
   taskId: TaskID;
   assistantMessageId: MessageID;
-  model: string;
+  /** Configured model from `session.model_config.model` — undefined when
+   * the user never explicitly picked one. We persist this on recorded
+   * tool messages; the SDK invocation model (with fallback) is owned by
+   * the caller and not threaded through here. */
+  model?: string;
   getNextIndex: () => number;
   toolCallMessageIds: MessageID[];
   toolCallMessageIdsByCallId: Map<string, MessageID>;

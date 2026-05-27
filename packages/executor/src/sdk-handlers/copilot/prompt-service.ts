@@ -299,17 +299,20 @@ export class CopilotPromptService {
       const mcpServers = await this.buildMcpServers(sessionId, session.mcp_token);
       const systemMessage = await this.buildSystemMessage(sessionId);
 
-      // Read model from session config (settable per-prompt — picker changes
-      // re-emit a new model_config and we re-bind it to the SDK every turn).
-      const resolvedModel = session.model_config?.model || DEFAULT_COPILOT_MODEL;
-      console.log(`🎯 [Copilot] Using model: ${resolvedModel}`);
+      // Split invocation model (what we bind to the SDK session) from
+      // configured model (what we record on stream events / rawSdkResponse).
+      // The SDK requires a string; the audit trail must stay undefined when
+      // the user never picked a model. See `sdk-handlers/base/model-recording.ts`.
+      const configuredModel = session.model_config?.model;
+      const invocationModel = configuredModel || DEFAULT_COPILOT_MODEL;
+      console.log(`🎯 [Copilot] Using model: ${invocationModel}`);
 
       // Create or resume session
       let copilotSession: CopilotSession;
       const sessionConfig = {
         workingDirectory: branch.path,
         streaming: true,
-        model: resolvedModel,
+        model: invocationModel,
         onPermissionRequest: permissionHandler,
         mcpServers: mcpServers as Record<string, import('@github/copilot-sdk').MCPServerConfig>,
         systemMessage: { mode: 'append' as const, content: systemMessage },
@@ -354,10 +357,10 @@ export class CopilotPromptService {
           copilotSession as unknown as {
             setModel: (m: string) => Promise<void>;
           }
-        ).setModel(resolvedModel);
+        ).setModel(invocationModel);
       } catch (err) {
         console.warn(
-          `⚠️  [Copilot] setModel("${resolvedModel}") failed; relying on session config:`,
+          `⚠️  [Copilot] setModel("${invocationModel}") failed; relying on session config:`,
           err instanceof Error ? err.message : err
         );
       }
@@ -491,7 +494,9 @@ export class CopilotPromptService {
         content.push({ type: 'text', text: fullText });
       }
 
-      // Build raw SDK response for normalization
+      // Build raw SDK response for normalization. We record the configured
+      // model (user's selection) — not the invocation fallback. The Copilot
+      // SDK doesn't echo a model field today; if it ever does, prefer that.
       const rawSdkResponse: CopilotRawResponse = {
         usage: usageData
           ? {
@@ -500,7 +505,7 @@ export class CopilotPromptService {
               total_tokens: usageData.total_tokens,
             }
           : undefined,
-        model: resolvedModel,
+        ...(configuredModel ? { model: configuredModel } : {}),
         sessionId: copilotSessionId,
       };
 
@@ -513,7 +518,7 @@ export class CopilotPromptService {
             ? toolUses.map((t) => ({ id: t.id, name: t.name, input: t.input }))
             : undefined,
         sessionId: copilotSessionId,
-        resolvedModel,
+        resolvedModel: configuredModel,
         usage: usageData,
         rawSdkResponse,
       };
