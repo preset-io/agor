@@ -9,6 +9,11 @@
  *   - Sessions, Files, Schedules — read-only / their own CRUD
  *   - Environment — start/stop/nuke + YAML editors with independent actions
  *
+ * `save()` calls `client.service('branches').patch()` directly so failures
+ * bubble back to the caller. Going through the parent's `onUpdateBranch`
+ * helper would swallow errors (the App-level helper toast-and-discards) and
+ * the modal would close on a silent failure.
+ *
  * See PR description for the rationale.
  */
 
@@ -21,9 +26,20 @@ import type {
 } from '@agor-live/client';
 import { getAssistantConfig, hasMinimumRole, isAssistant, ROLES } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { BranchUpdate } from './tabs/GeneralTab';
 
-export type FsAccessLevel = 'none' | 'read' | 'write';
+/** Patchable subset of `Branch` writable from the modal form. */
+export type BranchUpdate = Omit<
+  Partial<Branch>,
+  'issue_url' | 'pull_request_url' | 'notes' | 'board_id'
+> & {
+  board_id?: string | null | undefined;
+  issue_url?: string | null | undefined;
+  pull_request_url?: string | null | undefined;
+  notes?: string | null | undefined;
+};
+
+/** Derive directly from Branch so the union stays in sync with core. */
+export type FsAccessLevel = NonNullable<Branch['others_fs_access']>;
 
 export interface GeneralFormState {
   boardId: string | undefined;
@@ -89,7 +105,6 @@ interface UseBranchModalFormOptions {
   client: AgorClient | null;
   currentUser?: User | null;
   open: boolean;
-  onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void | Promise<void>;
 }
 
 const buildGeneralDefaults = (branch: Branch | null): GeneralFormState => ({
@@ -123,7 +138,6 @@ export function useBranchModalForm({
   client,
   currentUser,
   open,
-  onUpdateBranch,
 }: UseBranchModalFormOptions): BranchModalFormApi {
   // Async-loaded owners data
   const [owners, setOwners] = useState<User[]>([]);
@@ -142,18 +156,23 @@ export function useBranchModalForm({
     buildPermissionsDefaults(branch, [])
   );
 
-  // Track the last branch we initialized for, so WebSocket-driven re-renders of
-  // the same branch don't trample user edits.
+  // Which branch did we initialize for? Used to detect branch swaps while the
+  // modal is open (rare but possible via deep links).
   const initBranchIdRef = useRef<string | null>(null);
-  // Track whether the user has touched the permissions slice — if they have,
-  // don't blow away their edits when the async owners load resolves.
+  // Per-slice "user has edited this slice" gates. Untouched slices are kept
+  // in sync with the latest server state via WebSocket-driven prop changes;
+  // touched slices are left alone until Save or Reset.
+  const generalTouchedRef = useRef<boolean>(false);
+  const assistantTouchedRef = useRef<boolean>(false);
   const permissionsTouchedRef = useRef<boolean>(false);
 
   const setGeneral = useCallback<BranchModalFormApi['setGeneral']>((key, value) => {
+    generalTouchedRef.current = true;
     setGeneralState((prev) => ({ ...prev, [key]: value }));
   }, []);
 
   const setAssistant = useCallback<BranchModalFormApi['setAssistant']>((key, value) => {
+    assistantTouchedRef.current = true;
     setAssistantState((prev) => ({ ...prev, [key]: value }));
   }, []);
 
@@ -162,21 +181,50 @@ export function useBranchModalForm({
     setPermissionsState((prev) => ({ ...prev, [key]: value }));
   }, []);
 
-  // Reset form slices whenever modal opens for a (possibly different) branch
+  // Branch lifecycle. Handles three scenarios:
+  //   1. Modal closed / no branch → clear init refs so the next open re-seeds.
+  //   2. Modal opens for a different branch → full reset, all touched=false.
+  //   3. Same branch but new prop reference (WebSocket update) → re-sync only
+  //      untouched slices so external edits propagate without trampling
+  //      in-flight user edits.
   useEffect(() => {
     if (!open || !branch) {
       initBranchIdRef.current = null;
+      generalTouchedRef.current = false;
+      assistantTouchedRef.current = false;
       permissionsTouchedRef.current = false;
       return;
     }
-    if (initBranchIdRef.current === branch.branch_id) return;
-    initBranchIdRef.current = branch.branch_id;
-    permissionsTouchedRef.current = false;
-    setGeneralState(buildGeneralDefaults(branch));
-    setAssistantState(buildAssistantDefaults(branch));
-    setPermissionsState(buildPermissionsDefaults(branch, []));
-    setOwners([]);
-    setLoadingOwners(true);
+    const isNewBranch = initBranchIdRef.current !== branch.branch_id;
+    if (isNewBranch) {
+      initBranchIdRef.current = branch.branch_id;
+      generalTouchedRef.current = false;
+      assistantTouchedRef.current = false;
+      permissionsTouchedRef.current = false;
+      setGeneralState(buildGeneralDefaults(branch));
+      setAssistantState(buildAssistantDefaults(branch));
+      setPermissionsState(buildPermissionsDefaults(branch, []));
+      setOwners([]);
+      setLoadingOwners(true);
+      return;
+    }
+    // Same branch, refreshed prop. Resync any slice the user hasn't touched.
+    if (!generalTouchedRef.current) {
+      setGeneralState(buildGeneralDefaults(branch));
+    }
+    if (!assistantTouchedRef.current) {
+      setAssistantState(buildAssistantDefaults(branch));
+    }
+    // Permissions slice — only non-owner fields here; selectedOwnerIds is
+    // resynced from the owners-load effect below using the same touched gate.
+    if (!permissionsTouchedRef.current) {
+      setPermissionsState((prev) => ({
+        ...prev,
+        othersCan: branch.others_can || 'session',
+        othersFsAccess: branch.others_fs_access || 'read',
+        allowSessionSharing: Boolean(branch.dangerously_allow_session_sharing),
+      }));
+    }
   }, [open, branch]);
 
   // Load owners + all users for the permissions tab
@@ -280,6 +328,8 @@ export function useBranchModalForm({
     setGeneralState(buildGeneralDefaults(branch));
     setAssistantState(buildAssistantDefaults(branch));
     setPermissionsState(buildPermissionsDefaults(branch, owners));
+    generalTouchedRef.current = false;
+    assistantTouchedRef.current = false;
     permissionsTouchedRef.current = false;
   }, [branch, owners]);
 
@@ -351,10 +401,13 @@ export function useBranchModalForm({
       }
 
       if (Object.keys(updates).length > 0) {
-        await onUpdateBranch?.(branch.branch_id, updates);
+        // Call the service directly — going through a parent helper would let
+        // it swallow the error and we'd report a false success.
+        await client.service('branches').patch(branch.branch_id, updates as Partial<Branch>);
       }
 
-      // 3. Assistant emoji → board icon side effect
+      // 3. Assistant emoji → board icon side effect. Cosmetic only — log on
+      // failure, don't fail the save.
       if (assistantChanged && isAssistantBranch && canEditGeneral && branch.board_id) {
         const config = getAssistantConfig(branch);
         const emojiChanged = config && assistant.emoji !== (config.emoji || '');
@@ -364,7 +417,6 @@ export function useBranchModalForm({
               icon: assistant.emoji || '🤖',
             });
           } catch (err) {
-            // Non-fatal — board icon update is cosmetic; log but don't abort.
             console.error('Failed to update board icon:', err);
           }
         }
@@ -383,11 +435,16 @@ export function useBranchModalForm({
             ...prev,
             selectedOwnerIds: ownersData.map((o) => o.user_id),
           }));
-          permissionsTouchedRef.current = false;
         } catch (err) {
           console.error('Failed to reload owners after save:', err);
         }
       }
+
+      // Clear all touched flags — the form is once again clean against the
+      // server state. WebSocket-driven prop updates may resync slices freely.
+      generalTouchedRef.current = false;
+      assistantTouchedRef.current = false;
+      permissionsTouchedRef.current = false;
 
       return { ok: true };
     } catch (error) {
@@ -410,7 +467,6 @@ export function useBranchModalForm({
     isAssistantBranch,
     assistantChanged,
     assistant,
-    onUpdateBranch,
   ]);
 
   return {

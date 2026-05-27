@@ -16,11 +16,11 @@ import { useThemedMessage } from '../../utils/message';
 import { AssistantTab } from './tabs/AssistantTab';
 import { EnvironmentTab } from './tabs/EnvironmentTab';
 import { FilesTab } from './tabs/FilesTab';
-import { type BranchUpdate, GeneralTab } from './tabs/GeneralTab';
+import { GeneralTab } from './tabs/GeneralTab';
 import { PermissionsTab } from './tabs/PermissionsTab';
 import { ScheduleTab } from './tabs/ScheduleTab';
 import { SessionsTab } from './tabs/SessionsTab';
-import { useBranchModalForm } from './useBranchModalForm';
+import { type BranchUpdate, useBranchModalForm } from './useBranchModalForm';
 
 export type BranchModalTab =
   | 'general'
@@ -42,6 +42,9 @@ export interface BranchModalProps {
   mcpServerById?: Map<string, MCPServer>;
   client: AgorClient | null;
   currentUser?: User | null; // Current user for RBAC
+  // Used by EnvironmentTab for its independent start/stop/snapshot actions.
+  // The General / Assistant / Permissions form does NOT route through this —
+  // it calls `client.service('branches').patch()` directly so errors bubble.
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onArchiveOrDelete?: (
@@ -85,7 +88,6 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     client,
     currentUser,
     open,
-    onUpdateBranch,
   });
 
   // Sync active tab when modal opens — use defaultTab if specified, otherwise reset to general
@@ -202,7 +204,6 @@ export const BranchModal: React.FC<BranchModalProps> = ({
             label: 'Permissions',
             children: (
               <PermissionsTab
-                rbacEnabled={form.rbacEnabled}
                 loadingOwners={form.loadingOwners}
                 canEdit={form.canEditPermissions}
                 allUsers={form.allUsers}

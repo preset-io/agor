@@ -17,8 +17,10 @@ import { useThemedMessage } from '../../../utils/message';
 import { Tag } from '../../Tag';
 import type { FsAccessLevel, PermissionsFormState } from '../useBranchModalForm';
 
+// Note: this tab is only rendered when RBAC is enabled — the parent
+// `BranchModal` hides it otherwise. No in-tab `rbacEnabled=false` placeholder
+// is needed (or reachable).
 interface PermissionsTabProps {
-  rbacEnabled: boolean;
   loadingOwners: boolean;
   canEdit: boolean;
   allUsers: User[];
@@ -42,7 +44,6 @@ const fsAccessDescriptions: Record<FsAccessLevel, string> = {
 };
 
 export const PermissionsTab: React.FC<PermissionsTabProps> = ({
-  rbacEnabled,
   loadingOwners,
   canEdit,
   allUsers,
@@ -55,19 +56,6 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
   // (Ant's Select is uncontrolled enough that pasting the previous value back
   // doesn't always cancel an in-flight tag removal animation).
   const [selectKey, setSelectKey] = useState(0);
-
-  if (!rbacEnabled) {
-    return (
-      <div style={{ padding: 24 }}>
-        <Alert
-          type="info"
-          showIcon
-          message="RBAC is disabled"
-          description="Branch-level permissions are not enforced on this instance. Enable execution.branch_rbac in your Agor config to manage owners and access tiers per branch."
-        />
-      </div>
-    );
-  }
 
   const currentUserId = currentUser?.user_id;
 

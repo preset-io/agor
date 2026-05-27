@@ -8,17 +8,11 @@ import { MCPServerSelect } from '../../MCPServerSelect';
 import { Tag } from '../../Tag';
 import type { GeneralFormState } from '../useBranchModalForm';
 
-const { TextArea } = Input;
+// Re-exported so external consumers can keep importing the patch-shape type
+// from the same path. Canonical definition lives in `useBranchModalForm`.
+export type { BranchUpdate } from '../useBranchModalForm';
 
-export type BranchUpdate = Omit<
-  Partial<Branch>,
-  'issue_url' | 'pull_request_url' | 'notes' | 'board_id'
-> & {
-  board_id?: string | null | undefined;
-  issue_url?: string | null | undefined;
-  pull_request_url?: string | null | undefined;
-  notes?: string | null | undefined;
-};
+const { TextArea } = Input;
 
 interface GeneralTabProps {
   branch: Branch;

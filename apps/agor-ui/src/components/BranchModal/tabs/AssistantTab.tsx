@@ -46,6 +46,7 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({ branch, canEdit, sta
               value={state.emoji}
               onChange={(val) => setField('emoji', val)}
               defaultEmoji="🤖"
+              disabled={!canEdit}
             />
           </Form.Item>
           <Form.Item

@@ -35,25 +35,9 @@ const defaultState: PermissionsFormState = {
 };
 
 describe('PermissionsTab', () => {
-  it('renders RBAC-disabled placeholder when rbacEnabled is false', () => {
+  it('renders owners + permission controls', () => {
     renderWithApp(
       <PermissionsTab
-        rbacEnabled={false}
-        loadingOwners={false}
-        canEdit={true}
-        allUsers={[]}
-        currentUser={makeUser()}
-        state={defaultState}
-        setField={vi.fn()}
-      />
-    );
-    expect(screen.getByText(/RBAC is disabled/i)).toBeInTheDocument();
-  });
-
-  it('renders owners + permission controls when RBAC is enabled', () => {
-    renderWithApp(
-      <PermissionsTab
-        rbacEnabled={true}
         loadingOwners={false}
         canEdit={true}
         allUsers={[makeUser()]}
@@ -72,7 +56,6 @@ describe('PermissionsTab', () => {
   it('shows the unix-identity warning when others_can = prompt', () => {
     renderWithApp(
       <PermissionsTab
-        rbacEnabled={true}
         loadingOwners={false}
         canEdit={true}
         allUsers={[makeUser()]}
@@ -87,7 +70,6 @@ describe('PermissionsTab', () => {
   it('shows the dangerous warning when legacy session sharing is on', () => {
     renderWithApp(
       <PermissionsTab
-        rbacEnabled={true}
         loadingOwners={false}
         canEdit={true}
         allUsers={[makeUser()]}
@@ -103,7 +85,6 @@ describe('PermissionsTab', () => {
     const setField = vi.fn();
     renderWithApp(
       <PermissionsTab
-        rbacEnabled={true}
         loadingOwners={false}
         canEdit={true}
         allUsers={[makeUser()]}
@@ -121,7 +102,6 @@ describe('PermissionsTab', () => {
   it('does NOT render a Save button — save lives at the modal level', () => {
     renderWithApp(
       <PermissionsTab
-        rbacEnabled={true}
         loadingOwners={false}
         canEdit={true}
         allUsers={[makeUser()]}
@@ -137,7 +117,6 @@ describe('PermissionsTab', () => {
   it('disables all controls when canEdit is false', () => {
     renderWithApp(
       <PermissionsTab
-        rbacEnabled={true}
         loadingOwners={false}
         canEdit={false}
         allUsers={[makeUser()]}
