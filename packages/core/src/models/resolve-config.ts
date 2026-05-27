@@ -16,7 +16,12 @@
  * - Returns `undefined` when there is no usable model, so callers can chain
  *   with `??` or feed a list into `resolveModelConfigPrecedence`.
  */
+import type { AgenticToolName } from '../types/index.js';
 import type { EffortLevel, Session } from '../types/session.js';
+import { DEFAULT_CLAUDE_MODEL } from './claude.js';
+import { DEFAULT_CODEX_MODEL } from './codex.js';
+import { DEFAULT_COPILOT_MODEL } from './copilot.js';
+import { DEFAULT_GEMINI_MODEL } from './gemini-shared.js';
 
 /**
  * Loose input shape accepted by the resolver.
@@ -88,4 +93,64 @@ export function resolveModelConfigPrecedence(
     if (resolved) return resolved;
   }
   return undefined;
+}
+
+/**
+ * Default model identifier for an agentic tool. Single source of truth used
+ * by the UI form, the daemon's session-create hook, and any session-creation
+ * helper that needs a final fallback when the user has expressed no
+ * preference. Mirrors what the `ModelSelector` displays as its visual
+ * default (the first entry per tool).
+ *
+ * Returns `undefined` for tools whose default depends on async data
+ * (`cursor` — fetched live from the daemon's `cursor-models` service) or
+ * structural choices the picker doesn't take statically (`opencode` — needs
+ * a provider as well as a model).
+ */
+export function getDefaultModelForTool(tool: AgenticToolName): string | undefined {
+  switch (tool) {
+    case 'claude-code':
+    case 'claude-code-cli':
+      return DEFAULT_CLAUDE_MODEL;
+    case 'codex':
+      return DEFAULT_CODEX_MODEL;
+    case 'gemini':
+      return DEFAULT_GEMINI_MODEL;
+    case 'copilot':
+      return DEFAULT_COPILOT_MODEL;
+    default:
+      // cursor / opencode handled by their own selectors.
+      return undefined;
+  }
+}
+
+/**
+ * Walk a precedence list AND fall back to the tool's static default when
+ * nothing in the list matched. Returns `undefined` only for tools that have
+ * no static default (cursor / opencode); the caller is expected to either
+ * accept that or fetch the default through a tool-specific channel.
+ *
+ * This is the helper to reach for at the *session-create boundary* — the
+ * single point that decides what gets persisted on `session.model_config`.
+ * Downstream code (executor, normalizers, UI display) reads what was
+ * persisted; it must not re-implement defaulting.
+ *
+ * Example:
+ * ```ts
+ * const modelConfig = resolveModelConfigWithFallback(tool, [
+ *   args.modelConfig,
+ *   userToolDefaults?.modelConfig,
+ * ]);
+ * ```
+ */
+export function resolveModelConfigWithFallback(
+  tool: AgenticToolName,
+  sources: Array<ModelConfigInput | undefined | null>,
+  opts?: { now?: Date }
+): ResolvedModelConfig | undefined {
+  const fromSources = resolveModelConfigPrecedence(sources, opts);
+  if (fromSources) return fromSources;
+  const toolDefault = getDefaultModelForTool(tool);
+  if (!toolDefault) return undefined;
+  return resolveModelConfig({ mode: 'alias', model: toolDefault }, opts);
 }

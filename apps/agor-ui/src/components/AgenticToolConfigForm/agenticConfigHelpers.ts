@@ -16,44 +16,7 @@ import type {
   EffortLevel,
   ScheduleAgenticToolConfig,
 } from '@agor-live/client';
-import {
-  DEFAULT_CLAUDE_MODEL,
-  DEFAULT_CODEX_MODEL,
-  DEFAULT_COPILOT_MODEL,
-  DEFAULT_GEMINI_MODEL,
-  getDefaultPermissionMode,
-} from '@agor-live/client';
-
-/**
- * Default `modelConfig` for a tool when neither the user nor the form
- * has picked one. Mirrors `ModelSelector`'s visible default so the
- * submitted config matches what the picker displays.
- *
- * Returns undefined for tools whose default depends on async data
- * (`cursor` — model list fetched from the daemon; the caller can still
- * submit `undefined` and let the daemon side fall back). For `opencode`
- * we deliberately return undefined as well: the OpenCode picker needs
- * both provider and model, and there's no static "first valid combo" we
- * can hard-code without taking a stance the picker doesn't take itself.
- */
-export function getDefaultModelConfigForTool(
-  tool: AgenticToolName
-): DefaultModelConfig | undefined {
-  switch (tool) {
-    case 'claude-code':
-    case 'claude-code-cli':
-      return { mode: 'alias', model: DEFAULT_CLAUDE_MODEL };
-    case 'codex':
-      return { mode: 'alias', model: DEFAULT_CODEX_MODEL };
-    case 'gemini':
-      return { mode: 'alias', model: DEFAULT_GEMINI_MODEL };
-    case 'copilot':
-      return { mode: 'alias', model: DEFAULT_COPILOT_MODEL };
-    default:
-      // cursor / opencode — defaults live elsewhere or require async data.
-      return undefined;
-  }
-}
+import { getDefaultPermissionMode } from '@agor-live/client';
 
 /**
  * Form field values shape used by AgenticToolConfigForm.

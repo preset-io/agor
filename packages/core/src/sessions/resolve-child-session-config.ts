@@ -5,7 +5,7 @@
  * tool-gated parent layer interposed between explicit overrides and user
  * defaults.
  *
- *   model_config:      request → parent (same tool only) → user default → undefined
+ *   model_config:      request → parent (same tool only) → user default → tool default
  *   permission_config: request → parent (same tool only) → user default → mapped system default
  *
  * The "same tool only" gate is the bug fix: a Claude model cannot run on
@@ -18,7 +18,7 @@
  * regardless of tool match.
  */
 
-import { resolveModelConfigPrecedence } from '../models/resolve-config.js';
+import { resolveModelConfigWithFallback } from '../models/resolve-config.js';
 import type { AgenticToolName, Session, User } from '../types/index.js';
 import {
   type ParentPermissionLayer,
@@ -50,7 +50,11 @@ export interface ResolveChildSessionConfigArgs {
 export interface ResolvedChildSessionConfig {
   /** Always populated. */
   permission_config: NonNullable<Session['permission_config']>;
-  /** May be `undefined` when no model is set anywhere appropriate for the effective tool. */
+  /**
+   * Always populated for tools with a static default (claude-code, codex,
+   * gemini, copilot). `undefined` only for cursor/opencode whose defaults
+   * live in tool-specific selectors. See `resolveModelConfigWithFallback`.
+   */
   model_config?: NonNullable<Session['model_config']>;
 }
 
@@ -79,8 +83,9 @@ export function resolveChildSessionConfig(
     parentLayer,
   });
 
-  // model_config: explicit > parent (same tool only) > user default > undefined.
-  const model_config = resolveModelConfigPrecedence(
+  // model_config: explicit > parent (same tool only) > user default > tool default.
+  const model_config = resolveModelConfigWithFallback(
+    effectiveTool,
     [
       overrides?.modelConfig,
       sameTool ? parent.model_config : undefined,

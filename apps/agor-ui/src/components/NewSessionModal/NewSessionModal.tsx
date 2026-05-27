@@ -13,11 +13,7 @@ import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live
 import { DownOutlined } from '@ant-design/icons';
 import { Alert, Collapse, Form, Input, Modal, Typography } from 'antd';
 import { useEffect, useState } from 'react';
-import {
-  AgenticToolConfigForm,
-  getDefaultModelConfigForTool,
-  getFormValuesFromConfig,
-} from '../AgenticToolConfigForm';
+import { AgenticToolConfigForm, getFormValuesFromConfig } from '../AgenticToolConfigForm';
 import {
   type AgenticToolOption,
   AgentSelectionGrid,
@@ -155,18 +151,14 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         agent: selectedAgent,
         title: values.title,
         initialPrompt: values.initialPrompt,
-        // Precedence: form value > user default > tool default. The tool
-        // default mirrors what ModelSelector shows visually, so the
-        // submitted config always agrees with the picker — even when the
-        // user opens the modal and submits without touching the picker
-        // (the form field starts undefined; the picker only displays
-        // `modelList[0]` as a visual fallback). Without this third link,
-        // brand-new users with no per-tool defaults silently created
-        // sessions with `model_config: undefined`.
-        modelConfig:
-          values.modelConfig ??
-          agentDefaults?.modelConfig ??
-          getDefaultModelConfigForTool(selectedAgent as AgenticToolName),
+        // Form value first, user default second. We deliberately do NOT
+        // fall back to a tool default here — that's the daemon's job. The
+        // `applySessionConfigDefaults` before:create hook walks
+        // overrides → user default → tool default via
+        // `resolveModelConfigWithFallback`, so every session-create path
+        // (UI, MCP, gateway, zone-trigger) ends up with the same resolved
+        // `model_config` without each caller re-implementing the chain.
+        modelConfig: values.modelConfig ?? agentDefaults?.modelConfig,
         effort: (values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort,
         mcpServerIds: values.mcpServerIds ?? fallbackMcpServerIds,
         permissionMode,

@@ -45,14 +45,25 @@ describe('resolveChildSessionConfig', () => {
       permission_config: { mode: 'acceptEdits' },
     });
 
-    it('does NOT inherit parent claude model when no user codex default exists', () => {
+    it('does NOT inherit parent claude model; falls through to codex tool default', () => {
+      // The cross-tool gate is the regression we're protecting: Claude's
+      // model identifier cannot run on Codex. After the resolver upgrade
+      // (`resolveModelConfigWithFallback`), instead of returning undefined
+      // and pushing the fallback onto downstream code, the resolver
+      // substitutes Codex's static default — same single point of decision.
       const r = resolveChildSessionConfig({
         parent,
         effectiveTool: 'codex',
         user: makeUser({}), // no codex defaults, no claude defaults — empty
         now,
       });
-      expect(r.model_config).toBeUndefined();
+      expect(r.model_config).toEqual({
+        mode: 'alias',
+        model: 'gpt-5.4',
+        updated_at: now.toISOString(),
+      });
+      // Critically: NOT the parent's claude model.
+      expect(r.model_config?.model).not.toBe('claude-opus-4-7');
     });
 
     it('falls through to user codex default when present, not parent claude model', () => {
@@ -155,7 +166,12 @@ describe('resolveChildSessionConfig', () => {
   // we still don't inherit — model identity is tool-scoped by contract.
   // --------------------------------------------------------------
   describe('cross-tool spawn with no user default', () => {
-    it('returns undefined model when neither parent (gated off) nor user default applies', () => {
+    it('falls back to the effective tool default when parent (gated off) and user default are absent', () => {
+      // Regression: previously returned undefined and let downstream
+      // (executor/UI) re-implement the fallback. Now `resolveModelConfigWithFallback`
+      // is the single point that decides — the Claude parent's model is
+      // (correctly) gated off because gemini can't run Claude models, and
+      // the resolver substitutes Gemini's static default.
       const parent = makeParent({
         agentic_tool: 'claude-code',
         model_config: {
@@ -170,7 +186,11 @@ describe('resolveChildSessionConfig', () => {
         user: null,
         now,
       });
-      expect(r.model_config).toBeUndefined();
+      expect(r.model_config).toEqual({
+        mode: 'alias',
+        model: 'gemini-2.0-flash',
+        updated_at: now.toISOString(),
+      });
       expect(r.permission_config.mode).toBe('autoEdit'); // gemini system default
     });
 

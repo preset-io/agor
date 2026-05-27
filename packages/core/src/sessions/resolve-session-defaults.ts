@@ -14,7 +14,10 @@
  *   permission_config: overrides → user default → mapped system default
  *                      (algorithm shared with the child resolver via
  *                      {@link resolvePermissionConfig})
- *   model_config:      overrides → user default → undefined
+ *   model_config:      overrides → user default → tool default (always
+ *                      populated for tools with a static default; only
+ *                      `undefined` for cursor/opencode whose defaults
+ *                      live elsewhere)
  *   mcp_server_ids:    overrides → branch → user default → []
  *
  * The child-session variant ({@link resolveChildSessionConfig}) layers a
@@ -22,7 +25,7 @@
  * resolvers share the same permission/model walk.
  */
 
-import { resolveModelConfigPrecedence } from '../models/resolve-config.js';
+import { resolveModelConfigWithFallback } from '../models/resolve-config.js';
 import type { AgenticToolName, Session, User } from '../types/index.js';
 import {
   resolvePermissionConfig,
@@ -52,7 +55,13 @@ export interface ResolveSessionDefaultsArgs {
 export interface ResolvedSessionDefaults {
   /** Always populated — falls back to mapped `getDefaultPermissionMode(tool)`. */
   permission_config: NonNullable<Session['permission_config']>;
-  /** Optional — `undefined` when neither overrides nor user defaults specify a model. */
+  /**
+   * Always populated for tools with a static default (claude-code, codex,
+   * gemini, copilot — falls through overrides → user default → tool
+   * default). `undefined` only for cursor/opencode, whose defaults are
+   * supplied by their own selectors (cursor: async daemon fetch; opencode:
+   * provider + model pair).
+   */
   model_config?: NonNullable<Session['model_config']>;
   /** Resolved MCP server list. Empty array means "no MCPs". */
   mcp_server_ids: string[];
@@ -69,7 +78,8 @@ export function resolveSessionDefaults(args: ResolveSessionDefaultsArgs): Resolv
     // No parent layer for fresh-session defaults.
   });
 
-  const model_config = resolveModelConfigPrecedence(
+  const model_config = resolveModelConfigWithFallback(
+    agenticTool,
     [overrides?.modelConfig, userToolDefaults?.modelConfig],
     { now }
   );
