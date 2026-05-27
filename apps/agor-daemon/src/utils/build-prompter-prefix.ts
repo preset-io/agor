@@ -33,22 +33,41 @@ import type { User } from '@agor/core/types';
 const FIELD_MAX_LEN = 100;
 
 /**
- * Strip newlines/control chars and cap length before embedding a
- * user-controlled field (name, email) into the prompt — defense against
- * prompt injection via a crafted profile.
+ * Match any Unicode control character (`\p{Cc}` = the C0 + C1 control
+ * blocks, including \r \n \t \0 \x1b \v \f and friends) plus the two
+ * separator code points that render as line breaks but live outside
+ * \p{Cc} (U+2028 LINE SEPARATOR, U+2029 PARAGRAPH SEPARATOR). The `+`
+ * collapses runs of these to a single space so a crafted profile can't
+ * pad the output with extra whitespace.
  */
-export function sanitizeUserField(value: string, maxLength = FIELD_MAX_LEN): string {
-  return value
-    .replace(/[\r\n\t]/g, ' ')
-    .trim()
-    .substring(0, maxLength);
+const CONTROL_OR_LINE_SEPARATOR = /[\p{Cc}\u2028\u2029]+/gu;
+
+/**
+ * Strip control chars / line-separator code points and cap length
+ * before embedding a user-controlled field (name, email) into the
+ * prompt — defense against prompt injection via a crafted profile.
+ *
+ * Length is enforced in *code points* (via `Array.from`) rather than
+ * UTF-16 code units, so truncation never splits a surrogate pair (an
+ * emoji-padded name can no longer leave a half-character at the cap).
+ */
+export function sanitizeUserField(value: string | undefined, maxLength = FIELD_MAX_LEN): string {
+  const cleaned = (value ?? '').replace(CONTROL_OR_LINE_SEPARATOR, ' ').trim();
+  return Array.from(cleaned).slice(0, maxLength).join('');
 }
 
-/** Format the attribution header for a prompter. Exported for tests / reuse. */
+/**
+ * Format the attribution header for a prompter. Exported for tests / reuse.
+ *
+ * Sanitizes name and email separately, then falls back name → email →
+ * `'unknown user'`. A whitespace-only name no longer leaks through as a
+ * blank display (the old `name || email` ran before sanitization, so
+ * `'   '` was truthy).
+ */
 export function formatPrompterPrefix(prompter: Pick<User, 'name' | 'email'>): string {
-  const name = sanitizeUserField(prompter.name || prompter.email);
   const email = sanitizeUserField(prompter.email);
-  return `[Prompted by: ${name} (${email})]`;
+  const name = sanitizeUserField(prompter.name) || email || 'unknown user';
+  return email ? `[Prompted by: ${name} (${email})]` : `[Prompted by: ${name}]`;
 }
 
 /**
