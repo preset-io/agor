@@ -81,7 +81,15 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           start_timestamp: new Date(now).toISOString(),
         },
         git_state,
-        model: task.model ?? 'claude-sonnet-4-6',
+        // Persist model honestly: leave undefined until the executor fills
+        // it in from `session.model_config.model` (or an SDK echo). The
+        // previous `?? 'claude-sonnet-4-6'` substitution was the persistence
+        // half of the same "lie about what ran" anti-pattern fixed in this
+        // PR — it stamped a Claude default onto every Codex/Gemini/Copilot
+        // task at insert time, and only the executor's subsequent patch
+        // could correct it. See `sdk-handlers/base/model-recording.ts`
+        // for the no-substitution contract.
+        ...(task.model ? { model: task.model } : {}),
         tool_use_count: task.tool_use_count ?? 0,
         duration_ms: task.duration_ms, // Task execution duration
         agent_session_id: task.agent_session_id, // SDK session ID

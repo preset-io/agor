@@ -150,6 +150,32 @@ describe('TaskRepository.create', () => {
     await expect(taskRepo.create(data)).rejects.toThrow('session_id is required');
   });
 
+  dbTest('should leave Task.model undefined when not provided', async ({ db }) => {
+    // Regression: the repo previously stamped `'claude-sonnet-4-6'` as the
+    // default at insert time, which silently lied about what ran on every
+    // Codex/Gemini/Copilot task until the executor patched the real model
+    // in after the turn. We now persist `model` honestly — absent until a
+    // tool fills it in. See `sdk-handlers/base/model-recording.ts`.
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const data = createTaskData({ session_id: sessionId });
+    delete (data as any).model;
+
+    const created = await taskRepo.create(data);
+
+    expect(created.model).toBeUndefined();
+  });
+
+  dbTest('should preserve explicit Task.model when provided', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const data = createTaskData({ session_id: sessionId, model: 'gpt-5.5' });
+
+    const created = await taskRepo.create(data);
+
+    expect(created.model).toBe('gpt-5.5');
+  });
+
   dbTest('should handle complex task data with all optional fields', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);

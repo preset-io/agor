@@ -280,7 +280,11 @@ export const tasks = pgTable(
         message_range: Task['message_range'];
         git_state: Task['git_state'];
 
-        model: string;
+        // Optional: present once the executor records the model that
+        // actually ran. Absent on tasks where the SDK never echoed a model
+        // and the session has no `model_config.model`. See
+        // `sdk-handlers/base/model-recording.ts`.
+        model?: string;
         tool_use_count: number;
 
         duration_ms?: number;
