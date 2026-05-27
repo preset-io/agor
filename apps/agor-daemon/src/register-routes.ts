@@ -1006,11 +1006,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
     // Tag the bytes shipped to the executor with `[Prompted by: ...]` when a
     // non-owner is prompting. The prompter identity comes from `task.created_by`
-    // (NOT `params.user`): every route that lands here — idle prompt, queued
-    // drain, callback drain, `/tasks/:id/run` — stamps it at prompt submission
-    // via `TaskRepository.createPending`, so it survives the queue / hook /
-    // drain hop intact. `params.user` can drop on hook-triggered drains that
-    // don't carry `queued_by_user_id` and is therefore not authoritative.
+    // (NOT `params.user`): every persisted Task row requires `created_by`
+    // (`createPending` for the prompt/queue/callback paths, `create`/`createMany`
+    // for pre-created tasks run via `/tasks/:id/run`), so it survives the queue
+    // / hook / drain hop intact. `params.user` can drop on hook-triggered drains
+    // that don't carry `queued_by_user_id` and is therefore not authoritative.
     // See `./utils/build-prompter-prefix.ts` for the helper + tests.
     const { prompt: promptForExecutor } = await buildPrompterPrefixedPrompt({
       rawPrompt: task.full_prompt,
