@@ -43,7 +43,11 @@ describe('CodexNormalizer', () => {
     expect(result.contextWindowLimit).toBe(
       models.getCodexContextWindowLimit(models.DEFAULT_CODEX_MODEL)
     );
-    expect(result.primaryModel).toBe(models.DEFAULT_CODEX_MODEL);
+    // The Codex turn.completed event does not carry the model name. The
+    // normalizer must leave primaryModel undefined so base-executor can fall
+    // back to result.model (the resolved model from session.model_config)
+    // instead of silently overwriting Task.model with DEFAULT_CODEX_MODEL.
+    expect(result.primaryModel).toBeUndefined();
     expect(result.durationMs).toBeUndefined();
   });
 
@@ -66,7 +70,9 @@ describe('CodexNormalizer', () => {
       cacheReadTokens: 300,
       cacheCreationTokens: 0,
     });
-    expect(result.primaryModel).toBe(models.DEFAULT_CODEX_MODEL);
+    // Regression: see the empty-usage test above — primaryModel must stay
+    // undefined so the user's selected model is preserved on the task.
+    expect(result.primaryModel).toBeUndefined();
   });
 
   it('does not double-count reasoning_output_tokens against totals', () => {

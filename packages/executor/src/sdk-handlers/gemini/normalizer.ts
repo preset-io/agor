@@ -19,6 +19,13 @@
  * - Map cachedContentTokenCount to cacheReadTokens for consistency
  * - Calculate context window usage
  * - Determine context window limit (Gemini doesn't provide this in event)
+ *
+ * Note on `primaryModel`: the Finished event does not reliably carry the
+ * model name, so we leave `primaryModel` undefined here. The authoritative
+ * resolved model lives on `session.model_config.model` and is patched onto
+ * the task via gemini-tool / base-executor's tool-result fallback path.
+ * Leaving it undefined avoids overwriting the resolved model with a stale
+ * default (the same bug fixed for Codex in this commit).
  */
 
 import type { GeminiSdkResponse } from '../../types/sdk-response.js';
@@ -49,7 +56,7 @@ export class GeminiNormalizer implements INormalizer<GeminiSdkResponse> {
         cacheCreationTokens: 0, // Gemini doesn't provide this
       },
       contextWindowLimit,
-      primaryModel: DEFAULT_GEMINI_MODEL,
+      // Intentionally omit primaryModel — see file header.
       durationMs: undefined, // Not available in raw SDK event
     };
   }

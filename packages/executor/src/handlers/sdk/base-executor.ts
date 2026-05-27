@@ -61,6 +61,18 @@ export interface BaseTool {
      * `Task.computed_context_window` and `normalized_sdk_response.contextUsageSnapshot`.
      */
     rawContextUsage?: ContextUsageSnapshot;
+    /**
+     * Resolved model the tool actually invoked for this turn.
+     *
+     * Sourced from `session.model_config.model` at execution time (via the
+     * tool's prompt-service), so it reflects the user's current selection
+     * — including models whose raw SDK event does not echo the model name
+     * back (Codex turn.completed, Gemini Finished). base-executor uses this
+     * as the authoritative value for `Task.model` so the task header and
+     * `Task.model` always match what the user selected, instead of falling
+     * back to a tool-wide default in the normalizer.
+     */
+    model?: string;
   }>;
 
   // Optional stopTask method for tools that support interruption
@@ -95,6 +107,33 @@ export interface ExecutionContext {
   client: AgorClient;
   repos: ReturnType<typeof createFeathersBackedRepositories>;
   callbacks: StreamingCallbacks;
+}
+
+/**
+ * Resolve which model to persist on `Task.model` after a turn completes.
+ *
+ * Priority:
+ *   1. `result.model` — the model the tool actually invoked, sourced from
+ *      `session.model_config.model` at execution time. This is the
+ *      authoritative value, especially for tools whose raw SDK event omits
+ *      the model name (Codex turn.completed, Gemini Finished).
+ *   2. `normalized.primaryModel` — only populated when the raw SDK event
+ *      itself echoes the model back (Claude, Copilot). Codex/Gemini
+ *      normalizers intentionally leave this undefined so a stale tool-wide
+ *      default cannot mask the user's selection.
+ *
+ * Returns undefined when neither source has a usable value, so callers can
+ * skip the `Task.model` patch entirely instead of writing an empty string.
+ *
+ * Extracted as a pure helper so the regression for "GPT 5.5 selected, task
+ * header shows GPT 5.4" stays unit-testable independent of the executor
+ * scaffolding (Feathers client, repos, tools).
+ */
+export function resolveTaskModelFromResult(
+  resultModel: string | undefined,
+  normalizedPrimaryModel: string | undefined
+): string | undefined {
+  return resultModel || normalizedPrimaryModel || undefined;
 }
 
 /**
@@ -434,13 +473,20 @@ export async function executeToolTask(params: {
         console.log(
           `[${toolName}] Normalized SDK response: ${normalized.tokenUsage.totalTokens} tokens, $${normalized.costUsd?.toFixed(4) ?? 'N/A'}`
         );
-
-        // Extract model from normalized response to display correct model tag in UI
-        if (normalized.primaryModel) {
-          patchData.model = normalized.primaryModel;
-          console.log(`[${toolName}] Task model set to: ${normalized.primaryModel}`);
-        }
       }
+    }
+
+    // Set Task.model from the model the tool actually invoked. See
+    // `resolveTaskModelFromResult` above for the precedence rules and why
+    // this exists. Runs AFTER the normalized_sdk_response assignment so the
+    // tool's reported `result.model` wins over any normalizer-derived value.
+    const resolvedTaskModel = resolveTaskModelFromResult(
+      result.model,
+      patchData.normalized_sdk_response?.primaryModel
+    );
+    if (resolvedTaskModel) {
+      patchData.model = resolvedTaskModel;
+      console.log(`[${toolName}] Task model set to: ${resolvedTaskModel}`);
     }
 
     // Prefer the authoritative context-window snapshot when the tool surfaced

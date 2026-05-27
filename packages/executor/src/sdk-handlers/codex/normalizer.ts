@@ -24,6 +24,13 @@
  * - Determine context window limit based on model registry (best-effort —
  *   the authoritative model_context_window is captured separately from
  *   Codex CLI's event_msg/token_count events in base-executor)
+ *
+ * Note on `primaryModel`: Codex's turn.completed event has no model field, so
+ * we intentionally leave `primaryModel` undefined here. The authoritative
+ * resolved model lives on `session.model_config.model` and is patched onto
+ * the task by codex-tool / base-executor's tool-result fallback path. Leaving
+ * it undefined avoids overwriting the correctly-resolved model with a stale
+ * default (the bug fixed in this commit).
  */
 
 import type { CodexSdkResponse } from '../../types/sdk-response.js';
@@ -46,7 +53,7 @@ export class CodexNormalizer implements INormalizer<CodexSdkResponse> {
           cacheCreationTokens: 0,
         },
         contextWindowLimit: getCodexContextWindowLimit(DEFAULT_CODEX_MODEL),
-        primaryModel: DEFAULT_CODEX_MODEL,
+        // Intentionally omit primaryModel — see file header.
         durationMs: undefined,
       };
     }
@@ -55,7 +62,9 @@ export class CodexNormalizer implements INormalizer<CodexSdkResponse> {
     const outputTokens = usage.output_tokens || 0;
     const cacheReadTokens = usage.cached_input_tokens || 0;
 
-    // Get context window limit based on model (Codex doesn't include model in event)
+    // Context window limit lookup uses the default model only as a fallback
+    // ceiling for the per-task popover. The authoritative limit (from the
+    // CLI's token_count event) overrides this in base-executor when present.
     const contextWindowLimit = getCodexContextWindowLimit(DEFAULT_CODEX_MODEL);
 
     return {
@@ -67,7 +76,7 @@ export class CodexNormalizer implements INormalizer<CodexSdkResponse> {
         cacheCreationTokens: 0, // Codex doesn't provide this
       },
       contextWindowLimit,
-      primaryModel: DEFAULT_CODEX_MODEL,
+      // Intentionally omit primaryModel — see file header.
       durationMs: undefined, // Not available in raw SDK event
     };
   }
